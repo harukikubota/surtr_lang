@@ -1,0 +1,3 @@
+phase: typecheck
+contains: Argument type mismatch: expected Int, got String
+contains: add(x: Int, y: Int) -> Int

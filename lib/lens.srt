@@ -1,11 +1,16 @@
-@@doc """
+@doc """
 Standard `Lens` type declaration.
 `Lens<S, A>` is a compiler-managed path capability from source `S` to focus `A`.
-Lens values are consumed in the same scope via `Lens::view/set/over` and are not
+Lens values are consumed in the same scope via `Lens::view/set/over/over_result` and are not
 transported as runtime values across function boundaries.
 
 Use `Lens` when you want to describe "where" inside a value the compiler should
 look or update.
+When a struct or record field should participate in Result-style update flows,
+prefer `T?` or `Result<T, NoneError>` over `Option<T>`.
+That keeps the field aligned with `set`, `over`, `over_result`, `=?`, and
+ordinary `Result`-returning helper functions without repeated container
+conversion.
 
 - `Type.segment` builds a path itself
 - `value.segment` is sugar for applying the corresponding path to `value`
@@ -14,157 +19,181 @@ Common path forms:
 
 - struct / record field: `User.name`
 - tuple field: `Tuple._0`, `Tuple._1`, ...
-- nested path: `Lens::compose(User.profile, Profile.name)`
+- nested path: `User.profile / Profile.name`
+- function-form nested path: `Lens::compose(User.profile, Profile.name)`
 - enum variant selector: `Expr.Add`
+- value sugar: `value.segment`
 
 `Lens` is compile-time only in Stage1.
 You may bind it in the same scope:
 
 `lens = User.name`
+`tuple_lens = Tuple._1`
 
 but you may not pass it as a function argument, return it, capture it in a
 closure, or store it inside runtime containers such as `List`, tuples, `Ok(...)`
 or `Err(...)`.
+
+Private field paths follow the same visibility rules as ordinary field access.
+Outside the allowed scope, `User.secret`-style path roots are compile errors.
 """
-@@builtin type Lens<$S, $A>
+@builtin type Lens<$S, $A>
 
-@@doc """
-Lens module.
-Provides compiler-managed path access/update intrinsics:
-`view`, `set`, `over`, `compose`.
-
-Typical workflow:
-
-1. Build a path with `Type.segment` or `Lens::compose(...)`
-2. Read with `Lens::view(...)` or `value.segment`
-3. Update with `Lens::set(...)` or `Lens::over(...)`
-
-Examples:
-
-```surtr
-defstruct Profile {
-  name: String
-}
-
-defstruct User {
-  profile: Profile,
-  pair: (String, Int)
-}
-
-user = User(Profile("alice"), ("admin", 3))
-
-name = Lens::view(Lens::compose(User.profile, Profile.name), user)
-first = Lens::view(Tuple._0, user.pair)
-updated =? Lens::set(Lens::compose(User.profile, Profile.name), user, "bob")
-```
-"""
-@@autoimport
-defmod Lens {
-  @@doc """
+@autoimport
+impl Lens {
+  @doc """
   View the focus at `lens` from `source`.
   The declared contract is `Result`-shaped; the compiler refines this in
   Stage1 based on path context.
 
-How to read the return type:
+  How to read the return type:
 
-- plain field / tuple paths on plain values return plain `A`
-- if `source` is already `Result<S>`, the result stays `Result<A>`
-- if the path contains an enum variant selector such as `Expr.Add`, the result
-  is promoted to `Result<A>`
+  - plain field / tuple paths on plain values return plain `A`
+  - if `source` is already `Result<S>`, the result stays `Result<A>`
+  - if the path contains an enum variant selector such as `Expr.Add`, the result
+    is promoted to `Result<A>`
 
-Examples:
+  `value.segment` is shorthand for the same read:
+  `cfg.entrypoint`
+  `pair._0`
 
-```surtr
-name = Lens::view(User.name, user)
-first = Lens::view(Tuple._0, pair)
-value = Lens::view(Lens::compose(User.profile, Profile.name), user)
-```
+  Variant paths are fallible because the runtime value may be a different
+  variant:
 
-`value.segment` is shorthand for the same read:
+  When the selector does not match, the result is `Err(VariantMismatch(...))`.
 
-```surtr
-name = user.name
-first = pair._0
-```
+  ## REPL
+  xldr(1)> cfg = Config::new("demo")
+  > cfg: Config = Config { name: "demo", entrypoint: "Main::main", paths: [] }
+  xldr(2)> cfg.entrypoint
+  "Main::main"
 
-Variant paths are fallible because the runtime value may be a different
-variant:
+  xldr(1)> pair = ("alice", 42)
+  > pair: (String, Int) = ("alice", 42)
+  xldr(2)> pair._0
+  "alice"
 
-```surtr
-match Lens::view(Expr.Add, expr) {
-  Ok(add) => ...,
-  Err(err) => ...,
-}
-```
-
-When the selector does not match, the result is `Err(VariantMismatch(...))`.
+  xldr(1)> Lens::view(BitWidth.Any, BitWidth::Any(5))
+  Ok(5)
   """
-  @@builtin def view(lens: Lens<$S, $A>, source: $S) -> Result<$A>
+  @builtin def view(lens: Lens<$S, $A>, source: $S) -> Result<$A>
 
-  @@doc """
+  @doc """
   Replace the focus at `lens` in `source` with `value`.
   Returns the updated source wrapped in `Result`.
 
-Use `set` when you already have the replacement value.
+  Use `set` when you already have the replacement value.
+  When the focus is `Result<$A>`, `set` also accepts a plain `$A` and stores it
+  as `Ok($A)`.
+  This is especially useful for `T?` fields because `T?` lowers to
+  `Result<T, NoneError>`.
 
-```surtr
-updated =? Lens::set(User.name, user, "bob")
-pair2 =? Lens::set(Tuple._1, pair, 4)
-```
+  For nested updates, compose the path first:
 
-For nested updates, compose the path first:
+  If the path contains a variant selector, `set` fails with
+  `Err(VariantMismatch(...))` when the current value is not on that variant.
 
-```surtr
-name_lens = Lens::compose(User.profile, Profile.name)
-updated =? Lens::set(name_lens, user, "bob")
-```
+  ## REPL
+  xldr(1)> cfg = Config::new("demo")
+  > cfg: Config = Config { name: "demo", entrypoint: "Main::main", paths: [] }
+  xldr(2)> cfg2 =? Lens::set(Config.entrypoint, cfg, "App::main")
+  > cfg2: Config = Config { name: "demo", entrypoint: "App::main", paths: [] }
 
-If the path contains a variant selector, `set` fails with
-`Err(VariantMismatch(...))` when the current value is not on that variant.
+  xldr(1)> pair = ("alice", 42)
+  > pair: (String, Int) = ("alice", 42)
+  xldr(2)> pair2 =? Lens::set(Tuple._1, pair, 99)
+  > pair2: (String, Int) = ("alice", 99)
+
+  xldr(1)> bw2 =? Lens::set(BitWidth.Any, BitWidth::Any(5), 7)
+  > bw2: BitWidth = BitWidth::Any(7)
   """
-  @@builtin def set(lens: Lens<$S, $A>, source: $S, value: $A) -> Result<$S>
+  @builtin def set(lens: Lens<$S, $A>, source: $S, value: $A) -> Result<$S>
 
-  @@doc """
+  @doc """
   Update the focus at `lens` in `source` with `update_fun`.
   `update_fun` receives the current focus and returns `Result<$A>`.
 
-Use `over` when the new value depends on the current focused value.
+  Use `over` when the new value depends on the current focused value.
+  When the focus is `Result<$A>`, `over` updates only the successful payload:
+  `Ok(value)` calls the updater with `value`, while `Err(err)` skips the updater
+  and leaves the field unchanged.
+  This makes `Result`-backed fields compose directly with ordinary
+  `A -> Result<A>` update helpers.
 
-```surtr
-user2 =? Lens::over(User.name, user, {|name|
-  Ok(name ++ "!")
-})
+  `update_fun` must return `Result`.
+  If `update_fun` returns `Err(...)`, that error is propagated as-is.
 
-pair2 =? Lens::over(Tuple._1, pair, {|n|
-  Ok(n + 1)
-})
-```
+  ## REPL
+  xldr(1)> cfg = Config::new("demo")
+  > cfg: Config = Config { name: "demo", entrypoint: "Main::main", paths: [] }
+  xldr(2)> cfg2 =? Lens::over(Config.entrypoint, cfg, {|entry| Ok(entry ++ "!")})
+  > cfg2: Config = Config { name: "demo", entrypoint: "Main::main!", paths: [] }
 
-`update_fun` must return `Result`.
-If `update_fun` returns `Err(...)`, that error is propagated as-is.
+  xldr(1)> pair = ("alice", 42)
+  > pair: (String, Int) = ("alice", 42)
+  xldr(2)> pair2 =? Lens::over(Tuple._1, pair, {|n| Ok(n + 1)})
+  > pair2: (String, Int) = ("alice", 43)
+
+  xldr(1)> bw2 =? Lens::over(BitWidth.Any, BitWidth::Any(7), {|n| Ok(n + 1)})
+  > bw2: BitWidth = BitWidth::Any(8)
   """
-  @@builtin def over(lens: Lens<$S, $A>, source: $S, update_fun: ($A -> Result<$A>)) -> Result<$S>
+  @builtin def over(lens: Lens<$S, $A>, source: $S, update_fun: ($A -> Result<$A>)) -> Result<$S>
 
-  @@doc """
+  @doc """
+  Update a `Result<$A>` focus as a whole.
+  `update_fun` receives the entire current `Result<$A>` and returns
+  `Result<Result<$A>>`.
+
+  Use `over_result` when you want to rewrite `Ok(...)` and `Err(...)` directly.
+  Use plain `over` when you only want to transform the successful payload.
+
+  `update_fun` must return `Result`.
+  If `update_fun` returns `Err(...)`, that error is propagated as-is.
+  """
+  @builtin def over_result(lens: Lens<$S, Result<$A>>, source: $S, update_fun: (Result<$A> -> Result<Result<$A>>)) -> Result<$S>
+
+  @doc """
   Compose two lens paths in sequence.
   `compose(outer, inner)` focuses from `S` to `B` via `A`.
+  `outer / inner` is equivalent operator sugar.
 
-Use this for nested access and updates.
+  Use this for nested access and updates.
 
-```surtr
-profile_name = Lens::compose(User.profile, Profile.name)
+  The types must line up:
 
-name = Lens::view(profile_name, user)
-user2 =? Lens::set(profile_name, user, "bob")
-```
+  - `outer: Lens<S, A>`
+  - `inner: Lens<A, B>`
+  - result: `Lens<S, B>`
 
-The types must line up:
+  This is the canonical path-composition API.
 
-- `outer: Lens<S, A>`
-- `inner: Lens<A, B>`
-- result: `Lens<S, B>`
+  Private field segments keep their visibility rules after composition.
+  If one segment is private and the current scope cannot see it, the composed
+  path is rejected at compile time.
 
-This is the canonical path-composition API.
+  ## REPL
+  Compose is easiest to try with a user-defined nested type in a source file.
+  In the REPL, use the same shape as:
+  outer = User.profile
+  inner = Profile.name
+  path2 = outer / inner
+  path = Lens::compose(outer, inner)
   """
-  @@builtin def compose(outer: Lens<$S, $A>, inner: Lens<$A, $B>) -> Lens<$S, $B>
+  @builtin def compose(outer: Lens<$S, $A>, inner: Lens<$A, $B>) -> Lens<$S, $B>
+}
+
+@doc """
+`Compose` implementation for nested `Lens` paths.
+This is the source-level meaning of `left / right` for Lens values.
+
+The compiler still lowers Lens composition at compile time in Stage1, but the
+surface contract is expressed through `Compose::compose`.
+"""
+impl Compose<Lens<$A, $B>, Lens<$S, $B>> for Lens<$S, $A> {
+  @doc """
+  Compose the receiver path before `rhs`.
+  `left / right` and `Compose::compose(left, right)` follow this contract.
+  `Lens::compose(left, right)` remains the canonical helper form.
+  """
+  @builtin def compose(self: Self, rhs: Lens<$A, $B>) -> Lens<$S, $B>
 }

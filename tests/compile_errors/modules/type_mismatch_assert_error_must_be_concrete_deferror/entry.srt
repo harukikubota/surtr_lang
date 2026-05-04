@@ -1,5 +1,5 @@
-def make_error() -> Error {
-  if(True, SomeError("left"), OtherError("right"))
+def make_error() -> Int {
+  1
 }
 
 guard = assert(False, make_error())

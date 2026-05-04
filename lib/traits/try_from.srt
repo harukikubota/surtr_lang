@@ -1,0 +1,16 @@
+@doc """
+Standard `TryFrom` trait declaration.
+`TryFrom<$To>` models fallible conversion from `Self` into `$To`.
+The target witness uses `TypeRef<$To>` for the same reason as `From`.
+Because `try_from(...)` is part of the shared conversion surface, this trait is
+auto-imported when the standard prelude is loaded.
+
+## REPL
+xldr(1)> try_from("42", Int)
+Ok(42)
+"""
+@autoimport
+deftrait TryFrom<$To> {
+  # Convert the value into the requested target type and return `Err(...)` on failure.
+  def try_from(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+}

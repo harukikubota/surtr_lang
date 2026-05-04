@@ -26,15 +26,19 @@ pub enum Token {
     Plus,   // +
     Minus,  // -
     Star,   // *
+    Slash,  // /
     Concat, // ++
 
     // ── Comparison / equality ──
     EqEq,   // ==
     BangEq, // !=
+    Bang,   // !
     Lt,     // <
     Gt,     // >
     LtEq,   // <=
     GtEq,   // >=
+    AndAnd, // &&
+    OrOr,   // ||
 
     // ── Assignment ──
     Bind,     // =
@@ -49,22 +53,24 @@ pub enum Token {
     RBrace, // }
 
     // ── Punctuation ──
-    Comma,       // ,
-    Colon,       // :
-    At,          // @
-    Dot,         // .
-    DotDot,      // ..
-    FatArrow,    // =>
-    Arrow,       // ->
-    Semicolon,   // ;
-    Pipe,        // |
-    PipeApply,   // |>
-    PipeMap,     // |*>
-    PipeBind,    // |>=
-    PipeCompose, // |=>
-    Compose,     // >>
-    Amp,         // &
-    Dollar,      // $
+    Comma,          // ,
+    Colon,          // :
+    At,             // @
+    Dot,            // .
+    Question,       // ?
+    DotDot,         // ..
+    FatArrow,       // =>
+    Arrow,          // ->
+    Semicolon,      // ;
+    Pipe,           // |
+    PipeApply,      // |>
+    PipeMap,        // |*>
+    PipeBind,       // |>=
+    Compose,        // >>
+    LiftCompose,    // >*
+    KleisliCompose, // >=>
+    Amp,            // &
+    Dollar,         // $
 
     // ── Statement separators ──
     Newline,
@@ -72,11 +78,13 @@ pub enum Token {
     // ── Keywords ──
     Def,
     Defp,
+    Defagent,
     Defmod,
+    Namespace,
     Deftrait,
     Import,
     Include,
-    /// Generic annotator token: `@@builtin`, `@@foo`, ...
+    /// Generic annotator token: `@builtin`, `@foo`, ...
     Annotator(String),
     Defstruct,
     Defrecord,
@@ -86,8 +94,11 @@ pub enum Token {
     Impl,
     For,
     Match,
+    When,
     Cond,
     Private,
+    Public,
+    Const,
     Type,
     Where,
 

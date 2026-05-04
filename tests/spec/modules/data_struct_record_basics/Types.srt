@@ -5,7 +5,7 @@ defstruct User {
 
 impl User {
   def new(name: String, age: Int) -> Self {
-    User { name: name, age: age }
+    User { name, age }
   }
 }
 

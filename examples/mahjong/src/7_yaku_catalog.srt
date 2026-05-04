@@ -1,0 +1,99 @@
+defrecord Yaku(yaku_id: String, name: String, han: Int)
+
+defmod MahjongYakuCatalog {
+  def registry() -> HashMap<Yaku> {
+    HashMap::from_entries([
+      (
+        "StandardShape",
+        Yaku(
+          yaku_id: "StandardShape",
+          name: "標準形",
+          han: 1,
+        ),
+      ),
+      (
+        "Chiitoitsu",
+        Yaku(
+          yaku_id: "Chiitoitsu",
+          name: "七対子",
+          han: 2,
+        ),
+      ),
+      (
+        "KokushiMusou",
+        Yaku(
+          yaku_id: "KokushiMusou",
+          name: "国士無双",
+          han: 13,
+        ),
+      ),
+      (
+        "Tanyao",
+        Yaku(
+          yaku_id: "Tanyao",
+          name: "タンヤオ",
+          han: 1,
+        ),
+      ),
+      (
+        "Iipeikou",
+        Yaku(
+          yaku_id: "Iipeikou",
+          name: "一盃口",
+          han: 1,
+        ),
+      ),
+      (
+        "Ittsu",
+        Yaku(
+          yaku_id: "Ittsu",
+          name: "一気通貫",
+          han: 2,
+        ),
+      ),
+      (
+        "YakuhaiWhite",
+        Yaku(
+          yaku_id: "YakuhaiWhite",
+          name: "役牌(白)",
+          han: 1,
+        ),
+      ),
+      (
+        "YakuhaiGreen",
+        Yaku(
+          yaku_id: "YakuhaiGreen",
+          name: "役牌(發)",
+          han: 1,
+        ),
+      ),
+      (
+        "YakuhaiRed",
+        Yaku(
+          yaku_id: "YakuhaiRed",
+          name: "役牌(中)",
+          han: 1,
+        ),
+      ),
+      (
+        "Toitoi",
+        Yaku(
+          yaku_id: "Toitoi",
+          name: "対々和",
+          han: 2,
+        ),
+      ),
+    ])
+  }
+
+  def by_id(yaku_id: String) -> Result<Yaku> {
+    HashMap::get(registry(), yaku_id)
+    |> map_err(HandValidationError("unknown yaku id: " ++ yaku_id))
+  }
+
+  def resolve_many(ids: List<String>) -> Result<List<Yaku>> {
+    ids
+      |> List::map(&by_id)
+      |> Result::all()
+  }
+}

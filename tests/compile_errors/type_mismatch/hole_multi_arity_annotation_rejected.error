@@ -1,0 +1,2 @@
+phase: typecheck
+contains: expected (_, _ -> Int), got (Int, Int -> Int)

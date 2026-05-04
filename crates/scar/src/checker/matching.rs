@@ -5,14 +5,27 @@ impl Checker {
         &mut self,
         span: &Span,
         scrutinee: &Resolved,
-        arms: &[(ResolvedPattern, Resolved)],
+        arms: &[ResolvedMatchArm],
     ) -> Result<TypedNode, TypeError> {
         let typed_scrut = self.check_node(scrutinee)?;
         let mut typed_arms = Vec::new();
         let mut result_ty: Option<Ty> = None;
 
-        for (pat, body) in arms {
-            let (typed_pat, body_node) = self.check_match_arm(pat, body, &typed_scrut.ty, span)?;
+        for arm in arms {
+            let mut typed_arm = self.check_match_arm(arm, &typed_scrut.ty, span)?;
+            if let Some(ref rt) = result_ty {
+                if !self.types_compatible(rt, &typed_arm.body.ty)
+                    && self.can_coerce_err_only_result_self_arm(
+                        &typed_scrut,
+                        &typed_arms,
+                        &typed_arm,
+                        rt,
+                    )
+                {
+                    typed_arm.body.ty = self.resolve_ty(rt);
+                }
+            }
+            let body_node = &typed_arm.body;
             if let Some(ref rt) = result_ty {
                 if !self.types_compatible(rt, &body_node.ty) {
                     return Err(TypeError {
@@ -28,10 +41,11 @@ impl Checker {
             } else {
                 result_ty = Some(body_node.ty.clone());
             }
-            typed_arms.push((typed_pat, body_node));
-            self.normalize_env_bindings();
+            typed_arms.push(typed_arm);
         }
 
+        // Arm-local bindings are rolled back by each arm scope. Keep typed arm
+        // subtrees unresolved here and let check_program do one final pass.
         self.check_match_exhaustive(span, &typed_scrut.ty, &typed_arms)?;
 
         let ty = result_ty.unwrap_or(Ty::Unit);
@@ -42,24 +56,76 @@ impl Checker {
         })
     }
 
+    fn can_coerce_err_only_result_self_arm(
+        &mut self,
+        scrutinee: &TypedNode,
+        previous_arms: &[TypedMatchArm],
+        arm: &TypedMatchArm,
+        expected_ty: &Ty,
+    ) -> bool {
+        if arm.guard.is_some() || !matches!(arm.pattern, TypedMatchPattern::Wildcard) {
+            return false;
+        }
+
+        let (scrut_ok, scrut_err) = match self.resolve_ty(&scrutinee.ty) {
+            Ty::Result(ok, err) => (ok, err),
+            _ => return false,
+        };
+        let (expected_ok, expected_err) = match self.resolve_ty(expected_ty) {
+            Ty::Result(ok, err) => (ok, err),
+            _ => return false,
+        };
+
+        if !self.types_compatible(scrut_err.as_ref(), expected_err.as_ref()) {
+            return false;
+        }
+
+        if self.types_compatible(scrut_ok.as_ref(), expected_ok.as_ref()) {
+            return false;
+        }
+
+        let (scrut_id, body_id) = match (&scrutinee.node, &arm.body.node) {
+            (TypedInner::Var(scrut_id), TypedInner::Var(body_id)) => {
+                (scrut_id.unique_id, body_id.unique_id)
+            }
+            _ => return false,
+        };
+        if scrut_id != body_id {
+            return false;
+        }
+
+        previous_arms.iter().any(|prev_arm| {
+            prev_arm.guard.is_none()
+                && matches!(
+                    prev_arm.pattern,
+                    TypedMatchPattern::Constructor { tag: 0, .. }
+                )
+        })
+    }
+
     pub(super) fn check_match_exhaustive(
         &self,
         span: &Span,
         scrut_ty: &Ty,
-        arms: &[(TypedMatchPattern, TypedNode)],
+        arms: &[TypedMatchArm],
     ) -> Result<(), TypeError> {
-        if arms.iter().any(|(pat, _)| self.is_match_catch_all(pat)) {
+        let profile = self.profiler.start();
+        if arms
+            .iter()
+            .any(|arm| arm.guard.is_none() && self.is_match_catch_all(&arm.pattern))
+        {
+            self.profiler.finish(ProfileEvent::MatchExhaustive, profile);
             return Ok(());
         }
 
-        match scrut_ty {
+        let result = match scrut_ty {
             Ty::Bool => {
-                let has_true = arms
-                    .iter()
-                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::BoolLit(true)));
-                let has_false = arms
-                    .iter()
-                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::BoolLit(false)));
+                let has_true = arms.iter().any(|arm| {
+                    arm.guard.is_none() && matches!(&arm.pattern, TypedMatchPattern::BoolLit(true))
+                });
+                let has_false = arms.iter().any(|arm| {
+                    arm.guard.is_none() && matches!(&arm.pattern, TypedMatchPattern::BoolLit(false))
+                });
 
                 if has_true && has_false {
                     Ok(())
@@ -79,12 +145,14 @@ impl Checker {
                 }
             }
             Ty::Result(_, _) => {
-                let has_ok = arms
-                    .iter()
-                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::Constructor { tag: 0, .. }));
-                let has_err = arms
-                    .iter()
-                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::Constructor { tag: 1, .. }));
+                let has_ok = arms.iter().any(|arm| {
+                    arm.guard.is_none()
+                        && matches!(&arm.pattern, TypedMatchPattern::Constructor { tag: 0, .. })
+                });
+                let has_err = arms.iter().any(|arm| {
+                    arm.guard.is_none()
+                        && matches!(&arm.pattern, TypedMatchPattern::Constructor { tag: 1, .. })
+                });
 
                 if has_ok && has_err {
                     Ok(())
@@ -104,21 +172,21 @@ impl Checker {
                 }
             }
             Ty::Enum(enum_name, _) => {
-                let variants = self
-                    .env
-                    .enum_variants_of(enum_name)
-                    .cloned()
-                    .unwrap_or_default();
                 let mut missing = Vec::new();
-                for variant in variants {
-                    let covered = arms.iter().any(|(pat, _)| {
-                        matches!(
-                            pat,
-                            TypedMatchPattern::Constructor { tag, .. } if *tag == variant.tag
-                        )
-                    });
-                    if !covered {
-                        missing.push(variant.short_name);
+                if let Some(variants) = self.lookup_enum_variants_of(enum_name) {
+                    for variant in variants {
+                        let covered = arms.iter().any(|arm| {
+                            if arm.guard.is_some() {
+                                return false;
+                            }
+                            matches!(
+                                &arm.pattern,
+                                TypedMatchPattern::Constructor { tag, .. } if *tag == variant.tag
+                            )
+                        });
+                        if !covered {
+                            missing.push(variant.short_name.clone());
+                        }
                     }
                 }
                 if missing.is_empty() {
@@ -132,12 +200,12 @@ impl Checker {
                 }
             }
             Ty::List(_) => {
-                let has_nil = arms
-                    .iter()
-                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::ListNil));
-                let has_cons = arms
-                    .iter()
-                    .any(|(pat, _)| matches!(pat, TypedMatchPattern::ListCons(_, _)));
+                let has_nil = arms.iter().any(|arm| {
+                    arm.guard.is_none() && matches!(&arm.pattern, TypedMatchPattern::ListNil)
+                });
+                let has_cons = arms.iter().any(|arm| {
+                    arm.guard.is_none() && matches!(&arm.pattern, TypedMatchPattern::ListCons(_, _))
+                });
                 if has_nil && has_cons {
                     Ok(())
                 } else {
@@ -156,19 +224,21 @@ impl Checker {
                 }
             }
             Ty::Str => {
-                let has_empty = arms.iter().any(
-                    |(pat, _)| matches!(pat, TypedMatchPattern::StrLit(value) if value.is_empty()),
-                );
-                let has_cons = arms.iter().any(|(pat, _)| {
-                    matches!(
-                        pat,
-                        TypedMatchPattern::Extractor {
-                            input_ty,
-                            extractor,
-                            ..
-                        } if extractor.name == "uncons"
-                            && matches!(self.resolve_ty(input_ty), Ty::Str)
-                    )
+                let has_empty = arms.iter().any(|arm| {
+                    arm.guard.is_none()
+                        && matches!(&arm.pattern, TypedMatchPattern::StrLit(value) if value.is_empty())
+                });
+                let has_cons = arms.iter().any(|arm| {
+                    arm.guard.is_none()
+                        && matches!(
+                            &arm.pattern,
+                            TypedMatchPattern::Extractor {
+                                input_ty,
+                                extractor,
+                                ..
+                            } if extractor.name == "uncons"
+                                && matches!(self.resolve_ty(input_ty), Ty::Str)
+                        )
                 });
                 if has_empty && has_cons {
                     Ok(())
@@ -192,23 +262,50 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             }),
-        }
+        };
+        self.profiler.finish(ProfileEvent::MatchExhaustive, profile);
+        result
     }
 
     pub(super) fn check_match_arm(
         &mut self,
-        pat: &ResolvedPattern,
-        body: &Resolved,
+        arm: &ResolvedMatchArm,
         scrut_ty: &Ty,
         _span: &Span,
-    ) -> Result<(TypedMatchPattern, TypedNode), TypeError> {
-        let mut arm_checker = self.spawn_child_checker(self.env.clone());
-        let typed_pat = arm_checker.check_match_subpattern(pat, scrut_ty)?;
-        let typed_body = arm_checker.check_node(body)?;
-        arm_checker.normalize_env_bindings();
-        let typed_body = arm_checker.resolve_typed_node(typed_body);
-        self.absorb_child_progress(&arm_checker);
-        Ok((typed_pat, typed_body))
+    ) -> Result<TypedMatchArm, TypeError> {
+        let profile = self.profiler.start();
+        self.env.push_var_scope();
+        let result = (|| {
+            let typed_pat = self.check_match_subpattern(&arm.pattern, scrut_ty)?;
+            let typed_guard = if let Some(guard) = &arm.guard {
+                let typed_guard = self.check_node(guard)?;
+                if !self.types_compatible(&Ty::Bool, &typed_guard.ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "match guard must be Boolean, got {}",
+                            self.ty_name(&typed_guard.ty)
+                        ),
+                        span: typed_guard.span.clone(),
+                        hint: None,
+                    });
+                }
+                Some(typed_guard)
+            } else {
+                None
+            };
+            let typed_body = self.check_node(&arm.body)?;
+            // Do not normalize env bindings or typed guard/body subtrees in this
+            // scoped arm. The env frame is discarded below, and the containing
+            // TypedInner::Match is normalized once at the program boundary.
+            Ok(TypedMatchArm {
+                pattern: typed_pat,
+                guard: typed_guard,
+                body: typed_body,
+            })
+        })();
+        self.env.pop_var_scope();
+        self.profiler.finish(ProfileEvent::MatchArm, profile);
+        result
     }
 
     pub(super) fn check_match_subpattern(
@@ -224,7 +321,7 @@ impl Checker {
             }
             ResolvedPattern::Annotated(id, ast_ty) => {
                 let expected =
-                    self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
+                    self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                 if !self.types_compatible(&expected, expected_ty) {
                     return Err(TypeError {
                         message: format!(
@@ -244,7 +341,7 @@ impl Checker {
                 let typed_inner = self.check_match_subpattern(inner, expected_ty)?;
                 let alias_bind_ty = if let Some(ast_ty) = alias_ty {
                     let expected =
-                        self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
+                        self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                     if !self.types_compatible(&expected, expected_ty) {
                         return Err(TypeError {
                             message: format!(
@@ -323,7 +420,59 @@ impl Checker {
                 }
                 Ok(TypedMatchPattern::StrLit(s.clone()))
             }
+            ResolvedPattern::DurationLit(span, n) => {
+                let expected_ty = self.resolve_ty(expected_ty);
+                if !Self::is_duration_ty(&expected_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "duration literal pattern requires Duration, got {}",
+                            self.ty_name(&expected_ty)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                Ok(TypedMatchPattern::DurationLit(n.clone()))
+            }
+            ResolvedPattern::Or(items) => {
+                if items.is_empty() {
+                    return Err(TypeError {
+                        message: "empty pattern alternative".into(),
+                        span: Span { start: 0, end: 0 },
+                        hint: None,
+                    });
+                }
+                let mut typed_items = Vec::with_capacity(items.len());
+                for item in items {
+                    let typed_item = self.check_match_subpattern(item, expected_ty)?;
+                    if self.match_pattern_has_bindings(&typed_item) {
+                        return Err(TypeError {
+                            message: "Pattern alternatives cannot bind names directly.".into(),
+                            span: Span { start: 0, end: 0 },
+                            hint: Some(
+                                "Use an outer as-pattern such as `A | B @ err: Error`.".into(),
+                            ),
+                        });
+                    }
+                    typed_items.push(typed_item);
+                }
+                Ok(TypedMatchPattern::Or(typed_items))
+            }
             ResolvedPattern::Constructor(ctor_id, inner_pats) => {
+                if matches!(expected_ty, Ty::Error)
+                    && self.env.is_error_constructor(ctor_id.unique_id)
+                {
+                    if !inner_pats.is_empty() {
+                        return Err(TypeError {
+                            message: "Error kind patterns do not destructure payloads yet.".into(),
+                            span: ctor_id.span.clone(),
+                            hint: Some(
+                                "Use `Kind @ err: Error` and inspect the Error value.".into(),
+                            ),
+                        });
+                    }
+                    return Ok(TypedMatchPattern::ErrorKind(ctor_id.name.clone()));
+                }
                 if matches!(expected_ty, Ty::Result(_, _)) {
                     let tag = match ctor_id.name.as_str() {
                         "Ok" => 0u32,
@@ -367,8 +516,7 @@ impl Checker {
                     });
                 };
                 let variant = self
-                    .env
-                    .enum_variant_by_constructor_id(ctor_id.unique_id)
+                    .lookup_enum_variant_by_constructor_id(ctor_id.unique_id)
                     .ok_or_else(|| TypeError {
                         message: format!("Unknown constructor: {}", ctor_id.name),
                         span: ctor_id.span.clone(),
@@ -489,7 +637,12 @@ impl Checker {
                             self.ty_name(&expected_ty)
                         ),
                         span: extractor_id.span.clone(),
-                        hint: None,
+                        hint: Some(format!(
+                            "Extractor type signature: {}. Match scrutinee type is {}.",
+                            self.callable_signature_for_ty(&extractor_ty)
+                                .unwrap_or_else(|| self.ty_name(&extractor_ty)),
+                            self.ty_name(&expected_ty)
+                        )),
                     });
                 }
                 if items.len() != seq_tys.len() {
@@ -501,7 +654,14 @@ impl Checker {
                             items.len()
                         ),
                         span: extractor_id.span.clone(),
-                        hint: None,
+                        hint: Some(format!(
+                            "Extractor success value(s): {}.",
+                            seq_tys
+                                .iter()
+                                .map(|ty| self.ty_name(ty))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )),
                     });
                 }
                 let mut typed_items = Vec::with_capacity(items.len());
@@ -526,16 +686,55 @@ impl Checker {
         match pat {
             TypedMatchPattern::Binding(_) | TypedMatchPattern::Wildcard => true,
             TypedMatchPattern::As(inner, _) => self.is_match_catch_all(inner),
+            TypedMatchPattern::Or(items) => items.iter().any(|item| self.is_match_catch_all(item)),
             TypedMatchPattern::Tuple(items) => {
+                items.iter().all(|item| self.is_match_catch_all(item))
+            }
+            TypedMatchPattern::Extractor {
+                input_ty,
+                extractor,
+                items,
+                ..
+            } if extractor.name == "Duration::deconstruct"
+                && Self::is_duration_ty(&self.resolve_ty(input_ty)) =>
+            {
                 items.iter().all(|item| self.is_match_catch_all(item))
             }
             TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
+            | TypedMatchPattern::DurationLit(_)
+            | TypedMatchPattern::ErrorKind(_)
             | TypedMatchPattern::Constructor { .. }
             | TypedMatchPattern::ListNil
             | TypedMatchPattern::ListCons(_, _)
             | TypedMatchPattern::Extractor { .. } => false,
+        }
+    }
+
+    fn match_pattern_has_bindings(&self, pat: &TypedMatchPattern) -> bool {
+        match pat {
+            TypedMatchPattern::Binding(_) => true,
+            TypedMatchPattern::As(_, _) => true,
+            TypedMatchPattern::Tuple(items) | TypedMatchPattern::Or(items) => items
+                .iter()
+                .any(|item| self.match_pattern_has_bindings(item)),
+            TypedMatchPattern::Constructor { fields, .. } => fields
+                .iter()
+                .any(|item| self.match_pattern_has_bindings(item)),
+            TypedMatchPattern::ListCons(head, tail) => {
+                self.match_pattern_has_bindings(head) || self.match_pattern_has_bindings(tail)
+            }
+            TypedMatchPattern::Extractor { items, .. } => items
+                .iter()
+                .any(|item| self.match_pattern_has_bindings(item)),
+            TypedMatchPattern::Wildcard
+            | TypedMatchPattern::BoolLit(_)
+            | TypedMatchPattern::IntLit(_)
+            | TypedMatchPattern::StrLit(_)
+            | TypedMatchPattern::DurationLit(_)
+            | TypedMatchPattern::ErrorKind(_)
+            | TypedMatchPattern::ListNil => false,
         }
     }
 }

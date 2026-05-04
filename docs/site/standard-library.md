@@ -1,9 +1,9 @@
 # Surtr Standard Library Layout
 
-このページは、Surtr の標準モジュール構成を利用者向けにまとめたものです。
+このページは、Surtr の標準定義ソース構成を利用者向けにまとめたものです。
 
-標準モジュールは単なる補助ファイルではなく、language surface の一部です。  
-`lib/*.srt` に書かれた `@@doc` は source 上の説明であり、将来的には `.eldr` の `Docs` chunk からも参照できる前提で扱います。
+標準定義ソースは単なる補助ファイルではなく、language surface の一部です。  
+`lib/*.srt` に書かれた `@doc` は source 上の説明であり、将来的には `.eldr` の `Docs` chunk からも参照できる前提で扱います。
 
 Surtr 全体では、関数は常に何らかの namespace に属します。標準ライブラリでもこの方針は同じです。
 
@@ -14,14 +14,14 @@ Surtr 全体では、関数は常に何らかの namespace に属します。標
 
 ## 1. ロード順
 
-標準モジュールの初期ロード順は次で固定されています。
+標準定義ソースの初期ロード順は次で固定されています。
 
 ```text
-Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, HashMap, Result, Lens, Float] -> user source
+Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> user source
 ```
 
-このうち auto import されるのは `Bootstrap` と `Kernel` だけです。  
-他の標準モジュールは標準モジュールとして同梱されますが、名前空間としては明示 import 前提です。
+このうち auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@autoimport` が付いた標準 trait です。  
+他の標準定義ソースは標準定義ソースとして同梱されますが、名前空間としては明示 import 前提です。
 
 ## 2. 各モジュールの役割
 
@@ -37,14 +37,13 @@ Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, T
 そのうえで、`NoneError` や `ZeroDivisionError` のような universally useful な
 concrete error は、最初の標準ステージから使えるようここに置きます。
 同時に、`import` / `include` のような language-provided macro surface も
-`Bootstrap` module 配下の `@@builtin def` として source に残します。
+`Bootstrap` module 配下の `@builtin def` として source に残します。
 ただし surface 構文では引き続き top-level 専用の special form として扱います。
 
 ### `Kernel`
 
 - `defmod Kernel` の中に `if`, `if_then`, `assert`, `ensure`, `and`, `or`, `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `concat`, `print`, `to_string`, `inspect`, `eprint`, `set_exit_code` のような cross-cutting builtin を置く
 - auto import される最小の標準 API を置く
-- 専用 file を持たない `Unit` の builtin type 宣言を置く
 
 primitive type に強く結びつかない builtin は、ここへ集めます。
 特に `if` / `if_then` は言語特性に近い special form ですが、source 上の契約と
@@ -54,11 +53,19 @@ primitive type に強く結びつかない builtin は、ここへ集めます�
 comparison / concat 系の call-style helper (`eq`, `lt`, `concat` など) も
 primitive module をまたぐ読みやすさを優先して `Kernel` に置きます。
 
+### `SpecialTypes`
+
+- `special_types.srt` に compiler-special builtin type を集約する
+- 現在は `Unit`, `TypeRef<$T>`, `Hole` をここへ置く
+- `defmod` は持たず、top-level canonical type declaration だけを持つ
+- user-facing な振る舞いは各 trait / callable / module surface 側から現れる
+
 ### type modules
 
 現時点では次の module が用意されています。
 
 - `Numeric`
+  - helper capability trait
 - `Int`
 - `String`
 - `Boolean`
@@ -71,45 +78,49 @@ primitive module をまたぐ読みやすさを優先して `Kernel` に置き�
 
 各 type module には 2 つの層があります。
 
-1. file top-level の `@@builtin type ...`
+1. file top-level の `@builtin type ...`
 2. `defmod Name { ... }` の module API
 
 この分離により、「型そのものの compiler 契約」と「その型の helper / docs / 将来 API」を同じ file に置きつつ、役割は混ぜずに管理できます。
 `impl Type` や `impl Trait for Type` は、この module API とは別の型専用 namespace として並びます。
 
-`Numeric` だけは type module ではなく、トップレベル trait 宣言専用の標準 module です。
+`Numeric` だけは type module ではなく、トップレベル trait 宣言専用の標準定義ソースです。
 
 - `numeric.srt` に `deftrait Numeric` を置く
 - `int.srt` のトップレベルに `impl Numeric for Int` を置く
 - `float.srt` のトップレベルに `impl Numeric for Float` を置く
-- `+`, `-`, `*` は `Numeric` dispatch を通るが、runtime には trait object を導入しない
+- `Numeric` は `safe_div`, `abs`, `min`, `max` の helper capability を表す
+- `+`, `-`, `*` は `Add` / `Sub` / `Mul` dispatch を通るが、runtime には trait object を導入しない
 
-## 3. `@@builtin type` の契約
+## 3. `@builtin type` の契約
 
 標準型宣言は、各対応 file のトップレベルで canonical shape を宣言します。
 
 ```surtr
-// kernel.srt
-@@builtin type Unit
+// special_types.srt
+@builtin type Unit
+
+// special_types.srt
+@builtin type TypeRef<$T>
+
+// special_types.srt
+@builtin type Hole
 
 // int.srt
-@@builtin type Int
-
-// compiler-reserved type witness
-@@builtin type TypeRef<$T>
+@builtin type Int
 
 // list.srt
-@@builtin type List<$A>
+@builtin type List<$A>
 
 // hash_map.srt
-@@builtin type HashMap<$V>
+@builtin type HashMap<$V>
 
 // result.srt
-@@builtin type Result<$T>
+@builtin type Result<$T>
 ```
 
 compiler はこの head 自体を契約として扱います。  
-そのため、標準モジュール側で name や generic parameter が変わっていると compile error になります。
+そのため、標準定義ソース側で name や generic parameter が変わっていると compile error になります。
 
 特に次は重要です。
 
@@ -117,10 +128,12 @@ compiler はこの head 自体を契約として扱います。
 - `HashMap` は `HashMap<$V>`（key は常に `String`）
 - `Result` は `Result<$T>`
 - `TypeRef` は `TypeRef<$T>`
+- `Hole` は ignored-input callable marker
 
 `Result<T, E>` は builtin type declaration ではなく、戻り値位置での error contract 記法として扱います。
 `TypeRef<$T>` は ordinary value type ではなく、target type witness 専用の
 compiler-reserved builtin type です。
+`Hole` は ordinary data type ではなく、`_` の背後にある callable marker です。
 
 `TypeRef<$T>` の使い道は限定されています。
 
@@ -134,6 +147,8 @@ compiler-reserved builtin type です。
 - field type
 - local binding の型注釈
 - first-class value としての生成・保存・返却
+
+compiler-special type の詳しい説明は `./special-types.md` を参照してください。
 
 ## 4. `Error` と `Result` の読み方
 
@@ -155,39 +170,39 @@ compiler-reserved builtin type です。
 利用者が見る surface contract は、専用の builtin type と専用 constructor contract です。
 
 ```surtr
-@@builtin type Ok($T) -> Result<$T>
-@@builtin type Err(Error) -> Result<$T>
+@builtin type Ok($T) -> Result<$T>
+@builtin type Err(Error) -> Result<$T>
 ```
 
 この 2 行は通常の関数本体付き `def` ではなく、compiler が特別扱いする declaration-only contract です。
 
-## 5. `@@doc` の使い方
+## 5. `@doc` の使い方
 
-標準モジュールの説明は `@@doc """..."""` で source に直接載せます。
+標準定義ソースの説明は `@doc """..."""` で source に直接載せます。
 
 ```surtr
-@@doc """
+@doc """
 Standard `String` type declaration.
 Text values produced by literals, interpolation, and textual conversion use this
 head.
 """
-@@builtin type String
+@builtin type String
 
-@@doc """
+@doc """
 String module.
 Groups string-oriented helpers.
 """
 defmod String {
-  @@doc """
+  @doc """
   Placeholder while the module API grows.
   """
   def dummy() { () }
 }
 ```
 
-`@@doc` を source に置く利点は次のとおりです。
+`@doc` を source に置く利点は次のとおりです。
 
-- 標準モジュールと説明文がずれにくい
+- 標準定義ソースと説明文がずれにくい
 - dump や REPL の docs UI に同じ情報を流せる
 - Rust 実装ではなく Surtr surface として API を説明できる
 - language-provided macro surface も bootstrap module の function docs として揃えられる
@@ -230,9 +245,9 @@ defmod String {
 - cross-cutting runtime builtin value を足すときは `kernel.srt` の `defmod Kernel` と shared builtin metadata の両方を更新する
 - `Numeric` surface を増やすときは `numeric.srt` の trait 宣言、各 concrete impl、Scar の trait dispatch、Forge の lowering を同時に更新する
 - `if` / `assert` / `and` / `eq` のような compiler-handled helper を足すときは `kernel.srt` と resolver/checker の canonical contract を同時に更新する
-- builtin type を変えるときは、対応する `lib/*.srt` の `@@builtin type` と compiler 側の canonical contract を同時に更新する
+- builtin type を変えるときは、対応する `lib/*.srt` の `@builtin type` と compiler 側の canonical contract を同時に更新する
 - `Result` constructor contract を変えるときは `result.srt` の `Ok` / `Err` 宣言と checker 側の canonical rule を同時に更新する
-- module API を足すときは `defmod Name` に実装し、まず `@@doc` を先に書く
+- module API を足すときは `defmod Name` に実装し、まず `@doc` を先に書く
 
 ## 8. `List` helper surface
 
@@ -318,7 +333,7 @@ ret = List::reverse(acc)
 `HashMap` は key を `String` に固定した immutable map です。
 
 ```surtr
-@@builtin type HashMap<$V>
+@builtin type HashMap<$V>
 ```
 
 公開 surface は次で固定されています。
@@ -347,21 +362,69 @@ ret = List::reverse(acc)
 `Result` module は constructor contract と、よく使う variant 判定 helper の置き場です。
 
 ```surtr
-@@builtin type Result<$T>
-@@builtin type Ok($T) -> Result<$T>
-@@builtin type Err(Error) -> Result<$T>
+@builtin type Result<$T>
+@builtin type Ok($T) -> Result<$T>
+@builtin type Err(Error) -> Result<$T>
 ```
 
-現時点でも中心は `Ok(...)`, `Err(...)`, `match`, `=?`, `|*>`, `|>=`, `|=>` の言語構文と型規則ですが、
+現時点でも中心は `Ok(...)`, `Err(...)`, `match`, `=?`, `|*>`, `|>=`, `>*`, `>=>` の言語構文と型規則ですが、
 `Result::is_ok(...)` / `Result::is_err(...)` で variant 判定だけを簡潔に書けます。
 
-## 11. `Lens` module の位置づけ
+## 11. `Option` module の位置づけ
+
+`Option` は user-facing な補助 enum です。
+`Some(value)` / `None` 相当の値を表せますが、Surtr の失敗伝播の主軸ではありません。
+
+```surtr
+defenum Option<$T> {
+  Some($T),
+  None,
+}
+```
+
+`Option` は `=?` の対象ではありませんが、`|*>`、`|>=`、`>*`、`>=>` には `Option` 文脈の標準実装があります。
+失敗伝播へ載せたい場合は `from(value, Result)`、値として分岐したい場合は `match` を使います。
+`from(value, Option)` は `Err(_)` を `None` に畳み込む明示変換です。
+
+## Public vs Hidden
+
+`Process` / `Task` のような副作用系モジュールは、public helper と runtime/internal builtin を分けて読みます。  
+`IO` と `Random` は現時点では public builtin をそのまま surface に出しており、hidden shim 経由ではありません。
+
+- public API は通常の `def` / `impl Type` / `@doc` に現れる
+- `@hidden __*` builtin は compiler/runtime 接続用で、利用者向け API 一覧には含めない
+
+特に `|>` や trait helper の docs では public surface を正本とし、hidden builtin 名を直接使う前提にはしません。
+
+## REPL Model
+
+REPL は起動時に標準定義ソースと preload script を読み切った OnceRead universe で動きます。
+
+- REPL 中の `include` は扱わない
+- REPL 中の `import` は、起動時に読み込まれた固定 universe に対する既存 symbol の導入としては使える
+- REPL 中の `defstruct` / `defenum` / `deftrait` / `impl` / `defmod` は増分 universe 更新を前提にしない
+- trait impl 候補一覧や diagnostics は、その起動時 universe を前提に固定される
+
+データ型の field で欠損を表したい場合は、`Option<T>` より `T?` を先に検討してください。
+`T?` は `Result<T, NoneError>` に下がるので、Lens 更新や `Result` を返す helper と直接つながります。
+
+```surtr
+user.nickname
+|> from(Result)
+|>= normalize_name
+|> from(Option)
+```
+
+`Option<T>` field を `Result` パイプへ流すと、上のような往復変換が必要です。
+`nickname: String?` なら field 自体が `Result` 系なので、この変換を省けます。
+
+## 12. `Lens` module の位置づけ
 
 `Lens` は runtime の first-class value ではなく、compile-time にだけ存在する
 path capability です。
 
 ```surtr
-@@builtin type Lens<$S, $A>
+@builtin type Lens<$S, $A>
 ```
 
 読み方は次です。
@@ -390,7 +453,7 @@ Tuple._1
 ```
 
 - `.0`, `.1` ではなく `._0`, `._1`
-- `Tuple._N` は `Lens<(...), ...>` が期待される場所でだけ使う
+- `Tuple._N` は `Lens<(...), ...>` が期待される場所で使うほか、同一スコープの local binding として deferred path に束縛できる
 - `_0` 単体は使わない
 
 enum variant path は `Enum.Variant` です。
@@ -403,11 +466,16 @@ Token.Ident
 - selector は PascalCase 固定
 - 実行時の値がその variant でなければ `Err(VariantMismatch(...))` になる
 
-ネストした path は `Lens::compose` でつなぎます。
+ネストした path は `/` または `Lens::compose` でつなぎます。
 
 ```surtr
+User.profile / Profile.name
 Lens::compose(User.profile, Profile.name)
 ```
+
+compose 後の表示は canonical path に正規化されます。
+`User.profile / Profile.name` は `User.profile.name` として扱われ、root path の
+重複は表示に残りません。
 
 ### `value.segment` は read sugar
 
@@ -432,7 +500,7 @@ first = Lens::view(Tuple._0, pair)
 ```surtr
 name = Lens::view(User.name, user)
 first = Lens::view(Tuple._0, pair)
-profile_name = Lens::view(Lens::compose(User.profile, Profile.name), user)
+profile_name = Lens::view(User.profile / Profile.name, user)
 ```
 
 返り値は path と source に応じて変わります。
@@ -462,7 +530,7 @@ pair2 =? Lens::set(Tuple._1, pair, 4)
 ネストした値も同じです。
 
 ```surtr
-profile_name = Lens::compose(User.profile, Profile.name)
+profile_name = User.profile / Profile.name
 user2 =? Lens::set(profile_name, user, "bob")
 ```
 
@@ -480,9 +548,20 @@ user2 =? Lens::over(User.name, user, {|name|
 - `Err(...)` を返したらそのまま伝播する
 - 返り値は常に `Result<S>`
 
+focus が `Result<A>` のとき、`over` は `Ok(value)` の payload だけを更新します。
+`Err(err)` の場合は updater を呼ばず、その field をそのまま残します。
+
+### `Lens::over_result`
+
+`Lens::over_result(lens, source, update_fun)` は `Result<A>` focus 全体を更新します。
+
+- `update_fun` は `Result<A> -> Result<Result<A>>`
+- `Ok(...)` と `Err(...)` の両方を明示的に作り直したい場面向け
+- successful payload だけ触りたいなら `over` の方が軽い
+
 ### `Lens::compose`
 
-`Lens::compose(outer, inner)` は 2 つの path を順につなぎます。
+`Lens::compose(outer, inner)` は 2 つの path を順につなぎます。`outer / inner` は同じ意味の operator sugar です。
 
 ```surtr
 profile_name = Lens::compose(User.profile, Profile.name)
@@ -504,6 +583,10 @@ lens = User.name
 name = Lens::view(lens, user)
 ```
 
+REPL では `:type` / `:info` に加えて `:lens <binding|expr>` が使えます。
+`type` と `full path` の確認に加えて、variant selector や `Result` source を含む
+path の停止点をまとめて見たいときに使います。
+
 一方で、次はできません。
 
 - 関数引数として渡す
@@ -513,16 +596,17 @@ name = Lens::view(lens, user)
 
 関数境界を越えたいときは `Lens` 自体ではなく、`Lens::view(...)` 済みの値を渡します。
 
-## 12. パイプ / bind 系と標準モジュールの関係
+## 13. パイプ / bind 系と標準定義ソースの関係
 
-標準モジュール側から見ると、各演算子との対応は次です。
+標準定義ソース側から見ると、各演算子との対応は次です。
 
 | 構文 | 標準 surface / 役割 |
 |---|---|
 | `x |> f(1)` | call 式への第一引数注入 |
 | `list |*> f()` | `List::map` と同じ方向の変換 |
 | `list |>= f()` | `List` の bind 方向の変換 |
-| `&f |=> &g` | `List` または `Result` を返す関数の合成 |
+| `&f >* &g` | 文脈付き関数の後ろに pure function をつなぐ lifted compose |
+| `&f >=> &g` | `List` または `Result` を返す関数どうしの Kleisli 合成 |
 
 重要なのは、compose 系の実装詳細ではなく surface contract です。
 

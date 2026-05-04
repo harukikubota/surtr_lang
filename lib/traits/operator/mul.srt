@@ -1,0 +1,14 @@
+@doc """
+Standard `Mul` operator trait declaration.
+`Mul` models the `*` / `mul(...)` contract.
+`Mul` is intentionally not auto-imported, so helper-style calls use
+`Mul::mul(...)` or an explicit `import`.
+
+## REPL
+xldr(1)> Mul::mul(3, 4)
+12
+"""
+deftrait Mul {
+  # Return the multiplication result.
+  def mul(self: Self, rhs: Self) -> Self
+}

@@ -6,6 +6,7 @@ impl Checker {
         stmts: Vec<TypedNode>,
     ) -> Result<Vec<TypedNode>, TypeError> {
         let mut defs_by_fun_idx = HashMap::new();
+        defs_by_fun_idx.extend(self.specializable_defs.clone());
         for stmt in &stmts {
             if let Some(fun_idx) = Self::def_fun_idx(stmt) {
                 defs_by_fun_idx.insert(fun_idx, stmt.clone());
@@ -30,6 +31,7 @@ impl Checker {
         for stmt in stmts {
             if let Some(fun_idx) = Self::def_fun_idx(&stmt) {
                 if needs_specialization.contains(&fun_idx) {
+                    self.specializable_defs.insert(fun_idx, stmt);
                     continue;
                 }
             }
@@ -156,6 +158,7 @@ impl Checker {
                 method_name,
                 receiver_ty,
                 dispatch,
+                origin,
                 args,
             } => {
                 let args = args
@@ -190,6 +193,7 @@ impl Checker {
                     method_name,
                     receiver_ty,
                     dispatch,
+                    origin,
                     args,
                 }
             }
@@ -272,42 +276,6 @@ impl Checker {
                 )?),
             ),
             TypedInner::Pipe(left, right) => TypedInner::Pipe(
-                Box::new(self.rewrite_specializations_in_node(
-                    *left,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?),
-                Box::new(self.rewrite_specializations_in_node(
-                    *right,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?),
-            ),
-            TypedInner::ResultMap(left, right) => TypedInner::ResultMap(
-                Box::new(self.rewrite_specializations_in_node(
-                    *left,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?),
-                Box::new(self.rewrite_specializations_in_node(
-                    *right,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?),
-            ),
-            TypedInner::ResultBind(left, right) => TypedInner::ResultBind(
                 Box::new(self.rewrite_specializations_in_node(
                     *left,
                     defs_by_fun_idx,
@@ -411,6 +379,24 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             ),
+            TypedInner::Dbg(args) => TypedInner::Dbg(
+                args.into_iter()
+                    .map(|arg| {
+                        Ok(TypedDbgArg {
+                            span: arg.span,
+                            ty_name: arg.ty_name,
+                            expr: self.rewrite_specializations_in_node(
+                                arg.expr,
+                                defs_by_fun_idx,
+                                bound_tyvars_by_fun_idx,
+                                needs_specialization,
+                                specialization_fun_idxs,
+                                generated_defs,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
             TypedInner::If(cond, then_branch, else_branch) => TypedInner::If(
                 Box::new(self.rewrite_specializations_in_node(
                     *cond,
@@ -486,6 +472,68 @@ impl Checker {
                     generated_defs,
                 )?),
             ),
+            TypedInner::MapErr(value, err) => TypedInner::MapErr(
+                Box::new(self.rewrite_specializations_in_node(
+                    *value,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                Box::new(self.rewrite_specializations_in_node(
+                    *err,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+            ),
+            TypedInner::Cause(value, err) => TypedInner::Cause(
+                Box::new(self.rewrite_specializations_in_node(
+                    *value,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                Box::new(self.rewrite_specializations_in_node(
+                    *err,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+            ),
+            TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
+                Box::new(self.rewrite_specializations_in_node(
+                    *value,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                Box::new(self.rewrite_specializations_in_node(
+                    *marker,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                Box::new(self.rewrite_specializations_in_node(
+                    *handler,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+            ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 Box::new(self.rewrite_specializations_in_node(
                     *scrutinee,
@@ -496,18 +544,31 @@ impl Checker {
                     generated_defs,
                 )?),
                 arms.into_iter()
-                    .map(|(pat, body)| {
-                        Ok((
-                            pat,
-                            self.rewrite_specializations_in_node(
-                                body,
+                    .map(|arm| {
+                        Ok(TypedMatchArm {
+                            pattern: arm.pattern,
+                            guard: arm
+                                .guard
+                                .map(|guard| {
+                                    self.rewrite_specializations_in_node(
+                                        guard,
+                                        defs_by_fun_idx,
+                                        bound_tyvars_by_fun_idx,
+                                        needs_specialization,
+                                        specialization_fun_idxs,
+                                        generated_defs,
+                                    )
+                                })
+                                .transpose()?,
+                            body: self.rewrite_specializations_in_node(
+                                arm.body,
                                 defs_by_fun_idx,
                                 bound_tyvars_by_fun_idx,
                                 needs_specialization,
                                 specialization_fun_idxs,
                                 generated_defs,
                             )?,
-                        ))
+                        })
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             ),
@@ -523,6 +584,7 @@ impl Checker {
                 index,
             ),
             TypedInner::LensPath(path) => TypedInner::LensPath(path),
+            TypedInner::PendingLensPath(path) => TypedInner::PendingLensPath(path),
             TypedInner::LensView {
                 source,
                 path,
@@ -544,6 +606,7 @@ impl Checker {
                 path,
                 value,
                 source_is_result,
+                mode,
             } => TypedInner::LensSet {
                 source: Box::new(self.rewrite_specializations_in_node(
                     *source,
@@ -563,12 +626,14 @@ impl Checker {
                     generated_defs,
                 )?),
                 source_is_result,
+                mode,
             },
             TypedInner::LensOver {
                 source,
                 path,
                 update_fun,
                 source_is_result,
+                mode,
             } => TypedInner::LensOver {
                 source: Box::new(self.rewrite_specializations_in_node(
                     *source,
@@ -588,6 +653,7 @@ impl Checker {
                     generated_defs,
                 )?),
                 source_is_result,
+                mode,
             },
             TypedInner::StructLit(tag, fields) => TypedInner::StructLit(
                 tag,
@@ -708,11 +774,11 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             ),
-            TypedInner::StructDef(tag, name, field_names) => {
-                TypedInner::StructDef(tag, name, field_names)
+            TypedInner::StructDef(tag, name, field_names, private_flags) => {
+                TypedInner::StructDef(tag, name, field_names, private_flags)
             }
-            TypedInner::RecordDef(tag, name, field_names) => {
-                TypedInner::RecordDef(tag, name, field_names)
+            TypedInner::RecordDef(tag, name, field_names, private_flags) => {
+                TypedInner::RecordDef(tag, name, field_names, private_flags)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::TraitDef(name, methods) => TypedInner::TraitDef(name, methods),
@@ -899,6 +965,10 @@ impl Checker {
                 self.match_specialization_ty(left_ok, right_ok, bound_tyvars, mapping);
                 self.match_specialization_ty(left_err, right_err, bound_tyvars, mapping);
             }
+            (Ty::Pid(left_name), Ty::Pid(right_name))
+                if left_name == right_name
+                    || left_name.starts_with('$')
+                    || right_name.starts_with('$') => {}
             (Ty::Enum(left_name, left_args), Ty::Enum(right_name, right_args))
                 if left_name == right_name =>
             {
@@ -972,8 +1042,6 @@ impl Checker {
             }
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
-            | TypedInner::ResultMap(left, right)
-            | TypedInner::ResultBind(left, right)
             | TypedInner::Compose(_, left, right) => {
                 self.collect_bound_tyvars_in_node(left, ordered, seen);
                 self.collect_bound_tyvars_in_node(right, ordered, seen);
@@ -994,6 +1062,11 @@ impl Checker {
                     }
                 }
             }
+            TypedInner::Dbg(args) => {
+                for arg in args {
+                    self.collect_bound_tyvars_in_node(&arg.expr, ordered, seen);
+                }
+            }
             TypedInner::If(cond, then_branch, else_branch) => {
                 self.collect_bound_tyvars_in_node(cond, ordered, seen);
                 self.collect_bound_tyvars_in_node(then_branch, ordered, seen);
@@ -1010,10 +1083,22 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(pred, ordered, seen);
                 self.collect_bound_tyvars_in_node(err, ordered, seen);
             }
+            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
+                self.collect_bound_tyvars_in_node(value, ordered, seen);
+                self.collect_bound_tyvars_in_node(err, ordered, seen);
+            }
+            TypedInner::RecoverKind(value, marker, handler) => {
+                self.collect_bound_tyvars_in_node(value, ordered, seen);
+                self.collect_bound_tyvars_in_node(marker, ordered, seen);
+                self.collect_bound_tyvars_in_node(handler, ordered, seen);
+            }
             TypedInner::Match(scrutinee, arms) => {
                 self.collect_bound_tyvars_in_node(scrutinee, ordered, seen);
-                for (_, body) in arms {
-                    self.collect_bound_tyvars_in_node(body, ordered, seen);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.collect_bound_tyvars_in_node(guard, ordered, seen);
+                    }
+                    self.collect_bound_tyvars_in_node(&arm.body, ordered, seen);
                 }
             }
             TypedInner::FieldAccess(expr, _) => {
@@ -1022,6 +1107,11 @@ impl Checker {
             TypedInner::LensPath(path) => {
                 self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
+            }
+            TypedInner::PendingLensPath(path) => {
+                if let Some(source_ty_hint) = &path.source_ty_hint {
+                    self.collect_bound_tyvars_in_ty(source_ty_hint, ordered, seen);
+                }
             }
             TypedInner::LensView { source, path, .. } => {
                 self.collect_bound_tyvars_in_node(source, ordered, seen);
@@ -1082,8 +1172,9 @@ impl Checker {
                     ordered.push(var);
                 }
             }
-            Ty::List(inner) => self.collect_bound_tyvars_in_ty(&inner, ordered, seen),
-            Ty::TypeRef(inner) => self.collect_bound_tyvars_in_ty(&inner, ordered, seen),
+            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
+                self.collect_bound_tyvars_in_ty(&inner, ordered, seen)
+            }
             Ty::Lens(source, focus) => {
                 self.collect_bound_tyvars_in_ty(&source, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&focus, ordered, seen);
@@ -1119,7 +1210,14 @@ impl Checker {
                     self.collect_bound_tyvars_in_ty(&arg, ordered, seen);
                 }
             }
-            Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Error => {}
+            Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Error
+            | Ty::Hole
+            | Ty::Pid(_) => {}
         }
     }
 
@@ -1144,12 +1242,14 @@ impl Checker {
                 method_name,
                 receiver_ty,
                 dispatch,
+                origin,
                 args,
             } => TypedInner::TraitCall {
                 trait_name,
                 method_name,
                 receiver_ty: self.substitute_ty_with_mapping(&receiver_ty, mapping),
                 dispatch,
+                origin: self.substitute_trait_call_origin_with_mapping(origin, mapping),
                 args: args
                     .into_iter()
                     .map(|arg| self.substitute_typed_node_with_mapping(arg, mapping))
@@ -1181,14 +1281,6 @@ impl Checker {
                 Box::new(self.substitute_typed_node_with_mapping(*right, mapping)),
             ),
             TypedInner::Pipe(left, right) => TypedInner::Pipe(
-                Box::new(self.substitute_typed_node_with_mapping(*left, mapping)),
-                Box::new(self.substitute_typed_node_with_mapping(*right, mapping)),
-            ),
-            TypedInner::ResultMap(left, right) => TypedInner::ResultMap(
-                Box::new(self.substitute_typed_node_with_mapping(*left, mapping)),
-                Box::new(self.substitute_typed_node_with_mapping(*right, mapping)),
-            ),
-            TypedInner::ResultBind(left, right) => TypedInner::ResultBind(
                 Box::new(self.substitute_typed_node_with_mapping(*left, mapping)),
                 Box::new(self.substitute_typed_node_with_mapping(*right, mapping)),
             ),
@@ -1225,6 +1317,15 @@ impl Checker {
                     })
                     .collect(),
             ),
+            TypedInner::Dbg(args) => TypedInner::Dbg(
+                args.into_iter()
+                    .map(|arg| TypedDbgArg {
+                        span: arg.span,
+                        ty_name: arg.ty_name,
+                        expr: self.substitute_typed_node_with_mapping(arg.expr, mapping),
+                    })
+                    .collect(),
+            ),
             TypedInner::If(cond, then_branch, else_branch) => TypedInner::If(
                 Box::new(self.substitute_typed_node_with_mapping(*cond, mapping)),
                 Box::new(self.substitute_typed_node_with_mapping(*then_branch, mapping)),
@@ -1241,14 +1342,29 @@ impl Checker {
                 Box::new(self.substitute_typed_node_with_mapping(*pred, mapping)),
                 Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
             ),
+            TypedInner::MapErr(value, err) => TypedInner::MapErr(
+                Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
+                Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
+            ),
+            TypedInner::Cause(value, err) => TypedInner::Cause(
+                Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
+                Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
+            ),
+            TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
+                Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
+                Box::new(self.substitute_typed_node_with_mapping(*marker, mapping)),
+                Box::new(self.substitute_typed_node_with_mapping(*handler, mapping)),
+            ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 Box::new(self.substitute_typed_node_with_mapping(*scrutinee, mapping)),
                 arms.into_iter()
-                    .map(|(pat, body)| {
-                        (
-                            self.substitute_typed_match_pattern_with_mapping(pat, mapping),
-                            self.substitute_typed_node_with_mapping(body, mapping),
-                        )
+                    .map(|arm| TypedMatchArm {
+                        pattern: self
+                            .substitute_typed_match_pattern_with_mapping(arm.pattern, mapping),
+                        guard: arm
+                            .guard
+                            .map(|guard| self.substitute_typed_node_with_mapping(guard, mapping)),
+                        body: self.substitute_typed_node_with_mapping(arm.body, mapping),
                     })
                     .collect(),
             ),
@@ -1260,6 +1376,12 @@ impl Checker {
                 source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                 focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
                 may_fail: path.may_fail,
+                segments: path.segments,
+            }),
+            TypedInner::PendingLensPath(path) => TypedInner::PendingLensPath(PendingLensPath {
+                source_ty_hint: path
+                    .source_ty_hint
+                    .map(|ty| self.substitute_ty_with_mapping(&ty, mapping)),
                 segments: path.segments,
             }),
             TypedInner::LensView {
@@ -1281,6 +1403,7 @@ impl Checker {
                 path,
                 value,
                 source_is_result,
+                mode,
             } => TypedInner::LensSet {
                 source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
                 path: TypedLensPath {
@@ -1291,12 +1414,14 @@ impl Checker {
                 },
                 value: Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
                 source_is_result,
+                mode,
             },
             TypedInner::LensOver {
                 source,
                 path,
                 update_fun,
                 source_is_result,
+                mode,
             } => TypedInner::LensOver {
                 source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
                 path: TypedLensPath {
@@ -1307,6 +1432,7 @@ impl Checker {
                 },
                 update_fun: Box::new(self.substitute_typed_node_with_mapping(*update_fun, mapping)),
                 source_is_result,
+                mode,
             },
             TypedInner::StructLit(tag, fields) => TypedInner::StructLit(
                 tag,
@@ -1404,11 +1530,11 @@ impl Checker {
                     .map(|arg| self.substitute_typed_node_with_mapping(arg, mapping))
                     .collect(),
             ),
-            TypedInner::StructDef(tag, name, field_names) => {
-                TypedInner::StructDef(tag, name, field_names)
+            TypedInner::StructDef(tag, name, field_names, private_flags) => {
+                TypedInner::StructDef(tag, name, field_names, private_flags)
             }
-            TypedInner::RecordDef(tag, name, field_names) => {
-                TypedInner::RecordDef(tag, name, field_names)
+            TypedInner::RecordDef(tag, name, field_names, private_flags) => {
+                TypedInner::RecordDef(tag, name, field_names, private_flags)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::TraitDef(name, methods) => TypedInner::TraitDef(name, methods),
@@ -1456,6 +1582,9 @@ impl Checker {
             }
             TypedPattern::BoolLit(ty, value) => {
                 TypedPattern::BoolLit(self.substitute_ty_with_mapping(&ty, mapping), value)
+            }
+            TypedPattern::DurationLit(ty, value) => {
+                TypedPattern::DurationLit(self.substitute_ty_with_mapping(&ty, mapping), value)
             }
             TypedPattern::Tuple(ty, items) => TypedPattern::Tuple(
                 self.substitute_ty_with_mapping(&ty, mapping),
@@ -1511,6 +1640,14 @@ impl Checker {
             TypedMatchPattern::BoolLit(value) => TypedMatchPattern::BoolLit(value),
             TypedMatchPattern::IntLit(value) => TypedMatchPattern::IntLit(value),
             TypedMatchPattern::StrLit(value) => TypedMatchPattern::StrLit(value),
+            TypedMatchPattern::DurationLit(value) => TypedMatchPattern::DurationLit(value),
+            TypedMatchPattern::ErrorKind(value) => TypedMatchPattern::ErrorKind(value),
+            TypedMatchPattern::Or(items) => TypedMatchPattern::Or(
+                items
+                    .into_iter()
+                    .map(|item| self.substitute_typed_match_pattern_with_mapping(item, mapping))
+                    .collect(),
+            ),
             TypedMatchPattern::Tuple(items) => TypedMatchPattern::Tuple(
                 items
                     .into_iter()
@@ -1646,6 +1783,21 @@ impl Checker {
         }
     }
 
+    fn substitute_trait_call_origin_with_mapping(
+        &self,
+        origin: TraitCallOrigin,
+        mapping: &HashMap<u32, Ty>,
+    ) -> TraitCallOrigin {
+        match origin {
+            TraitCallOrigin::Explicit => TraitCallOrigin::Explicit,
+            TraitCallOrigin::Operator { op, lhs_ty, rhs_ty } => TraitCallOrigin::Operator {
+                op,
+                lhs_ty: self.substitute_ty_with_mapping(&lhs_ty, mapping),
+                rhs_ty: self.substitute_ty_with_mapping(&rhs_ty, mapping),
+            },
+        }
+    }
+
     fn typed_node_has_pending_trait_call(node: &TypedNode) -> bool {
         match &node.node {
             TypedInner::TraitCall { dispatch, args, .. } => {
@@ -1664,8 +1816,6 @@ impl Checker {
             }
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
-            | TypedInner::ResultMap(left, right)
-            | TypedInner::ResultBind(left, right)
             | TypedInner::Compose(_, left, right) => {
                 Self::typed_node_has_pending_trait_call(left)
                     || Self::typed_node_has_pending_trait_call(right)
@@ -1681,6 +1831,9 @@ impl Checker {
                 TypedInterpolatedPart::Text(_) => false,
                 TypedInterpolatedPart::Expr(expr) => Self::typed_node_has_pending_trait_call(expr),
             }),
+            TypedInner::Dbg(args) => args
+                .iter()
+                .any(|arg| Self::typed_node_has_pending_trait_call(&arg.expr)),
             TypedInner::If(cond, then_branch, else_branch) => {
                 Self::typed_node_has_pending_trait_call(cond)
                     || Self::typed_node_has_pending_trait_call(then_branch)
@@ -1697,14 +1850,26 @@ impl Checker {
                     || Self::typed_node_has_pending_trait_call(pred)
                     || Self::typed_node_has_pending_trait_call(err)
             }
+            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
+                Self::typed_node_has_pending_trait_call(value)
+                    || Self::typed_node_has_pending_trait_call(err)
+            }
+            TypedInner::RecoverKind(value, marker, handler) => {
+                Self::typed_node_has_pending_trait_call(value)
+                    || Self::typed_node_has_pending_trait_call(marker)
+                    || Self::typed_node_has_pending_trait_call(handler)
+            }
             TypedInner::Match(scrutinee, arms) => {
                 Self::typed_node_has_pending_trait_call(scrutinee)
-                    || arms
-                        .iter()
-                        .any(|(_, body)| Self::typed_node_has_pending_trait_call(body))
+                    || arms.iter().any(|arm| {
+                        arm.guard
+                            .as_ref()
+                            .is_some_and(Self::typed_node_has_pending_trait_call)
+                            || Self::typed_node_has_pending_trait_call(&arm.body)
+                    })
             }
             TypedInner::FieldAccess(expr, _) => Self::typed_node_has_pending_trait_call(expr),
-            TypedInner::LensPath(_) => false,
+            TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => false,
             TypedInner::LensView { source, .. } => Self::typed_node_has_pending_trait_call(source),
             TypedInner::LensSet { source, value, .. } => {
                 Self::typed_node_has_pending_trait_call(source)

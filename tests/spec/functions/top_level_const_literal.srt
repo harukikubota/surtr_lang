@@ -1,0 +1,7 @@
+const APP_NAME = "surtr"
+public const DEFAULT_PORT = 8080
+private const SECRET = "hidden"
+
+print(APP_NAME)
+print(to_string(DEFAULT_PORT))
+print(SECRET)

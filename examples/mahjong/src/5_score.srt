@@ -1,0 +1,21 @@
+import MahjongJudge::judge_hand
+import MahjongYakuCatalog::resolve_many
+
+defmod MahjongScore {
+  defp _han_from_yaku(yaku: Yaku) -> Int {
+    yaku.han
+  }
+
+  def score_hand14(valid: ValidHand14) -> Result<Int> {
+    yaku_ids =? judge_hand(valid)
+    yakus =? resolve_many(yaku_ids)
+    best_han = yakus
+      |> List::map(&_han_from_yaku)
+      |> List::sum()
+    if(
+      best_han > 0,
+      Ok(best_han),
+      Err(HandValidationError("score could not be computed from yaku")),
+    )
+  }
+}

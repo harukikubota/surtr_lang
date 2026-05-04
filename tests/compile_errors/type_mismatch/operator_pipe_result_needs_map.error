@@ -1,0 +1,5 @@
+phase: typecheck
+contains: `|>` type mismatch: expected Int, got Result<Int>
+contains: `|>` signature rule
+contains: LHS: Result<Int>
+contains: RHS: (Int -> Int)

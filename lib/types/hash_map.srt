@@ -1,0 +1,212 @@
+@doc """
+Standard `HashMap` type declaration.
+`HashMap<$V>` is an immutable map with `String` keys and
+value-only generics.
+The canonical builtin head is fixed to this shape.
+"""
+@builtin type HashMap<$V>
+
+impl HashMap {
+  defp _map_values_go(
+    source: HashMap<$A>,
+    remaining_keys: List<String>,
+    f: ($A -> $B),
+    acc: HashMap<$B>,
+  ) -> HashMap<$B> {
+    match remaining_keys {
+      [] => acc,
+      [key, ..tail] => match get(source, key) {
+        Ok(value) => _map_values_go(source, tail, f, insert(acc, key, f(value))),
+        Err(_) => _map_values_go(source, tail, f, acc),
+      },
+    }
+  }
+
+  @doc """
+  Return the empty map.
+  ## REPL
+  xldr(1)> HashMap::empty_map()
+  HashMap()
+  """
+  @builtin def empty_map() -> HashMap<$V>
+
+  @doc """
+  Return the empty map.
+  This is the user-facing alias for the builtin constructor helper.
+  ## REPL
+  xldr(1)> HashMap::empty()
+  HashMap()
+  """
+  def empty() -> HashMap<$V> {
+    empty_map()
+  }
+
+  @doc """
+  Build a map from `(String, value)` entries.
+  Later duplicates overwrite values.
+  ## REPL
+  xldr(1)> HashMap::map_from_entries([("a", 1)])
+  HashMap("a" => 1)
+  """
+  @builtin def map_from_entries(entries: List<(String, $V)>) -> HashMap<$V>
+
+  @doc """
+  Build a map from `(String, value)` entries.
+  Later duplicates overwrite values.
+  ## REPL
+  xldr(1)> HashMap::from_entries([("a", 1)])
+  HashMap("a" => 1)
+  """
+  def from_entries(entries: List<(String, $V)>) -> HashMap<$V> {
+    map_from_entries(entries)
+  }
+
+  @doc """
+  Return the number of entries.
+  ## REPL
+  xldr(1)> HashMap::map_len(HashMap::from_entries([("a", 1), ("b", 2)]))
+  2
+  """
+  @builtin def map_len(map: HashMap<$V>) -> Int
+
+  @doc """
+  Return the number of entries.
+  ## REPL
+  xldr(1)> HashMap::len(HashMap::from_entries([("a", 1), ("b", 2)]))
+  2
+  """
+  def len(map: HashMap<$V>) -> Int {
+    map_len(map)
+  }
+
+  @doc """
+  Return `True` when `key` exists in `map`.
+  ## REPL
+  xldr(1)> HashMap::map_contains_key(HashMap::from_entries([("a", 1)]), "a")
+  True
+  """
+  @builtin def map_contains_key(map: HashMap<$V>, key: String) -> Boolean
+
+  @doc """
+  Return `True` when `key` exists in `map`.
+  ## REPL
+  xldr(1)> HashMap::contains_key(HashMap::from_entries([("a", 1)]), "a")
+  True
+  """
+  def contains_key(map: HashMap<$V>, key: String) -> Boolean {
+    map_contains_key(map, key)
+  }
+
+  @doc """
+  Return `Ok(value)` when the key exists, otherwise `Err(NoneError)`.
+  ## REPL
+  xldr(1)> HashMap::map_get(HashMap::from_entries([("a", 1)]), "a")
+  Ok(1)
+  """
+  @builtin def map_get(map: HashMap<$V>, key: String) -> Result<$V, NoneError>
+
+  @doc """
+  Return `Ok(value)` when the key exists, otherwise `Err(NoneError)`.
+  ## REPL
+  xldr(1)> HashMap::get(HashMap::from_entries([("a", 1)]), "a")
+  Ok(1)
+  """
+  def get(map: HashMap<$V>, key: String) -> Result<$V, NoneError> {
+    map_get(map, key)
+  }
+
+  @doc """
+  Return a new map with `key` set to `value`.
+  ## REPL
+  xldr(1)> HashMap::map_insert(HashMap::empty(), "a", 1)
+  HashMap("a" => 1)
+  """
+  @builtin def map_insert(map: HashMap<$V>, key: String, value: $V) -> HashMap<$V>
+
+  @doc """
+  Return a new map with `key` set to `value`.
+  ## REPL
+  xldr(1)> HashMap::insert(HashMap::empty(), "a", 1)
+  HashMap("a" => 1)
+  """
+  def insert(map: HashMap<$V>, key: String, value: $V) -> HashMap<$V> {
+    map_insert(map, key, value)
+  }
+
+  @doc """
+  Return a new map without `key`.
+  Missing keys are no-op.
+  ## REPL
+  xldr(1)> HashMap::map_remove(HashMap::from_entries([("a", 1)]), "a")
+  HashMap()
+  """
+  @builtin def map_remove(map: HashMap<$V>, key: String) -> HashMap<$V>
+
+  @doc """
+  Return a new map without `key`.
+  Missing keys are no-op.
+  ## REPL
+  xldr(1)> HashMap::remove(HashMap::from_entries([("a", 1)]), "a")
+  HashMap()
+  """
+  def remove(map: HashMap<$V>, key: String) -> HashMap<$V> {
+    map_remove(map, key)
+  }
+
+  @doc """
+  Return keys in deterministic key-sorted order.
+  ## REPL
+  xldr(1)> HashMap::map_keys(HashMap::from_entries([("b", 2), ("a", 1)]))
+  ["a", "b"]
+  """
+  @builtin def map_keys(map: HashMap<$V>) -> List<String>
+
+  @doc """
+  Return keys in deterministic key-sorted order.
+  ## REPL
+  xldr(1)> HashMap::keys(HashMap::from_entries([("b", 2), ("a", 1)]))
+  ["a", "b"]
+  """
+  def keys(map: HashMap<$V>) -> List<String> {
+    map_keys(map)
+  }
+
+  @doc """
+  Return values in the same deterministic order as `keys(map)`.
+  ## REPL
+  xldr(1)> HashMap::map_values_list(HashMap::from_entries([("b", 2), ("a", 1)]))
+  [1, 2]
+  """
+  @builtin def map_values_list(map: HashMap<$V>) -> List<$V>
+
+  @doc """
+  Return values in the same deterministic order as `keys(map)`.
+  ## REPL
+  xldr(1)> HashMap::values(HashMap::from_entries([("b", 2), ("a", 1)]))
+  [1, 2]
+  """
+  def values(map: HashMap<$V>) -> List<$V> {
+    map_values_list(map)
+  }
+
+  @doc """
+  Return `(key, value)` entries in deterministic key-sorted order.
+  ## REPL
+  xldr(1)> HashMap::entries(HashMap::from_entries([("b", 2), ("a", 1)]))
+  [("a", 1), ("b", 2)]
+  """
+  def entries(map: HashMap<$V>) -> List<(String, $V)> {
+    List::zip(keys(map), values(map))
+  }
+
+  @doc """
+  Return a new map with the same keys and transformed values.
+  The visible order remains deterministic and sorted by key.
+  ## REPL
+  xldr(1)> HashMap::map_values(HashMap::from_entries([("a", 1), ("b", 2)]), {|n| n + 1})
+  HashMap("a" => 2, "b" => 3)
+  """
+  def map_values(map: HashMap<$A>, f: ($A -> $B)) -> HashMap<$B> {
+    _map_values_go(map, keys(map), f, empty())
+  }
+}

@@ -1,0 +1,3 @@
+defmod Helper {
+  def answer() -> Int { 42 }
+}

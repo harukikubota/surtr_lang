@@ -1,4 +1,4 @@
-@@doc """
+@doc """
 Bootstrap module.
 
 Auto-imported root of the standard surface.
@@ -10,23 +10,228 @@ library.
 Cross-cutting builtin values live in `kernel.srt`, builtin type declarations
 live at the top level of their corresponding files, and the abstract `Error`
 type itself lives in `error.srt`.
-
-Language-provided top-level macros such as `import` and `include` are also
-documented here as builtin bootstrap functions with macro-style surface syntax.
-They still stay unavailable inside ordinary code blocks.
 """
 
-@@autoimport
+@autoimport
 # `defmod` introduces a module namespace.
 # Bootstrap is the first auto-imported standard module and acts as the fixed
 # stage-0 anchor for the loader.
 defmod Bootstrap {
+  @doc """
+  Debug special form.
+
+  `dbg!` is a language-provided special form for observing intermediate values.
+  It evaluates each argument from left to right, writes one debug diagnostic to
+  stderr, and returns `Unit`.
+
+  Each argument is type-checked independently.
+  The argument list is not collected into `List` or `Tuple`; each expression is
+  evaluated as its own input slot and rendered in left-to-right order.
+  Rendered values use `inspect`, so strings keep quotes and composite values
+  retain their structural shape.
+
+  ## Examples
+  dbg!(value)
+  dbg!(count, label, make_user(name))
+
+  def main() -> Unit {
+    num = 2
+    term = "hoge"
+    dbg!(num, term)
+    print("ok")
+  }
+
+  ## REPL
+  xldr(1)> num = 1
+  > num: Int = 1
+  xldr(2)> dbg!(num)
+  Debug: inspect values.
+     ╭─[ REPL:1:1 ]
+     │ 
+   1 │ dbg!(num)
+     │      ─┬─  
+     │       ╰─── Int: 1
+  ───╯
+  ## Notes
+  - `dbg!` returns `()`
+  - `x = dbg!(value)` binds `x: Unit = ()`
+  - `dbg!()` is invalid
+  """
+  @intrinsic def dbg!(values: *$A) -> Unit
+
+  @doc """
+  Bind special form.
+
+  `=` is a language-provided binding form.
+  It evaluates the right-hand side once, checks it against a total left-hand
+  MatchBlock pattern, and introduces the resulting bindings into the current
+  scope.
+
+  `=` is not a trait-dispatched operator.
+  Use `=?` when the left-hand side is partial or when failure propagation is
+  part of the intended control flow.
+
+  ## Examples
+  name = "surtr"
+  pair = (1, 2)
+  (left, right) = pair
+
+  ## Notes
+  - `=` returns `()`
+  - only total MatchBlock patterns are accepted
+  """
+  @intrinsic def =(pattern: $Pattern, value: $A) -> Unit
+
+  @doc """
+  SafeBind special form.
+
+  `=?` is a language-provided binding form for failure-aware destructuring.
+  It may be used only inside functions whose current evaluation returns
+  `Result<T>`.
+  The REPL accepts the syntax, reports the resulting error message, and keeps
+  the session alive.
+
+  `=?` evaluates the right-hand side once and then applies the left-hand
+  MatchBlock pattern to the successful payload.
+  If the RHS produces `Err(error)`, that `Err(error)` is returned immediately.
+  If the LHS MatchBlock or Extractor observes `Err(error)`, that
+  `Err(error)` is also returned immediately.
+  If matching produces `MatchBlock::NoMatch`, the runtime converts it into an
+  error and returns it immediately.
+
+  `=?` is not a trait-dispatched operator.
+  It is the binding-form entrypoint for Result-style propagation and other
+  SafeBind-aware MatchBlock inputs.
+  `num: Int =? Option::Some(1)` is an error because `Option` is not a
+  SafeBind target.
+
+  The left-hand side may use structural pattern matching such as `uncons`,
+  list/string decomposition, and literal matching.
+  The left-hand side may also apply Extractors.
+  MatchBlock patterns and Extractors may be written recursively, and each step
+  is executed only as far as the current partial match requires.
+  When every recursive match and Extractor step succeeds under `Ok(...)`, the
+  bound variables are introduced and evaluation continues.
+
+  ## Examples
+  value: Int =? try_from("1", Int)
+  [head, ..tail] =? [1, 2, 3]
+  [first, ..rest] =? "source"
+
+  ## Notes
+  - `=?` returns `()`
+  - `=?` is valid only in functions that return `Result<T>`
+  - RHS `Err(...)` returns early
+  - LHS MatchBlock / Extractor `Err(...)` returns early
+  - `MatchBlock::NoMatch` becomes an error and returns early
+  - `Option` is not a SafeBind target
+  """
+  @intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
+
+  @doc """
+  Match special form.
+
+  `match` is a language-provided branching form for pattern-directed control
+  flow.
+
+  `match value { pattern => expr, ... }` evaluates the scrutinee once and then
+  tries each arm from top to bottom.
+  Each left-hand side is interpreted as a MatchBlock pattern.
+  Structural patterns, literal patterns, constructor patterns, list/string
+  decomposition, as-patterns, and Extractors may all appear there.
+
+  An arm may also carry a guard: `pattern when cond => expr`.
+  The guard is evaluated only after the pattern matches.
+  If the guard returns `False`, that arm is treated as non-matching and
+  evaluation continues with the next arm.
+
+  Only the selected arm body is evaluated.
+  `match` is not a trait-dispatched operator.
+
+  `match` requires exhaustiveness.
+  A missing fallback or missing variant arm is a compile error even when other
+  arms use guards.
+
+  `match` is the main way to branch on `Result`.
+  Use `Ok(...)` and `Err(...)` to inspect success and failure structure.
+  Inside `Err(...)`, concrete error kinds may be checked by name, but payload
+  destructuring is not provided there.
+
+  ## Examples
+  match flag {
+    True => "yes",
+    False => "no",
+  }
+
+  match result {
+    Ok(value) => to_string(value),
+    Err(err) => inspect(err),
+  }
+
+  match [1, 2, 3] {
+    [head, ..tail] => to_string(head),
+    [] => "empty",
+  }
+
+  ## Notes
+  - `match` evaluates the scrutinee once
+  - only the selected arm body is evaluated
+  - guards must return `Boolean`
+  - `match` must be exhaustive
+  """
+  @intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B
+
+  @doc """
+  Cond special form.
+
+  `cond` is a language-provided multi-branch conditional form.
+
+  `cond { cond1 => expr1, ..., True => exprN }` evaluates each condition from
+  top to bottom and returns the body of the first clause whose condition is
+  `True`.
+
+  Every non-final clause condition must return `Boolean`.
+  The final clause must use the literal `True`, and that `True` clause may
+  appear only once at the end.
+
+  All clause bodies must agree on one result type.
+  Bodies belonging to non-selected clauses are not evaluated.
+
+  `cond` is not a trait-dispatched operator.
+  Its meaning is equivalent to nested `if(...)` forms, but the surface keeps a
+  flatter multi-branch shape.
+
+  ## Examples
+  cond {
+    n < 0 => "neg",
+    n == 0 => "zero",
+    True => "pos",
+  }
+
+  cond {
+    is_match(term, Ok(_)) => "ok",
+    is_match(term, Err(_)) => "err",
+    True => "unknown",
+  }
+
+  ## Notes
+  - conditions are checked from top to bottom
+  - the final clause must be `True`
+  - all clause bodies must have the same type
+  - only the selected clause body is evaluated
+  """
+  @intrinsic def cond(clauses: CondClauses<$A>) -> $A
+
   # `def` introduces a named function declaration.
   # `dummy` exists only to keep the module non-empty and to leave a minimal
   # function-shaped example in the first standard source file.
+  @doc """
+  Return `()` without side effects.
+  This is a minimal placeholder helper that keeps `Bootstrap` non-empty.
+  """
   def dummy() { () }
 
-  @@doc """
+  @doc """
   Language-provided import macro function.
 
   `import` belongs to `Bootstrap`, but its user-facing surface is a top-level
@@ -39,10 +244,14 @@ defmod Bootstrap {
   - `import Mod::{name1, name2}`
 
   It stays invalid inside ordinary code blocks and in expression position.
+  ## REPL
+  xldr(1)> import Option::wrap
+  xldr(2)> Option::is_some(wrap(1))
+  True
   """
-  @@builtin def import() -> Unit
+  @builtin def import() -> Unit
 
-  @@doc """
+  @doc """
   Language-provided include macro function.
 
   `include` belongs to `Bootstrap`, but in script source its user-facing
@@ -54,42 +263,45 @@ defmod Bootstrap {
 
   It accepts exactly one string literal path in source syntax and stays invalid
   inside ordinary code blocks and in expression position.
+  ## REPL
+  xldr(1)> include "./path/to/module.srt"
+  # loads declarations with no direct value output
   """
-  @@builtin def include(path: String) -> Unit
+  @builtin def include(path: String) -> Unit
 }
 
 # `deferror` introduces a concrete recoverable error declaration.
 # Bootstrap carries the most universally useful standard errors so they are
 # available from the first standard-library stage.
 
-@@doc """
+@doc """
 Concrete bootstrap error for "no value" situations.
-`NoneError` is the standard failure used by optional-style sugar such as `T?`
-and `None`.
+`NoneError` is the standard failure used by optional-style sugar such as `T?`.
+`T?` lowers to `Result<T, NoneError>` and is separate from `Option::None`.
 """
 deferror NoneError { "None Value." }
 
-@@doc """
+@doc """
 Concrete bootstrap error for division or modulo by zero.
 `safe_div` and `safe_mod` return this through `Err(...)` instead of trapping.
 """
 deferror ZeroDivisionError { "division by zero" }
 
-@@doc """
+@doc """
 Concrete bootstrap error for operations that require at least one list element.
 Use this when a list-specific operation cannot proceed because the input is
 empty.
 """
 deferror EmptyList { "Empty List." }
 
-@@doc """
+@doc """
 Concrete bootstrap error for index-based access outside the valid range.
 The `detail` field keeps the user-facing message flexible so the runtime can
 attach the relevant bounds information.
 """
 deferror IndexOutOfBounds(detail: String) { detail }
 
-@@doc """
+@doc """
 Concrete bootstrap error for enum-variant selector mismatch in lens access.
 `Lens::view` returns this when a variant segment does not match the runtime
 value's tag.

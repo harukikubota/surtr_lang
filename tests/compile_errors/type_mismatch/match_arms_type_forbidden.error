@@ -1,0 +1,2 @@
+phase: typecheck
+contains: MatchArms<$Scrutinee, $Result> is reserved for the `match` special form

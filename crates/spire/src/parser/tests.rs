@@ -40,6 +40,26 @@ fn test_defp_marks_definition_private() {
 }
 
 #[test]
+fn test_const_definition_surface() {
+    let ast = parse("public const APP_NAME: String = \"surtr\"").unwrap();
+    match &ast[0] {
+        Ast::ConstDef(_, name, Some(AstTy::Named(_, ty)), rhs, attrs) => {
+            assert_eq!(name, "APP_NAME");
+            assert_eq!(ty, "String");
+            assert_eq!(attrs.visibility, Visibility::Public);
+            assert!(matches!(rhs.as_ref(), Ast::Lit(_, Lit::Str(value)) if value == "surtr"));
+        }
+        _ => panic!("Expected ConstDef"),
+    }
+}
+
+#[test]
+fn test_const_name_requires_cap_pattern() {
+    let err = parse("const app_name = \"surtr\"").expect_err("expected parse error");
+    assert!(err.message().contains("const name must match CAP_PATTERN"));
+}
+
+#[test]
 fn test_private_field_modifier_is_preserved() {
     let ast = parse_with_context(
         "defstruct User { private password: String, name: String }",
@@ -47,14 +67,320 @@ fn test_private_field_modifier_is_preserved() {
     )
     .unwrap();
     match &ast[0] {
-        Ast::StructDef(_, name, fields) => {
+        Ast::StructDef(_, name, fields, attrs) => {
             assert_eq!(name, "User");
             assert_eq!(fields[0].name, "password");
             assert_eq!(fields[0].visibility, Visibility::Private);
             assert_eq!(fields[1].name, "name");
             assert_eq!(fields[1].visibility, Visibility::Public);
+            assert_eq!(attrs, &DeclAttrs::default());
         }
         _ => panic!("Expected StructDef"),
+    }
+}
+
+#[test]
+fn test_doc_attributes_parse_for_struct_and_record_decls() {
+    let ast = parse_with_context(
+        r#"@doc """User docs."""
+defstruct User {
+  name: String,
+}
+
+@doc """Point docs."""
+defrecord Point(x: Float, y: Float)"#,
+        ParserContext::module(1, None),
+    )
+    .expect("annotated struct and record should parse");
+
+    match &ast[0] {
+        Ast::StructDef(_, name, fields, attrs) => {
+            assert_eq!(name, "User");
+            assert_eq!(fields.len(), 1);
+            assert_eq!(attrs.doc.as_deref(), Some("User docs."));
+        }
+        other => panic!("Expected StructDef, got {other:?}"),
+    }
+
+    match &ast[1] {
+        Ast::RecordDef(_, name, fields, attrs) => {
+            assert_eq!(name, "Point");
+            assert_eq!(fields.len(), 2);
+            assert_eq!(attrs.doc.as_deref(), Some("Point docs."));
+        }
+        other => panic!("Expected RecordDef, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_duplicate_doc_annotation_reports_later_span_for_struct_decl() {
+    let src = r#"@doc """first"""
+@doc """second"""
+defstruct User {
+  name: String,
+}"#;
+    let err = parse_with_context(src, ParserContext::module(1, None))
+        .expect_err("duplicate struct doc annotation should fail");
+    assert!(err
+        .message()
+        .contains("@doc may only appear once before a declaration"));
+
+    let duplicate_offset = src.find(r#"@doc """second""""#).expect("second @doc");
+    assert_eq!(
+        err.span(),
+        &Span {
+            start: duplicate_offset,
+            end: duplicate_offset + "@doc".len(),
+        }
+    );
+}
+
+#[test]
+fn test_impl_member_rejects_autoimport_annotation() {
+    let err = parse_with_context(
+        r#"defstruct User {
+  name: String,
+}
+
+impl User {
+  @autoimport
+  def normalize(self) -> Self {
+    self
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("@autoimport impl member should be rejected");
+
+    assert!(err
+        .message()
+        .contains("Only @doc / @hidden / @builtin are allowed before impl members"));
+}
+
+#[test]
+fn test_dbg_special_form_parses() {
+    let ast = parse("dbg!(x, y)").unwrap();
+    match &ast[0] {
+        Ast::Dbg(_, args) => {
+            assert_eq!(args.len(), 2);
+            assert!(matches!(args[0].expr, Ast::Var(_, ref name) if name == "x"));
+            assert!(matches!(args[1].expr, Ast::Var(_, ref name) if name == "y"));
+        }
+        other => panic!("Expected Dbg, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_dbg_zero_arg_is_rejected() {
+    let err = parse("dbg!()").expect_err("dbg!() should fail");
+    assert!(err.message().contains("at least one argument"));
+}
+
+#[test]
+fn test_intrinsic_dbg_decl_parses_in_std_module() {
+    let mut context = ParserContext::module(0, None);
+    context.parse_rules = ParseRules::permissive_for_tests();
+    let ast = parse_with_context(
+        r#"defmod Bootstrap {
+  @doc """
+  Debug special form.
+  """
+  @intrinsic def dbg!(values: *$A) -> Unit
+}"#,
+        context,
+    )
+    .expect("intrinsic decl should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, name, body, _) => {
+            assert_eq!(name, "Bootstrap");
+            match &body[0] {
+                Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
+                    assert_eq!(intrinsic_name, "dbg!");
+                    assert_eq!(signature, "@intrinsic def dbg!(values: *$A) -> Unit");
+                    assert!(attrs
+                        .doc
+                        .as_deref()
+                        .is_some_and(|doc| doc.contains("Debug special form.")));
+                }
+                other => panic!("Expected IntrinsicDecl, got {other:?}"),
+            }
+        }
+        other => panic!("Expected Defmod, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_intrinsic_decl_preserves_source_text_verbatim() {
+    let mut context = ParserContext::module(0, None);
+    context.parse_rules = ParseRules::permissive_for_tests();
+    let ast = parse_with_context(
+        r#"defmod Bootstrap {
+  @doc """
+  Debug special form.
+  """
+  @intrinsic def dbg!<$A>(values: *$A) -> Unit
+}"#,
+        context,
+    )
+    .expect("intrinsic decl should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, _, body, _) => match &body[0] {
+            Ast::IntrinsicDecl(_, _, signature, _) => {
+                assert_eq!(signature, "@intrinsic def dbg!<$A>(values: *$A) -> Unit");
+            }
+            other => panic!("Expected IntrinsicDecl, got {other:?}"),
+        },
+        other => panic!("Expected Defmod, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_intrinsic_bind_decl_parses_in_std_module() {
+    let mut context = ParserContext::module(0, None);
+    context.parse_rules = ParseRules::permissive_for_tests();
+    let ast = parse_with_context(
+        r#"defmod Bootstrap {
+  @doc """
+  Bind special form.
+  """
+  @intrinsic def =(pattern: $Pattern, value: $A) -> Unit
+}"#,
+        context,
+    )
+    .expect("intrinsic bind decl should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, name, body, _) => {
+            assert_eq!(name, "Bootstrap");
+            match &body[0] {
+                Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
+                    assert_eq!(intrinsic_name, "=");
+                    assert_eq!(
+                        signature,
+                        "@intrinsic def =(pattern: $Pattern, value: $A) -> Unit"
+                    );
+                    assert!(attrs
+                        .doc
+                        .as_deref()
+                        .is_some_and(|doc| doc.contains("Bind special form.")));
+                }
+                other => panic!("Expected IntrinsicDecl, got {other:?}"),
+            }
+        }
+        other => panic!("Expected Defmod, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_intrinsic_safebind_decl_parses_in_std_module() {
+    let mut context = ParserContext::module(0, None);
+    context.parse_rules = ParseRules::permissive_for_tests();
+    let ast = parse_with_context(
+        r#"defmod Bootstrap {
+  @doc """
+  SafeBind special form.
+  """
+  @intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
+}"#,
+        context,
+    )
+    .expect("intrinsic safebind decl should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, name, body, _) => {
+            assert_eq!(name, "Bootstrap");
+            match &body[0] {
+                Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
+                    assert_eq!(intrinsic_name, "=?");
+                    assert_eq!(
+                        signature,
+                        "@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit"
+                    );
+                    assert!(attrs
+                        .doc
+                        .as_deref()
+                        .is_some_and(|doc| doc.contains("SafeBind special form.")));
+                }
+                other => panic!("Expected IntrinsicDecl, got {other:?}"),
+            }
+        }
+        other => panic!("Expected Defmod, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_intrinsic_match_decl_parses_in_std_module() {
+    let mut context = ParserContext::module(0, None);
+    context.parse_rules = ParseRules::permissive_for_tests();
+    let ast = parse_with_context(
+        r#"defmod Bootstrap {
+  @doc """
+  Match special form.
+  """
+  @intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B
+}"#,
+        context,
+    )
+    .expect("intrinsic match decl should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, name, body, _) => {
+            assert_eq!(name, "Bootstrap");
+            match &body[0] {
+                Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
+                    assert_eq!(intrinsic_name, "match");
+                    assert_eq!(
+                        signature,
+                        "@intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B"
+                    );
+                    assert!(attrs
+                        .doc
+                        .as_deref()
+                        .is_some_and(|doc| doc.contains("Match special form.")));
+                }
+                other => panic!("Expected IntrinsicDecl, got {other:?}"),
+            }
+        }
+        other => panic!("Expected Defmod, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_intrinsic_cond_decl_parses_in_std_module() {
+    let mut context = ParserContext::module(0, None);
+    context.parse_rules = ParseRules::permissive_for_tests();
+    let ast = parse_with_context(
+        r#"defmod Bootstrap {
+  @doc """
+  Cond special form.
+  """
+  @intrinsic def cond(clauses: CondClauses<$A>) -> $A
+}"#,
+        context,
+    )
+    .expect("intrinsic cond decl should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, name, body, _) => {
+            assert_eq!(name, "Bootstrap");
+            match &body[0] {
+                Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
+                    assert_eq!(intrinsic_name, "cond");
+                    assert_eq!(
+                        signature,
+                        "@intrinsic def cond(clauses: CondClauses<$A>) -> $A"
+                    );
+                    assert!(attrs
+                        .doc
+                        .as_deref()
+                        .is_some_and(|doc| doc.contains("Cond special form.")));
+                }
+                other => panic!("Expected IntrinsicDecl, got {other:?}"),
+            }
+        }
+        other => panic!("Expected Defmod, got {other:?}"),
     }
 }
 
@@ -116,8 +442,13 @@ fn test_function_call_accepts_trailing_block_arg() {
             ));
             assert!(matches!(
                 &args[1],
-                RecordLitArg::Positional(Ast::Block(_, stmts))
-                    if matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::Var(_, name)] if name == "num")
+                RecordLitArg::Positional(Ast::Closure(_, params, body))
+                    if params.is_empty()
+                    && matches!(
+                        body.as_ref(),
+                        Ast::Block(_, stmts)
+                            if matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::Var(_, name)] if name == "num")
+                    )
             ));
         }
         _ => panic!("Expected App"),
@@ -133,11 +464,31 @@ fn test_zero_arg_call_accepts_trailing_block_arg() {
             assert_eq!(args.len(), 1);
             assert!(matches!(
                 &args[0],
-                RecordLitArg::Positional(Ast::Block(_, stmts))
-                    if matches!(stmts.as_slice(), [Ast::App(_, _, inner_args)] if inner_args.len() == 1)
+                RecordLitArg::Positional(Ast::Closure(_, params, body))
+                    if params.is_empty()
+                    && matches!(body.as_ref(), Ast::App(_, _, inner_args) if inner_args.len() == 1)
             ));
         }
         _ => panic!("Expected App"),
+    }
+}
+
+#[test]
+fn test_brace_expression_is_zero_arg_closure() {
+    let ast = parse("x = { tmp = 10; tmp * 10 }").expect("brace expression should parse");
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::Closure(_, params, body) => {
+                assert!(params.is_empty());
+                assert!(matches!(
+                    body.as_ref(),
+                    Ast::Block(_, stmts)
+                        if matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::BinOp(_, BinOp::Mul, _, _)])
+                ));
+            }
+            other => panic!("Expected zero-arg Closure, got {:?}", other),
+        },
+        other => panic!("Expected Bind, got {:?}", other),
     }
 }
 
@@ -267,11 +618,12 @@ impl User {
 
     let impl_node = ast
         .iter()
-        .find(|node| matches!(node, Ast::ImplDef(_, _, _)))
+        .find(|node| matches!(node, Ast::ImplDef(_, _, _, _)))
         .expect("expected impl node");
     match impl_node {
-        Ast::ImplDef(_, target, methods) => {
+        Ast::ImplDef(_, target, methods, attrs) => {
             assert_eq!(target, "User");
+            assert_eq!(attrs, &DeclAttrs::default());
             assert_eq!(methods.len(), 2);
             assert!(matches!(
                 &methods[0],
@@ -282,6 +634,38 @@ impl User {
                 &methods[1],
                 Ast::Def(_, name, _, _, Some(AstTy::Named(_, ret)), _, _)
                     if name == "normalize" && ret == "Self"
+            ));
+        }
+        _ => panic!("Expected ImplDef"),
+    }
+}
+
+#[test]
+fn test_impl_parses_and_keeps_builtin_methods() {
+    let ast = parse_with_context(
+        r#"@builtin type Int
+
+impl Int {
+  @doc """Builtin int helper."""
+  @builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
+}"#,
+        ParserContext::module(1, None).with_rules(ParseRules::std_module()),
+    )
+    .expect("builtin impl method should parse");
+
+    let impl_node = ast
+        .iter()
+        .find(|node| matches!(node, Ast::ImplDef(_, _, _, _)))
+        .expect("expected impl node");
+    match impl_node {
+        Ast::ImplDef(_, target, methods, _) => {
+            assert_eq!(target, "Int");
+            assert!(matches!(
+                methods.as_slice(),
+                [Ast::BuiltinDecl(_, name, _, Some(AstTy::Generic(_, ret, _)), attrs)]
+                    if name == "safe_mod"
+                    && ret == "Result"
+                    && attrs.doc.as_deref() == Some("Builtin int helper.")
             ));
         }
         _ => panic!("Expected ImplDef"),
@@ -335,10 +719,11 @@ fn test_trait_impl_parses_and_keeps_methods() {
     .expect("trait impl should parse");
 
     match ast.as_slice() {
-        [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods)] => {
+        [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods, attrs)] => {
             assert_eq!(trait_name, "Numeric");
             assert!(trait_args.is_empty());
             assert_eq!(target, "Int");
+            assert_eq!(attrs, &DeclAttrs::default());
             assert_eq!(methods.len(), 2);
             assert!(matches!(
                 &methods[0],
@@ -350,6 +735,338 @@ fn test_trait_impl_parses_and_keeps_methods() {
                 Ast::Def(_, name, _, _, Some(AstTy::Named(_, ret)), _, _)
                     if name == "abs" && ret == "Self"
             ));
+        }
+        _ => panic!("Expected TraitImplDef"),
+    }
+}
+
+#[test]
+fn test_trait_impl_accepts_builtin_def_method() {
+    let ast = parse_with_context(
+        r#"impl Add for Int {
+  @builtin def add(self: Self, rhs: Self) -> Self
+}"#,
+        ParserContext::module(1, None).with_rules(ParseRules::std_module()),
+    )
+    .expect("trait impl builtin method should parse");
+
+    match ast.as_slice() {
+        [Ast::TraitImplDef(_, trait_name, _, AstTy::Named(_, target), methods, _)] => {
+            assert_eq!(trait_name, "Add");
+            assert_eq!(target, "Int");
+            assert!(matches!(
+                methods.as_slice(),
+                [Ast::BuiltinDecl(_, name, _, Some(AstTy::Named(_, ret)), _)]
+                    if name == "add" && ret == "Self"
+            ));
+        }
+        _ => panic!("Expected TraitImplDef"),
+    }
+}
+
+#[test]
+fn test_trait_impl_rejects_builtin_defp_method() {
+    let err = parse_with_context(
+        r#"impl Add for Int {
+  @builtin defp add(self: Self, rhs: Self) -> Self
+}"#,
+        ParserContext::module(1, None).with_rules(ParseRules::std_module()),
+    )
+    .expect_err("trait impl builtin private method should be rejected");
+    assert!(err
+        .message()
+        .contains("@builtin is not allowed before `defp` impl members"));
+}
+
+#[test]
+fn test_doc_attributes_parse_for_trait_and_trait_impl_decls() {
+    let ast = parse_with_context(
+        r#"@doc """Trait docs."""
+deftrait Numeric {
+  def add(self: Self, rhs: Self) -> Self
+}
+
+@doc """Impl docs."""
+impl Show for User {
+  def to_string(self: Self) -> String {
+    "user"
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("annotated trait and trait impl should parse");
+
+    match &ast[0] {
+        Ast::TraitDef(_, name, _, _, attrs) => {
+            assert_eq!(name, "Numeric");
+            assert_eq!(attrs.doc.as_deref(), Some("Trait docs."));
+        }
+        _ => panic!("Expected TraitDef"),
+    }
+
+    match &ast[1] {
+        Ast::TraitImplDef(_, trait_name, _, target, _, attrs) => {
+            assert_eq!(trait_name, "Show");
+            assert!(matches!(target, AstTy::Named(_, name) if name == "User"));
+            assert_eq!(attrs.doc.as_deref(), Some("Impl docs."));
+        }
+        _ => panic!("Expected TraitImplDef"),
+    }
+}
+
+#[test]
+fn test_doc_attribute_rejected_for_impl_block() {
+    let err = parse_with_context(
+        r#"@doc """Impl docs."""
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("@doc on impl block should be rejected");
+
+    assert!(err
+        .message()
+        .contains("@doc is not allowed before `impl Type`; attach docs to the type declaration, defagent, or impl members"));
+}
+
+#[test]
+fn test_hidden_attribute_rejected_for_impl_block() {
+    let err = parse_with_context(
+        r#"@hidden
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("@hidden on impl block should be rejected");
+
+    assert!(err
+        .message()
+        .contains("@hidden is only allowed together with @builtin in standard/internal source"));
+}
+
+#[test]
+fn test_autoimport_attribute_allowed_for_impl_block() {
+    let ast = parse_with_context(
+        r#"@autoimport
+impl User {
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("@autoimport on impl block should parse");
+
+    match &ast[0] {
+        Ast::ImplDef(_, target, _, attrs) => {
+            assert_eq!(target, "User");
+            assert!(attrs.auto_import);
+        }
+        other => panic!("Expected ImplDef, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_removed_entrypoint_annotation_is_rejected() {
+    let err = parse_with_context(
+        r#"@entrypoint
+def main() -> Int { 0 }"#,
+        ParserContext::project(0),
+    )
+    .expect_err("@entrypoint should be rejected");
+
+    assert!(err.message().contains("@entrypoint has been removed"));
+}
+
+#[test]
+fn test_removed_test_annotation_is_rejected() {
+    let err = parse_with_context(
+        r#"@test
+def sample() -> Int { 0 }"#,
+        ParserContext::project(0),
+    )
+    .expect_err("@test should be rejected");
+
+    assert!(err.message().contains("@test has been removed"));
+}
+
+#[test]
+fn test_agent_handler_marker_is_rejected_outside_defagent() {
+    let err = parse_with_context(
+        r#"@init
+def init() -> Int { 0 }"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("@init outside defagent should be rejected");
+
+    assert!(err
+        .message()
+        .contains("@init/@get/@set are only allowed on def declarations inside defagent"));
+}
+
+#[test]
+fn test_doc_attributes_parse_for_impl_methods() {
+    let ast = parse_with_context(
+        r#"defstruct User {
+  name: String,
+}
+
+impl User {
+  @doc """Construct a user."""
+  def new(name: String) -> Self {
+    User { name: name }
+  }
+
+  @doc """Normalize the user."""
+  def normalize(self) -> Self {
+    self
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("annotated impl methods should parse");
+
+    match &ast[1] {
+        Ast::ImplDef(_, target, methods, _) => {
+            assert_eq!(target, "User");
+            assert_eq!(methods.len(), 2);
+            match &methods[0] {
+                Ast::Def(_, name, _, _, _, _, attrs) => {
+                    assert_eq!(name, "new");
+                    assert_eq!(attrs.doc.as_deref(), Some("Construct a user."));
+                }
+                _ => panic!("Expected impl def"),
+            }
+            match &methods[1] {
+                Ast::Def(_, name, _, _, _, _, attrs) => {
+                    assert_eq!(name, "normalize");
+                    assert_eq!(attrs.doc.as_deref(), Some("Normalize the user."));
+                }
+                _ => panic!("Expected impl def"),
+            }
+        }
+        _ => panic!("Expected ImplDef"),
+    }
+}
+
+#[test]
+fn test_struct_literal_field_shorthand_parses() {
+    let ast = parse_with_context(
+        r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name, age }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("impl with struct shorthand should parse");
+
+    let impl_node = ast
+        .iter()
+        .find(|node| matches!(node, Ast::ImplDef(_, _, _, _)))
+        .expect("expected impl node");
+    match impl_node {
+        Ast::ImplDef(_, _, methods, _) => match &methods[0] {
+            Ast::Def(_, _, _, _, _, body, _) => match body.as_ref() {
+                Ast::Block(_, stmts) => match &stmts[0] {
+                    Ast::StructLit(_, _, fields) => {
+                        assert!(matches!(
+                            fields.as_slice(),
+                            [
+                                StructLitField::Shorthand(name),
+                                StructLitField::Shorthand(age)
+                            ] if name == "name" && age == "age"
+                        ));
+                    }
+                    other => panic!("Expected StructLit, got {:?}", other),
+                },
+                other => panic!("Expected block body, got {:?}", other),
+            },
+            other => panic!("Expected Def, got {:?}", other),
+        },
+        other => panic!("Expected ImplDef, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_struct_literal_field_shorthand_mixed_with_explicit_parses() {
+    let ast = parse_with_context(
+        r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def update(self, name: String, next_age: Int) -> Self {
+    User { name, age: next_age }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("mixed struct shorthand should parse");
+
+    let impl_node = ast
+        .iter()
+        .find(|node| matches!(node, Ast::ImplDef(_, _, _, _)))
+        .expect("expected impl node");
+    match impl_node {
+        Ast::ImplDef(_, _, methods, _) => match &methods[0] {
+            Ast::Def(_, _, _, _, _, body, _) => match body.as_ref() {
+                Ast::Block(_, stmts) => match &stmts[0] {
+                    Ast::StructLit(_, _, fields) => {
+                        assert!(matches!(
+                            fields.as_slice(),
+                            [
+                                StructLitField::Shorthand(name),
+                                StructLitField::Explicit(age, Ast::Var(_, next_age))
+                            ] if name == "name" && age == "age" && next_age == "next_age"
+                        ));
+                    }
+                    other => panic!("Expected StructLit, got {:?}", other),
+                },
+                other => panic!("Expected block body, got {:?}", other),
+            },
+            other => panic!("Expected Def, got {:?}", other),
+        },
+        other => panic!("Expected ImplDef, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_doc_attributes_parse_for_trait_impl_methods() {
+    let ast = parse_with_context(
+        r#"impl Show for Int {
+  @doc """Format the integer."""
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("annotated trait impl methods should parse");
+
+    match ast.as_slice() {
+        [Ast::TraitImplDef(_, trait_name, _, AstTy::Named(_, target), methods, _)] => {
+            assert_eq!(trait_name, "Show");
+            assert_eq!(target, "Int");
+            match &methods[0] {
+                Ast::Def(_, name, _, _, _, _, attrs) => {
+                    assert_eq!(name, "to_string");
+                    assert_eq!(attrs.doc.as_deref(), Some("Format the integer."));
+                }
+                _ => panic!("Expected trait impl def"),
+            }
         }
         _ => panic!("Expected TraitImplDef"),
     }
@@ -414,10 +1131,11 @@ fn test_trait_impl_parses_trait_type_args() {
     .expect("generic trait impl should parse");
 
     match ast.as_slice() {
-        [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods)] => {
+        [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods, attrs)] => {
             assert_eq!(trait_name, "From");
             assert!(matches!(trait_args.as_slice(), [AstTy::Named(_, name)] if name == "String"));
             assert_eq!(target, "Int");
+            assert_eq!(attrs, &DeclAttrs::default());
             assert_eq!(methods.len(), 1);
         }
         _ => panic!("Expected TraitImplDef"),
@@ -496,7 +1214,9 @@ impl User {
         ParserContext::module(1, None),
     )
     .expect("self rebinding should be parsed");
-    assert!(ast.iter().any(|node| matches!(node, Ast::ImplDef(_, _, _))));
+    assert!(ast
+        .iter()
+        .any(|node| matches!(node, Ast::ImplDef(_, _, _, _))));
 }
 
 #[test]
@@ -523,9 +1243,18 @@ fn test_defmod_rejects_self_and_self_type() {
 }
 
 #[test]
+fn test_defmod_rejects_matcharms_builtin_type_name() {
+    let err = parse("defmod MatchArms { def ok() -> Int { 1 } }")
+        .expect_err("builtin clause block type name should be reserved");
+    assert!(err
+        .message()
+        .contains("Module name `MatchArms` is reserved by a canonical builtin type declaration"));
+}
+
+#[test]
 fn test_builtin_decl() {
     let ast = parse_with_context(
-        "@@builtin def to_string(a: $A) -> String",
+        "@builtin def to_string(a: $A) -> String",
         ParserContext::module(1, Some("Bootstrap".into())).with_rules(ParseRules::std_module()),
     )
     .expect("std module should accept builtin declarations");
@@ -547,7 +1276,7 @@ fn test_builtin_decl() {
 #[test]
 fn test_builtin_type_decl() {
     let ast = parse_with_context(
-        "@@builtin\ntype Int",
+        "@builtin\ntype Int",
         ParserContext::module(1, Some("Bootstrap".into())).with_rules(ParseRules::std_module()),
     )
     .expect("std module should accept builtin type declarations");
@@ -559,9 +1288,75 @@ fn test_builtin_type_decl() {
 }
 
 #[test]
+fn test_hidden_annotates_builtin_decl() {
+    let ast = parse_with_context(
+        "@hidden\n@builtin def __process_sleep(duration: Duration) -> Result<Unit>",
+        ParserContext::module(1, Some("Process".into())).with_rules(ParseRules::std_module()),
+    )
+    .expect("hidden + builtin def should parse");
+
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::BuiltinDecl(_, name, _, _, DeclAttrs { hidden: true, .. })]
+            if name == "__process_sleep"
+    ));
+}
+
+#[test]
+fn test_hidden_duplicate_is_error() {
+    let err = parse_with_context(
+        "@hidden\n@hidden\n@builtin def __process_sleep(duration: Duration) -> Result<Unit>",
+        ParserContext::module(1, Some("Process".into())).with_rules(ParseRules::std_module()),
+    )
+    .expect_err("duplicate hidden should fail");
+    assert!(err
+        .message()
+        .contains("@hidden may only appear once before a declaration"));
+}
+
+#[test]
+fn test_hidden_builtin_impl_member_parses() {
+    let ast = parse_with_context(
+        r#"impl Task {
+  @hidden
+  @builtin def __task_call(body: (-> Result<$A>)) -> Result<$A>
+}"#,
+        ParserContext::module(1, Some("Task".into())).with_rules(ParseRules::std_module()),
+    )
+    .expect("hidden builtin impl member should parse");
+
+    match &ast[0] {
+        Ast::ImplDef(_, target, body, _) => {
+            assert_eq!(target, "Task");
+            assert!(matches!(
+                &body[0],
+                Ast::BuiltinDecl(_, name, _, _, DeclAttrs { hidden: true, .. })
+                    if name == "__task_call"
+            ));
+        }
+        other => panic!("expected impl, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_duration_literal_lowers_to_internal_struct_lit() {
+    let ast = parse("100ms").expect("duration literal should parse");
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::InternalStructLit(_, name, fields)]
+            if name == "Duration"
+                && matches!(
+                    fields.as_slice(),
+                    [StructLitField::Explicit(field, Ast::Lit(_, Lit::Int(value)))]
+                        if field == "millis" && *value == int(100)
+                )
+    ));
+}
+
+#[test]
 fn test_doc_annotates_builtin_type_decl() {
     let ast = parse_with_context(
-        "@@doc \"\"\"\nBuiltin Int.\n\"\"\"\n@@builtin type Int",
+        "@doc \"\"\"\nBuiltin Int.\n\"\"\"\n@builtin type Int",
         ParserContext::module(1, Some("Bootstrap".into())).with_rules(ParseRules::std_module()),
     )
     .expect("doc + builtin type should parse");
@@ -576,7 +1371,7 @@ fn test_doc_annotates_builtin_type_decl() {
 #[test]
 fn test_doc_annotates_defmod() {
     let ast = parse_with_context(
-            "@@doc \"\"\"Kernel docs\"\"\"\ndefmod Kernel {\n  def add(x: Int, y: Int) -> Int { x + y }\n}",
+            "@doc \"\"\"Kernel docs\"\"\"\ndefmod Kernel {\n  def add(x: Int, y: Int) -> Int { x + y }\n}",
             ParserContext::module(1, None),
         )
         .expect("doc + defmod should parse");
@@ -591,7 +1386,7 @@ fn test_doc_annotates_defmod() {
 #[test]
 fn test_autoimport_annotates_defmod() {
     let ast = parse_with_context(
-        "@@autoimport\ndefmod Kernel { def add(x: Int, y: Int) -> Int { x + y } }",
+        "@autoimport\ndefmod Kernel { def add(x: Int, y: Int) -> Int { x + y } }",
         ParserContext::module(1, None),
     )
     .expect("autoimport + defmod should parse");
@@ -606,7 +1401,7 @@ fn test_autoimport_annotates_defmod() {
 #[test]
 fn test_doc_annotates_deferror() {
     let ast = parse_with_context(
-        "@@doc \"\"\"Missing value error\"\"\"\ndeferror NoneError { \"None Value.\" }",
+        "@doc \"\"\"Missing value error\"\"\"\ndeferror NoneError { \"None Value.\" }",
         ParserContext::module(1, None),
     )
     .expect("doc + deferror should parse");
@@ -620,14 +1415,14 @@ fn test_doc_annotates_deferror() {
 
 #[test]
 fn test_doc_requires_following_declaration() {
-    let err = parse("@@doc \"\"\"dangling\"\"\"").expect_err("expected parse error");
+    let err = parse("@doc \"\"\"dangling\"\"\"").expect_err("expected parse error");
     assert!(err.message().contains("declaration"));
 }
 
 #[test]
 fn test_builtin_type_decl_preserves_generic_head() {
     let ast = parse_with_context(
-        "@@builtin type Result<$T>",
+        "@builtin type Result<$T>",
         ParserContext::module(1, Some("Bootstrap".into())).with_rules(ParseRules::std_module()),
     )
     .expect("generic builtin type should parse");
@@ -641,12 +1436,12 @@ fn test_builtin_type_decl_preserves_generic_head() {
 #[test]
 fn test_std_module_result_ctor_decls_are_accepted() {
     let ast = parse_with_context(
-        r#"@@doc """
+        r#"@doc """
 Construct the success branch.
 """
 def Ok($T) -> Result<$T>
 
-@@doc """
+@doc """
 Construct the error branch.
 """
 def Err(Error) -> Result<$T>"#,
@@ -670,15 +1465,15 @@ def Err(Error) -> Result<$T>"#,
 #[test]
 fn test_std_module_result_ctor_builtin_type_contracts_are_accepted() {
     let ast = parse_with_context(
-        r#"@@doc """
+        r#"@doc """
 Construct the success branch.
 """
-@@builtin type Ok($T) -> Result<$T>
+@builtin type Ok($T) -> Result<$T>
 
-@@doc """
+@doc """
 Construct the error branch.
 """
-@@builtin type Err(Error) -> Result<$T>"#,
+@builtin type Err(Error) -> Result<$T>"#,
         ParserContext::module(1, None).with_rules(ParseRules::std_module()),
     )
     .expect("result constructor builtin contracts should parse in std modules");
@@ -704,7 +1499,7 @@ fn test_type_keyword_cannot_be_used_as_function_name() {
 
 #[test]
 fn test_builtin_decl_with_body_is_error() {
-    let err = parse("@@builtin def print(a: String) -> Unit { print(a) }").expect_err("error");
+    let err = parse("@builtin def print(a: String) -> Unit { print(a) }").expect_err("error");
     assert!(err.message().contains("must not have a function body"));
 }
 
@@ -712,7 +1507,7 @@ fn test_builtin_decl_with_body_is_error() {
 fn test_builtin_if_decl_accepts_keyword_name_in_std_module_member() {
     let ast = parse_with_context(
         r#"defmod Kernel {
-  @@builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
+  @builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A
 }"#,
         ParserContext::module(1, None).with_rules(ParseRules::std_module()),
     )
@@ -735,8 +1530,8 @@ fn test_builtin_if_decl_accepts_keyword_name_in_std_module_member() {
 fn test_builtin_import_decl_accepts_keyword_name_in_std_module_member() {
     let ast = parse_with_context(
         r#"defmod Bootstrap {
-  @@builtin def import() -> Unit
-  @@builtin def include(path: String) -> Unit
+  @builtin def import() -> Unit
+  @builtin def include(path: String) -> Unit
 }"#,
         ParserContext::module(1, None).with_rules(ParseRules::std_module()),
     )
@@ -762,8 +1557,8 @@ fn test_builtin_import_decl_accepts_keyword_name_in_std_module_member() {
 
 #[test]
 fn test_unknown_annotator_is_error() {
-    let err = parse("@@memo def f()").expect_err("error");
-    assert!(err.message().contains("Unknown annotator: @@memo"));
+    let err = parse("@memo def f()").expect_err("error");
+    assert!(err.message().contains("Unknown annotation: @memo"));
 }
 
 #[test]
@@ -819,6 +1614,147 @@ fn test_logical_precedence_is_lower_than_expr_class() {
 }
 
 #[test]
+fn test_prefix_bang_lowers_to_boolean_not_call() {
+    let ast = parse("x = !flag").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(
+                    func.as_ref(),
+                    Ast::Path(_, path)
+                        if path.segments == vec!["Boolean".to_string(), "not".to_string()]
+                ));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(arg)]
+                        if matches!(arg, Ast::Var(_, name) if name == "flag")
+                ));
+            }
+            other => panic!("Expected lowered Boolean::not call, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_prefix_bang_binds_tighter_than_comparison() {
+    let ast = parse("x = !a == b").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::BinOp(_, BinOp::Eq, left, right) => {
+                assert!(matches!(right.as_ref(), Ast::Var(_, name) if name == "b"));
+                assert!(matches!(
+                    left.as_ref(),
+                    Ast::App(_, func, args)
+                        if matches!(
+                            func.as_ref(),
+                            Ast::Path(_, path)
+                                if path.segments == vec!["Boolean".to_string(), "not".to_string()]
+                        ) && matches!(
+                            args.as_slice(),
+                            [RecordLitArg::Positional(arg)]
+                                if matches!(arg, Ast::Var(_, name) if name == "a")
+                        )
+                ));
+            }
+            other => panic!("Expected Eq at top level, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_prefix_bang_binds_tighter_than_expr_class_ops() {
+    let ast = parse("x = !a + b").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::BinOp(_, BinOp::Add, left, right) => {
+                assert!(matches!(right.as_ref(), Ast::Var(_, name) if name == "b"));
+                assert!(matches!(
+                    left.as_ref(),
+                    Ast::App(_, func, args)
+                        if matches!(
+                            func.as_ref(),
+                            Ast::Path(_, path)
+                                if path.segments == vec!["Boolean".to_string(), "not".to_string()]
+                        ) && matches!(
+                            args.as_slice(),
+                            [RecordLitArg::Positional(arg)]
+                                if matches!(arg, Ast::Var(_, name) if name == "a")
+                        )
+                ));
+            }
+            other => panic!("Expected Add at top level, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_prefix_bang_binds_tighter_than_and() {
+    let ast = parse("x = !a && b").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "and"));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(
+                            left,
+                            Ast::App(_, func, args)
+                                if matches!(
+                                    func.as_ref(),
+                                    Ast::Path(_, path)
+                                        if path.segments == vec!["Boolean".to_string(), "not".to_string()]
+                                ) && matches!(
+                                    args.as_slice(),
+                                    [RecordLitArg::Positional(arg)]
+                                        if matches!(arg, Ast::Var(_, name) if name == "a")
+                                )
+                        ) && matches!(right, Ast::Var(_, name) if name == "b")
+                ));
+            }
+            other => panic!("Expected and(...) call, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_prefix_bang_preserves_grouping() {
+    let ast = parse("x = !(a && b)").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(
+                    func.as_ref(),
+                    Ast::Path(_, path)
+                        if path.segments == vec!["Boolean".to_string(), "not".to_string()]
+                ));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(Ast::Grouped(_, inner))]
+                        if matches!(
+                            inner.as_ref(),
+                            Ast::App(_, inner_func, inner_args)
+                                if matches!(inner_func.as_ref(), Ast::Var(_, name) if name == "and")
+                                    && matches!(
+                                        inner_args.as_slice(),
+                                        [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                                            if matches!(left, Ast::Var(_, name) if name == "a")
+                                                && matches!(right, Ast::Var(_, name) if name == "b")
+                                    )
+                        )
+                ));
+            }
+            other => panic!("Expected lowered Boolean::not call, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_func_literal_name_lowers_to_binary_call() {
     let ast = parse("x = left `eq` right").unwrap();
     match &ast[0] {
@@ -833,6 +1769,168 @@ fn test_func_literal_name_lowers_to_binary_call() {
                 ));
             }
             other => panic!("Expected lowered App, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_func_literal_qualified_path_lowers_to_binary_call() {
+    let ast = parse("x = left `Boolean::not_eq` right").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(
+                    func.as_ref(),
+                    Ast::Path(_, path)
+                        if path.segments == vec!["Boolean".to_string(), "not_eq".to_string()]
+                ));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(left, Ast::Var(_, name) if name == "left")
+                            && matches!(right, Ast::Var(_, name) if name == "right")
+                ));
+            }
+            other => panic!("Expected lowered App, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_func_literal_comparison_name_uses_logical_tier() {
+    let ast = parse("x = a `eq` b + c").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "eq"));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(left, Ast::Var(_, name) if name == "a")
+                            && matches!(
+                                right,
+                                Ast::BinOp(_, BinOp::Add, rl, rr)
+                                    if matches!(rl.as_ref(), Ast::Var(_, name) if name == "b")
+                                        && matches!(rr.as_ref(), Ast::Var(_, name) if name == "c")
+                            )
+                ));
+            }
+            other => panic!(
+                "Expected logical-tier comparison helper parse, got {:?}",
+                other
+            ),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_func_literal_and_is_lower_precedence_than_comparison_ops() {
+    let ast = parse("x = 0 < num `and` num < 10").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "and"));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(
+                            left,
+                            Ast::BinOp(_, BinOp::Lt, ll, lr)
+                                if matches!(ll.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(0))
+                                    && matches!(lr.as_ref(), Ast::Var(_, name) if name == "num")
+                        ) && matches!(
+                            right,
+                            Ast::BinOp(_, BinOp::Lt, rl, rr)
+                                if matches!(rl.as_ref(), Ast::Var(_, name) if name == "num")
+                                    && matches!(rr.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(10))
+                        )
+                ));
+            }
+            other => panic!("Expected and(...) call, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_symbolic_and_is_lower_precedence_than_comparison_ops() {
+    let ast = parse("x = 0 < num && num < 10").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "and"));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(
+                            left,
+                            Ast::BinOp(_, BinOp::Lt, ll, lr)
+                                if matches!(ll.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(0))
+                                    && matches!(lr.as_ref(), Ast::Var(_, name) if name == "num")
+                        ) && matches!(
+                            right,
+                            Ast::BinOp(_, BinOp::Lt, rl, rr)
+                                if matches!(rl.as_ref(), Ast::Var(_, name) if name == "num")
+                                    && matches!(rr.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(10))
+                        )
+                ));
+            }
+            other => panic!("Expected and(...) call, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_symbolic_or_lowers_to_call() {
+    let ast = parse("x = left || right").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "or"));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(left, Ast::Var(_, name) if name == "left")
+                            && matches!(right, Ast::Var(_, name) if name == "right")
+                ));
+            }
+            other => panic!("Expected lowered App, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_func_literal_and_or_chain_is_left_associative_with_comparisons() {
+    let ast = parse("x = 0 < num `and` num < 10 `or` num == 42").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, or_func, or_args) => {
+                assert!(matches!(or_func.as_ref(), Ast::Var(_, name) if name == "or"));
+                assert!(matches!(
+                    or_args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(
+                            left,
+                            Ast::App(_, and_func, and_args)
+                                if matches!(and_func.as_ref(), Ast::Var(_, name) if name == "and")
+                                    && matches!(
+                                        and_args.as_slice(),
+                                        [RecordLitArg::Positional(_), RecordLitArg::Positional(_)]
+                                    )
+                        ) && matches!(
+                            right,
+                            Ast::BinOp(_, BinOp::Eq, rl, rr)
+                                if matches!(rl.as_ref(), Ast::Var(_, name) if name == "num")
+                                    && matches!(rr.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(42))
+                        )
+                ));
+            }
+            other => panic!("Expected or(...) at top, got {:?}", other),
         },
         other => panic!("Expected bind, got {:?}", other),
     }
@@ -920,6 +2018,36 @@ fn test_list_cons_expr() {
             _ => panic!("Expected ListCons"),
         },
         _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_range_literal_expr() {
+    let ast = parse("nums = [1..3]").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::RangeLiteral(_, start, stop) => {
+                assert!(matches!(start.as_ref(), Ast::Lit(_, Lit::Int(n)) if *n == int(1)));
+                assert!(matches!(stop.as_ref(), Ast::Lit(_, Lit::Int(n)) if *n == int(3)));
+            }
+            other => panic!("Expected RangeLiteral, got {other:?}"),
+        },
+        other => panic!("Expected Bind, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_string_range_literal_expr() {
+    let ast = parse(r#"chars = ["a".."c"]"#).unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::RangeLiteral(_, start, stop) => {
+                assert!(matches!(start.as_ref(), Ast::Lit(_, Lit::Str(value)) if value == "a"));
+                assert!(matches!(stop.as_ref(), Ast::Lit(_, Lit::Str(value)) if value == "c"));
+            }
+            other => panic!("Expected RangeLiteral, got {other:?}"),
+        },
+        other => panic!("Expected Bind, got {other:?}"),
     }
 }
 
@@ -1166,6 +2294,60 @@ fn test_capture_and_zero_arg_closure() {
 }
 
 #[test]
+fn test_capture_placeholder_and_tuple_field_access_parse() {
+    let ast = parse("inc = &add(&1, 1)\nsecond = pair._1").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(rhs.as_ref(), Ast::Capture(_, target, args)
+                if matches!(target.as_ref(), Ast::Var(_, name) if name == "add")
+                && matches!(args.as_slice(), [Ast::CapturePlaceholder(_, 1), Ast::Lit(_, Lit::Int(_))])));
+        }
+        other => panic!("Expected capture placeholder bind, got {:?}", other),
+    }
+    match &ast[1] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(rhs.as_ref(), Ast::FieldAccess(_, _, field) if field == "_1"));
+        }
+        other => panic!("Expected tuple field access bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_identity_anonymous_capture_reports_id_hint() {
+    let err = parse("f = &(&1)").expect_err("identity anonymous capture must fail");
+    assert!(err.message().contains("use `&id` instead"));
+}
+
+#[test]
+fn test_anonymous_capture_reports_named_function_hint() {
+    let err = parse(
+        r#"f = &(&1 + &2)
+g = &(print("Hello"))"#,
+    )
+    .expect_err("anonymous capture forms must fail");
+    assert!(err
+        .message()
+        .contains("capture it like `&fun_name(&1, &2)`"));
+}
+
+#[test]
+fn test_immediate_anonymous_callable_calls_report_dedicated_error() {
+    for source in [
+        "f = &add(&1, 10)(4)",
+        "f = (&add(&1, 10))(4)",
+        "f = ({|x| x + 1})(4)",
+        "f = (make())(4)",
+        "f = (&noop)()",
+    ] {
+        let err = parse(source).expect_err("immediate anonymous callable call must fail");
+        assert_eq!(
+            err.message(),
+            "Immediate calls on anonymous callable expressions are not supported; bind the callable to a name and call it as `fn(args)`"
+        );
+    }
+}
+
+#[test]
 fn test_qualified_capture_and_flow_parse() {
     let ast = parse("reader = &User::get_name\nout = value |> trim() |*> normalize()").unwrap();
     match &ast[0] {
@@ -1187,6 +2369,48 @@ fn test_qualified_capture_and_flow_parse() {
 }
 
 #[test]
+fn test_backtick_qualified_capture_and_operator_capture_parse() {
+    let ast = parse("reader = &`User::get_name`\ninc = &`+`(&1, 10)\nadd = &`+`").unwrap();
+
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::Capture(_, target, args)
+                    if args.is_empty()
+                        && matches!(target.as_ref(), Ast::Path(_, path)
+                            if path.segments == vec!["User".to_string(), "get_name".to_string()])
+            ));
+        }
+        other => panic!("Expected qualified capture bind, got {:?}", other),
+    }
+
+    match &ast[1] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::Capture(_, target, args)
+                    if args.len() == 2
+                        && matches!(target.as_ref(), Ast::FuncLiteralRef(_, func) if func.body == "+")
+            ));
+        }
+        other => panic!("Expected operator capture bind, got {:?}", other),
+    }
+
+    match &ast[2] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::Capture(_, target, args)
+                    if args.is_empty()
+                        && matches!(target.as_ref(), Ast::FuncLiteralRef(_, func) if func.body == "+")
+            ));
+        }
+        other => panic!("Expected bare operator capture bind, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_pipe_rhs_call_stays_as_app() {
     let ast = parse("out = user |> User::get_name()").expect("pipe with method call should parse");
     match &ast[0] {
@@ -1203,7 +2427,7 @@ fn test_pipe_rhs_call_stays_as_app() {
 #[test]
 fn test_flow_operators_allow_elixir_style_line_breaks() {
     let ast = parse(
-        "out = value\n|> trim()\n|*> normalize()\npipeline = &parse\n|=> &render\nplain = &inc >>\n&inc",
+        "out = value\n|> trim()\n|*> normalize()\npipeline = &parse\n>* &render\nplain = &inc >>\n&inc",
     )
     .expect("flow operators should continue across newlines");
 
@@ -1219,9 +2443,9 @@ fn test_flow_operators_allow_elixir_style_line_breaks() {
 
     match &ast[1] {
         Ast::Bind(_, _, rhs) => {
-            assert!(matches!(rhs.as_ref(), Ast::KleisliCompose(_, _, _)));
+            assert!(matches!(rhs.as_ref(), Ast::LiftedCompose(_, _, _)));
         }
-        other => panic!("Expected multiline kleisli compose, got {:?}", other),
+        other => panic!("Expected multiline lifted compose, got {:?}", other),
     }
 
     match &ast[2] {
@@ -1256,15 +2480,15 @@ fn test_nested_generic_type_closes_without_confusing_compose() {
 }
 
 #[test]
-fn test_qualified_partial_capture_parses() {
-    let ast = parse(r#"rename = &User::with_name("bob")"#)
-        .expect("qualified partial capture should parse");
+fn test_qualified_placeholder_capture_parses() {
+    let ast = parse(r#"rename = &User::with_name("bob", &1)"#)
+        .expect("qualified placeholder capture should parse");
     match &ast[0] {
         Ast::Bind(_, _, rhs) => {
             assert!(matches!(
                 rhs.as_ref(),
                 Ast::Capture(_, target, args)
-                    if args.len() == 1
+                    if args.len() == 2
                         && matches!(target.as_ref(), Ast::Path(_, path)
                             if path.segments == vec!["User".to_string(), "with_name".to_string()])
             ));
@@ -1276,7 +2500,7 @@ fn test_qualified_partial_capture_parses() {
 #[test]
 fn test_compose_chain_is_left_associative_at_same_precedence() {
     let ast =
-        parse("pipeline = parse() |=> validate() >> render()").expect("compose chain should parse");
+        parse("pipeline = parse() >=> validate() >> render()").expect("compose chain should parse");
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Compose(_, left, right) => {
@@ -1287,6 +2511,23 @@ fn test_compose_chain_is_left_associative_at_same_precedence() {
         },
         other => panic!("Expected bind, got {:?}", other),
     }
+}
+
+#[test]
+fn test_legacy_pipe_compose_operator_is_rejected() {
+    parse("pipeline = &parse |=> &render").expect_err("legacy pipe compose should be rejected");
+}
+
+#[test]
+fn test_lens_slash_compose_expression_parses() {
+    parse(r#"value = Lens::view(User.profile / Profile.name, user)"#)
+        .expect("lens slash compose should parse");
+}
+
+#[test]
+fn test_lens_slash_compose_chain_parses() {
+    parse(r#"value = Lens::view(Config.root / Project.current / Tuple._0, cfg)"#)
+        .expect("chained lens slash compose should parse");
 }
 
 #[test]
@@ -1459,6 +2700,78 @@ fn test_interpolation_escape_drops_backslash() {
 }
 
 #[test]
+fn test_triple_quoted_string_parses_as_plain_string_expr() {
+    let ast = parse("msg = \"\"\"\nhello\n\"\"\"").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(rhs.as_ref(), Ast::Lit(_, Lit::Str(s)) if s == "\nhello\n"));
+        }
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_triple_quoted_string_allows_interpolation() {
+    let ast = parse("msg = \"\"\"\nhello #{name}\n\"\"\"").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::InterpolatedStr(_, parts) => {
+                assert!(
+                    matches!(parts.first(), Some(InterpolatedPart::Text(s)) if s == "\nhello ")
+                );
+                assert!(matches!(parts.get(1), Some(InterpolatedPart::Expr(expr))
+                    if matches!(expr.as_ref(), Ast::Var(_, name) if name == "name")));
+                assert!(matches!(parts.get(2), Some(InterpolatedPart::Text(s)) if s == "\n"));
+            }
+            _ => panic!("Expected InterpolatedStr"),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_triple_quoted_string_dedents_from_starting_line_indent() {
+    let ast = parse("def main() -> Unit {\n  msg = \"\"\"\n  hello\n  world\n  \"\"\"\n}");
+    let ast = ast.unwrap();
+    match &ast[0] {
+        Ast::Def(_, _, _, _, _, body, _) => match body.as_ref() {
+            Ast::Block(_, stmts) => {
+                assert!(matches!(
+                    stmts.as_slice(),
+                    [Ast::Bind(_, _, rhs)]
+                        if matches!(rhs.as_ref(), Ast::Lit(_, Lit::Str(s)) if s == "\nhello\nworld\n")
+                ));
+            }
+            _ => panic!("Expected Block"),
+        },
+        _ => panic!("Expected Def"),
+    }
+}
+
+#[test]
+fn test_doc_attribute_rejects_interpolation() {
+    let err = parse("@doc \"\"\"\nhello #{name}\n\"\"\"\ndef main() -> Unit { () }")
+        .expect_err("@doc interpolation must fail");
+    assert!(
+        err.message()
+            .contains("@doc does not allow string interpolation"),
+        "unexpected error: {}",
+        err.message()
+    );
+}
+
+#[test]
+fn test_triple_quoted_string_rejects_content_shallower_than_starting_line() {
+    let err = parse("def main() -> Unit {\n  msg = \"\"\"\n shallow\n  \"\"\"\n}");
+    assert!(err
+        .expect_err("expected indentation error")
+        .message()
+        .contains(
+            "Triple-quoted string content must be indented at least as far as the starting line"
+        ));
+}
+
+#[test]
 fn test_regex_generated_literal_double_quote_lowers_to_compile_call() {
     let ast = parse(r#"rx = re"^a+$""#).unwrap();
     match &ast[0] {
@@ -1540,8 +2853,112 @@ fn test_parenthesized_expression_is_not_tuple_literal() {
     let ast = parse("value = (1)").unwrap();
     match &ast[0] {
         Ast::Bind(_, _, rhs) => {
-            assert!(matches!(rhs.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(1)));
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::Grouped(_, inner)
+                    if matches!(inner.as_ref(), Ast::Lit(_, Lit::Int(n)) if n == &int(1))
+            ));
         }
+        other => panic!("Expected Bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_deep_parenthesized_expression_parses_without_stacker_feature() {
+    let depth = 16;
+    let mut source = String::from("value = ");
+    source.push_str(&"(".repeat(depth));
+    source.push('1');
+    source.push_str(&")".repeat(depth));
+
+    let ast = parse(&source).expect("deep parenthesized expression should parse");
+    assert_eq!(ast.len(), 1);
+}
+
+#[test]
+fn test_max_depth_parenthesized_expression_parses() {
+    let depth = MAX_PARSE_NESTING;
+    let mut source = String::from("value = ");
+    source.push_str(&"(".repeat(depth));
+    source.push('1');
+    source.push_str(&")".repeat(depth));
+
+    let ast = parse(&source).expect("maximum allowed parenthesized expression should parse");
+    assert_eq!(ast.len(), 1);
+}
+
+#[test]
+fn test_excessive_parenthesized_expression_is_parse_error() {
+    let depth = MAX_PARSE_NESTING + 1;
+    let mut source = String::from("value = ");
+    source.push_str(&"(".repeat(depth));
+    source.push('1');
+    source.push_str(&")".repeat(depth));
+
+    let err = parse(&source).expect_err("excessive parenthesized expression must fail");
+    assert!(err.message().contains(MAX_PARSE_NESTING_MESSAGE));
+}
+
+#[test]
+fn test_excessive_generic_type_nesting_is_parse_error() {
+    let depth = MAX_PARSE_NESTING + 1;
+    let mut ty = "Int".to_string();
+    for _ in 0..depth {
+        ty = format!("List<{}>", ty);
+    }
+    let source = format!("value: {} = []", ty);
+
+    let err = parse(&source).expect_err("excessive generic type nesting must fail");
+    assert!(err.message().contains(MAX_PARSE_NESTING_MESSAGE));
+}
+
+#[test]
+fn test_excessive_list_expression_nesting_is_parse_error() {
+    let depth = MAX_PARSE_NESTING + 1;
+    let mut source = String::from("value = ");
+    source.push_str(&"[".repeat(depth));
+    source.push('1');
+    source.push_str(&"]".repeat(depth));
+
+    let err = parse(&source).expect_err("excessive list expression nesting must fail");
+    assert!(err.message().contains(MAX_PARSE_NESTING_MESSAGE));
+}
+
+#[test]
+fn test_excessive_block_expression_nesting_is_parse_error() {
+    let depth = MAX_PARSE_NESTING + 1;
+    let mut source = String::from("value = ");
+    source.push_str(&"{".repeat(depth));
+    source.push('1');
+    source.push_str(&"}".repeat(depth));
+
+    let err = parse(&source).expect_err("excessive block expression nesting must fail");
+    assert!(err.message().contains(MAX_PARSE_NESTING_MESSAGE));
+}
+
+#[test]
+fn test_excessive_pattern_nesting_is_parse_error() {
+    let depth = MAX_PARSE_NESTING + 1;
+    let mut source = "[".repeat(depth);
+    source.push('_');
+    source.push_str(&"]".repeat(depth));
+    source.push_str(" = value");
+
+    let err = parse(&source).expect_err("excessive pattern nesting must fail");
+    assert!(err.message().contains(MAX_PARSE_NESTING_MESSAGE));
+}
+
+#[test]
+fn test_grouped_pipe_rhs_preserves_callable_returning_call() {
+    let ast = parse("out = value |> (make_closure(1))").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::Pipe(_, _, right) => assert!(matches!(
+                right.as_ref(),
+                Ast::Grouped(_, inner) if matches!(inner.as_ref(), Ast::App(_, _, _))
+            )),
+            other => panic!("Expected pipe node, got {:?}", other),
+        },
         other => panic!("Expected Bind, got {:?}", other),
     }
 }
@@ -1590,6 +3007,41 @@ fn test_function_type_annotation_is_not_tuple_type() {
             assert!(matches!(rhs.as_ref(), Ast::Closure(_, params, _) if params.len() == 2));
         }
         other => panic!("Expected function type bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_function_type_annotation_arrow_outside_parens_has_guided_error() {
+    let err = parse("fun: (Int) -> String = value").expect_err("Expected parse error");
+    let message = err.message();
+    assert!(message.contains("choose tuple or function syntax"));
+    assert!(message.contains("`, `") || message.contains("`,`"));
+    assert!(message.contains("`->`"));
+    assert!(message.contains("(Int -> String)"));
+}
+
+#[test]
+fn test_parenthesized_single_type_annotation_is_rejected() {
+    let err = parse("value: (Int) = input").expect_err("Expected parse error");
+    let message = err.message();
+    assert!(message.contains("one element"));
+    assert!(message.contains("without parentheses"));
+    assert!(message.contains("(T, U)"));
+    assert!(message.contains("(T -> R)"));
+}
+
+#[test]
+fn test_optional_type_annotation_lowers_to_result_none_error() {
+    let ast = parse("value: Int? = input").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Generic(_, name, args)), rhs) => {
+            assert_eq!(name, "Result");
+            assert_eq!(args.len(), 2);
+            assert!(matches!(&args[0], AstTy::Named(_, inner) if inner == "Int"));
+            assert!(matches!(&args[1], AstTy::Named(_, inner) if inner == "NoneError"));
+            assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "input"));
+        }
+        other => panic!("Expected optional type bind, got {:?}", other),
     }
 }
 
@@ -1646,8 +3098,8 @@ fn test_match_wildcard_and_int_pattern() {
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Match(_, _, arms) => {
-                assert!(matches!(&arms[0].0, AstPattern::IntLit(_, n) if n == &int(1)));
-                assert!(matches!(&arms[1].0, AstPattern::Wildcard(_)));
+                assert!(matches!(&arms[0].pattern, AstPattern::IntLit(_, n) if n == &int(1)));
+                assert!(matches!(&arms[1].pattern, AstPattern::Wildcard(_)));
             }
             _ => panic!("Expected Match"),
         },
@@ -1667,11 +3119,55 @@ fn test_match_string_pattern() {
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Match(_, _, arms) => {
-                assert!(matches!(&arms[0].0, AstPattern::StrLit(_, s) if s == "a"));
+                assert!(matches!(&arms[0].pattern, AstPattern::StrLit(_, s) if s == "a"));
             }
             _ => panic!("Expected Match"),
         },
         _ => panic!("Expected Bind with Match"),
+    }
+}
+
+#[test]
+fn test_match_arm_rhs_brace_block_is_block_expr() {
+    let ast = parse(
+        r#"x = match n {
+  1 => {
+    y = 2
+    y + 3
+  },
+  _ => 0,
+}"#,
+    )
+    .unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::Match(_, _, arms) => {
+                assert!(matches!(&arms[0].body, Ast::Block(_, stmts) if stmts.len() == 2));
+            }
+            other => panic!("Expected Match, got {:?}", other),
+        },
+        other => panic!("Expected Bind with Match, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_match_arm_rhs_explicit_closure_stays_closure() {
+    let ast = parse(
+        r#"x = match n {
+  1 => {|| 2},
+  _ => {|| 0},
+}"#,
+    )
+    .unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::Match(_, _, arms) => {
+                assert!(matches!(&arms[0].body, Ast::Closure(_, params, _) if params.is_empty()));
+                assert!(matches!(&arms[1].body, Ast::Closure(_, params, _) if params.is_empty()));
+            }
+            other => panic!("Expected Match, got {:?}", other),
+        },
+        other => panic!("Expected Bind with Match, got {:?}", other),
     }
 }
 
@@ -1688,7 +3184,7 @@ fn test_match_negative_int_in_list_pattern() {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Match(_, _, arms) => {
                 assert!(matches!(
-                    &arms[0].0,
+                    &arms[0].pattern,
                     AstPattern::ListCons(_, head, tail)
                         if matches!(head.as_ref(), AstPattern::IntLit(_, n) if n == &int(-1))
                             && matches!(tail.as_ref(), AstPattern::ListNil(_))
@@ -1745,22 +3241,28 @@ fn test_cond_desugars_to_nested_if_apps() {
 }
 
 #[test]
-fn test_cond_accepts_block_body() {
+fn test_cond_accepts_zero_arg_closure_body() {
     let ast = parse(
         r#"x = cond {
   True => { print("ok"); 1 },
 }"#,
     )
-    .expect("cond with block body should parse");
+    .expect("cond with closure body should parse");
 
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
-            Ast::Block(_, stmts) => {
-                assert!(
-                    matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::Lit(_, Lit::Int(n))] if n == &int(1))
-                );
+            Ast::Closure(_, params, body) => {
+                assert!(params.is_empty());
+                assert!(matches!(
+                    body.as_ref(),
+                    Ast::Block(_, stmts)
+                        if matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::Lit(_, Lit::Int(n))] if n == &int(1))
+                ));
             }
-            _ => panic!("Expected final True clause body to remain as block"),
+            other => panic!(
+                "Expected final True clause body to become closure, got {:?}",
+                other
+            ),
         },
         _ => panic!("Expected Bind"),
     }
@@ -1814,7 +3316,7 @@ fn test_match_constructor_pattern_is_accepted() {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Match(_, _, arms) => {
                 assert!(matches!(
-                    &arms[0].0,
+                    &arms[0].pattern,
                     AstPattern::Call(_, name, inner)
                         if name == "Some"
                             && matches!(inner.as_slice(), [AstPattern::Var(_, bound)] if bound == "y")
@@ -1839,7 +3341,7 @@ fn test_match_bare_uppercase_identifier_is_constructor_pattern() {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Match(_, _, arms) => {
                 assert!(matches!(
-                    &arms[0].0,
+                    &arms[0].pattern,
                     AstPattern::Constructor(_, name, args) if name == "ParseError" && args.is_empty()
                 ));
             }
@@ -1863,13 +3365,67 @@ fn test_match_as_and_annotated_pattern_is_accepted() {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Match(_, _, arms) => {
                 assert!(matches!(
-                    &arms[0].0,
+                    &arms[0].pattern,
                     AstPattern::As(_, inner, alias, Some(AstTy::Generic(_, ty_name, ty_args)))
                         if alias == "whole"
                             && ty_name == "List"
                             && ty_args.len() == 1
                             && matches!(inner.as_ref(), AstPattern::ListCons(_, _, _))
                 ));
+            }
+            _ => panic!("Expected Match"),
+        },
+        _ => panic!("Expected Bind with Match"),
+    }
+}
+
+#[test]
+fn test_match_or_pattern_expands_into_multiple_arms() {
+    let ast = parse(
+        r#"x = match value {
+  "a" | "b" => 1,
+  _ => 0,
+}"#,
+    )
+    .expect("or pattern should parse");
+
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::Match(_, _, arms) => {
+                assert_eq!(arms.len(), 3);
+                assert!(matches!(
+                    &arms[0].pattern,
+                    AstPattern::StrLit(_, s) if s == "a"
+                ));
+                assert!(matches!(
+                    &arms[1].pattern,
+                    AstPattern::StrLit(_, s) if s == "b"
+                ));
+                assert!(matches!(&arms[2].pattern, AstPattern::Wildcard(_)));
+            }
+            _ => panic!("Expected Match"),
+        },
+        _ => panic!("Expected Bind with Match"),
+    }
+}
+
+#[test]
+fn test_match_guard_is_parsed_on_each_expanded_or_arm() {
+    let ast = parse(
+        r#"x = match n {
+  1 | 2 when 0 < n `and` n < 10 => n,
+  _ => 0,
+}"#,
+    )
+    .expect("guarded or pattern should parse");
+
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::Match(_, _, arms) => {
+                assert_eq!(arms.len(), 3);
+                assert!(arms[0].guard.is_some());
+                assert!(arms[1].guard.is_some());
+                assert!(arms[2].guard.is_none());
             }
             _ => panic!("Expected Match"),
         },
@@ -2073,6 +3629,52 @@ fn test_module_compile_unit_accepts_top_level_defmod() {
 }
 
 #[test]
+fn test_namespace_block_lowers_type_and_module_heads() {
+    let ast = parse_with_context(
+        r#"namespace Auth {
+  defrecord User(name: String)
+  defmod Repo {
+    def wrap(user: Auth::User) -> Auth::User { user }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("namespace declarations should lower into ordinary top-level declarations");
+
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::RecordDef(_, name, _, _), Ast::Defmod(_, module_name, _, _)]
+            if name == "Auth::User" && module_name == "Auth::Repo"
+    ));
+}
+
+#[test]
+fn test_defmod_accepts_qualified_module_path() {
+    let ast = parse_with_context(
+        "defmod Auth::Repo { def name() -> String { \"repo\" } }",
+        ParserContext::module(1, None),
+    )
+    .expect("qualified defmod path should parse");
+    assert!(matches!(ast.as_slice(), [Ast::Defmod(_, name, _, _)] if name == "Auth::Repo"));
+}
+
+#[test]
+fn test_impl_accepts_qualified_type_target() {
+    let ast = parse_with_context(
+        r#"impl Auth::User {
+  def id(self: Self) -> Auth::User { self }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("qualified impl target should parse");
+    assert!(
+        matches!(ast.as_slice(), [Ast::ImplDef(_, target, methods, _)]
+        if target == "Auth::User"
+            && matches!(methods.as_slice(), [Ast::Def(_, _, _, _, Some(AstTy::Named(_, ret_ty)), _, _)] if ret_ty == "Auth::User"))
+    );
+}
+
+#[test]
 fn test_defmod_body_accepts_defextractor() {
     let ast = parse_with_context(
         r#"defmod Matchers {
@@ -2088,6 +3690,79 @@ fn test_defmod_body_accepts_defextractor() {
         [Ast::Defmod(_, name, body, _)]
             if name == "Matchers"
                 && matches!(body.as_slice(), [Ast::ExtractorDef(_, extractor_name, _, _, _, _, _)] if extractor_name == "never")
+    ));
+}
+
+#[test]
+fn test_defmod_body_accepts_import() {
+    let ast = parse_with_context(
+        r#"defmod Parser {
+  import String;
+  def parse(line: String) -> String { trim(line) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("defmod should accept import declarations");
+
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::Defmod(_, name, body, _)]
+            if name == "Parser"
+                && matches!(body.as_slice(),
+                    [
+                        Ast::Import(_, AstPath { segments, .. }, ImportSpec::All),
+                        Ast::Def(_, def_name, _, _, _, _, _)
+                    ]
+                    if segments.as_slice() == ["String"] && def_name == "parse")
+    ));
+}
+
+#[test]
+fn test_impl_body_accepts_import() {
+    let ast = parse_with_context(
+        r#"impl User {
+  import String;
+  def normalize(self: Self, name: String) -> String { trim(name) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("impl should accept import declarations");
+
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::ImplDef(_, target, body, _)]
+            if target == "User"
+                && matches!(body.as_slice(),
+                    [
+                        Ast::Import(_, AstPath { segments, .. }, ImportSpec::All),
+                        Ast::Def(_, def_name, _, _, _, _, _)
+                    ]
+                    if segments.as_slice() == ["String"] && def_name == "normalize")
+    ));
+}
+
+#[test]
+fn test_trait_impl_body_accepts_import() {
+    let ast = parse_with_context(
+        r#"impl Show for User {
+  import String;
+  def to_string(self: Self) -> String { trim("x") }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("trait impl should accept import declarations");
+
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::TraitImplDef(_, trait_name, _, AstTy::Named(_, target), body, _)]
+            if trait_name == "Show"
+                && target == "User"
+                && matches!(body.as_slice(),
+                    [
+                        Ast::Import(_, AstPath { segments, .. }, ImportSpec::All),
+                        Ast::Def(_, def_name, _, _, _, _, _)
+                    ]
+                    if segments.as_slice() == ["String"] && def_name == "to_string")
     ));
 }
 
@@ -2118,7 +3793,7 @@ fn test_defmod_body_rejects_non_function_declarations() {
 #[test]
 fn test_module_compile_unit_rejects_builtin_decl() {
     let err = parse_with_context(
-        "@@builtin def print(a: String) -> Unit",
+        "@builtin def print(a: String) -> Unit",
         ParserContext::module(1, None),
     )
     .expect_err("user module compile unit should reject builtin declarations");
@@ -2129,7 +3804,7 @@ fn test_module_compile_unit_rejects_builtin_decl() {
 
 #[test]
 fn test_module_compile_unit_rejects_builtin_type_decl() {
-    let err = parse_with_context("@@builtin type Int", ParserContext::module(1, None))
+    let err = parse_with_context("@builtin type Int", ParserContext::module(1, None))
         .expect_err("user module compile unit should reject builtin type declarations");
     assert!(err
         .message()
@@ -2139,7 +3814,7 @@ fn test_module_compile_unit_rejects_builtin_type_decl() {
 #[test]
 fn test_std_module_compile_unit_accepts_builtin_decl() {
     let ast = parse_with_context(
-        "defmod Bootstrap { @@builtin def print(a: String) -> Unit }",
+        "defmod Bootstrap { @builtin def print(a: String) -> Unit }",
         ParserContext::module(1, None).with_rules(ParseRules::std_module()),
     )
     .expect("std module compile unit should accept builtin declarations");
@@ -2152,7 +3827,7 @@ fn test_std_module_compile_unit_accepts_builtin_decl() {
 #[test]
 fn test_std_module_compile_unit_accepts_builtin_type_decl() {
     let ast = parse_with_context(
-        "defmod Bootstrap { @@builtin type Int }",
+        "defmod Bootstrap { @builtin type Int }",
         ParserContext::module(1, None).with_rules(ParseRules::std_module()),
     )
     .expect("std module compile unit should accept builtin type declarations");
@@ -2165,21 +3840,80 @@ fn test_std_module_compile_unit_accepts_builtin_type_decl() {
 #[test]
 fn test_script_compile_unit_accepts_top_level_def_import_and_include() {
     let ast = parse_with_context(
-        "def add(x: Int, y: Int) -> Int { x + y }\ninclude './mylib.srt'\nimport Kernel::add;",
+        "include './mylib.srt'\ndef add(x: Int, y: Int) -> Int { x + y }\nimport Kernel::add;",
         ParserContext::script(1),
     )
     .expect("script compile unit should accept top-level def, include, and import");
     assert!(matches!(
         ast.as_slice(),
         [
-            Ast::Def(_, name, _, _, _, _, _),
             Ast::Include(_, include_path),
+            Ast::Def(_, name, _, _, _, _, _),
             Ast::Import(_, AstPath { segments, .. }, ImportSpec::Single(import_name))
-        ] if name == "add"
-            && include_path == "./mylib.srt"
+        ] if include_path == "./mylib.srt"
+            && name == "add"
             && segments.as_slice() == ["Kernel"]
             && import_name == "add"
     ));
+}
+
+#[test]
+fn test_script_compile_unit_accepts_namespace_types_traits_and_impls() {
+    let ast = parse_with_context(
+        r#"const LIMIT = 1
+
+namespace Auth {
+  defrecord User(name: String)
+  defmod Repo {
+    def load() -> Unit { () }
+  }
+}
+
+deferror Oops(reason: String) { reason }
+
+defenum Role { Admin }
+
+deftrait Named {
+  def name(self: Self) -> String
+}
+
+impl Auth::User {
+  def rename(self: Self, next: String) -> Self { self }
+}
+
+impl Show for Auth::User {
+  def to_string(self: Self) -> String { "ok" }
+}"#,
+        ParserContext::script(1),
+    )
+    .expect("script compile unit should accept widened top-level declarations");
+
+    assert!(ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::ConstDef(_, name, _, _, _) if name == "LIMIT")));
+    assert!(ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::RecordDef(_, name, _, _) if name == "Auth::User")));
+    assert!(ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::Defmod(_, name, _, _) if name == "Auth::Repo")));
+    assert!(ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::DeferrorDef(_, name, _, _, _) if name == "Oops")));
+    assert!(ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::EnumDef(_, name, _, _, _) if name == "Role")));
+    assert!(ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::TraitDef(_, name, _, _, _) if name == "Named")));
+    assert!(ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::ImplDef(_, target, _, _) if target == "Auth::User")));
+    assert!(ast.iter().any(|stmt| matches!(
+        stmt,
+        Ast::TraitImplDef(_, trait_name, _, AstTy::Named(_, target), _, _)
+            if trait_name == "Show" && target == "Auth::User"
+    )));
 }
 
 #[test]
@@ -2192,12 +3926,27 @@ fn test_module_compile_unit_rejects_top_level_include() {
 }
 
 #[test]
-fn test_script_compile_unit_rejects_top_level_struct_def() {
-    let err = parse_with_context("defstruct User { name: String }", ParserContext::script(1))
-        .expect_err("script compile unit should reject top-level type declarations");
+fn test_script_compile_unit_rejects_top_level_defmod() {
+    let err = parse_with_context(
+        "defmod User { def label() -> String { \"x\" } }",
+        ParserContext::script(1),
+    )
+    .expect_err("script compile unit should reject explicit top-level defmod");
     assert!(err
         .message()
-        .contains("This top-level declaration is not allowed in the current source policy"));
+        .contains("defmod is not allowed at script top-level"));
+}
+
+#[test]
+fn test_script_compile_unit_rejects_declaration_after_top_level_expression() {
+    let err = parse_with_context(
+        "print(\"start\")\ndefrecord User(name: String)",
+        ParserContext::script(1),
+    )
+    .expect_err("script compile unit should reject declarations after expressions");
+    assert!(err
+        .message()
+        .contains("top-level definition cannot appear after top-level expression"));
 }
 
 #[test]
@@ -2207,9 +3956,14 @@ fn test_repl_compile_unit_rejects_top_level_impl_block() {
         ParserContext::repl(1),
     )
     .expect_err("repl chunk should reject top-level impl declarations");
-    assert!(err
-        .message()
-        .contains("This top-level declaration is not allowed in the current source policy"));
+    assert!(err.message().contains("REPL"));
+}
+
+#[test]
+fn test_repl_compile_unit_rejects_top_level_const() {
+    let err = parse_with_context("const LIMIT = 1", ParserContext::repl(1))
+        .expect_err("repl chunk should reject top-level const declarations");
+    assert!(err.message().contains("REPL"));
 }
 
 #[test]
@@ -2267,4 +4021,152 @@ fn test_constructor_like_capture_parses_and_is_left_for_later_validation() {
 fn test_assignment_is_rejected_in_argument_position() {
     let err = parse("f(x: y = 1)").expect_err("Expected parse error");
     assert!(err.message().contains("cannot appear in argument position"));
+}
+
+#[test]
+fn test_many_top_level_declarations_parse_successfully() {
+    let mut source = String::new();
+    for idx in 0..256 {
+        source.push_str(&format!("def value_{idx}() -> Int {{ {idx} }}\n"));
+    }
+
+    let ast = parse(&source).expect("many top-level declarations should parse");
+    assert_eq!(ast.len(), 256);
+}
+
+#[test]
+fn test_defagent_lowering_preserves_runtime_process_spec() {
+    let ast = parse_with_context(
+        r#"@doc """Counter agent docs."""
+@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
+defagent Counter {
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("defagent should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, name, body, attrs) => {
+            assert_eq!(name, "Counter");
+            assert_eq!(attrs.doc.as_deref(), Some("Counter agent docs."));
+            let process_spec = attrs
+                .process_spec
+                .as_ref()
+                .expect("defagent lowered module should keep process spec");
+            assert_eq!(process_spec.process_name, "Counter");
+            assert_eq!(process_spec.kind, crate::ast::ProcessKind::StateAgent);
+            assert_eq!(
+                process_spec.instance,
+                crate::ast::ProcessInstance::Singleton
+            );
+            assert!(process_spec.boot);
+            assert!(!process_spec.lazy);
+            assert!(process_spec.registry);
+
+            let pid_wrapper = body
+                .iter()
+                .find(|node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "pid"))
+                .expect("lowered module should include pid wrapper");
+            match pid_wrapper {
+                Ast::Def(_, _, _, params, Some(AstTy::Generic(_, ty_name, ty_args)), _, _) => {
+                    assert!(params.is_empty());
+                    assert_eq!(ty_name, "PID");
+                    assert!(
+                        matches!(ty_args.as_slice(), [AstTy::Named(_, inner)] if inner == "Counter")
+                    );
+                }
+                other => panic!("expected pid wrapper to return PID<Counter>, got {other:?}"),
+            }
+
+            assert!(body.iter().all(
+                |node| !matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "spawn")
+            ));
+
+            let get_wrapper = body
+                .iter()
+                .find(|node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "get"))
+                .expect("lowered module should include get wrapper");
+            match get_wrapper {
+                Ast::Def(_, _, _, params, _, _, _) => {
+                    assert!(matches!(
+                        params.as_slice(),
+                        [FunParam {
+                            ty: AstTy::Generic(_, ty_name, ty_args),
+                            ..
+                        }, ..] if ty_name == "PID"
+                            && matches!(ty_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Counter")
+                    ));
+                }
+                other => panic!("expected get wrapper definition, got {other:?}"),
+            }
+        }
+        other => panic!("Expected lowered Defmod, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
+    let ast = parse_with_context(
+        r#"@agent(kind: State, instance: Multi, boot: false, lazy: false)
+defagent Worker {
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("multi defagent should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, name, body, _) => {
+            assert_eq!(name, "Worker");
+            assert!(body.iter().all(
+                |node| !matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "pid")
+            ));
+            let spawn_wrapper = body
+                .iter()
+                .find(
+                    |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "spawn"),
+                )
+                .expect("multi agent should include spawn wrapper");
+            match spawn_wrapper {
+                Ast::Def(_, _, _, _, Some(AstTy::Generic(_, ty_name, ty_args)), _, _) => {
+                    assert_eq!(ty_name, "Result");
+                    assert!(matches!(
+                        ty_args.as_slice(),
+                        [AstTy::Generic(_, inner_name, inner_args)]
+                            if inner_name == "PID"
+                                && matches!(inner_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Worker")
+                    ));
+                }
+                other => {
+                    panic!("expected spawn wrapper to return Result<PID<Worker>>, got {other:?}")
+                }
+            }
+        }
+        other => panic!("Expected lowered Defmod, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_task_timeout_literal_parses_in_project_context() {
+    let ast = parse_with_context(
+        r#"value = Task::async({|| Ok(())}) @timeout(100ms)"#,
+        ParserContext::project(1),
+    )
+    .expect("task timeout literal should parse");
+    assert!(!ast.is_empty());
 }

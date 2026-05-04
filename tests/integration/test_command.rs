@@ -1,16 +1,42 @@
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
-mod common;
-use common::{surtr_bin, unique_temp_dir, write_source};
+use crate::common::{surtr_command, unique_temp_dir, write_source};
 
 fn run_surtr(temp: &Path, args: &[&str]) -> Output {
-    Command::new(surtr_bin())
+    surtr_command()
         .args(args)
         .current_dir(temp)
         .output()
         .expect("failed to run surtr command")
+}
+
+fn run_surtr_with_env(temp: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
+    let mut command = surtr_command();
+    command.args(args).current_dir(temp);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    command.output().expect("failed to run surtr command")
+}
+
+fn strip_ansi(input: &str) -> String {
+    let mut output = String::new();
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() {
+                if next.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            output.push(ch);
+        }
+    }
+    output
 }
 
 fn write_math_module(temp: &Path) {
@@ -93,6 +119,144 @@ test("Math") {
     assert!(stdout.contains("[FAIL] Math > add > rejects wrong sum (lib/tests/math.srt)"));
     assert!(stdout.contains("expected 6, got 14"));
     assert!(stdout.contains("test result: passed=0, failed=1, total=1"));
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_reports_assertion_failure_source_diagnostic() {
+    let temp = unique_temp_dir("surtr_test_command_assertion_source_diagnostic");
+    write_math_test(
+        &temp,
+        r#"import Test;
+
+test("String") {
+  describe("repeat") {
+    it("bad") { assert_eq("tes", "bad") }
+  }
+}
+"#,
+    );
+
+    let output = run_surtr(&temp, &["test", "math"]);
+    assert!(
+        !output.status.success(),
+        "test command should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("[FAIL] String > repeat > bad (lib/tests/math.srt)"));
+    assert!(stdout.contains("TestAssertionFailed: expected \"tes\", got \"bad\""));
+    assert!(stdout.contains("assert_eq(\"tes\", \"bad\")"));
+    assert!(stdout.contains("LHS term: \"tes\""));
+    assert!(stdout.contains("RHS term: \"bad\""));
+    assert!(stdout.contains("assert_eq failed: expected \"tes\", got \"bad\""));
+    assert!(stdout.contains("lib/tests/math.srt"));
+    assert!(!stdout.contains("note:"));
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_quiet_suppresses_success_output() {
+    let temp = unique_temp_dir("surtr_test_command_quiet_success");
+    write_math_module(&temp);
+    write_math_test(
+        &temp,
+        r#"import Math;
+import Test;
+
+test("Math") {
+  it("adds two numbers") { assert_eq(3, add(1, 2)) }
+}
+"#,
+    );
+
+    let output = run_surtr(&temp, &["test", "--quiet", "math"]);
+    assert!(
+        output.status.success(),
+        "quiet test command should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+
+    let output = run_surtr(&temp, &["test", "math", "-q"]);
+    assert!(
+        output.status.success(),
+        "quiet test command should accept trailing flag\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_quiet_keeps_failure_output() {
+    let temp = unique_temp_dir("surtr_test_command_quiet_failure");
+    write_math_module(&temp);
+    write_math_test(
+        &temp,
+        r#"import Math;
+import Test;
+
+test("Math") {
+  it("rejects wrong sum") { assert_eq(6, add(10, 4)) }
+}
+"#,
+    );
+
+    let output = run_surtr(&temp, &["test", "-q", "math"]);
+    assert!(
+        !output.status.success(),
+        "quiet failing test command should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[FAIL] Math > rejects wrong sum (lib/tests/math.srt)"));
+    assert!(stdout.contains("expected 6, got 14"));
+    assert!(stdout.contains("test result: passed=0, failed=1, total=1"));
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_colors_suite_lines_and_summary_when_requested() {
+    let temp = unique_temp_dir("surtr_test_command_color");
+    write_math_module(&temp);
+    write_math_test(
+        &temp,
+        r#"import Math;
+import Test;
+
+test("Math") {
+  describe("add") {
+    it("adds two numbers") { assert_eq(3, add(1, 2)) }
+  }
+}
+"#,
+    );
+
+    let output = run_surtr_with_env(&temp, &["test", "math"], &[("SURTR_TEST_COLOR", "always")]);
+    assert!(
+        output.status.success(),
+        "test command should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\x1b[32m[PASS]\x1b[0m Math > add > adds two numbers"));
+    assert!(stdout.contains(
+        "test result: \x1b[32mpassed=1\x1b[0m, \x1b[32mfailed=0\x1b[0m, \x1b[36mtotal=1\x1b[0m"
+    ));
 
     let _ = fs::remove_dir_all(temp);
 }
@@ -210,6 +374,48 @@ fn test_command_reports_missing_test_script() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("test: failed to read lib/tests/missing.srt for selector `missing`"));
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_all_runs_lib_test_scripts() {
+    let temp = unique_temp_dir("surtr_test_command_all");
+    write_source(
+        &temp.join("lib/tests/alpha.srt"),
+        r#"import Test;
+
+test("Alpha") {
+  it("passes") { assert_eq(1, 1) }
+}
+"#,
+    );
+    write_source(
+        &temp.join("lib/tests/nested/beta.srt"),
+        r#"import Test;
+
+test("Beta") {
+  it("passes") { assert_true(True) }
+}
+"#,
+    );
+    write_source(
+        &temp.join("lib/tests/prelude.srt"),
+        r#"this file is intentionally ignored by --all"#,
+    );
+
+    let output = run_surtr(&temp, &["test", "--all"]);
+    assert!(
+        output.status.success(),
+        "test --all should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[PASS] Alpha > passes"));
+    assert!(stdout.contains("[PASS] Beta > passes"));
+    assert!(stdout.contains("test result: passed=2, failed=0, total=2"));
 
     let _ = fs::remove_dir_all(temp);
 }

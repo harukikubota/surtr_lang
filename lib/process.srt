@@ -1,0 +1,90 @@
+@doc """
+Process and Task provide the staged process-oriented surface.
+"""
+defmod Process {
+  @doc """
+  Return the current process PID.
+
+  ## REPL
+  xldr(1)> Process::self()
+  <pid>
+  """
+  @builtin def self() -> PID<$Process>
+
+  @hidden
+  @builtin def __process_pid(name: String, init: (-> Result<$State>)) -> PID<$Process>
+
+  @hidden
+  @builtin def __process_spawn(name: String, init: (-> Result<$State>)) -> Result<PID<$Process>>
+
+  @hidden
+  @builtin def __process_state(pid: PID<$Process>) -> Result<$State>
+
+  @hidden
+  @builtin def __process_store(pid: PID<$Process>, state: $State) -> Result<Unit>
+
+  @hidden
+  @builtin def __process_self() -> PID<$Process>
+
+  @doc """
+  Sleep the current execution for the given duration.
+
+  ## REPL
+  xldr(1)> Process::sleep(10ms)
+  Ok(())
+  """
+  @builtin def sleep(duration: Duration) -> Result<Unit>
+
+  @hidden
+  @builtin def __process_sleep(duration: Duration) -> Result<Unit>
+}
+
+defmod Task {
+  @doc """
+  Run a zero-argument task body and return its Result.
+
+  ## REPL
+  xldr(1)> Task::call({|| Ok(1)})
+  Ok(1)
+  """
+  @builtin def call(body: (-> Result<$A>)) -> Result<$A>
+
+  @doc """
+  Run a zero-argument task body through the task runtime and return its Result.
+
+  ## REPL
+  xldr(1)> Task::async({|| Ok("ready")})
+  Ok("ready")
+  """
+  @builtin def async(body: (-> Result<$A>)) -> Result<$A>
+
+  @doc """
+  Start a detached task body and return Ok(()) after the runtime accepts it.
+
+  ## REPL
+  xldr(1)> Task::launch({|| Ok(())})
+  Ok(())
+  """
+  @builtin def launch(body: (-> Result<Unit>)) -> Result<Unit>
+
+  @doc """
+  Schedule a fire-and-forget task body and return Ok(()) after acceptance.
+
+  ## REPL
+  xldr(1)> Task::cast({|| ()})
+  Ok(())
+  """
+  @builtin def cast(body: (-> Unit)) -> Result<Unit>
+
+  @hidden
+  @builtin def __task_call_timeout(timeout: Duration, body: (-> Result<$A>)) -> Result<$A>
+
+  @hidden
+  @builtin def __task_async_timeout(timeout: Duration, body: (-> Result<$A>)) -> Result<$A>
+
+  @hidden
+  @builtin def __task_launch_timeout(timeout: Duration, body: (-> Result<Unit>)) -> Result<Unit>
+
+  @hidden
+  @builtin def __task_cast_timeout(timeout: Duration, body: (-> Unit)) -> Result<Unit>
+}

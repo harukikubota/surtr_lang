@@ -1,215 +1,489 @@
 use crate::error::RuntimeError;
 use crate::value::Value;
-use crate::vm::VM;
+use crate::vm::{TaskMode, VM};
+use num_bigint::{BigInt, BigUint, Sign};
 use regex::Regex;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
-use sindr::ir::DocKind;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
-    Callable, CallableTarget, HashMapHandle, ListHandle, Location, RegexCapturesHandle,
+    Callable, HashMapHandle, ListHandle, Location, RandomGeneratorHandle, RegexCapturesHandle,
     RegexHandle, RegexMatchHandle, RichError,
 };
 use std::collections::HashMap;
+use std::io::{self, IsTerminal, Read};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 
 /// Function pointer type for built-in implementations.
 pub type BuiltinFn = fn(&mut VM, Vec<Value>) -> Result<Value, RuntimeError>;
 
 struct BuiltinImpl {
+    name: &'static str,
     func: BuiltinFn,
 }
 
 // Eldr keeps implementation pointers only. Metadata lives in sindr::builtin.
 const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
+        name: "print",
         func: builtin_print,
     },
     BuiltinImpl {
+        name: "to_string",
         func: builtin_to_string,
     },
     BuiltinImpl {
+        name: "inspect",
         func: builtin_inspect,
     },
     BuiltinImpl {
+        name: "safe_div",
         func: builtin_safe_div,
     },
     BuiltinImpl {
+        name: "safe_mod",
         func: builtin_safe_mod,
     },
     BuiltinImpl {
+        name: "eprint",
         func: builtin_eprint,
     },
     BuiltinImpl {
+        name: "set_exit_code",
         func: builtin_set_exit_code,
     },
-    BuiltinImpl { func: builtin_shl },
-    BuiltinImpl { func: builtin_shr },
     BuiltinImpl {
+        name: "shl",
+        func: builtin_shl,
+    },
+    BuiltinImpl {
+        name: "shr",
+        func: builtin_shr,
+    },
+    BuiltinImpl {
+        name: "len",
         func: builtin_list_len,
     },
     BuiltinImpl {
+        name: "gen_make",
         func: builtin_gen_make,
     },
     BuiltinImpl {
+        name: "gen_idx",
         func: builtin_gen_idx,
     },
     BuiltinImpl {
+        name: "gen_items",
         func: builtin_gen_items,
     },
     BuiltinImpl {
+        name: "bit_and",
         func: builtin_bit_and,
     },
     BuiltinImpl {
+        name: "bit_or",
         func: builtin_bit_or,
     },
     BuiltinImpl {
+        name: "bit_xor",
         func: builtin_bit_xor,
     },
     BuiltinImpl {
+        name: "bit_not",
         func: builtin_bit_not,
     },
     BuiltinImpl {
+        name: "test_bit",
         func: builtin_test_bit,
     },
     BuiltinImpl {
+        name: "set_bit",
         func: builtin_set_bit,
     },
     BuiltinImpl {
+        name: "clear_bit",
         func: builtin_clear_bit,
     },
     BuiltinImpl {
+        name: "toggle_bit",
         func: builtin_toggle_bit,
     },
     BuiltinImpl {
+        name: "codepoints",
         func: builtin_codepoints,
     },
     BuiltinImpl {
+        name: "from_codepoints",
         func: builtin_from_codepoints,
     },
     BuiltinImpl {
+        name: "map_err",
         func: builtin_result_map_err,
     },
     BuiltinImpl {
+        name: "cause",
         func: builtin_result_cause,
     },
     BuiltinImpl {
+        name: "chain",
         func: builtin_result_chain,
     },
     BuiltinImpl {
+        name: "__test_push",
         func: builtin_test_push,
     },
     BuiltinImpl {
+        name: "__test_pop",
         func: builtin_test_pop,
     },
     BuiltinImpl {
+        name: "__test_pass",
         func: builtin_test_pass,
     },
     BuiltinImpl {
+        name: "__test_fail",
         func: builtin_test_fail,
     },
     BuiltinImpl {
+        name: "__test_fail_error",
+        func: builtin_test_fail_error,
+    },
+    BuiltinImpl {
+        name: "__test_fail_current",
         func: builtin_test_fail_current,
     },
     BuiltinImpl {
+        name: "group_count",
         func: builtin_list_group_count,
     },
     BuiltinImpl {
+        name: "zip",
         func: builtin_list_zip,
     },
     BuiltinImpl {
+        name: "empty_map",
         func: builtin_empty_map,
     },
     BuiltinImpl {
+        name: "map_from_entries",
         func: builtin_map_from_entries,
     },
     BuiltinImpl {
+        name: "map_len",
         func: builtin_map_len,
     },
     BuiltinImpl {
+        name: "map_contains_key",
         func: builtin_map_contains_key,
     },
     BuiltinImpl {
+        name: "map_get",
         func: builtin_map_get,
     },
     BuiltinImpl {
+        name: "map_insert",
         func: builtin_map_insert,
     },
     BuiltinImpl {
+        name: "map_remove",
         func: builtin_map_remove,
     },
     BuiltinImpl {
+        name: "map_keys",
         func: builtin_map_keys,
     },
     BuiltinImpl {
-        func: builtin_map_values,
+        name: "map_values_list",
+        func: builtin_map_values_list,
     },
     BuiltinImpl {
+        name: "view",
         func: builtin_lens_view,
     },
     BuiltinImpl {
+        name: "compose",
         func: builtin_lens_compose,
     },
     BuiltinImpl {
+        name: "set",
         func: builtin_lens_set,
     },
     BuiltinImpl {
+        name: "over",
         func: builtin_lens_over,
     },
     BuiltinImpl {
+        name: "over_result",
+        func: builtin_lens_over_result,
+    },
+    BuiltinImpl {
+        name: "__test_capture_stdout",
         func: builtin_test_capture_stdout,
     },
     BuiltinImpl {
+        name: "__test_capture_stderr",
         func: builtin_test_capture_stderr,
     },
     BuiltinImpl {
+        name: "compile",
         func: builtin_regex_compile,
     },
     BuiltinImpl {
+        name: "is_match",
         func: builtin_regex_is_match,
     },
     BuiltinImpl {
+        name: "captures",
         func: builtin_regex_captures,
     },
     BuiltinImpl {
+        name: "whole",
         func: builtin_regex_whole,
     },
     BuiltinImpl {
+        name: "capture_count",
         func: builtin_regex_capture_count,
     },
     BuiltinImpl {
+        name: "get",
         func: builtin_regex_get,
     },
     BuiltinImpl {
+        name: "get_name",
         func: builtin_regex_get_name,
     },
     BuiltinImpl {
+        name: "find",
         func: builtin_regex_find,
     },
     BuiltinImpl {
+        name: "find_all",
         func: builtin_regex_find_all,
     },
     BuiltinImpl {
+        name: "split",
         func: builtin_regex_split,
     },
     BuiltinImpl {
+        name: "replace",
         func: builtin_regex_replace,
     },
     BuiltinImpl {
+        name: "replace_all",
         func: builtin_regex_replace_all,
     },
     BuiltinImpl {
+        name: "escape",
         func: builtin_regex_escape,
     },
     BuiltinImpl {
+        name: "group_names",
         func: builtin_regex_group_names,
     },
     BuiltinImpl {
+        name: "text",
         func: builtin_regex_match_text,
     },
     BuiltinImpl {
+        name: "start",
         func: builtin_regex_match_start,
     },
     BuiltinImpl {
+        name: "end",
         func: builtin_regex_match_end,
+    },
+    BuiltinImpl {
+        name: "project_args",
+        func: builtin_project_args,
+    },
+    BuiltinImpl {
+        name: "io_get",
+        func: builtin_io_get,
+    },
+    BuiltinImpl {
+        name: "io_get_line",
+        func: builtin_io_get_line,
+    },
+    BuiltinImpl {
+        name: "seed",
+        func: builtin_random_seed,
+    },
+    BuiltinImpl {
+        name: "int_until",
+        func: builtin_random_int_until,
+    },
+    BuiltinImpl {
+        name: "int_range",
+        func: builtin_random_int_range,
+    },
+    BuiltinImpl {
+        name: "next_int_until",
+        func: builtin_random_next_int_until,
+    },
+    BuiltinImpl {
+        name: "next_int_range",
+        func: builtin_random_next_int_range,
+    },
+    BuiltinImpl {
+        name: "kind",
+        func: builtin_error_kind,
+    },
+    BuiltinImpl {
+        name: "message",
+        func: builtin_error_message,
+    },
+    BuiltinImpl {
+        name: "format",
+        func: builtin_error_format,
+    },
+    BuiltinImpl {
+        name: "__process_pid",
+        func: builtin_process_pid,
+    },
+    BuiltinImpl {
+        name: "__process_spawn",
+        func: builtin_process_spawn,
+    },
+    BuiltinImpl {
+        name: "__process_state",
+        func: builtin_process_state,
+    },
+    BuiltinImpl {
+        name: "__process_store",
+        func: builtin_process_store,
+    },
+    BuiltinImpl {
+        name: "__process_self",
+        func: builtin_process_self,
+    },
+    BuiltinImpl {
+        name: "__process_sleep",
+        func: builtin_process_sleep,
+    },
+    BuiltinImpl {
+        name: "__task_call",
+        func: builtin_task_call,
+    },
+    BuiltinImpl {
+        name: "__task_async",
+        func: builtin_task_async,
+    },
+    BuiltinImpl {
+        name: "__task_launch",
+        func: builtin_task_launch,
+    },
+    BuiltinImpl {
+        name: "__task_cast",
+        func: builtin_task_cast,
+    },
+    BuiltinImpl {
+        name: "__task_call_timeout",
+        func: builtin_task_call_timeout,
+    },
+    BuiltinImpl {
+        name: "__task_async_timeout",
+        func: builtin_task_async_timeout,
+    },
+    BuiltinImpl {
+        name: "__task_launch_timeout",
+        func: builtin_task_launch_timeout,
+    },
+    BuiltinImpl {
+        name: "__task_cast_timeout",
+        func: builtin_task_cast_timeout,
+    },
+    BuiltinImpl {
+        name: "__operator_int_add",
+        func: builtin_operator_int_add,
+    },
+    BuiltinImpl {
+        name: "__operator_int_sub",
+        func: builtin_operator_int_sub,
+    },
+    BuiltinImpl {
+        name: "__operator_int_mul",
+        func: builtin_operator_int_mul,
+    },
+    BuiltinImpl {
+        name: "__operator_float_add",
+        func: builtin_operator_float_add,
+    },
+    BuiltinImpl {
+        name: "__operator_float_sub",
+        func: builtin_operator_float_sub,
+    },
+    BuiltinImpl {
+        name: "__operator_float_mul",
+        func: builtin_operator_float_mul,
+    },
+    BuiltinImpl {
+        name: "__operator_int_eq",
+        func: builtin_operator_int_eq,
+    },
+    BuiltinImpl {
+        name: "__operator_int_neq",
+        func: builtin_operator_int_neq,
+    },
+    BuiltinImpl {
+        name: "__operator_int_lt",
+        func: builtin_operator_int_lt,
+    },
+    BuiltinImpl {
+        name: "__operator_int_lte",
+        func: builtin_operator_int_lte,
+    },
+    BuiltinImpl {
+        name: "__operator_int_gt",
+        func: builtin_operator_int_gt,
+    },
+    BuiltinImpl {
+        name: "__operator_int_gte",
+        func: builtin_operator_int_gte,
+    },
+    BuiltinImpl {
+        name: "__operator_float_eq",
+        func: builtin_operator_float_eq,
+    },
+    BuiltinImpl {
+        name: "__operator_float_neq",
+        func: builtin_operator_float_neq,
+    },
+    BuiltinImpl {
+        name: "__operator_float_lt",
+        func: builtin_operator_float_lt,
+    },
+    BuiltinImpl {
+        name: "__operator_float_lte",
+        func: builtin_operator_float_lte,
+    },
+    BuiltinImpl {
+        name: "__operator_float_gt",
+        func: builtin_operator_float_gt,
+    },
+    BuiltinImpl {
+        name: "__operator_float_gte",
+        func: builtin_operator_float_gte,
+    },
+    BuiltinImpl {
+        name: "__operator_string_eq",
+        func: builtin_operator_string_eq,
+    },
+    BuiltinImpl {
+        name: "__operator_string_neq",
+        func: builtin_operator_string_neq,
+    },
+    BuiltinImpl {
+        name: "__operator_boolean_eq",
+        func: builtin_operator_boolean_eq,
+    },
+    BuiltinImpl {
+        name: "__operator_boolean_neq",
+        func: builtin_operator_boolean_neq,
+    },
+    BuiltinImpl {
+        name: "__operator_string_concat",
+        func: builtin_operator_string_concat,
     },
 ];
 
@@ -233,17 +507,18 @@ pub(crate) fn call_builtin(
         )));
     }
 
-    let func = BUILTIN_IMPLS
-        .get(builtin_id as usize)
-        .ok_or_else(|| {
-            RuntimeError::new(format!(
-                "Missing builtin implementation for id {}",
-                builtin_id
-            ))
-        })?
-        .func;
+    let builtin = BUILTIN_IMPLS.get(builtin_id as usize).ok_or_else(|| {
+        RuntimeError::new(format!(
+            "Missing builtin implementation for id {}",
+            builtin_id
+        ))
+    })?;
+    debug_assert_eq!(
+        builtin.name, meta.name,
+        "builtin implementation order drifted from BUILTIN_METAS"
+    );
 
-    func(vm, args)
+    (builtin.func)(vm, args)
 }
 
 fn builtin_print(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -261,6 +536,153 @@ fn builtin_to_string(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
 
 fn builtin_inspect(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     Ok(Value::Str(inspect_value(vm, &args[0])))
+}
+
+fn builtin_error_kind(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let rich = decode_error_arg(&args[0], "kind", "err")?;
+    Ok(Value::Str(rich.kind))
+}
+
+fn builtin_error_message(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let rich = decode_error_arg(&args[0], "message", "err")?;
+    Ok(Value::Str(rich.visible_message().to_string()))
+}
+
+fn builtin_error_format(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let rich = decode_error_arg(&args[0], "format", "err")?;
+    Ok(Value::Str(rich.to_eprint_lines().join("\n")))
+}
+
+fn builtin_process_pid(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(process_name) = &args[0] else {
+        return Err(RuntimeError::new("__process_pid expects String as name"));
+    };
+    let Value::Callable(init) = args[1].clone() else {
+        return Err(RuntimeError::new(
+            "__process_pid expects callable init handler",
+        ));
+    };
+    vm.process_singleton_pid(process_name.clone(), init)
+}
+
+fn builtin_process_spawn(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(process_name) = &args[0] else {
+        return Err(RuntimeError::new("__process_spawn expects String as name"));
+    };
+    let Value::Callable(init) = args[1].clone() else {
+        return Err(RuntimeError::new(
+            "__process_spawn expects callable init handler",
+        ));
+    };
+    vm.process_spawn(process_name.clone(), init)
+}
+
+fn builtin_process_state(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Pid(pid) = &args[0] else {
+        return Err(RuntimeError::new("__process_state expects PID"));
+    };
+    vm.process_state(pid)
+}
+
+fn builtin_process_store(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Pid(pid) = &args[0] else {
+        return Err(RuntimeError::new("__process_store expects PID"));
+    };
+    vm.process_store(pid, args[1].clone())
+}
+
+fn builtin_process_self(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Process::self must be lowered to a process-owned PID binding before runtime",
+    ))
+}
+
+fn builtin_process_sleep(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let millis = duration_to_u64(_vm, &args[0], "__process_sleep", "duration")?;
+    thread::sleep(StdDuration::from_millis(millis));
+    Ok(ok_result(Value::Unit))
+}
+
+fn builtin_task_call(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    invoke_task_body(vm, &args[0], "__task_call", TaskMode::Call)
+}
+
+fn builtin_task_async(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    invoke_task_body(vm, &args[0], "__task_async", TaskMode::Async)
+}
+
+fn builtin_task_launch(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    invoke_task_body(vm, &args[0], "__task_launch", TaskMode::Launch)
+}
+
+fn builtin_task_cast(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    invoke_task_body(vm, &args[0], "__task_cast", TaskMode::Cast)
+}
+
+fn builtin_task_call_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    invoke_task_body_with_timeout(
+        vm,
+        &args[1],
+        &args[0],
+        "__task_call_timeout",
+        TaskMode::Call,
+    )
+}
+
+fn builtin_task_async_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    invoke_task_body_with_timeout(
+        vm,
+        &args[1],
+        &args[0],
+        "__task_async_timeout",
+        TaskMode::Async,
+    )
+}
+
+fn builtin_task_launch_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    invoke_task_body_with_timeout(
+        vm,
+        &args[1],
+        &args[0],
+        "__task_launch_timeout",
+        TaskMode::Launch,
+    )
+}
+
+fn builtin_task_cast_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    invoke_task_body_with_timeout(
+        vm,
+        &args[1],
+        &args[0],
+        "__task_cast_timeout",
+        TaskMode::Cast,
+    )
+}
+
+fn invoke_task_body(
+    vm: &mut VM,
+    value: &Value,
+    name: &str,
+    mode: TaskMode,
+) -> Result<Value, RuntimeError> {
+    let Value::Callable(body) = value.clone() else {
+        return Err(RuntimeError::new(format!("{name} expects callable body")));
+    };
+    vm.invoke_task(body, mode)
+}
+
+fn invoke_task_body_with_timeout(
+    vm: &mut VM,
+    value: &Value,
+    timeout: &Value,
+    name: &str,
+    mode: TaskMode,
+) -> Result<Value, RuntimeError> {
+    let Value::Callable(body) = value.clone() else {
+        return Err(RuntimeError::new(format!("{name} expects callable body")));
+    };
+    let timeout_ms = duration_to_u64(vm, timeout, name, "timeout")?;
+    vm.invoke_task_with_timeout(body, mode, Some(timeout_ms))
 }
 
 fn builtin_safe_div(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -302,40 +724,168 @@ fn builtin_safe_mod(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError
     }
 }
 
+fn expect_int_pair(args: &[Value], name: &str) -> Result<(SurtrInt, SurtrInt), RuntimeError> {
+    let (Value::Int(left), Value::Int(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(format!("{} expects (Int, Int)", name)));
+    };
+    Ok((left.clone(), right.clone()))
+}
+
+fn expect_float_pair(args: &[Value], name: &str) -> Result<(f64, f64), RuntimeError> {
+    let (Value::Float(left), Value::Float(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(format!(
+            "{} expects (Float, Float)",
+            name
+        )));
+    };
+    Ok((*left, *right))
+}
+
+fn builtin_operator_int_add(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_add")?;
+    Ok(Value::Int(left + right))
+}
+
+fn builtin_operator_int_sub(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_sub")?;
+    Ok(Value::Int(left - right))
+}
+
+fn builtin_operator_int_mul(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_mul")?;
+    Ok(Value::Int(left * right))
+}
+
+fn builtin_operator_float_add(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_add")?;
+    Ok(Value::Float(left + right))
+}
+
+fn builtin_operator_float_sub(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_sub")?;
+    Ok(Value::Float(left - right))
+}
+
+fn builtin_operator_float_mul(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_mul")?;
+    Ok(Value::Float(left * right))
+}
+
+fn builtin_operator_int_eq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_eq")?;
+    Ok(Value::Bool(left == right))
+}
+
+fn builtin_operator_int_neq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_neq")?;
+    Ok(Value::Bool(left != right))
+}
+
+fn builtin_operator_int_lt(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_lt")?;
+    Ok(Value::Bool(left < right))
+}
+
+fn builtin_operator_int_lte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_lte")?;
+    Ok(Value::Bool(left <= right))
+}
+
+fn builtin_operator_int_gt(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_gt")?;
+    Ok(Value::Bool(left > right))
+}
+
+fn builtin_operator_int_gte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__operator_int_gte")?;
+    Ok(Value::Bool(left >= right))
+}
+
+fn builtin_operator_float_eq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_eq")?;
+    Ok(Value::Bool(left == right))
+}
+
+fn builtin_operator_float_neq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_neq")?;
+    Ok(Value::Bool(left != right))
+}
+
+fn builtin_operator_float_lt(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_lt")?;
+    Ok(Value::Bool(left < right))
+}
+
+fn builtin_operator_float_lte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_lte")?;
+    Ok(Value::Bool(left <= right))
+}
+
+fn builtin_operator_float_gt(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_gt")?;
+    Ok(Value::Bool(left > right))
+}
+
+fn builtin_operator_float_gte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__operator_float_gte")?;
+    Ok(Value::Bool(left >= right))
+}
+
+fn builtin_operator_string_eq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Str(left), Value::Str(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(
+            "__operator_string_eq expects (String, String)",
+        ));
+    };
+    Ok(Value::Bool(left == right))
+}
+
+fn builtin_operator_string_neq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Str(left), Value::Str(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(
+            "__operator_string_neq expects (String, String)",
+        ));
+    };
+    Ok(Value::Bool(left != right))
+}
+
+fn builtin_operator_boolean_eq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Bool(left), Value::Bool(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(
+            "__operator_boolean_eq expects (Boolean, Boolean)",
+        ));
+    };
+    Ok(Value::Bool(left == right))
+}
+
+fn builtin_operator_boolean_neq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Bool(left), Value::Bool(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(
+            "__operator_boolean_neq expects (Boolean, Boolean)",
+        ));
+    };
+    Ok(Value::Bool(left != right))
+}
+
+fn builtin_operator_string_concat(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Str(left), Value::Str(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(
+            "__operator_string_concat expects (String, String)",
+        ));
+    };
+    Ok(Value::Str(format!("{}{}", left, right)))
+}
+
 fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     match &args[0] {
         Value::Error(rich) => {
-            if vm.is_stderr_captured() {
-                for line in rich.to_eprint_lines() {
-                    vm.emit_stderr_line(line);
+            if !vm.is_stderr_captured() {
+                if let Some((file, line, column)) = error_display_site(rich) {
+                    vm.emit_stderr_line(format!("{}:{}:{}", file, line, column));
                 }
-            } else if let (Some(source), Some(file)) = (vm.source(), vm.source_file()) {
-                use ariadne::{Color, Label, Report, ReportKind, Source};
-
-                let start = rich.location.span_start as usize;
-                let end = rich.location.span_end as usize;
-                if let Err(err) = Report::build(ReportKind::Error, (file, start..end))
-                    .with_message(rich.kind.clone())
-                    .with_label(
-                        Label::new((file, start..end))
-                            .with_message(rich.message.clone())
-                            .with_color(Color::Red),
-                    )
-                    .finish()
-                    .eprint((file, Source::from(source)))
-                {
-                    return Err(RuntimeError::new(format!(
-                        "Failed to render rich error report: {}",
-                        err
-                    )));
-                }
-                for line in rich.to_eprint_lines().into_iter().skip(1) {
-                    eprintln!("{}", line);
-                }
-            } else {
-                for line in rich.to_eprint_lines() {
-                    vm.emit_stderr_line(line);
-                }
+            }
+            for line in rich.to_eprint_lines() {
+                vm.emit_stderr_line(line);
             }
         }
         other => {
@@ -344,6 +894,20 @@ fn builtin_eprint(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> 
         }
     }
     Ok(Value::Unit)
+}
+
+fn error_display_site(rich: &RichError) -> Option<(String, u32, u32)> {
+    if rich.location.line == 0 || rich.location.column == 0 {
+        return None;
+    }
+    if rich.location.file == "REPL" {
+        return Some((rich.location.file.clone(), rich.location.line + 1, 1));
+    }
+    Some((
+        rich.location.file.clone(),
+        rich.location.line,
+        rich.location.column,
+    ))
 }
 
 fn builtin_set_exit_code(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -667,6 +1231,21 @@ fn builtin_test_fail(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
     Ok(Value::Unit)
 }
 
+fn builtin_test_fail_error(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(name) = &args[0] else {
+        return Err(RuntimeError::new(
+            "__test_fail_error expects String as name",
+        ));
+    };
+    let Value::Error(error) = &args[1] else {
+        return Err(RuntimeError::new(
+            "__test_fail_error expects Error as error",
+        ));
+    };
+    vm.record_test_fail_error(name.clone(), error);
+    Ok(Value::Unit)
+}
+
 fn builtin_test_fail_current(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let Value::Str(detail) = &args[0] else {
         return Err(RuntimeError::new(
@@ -811,8 +1390,8 @@ fn builtin_map_keys(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
     Ok(Value::List(ListHandle::from_items(items)))
 }
 
-fn builtin_map_values(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let map = decode_hash_map_arg(&args[0], "map_values", "map")?;
+fn builtin_map_values_list(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let map = decode_hash_map_arg(&args[0], "map_values_list", "map")?;
     Ok(Value::List(ListHandle::from_items(map.values())))
 }
 
@@ -837,6 +1416,12 @@ fn builtin_lens_set(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeErr
 fn builtin_lens_over(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Lens::over should be lowered in Forge (runtime builtin call indicates lowering bug)",
+    ))
+}
+
+fn builtin_lens_over_result(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Lens::over_result should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
@@ -1053,6 +1638,177 @@ fn builtin_regex_match_end(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runt
     Ok(Value::Int(int(matched.end as u64)))
 }
 
+fn builtin_project_args(vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let args = vm
+        .cli_args()
+        .iter()
+        .cloned()
+        .map(Value::Str)
+        .collect::<Vec<_>>();
+    Ok(Value::List(ListHandle::from_items(args)))
+}
+
+fn builtin_io_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let prompt = decode_string_arg(&args[0], "io_get", "prompt")?;
+    if let Err(message) = emit_io_prompt(vm, prompt) {
+        return Ok(input_error(vm, &message));
+    }
+
+    if vm.has_injected_stdin() {
+        return Ok(match vm.read_injected_char() {
+            Some(ch) => ok_result(Value::Str(ch)),
+            None => input_error(vm, "end of input"),
+        });
+    }
+
+    let read = if io::stdin().is_terminal() {
+        read_terminal_char()
+    } else {
+        read_stdin_char()
+    };
+    Ok(match read {
+        Ok(Some(ch)) => ok_result(Value::Str(ch)),
+        Ok(None) => input_error(vm, "end of input"),
+        Err(message) => input_error(vm, &message),
+    })
+}
+
+fn builtin_io_get_line(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let prompt = decode_string_arg(&args[0], "io_get_line", "prompt")?;
+    if let Err(message) = emit_io_prompt(vm, prompt) {
+        return Ok(input_error(vm, &message));
+    }
+
+    let read = if vm.has_injected_stdin() {
+        Ok(vm.read_injected_line())
+    } else {
+        let mut line = String::new();
+        io::stdin()
+            .read_line(&mut line)
+            .map(|count| (count > 0).then_some(line))
+            .map_err(|err| err.to_string())
+    };
+    Ok(match read {
+        Ok(Some(line)) => ok_result(Value::Str(strip_line_ending(line))),
+        Ok(None) => input_error(vm, "end of input"),
+        Err(message) => input_error(vm, &message),
+    })
+}
+
+fn builtin_random_seed(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Int(seed) = &args[0] else {
+        return Err(RuntimeError::new("seed expects Int as seed"));
+    };
+    Ok(Value::RandomGenerator(RandomGeneratorHandle {
+        state: seed_to_state(seed),
+    }))
+}
+
+fn builtin_random_int_until(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Int(end) = &args[0] else {
+        return Err(RuntimeError::new("int_until expects Int as end"));
+    };
+    random_int_range_result(vm, &int(0), end, host_random_generator())
+        .map(|(value, _)| value.map(ok_result).unwrap_or_else(|err| err))
+}
+
+fn builtin_random_int_range(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Int(start), Value::Int(end)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new("int_range expects Int as start/end"));
+    };
+    random_int_range_result(vm, start, end, host_random_generator())
+        .map(|(value, _)| value.map(ok_result).unwrap_or_else(|err| err))
+}
+
+fn builtin_random_next_int_until(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let rng = decode_random_generator_arg(&args[0], "next_int_until", "rng")?;
+    let Value::Int(end) = &args[1] else {
+        return Err(RuntimeError::new("next_int_until expects Int as end"));
+    };
+    seeded_random_int_range_result(vm, rng, &int(0), end)
+}
+
+fn builtin_random_next_int_range(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let rng = decode_random_generator_arg(&args[0], "next_int_range", "rng")?;
+    let (Value::Int(start), Value::Int(end)) = (&args[1], &args[2]) else {
+        return Err(RuntimeError::new("next_int_range expects Int as start/end"));
+    };
+    seeded_random_int_range_result(vm, rng, start, end)
+}
+
+fn emit_io_prompt(vm: &mut VM, prompt: &str) -> Result<(), String> {
+    vm.emit_stdout_text(prompt.to_string())
+        .map_err(|err| format!("prompt write failed: {}", err))
+}
+
+fn strip_line_ending(mut line: String) -> String {
+    if line.ends_with('\n') {
+        line.pop();
+        if line.ends_with('\r') {
+            line.pop();
+        }
+    }
+    line
+}
+
+fn read_terminal_char() -> Result<Option<String>, String> {
+    crossterm::terminal::enable_raw_mode().map_err(|err| err.to_string())?;
+    let result = (|| loop {
+        match crossterm::event::read().map_err(|err| err.to_string())? {
+            crossterm::event::Event::Key(event) => break key_event_to_string(event),
+            _ => continue,
+        }
+    })();
+    let disable_result = crossterm::terminal::disable_raw_mode().map_err(|err| err.to_string());
+    match (result, disable_result) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(err), _) => Err(err),
+        (_, Err(err)) => Err(err),
+    }
+}
+
+fn key_event_to_string(event: crossterm::event::KeyEvent) -> Result<Option<String>, String> {
+    use crossterm::event::KeyCode;
+
+    let text = match event.code {
+        KeyCode::Char(ch) => ch.to_string(),
+        KeyCode::Enter => "\n".to_string(),
+        KeyCode::Tab => "\t".to_string(),
+        KeyCode::Backspace => "\u{8}".to_string(),
+        KeyCode::Esc => "\u{1b}".to_string(),
+        other => return Err(format!("unsupported key input: {:?}", other)),
+    };
+    Ok(Some(text))
+}
+
+fn read_stdin_char() -> Result<Option<String>, String> {
+    let mut stdin = io::stdin().lock();
+    let mut buf = [0u8; 4];
+    let mut len = 0usize;
+    loop {
+        let read = stdin
+            .read(&mut buf[len..len + 1])
+            .map_err(|err| err.to_string())?;
+        if read == 0 {
+            return if len == 0 {
+                Ok(None)
+            } else {
+                Err("incomplete UTF-8 input before EOF".into())
+            };
+        }
+        len += read;
+        match std::str::from_utf8(&buf[..len]) {
+            Ok(text) => return Ok(text.chars().next().map(|ch| ch.to_string())),
+            Err(err) if err.error_len().is_none() && len < buf.len() => continue,
+            Err(err) => return Err(err.to_string()),
+        }
+    }
+}
+
+fn input_error(vm: &VM, detail: &str) -> Value {
+    err_result(vm, "InputError", detail)
+}
+
 pub fn inspect_value(vm: &VM, value: &Value) -> String {
     if let Value::Callable(callable) = value {
         if let Some(display) = inspect_callable(vm, callable) {
@@ -1080,13 +1836,13 @@ fn inspect_non_callable_value(vm: &VM, value: &Value) -> String {
             }
 
             let inner = handle
-                .entries
-                .iter()
+                .sorted_entries()
+                .into_iter()
                 .map(|(key, value)| {
                     format!(
                         "{} => {}",
-                        quote_surtr_string_literal(key),
-                        inspect_non_callable_value(vm, value)
+                        quote_surtr_string_literal(&key),
+                        inspect_non_callable_value(vm, &value)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -1108,26 +1864,38 @@ fn inspect_non_callable_value(vm: &VM, value: &Value) -> String {
 
 fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
     if let Some(entry) = vm.type_registry().lookup(tag) {
-        return match entry.kind {
-            sindr::runtime::TypeKind::Struct => {
-                let pairs = entry
-                    .field_names
-                    .iter()
-                    .zip(fields.iter())
-                    .map(|(name, val)| format!("{name}: {}", inspect_non_callable_value(vm, val)))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{} {{ {} }}", entry.name, pairs)
+        if entry.name == "Duration" {
+            if let Some(Value::Int(ms)) = fields.first() {
+                return format!("{ms}ms");
             }
-            sindr::runtime::TypeKind::Record => {
-                let pairs = entry
-                    .field_names
-                    .iter()
-                    .zip(fields.iter())
-                    .map(|(name, val)| format!("{name}: {}", inspect_non_callable_value(vm, val)))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{}({pairs})", entry.name)
+        }
+        let render_named_value = || {
+            let hidden_field_count = entry.private_flags.iter().filter(|flag| **flag).count();
+            let mut parts = entry
+                .field_names
+                .iter()
+                .zip(
+                    entry
+                        .private_flags
+                        .iter()
+                        .copied()
+                        .chain(std::iter::repeat(false)),
+                )
+                .zip(fields.iter())
+                .filter_map(|((name, is_private), val)| {
+                    (!is_private)
+                        .then(|| format!("{name}: {}", inspect_non_callable_value(vm, val)))
+                })
+                .collect::<Vec<_>>();
+            if hidden_field_count > 0 {
+                parts.push("..private".to_string());
+            }
+            format!("{}({})", entry.name, parts.join(", "))
+        };
+
+        return match entry.kind {
+            sindr::runtime::TypeKind::Struct | sindr::runtime::TypeKind::Record => {
+                render_named_value()
             }
             sindr::runtime::TypeKind::EnumVariant => {
                 let payload = fields
@@ -1183,52 +1951,163 @@ fn quote_surtr_string_literal(input: &str) -> String {
     out
 }
 
-fn inspect_callable(vm: &VM, callable: &Callable) -> Option<String> {
-    if !callable.lexical_captures.is_empty() || !callable.partial_args.is_empty() {
-        return None;
-    }
-
-    match callable.target {
-        CallableTarget::Builtin(id) => {
-            let meta = builtin_meta_by_id(id)?;
-            let doc = vm.bytecode().docs.iter().rev().find(|doc| {
-                matches!(doc.kind, DocKind::Function)
-                    && doc.qualified_name.rsplit("::").next() == Some(meta.name)
-            })?;
-            let signature = doc.signature.as_deref()?;
-            Some(format!(
-                "FnCapture(module: {}, name: {}, signature: {})",
-                doc.module_path, meta.name, signature
-            ))
-        }
-        CallableTarget::Function(fun_idx) => {
-            let entry = vm.bytecode().functions.get(fun_idx as usize)?;
-            let qualified_name = entry.qualified_name.as_deref()?;
-            let signature = entry.signature.as_deref().or_else(|| {
-                vm.bytecode()
-                    .docs
-                    .iter()
-                    .rev()
-                    .find(|doc| {
-                        matches!(doc.kind, DocKind::Function)
-                            && doc.qualified_name == qualified_name
-                    })
-                    .and_then(|doc| doc.signature.as_deref())
-            })?;
-            let (module, name) = split_qualified_name(qualified_name);
-            Some(format!(
-                "FnCapture(module: {}, name: {}, signature: {})",
-                module, name, signature
-            ))
-        }
+fn inspect_callable(_vm: &VM, callable: &Callable) -> Option<String> {
+    let sig = callable_display_signature(callable)?;
+    match callable_display_origin(callable)? {
+        CallableDisplayOrigin::Capture { module, name } => Some(format!(
+            "FnCapture(module: {}, name: {}, sig: {})",
+            module, name, sig
+        )),
+        CallableDisplayOrigin::Closure => Some(format!("Closure{sig}")),
     }
 }
 
-fn split_qualified_name(qualified_name: &str) -> (&str, &str) {
-    match qualified_name.rsplit_once("::") {
-        Some((module, name)) if !module.is_empty() => (module, name),
-        _ => ("<local>", qualified_name),
+enum CallableDisplayOrigin<'a> {
+    Capture { module: &'a str, name: &'a str },
+    Closure,
+}
+
+fn callable_display_signature(callable: &Callable) -> Option<String> {
+    let full_signature = callable.metadata.full_signature.as_deref()?;
+    if callable.metadata.applied_args == 0 {
+        Some(full_signature.to_string())
+    } else {
+        remaining_callable_signature(full_signature, callable.metadata.applied_args)
     }
+}
+
+fn callable_display_origin(callable: &Callable) -> Option<CallableDisplayOrigin<'_>> {
+    match callable.metadata.origin {
+        sindr::runtime::CallableOrigin::Capture => {
+            if let (Some(module), Some(name)) = (
+                callable.metadata.module.as_deref(),
+                callable.metadata.name.as_deref(),
+            ) {
+                Some(CallableDisplayOrigin::Capture { module, name })
+            } else {
+                callable
+                    .lexical_captures
+                    .first()
+                    .and_then(callable_capture_origin_from_value)
+            }
+        }
+        sindr::runtime::CallableOrigin::Closure => callable
+            .lexical_captures
+            .first()
+            .and_then(callable_capture_origin_from_value)
+            .or(Some(CallableDisplayOrigin::Closure)),
+        sindr::runtime::CallableOrigin::Unknown => callable
+            .lexical_captures
+            .first()
+            .and_then(callable_capture_origin_from_value),
+    }
+}
+
+fn callable_capture_origin_from_value(value: &Value) -> Option<CallableDisplayOrigin<'_>> {
+    let Value::Callable(callable) = value else {
+        return None;
+    };
+    callable_display_origin(callable)
+}
+
+fn remaining_callable_signature(signature: &str, applied_args: usize) -> Option<String> {
+    let (param_types, return_ty) = callable_signature_parts(signature)?;
+    if applied_args > param_types.len() {
+        return None;
+    }
+    let remaining = &param_types[applied_args..];
+    if remaining.is_empty() {
+        Some(format!("(-> {return_ty})"))
+    } else {
+        Some(format!("({} -> {return_ty})", remaining.join(", ")))
+    }
+}
+
+fn callable_signature_parts(signature: &str) -> Option<(Vec<String>, String)> {
+    let arrow_idx = find_top_level_arrow(signature)?;
+    let return_ty = signature[arrow_idx + 2..].trim().to_string();
+    let head = signature[..arrow_idx].trim();
+    let open_idx = head.find('(')?;
+    let close_idx = find_matching_paren(head, open_idx)?;
+    let params_str = head[open_idx + 1..close_idx].trim();
+    let param_types = split_top_level_commas(params_str)
+        .into_iter()
+        .map(|param| {
+            param
+                .rsplit_once(':')
+                .map(|(_, ty)| ty.trim().to_string())
+                .unwrap_or_else(|| param.trim().to_string())
+        })
+        .filter(|param| !param.is_empty())
+        .collect::<Vec<_>>();
+    Some((param_types, return_ty))
+}
+
+fn find_matching_paren(input: &str, open_idx: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (idx, ch) in input.char_indices().skip(open_idx) {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn find_top_level_arrow(input: &str) -> Option<usize> {
+    let mut paren_depth = 0usize;
+    let mut angle_depth = 0usize;
+    let chars = input.char_indices().collect::<Vec<_>>();
+    let mut idx = 0usize;
+    while idx + 1 < chars.len() {
+        let (byte_idx, ch) = chars[idx];
+        match ch {
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.checked_sub(1)?,
+            '<' => angle_depth += 1,
+            '>' => angle_depth = angle_depth.checked_sub(1)?,
+            '-' if chars[idx + 1].1 == '>' && paren_depth == 0 && angle_depth == 0 => {
+                return Some(byte_idx);
+            }
+            _ => {}
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn split_top_level_commas(input: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut paren_depth = 0usize;
+    let mut angle_depth = 0usize;
+    let mut start = 0usize;
+    for (idx, ch) in input.char_indices() {
+        match ch {
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '<' => angle_depth += 1,
+            '>' => angle_depth = angle_depth.saturating_sub(1),
+            ',' if paren_depth == 0 && angle_depth == 0 => {
+                let part = input[start..idx].trim();
+                if !part.is_empty() {
+                    parts.push(part);
+                }
+                start = idx + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    let tail = input[start..].trim();
+    if !tail.is_empty() {
+        parts.push(tail);
+    }
+    parts
 }
 
 fn decode_regex_arg<'a>(
@@ -1322,6 +2201,136 @@ fn decode_generator_arg<'a>(
     Ok((idx, tail))
 }
 
+fn decode_random_generator_arg(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<RandomGeneratorHandle, RuntimeError> {
+    match value {
+        Value::RandomGenerator(handle) => Ok(*handle),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects RandomGenerator as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn seeded_random_int_range_result(
+    vm: &VM,
+    rng: RandomGeneratorHandle,
+    start: &SurtrInt,
+    end: &SurtrInt,
+) -> Result<Value, RuntimeError> {
+    let (sample, next_rng) = random_int_range_result(vm, start, end, rng)?;
+    Ok(match sample {
+        Ok(value) => ok_result(Value::Tuple(vec![value, Value::RandomGenerator(next_rng)])),
+        Err(err) => err,
+    })
+}
+
+fn random_int_range_result(
+    vm: &VM,
+    start: &SurtrInt,
+    end: &SurtrInt,
+    rng: RandomGeneratorHandle,
+) -> Result<(Result<Value, Value>, RandomGeneratorHandle), RuntimeError> {
+    let range = end - start;
+    if range <= int(0) {
+        return Ok((Err(invalid_random_range(vm, start, end)), rng));
+    }
+
+    let upper = range.to_biguint().ok_or_else(|| {
+        RuntimeError::new(format!(
+            "random range should be positive after validation, got {}",
+            range
+        ))
+    })?;
+    let (offset, next_rng) = sample_biguint_below(&upper, rng);
+    let value = start + BigInt::from_biguint(Sign::Plus, offset);
+    Ok((Ok(Value::Int(value)), next_rng))
+}
+
+fn invalid_random_range(vm: &VM, start: &SurtrInt, end: &SurtrInt) -> Value {
+    err_result(
+        vm,
+        "InvalidRandomRange",
+        &format!("random range must be non-empty: {}..{}", start, end),
+    )
+}
+
+fn sample_biguint_below(
+    upper: &BigUint,
+    mut rng: RandomGeneratorHandle,
+) -> (BigUint, RandomGeneratorHandle) {
+    debug_assert!(!upper.is_zero());
+    let bit_len = upper.bits();
+    let byte_len = ((bit_len + 7) / 8) as usize;
+
+    loop {
+        let mut bytes = vec![0_u8; byte_len];
+        for chunk in bytes.chunks_mut(8) {
+            let (raw, next_rng) = random_next_u64(rng);
+            rng = next_rng;
+            let raw_bytes = raw.to_le_bytes();
+            chunk.copy_from_slice(&raw_bytes[..chunk.len()]);
+        }
+
+        let excess_bits = (8 - (bit_len % 8)) % 8;
+        if excess_bits != 0 {
+            let mask = 0xff_u8 >> excess_bits;
+            if let Some(last) = bytes.last_mut() {
+                *last &= mask;
+            }
+        }
+
+        let candidate = BigUint::from_bytes_le(&bytes);
+        if &candidate < upper {
+            return (candidate, rng);
+        }
+    }
+}
+
+fn host_random_generator() -> RandomGeneratorHandle {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| {
+            duration.as_secs()
+                ^ u64::from(duration.subsec_nanos()).rotate_left(32)
+                ^ (duration.as_nanos() as u64)
+        })
+        .unwrap_or(0);
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = u64::from(std::process::id());
+
+    RandomGeneratorHandle {
+        state: mix64(now ^ count.rotate_left(17) ^ pid.rotate_left(41)),
+    }
+}
+
+fn seed_to_state(seed: &SurtrInt) -> u64 {
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    for byte in seed.to_signed_bytes_le() {
+        state = mix64(state ^ u64::from(byte));
+    }
+    state
+}
+
+fn random_next_u64(rng: RandomGeneratorHandle) -> (u64, RandomGeneratorHandle) {
+    let next_state = rng.state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    (
+        mix64(next_state),
+        RandomGeneratorHandle { state: next_state },
+    )
+}
+
+fn mix64(mut value: u64) -> u64 {
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
 fn decode_string_arg<'a>(
     value: &'a Value,
     builtin_name: &str,
@@ -1403,6 +2412,55 @@ fn bit_index_to_usize(vm: &VM, index: &SurtrInt) -> Result<Result<usize, Value>,
         .to_usize()
         .map(Ok)
         .ok_or_else(|| RuntimeError::new(format!("bit index out of range for usize: {}", index)))
+}
+
+fn duration_payload<'a>(vm: &'a VM, value: &'a Value) -> Result<&'a SurtrInt, RuntimeError> {
+    match value {
+        Value::Tagged { tag, fields } => {
+            let Some(entry) = vm.type_registry().lookup(*tag) else {
+                return Err(RuntimeError::new(format!(
+                    "Duration expects registered struct tag, got unknown tag {}",
+                    tag
+                )));
+            };
+            if entry.name != "Duration" {
+                return Err(RuntimeError::new(format!(
+                    "expected Duration struct tag, got {}",
+                    entry.name
+                )));
+            }
+            match fields.first() {
+                Some(Value::Int(ms)) => Ok(ms),
+                other => Err(RuntimeError::new(format!(
+                    "Duration payload must store Int milliseconds, got {:?}",
+                    other
+                ))),
+            }
+        }
+        other => Err(RuntimeError::new(format!(
+            "expected Duration value, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn duration_to_u64(
+    vm: &VM,
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<u64, RuntimeError> {
+    let ms = duration_payload(vm, value).map_err(|_| {
+        RuntimeError::new(format!(
+            "{builtin_name} expects Duration as {arg_name}, got {:?}",
+            value
+        ))
+    })?;
+    ms.to_u64().ok_or_else(|| {
+        RuntimeError::new(format!(
+            "{builtin_name} duration is out of range for u64 milliseconds: {ms}"
+        ))
+    })
 }
 
 fn ok_result(value: Value) -> Value {
@@ -1497,6 +2555,7 @@ fn err_result(vm: &VM, kind: &str, message: &str) -> Value {
         kind: kind.into(),
         message: message.into(),
         location,
+        diagnostic: None,
         cause: None,
     })
 }
@@ -1507,19 +2566,27 @@ fn none_result(vm: &VM) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{call_builtin, err_result_from_rich_error, inspect_value};
+    use super::{call_builtin, err_result_from_rich_error, inspect_value, BUILTIN_IMPLS};
     use crate::vm::VM;
-    use sindr::builtin::{builtin_id_by_name, builtin_meta_by_name};
-    use sindr::ir::{Bytecode, DocEntry, DocKind, FunctionEntry};
+    use sindr::builtin::{builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name};
+    use sindr::ir::{Bytecode, DocEntry, DocKind, FunctionEntry, FunctionFlags};
     use sindr::primitives::int;
     use sindr::runtime::{
-        Callable, CallableTarget, HashMapHandle, ListHandle, Location, RichError, TypeEntry,
-        TypeKind, TypeRegistry, Value,
+        Callable, CallableMetadata, CallableOrigin, CallableTarget, HashMapHandle, ListHandle,
+        Location, RichError, TypeEntry, TypeKind, TypeRegistry, Value,
     };
 
     fn test_vm() -> VM {
+        let mut registry = TypeRegistry::new();
+        registry.register(TypeEntry {
+            tag: 2,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: vec![true],
+        });
         VM::new(Bytecode {
-            type_registry: TypeRegistry::new(),
+            type_registry: registry,
             ..Bytecode::default()
         })
         .with_error_capture()
@@ -1549,6 +2616,7 @@ mod tests {
                 span_start: 0,
                 span_end: 0,
             },
+            diagnostic: None,
             cause: None,
         }
     }
@@ -1561,12 +2629,12 @@ mod tests {
         builtin_id_by_name(name).unwrap_or_else(|| panic!("missing builtin metadata for {name}"))
     }
 
-    /// Parse the `name(params) -> ret_ty` portion of a `def` declaration.
-    fn parse_decl_name(def_rest: &str) -> &str {
-        def_rest
-            .split_once('(')
-            .map(|(name, _)| name.trim())
-            .expect("def declaration must include params")
+    #[test]
+    fn builtin_impl_order_matches_metadata() {
+        for (id, builtin) in BUILTIN_IMPLS.iter().enumerate() {
+            let meta = builtin_meta_by_id(id as u16).expect("builtin metadata by id");
+            assert_eq!(builtin.name, meta.name, "builtin impl mismatch at id {id}");
+        }
     }
 
     /// Parse the `name(params) -> ret_ty` portion of a `def` declaration.
@@ -1641,14 +2709,15 @@ mod tests {
         let sources = [
             include_str!("../../../lib/bootstrap.srt"),
             include_str!("../../../lib/kernel.srt"),
-            include_str!("../../../lib/int.srt"),
-            include_str!("../../../lib/list.srt"),
-            include_str!("../../../lib/generator.srt"),
-            include_str!("../../../lib/hash_map.srt"),
-            include_str!("../../../lib/result.srt"),
+            include_str!("../../../lib/types/int.srt"),
+            include_str!("../../../lib/types/list.srt"),
+            include_str!("../../../lib/types/generator.srt"),
+            include_str!("../../../lib/types/hash_map.srt"),
+            include_str!("../../../lib/types/result.srt"),
             include_str!("../../../lib/lens.srt"),
-            include_str!("../../../lib/string.srt"),
-            include_str!("../../../lib/regex.srt"),
+            include_str!("../../../lib/types/string.srt"),
+            include_str!("../../../lib/types/regex.srt"),
+            include_str!("../../../lib/Random.srt"),
         ];
 
         // Collect all lines across the std-module files that currently declare
@@ -1663,10 +2732,10 @@ mod tests {
             .map(str::trim)
             .collect();
 
-        // For each @@builtin annotation, find the associated def signature.
+        // For each @builtin annotation, find the associated def signature.
         // Annotation order is flexible:
-        // - `@@builtin def ...` can appear inline
-        // - `@@builtin` can appear on its own line before a following `def`
+        // - `@builtin def ...` can appear inline
+        // - `@builtin` can appear on its own line before a following `def`
         //
         // We intentionally scan raw source text here instead of depending on
         // parser lowering details, because this test is meant to guard the
@@ -1676,21 +2745,29 @@ mod tests {
         let mut i = 0;
         while i < all_lines.len() {
             let line = all_lines[i];
-            if let Some(rest) = line.strip_prefix("@@builtin def ") {
-                // Inline form: @@builtin def name(params) -> ret
-                if builtin_meta_by_name(parse_decl_name(rest)).is_some() {
-                    let entry = parse_def_signature(rest);
-                    entries.push(entry);
+            if let Some(rest) = line.strip_prefix("@builtin def ") {
+                // Inline form: @builtin def name(params) -> ret
+                let entry = parse_def_signature(rest);
+                if let Some(meta) = builtin_meta_by_name(&entry.0) {
+                    // Keep only declarations that map to a concrete runtime
+                    // builtin contract. Some same-name surface declarations
+                    // are lowered as special forms and intentionally have
+                    // different signatures.
+                    if meta.arity == entry.1 && meta.sig_str == entry.2 {
+                        entries.push(entry);
+                    }
                 }
-            } else if line == "@@builtin" {
+            } else if line == "@builtin" {
                 // Standalone form: find the next `def` line.
                 let mut j = i + 1;
                 while j < all_lines.len() {
                     let next = all_lines[j];
                     if let Some(rest) = next.strip_prefix("def ") {
-                        if builtin_meta_by_name(parse_decl_name(rest)).is_some() {
-                            let entry = parse_def_signature(rest);
-                            entries.push(entry);
+                        let entry = parse_def_signature(rest);
+                        if let Some(meta) = builtin_meta_by_name(&entry.0) {
+                            if meta.arity == entry.1 && meta.sig_str == entry.2 {
+                                entries.push(entry);
+                            }
                         }
                         break;
                     }
@@ -1703,7 +2780,7 @@ mod tests {
         // The stdlib declaration layer intentionally exposes only the
         // user-surface builtins. Some runtime builtins (for example the
         // trait-backed `to_string`) remain in `BUILTIN_METAS` without a
-        // matching `@@builtin def` surface declaration.
+        // matching `@builtin def` surface declaration.
         //
         // So this test verifies:
         // - every declared builtin surface matches `BUILTIN_METAS`
@@ -1729,8 +2806,92 @@ mod tests {
 
         assert!(
             !entry_map.contains_key("to_string"),
-            "to_string is trait-backed and should not be declared via @@builtin def"
+            "to_string is trait-backed and should not be declared via @builtin def"
         );
+    }
+
+    #[test]
+    fn random_seeded_range_is_repeatable_and_returns_next_state() {
+        let mut vm = test_vm();
+        let seed = call_builtin(&mut vm, builtin_id("seed"), vec![Value::Int(int(123))])
+            .expect("seed should return RandomGenerator");
+        let Value::RandomGenerator(original_rng) = seed.clone() else {
+            panic!("expected RandomGenerator from seed");
+        };
+
+        let first = call_builtin(
+            &mut vm,
+            builtin_id("next_int_range"),
+            vec![seed.clone(), Value::Int(int(-3)), Value::Int(int(3))],
+        )
+        .expect("next_int_range should return Result");
+        let second = call_builtin(
+            &mut vm,
+            builtin_id("next_int_range"),
+            vec![seed, Value::Int(int(-3)), Value::Int(int(3))],
+        )
+        .expect("next_int_range should return Result");
+        assert_eq!(first, second, "same seed should produce same first value");
+
+        let Value::Tagged { tag: 0, fields } = first else {
+            panic!("expected Ok((Int, RandomGenerator))");
+        };
+        let Some(Value::Tuple(items)) = fields.first() else {
+            panic!("expected tuple payload");
+        };
+        let [Value::Int(value), Value::RandomGenerator(next_rng)] = items.as_slice() else {
+            panic!("expected Int and next RandomGenerator");
+        };
+        assert!(value >= &int(-3) && value < &int(3));
+        assert_ne!(
+            *next_rng, original_rng,
+            "equal calls return equal next states, but the state should be opaque and stable"
+        );
+    }
+
+    #[test]
+    fn process_sleep_accepts_zero_duration_value() {
+        let mut vm = test_vm();
+        let slept = call_builtin(
+            &mut vm,
+            builtin_id("__process_sleep"),
+            vec![Value::Tagged {
+                tag: 2,
+                fields: vec![Value::Int(int(0))],
+            }],
+        )
+        .expect("process sleep should return Result");
+        assert_eq!(slept, super::ok_result(Value::Unit));
+    }
+
+    #[test]
+    fn random_ranges_validate_half_open_bounds() {
+        let mut vm = test_vm();
+
+        let invalid_until =
+            call_builtin(&mut vm, builtin_id("int_until"), vec![Value::Int(int(0))])
+                .expect("int_until should return Result");
+        match invalid_until {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => assert_eq!(rich.kind, "InvalidRandomRange"),
+                other => panic!("expected InvalidRandomRange error, got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
+
+        let invalid_range = call_builtin(
+            &mut vm,
+            builtin_id("int_range"),
+            vec![Value::Int(int(4)), Value::Int(int(4))],
+        )
+        .expect("int_range should return Result");
+        match invalid_range {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => assert_eq!(rich.kind, "InvalidRandomRange"),
+                other => panic!("expected InvalidRandomRange error, got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
     }
 
     #[test]
@@ -2063,6 +3224,7 @@ mod tests {
             name: "StringEncoding::Utf8".into(),
             kind: TypeKind::EnumVariant,
             field_names: vec![],
+            private_flags: vec![],
         }]);
         let value = call_builtin(
             &mut vm,
@@ -2101,6 +3263,7 @@ mod tests {
             name: "StringEncoding::Ascii".into(),
             kind: TypeKind::EnumVariant,
             field_names: vec![],
+            private_flags: vec![],
         }]);
         let value = call_builtin(
             &mut vm,
@@ -2228,8 +3391,8 @@ mod tests {
             other => panic!("expected List<String>, got {:?}", other),
         }
 
-        let values = call_builtin(&mut vm, builtin_id("map_values"), vec![map.clone()])
-            .expect("map_values should succeed");
+        let values = call_builtin(&mut vm, builtin_id("map_values_list"), vec![map.clone()])
+            .expect("map_values_list should succeed");
         match values {
             Value::List(list) => {
                 let rendered = list
@@ -2320,6 +3483,70 @@ mod tests {
             inspect_value(&vm, &value),
             "(\"hello\", [\"line\\nfeed\"], Ok(\"world\"))"
         );
+    }
+
+    #[test]
+    fn io_get_line_reads_injected_input_and_strips_newline() {
+        let mut vm = test_vm()
+            .with_output_capture()
+            .with_stdin_input("surtr\r\nnext\n");
+        let value = call_builtin(
+            &mut vm,
+            builtin_id("io_get_line"),
+            vec![Value::Str("name> ".into())],
+        )
+        .expect("io_get_line should run");
+
+        assert_eq!(vm.captured_stdout(), Some(&["name> ".to_string()][..]));
+        assert!(
+            matches!(value, Value::Tagged { tag: 0, fields } if matches!(fields.as_slice(), [Value::Str(text)] if text == "surtr"))
+        );
+    }
+
+    #[test]
+    fn io_get_reads_one_injected_character() {
+        let mut vm = test_vm().with_stdin_input("あb");
+        let first = call_builtin(
+            &mut vm,
+            builtin_id("io_get"),
+            vec![Value::Str(String::new())],
+        )
+        .expect("first io_get should run");
+        let second = call_builtin(
+            &mut vm,
+            builtin_id("io_get"),
+            vec![Value::Str(String::new())],
+        )
+        .expect("second io_get should run");
+
+        assert!(
+            matches!(first, Value::Tagged { tag: 0, fields } if matches!(fields.as_slice(), [Value::Str(text)] if text == "あ"))
+        );
+        assert!(
+            matches!(second, Value::Tagged { tag: 0, fields } if matches!(fields.as_slice(), [Value::Str(text)] if text == "b"))
+        );
+    }
+
+    #[test]
+    fn io_get_reports_eof_as_input_error_result() {
+        let mut vm = test_vm().with_stdin_input("");
+        let value = call_builtin(
+            &mut vm,
+            builtin_id("io_get"),
+            vec![Value::Str(String::new())],
+        )
+        .expect("io_get should convert eof into Err");
+
+        match value {
+            Value::Tagged { tag: 1, fields } => match fields.as_slice() {
+                [Value::Error(rich)] => {
+                    assert_eq!(rich.kind, "InputError");
+                    assert_eq!(rich.message, "end of input");
+                }
+                other => panic!("expected Err(InputError), got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
     }
 
     #[test]
@@ -2416,6 +3643,40 @@ mod tests {
     }
 
     #[test]
+    fn project_args_returns_vm_cli_arguments() {
+        let mut vm = test_vm();
+        vm.set_cli_args(vec![
+            "--mode".to_string(),
+            "score".to_string(),
+            "123m456p789s11z".to_string(),
+        ]);
+
+        let value = call_builtin(&mut vm, builtin_id("project_args"), vec![])
+            .expect("project_args should succeed");
+
+        match value {
+            Value::List(list) => {
+                let actual = list
+                    .iter()
+                    .map(|value| match value {
+                        Value::Str(text) => text,
+                        other => panic!("expected String value, got {:?}", other),
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    actual,
+                    vec![
+                        "--mode".to_string(),
+                        "score".to_string(),
+                        "123m456p789s11z".to_string()
+                    ]
+                );
+            }
+            other => panic!("expected List<String>, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn eprint_writes_rich_errors_to_captured_stderr() {
         let mut vm = test_vm();
         let value = Value::Error(Box::new(sindr::runtime::RichError {
@@ -2429,6 +3690,7 @@ mod tests {
                 span_start: 0,
                 span_end: 4,
             },
+            diagnostic: None,
             cause: Some(Box::new(sindr::runtime::RichError {
                 kind: "Root".into(),
                 message: "root cause".into(),
@@ -2440,6 +3702,7 @@ mod tests {
                     span_start: 0,
                     span_end: 4,
                 },
+                diagnostic: None,
                 cause: None,
             })),
         }));
@@ -2482,12 +3745,20 @@ mod tests {
         let value = Value::Callable(Callable {
             target: CallableTarget::Builtin(8),
             lexical_captures: Vec::new(),
-            partial_args: Vec::new(),
+            metadata: CallableMetadata {
+                origin: CallableOrigin::Capture,
+                module: Some("Int".into()),
+                name: Some("shr".into()),
+                full_signature: Some(
+                    "shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>".into(),
+                ),
+                applied_args: 0,
+            },
         });
 
         assert_eq!(
             inspect_value(&vm, &value),
-            "FnCapture(module: Int, name: shr, signature: shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
+            "FnCapture(module: Int, name: shr, sig: shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
         );
     }
 
@@ -2511,12 +3782,18 @@ mod tests {
         let value = Value::Callable(Callable {
             target: CallableTarget::Function(0),
             lexical_captures: Vec::new(),
-            partial_args: Vec::new(),
+            metadata: CallableMetadata {
+                origin: CallableOrigin::Capture,
+                module: Some("Main".into()),
+                name: Some("add".into()),
+                full_signature: Some("add(x: Int, y: Int) -> Int".into()),
+                applied_args: 0,
+            },
         });
 
         assert_eq!(
             inspect_value(&vm, &value),
-            "FnCapture(module: Main, name: add, signature: add(x: Int, y: Int) -> Int)"
+            "FnCapture(module: Main, name: add, sig: add(x: Int, y: Int) -> Int)"
         );
     }
 
@@ -2540,22 +3817,105 @@ mod tests {
         let value = Value::Callable(Callable {
             target: CallableTarget::Function(0),
             lexical_captures: Vec::new(),
-            partial_args: Vec::new(),
+            metadata: CallableMetadata {
+                origin: CallableOrigin::Capture,
+                module: Some("<local>".into()),
+                name: Some("add".into()),
+                full_signature: Some("add(x: Int, y: Int) -> Int".into()),
+                applied_args: 0,
+            },
         });
 
         assert_eq!(
             inspect_value(&vm, &value),
-            "FnCapture(module: <local>, name: add, signature: add(x: Int, y: Int) -> Int)"
+            "FnCapture(module: <local>, name: add, sig: add(x: Int, y: Int) -> Int)"
         );
     }
 
     #[test]
-    fn inspect_keeps_legacy_callable_display_for_partial_application() {
+    fn inspect_formats_closure_with_type_style_signature() {
+        let vm = VM::new(Bytecode {
+            functions: vec![FunctionEntry {
+                fun_idx: 0,
+                entry_pc: 0,
+                num_locals: 0,
+                arity: 2,
+                qualified_name: None,
+                signature: Some("(Int, Int -> Int)".into()),
+                end_pc: 0,
+                span_start: 0,
+                span_end: 0,
+                flags: FunctionFlags {
+                    closure: true,
+                    ..Default::default()
+                },
+            }],
+            ..Bytecode::default()
+        });
+        let value = Value::Callable(Callable {
+            target: CallableTarget::Function(0),
+            lexical_captures: Vec::new(),
+            metadata: CallableMetadata {
+                origin: CallableOrigin::Closure,
+                module: None,
+                name: None,
+                full_signature: Some("(Int, Int -> Int)".into()),
+                applied_args: 0,
+            },
+        });
+
+        assert_eq!(inspect_value(&vm, &value), "Closure(Int, Int -> Int)");
+    }
+
+    #[test]
+    fn inspect_formats_partial_capture_with_remaining_signature() {
+        let vm = VM::new(Bytecode::default());
+        let value = Value::Callable(Callable {
+            target: CallableTarget::Function(9),
+            lexical_captures: vec![Value::Unit],
+            metadata: CallableMetadata {
+                origin: CallableOrigin::Capture,
+                module: Some("Add".into()),
+                name: Some("add".into()),
+                full_signature: Some("add(value: Int, rhs: Int) -> Int".into()),
+                applied_args: 1,
+            },
+        });
+
+        assert_eq!(
+            inspect_value(&vm, &value),
+            "FnCapture(module: Add, name: add, sig: (Int -> Int))"
+        );
+    }
+
+    #[test]
+    fn inspect_formats_zero_arg_partial_capture_as_thunk_type() {
+        let vm = VM::new(Bytecode::default());
+        let value = Value::Callable(Callable {
+            target: CallableTarget::Function(9),
+            lexical_captures: vec![Value::Unit, Value::Unit],
+            metadata: CallableMetadata {
+                origin: CallableOrigin::Capture,
+                module: Some("Main".into()),
+                name: Some("ready".into()),
+                full_signature: Some("ready(left: Int, right: Int) -> String".into()),
+                applied_args: 2,
+            },
+        });
+
+        assert_eq!(
+            inspect_value(&vm, &value),
+            "FnCapture(module: Main, name: ready, sig: (-> String))"
+        );
+    }
+
+    #[test]
+    fn inspect_keeps_fallback_callable_display_for_unknown_lexical_captures() {
         let vm = VM::new(Bytecode::default());
         let value = Value::Callable(Callable {
             target: CallableTarget::Builtin(8),
-            lexical_captures: Vec::new(),
-            partial_args: vec![Value::Int(int(1))],
+            lexical_captures: vec![Value::Int(int(1))],
+            metadata: CallableMetadata::default(),
         });
 
         assert_eq!(inspect_value(&vm, &value), "<builtin:8>");

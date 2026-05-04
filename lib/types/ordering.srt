@@ -1,0 +1,51 @@
+@doc """
+Standard `Ordering` enum.
+Represents the three-way result of an ordering comparison.
+This is the shared result type used by the `Compare` trait, while boolean
+ordering helpers remain available through `Ord`.
+
+## REPL
+xldr(1)> Ordering::Less
+Ordering::Less
+"""
+defenum Ordering {
+  Less,
+  Equal,
+  Greater,
+}
+
+impl Show for Ordering {
+  @doc """
+  Return the standard string rendering for `Ordering`.
+  ## REPL
+  xldr(1)> to_string(Ordering::Less)
+  "Ordering::Less"
+  """
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}
+
+impl Eq for Ordering {
+  @doc """
+  Return `True` when both ordering values are equal.
+  ## REPL
+  xldr(1)> eq(Ordering::Less, Ordering::Less)
+  True
+  """
+  def eq(self: Self, rhs: Self) -> Boolean {
+    self == rhs
+  }
+}
+
+impl Neq for Ordering {
+  @doc """
+  Return `True` when the ordering values differ.
+  ## REPL
+  xldr(1)> neq(Ordering::Less, Ordering::Greater)
+  True
+  """
+  def neq(self: Self, rhs: Self) -> Boolean {
+    self != rhs
+  }
+}

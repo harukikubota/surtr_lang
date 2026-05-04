@@ -1,0 +1,278 @@
+@doc """
+Standard `Float` type declaration.
+Floating-point support is implemented, but the exact language contract is still
+provisional.
+This top-level declaration exists so the rest of the pipeline can talk about
+`Float` consistently while the finer contract remains under active review.
+"""
+@builtin type Float
+
+impl Float {
+  @doc """
+  Return the absolute value of `value`.
+  ## REPL
+  xldr(1)> Float::abs(-1.5)
+  1.5
+  """
+  def abs(value: Float) -> Float {
+    if(value < 0.0, 0.0 - value, value)
+  }
+
+  @doc """
+  Return the smaller of `a` and `b`.
+  ## REPL
+  xldr(1)> Float::min(1.5, 2.0)
+  1.5
+  """
+  def min(a: Float, b: Float) -> Float {
+    if(a <= b, a, b)
+  }
+
+  @doc """
+  Return the larger of `a` and `b`.
+  ## REPL
+  xldr(1)> Float::max(1.5, 2.0)
+  2.0
+  """
+  def max(a: Float, b: Float) -> Float {
+    if(a >= b, a, b)
+  }
+}
+
+impl Add for Float {
+  @doc """
+  Return the sum of the two float values.
+  ## REPL
+  xldr(1)> Add::add(1.5, 2.0)
+  3.5
+  """
+  @builtin def add(self: Self, rhs: Self) -> Self
+}
+
+impl Sub for Float {
+  @doc """
+  Return the difference of the two float values.
+  ## REPL
+  xldr(1)> Sub::sub(3.5, 1.0)
+  2.5
+  """
+  @builtin def sub(self: Self, rhs: Self) -> Self
+}
+
+impl Mul for Float {
+  @doc """
+  Return the product of the two float values.
+  ## REPL
+  xldr(1)> Mul::mul(1.5, 2.0)
+  3.0
+  """
+  @builtin def mul(self: Self, rhs: Self) -> Self
+}
+
+impl Numeric for Float {
+  @doc """
+  Divide by `rhs`, returning `Err(ZeroDivisionError)` for zero divisors.
+  ## REPL
+  xldr(1)> safe_div(3.0, 2.0)
+  Ok(1.5)
+  """
+  def safe_div(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError> {
+    safe_div(self, rhs)
+  }
+
+  @doc """
+  Return the absolute value of the float.
+  ## REPL
+  xldr(1)> abs(-1.5)
+  1.5
+  """
+  def abs(self: Self) -> Self {
+    Float::abs(self)
+  }
+
+  @doc """
+  Return the smaller of the two float values.
+  ## REPL
+  xldr(1)> min(1.5, 2.0)
+  1.5
+  """
+  def min(self: Self, rhs: Self) -> Self {
+    Float::min(self, rhs)
+  }
+
+  @doc """
+  Return the larger of the two float values.
+  ## REPL
+  xldr(1)> max(1.5, 2.0)
+  2.0
+  """
+  def max(self: Self, rhs: Self) -> Self {
+    Float::max(self, rhs)
+  }
+}
+
+impl Show for Float {
+  @doc """
+  Return the standard string rendering for `Float`.
+  ## REPL
+  xldr(1)> to_string(1.5)
+  "1.5"
+  """
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}
+
+impl From<Float> for Float {
+  @doc """
+  Return the value unchanged when converting `Float` to `Float`.
+  ## REPL
+  xldr(1)> from(1.5, Float)
+  1.5
+  """
+  def from(self: Self, to: TypeRef<Float>) -> Float {
+    self
+  }
+}
+
+impl From<String> for Float {
+  @doc """
+  Convert `Float` into its standard string representation.
+  ## REPL
+  xldr(1)> from(1.5, String)
+  "1.5"
+  """
+  def from(self: Self, to: TypeRef<String>) -> String {
+    to_string(self)
+  }
+}
+
+impl Eq for Float {
+  @doc """
+  Return `True` when both float values are equal.
+  ## REPL
+  xldr(1)> eq(1.5, 1.5)
+  True
+  """
+  @builtin def eq(self: Self, rhs: Self) -> Boolean
+}
+
+impl Neq for Float {
+  @doc """
+  Return `True` when the float values differ.
+  ## REPL
+  xldr(1)> neq(1.5, 2.0)
+  True
+  """
+  @builtin def neq(self: Self, rhs: Self) -> Boolean
+}
+
+impl Compare for Float {
+  @doc """
+  Return the three-way ordering between the two float values.
+  ## REPL
+  xldr(1)> compare(1.5, 2.0)
+  Ordering::Less
+  """
+  def compare(self: Self, rhs: Self) -> Ordering {
+    if(
+      Lt::lt(self, rhs),
+      Ordering::Less,
+      if(Gt::gt(self, rhs), Ordering::Greater, Ordering::Equal),
+    )
+  }
+}
+
+impl Ord for Float {
+  @doc """
+  Return `True` when the left float is strictly less than the right float.
+  ## REPL
+  xldr(1)> lt(1.5, 2.0)
+  True
+  """
+  def lt(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less => True,
+      Ordering::Equal | Ordering::Greater => False,
+    }
+  }
+
+  @doc """
+  Return `True` when the left float is less than or equal to the right float.
+  ## REPL
+  xldr(1)> lte(1.5, 1.5)
+  True
+  """
+  def lte(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less | Ordering::Equal => True,
+      Ordering::Greater => False,
+    }
+  }
+
+  @doc """
+  Return `True` when the left float is strictly greater than the right float.
+  ## REPL
+  xldr(1)> gt(2.0, 1.5)
+  True
+  """
+  def gt(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less | Ordering::Equal => False,
+      Ordering::Greater => True,
+    }
+  }
+
+  @doc """
+  Return `True` when the left float is greater than or equal to the right float.
+  ## REPL
+  xldr(1)> gte(2.0, 2.0)
+  True
+  """
+  def gte(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less => False,
+      Ordering::Equal | Ordering::Greater => True,
+    }
+  }
+}
+
+impl Lt for Float {
+  @doc """
+  Return `True` when the left float is strictly less than the right float.
+  ## REPL
+  xldr(1)> lt(1.5, 2.0)
+  True
+  """
+  @builtin def lt(self: Self, rhs: Self) -> Boolean
+}
+
+impl Lte for Float {
+  @doc """
+  Return `True` when the left float is less than or equal to the right float.
+  ## REPL
+  xldr(1)> lte(1.5, 1.5)
+  True
+  """
+  @builtin def lte(self: Self, rhs: Self) -> Boolean
+}
+
+impl Gt for Float {
+  @doc """
+  Return `True` when the left float is strictly greater than the right float.
+  ## REPL
+  xldr(1)> gt(2.0, 1.5)
+  True
+  """
+  @builtin def gt(self: Self, rhs: Self) -> Boolean
+}
+
+impl Gte for Float {
+  @doc """
+  Return `True` when the left float is greater than or equal to the right float.
+  ## REPL
+  xldr(1)> gte(2.0, 2.0)
+  True
+  """
+  @builtin def gte(self: Self, rhs: Self) -> Boolean
+}

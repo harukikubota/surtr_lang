@@ -1,0 +1,99 @@
+include "./schema/list_schema.srt"
+
+import ListSchema::{add_one, list_pure, list_step1, list_step2, list_step3};
+import Test;
+
+test("List") {
+  describe("monad laws") {
+    # ghci> let pureL x = [x]
+    # ghci> let f x = [x, x + 10]
+    # ghci> pureL 2 >>= f
+    # ghci> f 2
+    it("left identity holds") {
+      assert_eq(list_step1(2), list_pure(2) |>= list_step1())
+    }
+
+    # ghci> let pureL x = [x]
+    # ghci> let xs = [1, 2]
+    # ghci> xs >>= pureL
+    # ghci> xs
+    it("right identity keeps populated lists") {
+      values: List<Int> = [1, 2]
+      assert_eq(values, values |>= list_pure())
+    }
+
+    # ghci> let pureL x = [x]
+    # ghci> ([] :: [Int]) >>= pureL
+    # ghci> ([] :: [Int])
+    it("right identity keeps empty lists") {
+      values: List<Int> = []
+      assert_eq(values, values |>= list_pure())
+    }
+
+    # ghci> let f x = [x, x + 10]
+    # ghci> let g x = if x < 10 then [x * 2] else []
+    # ghci> let xs = [1, 2]
+    # ghci> ((xs >>= f) >>= g) == (xs >>= (f >=> g))
+    it("associativity holds on populated expansions") {
+      values: List<Int> = [1, 2]
+      composed = &list_step1 >=> &list_step2
+      assert_eq((values |>= list_step1()) |>= list_step2(), values |>= composed)
+    }
+
+    # ghci> let f x = [x, x + 10]
+    # ghci> let g x = if x < 10 then [x * 2] else []
+    # ghci> let xs = [10]
+    # ghci> ((xs >>= f) >>= g) == (xs >>= (f >=> g))
+    it("associativity holds when branches collapse to empty") {
+      values: List<Int> = [10]
+      composed = &list_step1 >=> &list_step2
+      assert_eq((values |>= list_step1()) |>= list_step2(), values |>= composed)
+    }
+
+    # ghci> let pureL x = [x]
+    # ghci> let f x = [x, x + 10]
+    # ghci> (pureL >=> f) 2
+    # ghci> f 2
+    it("kleisli left identity uses pure") {
+      composed = &list_pure >=> &list_step1
+      assert_eq(composed(2), list_step1(2))
+    }
+
+    # ghci> let pureL x = [x]
+    # ghci> let f x = [x, x + 10]
+    # ghci> (f >=> pureL) 2
+    # ghci> f 2
+    it("kleisli right identity uses pure") {
+      composed = &list_step1 >=> &list_pure
+      assert_eq(composed(2), list_step1(2))
+    }
+
+    # ghci> let f x = [x, x + 10]
+    # ghci> let g x = if x < 10 then [x * 2] else []
+    # ghci> let h x = [x - 3]
+    # ghci> (((f >=> g) >=> h) 2) == ((f >=> (g >=> h)) 2)
+    it("kleisli composition is associative") {
+      left = (&list_step1 >=> &list_step2) >=> &list_step3
+      right = &list_step1 >=> (&list_step2 >=> &list_step3)
+      assert_eq(left(2), right(2))
+    }
+
+    # ghci> let f x = [x, x + 10]
+    # ghci> let g x = if x < 10 then [x * 2] else []
+    # ghci> (f >=> g) 2
+    # ghci> f 2 >>= g
+    it("kleisli composition matches staged bind") {
+      composed = &list_step1 >=> &list_step2
+      assert_eq(composed(2), list_step1(2) |>= list_step2())
+    }
+
+    # ghci> let pureL x = [x]
+    # ghci> let xs = [1, 2]
+    # ghci> fmap (+ 1) xs
+    # ghci> xs >>= (pureL . (+ 1))
+    it("fmap matches bind with pure after mapping") {
+      values: List<Int> = [1, 2]
+      assert_eq(values |*> add_one(), values |>= {|x| list_pure(add_one(x))})
+    }
+  }
+}

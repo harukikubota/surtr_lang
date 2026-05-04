@@ -1,7 +1,9 @@
+use crate::names::{builtin_type_name, TypeName};
+
 /// Built-in function metadata shared across Sigil / Scar / Forge / Eldr.
 ///
 /// Surtr source files under `lib/*.srt` may declare these builtins with
-/// `@@builtin`, but the canonical definition order and ids live here.
+/// `@builtin`, but the canonical definition order and ids live here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuiltinMeta {
     pub name: &'static str,
@@ -12,7 +14,7 @@ pub struct BuiltinMeta {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuiltinTypeMeta {
-    /// Canonical builtin type head that std-module `@@builtin type`
+    /// Canonical builtin type head that std-module `@builtin type`
     /// declarations must match exactly.
     pub name: &'static str,
     pub params: &'static [&'static str],
@@ -140,12 +142,12 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "map_err",
         arity: 2,
-        sig_str: "(Result<$T>, Error) -> Result<$T>",
+        sig_str: "(Result<$T>, Lazy<Error>) -> Result<$T>",
     },
     BuiltinMeta {
         name: "cause",
         arity: 2,
-        sig_str: "(Result<$T>, Error) -> Result<$T>",
+        sig_str: "(Result<$T>, Lazy<Error>) -> Result<$T>",
     },
     BuiltinMeta {
         name: "chain",
@@ -171,6 +173,11 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         name: "__test_fail",
         arity: 2,
         sig_str: "(String, String) -> Unit",
+    },
+    BuiltinMeta {
+        name: "__test_fail_error",
+        arity: 2,
+        sig_str: "(String, Error) -> Unit",
     },
     BuiltinMeta {
         name: "__test_fail_current",
@@ -228,7 +235,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(HashMap<$V>) -> List<String>",
     },
     BuiltinMeta {
-        name: "map_values",
+        name: "map_values_list",
         arity: 1,
         sig_str: "(HashMap<$V>) -> List<$V>",
     },
@@ -251,6 +258,11 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         name: "over",
         arity: 3,
         sig_str: "(Lens<$S, $A>, $S, ($A -> Result<$A>)) -> Result<$S>",
+    },
+    BuiltinMeta {
+        name: "over_result",
+        arity: 3,
+        sig_str: "(Lens<$S, Result<$A>>, $S, (Result<$A> -> Result<Result<$A>>)) -> Result<$S>",
     },
     BuiltinMeta {
         name: "__test_capture_stdout",
@@ -347,77 +359,363 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 1,
         sig_str: "(RegexMatch) -> Int",
     },
+    BuiltinMeta {
+        name: "project_args",
+        arity: 0,
+        sig_str: "() -> List<String>",
+    },
+    BuiltinMeta {
+        name: "io_get",
+        arity: 1,
+        sig_str: "(String) -> Result<String, InputError>",
+    },
+    BuiltinMeta {
+        name: "io_get_line",
+        arity: 1,
+        sig_str: "(String) -> Result<String, InputError>",
+    },
+    BuiltinMeta {
+        name: "seed",
+        arity: 1,
+        sig_str: "(Int) -> RandomGenerator",
+    },
+    BuiltinMeta {
+        name: "int_until",
+        arity: 1,
+        sig_str: "(Int) -> Result<Int, InvalidRandomRange>",
+    },
+    BuiltinMeta {
+        name: "int_range",
+        arity: 2,
+        sig_str: "(Int, Int) -> Result<Int, InvalidRandomRange>",
+    },
+    BuiltinMeta {
+        name: "next_int_until",
+        arity: 2,
+        sig_str: "(RandomGenerator, Int) -> Result<(Int, RandomGenerator), InvalidRandomRange>",
+    },
+    BuiltinMeta {
+        name: "next_int_range",
+        arity: 3,
+        sig_str:
+            "(RandomGenerator, Int, Int) -> Result<(Int, RandomGenerator), InvalidRandomRange>",
+    },
+    BuiltinMeta {
+        name: "kind",
+        arity: 1,
+        sig_str: "(Error) -> String",
+    },
+    BuiltinMeta {
+        name: "message",
+        arity: 1,
+        sig_str: "(Error) -> String",
+    },
+    BuiltinMeta {
+        name: "format",
+        arity: 1,
+        sig_str: "(Error) -> String",
+    },
+    BuiltinMeta {
+        name: "__process_pid",
+        arity: 2,
+        sig_str: "(String, (-> Result<$State>)) -> PID<$Process>",
+    },
+    BuiltinMeta {
+        name: "__process_spawn",
+        arity: 2,
+        sig_str: "(String, (-> Result<$State>)) -> Result<PID<$Process>>",
+    },
+    BuiltinMeta {
+        name: "__process_state",
+        arity: 1,
+        sig_str: "(PID<$Process>) -> Result<$State>",
+    },
+    BuiltinMeta {
+        name: "__process_store",
+        arity: 2,
+        sig_str: "(PID<$Process>, $State) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__process_self",
+        arity: 0,
+        sig_str: "() -> PID<$Process>",
+    },
+    BuiltinMeta {
+        name: "__process_sleep",
+        arity: 1,
+        sig_str: "(Duration) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__task_call",
+        arity: 1,
+        sig_str: "((-> Result<$A>)) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "__task_async",
+        arity: 1,
+        sig_str: "((-> Result<$A>)) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "__task_launch",
+        arity: 1,
+        sig_str: "((-> Result<Unit>)) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__task_cast",
+        arity: 1,
+        sig_str: "((-> Unit)) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__task_call_timeout",
+        arity: 2,
+        sig_str: "(Duration, (-> Result<$A>)) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "__task_async_timeout",
+        arity: 2,
+        sig_str: "(Duration, (-> Result<$A>)) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "__task_launch_timeout",
+        arity: 2,
+        sig_str: "(Duration, (-> Result<Unit>)) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__task_cast_timeout",
+        arity: 2,
+        sig_str: "(Duration, (-> Unit)) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__operator_int_add",
+        arity: 2,
+        sig_str: "(Int, Int) -> Int",
+    },
+    BuiltinMeta {
+        name: "__operator_int_sub",
+        arity: 2,
+        sig_str: "(Int, Int) -> Int",
+    },
+    BuiltinMeta {
+        name: "__operator_int_mul",
+        arity: 2,
+        sig_str: "(Int, Int) -> Int",
+    },
+    BuiltinMeta {
+        name: "__operator_float_add",
+        arity: 2,
+        sig_str: "(Float, Float) -> Float",
+    },
+    BuiltinMeta {
+        name: "__operator_float_sub",
+        arity: 2,
+        sig_str: "(Float, Float) -> Float",
+    },
+    BuiltinMeta {
+        name: "__operator_float_mul",
+        arity: 2,
+        sig_str: "(Float, Float) -> Float",
+    },
+    BuiltinMeta {
+        name: "__operator_int_eq",
+        arity: 2,
+        sig_str: "(Int, Int) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_int_neq",
+        arity: 2,
+        sig_str: "(Int, Int) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_int_lt",
+        arity: 2,
+        sig_str: "(Int, Int) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_int_lte",
+        arity: 2,
+        sig_str: "(Int, Int) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_int_gt",
+        arity: 2,
+        sig_str: "(Int, Int) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_int_gte",
+        arity: 2,
+        sig_str: "(Int, Int) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_float_eq",
+        arity: 2,
+        sig_str: "(Float, Float) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_float_neq",
+        arity: 2,
+        sig_str: "(Float, Float) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_float_lt",
+        arity: 2,
+        sig_str: "(Float, Float) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_float_lte",
+        arity: 2,
+        sig_str: "(Float, Float) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_float_gt",
+        arity: 2,
+        sig_str: "(Float, Float) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_float_gte",
+        arity: 2,
+        sig_str: "(Float, Float) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_string_eq",
+        arity: 2,
+        sig_str: "(String, String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_string_neq",
+        arity: 2,
+        sig_str: "(String, String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_boolean_eq",
+        arity: 2,
+        sig_str: "(Boolean, Boolean) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_boolean_neq",
+        arity: 2,
+        sig_str: "(Boolean, Boolean) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__operator_string_concat",
+        arity: 2,
+        sig_str: "(String, String) -> String",
+    },
 ];
 
-/// Canonical builtin type declarations accepted from std-module sources.
+/// Canonical builtin type declarations accepted from standard definition sources.
 ///
 /// These entries define the exact source-level heads the compiler accepts,
 /// including generic parameter names such as `List<$A>` and `Result<$T>`.
 pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
     BuiltinTypeMeta {
-        name: "Int",
+        name: TypeName::Int.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "Float",
+        name: TypeName::Float.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "String",
+        name: TypeName::String.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "Boolean",
+        name: TypeName::Boolean.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "Unit",
+        name: TypeName::Unit.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "Error",
+        name: TypeName::Closure.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "Regex",
+        name: TypeName::MatchArms.as_str(),
+        params: &["$Scrutinee", "$Result"],
+    },
+    BuiltinTypeMeta {
+        name: TypeName::CondClauses.as_str(),
+        params: &["$Result"],
+    },
+    BuiltinTypeMeta {
+        name: TypeName::Error.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "RegexCaptures",
+        name: TypeName::Regex.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "RegexMatch",
+        name: TypeName::RegexCaptures.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
-        name: "List",
+        name: TypeName::RegexMatch.as_str(),
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: TypeName::RandomGenerator.as_str(),
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: TypeName::List.as_str(),
         params: &["$A"],
     },
     BuiltinTypeMeta {
-        name: "HashMap",
+        name: TypeName::HashMap.as_str(),
         params: &["$V"],
     },
     BuiltinTypeMeta {
-        name: "Generator",
+        name: TypeName::Generator.as_str(),
         params: &["$State", "$Item"],
     },
     BuiltinTypeMeta {
-        name: "Result",
+        name: TypeName::Result.as_str(),
         params: &["$T"],
     },
     BuiltinTypeMeta {
-        name: "TypeRef",
+        name: TypeName::Lazy.as_str(),
         params: &["$T"],
     },
     BuiltinTypeMeta {
-        name: "Lens",
+        name: TypeName::TypeRef.as_str(),
+        params: &["$T"],
+    },
+    BuiltinTypeMeta {
+        name: TypeName::Hole.as_str(),
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: TypeName::Lens.as_str(),
         params: &["$S", "$A"],
     },
 ];
 
 pub fn builtin_meta_by_name(name: &str) -> Option<&'static BuiltinMeta> {
     BUILTIN_METAS.iter().find(|meta| meta.name == name)
+}
+
+pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&str>) -> &'a str {
+    match qualified_name {
+        Some("IO::get") => "io_get",
+        Some("IO::get_line") => "io_get_line",
+        Some("Process::self") => "__process_self",
+        Some("Process::sleep") => "__process_sleep",
+        Some("Task::call") => "__task_call",
+        Some("Task::async") => "__task_async",
+        Some("Task::launch") => "__task_launch",
+        Some("Task::cast") => "__task_cast",
+        _ => declared_name,
+    }
+}
+
+pub fn builtin_meta_for_decl(
+    declared_name: &str,
+    qualified_name: Option<&str>,
+) -> Option<&'static BuiltinMeta> {
+    builtin_meta_by_name(builtin_runtime_name(declared_name, qualified_name))
 }
 
 pub fn builtin_id_by_name(name: &str) -> Option<u16> {
@@ -433,6 +731,10 @@ pub fn builtin_meta_by_id(builtin_id: u16) -> Option<&'static BuiltinMeta> {
 
 pub fn builtin_type_meta_by_name(name: &str) -> Option<&'static BuiltinTypeMeta> {
     BUILTIN_TYPE_METAS.iter().find(|meta| meta.name == name)
+}
+
+pub fn builtin_type_supports_inherent_impl(name: &str) -> bool {
+    builtin_type_name(name).is_some_and(TypeName::supports_inherent_impl)
 }
 
 pub fn builtin_uid(builtin_id: u16) -> u32 {

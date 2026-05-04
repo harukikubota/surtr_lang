@@ -1,0 +1,196 @@
+@doc """
+Standard `Regex` type declaration.
+`Regex` is an opaque compiled regular expression value handled by runtime
+builtins.
+"""
+@builtin type Regex
+
+@doc """
+Standard `RegexCaptures` type declaration.
+Represents one successful capture set produced by `Regex::captures`.
+"""
+@builtin type RegexCaptures
+
+@doc """
+Standard `RegexMatch` type declaration.
+Represents one concrete match span produced by `Regex::find` / `Regex::find_all`.
+"""
+@builtin type RegexMatch
+
+@doc """
+Regex compile error returned by `Regex::compile`.
+"""
+deferror RegexCompileError(detail: String) {
+  detail
+}
+
+impl Regex {
+  @doc """
+  Compile a pattern string into a `Regex` value.
+  Invalid syntax returns `Err(RegexCompileError(...))`.
+  ## REPL
+  xldr(1)> Regex::compile("a+")
+  Ok(Regex("a+"))
+  """
+  @builtin def compile(pattern: String) -> Result<Regex, RegexCompileError>
+
+  @doc """
+  Return `True` when the regex matches any part of `input`.
+  ## REPL
+  xldr(1)> re =? Regex::compile("a+")
+  xldr(2)> Regex::is_match(re, "caaat")
+  True
+  """
+  @builtin def is_match(re: Regex, input: String) -> Boolean
+
+  @doc """
+  Return the first capture set for `input`.
+  Missing match returns `Err(NoneError)`.
+  ## REPL
+  xldr(1)> re =? Regex::compile("(?<lhs>a+)(?<rhs>b+)")
+  xldr(2)> caps =? Regex::captures(re, "aaabbb")
+  xldr(3)> RegexCaptures::whole(caps)
+  "aaabbb"
+  """
+  @builtin def captures(re: Regex, input: String) -> Result<RegexCaptures, NoneError>
+
+  @doc """
+  Return the first match span for `input`.
+  Missing match returns `Err(NoneError)`.
+  ## REPL
+  xldr(1)> re =? Regex::compile("a+")
+  xldr(2)> m =? Regex::find(re, "caaat")
+  xldr(3)> RegexMatch::text(m)
+  "aaa"
+  """
+  @builtin def find(re: Regex, input: String) -> Result<RegexMatch, NoneError>
+
+  @doc """
+  Return all match spans for `input`.
+  ## REPL
+  xldr(1)> re =? Regex::compile("a+")
+  xldr(2)> List::len(Regex::find_all(re, "caaat"))
+  1
+  """
+  @builtin def find_all(re: Regex, input: String) -> List<RegexMatch>
+
+  @doc """
+  Split `input` by regex matches.
+  ## REPL
+  xldr(1)> re =? Regex::compile("a+")
+  xldr(2)> Regex::split(re, "caaataa")
+  ["c", "t", ""]
+  """
+  @builtin def split(re: Regex, input: String) -> List<String>
+
+  @doc """
+  Replace the first regex match in `input`.
+  ## REPL
+  xldr(1)> re =? Regex::compile("a+")
+  xldr(2)> Regex::replace(re, "caaat", "X")
+  "cXt"
+  """
+  @builtin def replace(re: Regex, input: String, replacement: String) -> String
+
+  @doc """
+  Replace all regex matches in `input`.
+  ## REPL
+  xldr(1)> re =? Regex::compile("a+")
+  xldr(2)> Regex::replace_all(re, "caaat aaa", "X")
+  "cXt X"
+  """
+  @builtin def replace_all(re: Regex, input: String, replacement: String) -> String
+
+  @doc """
+  Escape regex meta-characters in plain text.
+  ## REPL
+  xldr(1)> Regex::escape("a+b")
+  "a\+b"
+  """
+  @builtin def escape(text: String) -> String
+
+  @doc """
+  Return declared capture-group names in definition order.
+  ## REPL
+  xldr(1)> re =? Regex::compile("(?<lhs>a+)(?<rhs>b+)")
+  xldr(2)> Regex::group_names(re)
+  ["lhs", "rhs"]
+  """
+  @builtin def group_names(re: Regex) -> List<String>
+}
+
+impl RegexCaptures {
+  @doc """
+  Return the whole matched text (`group 0`).
+  ## REPL
+  xldr(1)> re =? Regex::compile("(?<lhs>a+)(?<rhs>b+)")
+  xldr(2)> caps =? Regex::captures(re, "aaabbb")
+  xldr(3)> RegexCaptures::whole(caps)
+  "aaabbb"
+  """
+  @builtin def whole(caps: RegexCaptures) -> String
+
+  @doc """
+  Return capture-group count, including `group 0`.
+  ## REPL
+  xldr(1)> re =? Regex::compile("(?<lhs>a+)(?<rhs>b+)")
+  xldr(2)> caps =? Regex::captures(re, "aaabbb")
+  xldr(3)> RegexCaptures::capture_count(caps)
+  3
+  """
+  @builtin def capture_count(caps: RegexCaptures) -> Int
+
+  @doc """
+  Return capture text by index.
+  Missing index or non-participating group returns `Err(NoneError)`.
+  ## REPL
+  xldr(1)> re =? Regex::compile("(?<lhs>a+)(?<rhs>b+)")
+  xldr(2)> caps =? Regex::captures(re, "aaabbb")
+  xldr(3)> RegexCaptures::get(caps, 1)
+  Ok("aaa")
+  """
+  @builtin def get(caps: RegexCaptures, idx: Int) -> Result<String, NoneError>
+
+  @doc """
+  Return capture text by group name.
+  Missing name or non-participating group returns `Err(NoneError)`.
+  ## REPL
+  xldr(1)> re =? Regex::compile("(?<lhs>a+)(?<rhs>b+)")
+  xldr(2)> caps =? Regex::captures(re, "aaabbb")
+  xldr(3)> RegexCaptures::get_name(caps, "rhs")
+  Ok("bbb")
+  """
+  @builtin def get_name(caps: RegexCaptures, name: String) -> Result<String, NoneError>
+}
+
+impl RegexMatch {
+  @doc """
+  Return matched text.
+  ## REPL
+  xldr(1)> re =? Regex::compile("a+")
+  xldr(2)> m =? Regex::find(re, "caaat")
+  xldr(3)> RegexMatch::text(m)
+  "aaa"
+  """
+  @builtin def text(m: RegexMatch) -> String
+
+  @doc """
+  Return start byte offset in source input.
+  ## REPL
+  xldr(1)> re =? Regex::compile("a+")
+  xldr(2)> m =? Regex::find(re, "caaat")
+  xldr(3)> RegexMatch::start(m)
+  1
+  """
+  @builtin def start(m: RegexMatch) -> Int
+
+  @doc """
+  Return end byte offset in source input.
+  ## REPL
+  xldr(1)> re =? Regex::compile("a+")
+  xldr(2)> m =? Regex::find(re, "caaat")
+  xldr(3)> RegexMatch::end(m)
+  4
+  """
+  @builtin def end(m: RegexMatch) -> Int
+}

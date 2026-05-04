@@ -1,6 +1,5 @@
 use super::harness::{assert_compile_error, assert_output, run_surtr_with_stderr};
 
-#[test]
 fn safebind_top_level_ok() {
     assert_output(
         r#"value: Result<Int> = Ok(5)
@@ -10,7 +9,6 @@ print(to_string(num + 1))"#,
     );
 }
 
-#[test]
 fn safebind_list_pattern_ok() {
     assert_output(
         r#"value: Result<List<Int>> = Ok([1, 2, 3])
@@ -21,7 +19,6 @@ print(to_string(tail))"#,
     );
 }
 
-#[test]
 fn safebind_list_pattern_plain_list_ok() {
     assert_output(
         r#"value = [1, 2, 3]
@@ -32,7 +29,6 @@ print(to_string(tail))"#,
     );
 }
 
-#[test]
 fn safebind_uncons_string_ok() {
     assert_output(
         r#"value = "source"
@@ -43,7 +39,6 @@ print(tail)"#,
     );
 }
 
-#[test]
 fn safebind_string_pattern_plain_string_ok() {
     assert_output(
         r#"value = "source"
@@ -54,7 +49,6 @@ print(tail)"#,
     );
 }
 
-#[test]
 fn safebind_string_pattern_handles_multibyte_chars() {
     assert_output(
         r#"value = "あい"
@@ -65,7 +59,6 @@ print(tail)"#,
     );
 }
 
-#[test]
 fn safebind_list_pattern_plain_list_empty_propagates_empty_list() {
     let (_stdout, stderr) = run_surtr_with_stderr(
         r#"value: List<Int> = []
@@ -76,7 +69,6 @@ print("after")"#,
     assert_eq!(stderr, vec!["Error: EmptyList: Empty List."]);
 }
 
-#[test]
 fn safebind_string_pattern_empty_propagates_pattern_mismatch() {
     let (_stdout, stderr) = run_surtr_with_stderr(
         r#"value: String = ""
@@ -90,7 +82,6 @@ print("after")"#,
     );
 }
 
-#[test]
 fn safebind_fixed_list_pattern_reports_index_out_of_bounds_for_longer_rhs() {
     let (_stdout, stderr) = run_surtr_with_stderr(
         r#"li = [1, 2]
@@ -103,7 +94,6 @@ fn safebind_fixed_list_pattern_reports_index_out_of_bounds_for_longer_rhs() {
     );
 }
 
-#[test]
 fn safebind_fixed_list_pattern_reports_index_out_of_bounds_for_shorter_rhs() {
     let (_stdout, stderr) = run_surtr_with_stderr(
         r#"li = [1]
@@ -116,7 +106,6 @@ fn safebind_fixed_list_pattern_reports_index_out_of_bounds_for_shorter_rhs() {
     );
 }
 
-#[test]
 fn match_string_empty_and_uncons_is_exhaustive() {
     assert_output(
         r#"value = "source"
@@ -128,7 +117,6 @@ print(match value {
     );
 }
 
-#[test]
 fn expr_list_cons_does_not_become_string_cons() {
     assert_compile_error(
         r#"source = ["x"]
@@ -137,7 +125,6 @@ str: String = ["t", ..source]"#,
     );
 }
 
-#[test]
 fn match_string_uncons_without_empty_arm_is_non_exhaustive() {
     assert_compile_error(
         r#"value = "x"
@@ -148,7 +135,6 @@ print(match value {
     );
 }
 
-#[test]
 fn safebind_list_pattern_with_nested_constructor_literals_ok() {
     assert_output(
         r#"lr = [Ok(1), Ok(2), Ok(3)]
@@ -158,7 +144,6 @@ print("ok")"#,
     );
 }
 
-#[test]
 fn safebind_list_pattern_with_nested_constructor_and_tail_ok() {
     assert_output(
         r#"lr = [Ok(1), Ok(2), Ok(3)]
@@ -168,7 +153,6 @@ print(to_string(tail))"#,
     );
 }
 
-#[test]
 fn safebind_top_ok_pattern_requires_nested_result() {
     assert_compile_error(
         r#"value: Result<Int> = Ok(5)
@@ -177,7 +161,6 @@ Ok(num) =? value"#,
     );
 }
 
-#[test]
 fn safebind_top_ok_pattern_allows_nested_result() {
     assert_output(
         r#"value: Result<Result<Int>> = Ok(Ok(5))
@@ -187,7 +170,6 @@ print(to_string(num + 1))"#,
     );
 }
 
-#[test]
 fn safebind_nested_result_err_propagates() {
     let (stdout, stderr) = run_surtr_with_stderr(
         r#"deferror Oops {
@@ -203,7 +185,6 @@ print("after")"#,
     assert_eq!(stderr, vec!["Error: Oops: oops"]);
 }
 
-#[test]
 fn safebind_list_pattern_empty_propagates_empty_list() {
     let (_stdout, stderr) = run_surtr_with_stderr(
         r#"def fun() -> Result<Int> {
@@ -222,7 +203,6 @@ match ret {
     assert_eq!(stderr, vec!["Error: EmptyList: Empty List."]);
 }
 
-#[test]
 fn safebind_function_early_return_on_err() {
     let (stdout, stderr) = run_surtr_with_stderr(
         r#"deferror Oops {
@@ -255,7 +235,6 @@ match err {
     assert_eq!(stderr, vec!["Error: Oops: oops"]);
 }
 
-#[test]
 fn safebind_script_error_eprints() {
     let (stdout, stderr) = run_surtr_with_stderr(
         r#"deferror Oops {
@@ -271,7 +250,6 @@ print("after")"#,
     assert_eq!(stderr, vec!["Error: Oops: oops"]);
 }
 
-#[test]
 fn safebind_allows_total_plain_rhs() {
     assert_output(
         r#"num =? 10
@@ -280,7 +258,6 @@ print(to_string(num))"#,
     );
 }
 
-#[test]
 fn safebind_requires_result_return_function() {
     assert_compile_error(
         r#"def bad() -> Int {
@@ -291,12 +268,10 @@ fn safebind_requires_result_return_function() {
     );
 }
 
-#[test]
 fn assignment_operators_non_associative() {
     assert_compile_error("x = y =? z", "non-associative");
 }
 
-#[test]
 fn plain_bind_rejects_result_test_pattern() {
     assert_compile_error(
         "Ok(num) = Ok(1)",
@@ -304,7 +279,6 @@ fn plain_bind_rejects_result_test_pattern() {
     );
 }
 
-#[test]
 fn deferror_no_args_basic() {
     let source = r#"deferror ValidationError {
   "Validation failed"
@@ -318,7 +292,6 @@ match err1 {
     assert_output(source, &["got error"]);
 }
 
-#[test]
 fn deferror_forward_reference_in_result_signature_succeeds() {
     assert_output(
         r#"ret: Result<Int> = load()
@@ -338,7 +311,6 @@ deferror NotFound(path: String) {
     );
 }
 
-#[test]
 fn builtin_prelude_provides_none_error() {
     let (stdout, stderr) = run_surtr_with_stderr(
         r#"ret: Result<Int> = Err(NoneError)
@@ -352,7 +324,6 @@ match ret {
     assert_eq!(stderr, vec!["Error: NoneError: None Value."]);
 }
 
-#[test]
 fn builtin_safe_xxx_zero_error_can_be_matched_and_eprinted() {
     let (stdout, stderr) = run_surtr_with_stderr(
         r#"match safe_div(1, 0) {
@@ -376,7 +347,6 @@ match safe_mod(1, 0) {
     );
 }
 
-#[test]
 fn deferror_interpolated_message_display() {
     let (stdout, stderr) = run_surtr_with_stderr(
         r#"deferror PageNotFound(html: String) {
@@ -394,7 +364,6 @@ match err_result {
     assert_eq!(stderr, vec!["Error: PageNotFound: Page Not Found. 404"]);
 }
 
-#[test]
 fn match_err_eprint_with_wildcard_arm() {
     let (stdout, stderr) = run_surtr_with_stderr(
         r#"deferror MyE {
@@ -412,7 +381,6 @@ match ret {
     assert_eq!(stderr, vec!["Error: MyE: hoge"]);
 }
 
-#[test]
 fn deferror_rejects_raw_error_binding() {
     assert_compile_error(
         r#"deferror PageNotFound(html: String) {
@@ -424,7 +392,6 @@ bad = PageNotFound("404")"#,
     );
 }
 
-#[test]
 fn result_ok_case_prints_value() {
     assert_output(
         r#"ok_val: Result<Int> = Ok(100)
@@ -436,7 +403,6 @@ match ok_val {
     );
 }
 
-#[test]
 fn result_helpers_render_multiline_cause_trees() {
     assert_output(
         r#"deferror Lower {
@@ -460,7 +426,6 @@ print(inspect(Result::chain(Err(Lower), Result::cause(Err(Tail), Higher))))"#,
     );
 }
 
-#[test]
 fn eprint_renders_linear_cause_chain_lines() {
     let (stdout, stderr) = run_surtr_with_stderr(
         r#"deferror Lower {
@@ -497,4 +462,141 @@ match Result::chain(Err(Lower), Result::cause(Err(Tail), Higher)) {
             "Caused by: Lower: lower",
         ]
     );
+}
+
+pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
+    let cases: &[(&str, fn())] = &[
+        ("safebind_top_level_ok", safebind_top_level_ok as fn()),
+        ("safebind_list_pattern_ok", safebind_list_pattern_ok as fn()),
+        (
+            "safebind_list_pattern_plain_list_ok",
+            safebind_list_pattern_plain_list_ok as fn(),
+        ),
+        (
+            "safebind_uncons_string_ok",
+            safebind_uncons_string_ok as fn(),
+        ),
+        (
+            "safebind_string_pattern_plain_string_ok",
+            safebind_string_pattern_plain_string_ok as fn(),
+        ),
+        (
+            "safebind_string_pattern_handles_multibyte_chars",
+            safebind_string_pattern_handles_multibyte_chars as fn(),
+        ),
+        (
+            "safebind_list_pattern_plain_list_empty_propagates_empty_list",
+            safebind_list_pattern_plain_list_empty_propagates_empty_list as fn(),
+        ),
+        (
+            "safebind_string_pattern_empty_propagates_pattern_mismatch",
+            safebind_string_pattern_empty_propagates_pattern_mismatch as fn(),
+        ),
+        (
+            "safebind_fixed_list_pattern_reports_index_out_of_bounds_for_longer_rhs",
+            safebind_fixed_list_pattern_reports_index_out_of_bounds_for_longer_rhs as fn(),
+        ),
+        (
+            "safebind_fixed_list_pattern_reports_index_out_of_bounds_for_shorter_rhs",
+            safebind_fixed_list_pattern_reports_index_out_of_bounds_for_shorter_rhs as fn(),
+        ),
+        (
+            "match_string_empty_and_uncons_is_exhaustive",
+            match_string_empty_and_uncons_is_exhaustive as fn(),
+        ),
+        (
+            "expr_list_cons_does_not_become_string_cons",
+            expr_list_cons_does_not_become_string_cons as fn(),
+        ),
+        (
+            "match_string_uncons_without_empty_arm_is_non_exhaustive",
+            match_string_uncons_without_empty_arm_is_non_exhaustive as fn(),
+        ),
+        (
+            "safebind_list_pattern_with_nested_constructor_literals_ok",
+            safebind_list_pattern_with_nested_constructor_literals_ok as fn(),
+        ),
+        (
+            "safebind_list_pattern_with_nested_constructor_and_tail_ok",
+            safebind_list_pattern_with_nested_constructor_and_tail_ok as fn(),
+        ),
+        (
+            "safebind_top_ok_pattern_requires_nested_result",
+            safebind_top_ok_pattern_requires_nested_result as fn(),
+        ),
+        (
+            "safebind_top_ok_pattern_allows_nested_result",
+            safebind_top_ok_pattern_allows_nested_result as fn(),
+        ),
+        (
+            "safebind_nested_result_err_propagates",
+            safebind_nested_result_err_propagates as fn(),
+        ),
+        (
+            "safebind_list_pattern_empty_propagates_empty_list",
+            safebind_list_pattern_empty_propagates_empty_list as fn(),
+        ),
+        (
+            "safebind_function_early_return_on_err",
+            safebind_function_early_return_on_err as fn(),
+        ),
+        (
+            "safebind_script_error_eprints",
+            safebind_script_error_eprints as fn(),
+        ),
+        (
+            "safebind_allows_total_plain_rhs",
+            safebind_allows_total_plain_rhs as fn(),
+        ),
+        (
+            "safebind_requires_result_return_function",
+            safebind_requires_result_return_function as fn(),
+        ),
+        (
+            "assignment_operators_non_associative",
+            assignment_operators_non_associative as fn(),
+        ),
+        (
+            "plain_bind_rejects_result_test_pattern",
+            plain_bind_rejects_result_test_pattern as fn(),
+        ),
+        ("deferror_no_args_basic", deferror_no_args_basic as fn()),
+        (
+            "deferror_forward_reference_in_result_signature_succeeds",
+            deferror_forward_reference_in_result_signature_succeeds as fn(),
+        ),
+        (
+            "builtin_prelude_provides_none_error",
+            builtin_prelude_provides_none_error as fn(),
+        ),
+        (
+            "builtin_safe_xxx_zero_error_can_be_matched_and_eprinted",
+            builtin_safe_xxx_zero_error_can_be_matched_and_eprinted as fn(),
+        ),
+        (
+            "deferror_interpolated_message_display",
+            deferror_interpolated_message_display as fn(),
+        ),
+        (
+            "match_err_eprint_with_wildcard_arm",
+            match_err_eprint_with_wildcard_arm as fn(),
+        ),
+        (
+            "deferror_rejects_raw_error_binding",
+            deferror_rejects_raw_error_binding as fn(),
+        ),
+        (
+            "result_ok_case_prints_value",
+            result_ok_case_prints_value as fn(),
+        ),
+        (
+            "result_helpers_render_multiline_cause_trees",
+            result_helpers_render_multiline_cause_trees as fn(),
+        ),
+        (
+            "eprint_renders_linear_cause_chain_lines",
+            eprint_renders_linear_cause_chain_lines as fn(),
+        ),
+    ];
+    super::run_bucket_cases("safebind_and_errors", cases, bucket, bucket_count)
 }

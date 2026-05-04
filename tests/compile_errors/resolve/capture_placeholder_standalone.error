@@ -1,0 +1,2 @@
+phase: resolve
+contains: capture placeholder &1 must appear inside a capture call

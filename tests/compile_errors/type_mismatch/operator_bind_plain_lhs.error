@@ -1,0 +1,4 @@
+phase: typecheck
+contains: `|>=` requires Chainable implementation on the left
+contains: LHS: Int
+contains: Chainable is implemented for: List<$A>, Option<$A>, Result<$A>

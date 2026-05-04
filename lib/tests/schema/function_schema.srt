@@ -1,0 +1,13 @@
+defmod FunctionSchema {
+  def inc(x: Int) -> Int {
+    x + 1
+  }
+
+  def double(x: Int) -> Int {
+    x * 2
+  }
+
+  def show_int(x: Int) -> String {
+    to_string(x)
+  }
+}

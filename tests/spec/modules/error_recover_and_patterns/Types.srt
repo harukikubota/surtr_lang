@@ -1,0 +1,15 @@
+deferror Timeout {
+  "timeout"
+}
+
+deferror ConnectionReset {
+  "connection reset"
+}
+
+deferror DnsFailure {
+  "dns failure"
+}
+
+deferror TimeoutWithDetail(detail: String) {
+  detail
+}

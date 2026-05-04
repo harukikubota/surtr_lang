@@ -1,2 +1,2 @@
 phase: parse
-contains: Unexpected token: Newline
+contains: Incomplete input: expected expression

@@ -17,6 +17,7 @@ pub(crate) enum TopLevelDeclKind {
     Def,
     ExtractorDef,
     Defmod,
+    Namespace,
     ImplDef,
     TraitDef,
     TraitImplDef,
@@ -26,6 +27,7 @@ pub(crate) enum TopLevelDeclKind {
     RecordDef,
     DeferrorDef,
     EnumDef,
+    ConstDef,
     BuiltinDecl,
     BuiltinExtractorDecl,
     BuiltinTypeDecl,
@@ -58,8 +60,17 @@ impl ParseRules {
             allow_top_level_expr: true,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Def,
+                TopLevelDeclKind::Namespace,
+                TopLevelDeclKind::ImplDef,
+                TopLevelDeclKind::TraitDef,
+                TopLevelDeclKind::TraitImplDef,
+                TopLevelDeclKind::ConstDef,
                 TopLevelDeclKind::Import,
                 TopLevelDeclKind::Include,
+                TopLevelDeclKind::StructDef,
+                TopLevelDeclKind::RecordDef,
+                TopLevelDeclKind::DeferrorDef,
+                TopLevelDeclKind::EnumDef,
             ]),
         }
     }
@@ -77,6 +88,7 @@ impl ParseRules {
             allow_top_level_expr: false,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Defmod,
+                TopLevelDeclKind::Namespace,
                 TopLevelDeclKind::ImplDef,
                 TopLevelDeclKind::TraitDef,
                 TopLevelDeclKind::TraitImplDef,
@@ -85,6 +97,7 @@ impl ParseRules {
                 TopLevelDeclKind::RecordDef,
                 TopLevelDeclKind::DeferrorDef,
                 TopLevelDeclKind::EnumDef,
+                TopLevelDeclKind::ConstDef,
             ]),
         }
     }
@@ -94,6 +107,7 @@ impl ParseRules {
             allow_top_level_expr: false,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Defmod,
+                TopLevelDeclKind::Namespace,
                 TopLevelDeclKind::ImplDef,
                 TopLevelDeclKind::TraitDef,
                 TopLevelDeclKind::TraitImplDef,
@@ -102,6 +116,7 @@ impl ParseRules {
                 TopLevelDeclKind::RecordDef,
                 TopLevelDeclKind::DeferrorDef,
                 TopLevelDeclKind::EnumDef,
+                TopLevelDeclKind::ConstDef,
                 TopLevelDeclKind::BuiltinDecl,
                 TopLevelDeclKind::BuiltinTypeDecl,
             ]),
@@ -112,6 +127,7 @@ impl ParseRules {
         Self {
             allow_top_level_expr: false,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Import,
                 TopLevelDeclKind::Def,
                 TopLevelDeclKind::ExtractorDef,
                 TopLevelDeclKind::TraitDef,
@@ -124,6 +140,7 @@ impl ParseRules {
         Self {
             allow_top_level_expr: false,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Import,
                 TopLevelDeclKind::Def,
                 TopLevelDeclKind::ExtractorDef,
                 TopLevelDeclKind::TraitDef,
@@ -151,6 +168,7 @@ impl ParseRules {
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Def,
                 TopLevelDeclKind::Defmod,
+                TopLevelDeclKind::Namespace,
                 TopLevelDeclKind::ImplDef,
                 TopLevelDeclKind::TraitDef,
                 TopLevelDeclKind::TraitImplDef,
@@ -159,13 +177,14 @@ impl ParseRules {
                 TopLevelDeclKind::RecordDef,
                 TopLevelDeclKind::DeferrorDef,
                 TopLevelDeclKind::EnumDef,
+                TopLevelDeclKind::ConstDef,
             ]),
         }
     }
 
     pub fn permissive_for_tests() -> Self {
         Self {
-            allow_top_level_expr: false,
+            allow_top_level_expr: true,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Any,
         }
     }

@@ -1,1 +1,1 @@
-@@builtin def fake(a: Int) -> Int
+@builtin def fake(a: Int) -> Int

@@ -1,0 +1,8 @@
+defmod StyledDocSchema {
+  def esc() -> String {
+    match String::from_codepoints([27], StringEncoding::Utf8) {
+      Ok(value) => value,
+      Err(_) => "",
+    }
+  }
+}

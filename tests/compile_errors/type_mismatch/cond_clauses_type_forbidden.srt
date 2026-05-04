@@ -1,0 +1,3 @@
+def takes_cond(blocks: CondClauses<String>) -> String { "nope" }
+
+print(takes_cond)

@@ -1,0 +1,23 @@
+Project::config({|config|
+  Project::entrypoint(config, "main", {|c|
+    Config::entry_fun(c, "Main::main")
+    |> Config::add_path("./main.srt")
+    |> Config::add_path("./src/0_types.srt")
+    |> Config::add_path("./src/1_parser.srt")
+    |> Config::add_path("./src/2_normalize.srt")
+    |> Config::add_path("./src/3_solver.srt")
+    |> Config::add_path("./src/9_extractor.srt")
+    |> Config::add_path("./src/7_yaku_catalog.srt")
+    |> Config::add_path("./src/4_judge.srt")
+    |> Config::add_path("./src/5_score.srt")
+    |> Config::add_path("./src/8_view_components.srt")
+    |> Config::add_path("./src/6_cli.srt")
+    # |> Config::add_path("./prod.srt")
+  })
+
+  # config = Project::entrypoint(config, "test", {|c|
+  #   Config::entry_fun(c, "Main::test")
+  #   |> Config::add_path("./test_helper.srt")
+  #   |> Config::add_path("./test/repo.srt")
+  # })
+})

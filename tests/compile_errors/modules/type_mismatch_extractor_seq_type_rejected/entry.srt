@@ -1,0 +1,3 @@
+import Matchers::bad
+
+bad(value) =? 1

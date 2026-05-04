@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Expected function type, got Int

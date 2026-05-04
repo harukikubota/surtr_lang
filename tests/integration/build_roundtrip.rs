@@ -1,9 +1,7 @@
-use std::fs;
-use std::process::Command;
-
+use crate::common::{module_spec_fixtures, repo_root, surtr_command, unique_temp_dir, write_source};
+use crate::support;
 use serde_json::Value;
-mod common;
-use common::{surtr_bin, unique_temp_dir, write_source};
+use std::fs;
 
 #[test]
 fn build_uses_default_eldr_output_path() {
@@ -12,9 +10,7 @@ fn build_uses_default_eldr_output_path() {
     let expected_eldr_path = temp.join("default_out.eldr");
 
     write_source(&source_path, "print(\"hello\")\n");
-
-    let bin = surtr_bin();
-    let build = Command::new(&bin)
+    let build = surtr_command()
         .args([
             "build",
             source_path.to_str().expect("source path must be utf-8"),
@@ -49,10 +45,8 @@ fn build_produces_identical_bytecode_for_same_input() {
 print(inspect(nums))
 print(to_string(10 + 20))"#,
     );
-
-    let bin = surtr_bin();
     for eldr_path in [&first_eldr_path, &second_eldr_path] {
-        let build = Command::new(&bin)
+        let build = surtr_command()
             .args([
                 "build",
                 source_path.to_str().expect("source path must be utf-8"),
@@ -85,9 +79,7 @@ fn dump_outputs_valid_json_for_jq() {
     let eldr_path = temp.join("dump_sample.eldr");
 
     write_source(&source_path, "print(\"hello\")\n");
-
-    let bin = surtr_bin();
-    let build = Command::new(&bin)
+    let build = surtr_command()
         .args([
             "build",
             source_path.to_str().expect("source path must be utf-8"),
@@ -102,7 +94,7 @@ fn dump_outputs_valid_json_for_jq() {
         String::from_utf8_lossy(&build.stderr)
     );
 
-    let dump = Command::new(&bin)
+    let dump = surtr_command()
         .args([
             "dump",
             eldr_path.to_str().expect("eldr path must be utf-8"),
@@ -141,21 +133,76 @@ fn dump_outputs_valid_json_for_jq() {
 }
 
 #[test]
+fn dump_outputs_runtime_process_specs_for_agent_modules() {
+    let fixture = module_spec_fixtures()
+        .into_iter()
+        .find(|fixture| {
+            fixture.case.case_dir
+                == repo_root().join("tests/spec/modules/process_state_agent_singleton_surface")
+        })
+        .expect("process_state_agent_singleton_surface fixture should exist");
+    let module_sources =
+        support::collect_module_sources(&fixture.case.module_stages).expect("definition sources");
+    let compile_sources = support::compose_script_sources(
+        &fixture.case.entry_path.to_string_lossy(),
+        fixture.case.entry_source,
+        module_sources,
+    );
+    let bytecode = support::compile_script_sources(&compile_sources)
+        .expect("module fixture bytecode should compile");
+    let temp = unique_temp_dir("surtr_dump_process_specs_module");
+    let eldr_path = temp.join("module_fixture.eldr");
+
+    fs::write(
+        &eldr_path,
+        bytecode.encode().expect("encode should succeed"),
+    )
+    .expect("failed to write eldr file");
+
+    let dump = surtr_command()
+        .args([
+            "dump",
+            eldr_path.to_str().expect("eldr path must be utf-8"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    assert_eq!(json["summary"]["process_spec_count"], 1);
+    let specs = json["bytecode"]["runtime_process_specs"]["entries"]
+        .as_array()
+        .expect("runtime process specs must be an array");
+    assert_eq!(specs.len(), 1);
+    assert_eq!(specs[0]["process_name"], "Counter");
+    assert_eq!(specs[0]["module_path"], "Counter");
+    assert_eq!(specs[0]["kind"], "StateAgent");
+    assert_eq!(specs[0]["instance"], "Singleton");
+    assert_eq!(specs[0]["boot"], true);
+    assert_eq!(specs[0]["set_fun_idx"].is_number(), true);
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn dump_supports_entry_srt_and_traces_normalized_entrypoint() {
     let temp = unique_temp_dir("surtr_dump_entry_srt");
     let source_path = temp.join("entry_trace.srt");
 
     write_source(
         &source_path,
-        r#"@@entrypoint
-def auto() -> Result<()> { Ok(()) }
-
+        r#"def auto() -> Result<()> { Ok(()) }
 def launch() -> Result<()> { Ok(()) }
 "#,
     );
-
-    let bin = surtr_bin();
-    let dump = Command::new(&bin)
+    let dump = surtr_command()
         .args([
             "dump",
             source_path.to_str().expect("source path must be utf-8"),
@@ -194,9 +241,7 @@ fn check_outputs_machine_readable_json_for_success_and_failure() {
 
     write_source(&ok_source_path, "print(\"hello\")\n");
     write_source(&bad_source_path, "bad: Int = \"oops\"\n");
-
-    let bin = surtr_bin();
-    let ok = Command::new(&bin)
+    let ok = surtr_command()
         .args([
             "check",
             ok_source_path.to_str().expect("source path must be utf-8"),
@@ -221,7 +266,7 @@ fn check_outputs_machine_readable_json_for_success_and_failure() {
         0
     );
 
-    let bad = Command::new(&bin)
+    let bad = surtr_command()
         .args([
             "check",
             bad_source_path.to_str().expect("source path must be utf-8"),
@@ -255,9 +300,7 @@ fn dump_outputs_viewer_json() {
     let source_path = temp.join("viewer_sample.srt");
 
     write_source(&source_path, "print(\"hello\")\n");
-
-    let bin = surtr_bin();
-    let dump = Command::new(&bin)
+    let dump = surtr_command()
         .args([
             "dump",
             source_path.to_str().expect("source path must be utf-8"),

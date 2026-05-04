@@ -1,0 +1,69 @@
+@doc """
+Standard `Error` type declaration.
+`Error` is an abstract type for recoverable failure values.
+Concrete failures are introduced with `deferror` and then flow through this
+abstract surface, most often inside `Result<T>`.
+The important point is that user code does not normally construct `Error`
+directly; it defines concrete error values and lets them be viewed through this
+shared abstraction.
+
+`Error` is not a user-owned data shape. In ordinary user code it cannot appear
+as a local variable annotation, a user-defined parameter type, or a user-defined
+return type. It survives only in compiler-managed positions such as `Err(...)`,
+pattern-bound `Err(err)` arms, and standard-module helpers that observe or
+forward an existing error.
+
+Code that mentions `Error` is therefore talking about the shared abstract view.
+The runtime value is always some concrete `deferror` instance.
+"""
+@builtin type Error
+
+impl Error {
+  @doc """
+  Return the concrete `deferror` kind name stored in an `Error` value.
+  ## REPL
+  xldr(1)> Error::kind(NoneError)
+  "NoneError"
+  """
+  @builtin def kind(err: Error) -> String
+
+  @doc """
+  Return the human message stored in an `Error` value.
+  ## REPL
+  xldr(1)> Error::message(NoneError)
+  "None Value."
+  """
+  @builtin def message(err: Error) -> String
+
+  @doc """
+  Render an `Error` into the same human-oriented multiline text used by `eprint`.
+  ## REPL
+  xldr(1)> Error::format(NoneError)
+  "Error: NoneError: None Value."
+  """
+  @builtin def format(err: Error) -> String
+}
+
+impl Show for Error {
+  @doc """
+  Return the standard string rendering for `Error`.
+  ## REPL
+  xldr(1)> to_string(NoneError)
+  "NoneError"
+  """
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}
+
+impl From<String> for Error {
+  @doc """
+  Convert `Error` into its standard string representation.
+  ## REPL
+  xldr(1)> from(NoneError, String)
+  "NoneError"
+  """
+  def from(self: Self, to: TypeRef<String>) -> String {
+    to_string(self)
+  }
+}

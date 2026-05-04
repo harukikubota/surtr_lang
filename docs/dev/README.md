@@ -1,0 +1,19 @@
+# Developer Docs
+
+`docs/dev/` は開発者向けドキュメントの入口です。
+
+ここにある各ページが、開発者向け正本ドキュメントです。  
+`doc/` は draft、開発アイデア、タスク入力、作業途中メモ、tmp ファイル置き場として扱います。
+
+## 仕様書
+
+- [EldrVM spec](./EldrVM_spec.md)
+- [Rune observability](./Rune_observability.md)
+- [Xldr spec](./Xldr_spec.md)
+- [テスト方針](./テスト方針.md)
+
+## 併読するとよいもの
+
+- [../../doc/要件定義v9.md](../../doc/要件定義v9.md)
+- [../../doc/open-issues.md](../../doc/open-issues.md)
+- [../../AGENTS.md](../../AGENTS.md)

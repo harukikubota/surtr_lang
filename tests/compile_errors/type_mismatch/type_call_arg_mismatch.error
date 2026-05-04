@@ -1,0 +1,3 @@
+phase: typecheck
+contains: Argument type mismatch: expected Int, got String
+contains: Callable definition signature: add_one(x: Int) -> Int

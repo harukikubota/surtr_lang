@@ -78,22 +78,35 @@ cargo clean
 
 ## Docs
 
-- Canonical specs in `doc/`
+- Public user docs in `docs/site/`
+  - [Docs index](./docs/site/README.md)
+  - [Standard modules](./docs/site/standard-modules.md)
+  - [Definitions and usage](./docs/site/definitions-and-usage.md)
+  - [Type annotations](./docs/site/type-annotations.md)
+  - [Trait impls](./docs/site/trait-impls.md)
+  - [Lens](./docs/site/lens.md)
+  - [Kernel](./docs/site/kernel.md)
+  - [Agents](./docs/site/agents.md)
+  - [Pattern matching](./docs/site/pattern-matching.md)
+  - [Extractors](./docs/site/extractors.md)
+  - [Language features](./docs/site/language-features.md)
+- Developer docs in `docs/dev/`
+  - [Docs index](./docs/dev/README.md)
+  - [VM spec entry](./docs/dev/EldrVM_spec.md)
+  - [REPL spec entry](./docs/dev/Xldr_spec.md)
+  - [Observability spec entry](./docs/dev/Rune_observability.md)
+  - [Test policy entry](./docs/dev/テスト方針.md)
+- Canonical specs and internal design notes in `doc/`
   - [Requirements (V9, Japanese)](./doc/要件定義v9.md)
-  - [VM spec](./doc/EldrVM_spec.md)
-  - [REPL spec](./doc/Xldr_spec.md)
-  - [Test policy](./doc/テスト方針.md)
   - [Open issues](./doc/open-issues.md)
   - [Float memo](./doc/float.md)
-- Public guides in `docs/site/`
-  - [Docs index](./docs/site/README.md)
-  - [Language guide](./docs/site/language-guide.md)
-  - [Language reference](./docs/site/language-reference.md)
-  - [Compiler design guide](./docs/site/compiler-design.md)
-  - [Crate reference](./docs/site/crate-reference.md)
-- Standard-library docs live in `lib/*.srt` via `@@doc`
+- Internal docs index
+  - [Internal docs guide](./docs/internal/README.md)
+- Standard-library docs live in `lib/*.srt` via `@doc`
 - Implementation contracts live in Rust doc comments under `crates/**`
-- Working ledger: [作業フロー.md](./作業フロー.md)
+- Install guide
+  - [INSTALL.md](./INSTALL.md)
+- Working ledger: [AGENTS.md](./AGENTS.md)
 
 ## Status
 
@@ -112,7 +125,7 @@ Implementation notes:
 
 - `Int` uses unbounded `BigInt` semantics across the pipeline
 - runtime-internal tags stay fixed-width and separate from user-visible `Int`
-- `type` is a reserved keyword; std modules can declare builtin surfaces with `@@builtin def ...` and `@@builtin type ...`
+- `type` is a reserved keyword; std modules can declare builtin surfaces with `@builtin def ...` and `@builtin type ...`
 - std modules are split into `Bootstrap`, `Kernel`, and type-oriented modules (`Int`, `String`, `Boolean`, `Error`, `List`, `Result`, `Float`); cross-cutting builtins live under `defmod Kernel` in `kernel.srt`, and each builtin type head is declared at the top level of its corresponding `lib/*.srt`
 - closure parameter annotations are optional and match-arm LHS follows the same pattern grammar as safe-bind
 - `Float` remains implemented, but its precise contract is tracked separately in [doc/float.md](./doc/float.md)

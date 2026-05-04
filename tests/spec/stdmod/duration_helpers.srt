@@ -1,0 +1,5 @@
+print(to_string(250ms))
+print(inspect(250ms))
+print(to_string(Duration::millis(250ms)))
+d: Duration =? try_from(7, Duration)
+print(to_string(Duration::millis(d)))

@@ -1,0 +1,49 @@
+def count_heads(
+  rng: RandomGenerator,
+  remaining: Int,
+  heads: Int,
+) -> Result<Int, InvalidRandomRange> {
+  if(
+    remaining <= 0,
+    Ok(heads),
+    match Random::next_int_until(rng, 2) {
+      Ok(pair) => count_heads_after_toss(pair, remaining, heads),
+      Err(err) => Err(err),
+    },
+  )
+}
+
+def count_heads_after_toss(
+  pair: (Int, RandomGenerator),
+  remaining: Int,
+  heads: Int,
+) -> Result<Int, InvalidRandomRange> {
+  (coin, next_rng) = pair
+  next_heads = if(coin == 0, heads + 1, heads)
+  count_heads(next_rng, remaining - 1, next_heads)
+}
+
+def count_heads_in_one_function(
+  rng: RandomGenerator,
+  remaining: Int,
+  heads: Int,
+) -> Result<Int, InvalidRandomRange> {
+  if(
+    remaining <= 0,
+    Ok(heads),
+    match Random::next_int_until(rng, 2) {
+      Ok((0, next_rng)) => count_heads_in_one_function(next_rng, remaining - 1, heads + 1),
+      Ok((_, next_rng)) => count_heads_in_one_function(next_rng, remaining - 1, heads),
+      Err(err) => Err(err),
+    },
+  )
+}
+
+n = 20
+seed = 20260429
+heads =? count_heads(Random::seed(seed), n, 0)
+heads_in_one_function =? count_heads_in_one_function(Random::seed(seed), n, 0)
+
+print("coin tosses: " ++ to_string(n))
+print("heads: " ++ to_string(heads))
+print("heads in one function: " ++ to_string(heads_in_one_function))

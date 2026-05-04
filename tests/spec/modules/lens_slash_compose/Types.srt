@@ -1,0 +1,2 @@
+defrecord Profile(name: String)
+defrecord User(profile: Profile)

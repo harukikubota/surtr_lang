@@ -1,0 +1,57 @@
+include "./schema/project_schema.srt"
+
+import ProjectSchema::{add, api_entry, worker_entry};
+import Test;
+
+def add_one(value: Int) -> Int {
+  value + 1
+}
+
+included_sum = add(1, 2)
+top_level_sum = add_one(included_sum)
+
+test("Project") {
+  describe("include and top-level ordering") {
+    it("evaluates import, definitions, and top-level expressions") {
+      assert_eq(3, included_sum)
+      assert_eq(4, top_level_sum)
+    }
+  }
+
+  describe("empty and new") {
+    it("constructs an empty project") {
+      assert_eq("Project(entries: [])", inspect(Project::empty()))
+    }
+
+    it("wraps provided entries as-is") {
+      project = Project::new([Config::new("App")])
+      assert_eq(
+        "Project(entries: [Config(name: \"App\", entrypoint: \"Main::main\", paths: [])])",
+        inspect(project),
+      )
+    }
+  }
+
+  describe("entrypoint") {
+    it("appends one configured entry") {
+      project = Project::entrypoint(Project::empty(), "Api", &api_entry)
+      assert_eq(
+        "Project(entries: [Config(name: \"Api\", entrypoint: \"Api::main\", paths: [\"./api\"])])",
+        inspect(project),
+      )
+    }
+  }
+
+  describe("config builders") {
+    it("supports realistic multi-entry project assembly") {
+      project = Project::config({|project|
+        project = Project::entrypoint(project, "Api", &api_entry)
+        Project::entrypoint(project, "Worker", &worker_entry)
+      })
+      assert_eq(
+        "Project(entries: [Config(name: \"Api\", entrypoint: \"Api::main\", paths: [\"./api\"]), Config(name: \"Worker\", entrypoint: \"Worker::main\", paths: [\"./workers\"])])",
+        inspect(project),
+      )
+    }
+  }
+}

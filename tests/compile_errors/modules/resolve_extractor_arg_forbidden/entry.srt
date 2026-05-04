@@ -1,0 +1,3 @@
+import Matchers::never
+
+print(to_string(never(1)))

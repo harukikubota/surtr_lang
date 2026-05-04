@@ -1,0 +1,18 @@
+a =? Random::int_until(10)
+print(to_string(a >= 0))
+print(to_string(a < 10))
+
+b =? Random::int_range(-3, 3)
+print(to_string(b >= -3))
+print(to_string(b < 3))
+
+rng0 = Random::seed(123)
+(v1, rng1) =? Random::next_int_range(rng0, -100, 100)
+(v1_again, _) =? Random::next_int_range(Random::seed(123), -100, 100)
+print(to_string(v1 == v1_again))
+
+(v2, _) =? Random::next_int_until(rng1, 10)
+print(to_string(v2 >= 0))
+print(to_string(v2 < 10))
+
+print(inspect(Random::int_range(4, 4)))

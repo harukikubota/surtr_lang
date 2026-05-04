@@ -1,21 +1,60 @@
 use std::collections::{HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
+use sindr::names::TypeIdentity;
 use sindr::primitives::SurtrInt;
 use spire::ast::Symbol;
 
 use crate::types::Ty;
 
+fn canonical_type_key(name: &str) -> String {
+    if name.contains("::") {
+        name.to_string()
+    } else {
+        format!("Global::{name}")
+    }
+}
+
+fn type_lookup_candidates(name: &str) -> Vec<String> {
+    let mut out = vec![name.to_string(), canonical_type_key(name)];
+    let segments = name.split("::").collect::<Vec<_>>();
+    if segments.len() > 1 {
+        for start in 1..segments.len() {
+            let suffix = segments[start..].join("::");
+            if !out.iter().any(|candidate| candidate == &suffix) {
+                out.push(suffix.clone());
+            }
+            let canonical_suffix = canonical_type_key(&suffix);
+            if !out.iter().any(|candidate| candidate == &canonical_suffix) {
+                out.push(canonical_suffix);
+            }
+        }
+    }
+    out
+}
+
 /// Kind of user-defined type.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypeKind {
     Struct,
     Record,
-    Error,
+    ConcreteError,
     Enum,
 }
 
+impl TypeKind {
+    pub const fn identity(self) -> TypeIdentity {
+        match self {
+            Self::Struct => TypeIdentity::Struct,
+            Self::Record => TypeIdentity::Record,
+            Self::ConcreteError => TypeIdentity::ConcreteError,
+            Self::Enum => TypeIdentity::Enum,
+        }
+    }
+}
+
 /// Metadata for a user-defined type (struct, record, error).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypeDefInfo {
     pub tag: u32,
     pub kind: TypeKind,
@@ -27,7 +66,7 @@ pub struct TypeDefInfo {
 }
 
 /// Resolution state for user-defined type signatures.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeDefState {
     /// Name/kind/tag are known, but field signature is not finalized yet.
     Declared,
@@ -35,7 +74,7 @@ pub enum TypeDefState {
     SignatureResolved,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnumVariantInfo {
     pub constructor_name: Symbol,
     pub short_name: Symbol,
@@ -46,8 +85,14 @@ pub struct EnumVariantInfo {
     pub discriminant: SurtrInt,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VarScopeFrame {
+    touched: HashSet<u32>,
+    undo: Vec<(u32, Option<Ty>)>,
+}
+
 /// Type environment — tracks variable types and type definitions.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypeEnv {
     /// unique_id → type
     pub vars: HashMap<u32, Ty>,
@@ -71,6 +116,7 @@ pub struct TypeEnv {
     pub enum_variants_by_enum: HashMap<Symbol, Vec<EnumVariantInfo>>,
     /// type declaration bindings usable as type-root lens path heads.
     pub type_constructor_ids: HashSet<u32>,
+    var_scope_frames: Vec<VarScopeFrame>,
 }
 
 impl Default for TypeEnv {
@@ -93,12 +139,45 @@ impl TypeEnv {
             enum_variant_tags: HashMap::new(),
             enum_variants_by_enum: HashMap::new(),
             type_constructor_ids: HashSet::new(),
+            var_scope_frames: Vec::new(),
         }
     }
 
     /// Bind a variable (by unique_id) to a type.
     pub fn bind_var(&mut self, unique_id: u32, ty: Ty) {
+        if let Some(frame) = self.var_scope_frames.last_mut() {
+            if frame.touched.insert(unique_id) {
+                frame
+                    .undo
+                    .push((unique_id, self.vars.get(&unique_id).cloned()));
+            }
+        }
         self.vars.insert(unique_id, ty);
+    }
+
+    /// Open a scoped mutation frame for `vars`.
+    ///
+    /// During an active frame, first writes to each `unique_id` record its
+    /// previous value so `pop_var_scope` can restore the exact prior state.
+    pub fn push_var_scope(&mut self) {
+        self.var_scope_frames.push(VarScopeFrame {
+            touched: HashSet::new(),
+            undo: Vec::new(),
+        });
+    }
+
+    /// Roll back all `bind_var` changes made since the last `push_var_scope`.
+    pub fn pop_var_scope(&mut self) {
+        let Some(frame) = self.var_scope_frames.pop() else {
+            return;
+        };
+        for (unique_id, old) in frame.undo.into_iter().rev() {
+            if let Some(old_ty) = old {
+                self.vars.insert(unique_id, old_ty);
+            } else {
+                self.vars.remove(&unique_id);
+            }
+        }
     }
 
     /// Look up the type of a variable.
@@ -116,7 +195,8 @@ impl TypeEnv {
         kind: TypeKind,
         type_params: Vec<Symbol>,
     ) -> u32 {
-        if let Some(existing) = self.type_defs.get(&name) {
+        let key = canonical_type_key(&name);
+        if let Some(existing) = self.type_defs.get(&key) {
             debug_assert!(
                 existing.kind == kind,
                 "Type predeclared with different kind: {}",
@@ -133,7 +213,7 @@ impl TypeEnv {
         let tag = self.next_tag;
         self.next_tag += 1;
         self.type_defs.insert(
-            name.clone(),
+            key,
             TypeDefInfo {
                 tag,
                 kind,
@@ -156,7 +236,8 @@ impl TypeEnv {
         fields: Vec<(Symbol, Ty)>,
         private_fields: HashSet<Symbol>,
     ) -> Option<u32> {
-        let def = self.type_defs.get_mut(name)?;
+        let key = canonical_type_key(name);
+        let def = self.type_defs.get_mut(&key)?;
         def.fields = fields;
         def.private_fields = private_fields;
         def.state = TypeDefState::SignatureResolved;
@@ -172,18 +253,18 @@ impl TypeEnv {
 
     /// Look up a type definition by name.
     pub fn lookup_type_def(&self, name: &str) -> Option<&TypeDefInfo> {
-        self.type_defs.get(name)
+        type_lookup_candidates(name)
+            .into_iter()
+            .find_map(|candidate| self.type_defs.get(&candidate))
     }
 
     pub fn is_private_field(&self, type_name: &str, field_name: &str) -> bool {
-        self.type_defs
-            .get(type_name)
+        self.lookup_type_def(type_name)
             .is_some_and(|def| def.private_fields.contains(field_name))
     }
 
     pub fn is_type_signature_resolved(&self, name: &str) -> bool {
-        self.type_defs
-            .get(name)
+        self.lookup_type_def(name)
             .is_some_and(|def| def.state == TypeDefState::SignatureResolved)
     }
 
@@ -203,11 +284,13 @@ impl TypeEnv {
     }
 
     pub fn declare_error_type_name(&mut self, name: Symbol) {
-        self.error_type_names.insert(name);
+        self.error_type_names.insert(canonical_type_key(&name));
     }
 
     pub fn is_declared_error_type_name(&self, name: &str) -> bool {
-        self.error_type_names.contains(name)
+        type_lookup_candidates(name)
+            .into_iter()
+            .any(|candidate| self.error_type_names.contains(&candidate))
     }
 
     pub fn register_enum_variant(
@@ -280,7 +363,7 @@ mod tests {
     #[test]
     fn resolve_type_def_signature_finalizes_predeclared_entry() {
         let mut env = TypeEnv::new();
-        let tag = env.predeclare_type_def("ApiError".into(), TypeKind::Error, Vec::new());
+        let tag = env.predeclare_type_def("ApiError".into(), TypeKind::ConcreteError, Vec::new());
 
         let before = env.lookup_type_def("ApiError").expect("must exist");
         assert_eq!(before.state, TypeDefState::Declared);
@@ -321,5 +404,22 @@ mod tests {
             def.fields,
             vec![("first".into(), Ty::Int), ("second".into(), Ty::Str)]
         );
+    }
+
+    #[test]
+    fn private_field_lookup_accepts_global_and_module_prefixed_names() {
+        let mut env = TypeEnv::new();
+        env.predeclare_type_def("User".into(), TypeKind::Struct, Vec::new());
+        env.resolve_type_def_signature(
+            "User",
+            vec![("name".into(), Ty::Str), ("password".into(), Ty::Str)],
+            HashSet::from(["password".into()]),
+        );
+
+        assert!(env.is_private_field("User", "password"));
+        assert!(env.is_private_field("Global::User", "password"));
+        assert!(env.is_private_field("Types::User", "password"));
+        assert!(env.is_type_signature_resolved("Global::User"));
+        assert!(env.is_type_signature_resolved("Types::User"));
     }
 }

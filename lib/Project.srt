@@ -1,0 +1,57 @@
+defstruct Project {
+  entries: List<Config>,
+}
+
+impl Project {
+  @doc """
+  Construct a project from the provided entry configurations.
+  ## REPL
+  xldr(1)> Project::new([])
+  Project { entries: [] }
+  """
+  def new(entries: List<Config>) -> Self {
+    Project { entries: entries }
+  }
+
+  @doc """
+  Return the runtime project arguments supplied by the host.
+  ## REPL
+  xldr(1)> Project::args()
+  []
+  """
+  def args() -> List<String> {
+    Kernel::project_args()
+  }
+
+  @doc """
+  Construct an empty project value.
+  ## REPL
+  xldr(1)> Project::empty()
+  Project { entries: [] }
+  """
+  def empty() -> Self {
+    Project::new([])
+  }
+
+  @doc """
+  Build a project by applying the configuration builder to an empty project.
+  ## REPL
+  xldr(1)> Project::config({|project| project})
+  Project { entries: [] }
+  """
+  def config(builder: (Project -> Project)) -> Self {
+    builder(Project::empty())
+  }
+
+  @doc """
+  Append one configured entrypoint to the project.
+  ## REPL
+  xldr(1)> Project::entrypoint(Project::empty(), "App", {|cfg| cfg})
+  Project { entries: [Config { name: "App", entrypoint: "Main::main", paths: [] }] }
+  """
+  def entrypoint(project: Self, name: String, builder: (Config -> Config)) -> Self {
+    base = Config::new(name)
+    configured = builder(base)
+    Project::new(List::append(project.entries, [configured]))
+  }
+}

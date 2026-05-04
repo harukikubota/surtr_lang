@@ -1,0 +1,5 @@
+defmod TestHelper {
+  def label() -> String {
+    "mahjong-test-helper"
+  }
+}

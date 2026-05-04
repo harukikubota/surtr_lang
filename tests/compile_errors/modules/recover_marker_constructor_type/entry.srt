@@ -1,0 +1,1 @@
+value = Result::recover_kind(Err(Timeout("runtime")), Timeout(1), {|err| Ok(1)})

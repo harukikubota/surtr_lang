@@ -1,0 +1,58 @@
+defmod ViewComponents {
+  defp _char_display_width(ch: String) -> Int {
+    match String::codepoints(ch, StringEncoding::Utf8) {
+      Ok(bytes) => if(List::len(bytes) == 1, 1, 2),
+      Err(_) => 1,
+    }
+  }
+
+  defp _display_width_go(chars: List<String>, acc: Int) -> Int {
+    match chars {
+      [] => acc,
+      [head, ..tail] => _display_width_go(tail, acc + _char_display_width(head)),
+    }
+  }
+
+  def display_width(text: String) -> Int {
+    _display_width_go(String::chars(text), 0)
+  }
+
+  def pad_space(max_before_pipe: Int, line: String) -> Result<String> {
+    line_width = display_width(line)
+    if(
+      line_width >= max_before_pipe,
+      Ok(""),
+      String::repeat(" ", max_before_pipe - line_width + 1),
+    )
+  }
+
+  defp _safe_repeat(text: String, count: Int) -> String {
+    match String::repeat(text, count) {
+      Ok(value) => value,
+      Err(_) => "",
+    }
+  }
+
+  def print_hline(left: String, fill: String, right: String, inner_width: Int) -> Unit {
+    print(left ++ _safe_repeat(fill, inner_width) ++ right)
+  }
+
+  def print_top(inner_width: Int) -> Unit {
+    print_hline("┌", "─", "┐", inner_width)
+  }
+
+  def print_mid(inner_width: Int) -> Unit {
+    print_hline("├", "─", "┤", inner_width)
+  }
+
+  def print_bottom(inner_width: Int) -> Unit {
+    print_hline("└", "─", "┘", inner_width)
+  }
+
+  def print_item(text: String, inner_width: Int) -> Unit {
+    line = "│ " ++ text
+    pad_space(inner_width + 1, line)
+    |> Result::tap_ok({|spaces| print(line ++ spaces ++ "│")})
+    ()
+  }
+}

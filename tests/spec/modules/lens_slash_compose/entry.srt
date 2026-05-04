@@ -1,0 +1,2 @@
+user = User(Profile("alice"))
+print(Lens::view(User.profile / Profile.name, user))

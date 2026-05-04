@@ -1,0 +1,2 @@
+phase: resolve
+contains: Duplicate public const: APP_NAME

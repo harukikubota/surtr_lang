@@ -1,0 +1,159 @@
+@doc """
+Recoverable assertion failure raised by the test DSL.
+"""
+deferror TestAssertionFailed(detail: String) {
+  detail
+}
+
+import StyledDoc;
+
+@doc """
+Test DSL helpers consumed by `surtr test`.
+"""
+defmod Test {
+  @builtin def __test_push(kind: String, name: String) -> Unit
+  @builtin def __test_pop() -> Unit
+  @builtin def __test_pass(name: String) -> Unit
+  @builtin def __test_fail(name: String, detail: String) -> Unit
+  @builtin def __test_fail_error(name: String, err: Error) -> Unit
+  @builtin def __test_fail_current(detail: String) -> Unit
+  @builtin def __test_capture_stdout() -> List<String>
+  @builtin def __test_capture_stderr() -> List<String>
+
+  defp _fail(detail: String) -> Result<()> {
+    Err(TestAssertionFailed(detail))
+  }
+
+  defp _finish_ok() -> Result<()> {
+    __test_pop()
+    Ok(())
+  }
+
+  defp _finish_unexpected_test_error_rendered(rendered: String) -> Result<()> {
+    __test_fail_current("unexpected test error: " ++ rendered)
+    __test_pop()
+    Ok(())
+  }
+
+  defp _finish_unexpected_describe_error_rendered(rendered: String) -> Result<()> {
+    __test_fail_current("unexpected describe error: " ++ rendered)
+    __test_pop()
+    Ok(())
+  }
+
+  defp _finish_it_ok(name: String) -> Result<()> {
+    __test_pass(name)
+    Ok(())
+  }
+
+  defp _finish_it_err(name: String, err: Error) -> Result<()> {
+    __test_fail_error(name, err)
+    Ok(())
+  }
+
+  defp _assert_err_rendered_contains(fragment: String, rendered: String) -> Result<()> {
+    if(
+      String::contains(rendered, fragment),
+      Ok(()),
+      _fail("expected Err containing #{fragment}, got #{rendered}"),
+    )
+  }
+
+  def test(name: String, body: (-> Result<()>)) -> Result<()> {
+    __test_push("test", name)
+    result = body()
+    match result {
+      Ok(_) => _finish_ok(),
+      Err(err) => _finish_unexpected_test_error_rendered(inspect(err)),
+    }
+  }
+
+  def describe(name: String, body: (-> Result<()>)) -> Result<()> {
+    __test_push("describe", name)
+    result = body()
+    match result {
+      Ok(_) => _finish_ok(),
+      Err(err) => _finish_unexpected_describe_error_rendered(inspect(err)),
+    }
+  }
+
+  def it(name: String, body: (-> Result<()>)) -> Result<()> {
+    match body() {
+      Ok(_) => _finish_it_ok(name),
+      Err(err) => _finish_it_err(name, err),
+    }
+  }
+
+  def assert_true(flag: Boolean) -> Result<()> {
+    if(flag, Ok(()), _fail("expected True, got False"))
+  }
+
+  def assert_false(flag: Boolean) -> Result<()> {
+    if(flag, _fail("expected False, got True"), Ok(()))
+  }
+
+  def assert_eq(expected: $A, actual: $A) -> Result<()> {
+    rendered_expected = inspect(expected)
+    rendered_actual = inspect(actual)
+    if(
+      rendered_expected == rendered_actual,
+      Ok(()),
+      Err(TestAssertionFailed("expected #{rendered_expected}, got #{rendered_actual}")),
+    )
+  }
+
+  def assert_ok_eq(expected: $A, result: Result<$A>) -> Result<()> {
+    match result {
+      Ok(actual) => assert_eq(expected, actual),
+      Err(err) => _fail("expected Ok(#{inspect(expected)}), got Err(#{inspect(err)})"),
+    }
+  }
+
+  def assert_err_contains(fragment: String, result: Result<$A>) -> Result<()> {
+    match result {
+      Ok(actual) => _fail("expected Err containing #{fragment}, got Ok(#{inspect(actual)})"),
+      Err(err) => _assert_err_rendered_contains(fragment, inspect(err)),
+    }
+  }
+
+  def assert_doc_plain_eq(expected: String, doc: StyledDocDoc) -> Result<()> {
+    assert_eq(expected, StyledDoc::plain(doc))
+  }
+
+  def assert_doc_ansi_eq(expected: String, doc: StyledDocDoc) -> Result<()> {
+    assert_eq(expected, StyledDoc::to_ansi(doc))
+  }
+
+  @doc """
+  Drain captured stdout lines produced since the previous capture read.
+  Current contract:
+  - buffer is per-VM (safe across parallel Rust test processes)
+  - drain cursor is shared in the same test script VM
+  - output left unread by a previous `it` can be observed by a later `it`
+  """
+  def capture_stdout() -> List<String> {
+    __test_capture_stdout()
+  }
+
+  @doc """
+  Drain captured stderr lines produced since the previous capture read.
+  Shares the same drain semantics and script-local cursor model as `capture_stdout`.
+  """
+  def capture_stderr() -> List<String> {
+    __test_capture_stderr()
+  }
+
+  @doc """
+  Assert captured stdout lines equal expected lines.
+  """
+  def assert_stdout_eq(expected: List<String>) -> Result<()> {
+    assert_eq(expected, __test_capture_stdout())
+  }
+
+  @doc """
+  Assert captured stderr lines equal expected lines.
+  """
+  def assert_stderr_eq(expected: List<String>) -> Result<()> {
+    assert_eq(expected, __test_capture_stderr())
+  }
+}

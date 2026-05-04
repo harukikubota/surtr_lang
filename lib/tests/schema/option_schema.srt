@@ -1,0 +1,30 @@
+defstruct DraftProfile {
+  name: String,
+}
+
+impl Show for DraftProfile {
+  def to_string(self: Self) -> String {
+    self.name
+  }
+}
+
+impl DraftProfile {
+  def new(name: String) -> Self {
+    DraftProfile { name: name }
+  }
+}
+
+defmod OptionSchema {
+  def maybe_profile(name: String) -> Option<DraftProfile> {
+    trimmed = String::trim(name)
+    if(
+      String::non_empty(trimmed),
+      Option::Some(DraftProfile::new(trimmed)),
+      Option::None,
+    )
+  }
+
+  def ensure_short_name(profile: DraftProfile) -> Option<DraftProfile> {
+    if(String::len(profile.name) < 10, Option::Some(profile), Option::None)
+  }
+}

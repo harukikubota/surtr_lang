@@ -1,0 +1,1 @@
+defrecord User(id: Int)

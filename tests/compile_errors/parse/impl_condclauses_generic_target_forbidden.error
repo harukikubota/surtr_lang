@@ -1,0 +1,2 @@
+phase: parse
+contains: Plain `impl Type { ... }` does not accept trait-style type arguments

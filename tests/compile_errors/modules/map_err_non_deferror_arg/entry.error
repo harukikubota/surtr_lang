@@ -1,0 +1,2 @@
+phase: typecheck
+contains: map_err error argument must evaluate to Error, got NotAnError

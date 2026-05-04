@@ -1,0 +1,11 @@
+defenum Boxed<$T> {
+  Box($T),
+}
+
+impl From<Option<$T>> for Boxed<$T> {
+  def from(self: Self, to: TypeRef<Option<$T>>) -> Option<$T> {
+    match self {
+      Boxed::Box(value) => Option::Some(value),
+    }
+  }
+}

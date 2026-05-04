@@ -1,6 +1,5 @@
 use super::harness::{assert_compile_error, assert_output};
 
-#[test]
 fn pipe_accepts_capture_and_injected_call() {
     assert_output(
         r#"def add(x: Int, y: Int) -> Int {
@@ -8,12 +7,11 @@ fn pipe_accepts_capture_and_injected_call() {
 }
 
 print(to_string(4 |> add(1)))
-print(to_string(4 |> &add(1)))"#,
+print(to_string(4 |> &add(&1, 1)))"#,
         &["5", "5"],
     );
 }
 
-#[test]
 fn pipe_accepts_qualified_capture_and_injected_call() {
     assert_output(
         r#"defstruct User {
@@ -38,15 +36,14 @@ print(user |> User::get_name())"#,
     );
 }
 
-#[test]
 fn flow_operators_allow_multiline_elixir_style_layout() {
     assert_output(
         r#"def parse(text: String) -> Result<Int> {
   Ok(2)
 }
 
-def render(x: Int) -> Result<String> {
-  Ok(to_string(x + 3))
+def render(x: Int) -> String {
+  to_string(x + 3)
 }
 
 def inc(x: Int) -> Int {
@@ -62,7 +59,7 @@ value = 4
   |> double()
 
 pipeline = &parse
-  |=> &render
+  >* &render
 
 plain = &inc
   >> &double
@@ -77,7 +74,6 @@ print(to_string(plain(4)))"#,
     );
 }
 
-#[test]
 fn result_pipeline_map_and_bind_work() {
     assert_output(
         r#"def inc(x: Int) -> Int {
@@ -104,7 +100,71 @@ match bound {
     );
 }
 
-#[test]
+fn flow_operators_accept_function_value_variables_and_grouped_calls() {
+    assert_output(
+        r#"def inc(x: Int) -> Int {
+  x + 1
+}
+
+def double(x: Int) -> Int {
+  x * 2
+}
+
+def show(x: Int) -> String {
+  to_string(x)
+}
+
+def check(x: Int) -> Result<Int> {
+  Ok(x + 10)
+}
+
+def mk_add(n: Int) -> (Int -> Int) {
+  {|x| x + n}
+}
+
+def mk_check(n: Int) -> (Int -> Result<Int>) {
+  {|x| Ok(x + n)}
+}
+
+f: (Int -> Int) = &inc
+g: (Int -> Int) = &double
+show_fn: (Int -> String) = &show
+check_fn: (Int -> Result<Int>) = &check
+
+print(to_string(1 |> f))
+print(to_string(1 |> (mk_add(2))))
+
+plain = f >> g
+print(to_string(plain(3)))
+
+render = g >> show_fn
+print(render(4))
+
+mapped: Result<Int> = Ok(1) |*> f
+mapped_grouped: Result<Int> = Ok(1) |*> (mk_add(4))
+bound: Result<Int> = Ok(1) |>= check_fn
+bound_grouped: Result<Int> = Ok(1) |>= (mk_check(5))
+
+match mapped {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("mapped err"),
+}
+match mapped_grouped {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("mapped grouped err"),
+}
+match bound {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("bound err"),
+}
+match bound_grouped {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("bound grouped err"),
+}"#,
+        &["2", "3", "8", "8", "2", "5", "11", "6"],
+    );
+}
+
 fn result_pipeline_injects_left_value_into_call_rhs() {
     assert_output(
         r#"deferror TooSmall {
@@ -135,7 +195,6 @@ match bound {
     );
 }
 
-#[test]
 fn pipeline_rhs_supports_partial_special_forms_without_lambda_wrapping() {
     assert_output(
         r#"deferror ParseHandError(detail: String) {
@@ -169,7 +228,6 @@ print(inspect(parse_hand("x")))"#,
     );
 }
 
-#[test]
 fn list_pipeline_helpers_and_compose_work() {
     assert_output(
         r#"def inc(x: Int) -> Int {
@@ -185,7 +243,7 @@ def singleton(x: Int) -> List<Int> {
 }
 
 nums: List<Int> = [1, 2, 3]
-expand = &singleton |=> &dup
+expand = &singleton >=> &dup
 
 print(to_string(singleton(5)))
 print(to_string(nums |*> inc()))
@@ -195,7 +253,6 @@ print(to_string(expand(2)))"#,
     );
 }
 
-#[test]
 fn compose_builds_callable_from_capture_only() {
     assert_output(
         r#"def parse(text: String) -> Result<Int> {
@@ -206,17 +263,52 @@ def render(x: Int) -> Result<String> {
   Ok(to_string(x + 2))
 }
 
-pipeline = &parse |=> &render
+def show(x: Int) -> String {
+  "value:" ++ to_string(x + 2)
+}
+
+pipeline = &parse >=> &render
+lifted = &parse >* &show
 
 match pipeline("x") {
   Ok(v) => print(v),
   Err(e) => print("err"),
+}
+
+match lifted("x") {
+  Ok(v) => print(v),
+  Err(e) => print("err"),
 }"#,
-        &["3"],
+        &["3", "value:3"],
     );
 }
 
-#[test]
+fn compose_chains_accept_prior_compose_expressions_and_function_value_variables() {
+    assert_output(
+        r#"def parse(text: String) -> Result<Int> {
+  if(eq(text, "7"), Ok(7), Err(IndexOutOfBounds("bad")))
+}
+
+def require_small(n: Int) -> Result<Int> {
+  if(n < 10, Ok(n), Err(IndexOutOfBounds("too large")))
+}
+
+def double(n: Int) -> Int {
+  n * 2
+}
+
+def render(n: Int) -> String {
+  "count=" ++ to_string(n)
+}
+
+format_count: (Int -> String) = &double >> &render
+checked_label: (String -> Result<String>) = &parse >=> &require_small >* format_count
+
+print(inspect(checked_label("7")))"#,
+        &["Ok(\"count=14\")"],
+    );
+}
+
 fn flow_operators_reject_naked_function_refs() {
     assert_compile_error(
         r#"def inc(x: Int) -> Int {
@@ -224,7 +316,7 @@ fn flow_operators_reject_naked_function_refs() {
 }
 
 value = 1 |> inc"#,
-        "requires `&f`, closure, or a function call like `f(...)`",
+        "requires a function value",
     );
 
     assert_compile_error(
@@ -236,12 +328,11 @@ def render(x: Int) -> Result<String> {
   Ok(to_string(x))
 }
 
-pipeline = parse |=> render"#,
-        "requires a closure or capture",
+pipeline = parse >=> render"#,
+        "requires a function value",
     );
 }
 
-#[test]
 fn compose_rejects_call_expressions() {
     assert_compile_error(
         r#"def parse(text: String) -> Result<Int> {
@@ -252,8 +343,21 @@ def render(x: Int) -> Result<String> {
   Ok(to_string(x))
 }
 
-pipeline = parse() |=> render()"#,
-        "requires a closure or capture",
+pipeline = parse() >=> render()"#,
+        "Undefined function parse/0",
+    );
+
+    assert_compile_error(
+        r#"def parse(text: String) -> Result<Int> {
+  Ok(1)
+}
+
+def render(x: Int) -> String {
+  to_string(x)
+}
+
+pipeline = parse() >* render()"#,
+        "Undefined function parse/0",
     );
 
     assert_compile_error(
@@ -262,11 +366,26 @@ pipeline = parse() |=> render()"#,
 }
 
 plain = inc() >> inc()"#,
-        "requires a closure or capture",
+        "Undefined function inc/0",
     );
 }
 
-#[test]
+fn compose_accepts_closure_returning_calls_without_parentheses() {
+    assert_output(
+        r#"def make_inc() -> (Int -> Int) {
+  {|x| x + 1}
+}
+
+def make_double() -> (Int -> Int) {
+  {|x| x * 2}
+}
+
+plain = make_inc() >> make_double()
+print(to_string(plain(3)))"#,
+        &["8"],
+    );
+}
+
 fn flow_operators_reject_context_mismatch_and_monadic_map_rhs() {
     assert_compile_error(
         r#"def lift(x: Int) -> Result<Int> {
@@ -285,11 +404,39 @@ bad = value |*> lift()"#,
 
 value: Result<Int> = Ok(1)
 bad = value |>= expand()"#,
-        "cannot mix Result and List context",
+        "cannot mix Result, List, and Option context",
+    );
+
+    assert_compile_error(
+        r#"def maybe_inc(value: Int) -> Option<Int> {
+  if(value > 0, Option::Some(value + 1), Option::None)
+}
+
+value: Result<Int> = Ok(1)
+bad = value |>= maybe_inc()"#,
+        "cannot switch from Result into Option bind context",
+    );
+
+    assert_compile_error(
+        r#"value: Option<Int> = Option::Some(1)
+bad = value |*> {|value| Option::Some(value + 1)}"#,
+        "expects a plain function on the right-hand side",
+    );
+
+    assert_compile_error(
+        r#"def parse(text: String) -> Result<Int> {
+  Ok(1)
+}
+
+def render(x: Int) -> Result<String> {
+  Ok(to_string(x))
+}
+
+pipeline = &parse >* &render"#,
+        "expects a plain function on the right-hand side",
     );
 }
 
-#[test]
 fn result_pipeline_usecase_user_lookup_and_render() {
     assert_output(
         r#"defstruct User {
@@ -319,7 +466,7 @@ def render(user: User) -> String {
   user.name ++ ":" ++ to_string(user.age)
 }
 
-lookup = &parse_id |=> &load_user
+lookup = &parse_id >=> &load_user
 summary: Result<String> = lookup("7") |>= ensure_adult() |*> render()
 
 match summary {
@@ -330,7 +477,6 @@ match summary {
     );
 }
 
-#[test]
 fn kernel_helper_usecase_works_with_funcliteral_and_flow_ops() {
     assert_output(
         r#"defstruct User {
@@ -386,7 +532,7 @@ def render(user: User) -> String {
   user.name `concat` ":" `concat` age_band(user) `concat` ":" `concat` visibility
 }
 
-lookup = &parse_key |=> &load_user
+lookup = &parse_key >=> &load_user
 
 match lookup("alice") |>= allow() |*> render() {
   Ok(v) => print(v),
@@ -406,7 +552,6 @@ match lookup("guest") |>= allow() |*> render() {
     );
 }
 
-#[test]
 fn safebind_usecase_result_and_list_pipeline() {
     assert_output(
         r##"def parse_csv(text: String) -> Result<List<Int>> {
@@ -435,7 +580,6 @@ print(to_string((head |> singleton()) |*> show()))"##,
     );
 }
 
-#[test]
 fn list_pipeline_usecase_expand_and_present_keywords() {
     assert_output(
         r#"def aliases(word: String) -> List<String> {
@@ -450,7 +594,7 @@ def singleton(word: String) -> List<String> {
   [word]
 }
 
-lift_and_expand = &singleton |=> &aliases
+lift_and_expand = &singleton >=> &aliases
 
 words: List<String> = ["surtr", "vm"]
 print(to_string(words |>= aliases() |*> wrap_bracket()))
@@ -462,7 +606,31 @@ print(to_string(lift_and_expand("bind") |*> wrap_bracket()))"#,
     );
 }
 
-#[test]
+fn lens_result_helpers_support_set_over_and_over_result() {
+    assert_output(
+        r#"defrecord User(score: Result<Int>)
+
+user1 = User(Err(NoneError))
+user2 =? Lens::set(User.score, user1, 3)
+print("set:" ++ inspect(user2.score))
+
+user3 =? Lens::over(User.score, user2, {|score| Ok(score + 1)})
+print("over ok:" ++ inspect(user3.score))
+
+user4 =? Lens::over(User.score, user1, {|score| Ok(score + 1)})
+print("skip:" ++ inspect(user4.score))
+
+user5 =? Lens::over_result(User.score, user1, {|score: Result<Int>| Ok(Ok(9))})
+print("over_result:" ++ inspect(user5.score))"#,
+        &[
+            "set:Ok(Ok(3))",
+            "over ok:Ok(Ok(4))",
+            "skip:Ok(Err(NoneError(\"None Value.\")))",
+            "over_result:Ok(Ok(9))",
+        ],
+    );
+}
+
 fn language_goal_combined() {
     assert_output(
         r#"num = 10
@@ -516,7 +684,7 @@ print(msg)"#,
             "hello world",
             "[1, 2, 3]",
             "[]",
-            "User { name: alice, age: 30 }",
+            "User(name: alice, age: 30)",
             "alice",
             "Pair(first: 1, second: hello)",
             "1",
@@ -526,4 +694,87 @@ print(msg)"#,
             "hello world",
         ],
     );
+}
+
+pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
+    let cases: &[(&str, fn())] = &[
+        (
+            "pipe_accepts_capture_and_injected_call",
+            pipe_accepts_capture_and_injected_call as fn(),
+        ),
+        (
+            "pipe_accepts_qualified_capture_and_injected_call",
+            pipe_accepts_qualified_capture_and_injected_call as fn(),
+        ),
+        (
+            "flow_operators_allow_multiline_elixir_style_layout",
+            flow_operators_allow_multiline_elixir_style_layout as fn(),
+        ),
+        (
+            "result_pipeline_map_and_bind_work",
+            result_pipeline_map_and_bind_work as fn(),
+        ),
+        (
+            "flow_operators_accept_function_value_variables_and_grouped_calls",
+            flow_operators_accept_function_value_variables_and_grouped_calls as fn(),
+        ),
+        (
+            "result_pipeline_injects_left_value_into_call_rhs",
+            result_pipeline_injects_left_value_into_call_rhs as fn(),
+        ),
+        (
+            "pipeline_rhs_supports_partial_special_forms_without_lambda_wrapping",
+            pipeline_rhs_supports_partial_special_forms_without_lambda_wrapping as fn(),
+        ),
+        (
+            "list_pipeline_helpers_and_compose_work",
+            list_pipeline_helpers_and_compose_work as fn(),
+        ),
+        (
+            "compose_builds_callable_from_capture_only",
+            compose_builds_callable_from_capture_only as fn(),
+        ),
+        (
+            "compose_chains_accept_prior_compose_expressions_and_function_value_variables",
+            compose_chains_accept_prior_compose_expressions_and_function_value_variables as fn(),
+        ),
+        (
+            "flow_operators_reject_naked_function_refs",
+            flow_operators_reject_naked_function_refs as fn(),
+        ),
+        (
+            "compose_rejects_call_expressions",
+            compose_rejects_call_expressions as fn(),
+        ),
+        (
+            "compose_accepts_closure_returning_calls_without_parentheses",
+            compose_accepts_closure_returning_calls_without_parentheses as fn(),
+        ),
+        (
+            "flow_operators_reject_context_mismatch_and_monadic_map_rhs",
+            flow_operators_reject_context_mismatch_and_monadic_map_rhs as fn(),
+        ),
+        (
+            "result_pipeline_usecase_user_lookup_and_render",
+            result_pipeline_usecase_user_lookup_and_render as fn(),
+        ),
+        (
+            "kernel_helper_usecase_works_with_funcliteral_and_flow_ops",
+            kernel_helper_usecase_works_with_funcliteral_and_flow_ops as fn(),
+        ),
+        (
+            "safebind_usecase_result_and_list_pipeline",
+            safebind_usecase_result_and_list_pipeline as fn(),
+        ),
+        (
+            "list_pipeline_usecase_expand_and_present_keywords",
+            list_pipeline_usecase_expand_and_present_keywords as fn(),
+        ),
+        (
+            "lens_result_helpers_support_set_over_and_over_result",
+            lens_result_helpers_support_set_over_and_over_result as fn(),
+        ),
+        ("language_goal_combined", language_goal_combined as fn()),
+    ];
+    super::run_bucket_cases("pipelines_and_usecases", cases, bucket, bucket_count)
 }

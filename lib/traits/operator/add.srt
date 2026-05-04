@@ -1,0 +1,14 @@
+@doc """
+Standard `Add` operator trait declaration.
+`Add` models the `+` / `add(...)` contract.
+`Add` itself is always available by qualified name, but the helper surface is
+not auto-imported into every file.
+
+## REPL
+xldr(1)> Add::add(1, 2)
+3
+"""
+deftrait Add {
+  # Return the addition result.
+  def add(self: Self, rhs: Self) -> Self
+}

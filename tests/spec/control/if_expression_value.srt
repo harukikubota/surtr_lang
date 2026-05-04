@@ -1,2 +1,0 @@
-print(to_string(if(True, 1, 2)))
-print(to_string(if(False, 1, 2)))

@@ -1,2 +1,2 @@
 phase: resolve
-contains: Undefined variable: double
+contains: Undefined function double/1

@@ -1,0 +1,15 @@
+defstruct Ranked {
+  weight: Int,
+}
+
+impl Compare for Ranked {
+  def compare(self: Self, rhs: Self) -> Ordering {
+    Compare::compare(self.weight, rhs.weight)
+  }
+}
+
+impl Ranked {
+  def new(weight: Int) -> Self {
+    Ranked { weight: weight }
+  }
+}

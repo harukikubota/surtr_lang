@@ -1,12 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use diagnostics::SourceRegistry;
+use diagnostics::{SourceId, SourceRegistry};
 use forge::bytecode::{
     populate_error_template_lines, stable_hash_hex, synthesize_source_map, SourceFileEntry,
 };
 use sindr::policy::EntryPoint;
 use spire::ast::{Ast, Span};
+use spire::error::ParseError;
 
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
 
@@ -16,17 +17,6 @@ pub(crate) struct ScriptCompilePlan {
     pub(crate) selected_entry_name: Option<String>,
     pub(crate) normalized_entrypoint: Option<EntryPoint>,
     pub(crate) include_directives: Vec<IncludeDirective>,
-}
-
-impl ScriptCompilePlan {
-    pub(crate) fn plain(source_for_parse: String) -> Self {
-        Self {
-            source_for_parse,
-            selected_entry_name: None,
-            normalized_entrypoint: None,
-            include_directives: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,8 +52,179 @@ pub(crate) fn script_plan_error_as_rune_error(
         &sources,
         source_id,
         "parse",
-        diagnostics::simple_error("ParseError", &error.message, error.span, None),
+        diagnostics::parse_error_spec(source, &error.message, error.span),
     )
+}
+
+fn load_error_span(source: &str) -> Span {
+    let len = source.chars().count();
+    if len == 0 {
+        return Span { start: 0, end: 0 };
+    }
+    let start = source
+        .chars()
+        .position(|ch| !ch.is_ascii_whitespace())
+        .unwrap_or(0);
+    Span {
+        start,
+        end: (start + 1).min(len),
+    }
+}
+
+fn module_source_collection_error_as_rune_error(
+    file_path: &str,
+    source: &str,
+    message: impl Into<String>,
+) -> RuneError {
+    let mut sources = SourceRegistry::new();
+    let source_id = sources.register(file_path, source.to_string());
+    RuneError::diagnostic(
+        1,
+        &sources,
+        source_id,
+        "resolve",
+        diagnostics::simple_error("LoadError", message, load_error_span(source), None),
+    )
+}
+
+fn source_id_for_span(compile_sources: &xldr::CompileSources, span: &Span) -> SourceId {
+    if let Some(source) = compile_sources
+        .sources
+        .source(compile_sources.user_source_id)
+    {
+        if source.chars().count() >= span.end {
+            return compile_sources.user_source_id;
+        }
+    }
+
+    let mut candidates = compile_sources.module_source_ids.clone();
+    candidates.push(compile_sources.user_source_id);
+    candidates.sort_by_key(|id| id.0);
+    candidates.dedup_by_key(|id| id.0);
+
+    let mut best_code: Option<(SourceId, usize)> = None;
+    let mut best_any: Option<(SourceId, usize)> = None;
+
+    for source_id in candidates {
+        let Some(source) = compile_sources.sources.source(source_id) else {
+            continue;
+        };
+        let chars: Vec<char> = source.chars().collect();
+        let len = chars.len();
+        if len < span.end {
+            continue;
+        }
+        let is_code = chars
+            .get(span.start)
+            .is_some_and(|ch| !ch.is_ascii_whitespace());
+        if is_code {
+            match best_code {
+                None => best_code = Some((source_id, len)),
+                Some((_, best_len)) if len < best_len => best_code = Some((source_id, len)),
+                _ => {}
+            }
+        }
+        match best_any {
+            None => best_any = Some((source_id, len)),
+            Some((_, best_len)) if len < best_len => best_any = Some((source_id, len)),
+            _ => {}
+        }
+    }
+
+    best_code
+        .or(best_any)
+        .map(|(source_id, _)| source_id)
+        .unwrap_or(compile_sources.user_source_id)
+}
+
+fn diagnostic_location_for_span(
+    compile_sources: &xldr::CompileSources,
+    span: &Span,
+) -> (SourceId, Span) {
+    if let Some((source_id, local_span)) = xldr::decode_rebased_module_span(span) {
+        if compile_sources.sources.get(source_id).is_some() {
+            return (source_id, local_span);
+        }
+    }
+    (source_id_for_span(compile_sources, span), span.clone())
+}
+
+fn impl_header_span(source: &str, span: &Span) -> Span {
+    let chars = source.chars().collect::<Vec<_>>();
+    if chars.is_empty() {
+        return span.clone();
+    }
+    let anchor = span.start.min(chars.len().saturating_sub(1));
+    let line_start = chars[..anchor]
+        .iter()
+        .rposition(|ch| *ch == '\n')
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    let line_end = chars[anchor..]
+        .iter()
+        .position(|ch| *ch == '\n')
+        .map(|idx| anchor + idx)
+        .unwrap_or(chars.len());
+    let mut header_start = line_start;
+    while header_start < line_end && chars[header_start].is_whitespace() {
+        header_start += 1;
+    }
+    let mut header_end = (line_start..line_end)
+        .find(|idx| chars[*idx] == '{')
+        .unwrap_or(line_end);
+    while header_end > header_start && chars[header_end - 1].is_whitespace() {
+        header_end -= 1;
+    }
+    if header_start < header_end {
+        Span {
+            start: header_start,
+            end: header_end,
+        }
+    } else {
+        span.clone()
+    }
+}
+
+fn resolve_spec_for_error(
+    compile_sources: &xldr::CompileSources,
+    error: &sigil::error::ResolveError,
+) -> (SourceId, diagnostics::DiagnosticSpec) {
+    let (source_id, span) = diagnostic_location_for_span(compile_sources, &error.span);
+    let source = compile_sources.sources.source(source_id).unwrap_or("");
+    let primary_span = if error.message.starts_with("Multiple impl blocks for `")
+        || error
+            .message
+            .starts_with("Multiple trait impl blocks for `")
+    {
+        impl_header_span(source, &span)
+    } else {
+        span
+    };
+    let mut spec = diagnostics::resolve_error_spec(source, &error.message, primary_span.clone());
+    for related in &error.related_labels {
+        let (label_source_id, label_span) =
+            diagnostic_location_for_span(compile_sources, &related.span);
+        let label_source = compile_sources
+            .sources
+            .source(label_source_id)
+            .unwrap_or("");
+        let label_span = if error.message.starts_with("Multiple impl blocks for `")
+            || error
+                .message
+                .starts_with("Multiple trait impl blocks for `")
+        {
+            impl_header_span(label_source, &label_span)
+        } else {
+            label_span
+        };
+        spec.labels.push(diagnostics::DiagnosticLabel {
+            source_id: Some(label_source_id),
+            span: label_span,
+            message: related.message.clone(),
+            color: Some(diagnostics::Color::Red),
+        });
+    }
+    (source_id, spec)
 }
 
 pub(crate) fn collect_default_script_compile_sources(
@@ -73,10 +234,11 @@ pub(crate) fn collect_default_script_compile_sources(
     include_directives: &[IncludeDirective],
 ) -> RuneResult<xldr::CompileSources> {
     let module_inputs = xldr::collect_additional_default_std_module_inputs().map_err(|e| {
-        RuneError::message(
-            1,
+        module_source_collection_error_as_rune_error(
+            file_path,
+            source,
             format!(
-                "{}: failed to collect module sources: {}",
+                "{}: failed to collect definition sources: {}",
                 env.command_name(),
                 e
             ),
@@ -91,10 +253,11 @@ pub(crate) fn collect_default_script_compile_sources(
 
     let module_sources = xldr::collect_module_sources_with_module_stages(&module_input_stages)
         .map_err(|e| {
-            RuneError::message(
-                1,
+            module_source_collection_error_as_rune_error(
+                file_path,
+                source,
                 format!(
-                    "{}: failed to collect module sources: {}",
+                    "{}: failed to collect definition sources: {}",
                     env.command_name(),
                     e
                 ),
@@ -195,111 +358,79 @@ fn include_runtime_error(file_path: &str, source: &str, span: Span, message: Str
     )
 }
 
-fn parse_program_with_module_sources(
+fn load_default_stdlib_snapshot(
+    env: ExecutionEnv,
+    sources: &xldr::CompileSources,
+) -> RuneResult<std::sync::Arc<xldr::DefaultStdlibSnapshot>> {
+    let user_source_id = sources.user_source_id;
+    xldr::default_stdlib_semantic_snapshot().map_err(|e| {
+        module_source_collection_error_as_rune_error(
+            sources
+                .sources
+                .file_name(user_source_id)
+                .unwrap_or("<script>"),
+            sources.sources.source(user_source_id).unwrap_or(""),
+            format!(
+                "{}: failed to load stdlib snapshot: {}",
+                env.command_name(),
+                e
+            ),
+        )
+    })
+}
+
+fn parse_program_with_module_sources<'a>(
     env: ExecutionEnv,
     compile_sources: &xldr::CompileSources,
-) -> RuneResult<(Vec<Vec<sigil::StagedModuleAst>>, Vec<spire::ast::Ast>)> {
+    std_snapshot: &'a xldr::DefaultStdlibSnapshot,
+) -> RuneResult<(
+    std::borrow::Cow<'a, [Vec<sigil::StagedModuleAst>]>,
+    Vec<spire::ast::Ast>,
+)> {
     let compile_unit_kind = env.compile_unit_kind();
     let source_kind = env.source_kind();
     let sources = &compile_sources.sources;
     let user_source_id = compile_sources.user_source_id;
-    let staged_module_asts =
-        xldr::parse_module_stages_from_compile_sources(compile_sources, compile_unit_kind)
-            .map_err(|e| {
-                RuneError::diagnostic(
-                    1,
-                    sources,
-                    e.source_id,
-                    "parse",
-                    diagnostics::simple_error("ParseError", e.message(), e.span(), None),
-                )
-            })?;
+    let mut staged_module_asts = std::borrow::Cow::Borrowed(std_snapshot.module_stages.as_slice());
+    let mut suffix_module_asts = xldr::parse_module_stages_from_compile_sources_suffix(
+        compile_sources,
+        compile_unit_kind,
+        std_snapshot.default_stage_count,
+    )
+    .map_err(|e| {
+        RuneError::diagnostic(
+            1,
+            sources,
+            e.source_id,
+            "parse",
+            diagnostics::parse_error_spec(
+                sources.source(e.source_id).unwrap_or(""),
+                e.message(),
+                e.span(),
+            ),
+        )
+    })?;
+    if !suffix_module_asts.is_empty() {
+        staged_module_asts.to_mut().append(&mut suffix_module_asts);
+    }
 
     let user_source = sources.source(user_source_id).unwrap_or("");
-    let user_ast = match spire::parse_with_context(
-        user_source,
-        spire::ParserContext::script(user_source_id.0)
-            .with_rules(xldr::derive_parse_rules(source_kind)),
-    ) {
-        Ok(ast) => ast,
-        Err(script_err) => {
-            if xldr::derive_primary_module_path(user_source).is_none() {
-                return Err(RuneError::diagnostic(
-                    1,
-                    sources,
-                    user_source_id,
-                    "parse",
-                    diagnostics::simple_error(
-                        "ParseError",
-                        script_err.message(),
-                        script_err.span().clone(),
-                        None,
-                    ),
-                ));
-            }
-
-            spire::parse_with_context(
-                user_source,
-                spire::ParserContext::module(user_source_id.0, None)
-                    .with_rules(xldr::derive_parse_rules(xldr::SourceKind::Module)),
+    let user_ast = parse_script_ast_for_compile(user_source, user_source_id.0, source_kind)
+        .map_err(|script_err: ParseError| {
+            RuneError::diagnostic(
+                1,
+                sources,
+                user_source_id,
+                "parse",
+                diagnostics::parse_error_spec(
+                    user_source,
+                    script_err.message(),
+                    script_err.span().clone(),
+                ),
             )
-            .map_err(|e| {
-                RuneError::diagnostic(
-                    1,
-                    sources,
-                    user_source_id,
-                    "parse",
-                    diagnostics::simple_error("ParseError", e.message(), e.span().clone(), None),
-                )
-            })?
-        }
-    };
+        })?;
 
-    if is_direct_module_source(&user_ast) {
-        let lowered = xldr::lower_module_source_ast(
-            user_ast,
-            Some(compile_sources.user_module_path.as_str()),
-        );
-        let mut combined_stages = staged_module_asts;
-        combined_stages.push(
-            lowered
-                .into_iter()
-                .map(|module| sigil::StagedModuleAst {
-                    module_path: module.module_path,
-                    ast: module.ast,
-                    module_doc: module.module_doc,
-                    auto_import: module.auto_import,
-                })
-                .collect(),
-        );
-        Ok((combined_stages, Vec::new()))
-    } else {
-        Ok((staged_module_asts, user_ast))
-    }
-}
-
-fn is_direct_module_source(ast: &[Ast]) -> bool {
-    !ast.is_empty()
-        && ast.iter().all(|stmt| {
-            matches!(
-                stmt,
-                Ast::Defmod(_, _, _, _)
-                    | Ast::Import(_, _, _)
-                    | Ast::Def(..)
-                    | Ast::ExtractorDef(..)
-                    | Ast::TraitDef(_, _, _, _, _)
-                    | Ast::TraitImplDef(_, _, _, _, _)
-                    | Ast::StructDef(_, _, _)
-                    | Ast::RecordDef(_, _, _)
-                    | Ast::DeferrorDef(_, _, _, _, _)
-                    | Ast::EnumDef(_, _, _, _, _)
-                    | Ast::ImplDef(_, _, _)
-                    | Ast::BuiltinDecl(_, _, _, _, _)
-                    | Ast::BuiltinExtractorDecl(_, _, _, _, _)
-                    | Ast::BuiltinTypeDecl(_, _, _)
-                    | Ast::ResultCtorDecl(_, _, _, _, _)
-            )
-        })
+    Ok((staged_module_asts, user_ast))
 }
 
 pub(crate) fn compile_source(
@@ -313,72 +444,108 @@ pub(crate) fn compile_source(
     let user_source_id = compile_sources.user_source_id;
     let user_source = sources.source(user_source_id).unwrap_or("");
 
-    let (module_stages, mut user_ast) = parse_program_with_module_sources(env, compile_sources)?;
+    let std_snapshot = load_default_stdlib_snapshot(env, compile_sources)?;
+    let (module_stages, mut user_ast) =
+        parse_program_with_module_sources(env, compile_sources, &std_snapshot)?;
     if let Some(entry_name) = compile_plan.selected_entry_name.as_deref() {
         user_ast = rewrite_script_ast_for_entry(user_ast, entry_name);
     }
-    let docs = xldr::collect_doc_entries(
-        &module_stages,
+    let suffix_module_stages = if module_stages.len() > std_snapshot.default_stage_count {
+        &module_stages[std_snapshot.default_stage_count..]
+    } else {
+        &[]
+    };
+    let docs = xldr::collect_doc_entries_with_base(
+        &std_snapshot.docs,
+        suffix_module_stages,
         &user_ast,
         Some(compile_sources.user_module_path.as_str()),
     );
 
-    let declaration_index = sigil::precollect_declaration_index(&module_stages).map_err(|e| {
-        RuneError::diagnostic(
-            1,
-            sources,
-            user_source_id,
-            "resolve",
-            diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
-        )
-    })?;
+    let rebuilt_declaration_index;
+    let declaration_index = if module_stages.len() == std_snapshot.default_stage_count {
+        &std_snapshot.declaration_index
+    } else {
+        rebuilt_declaration_index =
+            sigil::precollect_declaration_index(&module_stages).map_err(|e| {
+                let (source_id, spec) = resolve_spec_for_error(compile_sources, &e);
+                RuneError::diagnostic(1, sources, source_id, "resolve", spec)
+            })?;
+        &rebuilt_declaration_index
+    };
 
-    let resolved = sigil::resolve_staged_program(
+    let resolved = sigil::resolve_staged_program_from_state(
         &module_stages,
         user_ast,
-        &declaration_index,
+        declaration_index,
         Some(compile_sources.user_module_path.clone()),
+        std_snapshot.default_stage_count,
+        std_snapshot.resolve_state,
     )
     .map_err(|e| {
-        RuneError::diagnostic(
-            1,
-            sources,
-            user_source_id,
-            "resolve",
-            diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None),
-        )
+        let (source_id, spec) = resolve_spec_for_error(compile_sources, &e);
+        RuneError::diagnostic(1, sources, source_id, "resolve", spec)
     })?;
 
-    let typed = scar::typecheck_with_context(
-        resolved,
-        scar::TypecheckContext {
-            runtime_policy: xldr::derive_runtime_policy(
-                compile_unit_kind,
-                source_kind,
-                compile_plan.normalized_entrypoint.as_ref(),
-            ),
-            enforce_builtin_type_contracts: true,
-        },
-    )
-    .map_err(|e| {
-        RuneError::diagnostic(
-            1,
-            sources,
-            user_source_id,
-            "typecheck",
-            diagnostics::type_error_spec_by_id(sources, user_source_id, &e),
+    let mut scar_session = scar::ScarSession::new();
+    scar_session.rollback(std_snapshot.scar_checkpoint.clone());
+    let next_fun_idx = std_snapshot
+        .bytecode
+        .functions
+        .iter()
+        .map(|entry| entry.fun_idx.saturating_add(1))
+        .max()
+        .unwrap_or(0);
+    scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
+    let typed = scar_session
+        .typecheck_staged_program_with_context(
+            resolved,
+            scar::TypecheckContext {
+                runtime_policy: xldr::derive_runtime_policy(
+                    compile_unit_kind,
+                    source_kind,
+                    compile_plan.normalized_entrypoint.as_ref(),
+                ),
+                enforce_builtin_type_contracts: false,
+                allow_error_function_params: false,
+            },
         )
-    })?;
+        .map_err(|e| {
+            let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
+            let local_error = diagnostics::TypeErrorDiagnostic::new(e.message, span, e.hint);
+            RuneError::diagnostic(
+                1,
+                sources,
+                source_id,
+                "typecheck",
+                diagnostics::type_error_spec_by_id(sources, source_id, &local_error),
+            )
+        })?;
 
-    let mut bytecode = forge::codegen(typed).map_err(|e| {
-        RuneError::diagnostic(
-            1,
-            sources,
-            user_source_id,
-            "codegen",
-            diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None),
-        )
-    })?;
+    let mut forge_session = forge::ForgeSession::from_bytecode(&std_snapshot.bytecode);
+    let (chunk, _) = forge_session
+        .codegen_chunk_typed_program(typed)
+        .map_err(|e| {
+            let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
+            RuneError::diagnostic(
+                1,
+                sources,
+                source_id,
+                "codegen",
+                diagnostics::simple_error("CodegenError", &e.message, span, None),
+            )
+        })?;
+    let mut bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode.clone(), chunk)
+        .map_err(|e| {
+            let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
+            RuneError::diagnostic(
+                1,
+                sources,
+                source_id,
+                "codegen",
+                diagnostics::simple_error("CodegenError", &e.message, span, None),
+            )
+        })?;
 
     populate_error_template_lines(&mut bytecode.error_templates, user_source);
     bytecode.docs = docs;
@@ -394,6 +561,7 @@ pub(crate) fn compile_source(
             &bytecode.opcodes,
             &bytecode.functions,
             &bytecode.error_templates,
+            &bytecode.dbg_templates,
             user_source,
             Some(
                 compile_sources
@@ -433,34 +601,14 @@ pub(crate) fn prepare_script_compile_plan(
     source: &str,
     cli_entry: Option<&str>,
 ) -> Result<ScriptCompilePlan, ScriptPlanError> {
-    let source_without_tests = spire::strip_test_annotations(source);
-    let (source_for_parse, annotations) = collect_entrypoint_annotations(&source_without_tests)?;
-    let (source_for_parse, include_directives) = match collect_include_directives(&source_for_parse)
-    {
+    let (source_for_parse, include_directives) = match collect_include_directives(source) {
         Ok(collected) => collected,
-        Err(err) => {
-            if xldr::derive_primary_module_path(&source_for_parse).is_some() {
-                (source_for_parse, Vec::new())
-            } else {
-                return Err(err);
-            }
-        }
+        Err(err) => return Err(err),
     };
-
-    if annotations.len() > 1 {
-        let second = &annotations[1];
-        return Err(ScriptPlanError::new(
-            format!(
-                "multiple @@entrypoint annotations are not allowed (already declared as `{}`)",
-                annotations[0].name
-            ),
-            second.span.clone(),
-        ));
-    }
 
     let selected_entry_name = match cli_entry {
         Some(name) => Some(name.to_string()),
-        None => annotations.first().map(|a| a.name.clone()),
+        None => None,
     };
 
     let normalized_entrypoint = selected_entry_name.as_ref().map(|name| {
@@ -475,21 +623,11 @@ pub(crate) fn prepare_script_compile_plan(
     })
 }
 
-pub(crate) fn collect_entrypoint_annotations(
-    source: &str,
-) -> Result<(String, Vec<spire::EntryAnnotation>), ScriptPlanError> {
-    spire::collect_entrypoint_annotations(source)
-        .map_err(|e| ScriptPlanError::new(e.message().to_string(), e.span().clone()))
-}
-
 fn collect_include_directives(
     source: &str,
 ) -> Result<(String, Vec<IncludeDirective>), ScriptPlanError> {
-    let ast = spire::parse_with_context(
-        source,
-        spire::ParserContext::script(0).with_rules(spire::ParseRules::script()),
-    )
-    .map_err(|e| ScriptPlanError::new(e.message().to_string(), e.span().clone()))?;
+    let ast = spire::parse_with_context(source, spire::ParserContext::script(0))
+        .map_err(|e: ParseError| ScriptPlanError::new(e.message().to_string(), e.span().clone()))?;
 
     let mut chars = source.chars().collect::<Vec<_>>();
     let mut directives = Vec::new();
@@ -509,6 +647,15 @@ fn collect_include_directives(
 
     Ok((chars.into_iter().collect::<String>(), directives))
 }
+fn parse_script_ast_for_compile(
+    source: &str,
+    source_id: u32,
+    source_kind: xldr::SourceKind,
+) -> Result<Vec<Ast>, ParseError> {
+    let strict_context =
+        spire::ParserContext::script(source_id).with_rules(xldr::derive_parse_rules(source_kind));
+    spire::parse_with_context(source, strict_context)
+}
 
 fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast> {
     let mut out = user_ast
@@ -519,12 +666,12 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
                 Ast::Def(..)
                     | Ast::ExtractorDef(..)
                     | Ast::TraitDef(_, _, _, _, _)
-                    | Ast::TraitImplDef(_, _, _, _, _)
+                    | Ast::TraitImplDef(_, _, _, _, _, _)
                     | Ast::BuiltinDecl(_, _, _, _, _)
-                    | Ast::StructDef(_, _, _)
-                    | Ast::RecordDef(_, _, _)
+                    | Ast::StructDef(..)
+                    | Ast::RecordDef(..)
                     | Ast::DeferrorDef(_, _, _, _, _)
-                    | Ast::ImplDef(_, _, _)
+                    | Ast::ImplDef(_, _, _, _)
                     | Ast::Import(_, _, _)
             )
         })
@@ -542,34 +689,12 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_entrypoint_annotations, is_direct_module_source, prepare_script_compile_plan,
+        diagnostic_location_for_span, load_error_span, module_source_collection_error_as_rune_error,
+        parse_script_ast_for_compile, prepare_script_compile_plan, source_id_for_span,
     };
-    use spire::ast::Ast;
-
-    #[test]
-    fn collect_entrypoint_annotations_strips_annotator_and_keeps_def() {
-        let source = "@@entrypoint\ndef start() -> Result<()> { Ok(()) }\n";
-        let (sanitized, annotations) =
-            collect_entrypoint_annotations(source).expect("annotation parsing must succeed");
-        assert_eq!(annotations.len(), 1);
-        assert_eq!(annotations[0].name, "start");
-        assert!(sanitized.contains("def start() -> Result<()> { Ok(()) }"));
-        assert!(!sanitized.contains("@@entrypoint"));
-    }
-
-    #[test]
-    fn script_compile_plan_uses_cli_entry_over_annotation() {
-        let source = "@@entrypoint\ndef auto() -> Result<()> { Ok(()) }\n";
-        let plan = prepare_script_compile_plan("sample.srt", source, Some("manual"))
-            .expect("compile plan must succeed");
-        assert_eq!(plan.selected_entry_name.as_deref(), Some("manual"));
-        assert_eq!(
-            plan.normalized_entrypoint
-                .as_ref()
-                .map(|e| e.qualified_symbol.as_str()),
-            Some("__Script::sample::manual")
-        );
-    }
+    use crate::error::RuneError;
+    use spire::ast::Span;
+    use xldr::{SourceKind, StagedModule};
 
     #[test]
     fn script_compile_plan_extracts_include_directives() {
@@ -619,25 +744,109 @@ print(to_string(1))
     }
 
     #[test]
-    fn direct_module_source_is_detected() {
-        let ast = spire::parse_with_context(
-            r#"defmod Helper {
-  def add(x: Int, y: Int) -> Int {
-    x + y
-  }
-}"#,
-            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::module()),
+    fn parse_script_ast_for_compile_rejects_legacy_definition_after_expression() {
+        let err = parse_script_ast_for_compile(
+            "print(\"start\")\ndef helper() -> Unit { () }\n",
+            0,
+            SourceKind::Script,
         )
-        .expect("module source should parse");
+        .expect_err("legacy script ordering should fail under strict parsing");
 
-        assert!(is_direct_module_source(&ast));
+        assert!(
+            err.message()
+                .contains("top-level definition cannot appear after top-level expression"),
+            "unexpected error: {}",
+            err.message()
+        );
     }
 
     #[test]
-    fn plain_script_is_not_treated_as_module_source() {
-        let ast = spire::parse(r#"print(to_string(1))"#).expect("script source should parse");
+    fn load_error_span_uses_first_non_whitespace_character() {
+        let span = load_error_span("\n  print(\"ok\")\n");
+        assert_eq!(span.start, 3);
+        assert_eq!(span.end, 4);
+    }
 
-        assert!(matches!(ast.last(), Some(Ast::App(_, _, _))));
-        assert!(!is_direct_module_source(&ast));
+    #[test]
+    fn module_source_collection_error_returns_diagnostic_variant() {
+        let err = module_source_collection_error_as_rune_error(
+            "main.srt",
+            "print(\"ok\")\n",
+            "run: failed to collect definition sources: broken",
+        );
+        match err {
+            RuneError::Diagnostic { diagnostic, .. } => {
+                assert_eq!(diagnostic.phase, "resolve");
+                assert_eq!(diagnostic.spec.kind, "LoadError");
+                assert!(diagnostic
+                    .spec
+                    .message
+                    .contains("failed to collect definition sources"));
+            }
+            other => panic!("expected diagnostic error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn diagnostic_location_for_span_decodes_rebased_module_span() {
+        let module_source = "defmod MahjongCli { def render() -> Unit { () } }";
+        let user_source = "MahjongCli::render()";
+        let mut sources = diagnostics::SourceRegistry::new();
+        let module_source_id = sources.register("examples/mahjong/src/6_cli.srt", module_source);
+        let user_source_id = sources.register("examples/mahjong/run.srt", user_source);
+        let compile_sources = xldr::CompileSources {
+            sources,
+            user_source_id,
+            user_module_path: "__Script::examples::mahjong::run".into(),
+            builtin_source_id: module_source_id,
+            builtin_module_path: Some("Bootstrap".into()),
+            module_source_ids: vec![module_source_id],
+            module_stages: vec![vec![StagedModule {
+                source_id: module_source_id,
+                module_path: "MahjongCli".into(),
+                source_kind: SourceKind::DefinitionSource,
+            }]],
+        };
+        let base = xldr::module_span_base_for_source(module_source_id);
+        let span = Span {
+            start: base + 12,
+            end: base + 18,
+        };
+        let (source_id, local_span) = diagnostic_location_for_span(&compile_sources, &span);
+        assert_eq!(
+            compile_sources.sources.file_name(source_id),
+            Some("examples/mahjong/src/6_cli.srt")
+        );
+        assert_eq!(local_span.start, 12);
+        assert_eq!(local_span.end, 18);
+    }
+
+    #[test]
+    fn source_id_for_span_falls_back_to_user_source_when_module_does_not_cover_span() {
+        let module_source = "defmod MahjongCli { def render() -> Unit { () } }";
+        let user_source =
+            "main = \"................................................................\"";
+        let mut sources = diagnostics::SourceRegistry::new();
+        let module_source_id = sources.register("examples/mahjong/src/6_cli.srt", module_source);
+        let user_source_id = sources.register("examples/mahjong/run.srt", user_source);
+        let compile_sources = xldr::CompileSources {
+            sources,
+            user_source_id,
+            user_module_path: "__Script::examples::mahjong::run".into(),
+            builtin_source_id: module_source_id,
+            builtin_module_path: Some("Bootstrap".into()),
+            module_source_ids: vec![module_source_id],
+            module_stages: vec![vec![StagedModule {
+                source_id: module_source_id,
+                module_path: "MahjongCli".into(),
+                source_kind: SourceKind::DefinitionSource,
+            }]],
+        };
+        let span = Span { start: 50, end: 51 };
+        let source_id = source_id_for_span(&compile_sources, &span);
+        assert_eq!(
+            compile_sources.sources.file_name(source_id),
+            Some("examples/mahjong/run.srt")
+        );
     }
 }

@@ -3,7 +3,7 @@ def trim_name(user: User) -> String {
 }
 
 user = User("alice", 30)
-rename = &User::rename_to("bob")
+rename = &User::rename_to("bob", &1)
 print(user |> &User::get_name)
 print(user |> User::get_name())
 print(to_string(rename(user)))

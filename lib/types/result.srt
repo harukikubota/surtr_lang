@@ -1,0 +1,465 @@
+@doc """
+Standard `Result` type declaration.
+`Result` represents success-or-error control flow as a value.
+The canonical builtin head is `Result<$T>`.
+This is the language's Either-oriented success/failure representation.
+Its runtime representation is enum-like, but the language treats `Result` as a
+dedicated built-in abstraction rather than exposing it as the future general
+`Enum` surface.
+"""
+@builtin type Result<$T>
+
+@doc """
+Internal control result returned from extractor evaluation inside MatchBlock.
+The canonical surface type position is `MatchResult<$Value, Error>`, with the
+error side fixed to the abstract `Error` type.
+`MatchResult` is only valid as the return type of `defextractor` /
+`@builtin defextractor` and inside extractor bodies. Ordinary APIs should
+return `Result`, `Option`, or a user-defined enum instead.
+"""
+defenum MatchResult<$Value> {
+  Success($Value),
+  NoMatch,
+  Err(Error),
+}
+
+@doc """
+Construct the success branch of `Result`.
+This is a declaration-only surface contract for the constructor shape.
+The parser normalizes this special `@builtin type` spelling into the internal
+Result-constructor declaration that later phases validate.
+"""
+@builtin type Ok($T) -> Result<$T>
+
+@doc """
+Construct the failure branch of `Result`.
+Concrete `deferror` values flow through the abstract `Error` type here.
+This keeps the language surface focused on `Result` as an Either-style value
+without exposing the runtime representation directly.
+"""
+@builtin type Err(Error) -> Result<$T>
+
+@autoimport
+impl Result {
+  defp _all_go(values: List<Result<$A>>, acc_rev: List<$A>) -> Result<List<$A>> {
+    match values {
+      [] => Ok(List::reverse(acc_rev)),
+      [head, ..tail] => _all_cons(head, tail, acc_rev),
+    }
+  }
+
+  defp _all_cons(head: Result<$A>, tail: List<Result<$A>>, acc_rev: List<$A>) -> Result<List<$A>> {
+    value =? head
+    _all_go(tail, [value, ..acc_rev])
+  }
+
+  @doc """
+  Helper for matching on `Result` success vs failure.
+  This is not a general-purpose combinator, but it is a common enough pattern that it deserves a helper.
+  The `is_ok` name is a bit of a misnomer since it returns `True` for any `Ok(...)` value, even if the inner value is an error type.
+  It's really more of an `is_ok_variant` check, but the shorter name is more ergonomic for common use.
+  ## REPL
+  xldr(1)> Result::is_ok(Ok(1))
+  True
+  """
+  def is_ok(result: Result<$T>) -> Boolean {
+    match result {
+      Ok(_) => True,
+      Err(_) => False,
+    }
+  }
+
+  @doc """
+  Helper for matching on `Result` success vs failure.
+  This is not a general-purpose combinator,
+  but it is a common enough pattern that it deserves a helper.
+  The `is_err` name is a bit of a misnomer since it returns `True` for any `Err(...)` value,
+  even if the inner error is an `Ok`-wrapped success type. It's really more of an `is_err_variant` check,
+  but the shorter name is more ergonomic for common use.
+  ## REPL
+  xldr(1)> Result::is_err(Err(NoneError))
+  True
+  """
+  def is_err(result: Result<$T>) -> Boolean {
+    Boolean::not(is_ok(result))
+  }
+
+  @doc """
+  Replace the error branch of a `Result` without preserving the previous cause.
+
+  - `Ok(value)` stays `Ok(value)`
+  - `Err(old)` becomes `Err(err)`
+
+  This is a special form. The error argument is declared as `Lazy<Error>` so
+  call sites can pass a concrete `deferror` name or constructor directly, or
+  reuse an `Error` value already obtained from `Err(e)` pattern matching. The
+  expression is evaluated only when `result` is `Err(...)`.
+
+  Use `cause(...)` when the previous error should remain in the chain.
+  ## REPL
+  xldr(1)> Result::map_err(Err(NoneError), EmptyList)
+  Err(EmptyList("Empty List."))
+  """
+  @builtin def map_err(result: Result<$T>, err: Lazy<Error>) -> Result<$T>
+
+  @doc """
+  Add a higher-level domain error on top of an existing `Err(...)`.
+
+  - `Ok(value)` stays `Ok(value)`
+  - `Err(old)` becomes `Err(err)` and the previous error is appended to the new error's cause chain
+
+  This is also a special form. The error argument is surface-typed as
+  `Lazy<Error>` so the compiler can delay constructing the new error, or
+  forwarding an existing `Error` value, until the input is actually `Err(...)`.
+
+  This keeps `Error` runtime-managed and opaque while still allowing domain layering.
+  ## REPL
+  xldr(1)> Result::cause(Ok(1), EmptyList)
+  Ok(1)
+  """
+  @builtin def cause(result: Result<$T>, err: Lazy<Error>) -> Result<$T>
+
+  @doc """
+  Sequence a `Result<$T>` with a later `Result<()>` operation.
+
+  - `chain(Ok(value), Ok(()))` returns `Ok(value)`
+  - `chain(Ok(_), Err(right))` returns `Err(right)`
+  - `chain(Err(left), Ok(()))` returns `Err(left)`
+  - `chain(Err(left), Err(right))` returns `Err(right)` and appends `left` to the tail of `right`
+
+  This keeps the success value on the left and uses the right side only for trailing error-capable work.
+  ## REPL
+  xldr(1)> Result::chain(Ok(1), Ok(()))
+  Ok(1)
+  """
+  @builtin def chain(head: Result<$T>, tail: Result<()>) -> Result<$T>
+
+  @doc """
+  Recover from any error without inspecting the concrete error kind.
+
+  The handler body is evaluated only when `value` is `Err(...)`; `Ok(value)`
+  returns unchanged.
+  ## REPL
+  xldr(1)> Result::recover(Err(NoneError), {|| Ok(1)})
+  Ok(1)
+  """
+  def recover(value: Result<$A>, handler: (-> Result<$A>)) -> Result<$A> {
+    match value {
+      Ok(ok) => Ok(ok),
+      Err(_) => handler(),
+    }
+  }
+
+  @doc """
+  Recover from one concrete error kind.
+
+  This is a special form: `marker` is surface-typed as `Lazy<Error>`, but it
+  is used only as a concrete `deferror` kind marker. `Timeout` and
+  `Timeout("detail")` are both accepted. Payload arguments are resolved and type
+  checked, but not evaluated at runtime. The handler is evaluated only when
+  `value` is `Err(...)` with the same concrete kind.
+  ## REPL
+  xldr(1)> Result::recover_kind(Err(NoneError), NoneError, {|_| Ok(1)})
+  Ok(1)
+  """
+  @builtin def recover_kind(value: Result<$A>, marker: Lazy<Error>, handler: (Error -> Result<$A>)) -> Result<$A>
+
+  @doc """
+  Apply a function wrapped in `Result` to a value wrapped in `Result`.
+  ## REPL
+  xldr(1)> Result::lift(Ok({|n| n + 1}), Ok(1))
+  Ok(2)
+  """
+  def lift(f: Result<($A -> $B)>, value: Result<$A>) -> Result<$B> {
+    ff =? f
+    vv =? value
+    Ok(ff(vv))
+  }
+
+  @doc """
+  Apply a 2-argument function wrapped in `Result` to two `Result` values.
+  ## REPL
+  xldr(1)> Result::lift2(Ok({|a, b| a + b}), Ok(1), Ok(2))
+  Ok(3)
+  """
+  def lift2(f: Result<($A, $B -> $C)>, left: Result<$A>, right: Result<$B>) -> Result<$C> {
+    ff =? f
+    ll =? left
+    rr =? right
+    Ok(ff(ll, rr))
+  }
+
+  @doc """
+  Apply a 3-argument function wrapped in `Result` to three `Result` values.
+  ## REPL
+  xldr(1)> Result::lift3(Ok({|a, b, c| a + b + c}), Ok(1), Ok(2), Ok(3))
+  Ok(6)
+  """
+  def lift3(f: Result<($A, $B, $C -> $D)>, a: Result<$A>, b: Result<$B>, c: Result<$C>) -> Result<$D> {
+    ff =? f
+    aa =? a
+    bb =? b
+    cc =? c
+    Ok(ff(aa, bb, cc))
+  }
+
+  @doc """
+  Apply a `Result`-returning function wrapped in `Result` to one `Result` value.
+  ## REPL
+  xldr(1)> Result::flat_lift(Ok({|n| Ok(n + 1)}), Ok(1))
+  Ok(2)
+  """
+  def flat_lift(f: Result<($A -> Result<$B>)>, value: Result<$A>) -> Result<$B> {
+    ff =? f
+    vv =? value
+    ff(vv)
+  }
+
+  @doc """
+  Apply a `Result`-returning 2-argument function wrapped in `Result`.
+  ## REPL
+  xldr(1)> Result::flat_lift2(Ok({|a, b| Ok(a + b)}), Ok(1), Ok(2))
+  Ok(3)
+  """
+  def flat_lift2(
+    f: Result<($A, $B -> Result<$C>)>,
+    left: Result<$A>,
+    right: Result<$B>,
+  ) -> Result<$C> {
+    ff =? f
+    ll =? left
+    rr =? right
+    ff(ll, rr)
+  }
+
+  @doc """
+  Apply a `Result`-returning 3-argument function wrapped in `Result`.
+  ## REPL
+  xldr(1)> Result::flat_lift3(Ok({|a, b, c| Ok(a + b + c)}), Ok(1), Ok(2), Ok(3))
+  Ok(6)
+  """
+  def flat_lift3(
+    f: Result<($A, $B, $C -> Result<$D>)>,
+    a: Result<$A>,
+    b: Result<$B>,
+    c: Result<$C>,
+  ) -> Result<$D> {
+    ff =? f
+    aa =? a
+    bb =? b
+    cc =? c
+    ff(aa, bb, cc)
+  }
+
+  @doc """
+  Pipeline-friendly `lift` variant with value first.
+  ## REPL
+  xldr(1)> Result::with(Ok(1), Ok({|n| n + 1}))
+  Ok(2)
+  """
+  def with(value: Result<$A>, f: Result<($A -> $B)>) -> Result<$B> {
+    lift(f, value)
+  }
+
+  @doc """
+  Pipeline-friendly `lift2` variant with values first.
+  ## REPL
+  xldr(1)> Result::with2(Ok(1), Ok(2), Ok({|a, b| a + b}))
+  Ok(3)
+  """
+  def with2(left: Result<$A>, right: Result<$B>, f: Result<($A, $B -> $C)>) -> Result<$C> {
+    lift2(f, left, right)
+  }
+
+  @doc """
+  Pipeline-friendly `lift3` variant with values first.
+  ## REPL
+  xldr(1)> Result::with3(Ok(1), Ok(2), Ok(3), Ok({|a, b, c| a + b + c}))
+  Ok(6)
+  """
+  def with3(
+    a: Result<$A>,
+    b: Result<$B>,
+    c: Result<$C>,
+    f: Result<($A, $B, $C -> $D)>,
+  ) -> Result<$D> {
+    lift3(f, a, b, c)
+  }
+
+  @doc """
+  Pipeline-friendly `flat_lift` variant with value first.
+  ## REPL
+  xldr(1)> Result::flat_with(Ok(1), Ok({|n| Ok(n + 1)}))
+  Ok(2)
+  """
+  def flat_with(value: Result<$A>, f: Result<($A -> Result<$B>)>) -> Result<$B> {
+    flat_lift(f, value)
+  }
+
+  @doc """
+  Pipeline-friendly `flat_lift2` variant with values first.
+  ## REPL
+  xldr(1)> Result::flat_with2(Ok(1), Ok(2), Ok({|a, b| Ok(a + b)}))
+  Ok(3)
+  """
+  def flat_with2(
+    left: Result<$A>,
+    right: Result<$B>,
+    f: Result<($A, $B -> Result<$C>)>,
+  ) -> Result<$C> {
+    flat_lift2(f, left, right)
+  }
+
+  @doc """
+  Pipeline-friendly `flat_lift3` variant with values first.
+  ## REPL
+  xldr(1)> Result::flat_with3(Ok(1), Ok(2), Ok(3), Ok({|a, b, c| Ok(a + b + c)}))
+  Ok(6)
+  """
+  def flat_with3(
+    a: Result<$A>,
+    b: Result<$B>,
+    c: Result<$C>,
+    f: Result<($A, $B, $C -> Result<$D>)>,
+  ) -> Result<$D> {
+    flat_lift3(f, a, b, c)
+  }
+
+  @doc """
+  Bundle two `Result` values into one tuple-shaped `Result`.
+  ## REPL
+  xldr(1)> Result::zip(Ok(1), Ok(2))
+  Ok((1, 2))
+  """
+  def zip(left: Result<$A>, right: Result<$B>) -> Result<($A, $B)> {
+    ll =? left
+    rr =? right
+    Ok((ll, rr))
+  }
+
+  @doc """
+  Bundle three `Result` values into one tuple-shaped `Result`.
+  ## REPL
+  xldr(1)> Result::zip3(Ok(1), Ok(2), Ok(3))
+  Ok((1, 2, 3))
+  """
+  def zip3(a: Result<$A>, b: Result<$B>, c: Result<$C>) -> Result<($A, $B, $C)> {
+    aa =? a
+    bb =? b
+    cc =? c
+    Ok((aa, bb, cc))
+  }
+
+  @doc """
+  Convert `List<Result<$A>>` into `Result<List<$A>>`.
+  ## REPL
+  xldr(1)> Result::all([Ok(1), Ok(2)])
+  Ok([1, 2])
+  """
+  def all(values: List<Result<$A>>) -> Result<List<$A>> {
+    _all_go(values, [])
+  }
+
+  @doc """
+  Flatten one level of nested `Result`.
+  ## REPL
+  xldr(1)> Result::flatten(Ok(Ok(1)))
+  Ok(1)
+  """
+  def flatten(value: Result<Result<$A>>) -> Result<$A> {
+    inner =? value
+    inner
+  }
+
+  @doc """
+  Observe success values and return the original `Result` unchanged.
+  ## REPL
+  xldr(1)> Result::tap_ok(Ok(1), {|_| ()})
+  Ok(1)
+  """
+  def tap_ok(value: Result<$A>, f: ($A -> Unit)) -> Result<$A> {
+    match value {
+      Ok(v) => _tap_ok_value(value, f, v),
+      Err(_) => value,
+    }
+  }
+
+  defp _tap_ok_value(value: Result<$A>, f: ($A -> Unit), inner: $A) -> Result<$A> {
+    f(inner)
+    value
+  }
+
+  @doc """
+  Observe failure values and return the original `Result` unchanged.
+  ## REPL
+  xldr(1)> Result::tap_err(Err(NoneError), {|_| ()})
+  Err(NoneError)
+  """
+  def tap_err(value: Result<$A>, f: (Error -> Unit)) -> Result<$A> {
+    match value {
+      Ok(_) => value,
+      Err(err) => _tap_err_value(value, f, err),
+    }
+  }
+
+  defp _tap_err_value(value: Result<$A>, f: (Error -> Unit), err: Error) -> Result<$A> {
+    f(err)
+    value
+  }
+
+  @doc """
+  Continue with `next` only when the left `Result` is `Ok(...)`.
+  ## REPL
+  xldr(1)> Result::then(Ok(1), {|| Ok(2)})
+  Ok(2)
+  """
+  def then(value: Result<$A>, next: (-> Result<$B>)) -> Result<$B> {
+    flat_lift(Ok({|_| next()}), value)
+  }
+}
+
+@doc """
+`Functor` implementation for `Result`.
+This is the source-level meaning of `value |*> f`.
+"""
+impl Functor<$A, $B, Result<$B>> for Result<$A> {
+  def map(self: Self, f: ($A -> $B)) -> Result<$B> {
+    match self {
+      Ok(value) => Ok(f(value)),
+      _ => self,
+    }
+  }
+}
+
+@doc """
+`Chainable` implementation for `Result`.
+This is the source-level meaning of `value |>= f`.
+"""
+impl Chainable<$A, Result<$B>> for Result<$A> {
+  def chain(self: Self, f: ($A -> Result<$B>)) -> Result<$B> {
+    match self {
+      Ok(value) => f(value),
+      _ => self,
+    }
+  }
+}
+
+@doc """
+`LiftComposable` implementation for `Result`-returning unary functions.
+This is the source-level meaning of `left >* right` for `Result`.
+"""
+impl LiftComposable<$A, $B, $C, Result<$C>> for ($A -> Result<$B>) {
+  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Result<$C>) {
+    {|value| Functor::map(self(value), rhs)}
+  }
+}
+
+@doc """
+`KleisliComposable` implementation for `Result`-returning unary functions.
+This is the source-level meaning of `left >=> right` for `Result`.
+"""
+impl KleisliComposable<$A, $B, Result<$C>> for ($A -> Result<$B>) {
+  def kleisli_compose(self: Self, rhs: ($B -> Result<$C>)) -> ($A -> Result<$C>) {
+    {|value| Chainable::chain(self(value), rhs)}
+  }
+}

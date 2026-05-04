@@ -1,0 +1,2 @@
+phase: parse
+contains: Pattern alias cannot use CAP_PATTERN names

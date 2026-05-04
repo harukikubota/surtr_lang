@@ -1,0 +1,240 @@
+@doc """
+Standard `Duration` data type.
+`Duration` is an opaque millisecond span used by process and task APIs.
+The field stays private so callers construct validated values through `Duration(...)`
+or `try_from(..., Duration)`, while the `100ms` literal remains syntax sugar.
+
+## REPL
+xldr(1)> 250ms
+250ms
+xldr(2)> Duration(250)
+Ok(250ms)
+"""
+defstruct Duration {
+  private millis: Int,
+}
+
+deferror InvalidDuration(message: String) {
+  message
+}
+
+impl Duration {
+  @doc """
+  Construct a `Duration` from a millisecond count.
+  Negative values are rejected with `InvalidDuration`.
+
+  ## REPL
+  xldr(1)> Duration(10)
+  Ok(10ms)
+  xldr(2)> Duration(-1)
+  Err(InvalidDuration("duration must be non-negative: -1"))
+  """
+  def new(value: Int) -> Result<Self, Error> {
+    if(
+      value < 0,
+      Err(InvalidDuration("duration must be non-negative: #{value}")),
+      Ok(Duration { millis: value })
+    )
+  }
+
+  @doc """
+  Return the millisecond count stored in the duration.
+
+  ## REPL
+  xldr(1)> millis(250ms)
+  250
+  """
+  def millis(self: Self) -> Int {
+    self.millis
+  }
+
+  @doc """
+  Subtract `rhs` from `self`.
+  The `-` operator is intentionally not implemented for `Duration` because
+  `Sub` must return `Self`, while duration subtraction can fail.
+
+  ## REPL
+  xldr(1)> Duration::sub(20ms, 10ms)
+  Ok(10ms)
+  xldr(2)> Duration::sub(10ms, 20ms)
+  Err(InvalidDuration("duration subtraction would be negative: 10ms - 20ms"))
+  """
+  def sub(self: Self, rhs: Self) -> Result<Self, Error> {
+    if(
+      self.millis < rhs.millis,
+      Err(InvalidDuration("duration subtraction would be negative: " ++ to_string(self.millis) ++ "ms - " ++ to_string(rhs.millis) ++ "ms")),
+      Duration(self.millis - rhs.millis),
+    )
+  }
+
+  @doc """
+  Deconstruct a `Duration` into its millisecond count in pattern position.
+
+  ## REPL
+  xldr(1)> match 20ms { Duration(ms) => ms }
+  20
+  """
+  defextractor deconstruct(self: Self) -> MatchResult<Int, Error> {
+    MatchResult::Success(self.millis)
+  }
+}
+
+impl Add for Duration {
+  @doc """
+  Return the sum of two durations.
+  ## REPL
+  xldr(1)> 10ms + 20ms
+  30ms
+  """
+  def add(self: Self, rhs: Self) -> Self {
+    Duration { millis: self.millis + rhs.millis }
+  }
+}
+
+impl Eq for Duration {
+  @doc """
+  Return `True` when both durations have the same millisecond value.
+  ## REPL
+  xldr(1)> 10ms == 10ms
+  True
+  """
+  def eq(self: Self, rhs: Self) -> Boolean {
+    self.millis == rhs.millis
+  }
+}
+
+impl Neq for Duration {
+  @doc """
+  Return `True` when the durations differ.
+  ## REPL
+  xldr(1)> 10ms != 20ms
+  True
+  """
+  def neq(self: Self, rhs: Self) -> Boolean {
+    self.millis != rhs.millis
+  }
+}
+
+impl Compare for Duration {
+  @doc """
+  Return the three-way ordering between two durations.
+  ## REPL
+  xldr(1)> compare(10ms, 20ms)
+  Ordering::Less
+  """
+  def compare(self: Self, rhs: Self) -> Ordering {
+    if(
+      self.millis < rhs.millis,
+      Ordering::Less,
+      if(self.millis > rhs.millis, Ordering::Greater, Ordering::Equal),
+    )
+  }
+}
+
+impl Ord for Duration {
+  @doc """
+  Return `True` when the left duration is strictly less than the right duration.
+  """
+  def lt(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less => True,
+      Ordering::Equal | Ordering::Greater => False,
+    }
+  }
+
+  @doc """
+  Return `True` when the left duration is less than or equal to the right duration.
+  """
+  def lte(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less | Ordering::Equal => True,
+      Ordering::Greater => False,
+    }
+  }
+
+  @doc """
+  Return `True` when the left duration is strictly greater than the right duration.
+  """
+  def gt(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less | Ordering::Equal => False,
+      Ordering::Greater => True,
+    }
+  }
+
+  @doc """
+  Return `True` when the left duration is greater than or equal to the right duration.
+  """
+  def gte(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less => False,
+      Ordering::Equal | Ordering::Greater => True,
+    }
+  }
+}
+
+impl Lt for Duration {
+  @doc """
+  Return `True` when the left duration is strictly less than the right duration.
+  """
+  def lt(self: Self, rhs: Self) -> Boolean {
+    self.millis < rhs.millis
+  }
+}
+
+impl Lte for Duration {
+  @doc """
+  Return `True` when the left duration is less than or equal to the right duration.
+  """
+  def lte(self: Self, rhs: Self) -> Boolean {
+    self.millis <= rhs.millis
+  }
+}
+
+impl Gt for Duration {
+  @doc """
+  Return `True` when the left duration is strictly greater than the right duration.
+  """
+  def gt(self: Self, rhs: Self) -> Boolean {
+    self.millis > rhs.millis
+  }
+}
+
+impl Gte for Duration {
+  @doc """
+  Return `True` when the left duration is greater than or equal to the right duration.
+  """
+  def gte(self: Self, rhs: Self) -> Boolean {
+    self.millis >= rhs.millis
+  }
+}
+
+impl Show for Duration {
+  @doc """
+  Return the standard string rendering for `Duration`.
+
+  ## REPL
+  xldr(1)> to_string(250ms)
+  "250ms"
+  """
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}
+
+impl TryFrom<Duration> for Int {
+  @doc """
+  Convert an `Int` millisecond value into `Duration`.
+
+  Prefer the literal form or constructor sugar in ordinary code.
+
+  ## REPL
+  xldr(1)> try_from(10, Duration)
+  Ok(10ms)
+  xldr(2)> Duration(10)
+  Ok(10ms)
+  """
+  def try_from(self: Self, to: TypeRef<Duration>) -> Result<Duration, Error> {
+    Duration(self)
+  }
+}

@@ -1,0 +1,3 @@
+def apply_once(f: (_ -> Int)) -> Int {
+  f(())
+}

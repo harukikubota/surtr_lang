@@ -1,0 +1,2 @@
+sum = Vec2(1, 2) + Vec2(3, 4)
+print(inspect(sum))

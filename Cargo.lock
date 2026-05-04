@@ -30,15 +30,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
 
 [[package]]
-name = "ar_archive_writer"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7eb93bbb63b9c227414f6eb3a0adfddca591a8ce1e9b60661bb08969b87e340b"
-dependencies = [
- "object",
-]
-
-[[package]]
 name = "ariadne"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -97,16 +88,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cc"
-version = "1.2.60"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43c5703da9466b66a946814e1adf53ea2c90f10063b86290cc9eb67ce3478a20"
-dependencies = [
- "find-msvc-tools",
- "shlex",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -121,7 +102,6 @@ dependencies = [
  "hashbrown",
  "regex-automata 0.3.9",
  "serde",
- "stacker",
  "unicode-ident",
  "unicode-segmentation",
 ]
@@ -332,7 +312,6 @@ name = "diagnostics"
 version = "0.1.0"
 dependencies = [
  "ariadne",
- "scar",
  "serde",
  "spire",
 ]
@@ -353,7 +332,9 @@ checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 name = "eldr"
 version = "0.1.0"
 dependencies = [
- "ariadne",
+ "crossterm",
+ "diagnostics",
+ "num-bigint",
  "regex",
  "sindr",
 ]
@@ -396,12 +377,6 @@ dependencies = [
  "rustix 1.1.4",
  "windows-sys 0.59.0",
 ]
-
-[[package]]
-name = "find-msvc-tools"
-version = "0.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "foldhash"
@@ -645,15 +620,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "object"
-version = "0.37.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"
-dependencies = [
- "memchr",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -729,16 +695,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "psm"
-version = "0.1.30"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3852766467df634d74f0b2d7819bf8dc483a0eb2e3b0f50f756f9cfe8b0d18d8"
-dependencies = [
- "ar_archive_writer",
- "cc",
 ]
 
 [[package]]
@@ -944,6 +900,7 @@ dependencies = [
 name = "scar"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "sigil",
  "sindr",
  "spire",
@@ -1034,15 +991,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "shlex"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
-
-[[package]]
 name = "sigil"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "sindr",
  "spire",
 ]
@@ -1101,20 +1053,8 @@ name = "spire"
 version = "0.1.0"
 dependencies = [
  "chumsky",
+ "serde",
  "sindr",
-]
-
-[[package]]
-name = "stacker"
-version = "0.1.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08d74a23609d509411d10e2176dc2a4346e3b4aea2e7b1869f19fdedbc71c013"
-dependencies = [
- "cc",
- "cfg-if",
- "libc",
- "psm",
- "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1407,6 +1347,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 name = "xldr"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "criterion",
  "crossterm",
  "diagnostics",
@@ -1415,6 +1356,7 @@ dependencies = [
  "ratatui",
  "rustyline",
  "scar",
+ "serde",
  "sigil",
  "sindr",
  "spire",

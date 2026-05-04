@@ -1,26 +1,31 @@
-use std::fs;
-use std::process::Command;
-
 use serde_json::Value;
+use std::fs;
 
-mod common;
-mod support;
-use common::{
+use crate::common::{
     extract_phase_tag, module_compile_error_fixtures, module_spec_fixtures, normalize_text,
-    parse_compile_error_expectation, repo_root, surtr_bin, unique_temp_dir, ModuleFixtureCase,
+    parse_compile_error_expectation, repo_root, surtr_command, unique_temp_dir, ModuleFixtureCase,
 };
+use crate::support;
 
 fn compile_multi_source_case(
     case: &ModuleFixtureCase,
 ) -> Result<forge::bytecode::Bytecode, String> {
+    let compile_sources = compile_sources_for_case(case)?;
+    support::compile_script_sources(&compile_sources)
+}
+
+fn compile_sources_for_case(case: &ModuleFixtureCase) -> Result<xldr::CompileSources, String> {
     let module_sources = support::collect_module_sources(&case.module_stages)?;
-    let compile_sources = support::compose_script_sources(
+    Ok(support::compose_script_sources(
         &case.entry_path.to_string_lossy(),
         case.entry_source,
         module_sources,
-    );
+    ))
+}
 
-    support::compile_script_sources(&compile_sources)
+fn check_multi_source_case_phase(case: &ModuleFixtureCase, phase: &str) -> Result<(), String> {
+    let compile_sources = compile_sources_for_case(case)?;
+    support::check_script_sources_phase(&compile_sources, phase)
 }
 
 fn run_multi_source_case(case: &ModuleFixtureCase) -> Result<Vec<String>, String> {
@@ -79,7 +84,13 @@ fn run_module_compile_error_bucket(bucket: usize, bucket_count: usize) {
 
     for fixture in cases {
         let expected = parse_compile_error_expectation(&fixture.error_path);
-        let result = compile_multi_source_case(&fixture.case);
+        let result = match expected.phase.as_deref() {
+            Some(phase @ ("parse" | "resolve" | "typecheck")) => {
+                check_multi_source_case_phase(&fixture.case, phase)
+            }
+            None => compile_multi_source_case(&fixture.case).map(|_| ()),
+            Some(_) => compile_multi_source_case(&fixture.case).map(|_| ()),
+        };
         match result {
             Ok(_) => panic!(
                 "expected compile failure but succeeded: {}",
@@ -150,10 +161,10 @@ fn module_compile_error_fixtures_bucket_3() {
 }
 
 #[test]
-fn direct_module_file_compiles_without_module_resolution_stub_error() {
+fn direct_module_file_requires_module_loading_path_instead_of_script_cli_mode() {
     let module_path =
         repo_root().join("tests/compile_errors/modules/duplicate_import_all_all/Kernel.srt");
-    let output = Command::new(surtr_bin())
+    let output = surtr_command()
         .args([
             "check",
             module_path.to_str().expect("module path must be utf-8"),
@@ -166,8 +177,15 @@ fn direct_module_file_compiles_without_module_resolution_stub_error() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.status.success(),
-        "direct module compile should succeed for {}\nstdout:\n{}\nstderr:\n{}",
+        !output.status.success(),
+        "script-mode CLI should reject direct module file {}\nstdout:\n{}\nstderr:\n{}",
+        module_path.display(),
+        stdout,
+        stderr
+    );
+    assert!(
+        stderr.contains("defmod is not allowed at script top-level"),
+        "expected strict script parse failure for {}\nstdout:\n{}\nstderr:\n{}",
         module_path.display(),
         stdout,
         stderr
@@ -196,7 +214,7 @@ fn dump_includes_qualified_function_names_for_module_defined_functions() {
     let bytes = bytecode.encode().expect("encode should succeed");
     fs::write(&eldr_path, bytes).expect("failed to write eldr file");
 
-    let dump = Command::new(surtr_bin())
+    let dump = surtr_command()
         .args([
             "dump",
             eldr_path.to_str().expect("eldr path must be utf-8"),

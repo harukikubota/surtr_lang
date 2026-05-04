@@ -1,0 +1,12 @@
+include "./Agents.srt"
+
+pid = Counter::pid()
+
+print("pid: " ++ inspect(pid))
+print(inspect(Counter::get(pid, "count")))
+print(inspect(Counter::set(pid, 3)))
+print(inspect(Counter::get(pid, "count")))
+print(inspect(Counter::set(pid, 5)))
+print(inspect(Counter::get(pid, "count")))
+print(inspect(Counter::set(pid, -20)))
+print(inspect(Counter::get(pid, "count")))

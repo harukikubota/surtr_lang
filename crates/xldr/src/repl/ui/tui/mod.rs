@@ -22,8 +22,9 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 
 use crate::repl::logic::core::ReplEngine;
+use crate::repl::logic::PresentedResultKind;
 
-use app::{App, ResultEntryKind};
+use app::App;
 
 // ── Options ───────────────────────────────────────────────────────────────────
 
@@ -59,7 +60,7 @@ pub fn run_command(options: TuiOptions) -> Result<(), i32> {
         app.push_result(
             path.clone(),
             vec![format!("loaded {path}")],
-            ResultEntryKind::Info,
+            PresentedResultKind::Info,
         );
     }
 

@@ -1,0 +1,3 @@
+def takes_match(blocks: MatchArms<Int, String>) -> String { "nope" }
+
+print(takes_match)

@@ -1,0 +1,15 @@
+@doc """
+Standard `Compare` trait declaration.
+`Compare` models three-way comparison and returns `Ordering`.
+The unqualified helper `compare(...)` comes from this auto-imported trait
+surface rather than from a compiler-only builtin shim.
+
+## REPL
+xldr(1)> Compare::compare(1, 2)
+Ordering::Less
+"""
+@autoimport
+deftrait Compare {
+  # Return the three-way ordering result.
+  def compare(self: Self, rhs: Self) -> Ordering
+}

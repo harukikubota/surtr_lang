@@ -1,0 +1,2 @@
+timeout = 1ms
+value = Task::async({|| Ok(())}) @timeout(timeout)

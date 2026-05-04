@@ -4,7 +4,7 @@ use scar::typed::*;
 use scar::types::Ty;
 use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_id_by_name;
-use sindr::ir::{CompileInfo, DocEntry, FunctionFlags};
+use sindr::ir::{CompileInfo, DbgArgTemplate, DbgTemplate, DocEntry, FunctionFlags};
 use sindr::primitives::int;
 use spire::ast::{BinOp, Lit, Span, Visibility};
 
@@ -15,15 +15,30 @@ use crate::registry::{TypeEntry, TypeKind, TypeRegistry};
 
 /// Lower the typed AST to bytecode.
 pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
+    codegen_typed_program(TypedProgram {
+        nodes: typed,
+        process_specs: Vec::new(),
+    })
+}
+
+/// Lower a typed program, including runtime process metadata, to bytecode.
+pub fn codegen_typed_program(typed: TypedProgram) -> Result<Bytecode, CodegenError> {
+    let TypedProgram {
+        nodes,
+        process_specs,
+    } = typed;
     let mut gene = Codegen::new();
-    gene.emit_program(typed)?;
+    gene.emit_program(nodes.clone())?;
     let (opcodes, state) = gene.finalize()?;
+    let runtime_process_specs =
+        build_runtime_process_specs(&process_specs, &nodes, &state.functions)?;
     Ok(Bytecode {
         opcodes,
         constants: state.constants,
         num_locals: state.next_slot as usize,
         type_registry: state.type_registry,
         error_templates: state.error_templates,
+        dbg_templates: state.dbg_templates,
         functions: state.functions,
         source_map: None,
         docs: Vec::new(),
@@ -36,7 +51,405 @@ pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
         spans: Vec::new(),
         sources: Vec::new(),
         pc_spans: Vec::new(),
+        runtime_process_specs,
     })
+}
+
+/// Compose a complete executable bytecode artifact from a precompiled prefix
+/// and a chunk produced by `ForgeSession::codegen_chunk`.
+///
+/// REPL chunks are normally appended and executed from their appended base PC.
+/// A `.eldr` artifact, however, starts at PC 0, so the chunk top-level opcodes
+/// must be inserted before the prefix `Halt` while function bodies remain after
+/// the single top-level halt.
+pub fn compose_bytecode_with_chunk(
+    mut base: Bytecode,
+    chunk: BytecodeChunk,
+) -> Result<Bytecode, CodegenError> {
+    let base_halt = base
+        .opcodes
+        .iter()
+        .position(|op| matches!(op, Opcode::Halt))
+        .ok_or_else(|| CodegenError {
+            message: "precompiled bytecode has no top-level Halt".into(),
+            span: Span { start: 0, end: 0 },
+        })?;
+    let chunk_halt = chunk
+        .opcodes
+        .iter()
+        .position(|op| matches!(op, Opcode::Halt))
+        .ok_or_else(|| CodegenError {
+            message: "compiled chunk has no top-level Halt".into(),
+            span: Span { start: 0, end: 0 },
+        })?;
+
+    let const_base = base.constants.len();
+    let error_template_base = base.error_templates.len();
+    let dbg_template_base = base.dbg_templates.len();
+    if chunk.const_base as usize != const_base {
+        return Err(CodegenError {
+            message: format!(
+                "chunk constant base mismatch: chunk={}, base={}",
+                chunk.const_base, const_base
+            ),
+            span: Span { start: 0, end: 0 },
+        });
+    }
+    if chunk.error_template_base as usize != error_template_base {
+        return Err(CodegenError {
+            message: format!(
+                "chunk error template base mismatch: chunk={}, base={}",
+                chunk.error_template_base, error_template_base
+            ),
+            span: Span { start: 0, end: 0 },
+        });
+    }
+    if chunk.dbg_template_base as usize != dbg_template_base {
+        return Err(CodegenError {
+            message: format!(
+                "chunk dbg template base mismatch: chunk={}, base={}",
+                chunk.dbg_template_base, dbg_template_base
+            ),
+            span: Span { start: 0, end: 0 },
+        });
+    }
+
+    let base_top_len = base_halt;
+    let chunk_top_len = chunk_halt;
+    let base_func_len = base.opcodes.len().saturating_sub(base_halt + 1);
+    let final_halt = base_top_len + chunk_top_len;
+    let base_func_base = final_halt + 1;
+    let chunk_func_base = base_func_base + base_func_len;
+
+    let mut base_ops = base.opcodes;
+    relocate_base_ops_for_insert(&mut base_ops, base_halt, chunk_top_len)?;
+
+    let mut chunk_ops = chunk.opcodes;
+    relocate_chunk_ops_for_artifact(
+        &mut chunk_ops,
+        chunk_halt,
+        base_top_len,
+        chunk_func_base,
+        const_base,
+        error_template_base,
+        dbg_template_base,
+    )?;
+
+    let mut opcodes = Vec::with_capacity(base_ops.len() + chunk_ops.len().saturating_sub(1));
+    opcodes.extend_from_slice(&base_ops[..base_halt]);
+    opcodes.extend_from_slice(&chunk_ops[..chunk_halt]);
+    opcodes.push(Opcode::Halt);
+    opcodes.extend_from_slice(&base_ops[base_halt + 1..]);
+    opcodes.extend_from_slice(&chunk_ops[chunk_halt + 1..]);
+
+    for entry in &mut base.functions {
+        relocate_function_entry(entry, base_halt, chunk_top_len)?;
+    }
+
+    let mut functions = base.functions;
+    for mut entry in chunk.functions {
+        let mapped_entry = map_chunk_pc(entry.entry_pc, chunk_halt, base_top_len, chunk_func_base)?;
+        entry.entry_pc = mapped_entry;
+        if entry.end_pc != 0 {
+            entry.end_pc = map_chunk_pc(entry.end_pc, chunk_halt, base_top_len, chunk_func_base)?;
+        }
+        let idx = entry.fun_idx as usize;
+        if idx == functions.len() {
+            functions.push(entry);
+        } else if idx < functions.len() {
+            functions[idx] = entry;
+        } else {
+            return Err(CodegenError {
+                message: format!(
+                    "function table invariant violated in chunk: fun_idx {} > len {}",
+                    idx,
+                    functions.len()
+                ),
+                span: Span { start: 0, end: 0 },
+            });
+        }
+    }
+
+    base.opcodes = opcodes;
+    base.constants.extend(chunk.constants);
+    base.type_registry.entries.extend(chunk.type_entries);
+    base.error_templates.extend(chunk.error_templates);
+    base.dbg_templates.extend(chunk.dbg_templates);
+    base.num_locals = base.num_locals.saturating_add(chunk.new_locals);
+    base.functions = functions;
+    base.source_map = None;
+    extend_docs_unique(&mut base.docs, chunk.docs);
+    base.runtime_process_specs
+        .entries
+        .extend(chunk.runtime_process_specs);
+    Ok(base)
+}
+
+fn build_runtime_process_specs(
+    process_specs: &[TypedProcessSpec],
+    nodes: &[TypedNode],
+    functions: &[FunctionEntry],
+) -> Result<RuntimeProcessSpecTable, CodegenError> {
+    let qualified_names = nodes
+        .iter()
+        .filter_map(|node| match &node.node {
+            TypedInner::Def(_, id, _, _, _, _, _)
+            | TypedInner::ExtractorDef(_, id, _, _, _, _, _) => Some((
+                id.unique_id,
+                id.qualified_name.clone().unwrap_or_else(|| id.name.clone()),
+            )),
+            _ => None,
+        })
+        .collect::<HashMap<_, _>>();
+
+    let function_ids = functions
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .qualified_name
+                .as_ref()
+                .map(|name| (name.clone(), entry.fun_idx))
+        })
+        .collect::<HashMap<_, _>>();
+
+    let mut entries = Vec::with_capacity(process_specs.len());
+    for spec in process_specs {
+        let init_name = qualified_names
+            .get(&spec.init_uid)
+            .ok_or_else(|| CodegenError {
+                message: format!(
+                    "missing lowered init handler metadata for process `{}`",
+                    spec.process_name
+                ),
+                span: Span { start: 0, end: 0 },
+            })?;
+        let init_fun_idx = function_ids
+            .get(init_name)
+            .copied()
+            .ok_or_else(|| CodegenError {
+                message: format!(
+                    "missing bytecode init handler for process `{}`",
+                    spec.process_name
+                ),
+                span: Span { start: 0, end: 0 },
+            })?;
+
+        let get_name = qualified_names
+            .get(&spec.get_uid)
+            .ok_or_else(|| CodegenError {
+                message: format!(
+                    "missing lowered get handler metadata for process `{}`",
+                    spec.process_name
+                ),
+                span: Span { start: 0, end: 0 },
+            })?;
+        let get_fun_idx = function_ids
+            .get(get_name)
+            .copied()
+            .ok_or_else(|| CodegenError {
+                message: format!(
+                    "missing bytecode get handler for process `{}`",
+                    spec.process_name
+                ),
+                span: Span { start: 0, end: 0 },
+            })?;
+
+        let set_fun_idx = spec
+            .set_uid
+            .map(|uid| {
+                let set_name = qualified_names.get(&uid).ok_or_else(|| CodegenError {
+                    message: format!(
+                        "missing lowered set handler metadata for process `{}`",
+                        spec.process_name
+                    ),
+                    span: Span { start: 0, end: 0 },
+                })?;
+                function_ids
+                    .get(set_name)
+                    .copied()
+                    .ok_or_else(|| CodegenError {
+                        message: format!(
+                            "missing bytecode set handler for process `{}`",
+                            spec.process_name
+                        ),
+                        span: Span { start: 0, end: 0 },
+                    })
+            })
+            .transpose()?;
+
+        entries.push(RuntimeProcessSpec {
+            process_name: spec.process_name.clone(),
+            module_path: spec.module_path.clone(),
+            kind: match spec.spec.kind {
+                spire::ast::ProcessKind::ReadOnlyAgent => RuntimeProcessKind::ReadOnlyAgent,
+                spire::ast::ProcessKind::StateAgent => RuntimeProcessKind::StateAgent,
+            },
+            instance: match spec.spec.instance {
+                spire::ast::ProcessInstance::Singleton => RuntimeProcessInstance::Singleton,
+                spire::ast::ProcessInstance::Multi => RuntimeProcessInstance::Multi,
+            },
+            boot: spec.spec.boot,
+            registry: spec.spec.registry,
+            lazy: spec.spec.lazy,
+            init_fun_idx,
+            get_fun_idx,
+            set_fun_idx,
+        });
+    }
+
+    Ok(RuntimeProcessSpecTable { entries })
+}
+
+fn relocate_base_ops_for_insert(
+    opcodes: &mut [Opcode],
+    insertion_pc: usize,
+    inserted_len: usize,
+) -> Result<(), CodegenError> {
+    for op in opcodes {
+        match op {
+            Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr)
+                if *addr as usize >= insertion_pc =>
+            {
+                *addr = add_u32(*addr, inserted_len, "base jump relocation")?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn relocate_function_entry(
+    entry: &mut FunctionEntry,
+    insertion_pc: usize,
+    inserted_len: usize,
+) -> Result<(), CodegenError> {
+    if entry.entry_pc as usize > insertion_pc {
+        entry.entry_pc = add_u32(
+            entry.entry_pc,
+            inserted_len,
+            "base function entry relocation",
+        )?;
+    }
+    if entry.end_pc as usize > insertion_pc {
+        entry.end_pc = add_u32(entry.end_pc, inserted_len, "base function end relocation")?;
+    }
+    Ok(())
+}
+
+fn relocate_chunk_ops_for_artifact(
+    opcodes: &mut [Opcode],
+    chunk_halt: usize,
+    base_top_len: usize,
+    chunk_func_base: usize,
+    const_base: usize,
+    error_template_base: usize,
+    dbg_template_base: usize,
+) -> Result<(), CodegenError> {
+    let const_base = u32::try_from(const_base).map_err(|_| CodegenError {
+        message: "constant base exceeds u32".into(),
+        span: Span { start: 0, end: 0 },
+    })?;
+    let error_template_base = u32::try_from(error_template_base).map_err(|_| CodegenError {
+        message: "error template base exceeds u32".into(),
+        span: Span { start: 0, end: 0 },
+    })?;
+    let dbg_template_base = u32::try_from(dbg_template_base).map_err(|_| CodegenError {
+        message: "dbg template base exceeds u32".into(),
+        span: Span { start: 0, end: 0 },
+    })?;
+    for op in opcodes {
+        match op {
+            Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
+                *addr = map_chunk_pc(*addr, chunk_halt, base_top_len, chunk_func_base)?;
+            }
+            Opcode::LoadConst(idx) => {
+                *idx = idx.checked_add(const_base).ok_or_else(|| CodegenError {
+                    message: "chunk const relocation overflow".into(),
+                    span: Span { start: 0, end: 0 },
+                })?;
+            }
+            Opcode::MakeError { template_id } => {
+                *template_id = template_id
+                    .checked_add(error_template_base)
+                    .ok_or_else(|| CodegenError {
+                        message: "chunk error template relocation overflow".into(),
+                        span: Span { start: 0, end: 0 },
+                    })?;
+            }
+            Opcode::Dbg { template_id, .. } => {
+                *template_id =
+                    template_id
+                        .checked_add(dbg_template_base)
+                        .ok_or_else(|| CodegenError {
+                            message: "chunk dbg template relocation overflow".into(),
+                            span: Span { start: 0, end: 0 },
+                        })?;
+            }
+            Opcode::MakeErrorLiteral {
+                kind_const_idx,
+                message_const_idx,
+            } => {
+                *kind_const_idx =
+                    kind_const_idx
+                        .checked_add(const_base)
+                        .ok_or_else(|| CodegenError {
+                            message: "chunk error literal kind relocation overflow".into(),
+                            span: Span { start: 0, end: 0 },
+                        })?;
+                *message_const_idx =
+                    message_const_idx
+                        .checked_add(const_base)
+                        .ok_or_else(|| CodegenError {
+                            message: "chunk error literal message relocation overflow".into(),
+                            span: Span { start: 0, end: 0 },
+                        })?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn map_chunk_pc(
+    pc: u32,
+    chunk_halt: usize,
+    base_top_len: usize,
+    chunk_func_base: usize,
+) -> Result<u32, CodegenError> {
+    let pc = pc as usize;
+    let mapped = if pc <= chunk_halt {
+        base_top_len + pc
+    } else {
+        chunk_func_base + pc.saturating_sub(chunk_halt + 1)
+    };
+    u32::try_from(mapped).map_err(|_| CodegenError {
+        message: "chunk pc relocation exceeds u32".into(),
+        span: Span { start: 0, end: 0 },
+    })
+}
+
+fn add_u32(value: u32, add: usize, label: &str) -> Result<u32, CodegenError> {
+    let add = u32::try_from(add).map_err(|_| CodegenError {
+        message: format!("{label} offset exceeds u32"),
+        span: Span { start: 0, end: 0 },
+    })?;
+    value.checked_add(add).ok_or_else(|| CodegenError {
+        message: format!("{label} overflow"),
+        span: Span { start: 0, end: 0 },
+    })
+}
+
+fn extend_docs_unique(docs: &mut Vec<DocEntry>, new_docs: Vec<DocEntry>) {
+    for doc in new_docs {
+        let exists = docs.iter().any(|existing| {
+            existing.qualified_name == doc.qualified_name
+                && existing.kind == doc.kind
+                && existing.signature == doc.signature
+        });
+        if !exists {
+            docs.push(doc);
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,11 +460,52 @@ pub enum ReplTypeKind {
     Enum,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplCallableKind {
+    Closure,
+    Capture,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BindingInfo {
     pub name: String,
     pub ty: String,
     pub slot_id: u32,
+    pub callable_kind: Option<ReplCallableKind>,
+    pub callable_display: Option<ReplCallableDisplay>,
+    pub callable_captures: Vec<String>,
+    pub lens_info: Option<ReplLensInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplCallableDisplay {
+    FnCapture {
+        module: String,
+        name: String,
+        sig: String,
+    },
+    Closure {
+        sig: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplLensSegmentInfo {
+    pub label: String,
+    pub kind: String,
+    pub source_ty: String,
+    pub focus_ty: String,
+    pub fallible: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplLensInfo {
+    pub ty: String,
+    pub view_result_ty: String,
+    pub full_path: String,
+    pub segments: Vec<ReplLensSegmentInfo>,
+    pub stop_points: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +518,7 @@ pub struct TypeDefDisplay {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChunkMeta {
     pub bindings: Vec<BindingInfo>,
+    pub result_lens_info: Option<ReplLensInfo>,
     pub type_defs: Vec<TypeDefDisplay>,
     pub function_defs: Vec<String>,
     pub docs: Vec<DocEntry>,
@@ -77,6 +532,7 @@ struct CodegenState {
     next_fun_idx: u32,
     type_registry: TypeRegistry,
     error_templates: Vec<ErrTemplate>,
+    dbg_templates: Vec<DbgTemplate>,
     functions: Vec<FunctionEntry>,
     error_ctor_funs: HashMap<String, (u32, u8)>, // error kind -> (fun_idx, arity)
 }
@@ -90,6 +546,7 @@ impl CodegenState {
             next_fun_idx: 0,
             type_registry: TypeRegistry::new(),
             error_templates: Vec::new(),
+            dbg_templates: Vec::new(),
             functions: Vec::new(),
             error_ctor_funs: HashMap::new(),
         }
@@ -166,6 +623,7 @@ impl ForgeSession {
                 next_fun_idx,
                 type_registry: bytecode.type_registry.clone(),
                 error_templates: bytecode.error_templates.clone(),
+                dbg_templates: bytecode.dbg_templates.clone(),
                 functions: bytecode.functions.clone(),
                 error_ctor_funs,
             },
@@ -176,38 +634,84 @@ impl ForgeSession {
         &mut self,
         typed: Vec<TypedNode>,
     ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
-        self.codegen_chunk_with_options(typed, false)
+        self.codegen_chunk_typed_program(TypedProgram {
+            nodes: typed,
+            process_specs: Vec::new(),
+        })
+    }
+
+    pub fn codegen_chunk_typed_program(
+        &mut self,
+        typed: TypedProgram,
+    ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
+        self.codegen_chunk_typed_program_with_options(typed, false)
     }
 
     pub fn codegen_chunk_repl_result(
         &mut self,
         typed: Vec<TypedNode>,
     ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
-        self.codegen_chunk_with_options(typed, true)
+        self.codegen_chunk_typed_program_with_options(
+            TypedProgram {
+                nodes: typed,
+                process_specs: Vec::new(),
+            },
+            true,
+        )
     }
 
-    fn codegen_chunk_with_options(
+    fn codegen_chunk_typed_program_with_options(
+        &mut self,
+        typed: TypedProgram,
+        top_level_returns_result: bool,
+    ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
+        let TypedProgram {
+            nodes,
+            process_specs,
+        } = typed;
+        let typed_for_meta = nodes.clone();
+        let (chunk, meta, functions) =
+            self.codegen_chunk_nodes_with_options(nodes, top_level_returns_result)?;
+        let runtime_process_specs =
+            build_runtime_process_specs(&process_specs, &typed_for_meta, &functions)?.entries;
+        Ok((
+            BytecodeChunk {
+                runtime_process_specs,
+                ..chunk
+            },
+            meta,
+        ))
+    }
+
+    fn codegen_chunk_nodes_with_options(
         &mut self,
         typed: Vec<TypedNode>,
         top_level_returns_result: bool,
-    ) -> Result<(BytecodeChunk, ChunkMeta), CodegenError> {
+    ) -> Result<(BytecodeChunk, ChunkMeta, Vec<FunctionEntry>), CodegenError> {
         let before = self.state.clone();
         let typed_for_meta = typed.clone();
         let const_base = before.constants.len();
         let error_template_base = before.error_templates.len();
+        let dbg_template_base = before.dbg_templates.len();
 
         let mut gene = Codegen::from_state(before.clone());
         gene.set_chunk_constant_dedup_start(const_base);
         gene.set_top_level_returns_result(top_level_returns_result);
         gene.emit_program_chunk(typed)?;
         let (mut opcodes, after) = gene.finalize()?;
-        localize_chunk_indices(&mut opcodes, const_base, error_template_base)?;
+        localize_chunk_indices(
+            &mut opcodes,
+            const_base,
+            error_template_base,
+            dbg_template_base,
+        )?;
 
         let new_constants = after.constants[before.constants.len()..].to_vec();
         let new_locals = after.next_slot.saturating_sub(before.next_slot) as usize;
         let type_entries =
             after.type_registry.entries[before.type_registry.entries.len()..].to_vec();
         let error_templates = after.error_templates[before.error_templates.len()..].to_vec();
+        let dbg_templates = after.dbg_templates[before.dbg_templates.len()..].to_vec();
         let meta = collect_chunk_meta(&typed_for_meta, &after.slot_map);
         let functions = after.functions[before.functions.len()..].to_vec();
 
@@ -221,6 +725,10 @@ impl ForgeSession {
             message: "error template base exceeds u32".into(),
             span: Span { start: 0, end: 0 },
         })?;
+        let dbg_template_base = u32::try_from(dbg_template_base).map_err(|_| CodegenError {
+            message: "dbg template base exceeds u32".into(),
+            span: Span { start: 0, end: 0 },
+        })?;
 
         Ok((
             BytecodeChunk {
@@ -232,10 +740,14 @@ impl ForgeSession {
                 type_entries,
                 error_template_base,
                 error_templates,
-                functions,
+                dbg_template_base,
+                dbg_templates,
+                functions: functions.clone(),
                 docs: Vec::new(),
+                runtime_process_specs: Vec::new(),
             },
             meta,
+            functions,
         ))
     }
 }
@@ -244,6 +756,7 @@ fn localize_chunk_indices(
     opcodes: &mut [Opcode],
     const_base: usize,
     error_template_base: usize,
+    dbg_template_base: usize,
 ) -> Result<(), CodegenError> {
     for op in opcodes.iter_mut() {
         match op {
@@ -273,6 +786,46 @@ fn localize_chunk_indices(
                 }
                 *template_id = (id_usize - error_template_base) as u32;
             }
+            Opcode::Dbg { template_id, .. } => {
+                let id_usize = *template_id as usize;
+                if id_usize < dbg_template_base {
+                    return Err(CodegenError {
+                        message: format!(
+                            "chunk dbg template index {} is below base {}",
+                            id_usize, dbg_template_base
+                        ),
+                        span: Span { start: 0, end: 0 },
+                    });
+                }
+                *template_id = (id_usize - dbg_template_base) as u32;
+            }
+            Opcode::MakeErrorLiteral {
+                kind_const_idx,
+                message_const_idx,
+            } => {
+                let kind_idx = *kind_const_idx as usize;
+                if kind_idx < const_base {
+                    return Err(CodegenError {
+                        message: format!(
+                            "chunk error literal kind index {} is below base {}",
+                            kind_idx, const_base
+                        ),
+                        span: Span { start: 0, end: 0 },
+                    });
+                }
+                let message_idx = *message_const_idx as usize;
+                if message_idx < const_base {
+                    return Err(CodegenError {
+                        message: format!(
+                            "chunk error literal message index {} is below base {}",
+                            message_idx, const_base
+                        ),
+                        span: Span { start: 0, end: 0 },
+                    });
+                }
+                *kind_const_idx = (kind_idx - const_base) as u32;
+                *message_const_idx = (message_idx - const_base) as u32;
+            }
             _ => {}
         }
     }
@@ -283,7 +836,7 @@ fn localize_chunk_indices(
 mod tests {
     use super::Codegen;
     use crate::opcode::Opcode;
-    use scar::typed::{TypedInner, TypedMatchPattern, TypedNode};
+    use scar::typed::{TypedDbgArg, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode};
     use scar::types::Ty;
     use spire::ast::{BinOp, Lit, Span};
 
@@ -315,8 +868,15 @@ mod tests {
         let scrutinee = lit_node(Ty::Bool, Lit::Bool(false), span(1, 6));
         let body = lit_node(Ty::Bool, Lit::Bool(true), span(10, 14));
 
-        gene.emit_match(&scrutinee, &[(TypedMatchPattern::BoolLit(true), body)])
-            .expect("match emission should succeed");
+        gene.emit_match(
+            &scrutinee,
+            &[TypedMatchArm {
+                pattern: TypedMatchPattern::BoolLit(true),
+                guard: None,
+                body,
+            }],
+        )
+        .expect("match emission should succeed");
 
         let (opcodes, _) = gene.finalize().expect("labels should resolve");
         let eprint_id = Codegen::builtin_id("eprint").expect("eprint builtin must exist");
@@ -359,6 +919,7 @@ mod tests {
                         name: "NoneError".into(),
                         qualified_name: Some("NoneError".into()),
                         unique_id: 99,
+                        compiler_generated: false,
                         span: span(10, 19),
                     }),
                 }),
@@ -390,12 +951,14 @@ mod tests {
             name: "is_even".into(),
             qualified_name: None,
             unique_id: 7,
+            compiler_generated: false,
             span: span(8, 16),
         };
         let err_id = sigil::resolved::ResolvedId {
             name: "NoneError".into(),
             qualified_name: Some("NoneError".into()),
             unique_id: 8,
+            compiler_generated: false,
             span: span(18, 27),
         };
         gene.state.slot_map.insert(8, 0);
@@ -442,6 +1005,36 @@ mod tests {
             .iter()
             .any(|opcode| matches!(opcode, Opcode::CallClosure { arity: 1, .. })));
     }
+
+    #[test]
+    fn emit_dbg_uses_dedicated_opcode() {
+        let mut gene = Codegen::new();
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: span(1, 11),
+            node: TypedInner::Dbg(vec![
+                TypedDbgArg {
+                    span: span(6, 7),
+                    ty_name: "Int".into(),
+                    expr: lit_node(Ty::Int, Lit::Int(1.into()), span(6, 7)),
+                },
+                TypedDbgArg {
+                    span: span(9, 10),
+                    ty_name: "Int".into(),
+                    expr: lit_node(Ty::Int, Lit::Int(2.into()), span(9, 10)),
+                },
+            ]),
+        };
+
+        gene.emit_node(&node).expect("dbg emission should succeed");
+        let (opcodes, state) = gene.finalize().expect("finalize should succeed");
+
+        assert!(matches!(
+            opcodes.last(),
+            Some(Opcode::Dbg { arg_count: 2, .. })
+        ));
+        assert_eq!(state.dbg_templates.len(), 1);
+    }
 }
 
 impl Default for ForgeSession {
@@ -467,9 +1060,194 @@ fn collect_chunk_meta(typed: &[TypedNode], slot_map: &HashMap<u32, u32>) -> Chun
 
     ChunkMeta {
         bindings,
+        result_lens_info: top_level_result_lens_info(typed),
         type_defs,
         function_defs,
         docs: Vec::new(),
+    }
+}
+
+fn top_level_result_lens_info(typed: &[TypedNode]) -> Option<ReplLensInfo> {
+    typed
+        .iter()
+        .rev()
+        .find(|stmt| {
+            !matches!(
+                stmt.node,
+                TypedInner::Def(..) | TypedInner::ExtractorDef(..) | TypedInner::DeferrorDef(..)
+            )
+        })
+        .and_then(lens_info_for_node)
+}
+
+fn lens_segment_label(segment: &TypedLensSegment) -> String {
+    match segment {
+        TypedLensSegment::Field { field_name, .. } => field_name.clone(),
+        TypedLensSegment::Tuple { field_index, .. } => format!("_{field_index}"),
+        TypedLensSegment::Variant { variant_name, .. } => variant_name.clone(),
+    }
+}
+
+fn lens_path_full_path(path: &TypedLensPath) -> String {
+    let mut rendered = String::new();
+    for segment in &path.segments {
+        match segment {
+            TypedLensSegment::Tuple { field_index, .. } => {
+                if rendered.is_empty() {
+                    rendered.push_str("Tuple");
+                }
+                rendered.push_str(&format!("._{field_index}"));
+            }
+            other => {
+                if rendered.is_empty() {
+                    rendered.push_str(&ty_to_string(&path.source_ty));
+                }
+                if !rendered.is_empty() {
+                    rendered.push('.');
+                }
+                rendered.push_str(&lens_segment_label(other));
+            }
+        }
+    }
+    if rendered.is_empty() {
+        "<lens>".to_string()
+    } else {
+        rendered
+    }
+}
+
+fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
+    match &node.node {
+        TypedInner::LensPath(path) => {
+            let mut current_source = path.source_ty.clone();
+            let mut segments = Vec::with_capacity(path.segments.len());
+            let mut stop_points = Vec::new();
+            let mut path_is_fallible = false;
+            let mut prefix = String::new();
+            for segment in &path.segments {
+                let label = lens_segment_label(segment);
+                let focus_ty = match segment {
+                    TypedLensSegment::Field { .. } | TypedLensSegment::Tuple { .. } => {
+                        match &current_source {
+                            Ty::Tuple(items) => match segment {
+                                TypedLensSegment::Tuple { field_index, .. } => items
+                                    .get(*field_index as usize)
+                                    .cloned()
+                                    .unwrap_or(Ty::Unit),
+                                _ => Ty::Unit,
+                            },
+                            Ty::Struct(_, fields) | Ty::Record(_, fields) => match segment {
+                                TypedLensSegment::Field { field_index, .. } => fields
+                                    .get(*field_index as usize)
+                                    .map(|(_, ty)| ty.clone())
+                                    .unwrap_or(Ty::Unit),
+                                _ => Ty::Unit,
+                            },
+                            _ => Ty::Unit,
+                        }
+                    }
+                    TypedLensSegment::Variant {
+                        payload_arity,
+                        variant_name,
+                        ..
+                    } => {
+                        stop_points.push(format!(
+                            "{}.{} - variant mismatch returns Result",
+                            ty_to_string(&current_source),
+                            variant_name
+                        ));
+                        if *payload_arity == 0 {
+                            Ty::Unit
+                        } else {
+                            path.focus_ty.clone()
+                        }
+                    }
+                };
+                if !prefix.is_empty() && !matches!(segment, TypedLensSegment::Tuple { .. }) {
+                    prefix.push('.');
+                }
+                match segment {
+                    TypedLensSegment::Tuple { field_index, .. } => {
+                        if prefix.is_empty() {
+                            prefix.push_str("Tuple");
+                        }
+                        prefix.push_str(&format!("._{field_index}"));
+                    }
+                    _ => prefix.push_str(&label),
+                }
+                let (kind, fallible, reason) = match segment {
+                    TypedLensSegment::Field { .. } => ("field", false, "field access"),
+                    TypedLensSegment::Tuple { .. } => ("tuple", false, "tuple index access"),
+                    TypedLensSegment::Variant { .. } => {
+                        path_is_fallible = true;
+                        ("variant", true, "variant mismatch returns Result")
+                    }
+                };
+                segments.push(ReplLensSegmentInfo {
+                    label: prefix.clone(),
+                    kind: kind.to_string(),
+                    source_ty: ty_to_string(&current_source),
+                    focus_ty: ty_to_string(&focus_ty),
+                    fallible,
+                    reason: reason.to_string(),
+                });
+                current_source = focus_ty;
+            }
+            Some(ReplLensInfo {
+                ty: ty_to_string(&node.ty),
+                view_result_ty: if path_is_fallible {
+                    format!("Result<{}, Error>", ty_to_string(&path.focus_ty))
+                } else {
+                    ty_to_string(&path.focus_ty)
+                },
+                full_path: lens_path_full_path(path),
+                segments,
+                stop_points,
+            })
+        }
+        TypedInner::PendingLensPath(path) => Some(ReplLensInfo {
+            ty: ty_to_string(&node.ty),
+            view_result_ty: "_".to_string(),
+            full_path: if path.segments.is_empty() {
+                "<lens>".to_string()
+            } else {
+                let mut rendered = String::new();
+                for (index, segment) in path.segments.iter().enumerate() {
+                    if index == 0 && segment.starts_with('_') {
+                        rendered.push_str("Tuple");
+                    } else if !rendered.is_empty() && !segment.starts_with('_') {
+                        rendered.push('.');
+                    }
+                    if segment.starts_with('_') {
+                        rendered.push('.');
+                    }
+                    rendered.push_str(segment);
+                }
+                rendered
+            },
+            segments: path
+                .segments
+                .iter()
+                .map(|segment| ReplLensSegmentInfo {
+                    label: if segment.starts_with('_') {
+                        format!("Tuple.{segment}")
+                    } else {
+                        segment.clone()
+                    },
+                    kind: if segment.starts_with('_') {
+                        "tuple".to_string()
+                    } else {
+                        "field".to_string()
+                    },
+                    source_ty: "_".to_string(),
+                    focus_ty: "_".to_string(),
+                    fallible: false,
+                    reason: "requires Lens context to specialize".to_string(),
+                })
+                .collect(),
+            stop_points: Vec::new(),
+        }),
+        _ => None,
     }
 }
 
@@ -482,9 +1260,21 @@ fn collect_stmt_meta(
 ) {
     match &stmt.node {
         TypedInner::Bind(pat, _) | TypedInner::SafeBind(pat, _) => {
-            collect_pattern_binding_infos(pat, slot_map, bindings);
+            let rhs = match &stmt.node {
+                TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs) => rhs.as_ref(),
+                _ => unreachable!(),
+            };
+            collect_pattern_binding_infos(
+                pat,
+                slot_map,
+                bindings,
+                callable_kind_for_node(rhs),
+                callable_display_for_node(rhs),
+                &callable_capture_names(rhs),
+                lens_info_for_node(rhs),
+            );
         }
-        TypedInner::StructDef(_, name, field_names) => {
+        TypedInner::StructDef(_, name, field_names, _) => {
             type_defs.push(TypeDefDisplay {
                 name: name.clone(),
                 kind: ReplTypeKind::Struct,
@@ -494,7 +1284,7 @@ fn collect_stmt_meta(
                     .collect(),
             });
         }
-        TypedInner::RecordDef(_, name, field_names) => {
+        TypedInner::RecordDef(_, name, field_names, _) => {
             type_defs.push(TypeDefDisplay {
                 name: name.clone(),
                 kind: ReplTypeKind::Record,
@@ -541,6 +1331,10 @@ fn collect_pattern_binding_infos(
     pat: &TypedPattern,
     slot_map: &HashMap<u32, u32>,
     out: &mut Vec<BindingInfo>,
+    callable_kind: Option<ReplCallableKind>,
+    callable_display: Option<ReplCallableDisplay>,
+    callable_captures: &[String],
+    lens_info: Option<ReplLensInfo>,
 ) {
     match pat {
         TypedPattern::Var(ty, id) => {
@@ -549,6 +1343,10 @@ fn collect_pattern_binding_infos(
                     name: id.name.clone(),
                     ty: ty_to_string(ty),
                     slot_id: *slot_id,
+                    callable_kind,
+                    callable_display: callable_display.clone(),
+                    callable_captures: callable_captures.to_vec(),
+                    lens_info: lens_info.clone(),
                 });
             }
         }
@@ -558,33 +1356,178 @@ fn collect_pattern_binding_infos(
                     name: id.name.clone(),
                     ty: ty_to_string(ty),
                     slot_id: *slot_id,
+                    callable_kind,
+                    callable_display: callable_display.clone(),
+                    callable_captures: callable_captures.to_vec(),
+                    lens_info: lens_info.clone(),
                 });
             }
-            collect_pattern_binding_infos(inner, slot_map, out);
+            collect_pattern_binding_infos(
+                inner,
+                slot_map,
+                out,
+                callable_kind,
+                callable_display,
+                callable_captures,
+                lens_info,
+            );
         }
         TypedPattern::Wildcard(_)
         | TypedPattern::ListNil(_)
         | TypedPattern::IntLit(_, _)
         | TypedPattern::StrLit(_, _)
-        | TypedPattern::BoolLit(_, _) => {}
+        | TypedPattern::BoolLit(_, _)
+        | TypedPattern::DurationLit(_, _) => {}
         TypedPattern::Tuple(_, items) => {
             for item in items {
-                collect_pattern_binding_infos(item, slot_map, out);
+                collect_pattern_binding_infos(
+                    item,
+                    slot_map,
+                    out,
+                    callable_kind,
+                    callable_display.clone(),
+                    callable_captures,
+                    lens_info.clone(),
+                );
             }
         }
         TypedPattern::ListCons(_, head, tail) => {
-            collect_pattern_binding_infos(head, slot_map, out);
-            collect_pattern_binding_infos(tail, slot_map, out);
+            collect_pattern_binding_infos(
+                head,
+                slot_map,
+                out,
+                callable_kind,
+                callable_display.clone(),
+                callable_captures,
+                lens_info.clone(),
+            );
+            collect_pattern_binding_infos(
+                tail,
+                slot_map,
+                out,
+                callable_kind,
+                callable_display,
+                callable_captures,
+                lens_info,
+            );
         }
         TypedPattern::ResultOk(_, inner) => {
-            collect_pattern_binding_infos(inner, slot_map, out);
+            collect_pattern_binding_infos(
+                inner,
+                slot_map,
+                out,
+                callable_kind,
+                callable_display,
+                callable_captures,
+                lens_info,
+            );
         }
         TypedPattern::Extractor { items, .. } => {
             for item in items {
-                collect_pattern_binding_infos(item, slot_map, out);
+                collect_pattern_binding_infos(
+                    item,
+                    slot_map,
+                    out,
+                    callable_kind,
+                    callable_display.clone(),
+                    callable_captures,
+                    lens_info.clone(),
+                );
             }
         }
     }
+}
+
+fn callable_kind_for_node(node: &TypedNode) -> Option<ReplCallableKind> {
+    match &node.node {
+        TypedInner::Closure(params, _, _)
+            if params
+                .iter()
+                .all(|param| param.id.name.starts_with("__cap_")) =>
+        {
+            Some(ReplCallableKind::Capture)
+        }
+        TypedInner::Closure(..) => Some(ReplCallableKind::Closure),
+        TypedInner::Capture(..) | TypedInner::InjectCall(..) => Some(ReplCallableKind::Capture),
+        TypedInner::Semi(inner) => callable_kind_for_node(inner),
+        _ => None,
+    }
+}
+
+fn callable_display_for_node(node: &TypedNode) -> Option<ReplCallableDisplay> {
+    match &node.node {
+        TypedInner::InjectCall(func, _) => {
+            let (module, name) = callable_head_for_node(func.as_ref())?;
+            Some(ReplCallableDisplay::FnCapture {
+                module,
+                name,
+                sig: ty_to_string(&node.ty),
+            })
+        }
+        TypedInner::Closure(params, _, body)
+            if params
+                .iter()
+                .all(|param| param.id.name.starts_with("__cap_")) =>
+        {
+            let (module, name) = callable_head_for_invocation(body.as_ref())?;
+            Some(ReplCallableDisplay::FnCapture {
+                module,
+                name,
+                sig: ty_to_string(&node.ty),
+            })
+        }
+        TypedInner::Closure(..) => Some(ReplCallableDisplay::Closure {
+            sig: ty_to_string(&node.ty),
+        }),
+        TypedInner::Semi(inner) => callable_display_for_node(inner),
+        _ => None,
+    }
+}
+
+fn callable_capture_names(node: &TypedNode) -> Vec<String> {
+    match &node.node {
+        TypedInner::Closure(_, captures, _) => captures
+            .iter()
+            .map(|capture| capture.name.to_string())
+            .collect(),
+        TypedInner::Semi(inner) => callable_capture_names(inner),
+        _ => Vec::new(),
+    }
+}
+
+fn callable_head_for_node(node: &TypedNode) -> Option<(String, String)> {
+    match &node.node {
+        TypedInner::Var(id) => {
+            let qualified = id.qualified_name.as_deref().unwrap_or(id.name.as_str());
+            let (module, name) = qualified.rsplit_once("::")?;
+            Some((module.to_string(), name.to_string()))
+        }
+        _ => None,
+    }
+}
+
+fn callable_head_for_invocation(node: &TypedNode) -> Option<(String, String)> {
+    match &node.node {
+        TypedInner::App(func, _) => callable_head_for_node(func),
+        TypedInner::TraitCall {
+            trait_name,
+            method_name,
+            origin: TraitCallOrigin::Explicit,
+            ..
+        } => Some((
+            trait_short_name(trait_name).to_string(),
+            method_name.clone(),
+        )),
+        _ => None,
+    }
+}
+
+fn trait_short_name(trait_name: &str) -> &str {
+    trait_name
+        .split_once('<')
+        .map(|(name, _)| name)
+        .or_else(|| trait_name.split_once(" for ").map(|(name, _)| name))
+        .unwrap_or(trait_name)
 }
 
 fn ty_to_string(ty: &Ty) -> String {
@@ -594,8 +1537,11 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Str => "String".into(),
         Ty::Bool => "Boolean".into(),
         Ty::Unit => "Unit".into(),
+        Ty::Hole => "_".into(),
         Ty::List(inner) => format!("List<{}>", ty_to_string(inner)),
+        Ty::Lazy(inner) => format!("Lazy<{}>", ty_to_string(inner)),
         Ty::TypeRef(inner) => format!("TypeRef<{}>", ty_to_string(inner)),
+        Ty::Pid(name) => format!("PID<{}>", name),
         Ty::Lens(source, focus) => {
             format!("Lens<{}, {}>", ty_to_string(source), ty_to_string(focus))
         }
@@ -608,7 +1554,18 @@ fn ty_to_string(ty: &Ty) -> String {
                 .join(", ")
         ),
         Ty::Result(ok, err) => format!("Result<{}, {}>", ty_to_string(ok), ty_to_string(err)),
-        Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name, _) => name.clone(),
+        Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
+        Ty::Enum(name, args) => {
+            if args.is_empty() {
+                name.clone()
+            } else {
+                format!(
+                    "{}<{}>",
+                    name,
+                    args.iter().map(ty_to_string).collect::<Vec<_>>().join(", ")
+                )
+            }
+        }
         Ty::Error => "Error".into(),
         // Hide internal type-variable IDs from REPL output.
         Ty::Var(_id) => "_".into(),
@@ -669,6 +1626,8 @@ struct PendingClosure {
     captures: Vec<ResolvedId>,
     params: Vec<TypedClosureParam>,
     body: Box<TypedNode>,
+    display: Option<ReplCallableDisplay>,
+    signature: String,
 }
 
 #[derive(Debug, Clone)]
@@ -683,12 +1642,21 @@ struct PendingInjectCall {
     fun_idx: u32,
     extra_arg_count: usize,
     span: Span,
+    display: Option<ReplCallableDisplay>,
+    signature: String,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum LensUpdateLeaf {
-    Set { value_slot: u32 },
-    Over { update_fun_slot: u32 },
+    Set {
+        value_slot: u32,
+        wrap_plain_result: bool,
+    },
+    Over {
+        update_fun_slot: u32,
+        mode: TypedLensOverMode,
+        focus_is_result: bool,
+    },
 }
 
 struct Codegen {
@@ -806,6 +1774,8 @@ impl Codegen {
         params: &[TypedClosureParam],
         captures: &[ResolvedId],
         body: &TypedNode,
+        display: Option<&ReplCallableDisplay>,
+        signature: &str,
     ) -> Result<(), CodegenError> {
         let saved_slot_map = self.state.slot_map.clone();
         let saved_next_slot = self.state.next_slot;
@@ -831,19 +1801,28 @@ impl Codegen {
         self.emit_tail_node(body)?;
         self.in_function = prev_in_function;
 
+        let (qualified_name, signature) = match display {
+            Some(ReplCallableDisplay::FnCapture { module, name, sig }) => {
+                (Some(format!("{module}::{name}")), Some(sig.clone()))
+            }
+            Some(ReplCallableDisplay::Closure { sig }) => (None, Some(sig.clone())),
+            None => (None, Some(signature.to_string())),
+        };
+
         self.state.functions.push(FunctionEntry {
             fun_idx,
             entry_pc,
             num_locals: self.state.next_slot,
             arity: total_arity as u8,
-            qualified_name: None,
-            signature: None,
+            qualified_name,
+            signature,
             end_pc: 0,
             span_start: body.span.start as u32,
             span_end: body.span.end as u32,
             flags: FunctionFlags {
                 public: false,
                 closure: true,
+                partial_apply_wrapper: false,
                 builtin_wrapper: false,
                 tail_entry: false,
                 generated: true,
@@ -864,6 +1843,8 @@ impl Codegen {
                     &closure.params,
                     &closure.captures,
                     &closure.body,
+                    closure.display.as_ref(),
+                    &closure.signature,
                 )?;
             }
         }
@@ -1000,6 +1981,7 @@ impl Codegen {
             flags: FunctionFlags {
                 public: false,
                 closure: false,
+                partial_apply_wrapper: false,
                 builtin_wrapper: false,
                 tail_entry: false,
                 generated: true,
@@ -1016,6 +1998,8 @@ impl Codegen {
         fun_idx: u32,
         extra_arg_count: usize,
         span: &Span,
+        display: Option<&ReplCallableDisplay>,
+        signature: &str,
     ) -> Result<(), CodegenError> {
         let saved_slot_map = self.state.slot_map.clone();
         let saved_next_slot = self.state.next_slot;
@@ -1042,19 +2026,28 @@ impl Codegen {
         self.in_function = prev_in_function;
         self.emit(Opcode::Return);
 
+        let (qualified_name, signature) = match display {
+            Some(ReplCallableDisplay::FnCapture { module, name, sig }) => {
+                (Some(format!("{module}::{name}")), Some(sig.clone()))
+            }
+            Some(ReplCallableDisplay::Closure { sig }) => (None, Some(sig.clone())),
+            None => (None, Some(signature.to_string())),
+        };
+
         self.state.functions.push(FunctionEntry {
             fun_idx,
             entry_pc,
             num_locals: self.state.next_slot,
             arity: (extra_arg_count + 2) as u8,
-            qualified_name: None,
-            signature: None,
+            qualified_name,
+            signature,
             end_pc: 0,
             span_start: span.start as u32,
             span_end: span.end as u32,
             flags: FunctionFlags {
                 public: false,
                 closure: false,
+                partial_apply_wrapper: true,
                 builtin_wrapper: false,
                 tail_entry: false,
                 generated: true,
@@ -1087,6 +2080,8 @@ impl Codegen {
                         inject_call.fun_idx,
                         inject_call.extra_arg_count,
                         &inject_call.span,
+                        inject_call.display.as_ref(),
+                        &inject_call.signature,
                     )?;
                 }
             }
@@ -1110,6 +2105,25 @@ impl Codegen {
         let idx = self.state.constants.len() as u32;
         self.state.constants.push(c);
         idx
+    }
+
+    fn add_dbg_template(&mut self, span: Span, args: &[TypedDbgArg]) -> u32 {
+        let id = self.state.dbg_templates.len() as u32;
+        self.state.dbg_templates.push(DbgTemplate {
+            id,
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+            source_name: None,
+            args: args
+                .iter()
+                .map(|arg| DbgArgTemplate {
+                    span_start: arg.span.start as u32,
+                    span_end: arg.span.end as u32,
+                    ty_name: arg.ty_name.clone(),
+                })
+                .collect(),
+        });
+        id
     }
 
     fn emit(&mut self, op: Opcode) {
@@ -1205,7 +2219,18 @@ impl Codegen {
         });
 
         for (i, stmt) in main_stmts.iter().enumerate() {
-            self.emit_node(stmt)?;
+            if self.top_level_returns_result
+                && matches!(
+                    stmt.node,
+                    TypedInner::LensPath(_) | TypedInner::PendingLensPath(_)
+                )
+            {
+                // REPL chunks may end with a LensPath expression so the session can
+                // inspect the canonical path without materializing a runtime value.
+                self.emit_unit_const();
+            } else {
+                self.emit_node(stmt)?;
+            }
             if pop_last || i + 1 < main_stmts.len() {
                 self.emit(Opcode::Pop);
             }
@@ -1272,6 +2297,7 @@ impl Codegen {
             flags: FunctionFlags {
                 public: *visibility == Visibility::Public,
                 closure: false,
+                partial_apply_wrapper: false,
                 builtin_wrapper: false,
                 tail_entry: false,
                 generated: false,
@@ -1344,6 +2370,7 @@ impl Codegen {
             flags: FunctionFlags {
                 public: true,
                 closure: false,
+                partial_apply_wrapper: false,
                 builtin_wrapper: false,
                 tail_entry: false,
                 generated: false,
@@ -1411,6 +2438,7 @@ impl Codegen {
             flags: FunctionFlags {
                 public: *visibility == Visibility::Public,
                 closure: false,
+                partial_apply_wrapper: false,
                 builtin_wrapper: false,
                 tail_entry: false,
                 generated: false,
@@ -1443,6 +2471,7 @@ impl Codegen {
 
             TypedInner::Bind(pat, rhs) => {
                 if matches!(rhs.ty, Ty::Lens(_, _)) {
+                    self.reserve_pattern_slots_for_lens_bind(pat);
                     let unit_idx = self.add_constant(Constant::Unit);
                     self.emit(Opcode::LoadConst(unit_idx));
                     return Ok(());
@@ -1551,6 +2580,8 @@ impl Codegen {
                     fun_idx,
                     extra_arg_count: args.len(),
                     span: node.span.clone(),
+                    display: callable_display_for_node(node),
+                    signature: ty_to_string(&node.ty),
                 });
                 self.emit(Opcode::LoadFunctionRef(fun_idx));
                 self.emit_callable_ref(func)?;
@@ -1581,71 +2612,6 @@ impl Codegen {
                 });
             }
 
-            TypedInner::ResultMap(left, right) => {
-                self.emit_node(left)?;
-                let result_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::StoreLocal(result_slot));
-
-                self.emit(Opcode::LoadLocal(result_slot));
-                self.emit(Opcode::GetTag);
-                let err_tag = self.add_constant(Constant::Tag(1));
-                self.emit(Opcode::LoadConst(err_tag));
-                self.emit(Opcode::EqTag);
-
-                let ok_path = self.fresh_label();
-                let end_label = self.fresh_label();
-                self.emit_jump_if_false(ok_path);
-                self.emit(Opcode::LoadLocal(result_slot));
-                self.emit_jump(end_label);
-
-                self.patch_label(ok_path);
-                let ok_tag = self.add_constant(Constant::Tag(0));
-                self.emit(Opcode::LoadConst(ok_tag));
-                self.emit_callable_ref(right)?;
-                self.emit(Opcode::LoadLocal(result_slot));
-                self.emit(Opcode::GetField { field_index: 0 });
-                self.emit(Opcode::CallClosure {
-                    arity: 1,
-                    span_start: node.span.start as u32,
-                    span_end: node.span.end as u32,
-                });
-                self.emit(Opcode::StructNew { field_count: 1 });
-
-                self.patch_label(end_label);
-            }
-
-            TypedInner::ResultBind(left, right) => {
-                self.emit_node(left)?;
-                let result_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::StoreLocal(result_slot));
-
-                self.emit(Opcode::LoadLocal(result_slot));
-                self.emit(Opcode::GetTag);
-                let err_tag = self.add_constant(Constant::Tag(1));
-                self.emit(Opcode::LoadConst(err_tag));
-                self.emit(Opcode::EqTag);
-
-                let ok_path = self.fresh_label();
-                let end_label = self.fresh_label();
-                self.emit_jump_if_false(ok_path);
-                self.emit(Opcode::LoadLocal(result_slot));
-                self.emit_jump(end_label);
-
-                self.patch_label(ok_path);
-                self.emit_callable_ref(right)?;
-                self.emit(Opcode::LoadLocal(result_slot));
-                self.emit(Opcode::GetField { field_index: 0 });
-                self.emit(Opcode::CallClosure {
-                    arity: 1,
-                    span_start: node.span.start as u32,
-                    span_end: node.span.end as u32,
-                });
-
-                self.patch_label(end_label);
-            }
-
             TypedInner::Compose(flavor, left, right) => {
                 let fun_idx = self.reserve_fun_idx();
                 self.pending_composes.push(PendingCompose {
@@ -1660,11 +2626,7 @@ impl Codegen {
             }
 
             TypedInner::ListNil => self.emit(Opcode::ListNil),
-            TypedInner::ListCons(head, tail) => {
-                self.emit_node(head)?;
-                self.emit_node(tail)?;
-                self.emit(Opcode::ListCons);
-            }
+            TypedInner::ListCons(_, _) => self.emit_list_cons_chain(node)?,
             TypedInner::ListLiteral(elems) => {
                 for elem in elems {
                     self.emit_node(elem)?;
@@ -1686,6 +2648,17 @@ impl Codegen {
                 self.emit_interpolated_str(parts)?;
             }
 
+            TypedInner::Dbg(args) => {
+                for arg in args {
+                    self.emit_node(&arg.expr)?;
+                }
+                let template_id = self.add_dbg_template(node.span.clone(), args);
+                self.emit(Opcode::Dbg {
+                    template_id,
+                    arg_count: args.len() as u8,
+                });
+            }
+
             TypedInner::If(cond, then, else_opt) => {
                 self.emit_if(cond, then, else_opt)?;
             }
@@ -1694,6 +2667,15 @@ impl Codegen {
             }
             TypedInner::Ensure(value, pred, err) => {
                 self.emit_ensure(node, value, pred, err)?;
+            }
+            TypedInner::MapErr(value, err) => {
+                self.emit_result_error_transform(node, value, err, "map_err")?;
+            }
+            TypedInner::Cause(value, err) => {
+                self.emit_result_error_transform(node, value, err, "cause")?;
+            }
+            TypedInner::RecoverKind(value, marker, handler) => {
+                self.emit_recover_kind(node, value, marker, handler)?;
             }
 
             TypedInner::Match(scrutinee, arms) => {
@@ -1708,7 +2690,7 @@ impl Codegen {
                 }
             }
 
-            TypedInner::LensPath(_) => {
+            TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => {
                 return Err(CodegenError {
                     message:
                         "Lens path value leaked to codegen; Lens is compile-time only in Stage1"
@@ -1729,16 +2711,18 @@ impl Codegen {
                 path,
                 value,
                 source_is_result,
+                mode,
             } => {
-                self.emit_lens_set(node, source, path, value, *source_is_result)?;
+                self.emit_lens_set(node, source, path, value, *source_is_result, *mode)?;
             }
             TypedInner::LensOver {
                 source,
                 path,
                 update_fun,
                 source_is_result,
+                mode,
             } => {
-                self.emit_lens_over(node, source, path, update_fun, *source_is_result)?;
+                self.emit_lens_over(node, source, path, update_fun, *source_is_result, *mode)?;
             }
 
             TypedInner::StructLit(tag, fields) => {
@@ -1811,6 +2795,8 @@ impl Codegen {
                     captures: filtered_captures.clone(),
                     params: params.clone(),
                     body: body.clone(),
+                    display: callable_display_for_node(node),
+                    signature: ty_to_string(&node.ty),
                 });
                 self.emit(Opcode::LoadFunctionRef(fun_idx));
                 for capture in &filtered_captures {
@@ -1821,32 +2807,35 @@ impl Codegen {
             }
 
             TypedInner::Capture(target, args) => {
-                self.emit_callable_ref(target)?;
-                for arg in args {
-                    self.emit_node(arg)?;
-                }
                 if !args.is_empty() {
-                    self.emit(Opcode::CapturePartial(args.len() as u8));
+                    return Err(CodegenError {
+                        message: "capture calls with arguments should be lowered before codegen"
+                            .into(),
+                        span: node.span.clone(),
+                    });
                 }
+                self.emit_callable_ref(target)?;
             }
 
-            TypedInner::StructDef(tag, name, field_names) => {
+            TypedInner::StructDef(tag, name, field_names, private_flags) => {
                 self.state.type_registry.register(TypeEntry {
                     tag: *tag,
                     name: name.clone(),
                     kind: TypeKind::Struct,
                     field_names: field_names.clone(),
+                    private_flags: private_flags.clone(),
                 });
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
-            TypedInner::RecordDef(tag, name, field_names) => {
+            TypedInner::RecordDef(tag, name, field_names, private_flags) => {
                 self.state.type_registry.register(TypeEntry {
                     tag: *tag,
                     name: name.clone(),
                     kind: TypeKind::Record,
                     field_names: field_names.clone(),
+                    private_flags: private_flags.clone(),
                 });
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
@@ -1859,11 +2848,31 @@ impl Codegen {
                         name: variant.constructor_name.clone(),
                         kind: TypeKind::EnumVariant,
                         field_names: variant.field_names.clone(),
+                        private_flags: vec![false; variant.field_names.len()],
                     });
                 }
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
+        }
+        Ok(())
+    }
+
+    fn emit_list_cons_chain(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
+        let mut heads = Vec::new();
+        let mut tail = node;
+
+        while let TypedInner::ListCons(head, next_tail) = &tail.node {
+            heads.push(head.as_ref());
+            tail = next_tail;
+        }
+
+        for head in &heads {
+            self.emit_node(head)?;
+        }
+        self.emit_node(tail)?;
+        for _ in heads.iter().rev() {
+            self.emit(Opcode::ListCons);
         }
         Ok(())
     }
@@ -1944,6 +2953,7 @@ impl Codegen {
         path: &TypedLensPath,
         value: &TypedNode,
         source_is_result: bool,
+        mode: TypedLensSetMode,
     ) -> Result<(), CodegenError> {
         self.emit_node(source)?;
         let source_slot = self.state.next_slot;
@@ -1960,7 +2970,10 @@ impl Codegen {
             source_slot,
             path,
             source_is_result,
-            LensUpdateLeaf::Set { value_slot },
+            LensUpdateLeaf::Set {
+                value_slot,
+                wrap_plain_result: matches!(mode, TypedLensSetMode::WrapPlainResult),
+            },
         )
     }
 
@@ -1971,6 +2984,7 @@ impl Codegen {
         path: &TypedLensPath,
         update_fun: &TypedNode,
         source_is_result: bool,
+        mode: TypedLensOverMode,
     ) -> Result<(), CodegenError> {
         self.emit_node(source)?;
         let source_slot = self.state.next_slot;
@@ -1987,7 +3001,11 @@ impl Codegen {
             source_slot,
             path,
             source_is_result,
-            LensUpdateLeaf::Over { update_fun_slot },
+            LensUpdateLeaf::Over {
+                update_fun_slot,
+                mode,
+                focus_is_result: matches!(path.focus_ty, Ty::Result(_, _)),
+            },
         )
     }
 
@@ -2222,38 +3240,98 @@ impl Codegen {
         failure_end: Label,
     ) -> Result<(), CodegenError> {
         match leaf {
-            LensUpdateLeaf::Set { value_slot } => {
-                self.emit(Opcode::LoadLocal(value_slot));
+            LensUpdateLeaf::Set {
+                value_slot,
+                wrap_plain_result,
+            } => {
+                if wrap_plain_result {
+                    let ok_tag = self.add_constant(Constant::Tag(0));
+                    self.emit(Opcode::LoadConst(ok_tag));
+                    self.emit(Opcode::LoadLocal(value_slot));
+                    self.emit(Opcode::StructNew { field_count: 1 });
+                } else {
+                    self.emit(Opcode::LoadLocal(value_slot));
+                }
                 self.emit(Opcode::StoreLocal(current_slot));
             }
-            LensUpdateLeaf::Over { update_fun_slot } => {
-                self.emit(Opcode::LoadLocal(update_fun_slot));
-                self.emit(Opcode::LoadLocal(current_slot));
-                self.emit(Opcode::CallClosure {
-                    arity: 1,
-                    span_start: span.start as u32,
-                    span_end: span.end as u32,
-                });
-                let update_result_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::StoreLocal(update_result_slot));
+            LensUpdateLeaf::Over {
+                update_fun_slot,
+                mode,
+                focus_is_result,
+            } => match (mode, focus_is_result) {
+                (TypedLensOverMode::FocusValue, true) => {
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit(Opcode::GetTag);
+                    let err_tag = self.add_constant(Constant::Tag(1));
+                    self.emit(Opcode::LoadConst(err_tag));
+                    self.emit(Opcode::EqTag);
 
-                self.emit(Opcode::LoadLocal(update_result_slot));
-                self.emit(Opcode::GetTag);
-                let err_tag = self.add_constant(Constant::Tag(1));
-                self.emit(Opcode::LoadConst(err_tag));
-                self.emit(Opcode::EqTag);
+                    let ok_label = self.fresh_label();
+                    let continue_label = self.fresh_label();
+                    self.emit_jump_if_false(ok_label);
+                    self.emit_jump(continue_label);
 
-                let ok_label = self.fresh_label();
-                self.emit_jump_if_false(ok_label);
-                self.emit(Opcode::LoadLocal(update_result_slot));
-                self.emit_jump(failure_end);
+                    self.patch_label(ok_label);
+                    self.emit(Opcode::LoadLocal(update_fun_slot));
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit(Opcode::GetField { field_index: 0 });
+                    self.emit(Opcode::CallClosure {
+                        arity: 1,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
+                    let update_result_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::StoreLocal(update_result_slot));
 
-                self.patch_label(ok_label);
-                self.emit(Opcode::LoadLocal(update_result_slot));
-                self.emit(Opcode::GetField { field_index: 0 });
-                self.emit(Opcode::StoreLocal(current_slot));
-            }
+                    self.emit(Opcode::LoadLocal(update_result_slot));
+                    self.emit(Opcode::GetTag);
+                    self.emit(Opcode::LoadConst(err_tag));
+                    self.emit(Opcode::EqTag);
+
+                    let update_ok_label = self.fresh_label();
+                    self.emit_jump_if_false(update_ok_label);
+                    self.emit(Opcode::LoadLocal(update_result_slot));
+                    self.emit_jump(failure_end);
+
+                    self.patch_label(update_ok_label);
+                    let ok_tag = self.add_constant(Constant::Tag(0));
+                    self.emit(Opcode::LoadConst(ok_tag));
+                    self.emit(Opcode::LoadLocal(update_result_slot));
+                    self.emit(Opcode::GetField { field_index: 0 });
+                    self.emit(Opcode::StructNew { field_count: 1 });
+                    self.emit(Opcode::StoreLocal(current_slot));
+                    self.patch_label(continue_label);
+                }
+                _ => {
+                    self.emit(Opcode::LoadLocal(update_fun_slot));
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    self.emit(Opcode::CallClosure {
+                        arity: 1,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
+                    let update_result_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::StoreLocal(update_result_slot));
+
+                    self.emit(Opcode::LoadLocal(update_result_slot));
+                    self.emit(Opcode::GetTag);
+                    let err_tag = self.add_constant(Constant::Tag(1));
+                    self.emit(Opcode::LoadConst(err_tag));
+                    self.emit(Opcode::EqTag);
+
+                    let ok_label = self.fresh_label();
+                    self.emit_jump_if_false(ok_label);
+                    self.emit(Opcode::LoadLocal(update_result_slot));
+                    self.emit_jump(failure_end);
+
+                    self.patch_label(ok_label);
+                    self.emit(Opcode::LoadLocal(update_result_slot));
+                    self.emit(Opcode::GetField { field_index: 0 });
+                    self.emit(Opcode::StoreLocal(current_slot));
+                }
+            },
         }
         Ok(())
     }
@@ -2385,7 +3463,7 @@ impl Codegen {
             self.emit_jump(success_label);
 
             self.patch_label(pattern_fail);
-            self.emit_pattern_mismatch_failure(rhs.span.clone())?;
+            self.emit_safebind_pattern_failure(pat, payload_slot, rhs.span.clone())?;
 
             self.patch_label(success_label);
             let unit_idx = self.add_constant(Constant::Unit);
@@ -2465,7 +3543,7 @@ impl Codegen {
         self.emit_jump(success_label);
 
         self.patch_label(pattern_fail);
-        self.emit_safebind_pattern_failure(pat, rhs.span.clone())?;
+        self.emit_safebind_pattern_failure(pat, payload_slot, rhs.span.clone())?;
 
         self.patch_label(success_label);
         if matches!(pat, TypedPattern::Wildcard(_)) {
@@ -2533,7 +3611,7 @@ impl Codegen {
         self.emit_jump(success_label);
 
         self.patch_label(pattern_fail);
-        self.emit_safebind_pattern_failure(pat, rhs.span.clone())?;
+        self.emit_safebind_pattern_failure(pat, list_slot, rhs.span.clone())?;
 
         self.patch_label(success_label);
         let unit_idx = self.add_constant(Constant::Unit);
@@ -2548,10 +3626,13 @@ impl Codegen {
     fn emit_safebind_pattern_failure(
         &mut self,
         pat: &TypedPattern,
+        value_slot: u32,
         span: Span,
     ) -> Result<(), CodegenError> {
         match pat {
-            TypedPattern::As(_, inner, _) => self.emit_safebind_pattern_failure(inner, span),
+            TypedPattern::As(_, inner, _) => {
+                self.emit_safebind_pattern_failure(inner, value_slot, span)
+            }
             TypedPattern::ListNil(_) | TypedPattern::ListCons(_, _, _) => {
                 self.emit_empty_list_failure(span)
             }
@@ -2564,8 +3645,50 @@ impl Codegen {
             {
                 self.emit_empty_list_failure(span)
             }
+            TypedPattern::IntLit(_, _)
+            | TypedPattern::StrLit(_, _)
+            | TypedPattern::BoolLit(_, _)
+            | TypedPattern::DurationLit(_, _) => {
+                self.emit_literal_pattern_mismatch_failure(pat, value_slot, span)
+            }
             _ => self.emit_pattern_mismatch_failure(span),
         }
+    }
+
+    fn emit_literal_pattern_mismatch_failure(
+        &mut self,
+        pat: &TypedPattern,
+        value_slot: u32,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let Some(lhs_value) = literal_pattern_display(pat) else {
+            return self.emit_pattern_mismatch_failure(span);
+        };
+
+        let prefix_idx = self.add_constant(Constant::Str("Pattern did not match.\t@@lhs=".into()));
+        self.emit(Opcode::LoadConst(prefix_idx));
+        let lhs_idx = self.add_constant(Constant::Str(lhs_value));
+        self.emit(Opcode::LoadConst(lhs_idx));
+        self.emit(Opcode::ConcatStr);
+
+        let rhs_prefix_idx = self.add_constant(Constant::Str("\t@@rhs=".into()));
+        self.emit(Opcode::LoadConst(rhs_prefix_idx));
+        self.emit(Opcode::ConcatStr);
+
+        self.emit(Opcode::LoadLocal(value_slot));
+        let inspect_id = Self::builtin_id("inspect").ok_or_else(|| CodegenError {
+            message: "Unknown builtin: inspect".into(),
+            span: span.clone(),
+        })?;
+        self.emit(Opcode::CallBuiltin {
+            builtin_id: inspect_id,
+            arity: 1,
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+        });
+        self.emit(Opcode::ConcatStr);
+
+        self.emit_pattern_failure_from_message_stack("PatternMismatch", span)
     }
 
     fn emit_list_len_mismatch_failure_concrete(
@@ -2796,13 +3919,18 @@ impl Codegen {
             }
         }
 
-        self.emit(Opcode::Pop);
-        let kind_idx = self.add_constant(Constant::Str(kind.into()));
-        let message_idx = self.add_constant(Constant::Str("Pattern did not match.".into()));
-        self.emit(Opcode::MakeErrorLiteral {
-            kind_const_idx: kind_idx,
-            message_const_idx: message_idx,
+        let template_id = self.state.error_templates.len() as u32;
+        self.state.error_templates.push(ErrTemplate {
+            id: template_id,
+            kind: kind.into(),
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+            line: 0,
+            column: 0,
+            format: String::new(),
+            num_params: 1,
         });
+        self.emit(Opcode::MakeError { template_id });
     }
 
     fn collect_exact_list_pattern_items(pat: &TypedPattern) -> Option<Vec<&TypedPattern>> {
@@ -2952,37 +4080,18 @@ impl Codegen {
                 self.emit(Opcode::EqBool);
                 self.emit_jump_if_false(fail_label);
             }
+            TypedPattern::DurationLit(_, n) => {
+                self.emit_duration_lit_pattern_test(slot, n, fail_label);
+            }
             TypedPattern::ListNil(_) => {
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::ListIsEmpty);
                 self.emit_jump_if_false(fail_label);
             }
-            TypedPattern::ListCons(_, head, tail) => {
-                self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::ListIsEmpty);
-                self.emit_jump_if_true(fail_label);
-
-                let head_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::ListHead);
-                self.emit(Opcode::StoreLocal(head_slot));
-                self.emit_pattern_test_from_local_with_mode(
-                    head,
-                    head_slot,
-                    fail_label,
-                    err_span,
-                    propagate_result_error,
-                )?;
-
-                let tail_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::ListTail);
-                self.emit(Opcode::StoreLocal(tail_slot));
-                self.emit_pattern_test_from_local_with_mode(
-                    tail,
-                    tail_slot,
+            TypedPattern::ListCons(_, _, _) => {
+                self.emit_list_cons_pattern_test_from_local(
+                    pat,
+                    slot,
                     fail_label,
                     err_span,
                     propagate_result_error,
@@ -3076,7 +4185,8 @@ impl Codegen {
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
-            | TypedPattern::BoolLit(_, _) => {}
+            | TypedPattern::BoolLit(_, _)
+            | TypedPattern::DurationLit(_, _) => {}
             TypedPattern::Tuple(_, items) => {
                 for (index, item) in items.iter().enumerate() {
                     let item_slot = self.state.next_slot;
@@ -3089,20 +4199,8 @@ impl Codegen {
                     self.emit_pattern_bind_from_local(item, item_slot)?;
                 }
             }
-            TypedPattern::ListCons(_, head, tail) => {
-                let head_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::ListHead);
-                self.emit(Opcode::StoreLocal(head_slot));
-                self.emit_pattern_bind_from_local(head, head_slot)?;
-
-                let tail_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::ListTail);
-                self.emit(Opcode::StoreLocal(tail_slot));
-                self.emit_pattern_bind_from_local(tail, tail_slot)?;
+            TypedPattern::ListCons(_, _, _) => {
+                self.emit_list_cons_pattern_bind_from_local(pat, slot)?;
             }
             TypedPattern::ResultOk(_, inner) => {
                 let inner_slot = self.state.next_slot;
@@ -3147,6 +4245,97 @@ impl Codegen {
             }
         }
         Ok(())
+    }
+
+    fn emit_list_cons_pattern_test_from_local(
+        &mut self,
+        pat: &TypedPattern,
+        slot: u32,
+        fail_label: Label,
+        err_span: &Span,
+        propagate_result_error: bool,
+    ) -> Result<(), CodegenError> {
+        let mut current_pat = pat;
+        let mut current_slot = slot;
+
+        while let TypedPattern::ListCons(_, head, tail) = current_pat {
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListIsEmpty);
+            self.emit_jump_if_true(fail_label);
+
+            let head_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListHead);
+            self.emit(Opcode::StoreLocal(head_slot));
+            self.emit_pattern_test_from_local_with_mode(
+                head,
+                head_slot,
+                fail_label,
+                err_span,
+                propagate_result_error,
+            )?;
+
+            let tail_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListTail);
+            self.emit(Opcode::StoreLocal(tail_slot));
+
+            current_pat = tail;
+            current_slot = tail_slot;
+        }
+
+        self.emit_pattern_test_from_local_with_mode(
+            current_pat,
+            current_slot,
+            fail_label,
+            err_span,
+            propagate_result_error,
+        )
+    }
+
+    fn emit_list_cons_pattern_bind_from_local(
+        &mut self,
+        pat: &TypedPattern,
+        slot: u32,
+    ) -> Result<(), CodegenError> {
+        let mut current_pat = pat;
+        let mut current_slot = slot;
+
+        while let TypedPattern::ListCons(_, head, tail) = current_pat {
+            let head_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListHead);
+            self.emit(Opcode::StoreLocal(head_slot));
+            self.emit_pattern_bind_from_local(head, head_slot)?;
+
+            let tail_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListTail);
+            self.emit(Opcode::StoreLocal(tail_slot));
+
+            current_pat = tail;
+            current_slot = tail_slot;
+        }
+
+        self.emit_pattern_bind_from_local(current_pat, current_slot)
+    }
+
+    fn reserve_pattern_slots_for_lens_bind(&mut self, pat: &TypedPattern) {
+        match pat {
+            TypedPattern::Var(_, id) => {
+                self.alloc_slot(id.unique_id);
+            }
+            TypedPattern::As(_, inner, alias) => {
+                self.alloc_slot(alias.unique_id);
+                self.reserve_pattern_slots_for_lens_bind(inner);
+            }
+            TypedPattern::Wildcard(_) => {}
+            _ => {}
+        }
     }
 
     fn emit_propagate_result_from_local(
@@ -3216,6 +4405,10 @@ impl Codegen {
         arity: usize,
         _span: &Span,
     ) -> Result<Vec<u32>, CodegenError> {
+        if arity == 1 {
+            return Ok(vec![tuple_slot]);
+        }
+
         let mut item_slots = Vec::with_capacity(arity);
 
         for index in 0..arity {
@@ -3557,19 +4750,28 @@ impl Codegen {
     }
 
     fn emit_tail_node(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
-        match &node.node {
-            TypedInner::Block(stmts) => {
-                if let Some((last, prefix)) = stmts.split_last() {
-                    for stmt in prefix {
-                        self.emit_node(stmt)?;
-                        self.emit(Opcode::Pop);
+        let mut tail_node = node;
+
+        loop {
+            match &tail_node.node {
+                TypedInner::Block(stmts) => {
+                    if let Some((last, prefix)) = stmts.split_last() {
+                        for stmt in prefix {
+                            self.emit_node(stmt)?;
+                            self.emit(Opcode::Pop);
+                        }
+                        tail_node = last;
+                        continue;
                     }
-                    self.emit_tail_node(last)?;
-                } else {
                     self.emit_unit_const();
                     self.emit(Opcode::Return);
+                    return Ok(());
                 }
+                _ => break,
             }
+        }
+
+        match &tail_node.node {
             TypedInner::If(cond, then, else_opt) => {
                 self.emit_node(cond)?;
                 match else_opt {
@@ -3609,16 +4811,21 @@ impl Codegen {
                     arm_labels.push(self.fresh_label());
                 }
 
-                for (i, (pat, body)) in arms.iter().enumerate() {
+                for (i, arm) in arms.iter().enumerate() {
                     let next_arm = if i + 1 < arms.len() {
                         arm_labels[i + 1]
                     } else {
                         mismatch_label
                     };
 
+                    let pat = &arm.pattern;
                     self.emit_match_pattern_test(pat, scrut_slot, next_arm)?;
                     self.emit_match_pattern_bind(pat, scrut_slot)?;
-                    self.emit_tail_node(body)?;
+                    if let Some(guard) = &arm.guard {
+                        self.emit_node(guard)?;
+                        self.emit_jump_if_false(next_arm);
+                    }
+                    self.emit_tail_node(&arm.body)?;
 
                     if i + 1 < arms.len() {
                         self.patch_label(arm_labels[i + 1]);
@@ -3642,7 +4849,7 @@ impl Codegen {
                 self.emit(Opcode::Return);
             }
             _ => {
-                self.emit_node(node)?;
+                self.emit_node(tail_node)?;
                 self.emit(Opcode::Return);
             }
         }
@@ -3741,6 +4948,136 @@ impl Codegen {
         Ok(())
     }
 
+    fn emit_recover_kind(
+        &mut self,
+        node: &TypedNode,
+        value: &TypedNode,
+        marker: &TypedNode,
+        handler: &TypedNode,
+    ) -> Result<(), CodegenError> {
+        self.emit_node(value)?;
+        let result_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(result_slot));
+
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetTag);
+        let err_tag = self.add_constant(Constant::Tag(1));
+        self.emit(Opcode::LoadConst(err_tag));
+        self.emit(Opcode::EqTag);
+
+        let err_path = self.fresh_label();
+        let end_label = self.fresh_label();
+        self.emit_jump_if_true(err_path);
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit_jump(end_label);
+
+        self.patch_label(err_path);
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetField { field_index: 0 });
+        let err_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(err_slot));
+
+        let mismatch_label = self.fresh_label();
+        let marker_kind = Self::recover_kind_marker_kind(marker).ok_or_else(|| CodegenError {
+            message: "recover_kind marker must resolve to a deferror constructor".into(),
+            span: marker.span.clone(),
+        })?;
+        self.emit_error_kind_test_from_local(err_slot, marker_kind, mismatch_label)?;
+        self.emit_callable_ref(handler)?;
+        self.emit(Opcode::LoadLocal(err_slot));
+        self.emit(Opcode::CallClosure {
+            arity: 1,
+            span_start: node.span.start as u32,
+            span_end: node.span.end as u32,
+        });
+        self.emit_jump(end_label);
+
+        self.patch_label(mismatch_label);
+        self.emit(Opcode::LoadLocal(result_slot));
+
+        self.patch_label(end_label);
+        Ok(())
+    }
+
+    fn emit_result_error_transform(
+        &mut self,
+        node: &TypedNode,
+        value: &TypedNode,
+        err: &TypedNode,
+        builtin_name: &str,
+    ) -> Result<(), CodegenError> {
+        self.emit_node(value)?;
+        let result_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(result_slot));
+
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetTag);
+        let err_tag = self.add_constant(Constant::Tag(1));
+        self.emit(Opcode::LoadConst(err_tag));
+        self.emit(Opcode::EqTag);
+
+        let err_path = self.fresh_label();
+        let end_label = self.fresh_label();
+        self.emit_jump_if_true(err_path);
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit_jump(end_label);
+
+        self.patch_label(err_path);
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit_node(err)?;
+        let builtin_id = Self::builtin_id(builtin_name).ok_or_else(|| CodegenError {
+            message: format!("Unknown builtin: {}", builtin_name),
+            span: node.span.clone(),
+        })?;
+        self.emit(Opcode::CallBuiltin {
+            builtin_id,
+            arity: 2,
+            span_start: node.span.start as u32,
+            span_end: node.span.end as u32,
+        });
+
+        self.patch_label(end_label);
+        Ok(())
+    }
+
+    fn recover_kind_marker_kind(marker: &TypedNode) -> Option<&str> {
+        match &marker.node {
+            TypedInner::Var(id) => Some(id.name.rsplit("::").next().unwrap_or(&id.name)),
+            TypedInner::App(func, _) => match &func.node {
+                TypedInner::Var(id) => Some(id.name.rsplit("::").next().unwrap_or(&id.name)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn emit_error_kind_test_from_local(
+        &mut self,
+        slot: u32,
+        expected_kind: &str,
+        fail_label: Label,
+    ) -> Result<(), CodegenError> {
+        self.emit(Opcode::LoadLocal(slot));
+        let kind_id = Self::builtin_id("kind").ok_or_else(|| CodegenError {
+            message: "Unknown builtin: kind".into(),
+            span: Span { start: 0, end: 0 },
+        })?;
+        self.emit(Opcode::CallBuiltin {
+            builtin_id: kind_id,
+            arity: 1,
+            span_start: 0,
+            span_end: 0,
+        });
+        let kind_const = self.add_constant(Constant::Str(expected_kind.to_string()));
+        self.emit(Opcode::LoadConst(kind_const));
+        self.emit(Opcode::EqStr);
+        self.emit_jump_if_false(fail_label);
+        Ok(())
+    }
+
     fn emit_ok_unit_result(&mut self) -> Result<(), CodegenError> {
         let ok_tag = self.add_constant(Constant::Tag(0));
         let unit_idx = self.add_constant(Constant::Unit);
@@ -3813,7 +5150,7 @@ impl Codegen {
     fn emit_match(
         &mut self,
         scrutinee: &TypedNode,
-        arms: &[(TypedMatchPattern, TypedNode)],
+        arms: &[TypedMatchArm],
     ) -> Result<(), CodegenError> {
         if arms.is_empty() {
             return self.emit_pattern_mismatch_failure(scrutinee.span.clone());
@@ -3833,18 +5170,23 @@ impl Codegen {
             arm_labels.push(self.fresh_label());
         }
 
-        for (i, (pat, body)) in arms.iter().enumerate() {
+        for (i, arm) in arms.iter().enumerate() {
             let next_arm = if i + 1 < arms.len() {
                 arm_labels[i + 1]
             } else {
                 mismatch_label
             };
 
+            let pat = &arm.pattern;
             self.emit_match_pattern_test(pat, scrut_slot, next_arm)?;
             self.emit_match_pattern_bind(pat, scrut_slot)?;
+            if let Some(guard) = &arm.guard {
+                self.emit_node(guard)?;
+                self.emit_jump_if_false(next_arm);
+            }
 
             // Emit body
-            self.emit_node(body)?;
+            self.emit_node(&arm.body)?;
             self.emit_jump(end_label);
 
             // Patch next arm label
@@ -3891,6 +5233,23 @@ impl Codegen {
                 self.emit(Opcode::EqStr);
                 self.emit_jump_if_false(fail_label);
             }
+            TypedMatchPattern::DurationLit(n) => {
+                self.emit_duration_lit_pattern_test(slot, n, fail_label);
+            }
+            TypedMatchPattern::ErrorKind(kind) => {
+                self.emit_error_kind_test_from_local(slot, kind, fail_label)?;
+            }
+            TypedMatchPattern::Or(items) => {
+                let success_label = self.fresh_label();
+                for item in items {
+                    let next_label = self.fresh_label();
+                    self.emit_match_pattern_test(item, slot, next_label)?;
+                    self.emit_jump(success_label);
+                    self.patch_label(next_label);
+                }
+                self.emit_jump(fail_label);
+                self.patch_label(success_label);
+            }
             TypedMatchPattern::Tuple(items) => {
                 let mut item_slots = Vec::with_capacity(items.len());
                 for (index, item) in items.iter().enumerate() {
@@ -3935,24 +5294,8 @@ impl Codegen {
                 self.emit(Opcode::ListIsEmpty);
                 self.emit_jump_if_false(fail_label);
             }
-            TypedMatchPattern::ListCons(head, tail) => {
-                self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::ListIsEmpty);
-                self.emit_jump_if_true(fail_label);
-
-                let head_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::ListHead);
-                self.emit(Opcode::StoreLocal(head_slot));
-                self.emit_match_pattern_test(head, head_slot, fail_label)?;
-
-                let tail_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::ListTail);
-                self.emit(Opcode::StoreLocal(tail_slot));
-                self.emit_match_pattern_test(tail, tail_slot, fail_label)?;
+            TypedMatchPattern::ListCons(_, _) => {
+                self.emit_list_cons_match_pattern_test(pat, slot, fail_label)?;
             }
             TypedMatchPattern::Extractor {
                 input_ty,
@@ -4005,6 +5348,9 @@ impl Codegen {
             | TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
+            | TypedMatchPattern::DurationLit(_)
+            | TypedMatchPattern::ErrorKind(_)
+            | TypedMatchPattern::Or(_)
             | TypedMatchPattern::ListNil => {}
             TypedMatchPattern::Tuple(items) => {
                 for (index, item) in items.iter().enumerate() {
@@ -4034,20 +5380,8 @@ impl Codegen {
                     self.emit_match_pattern_bind(field_pat, inner_slot)?;
                 }
             }
-            TypedMatchPattern::ListCons(head, tail) => {
-                let head_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::ListHead);
-                self.emit(Opcode::StoreLocal(head_slot));
-                self.emit_match_pattern_bind(head, head_slot)?;
-
-                let tail_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::ListTail);
-                self.emit(Opcode::StoreLocal(tail_slot));
-                self.emit_match_pattern_bind(tail, tail_slot)?;
+            TypedMatchPattern::ListCons(_, _) => {
+                self.emit_list_cons_match_pattern_bind(pat, slot)?;
             }
             TypedMatchPattern::Extractor {
                 input_ty,
@@ -4083,6 +5417,69 @@ impl Codegen {
             }
         }
         Ok(())
+    }
+
+    fn emit_list_cons_match_pattern_test(
+        &mut self,
+        pat: &TypedMatchPattern,
+        slot: u32,
+        fail_label: Label,
+    ) -> Result<(), CodegenError> {
+        let mut current_pat = pat;
+        let mut current_slot = slot;
+
+        while let TypedMatchPattern::ListCons(head, tail) = current_pat {
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListIsEmpty);
+            self.emit_jump_if_true(fail_label);
+
+            let head_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListHead);
+            self.emit(Opcode::StoreLocal(head_slot));
+            self.emit_match_pattern_test(head, head_slot, fail_label)?;
+
+            let tail_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListTail);
+            self.emit(Opcode::StoreLocal(tail_slot));
+
+            current_pat = tail;
+            current_slot = tail_slot;
+        }
+
+        self.emit_match_pattern_test(current_pat, current_slot, fail_label)
+    }
+
+    fn emit_list_cons_match_pattern_bind(
+        &mut self,
+        pat: &TypedMatchPattern,
+        slot: u32,
+    ) -> Result<(), CodegenError> {
+        let mut current_pat = pat;
+        let mut current_slot = slot;
+
+        while let TypedMatchPattern::ListCons(head, tail) = current_pat {
+            let head_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListHead);
+            self.emit(Opcode::StoreLocal(head_slot));
+            self.emit_match_pattern_bind(head, head_slot)?;
+
+            let tail_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(current_slot));
+            self.emit(Opcode::ListTail);
+            self.emit(Opcode::StoreLocal(tail_slot));
+
+            current_pat = tail;
+            current_slot = tail_slot;
+        }
+
+        self.emit_match_pattern_bind(current_pat, current_slot)
     }
 
     // ── Label resolution ──
@@ -4129,6 +5526,24 @@ impl Codegen {
             self.emit(Opcode::NotBool);
         }
         Ok(())
+    }
+
+    fn emit_duration_payload_from_local(&mut self, slot: u32) {
+        self.emit(Opcode::LoadLocal(slot));
+        self.emit(Opcode::GetField { field_index: 0 });
+    }
+
+    fn emit_duration_lit_pattern_test(
+        &mut self,
+        slot: u32,
+        millis: &sindr::primitives::SurtrInt,
+        fail_label: Label,
+    ) {
+        self.emit_duration_payload_from_local(slot);
+        let millis_const = self.add_constant(Constant::Int(millis.clone()));
+        self.emit(Opcode::LoadConst(millis_const));
+        self.emit(Opcode::EqInt);
+        self.emit_jump_if_false(fail_label);
     }
 
     fn binop_to_opcode(
@@ -4214,4 +5629,35 @@ impl Codegen {
         }
         Ok((opcodes, self.state))
     }
+}
+
+fn literal_pattern_display(pat: &TypedPattern) -> Option<String> {
+    match pat {
+        TypedPattern::As(_, inner, _) => literal_pattern_display(inner),
+        TypedPattern::IntLit(_, value) => Some(value.to_string()),
+        TypedPattern::StrLit(_, value) => Some(quote_surtr_string_literal(value)),
+        TypedPattern::BoolLit(_, value) => Some(if *value {
+            "True".to_string()
+        } else {
+            "False".to_string()
+        }),
+        TypedPattern::DurationLit(_, value) => Some(format!("{value}ms")),
+        _ => None,
+    }
+}
+
+fn quote_surtr_string_literal(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 2);
+    out.push('"');
+    for ch in input.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
 }

@@ -1,0 +1,61 @@
+import MahjongDomain::parse_valid_hand14
+import MahjongJudge::judge_hand
+import MahjongScore::score_hand14
+import MahjongYakuCatalog::resolve_many
+import ViewComponents
+
+defmod MahjongCli {
+  defp _pick_raw(args: List<String>) -> String {
+    match args {
+      [] => "123m456789p567s11w",
+      [head, ..tail] => if(
+        head == "score",
+        match tail {
+          [hand, .._] => hand,
+          [] => "123m456789p567s11w",
+        },
+        head,
+      ),
+    }
+  }
+
+  defp _print_yaku_lines(yakus: List<Yaku>, inner_width: Int) -> Unit {
+    match yakus {
+      [] => (),
+      [head, ..tail] => {
+        print_item(head.name ++ "   " ++ to_string(head.han) ++ "翻", inner_width)
+        _print_yaku_lines(tail, inner_width)
+      },
+    }
+  }
+
+  defp _print_result_screen(raw: String, valid: ValidHand14, yakus: List<Yaku>, total_han: Int) -> Unit {
+    inner_width = 50
+    hand_text = MahjongTypes::hand_to_text(valid.tiles)
+    print_top(inner_width)
+    print_item("         SURTR MAHJONG RESULT", inner_width)
+    print_mid(inner_width)
+    print_item("入力: " ++ raw, inner_width)
+    print_item("手牌: " ++ hand_text, inner_width)
+    print_mid(inner_width)
+    print_item("役一覧", inner_width)
+    if(
+      List::len(yakus) == 0,
+      print_item(" (なし)", inner_width),
+      _print_yaku_lines(yakus, inner_width),
+    )
+    print_mid(inner_width)
+    print_item("合計翻: " ++ to_string(total_han), inner_width)
+    print_bottom(inner_width)
+  }
+
+  def run(args: List<String>) -> Result<()> {
+    raw = _pick_raw(args)
+    valid =? parse_valid_hand14(raw)
+    yaku_ids =? judge_hand(valid)
+    yakus =? resolve_many(yaku_ids)
+    score =? score_hand14(valid)
+    _print_result_screen(raw, valid, yakus, score)
+    Ok(())
+  }
+}

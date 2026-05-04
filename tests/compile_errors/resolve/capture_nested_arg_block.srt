@@ -1,0 +1,9 @@
+def outer(x: Int, f: (Int -> Int)) -> Int {
+  f(x)
+}
+
+def inner(x: Int) -> Int {
+  x + 1
+}
+
+bad = &outer(&1, &inner(1))

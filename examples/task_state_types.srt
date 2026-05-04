@@ -1,0 +1,69 @@
+deferror InvalidTaskTransition(reason: String) {
+  "invalid task transition: #{reason}"
+}
+
+defenum Task {
+  Draft(String),
+  Open(String),
+  Doing(String, String),
+  Done(String),
+  Archived(String),
+}
+
+impl Task {
+  def start(title: String) -> Self {
+    Task::Draft(title)
+  }
+
+  def open(self: Self) -> Result<Self, InvalidTaskTransition> {
+    match self {
+      Task::Draft(title) => Ok(Task::Open(title)),
+      _ => Err(InvalidTaskTransition("only Draft tasks can be opened")),
+    }
+  }
+
+  def assign(self: Self, assignee: String) -> Result<Self, InvalidTaskTransition> {
+    match self {
+      Task::Open(title) => Ok(Task::Doing(title, assignee)),
+      _ => Err(InvalidTaskTransition("only Open tasks can be assigned")),
+    }
+  }
+
+  def complete(self: Self) -> Result<Self, InvalidTaskTransition> {
+    match self {
+      Task::Doing(title, _) => Ok(Task::Done(title)),
+      _ => Err(InvalidTaskTransition("only Doing tasks can be completed")),
+    }
+  }
+
+  def archive(self: Self) -> Result<Self, InvalidTaskTransition> {
+    match self {
+      Task::Done(title) => Ok(Task::Archived(title)),
+      _ => Err(InvalidTaskTransition("only Done tasks can be archived")),
+    }
+  }
+
+  def title(self: Self) -> String {
+    match self {
+      Task::Draft(title) => title,
+      Task::Open(title) => title,
+      Task::Doing(title, _) => title,
+      Task::Done(title) => title,
+      Task::Archived(title) => title,
+    }
+  }
+
+  def status(self: Self) -> String {
+    match self {
+      Task::Draft(_) => "draft",
+      Task::Open(_) => "open",
+      Task::Doing(_, assignee) => "doing:" ++ assignee,
+      Task::Done(_) => "done",
+      Task::Archived(_) => "archived",
+    }
+  }
+
+  def render(self: Self) -> String {
+    Task::title(self) ++ " [" ++ Task::status(self) ++ "]"
+  }
+}

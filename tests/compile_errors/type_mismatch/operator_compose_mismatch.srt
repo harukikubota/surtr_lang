@@ -1,0 +1,9 @@
+def text(x: Int) -> String {
+  to_string(x)
+}
+
+def inc(x: Int) -> Int {
+  x + 1
+}
+
+bad = &text >> &inc

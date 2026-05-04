@@ -1,0 +1,2 @@
+value: Option<Int> = Option::Some(1)
+bad = value |>= {|value| Ok(value + 1)}

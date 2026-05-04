@@ -1,0 +1,5 @@
+def add(x: Int, y: Int) -> Int {
+  x + y
+}
+
+bad = 1 |> add(_1, _1)

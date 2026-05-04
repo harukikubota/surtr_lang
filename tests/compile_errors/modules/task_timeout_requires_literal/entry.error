@@ -1,0 +1,2 @@
+phase: parse
+contains: @timeout(...) requires a duration literal like `100ms`

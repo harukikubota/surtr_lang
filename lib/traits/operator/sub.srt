@@ -1,0 +1,14 @@
+@doc """
+Standard `Sub` operator trait declaration.
+`Sub` models the `-` / `sub(...)` contract.
+`Sub` is intentionally not auto-imported, so helper-style calls use
+`Sub::sub(...)` or an explicit `import`.
+
+## REPL
+xldr(1)> Sub::sub(5, 2)
+3
+"""
+deftrait Sub {
+  # Return the subtraction result.
+  def sub(self: Self, rhs: Self) -> Self
+}

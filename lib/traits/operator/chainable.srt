@@ -1,0 +1,11 @@
+@doc """
+Standard `Chainable` trait declaration.
+`Chainable<$A, $Chained>` models chaining a contextual unary callable after a
+contextual value. The `|>=` operator lowers through this trait.
+The trait is intentionally not auto-imported because its helper name `chain`
+would conflict with the existing `Result::chain` helper.
+"""
+deftrait Chainable<$A, $Chained> {
+  # Chain a contextual callable after the contextual receiver.
+  def chain(self: Self, f: ($A -> $Chained)) -> $Chained
+}

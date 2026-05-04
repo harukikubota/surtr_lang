@@ -3,13 +3,42 @@ use crate::error::ParseError;
 
 use super::Parser;
 
-impl Parser {
+impl Parser<'_> {
+    pub(super) fn string_has_interpolation(raw: &str) -> bool {
+        let chars: Vec<char> = raw.chars().collect();
+        let mut i = 0;
+        while i + 1 < chars.len() {
+            if chars[i] == '#' && chars[i + 1] == '{' && (i == 0 || chars[i - 1] != '\\') {
+                return true;
+            }
+            i += 1;
+        }
+        false
+    }
+
     pub(super) fn parse_string_or_interpolated(
         &mut self,
         span: Span,
         raw: String,
     ) -> Result<Ast, ParseError> {
-        let parts = self.parse_interpolated_parts(&raw, &span)?;
+        self.parse_string_or_interpolated_with_offset(span, raw, 1)
+    }
+
+    pub(super) fn parse_triple_string_or_interpolated(
+        &mut self,
+        span: Span,
+        raw: String,
+    ) -> Result<Ast, ParseError> {
+        self.parse_string_or_interpolated_with_offset(span, raw, 3)
+    }
+
+    fn parse_string_or_interpolated_with_offset(
+        &mut self,
+        span: Span,
+        raw: String,
+        content_offset: usize,
+    ) -> Result<Ast, ParseError> {
+        let parts = self.parse_interpolated_parts(&raw, &span, content_offset)?;
         if parts.is_empty() {
             Ok(Ast::Lit(span, Lit::Str(raw)))
         } else if matches!(parts.as_slice(), [InterpolatedPart::Text(_)]) {
@@ -26,6 +55,7 @@ impl Parser {
         &mut self,
         raw: &str,
         base_span: &Span,
+        content_offset: usize,
     ) -> Result<Vec<InterpolatedPart>, ParseError> {
         let chars: Vec<char> = raw.chars().collect();
         let mut parts = Vec::new();
@@ -127,7 +157,7 @@ impl Parser {
             }
 
             let parsed = super::parse(&expr_src).map_err(|e| {
-                let expr_offset = base_span.start + 1 + expr_start;
+                let expr_offset = base_span.start + content_offset + expr_start;
                 let mapped = Span {
                     start: expr_offset + e.span().start,
                     end: expr_offset + e.span().end,
@@ -143,7 +173,7 @@ impl Parser {
                     base_span.clone(),
                 ));
             }
-            let expr_offset = base_span.start + 1 + expr_start;
+            let expr_offset = base_span.start + content_offset + expr_start;
             let expr = super::shift_ast_span(parsed.into_iter().next().unwrap(), expr_offset);
             parts.push(InterpolatedPart::Expr(Box::new(expr)));
         }

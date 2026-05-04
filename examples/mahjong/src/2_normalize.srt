@@ -1,0 +1,46 @@
+defmod MahjongNormalize {
+  defp _same_tile_key(tile: Tile, key: String) -> Boolean {
+    MahjongTypes::tile_key(tile) == key
+  }
+
+  def normalize_hand14(parsed: ParsedHand14) -> Result<NormalizedHand14> {
+    Ok(NormalizedHand14(raw: parsed.raw, tiles: parsed.tiles))
+  }
+
+  defp _validate_copy_limit(rest: List<Tile>, all: List<Tile>) -> Result<Unit, HandValidationError> {
+    match rest {
+      [] => Ok(()),
+      [head, ..tail] => {
+        key = MahjongTypes::tile_key(head)
+        copies = List::count(all, &_same_tile_key(&1, key))
+        if(
+          copies <= 4,
+          _validate_copy_limit(tail, all),
+          Err(HandValidationError("tile appears more than 4 copies: " ++ key)),
+        )
+      },
+    }
+  }
+
+  def validate_hand14(normalized: NormalizedHand14) -> Result<ValidHand14> {
+    if(
+      List::len(normalized.tiles) != 14,
+      Err(HandValidationError("hand must contain exactly 14 tiles")),
+      {
+        _ok =? _validate_copy_limit(normalized.tiles, normalized.tiles)
+        Ok(ValidHand14(raw: normalized.raw, tiles: normalized.tiles))
+      },
+    )
+  }
+}
+
+defmod MahjongDomain {
+  @doc """
+  文字列入力を麻雀ドメインの検証済み手牌へ変換する入口。
+  関数演算子 `>=>` で parse -> normalize -> validate を直列化する。
+  """
+  def parse_valid_hand14(raw: String) -> Result<ValidHand14> {
+    pipeline = &MahjongParser::parse_hand14 >=> &MahjongNormalize::normalize_hand14 >=> &MahjongNormalize::validate_hand14
+    raw |> pipeline
+  }
+}

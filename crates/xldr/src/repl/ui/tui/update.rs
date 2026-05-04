@@ -3,11 +3,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::repl::logic::core::ReplEngine;
-use crate::repl::logic::output::ReplOutput;
+use crate::repl::logic::{present_for_interaction, PresentedEvent, PresentedResultKind};
 
-use super::app::{
-    App, Completion, CompletionItem, FocusPane, InputBuffer, InputMode, ResultEntryKind,
-};
+use super::app::{App, Completion, CompletionItem, FocusPane, InputBuffer, InputMode};
 
 // ── Completion helpers ────────────────────────────────────────────────────────
 
@@ -59,8 +57,11 @@ static GLOBAL_COMMANDS: &[(&str, &str)] = &[
     ("q", ":q  — quit"),
     ("help", ":help  — show help"),
     ("doc", ":doc <symbol>  — show docs"),
-    ("sig", ":sig <symbol>  — show signature"),
-    ("type", ":type <expr>  — infer type"),
+    ("error", ":error [full|summary]  — set error display mode"),
+    ("sig", ":sig <symbol|expr>  — show signature"),
+    ("info", ":info <query>  — show derived info"),
+    ("type", ":type <binding>  — lookup binding type"),
+    ("lens", ":lens <binding|expr>  — inspect lens path"),
     ("save", ":save <path>  — save session to .eldr"),
 ];
 
@@ -207,43 +208,13 @@ pub(super) fn submit_input(app: &mut App, engine: &mut ReplEngine) {
     app.input.clear();
     app.completion.clear();
 
-    let result = engine.handle_line(&source);
-    match result.output {
-        ReplOutput::EvalSuccess { rendered, .. } => {
-            app.push_result(&source, rendered, ResultEntryKind::EvalSuccess);
-        }
-        ReplOutput::EvalError { rendered, .. } => {
-            app.push_result(&source, rendered, ResultEntryKind::EvalError);
-        }
-        ReplOutput::CommandOutput { rendered } => {
-            app.push_result(&source, rendered, ResultEntryKind::CommandOutput);
-        }
-        ReplOutput::DocResolved {
-            symbol,
-            signature,
-            summary,
-            ..
-        } => {
-            app.docs.push_back(super::app::DocEntry {
-                idx: app.docs.len(),
-                symbol,
-                signature,
-                summary,
-            });
-            app.selected_doc = Some(app.docs.len() - 1);
-        }
-        ReplOutput::StatusMessage(_) => {
-            if result.should_exit {
-                app.should_quit = true;
-                return;
-            }
-            app.push_result(&source, vec![], ResultEntryKind::Info);
-        }
-        _ => {
-            app.push_result(&source, vec![], ResultEntryKind::EvalSuccess);
-        }
+    let presented = present_for_interaction(engine.handle_line(&source));
+    match presented.event {
+        PresentedEvent::None => {}
+        PresentedEvent::Result(result) => app.push_result(&source, result.lines, result.kind),
+        PresentedEvent::Doc(doc) => app.push_doc(doc),
     }
-    if result.should_exit {
+    if presented.should_exit {
         app.should_quit = true;
     }
     app.update_status();
@@ -266,94 +237,19 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
 
     match cmd {
         "q" | "quit" => app.should_quit = true,
-        "help" => {
-            app.push_result(
-                ":help",
-                vec![
-                    ":q :help :doc <sym> :sig <sym> :type <expr> :save <path> :v <idx> :j <idx>"
-                        .to_string(),
-                ],
-                ResultEntryKind::Info,
-            );
-        }
-        "save" => {
-            if arg.is_empty() {
-                app.push_result(
-                    ":save",
-                    vec!["Usage: :save <path>".to_string()],
-                    ResultEntryKind::EvalError,
-                );
+        "help" | "save" | "doc" | "error" | "sig" | "info" | "type" | "lens" => {
+            let line = if arg.is_empty() {
+                format!(":{cmd}")
             } else {
-                let result = engine.handle_line(&format!(":save {arg}"));
-                let lines = match result.output {
-                    ReplOutput::CommandOutput { rendered } => rendered,
-                    _ => vec![format!("saved to {arg}")],
-                };
-                app.push_result(format!(":save {arg}"), lines, ResultEntryKind::Info);
-            }
-        }
-        "doc" => {
-            if arg.is_empty() {
-                app.push_result(
-                    ":doc",
-                    vec!["Usage: :doc <symbol>".to_string()],
-                    ResultEntryKind::EvalError,
-                );
-            } else {
-                let result = engine.handle_line(&format!(":doc {arg}"));
-                match result.output {
-                    ReplOutput::DocResolved {
-                        symbol,
-                        signature,
-                        summary,
-                        ..
-                    } => {
-                        app.docs.push_back(super::app::DocEntry {
-                            idx: app.docs.len(),
-                            symbol,
-                            signature,
-                            summary,
-                        });
-                        app.selected_doc = Some(app.docs.len() - 1);
-                    }
-                    ReplOutput::EvalError { rendered, .. } => {
-                        app.push_result(
-                            format!(":doc {arg}"),
-                            rendered,
-                            ResultEntryKind::EvalError,
-                        );
-                    }
-                    ReplOutput::CommandOutput { rendered } => {
-                        app.push_result(
-                            format!(":doc {arg}"),
-                            rendered,
-                            ResultEntryKind::CommandOutput,
-                        );
-                    }
-                    _ => {}
+                format!(":{cmd} {arg}")
+            };
+            let presented = present_for_interaction(engine.handle_line(&line));
+            match presented.event {
+                PresentedEvent::Result(result) => {
+                    app.push_result(line, result.lines, result.kind);
                 }
-            }
-        }
-        "sig" => {
-            app.push_result(
-                format!(":sig {arg}"),
-                vec![format!("sig({arg}): (not yet implemented)")],
-                ResultEntryKind::Info,
-            );
-        }
-        "type" => {
-            if arg.is_empty() {
-                app.push_result(
-                    ":type",
-                    vec!["Usage: :type <expr>".to_string()],
-                    ResultEntryKind::EvalError,
-                );
-            } else {
-                app.push_result(
-                    format!(":type {arg}"),
-                    vec![format!("type({arg}): (not yet implemented)")],
-                    ResultEntryKind::Info,
-                );
+                PresentedEvent::Doc(doc) => app.push_doc(doc),
+                PresentedEvent::None => {}
             }
         }
         "v" => {
@@ -367,7 +263,7 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
                         app.push_result(
                             format!(":v {arg}"),
                             vec![format!("no result with idx {arg}")],
-                            ResultEntryKind::EvalError,
+                            PresentedResultKind::EvalError,
                         );
                     }
                 }
@@ -375,7 +271,7 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
                     app.push_result(
                         format!(":v {arg}"),
                         vec![format!("invalid index: {arg}")],
-                        ResultEntryKind::EvalError,
+                        PresentedResultKind::EvalError,
                     );
                 }
             }
@@ -395,7 +291,7 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
                     app.push_result(
                         format!(":j {arg}"),
                         vec![format!("no result with idx {arg}")],
-                        ResultEntryKind::EvalError,
+                        PresentedResultKind::EvalError,
                     );
                 }
             }
@@ -426,7 +322,7 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
             app.push_result(
                 format!(":{other}"),
                 vec![format!("unknown command: {other}")],
-                ResultEntryKind::EvalError,
+                PresentedResultKind::EvalError,
             );
         }
     }

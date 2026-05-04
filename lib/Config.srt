@@ -1,0 +1,44 @@
+# Standard helper struct for project-style configuration examples.
+# `Config` is handy in REPL-facing docs because it is already loaded with the
+# standard library and has named fields that work well with `Lens`.
+defstruct Config {
+  name: String,
+  entrypoint: String,
+  paths: List<String>,
+}
+
+impl Config {
+  @doc """
+  Build a config with a default entrypoint and no extra paths.
+  ## REPL
+  xldr(1)> Config::new("App")
+  Config { name: "App", entrypoint: "Main::main", paths: [] }
+  """
+  def new(name: String) -> Self {
+    Config { name: name, entrypoint: "Main::main", paths: [] }
+  }
+
+  @doc """
+  Replace the entrypoint symbol and return the updated config.
+  ## REPL
+  xldr(1)> Config::entry_fun(Config::new("App"), "App::main")
+  Config { name: "App", entrypoint: "App::main", paths: [] }
+  """
+  def entry_fun(self: Self, symbol: String) -> Self {
+    Config { name: self.name, entrypoint: symbol, paths: self.paths }
+  }
+
+  @doc """
+  Append one search path and return the updated config.
+  ## REPL
+  xldr(1)> Config::add_path(Config::new("App"), "./lib")
+  Config { name: "App", entrypoint: "Main::main", paths: ["./lib"] }
+  """
+  def add_path(self: Self, path: String) -> Self {
+    Config {
+      name: self.name,
+      entrypoint: self.entrypoint,
+      paths: List::append(self.paths, [path]),
+    }
+  }
+}

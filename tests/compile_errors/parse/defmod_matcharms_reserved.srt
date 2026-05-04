@@ -1,0 +1,3 @@
+defmod MatchArms {
+  def ok() -> Int { 1 }
+}

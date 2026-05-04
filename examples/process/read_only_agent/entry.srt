@@ -1,0 +1,3 @@
+include "./Agents.srt"
+
+print(inspect(Env::get("HOME")))

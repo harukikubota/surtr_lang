@@ -1,0 +1,8 @@
+def main() -> Unit {
+  msg = """
+ shallow
+  """
+  print(msg)
+}
+
+main()

@@ -1,0 +1,1041 @@
+@doc """
+Standard `Int` type declaration.
+User-visible integer values are backed by arbitrary-precision arithmetic across
+the pipeline.
+The compiler validates this top-level head as the canonical source-level
+contract for integers, so changing the shape here is a compile error rather
+than a local library tweak.
+"""
+@builtin type Int
+
+@doc """
+Concrete integer-module error for negative bit shift counts.
+`Int::shl` and `Int::shr` return this instead of trapping when `bits < 0`.
+"""
+deferror NegativeShiftCount(bits: Int) {
+  "shift amount must be non-negative: #{bits}"
+}
+
+@doc """
+Concrete integer-module error for negative bit indexes.
+Index-based bit helpers return this instead of trapping when `index < 0`.
+"""
+deferror NegativeBitIndex(index: Int) {
+  "bit index must be non-negative: #{index}"
+}
+
+@doc """
+Fixed-width selector for integer bit helpers.
+Named variants cover common machine widths, while `Any(bits)` accepts custom
+positive widths.
+"""
+defenum BitWidth {
+  W8,
+  W16,
+  W32,
+  W64,
+  W128,
+  Any(Int),
+}
+
+@doc """
+Type-safe radix marker for integer parsing helpers and diagnostics.
+"""
+defenum IntBase {
+  Bin,
+  Oct,
+  Dec,
+  Hex,
+}
+
+@doc """
+Concrete integer-module error for invalid custom bit widths.
+`BitWidth::Any(bits)` must use a positive width.
+"""
+deferror InvalidBitWidth(width: Int) {
+  "bit width must be positive: #{width}"
+}
+
+@doc """
+Recoverable parse error for base-fixed integer parsing helpers.
+"""
+deferror ParseIntError(detail: String) {
+  detail
+}
+
+@doc """
+Recoverable parse error for literal-syntax integer parsing helpers.
+"""
+deferror ParseIntLiteralError(detail: String) {
+  detail
+}
+
+@doc """
+Concrete integer-module error for fixed-width bit indexes outside the available
+range.
+`index` must satisfy `0 <= index < width`.
+"""
+deferror BitIndexOutOfRange(index: Int, width: Int) {
+  "bit index #{index} out of range for width #{width}"
+}
+
+impl IntBase {
+  @doc """
+  Return the numeric radix represented by `self`.
+  """
+  def radix(self: Self) -> Int {
+    match self {
+      IntBase::Bin => 2,
+      IntBase::Oct => 8,
+      IntBase::Dec => 10,
+      IntBase::Hex => 16,
+    }
+  }
+
+  @doc """
+  Return the canonical source prefix for `self`.
+  """
+  def prefix(self: Self) -> String {
+    match self {
+      IntBase::Bin => "0b",
+      IntBase::Oct => "0o",
+      IntBase::Dec => "0d",
+      IntBase::Hex => "0x",
+    }
+  }
+
+  @doc """
+  Return the human-friendly base label for diagnostics.
+  """
+  def label(self: Self) -> String {
+    match self {
+      IntBase::Bin => "binary",
+      IntBase::Oct => "octal",
+      IntBase::Dec => "decimal",
+      IntBase::Hex => "hexadecimal",
+    }
+  }
+}
+
+impl Int {
+  @doc """
+  Divide two values and return `Err(ZeroDivisionError)` instead of trapping.
+  The success case keeps the same value type as the inputs.
+  This follows the `Result`/`Either` style of representing failure as a value.
+  ## REPL
+  xldr(1)> Int::safe_div(8, 2)
+  Ok(4)
+  """
+  @builtin def safe_div(a: $A, b: $A) -> Result<$A, ZeroDivisionError>
+
+  @doc """
+  Compute `a mod b` for integers and return `Err(ZeroDivisionError)` on zero.
+  Failure stays on the value side rather than becoming an implicit exception.
+  ## REPL
+  xldr(1)> Int::safe_mod(7, 3)
+  Ok(1)
+  """
+  @builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
+
+  @doc """
+  Return the bitwise AND of `a` and `b`.
+  ## REPL
+  xldr(1)> Int::bit_and(6, 3)
+  2
+  """
+  @builtin
+  def bit_and(a: Int, b: Int) -> Int
+
+  @doc """
+  Return the bitwise OR of `a` and `b`.
+  ## REPL
+  xldr(1)> Int::bit_or(6, 3)
+  7
+  """
+  @builtin
+  def bit_or(a: Int, b: Int) -> Int
+
+  @doc """
+  Return the bitwise XOR of `a` and `b`.
+  ## REPL
+  xldr(1)> Int::bit_xor(6, 3)
+  5
+  """
+  @builtin
+  def bit_xor(a: Int, b: Int) -> Int
+
+  @doc """
+  Return the bitwise complement of `value`.
+  ## REPL
+  xldr(1)> Int::bit_not(0)
+  -1
+  """
+  @builtin
+  def bit_not(value: Int) -> Int
+
+  @doc """
+  Return whether the bit at `index` is set on `value`.
+  Negative bit indexes return `Err(NegativeBitIndex(...))`.
+  ## REPL
+  xldr(1)> Int::test_bit(4, 2)
+  Ok(True)
+  """
+  @builtin
+  def test_bit(value: Int, index: Int) -> Result<Boolean, NegativeBitIndex>
+
+  @doc """
+  Return `value` with the bit at `index` set.
+  Negative bit indexes return `Err(NegativeBitIndex(...))`.
+  ## REPL
+  xldr(1)> Int::set_bit(0, 1)
+  Ok(2)
+  """
+  @builtin
+  def set_bit(value: Int, index: Int) -> Result<Int, NegativeBitIndex>
+
+  @doc """
+  Return `value` with the bit at `index` cleared.
+  Negative bit indexes return `Err(NegativeBitIndex(...))`.
+  ## REPL
+  xldr(1)> Int::clear_bit(7, 1)
+  Ok(5)
+  """
+  @builtin
+  def clear_bit(value: Int, index: Int) -> Result<Int, NegativeBitIndex>
+
+  @doc """
+  Return `value` with the bit at `index` toggled.
+  Negative bit indexes return `Err(NegativeBitIndex(...))`.
+  ## REPL
+  xldr(1)> Int::toggle_bit(5, 0)
+  Ok(4)
+  """
+  @builtin
+  def toggle_bit(value: Int, index: Int) -> Result<Int, NegativeBitIndex>
+
+  defp _apply_parse_sign(value: Int, sign: Int) -> Int {
+    if(sign < 0, 0 - value, value)
+  }
+
+  defp _digit_value(ch: String) -> Result<Int> {
+    match String::codepoints(ch, StringEncoding::Ascii) {
+      Ok([cp]) => cond {
+        cp >= 48 && cp <= 57 => Ok(cp - 48),
+        cp >= 65 && cp <= 70 => Ok(cp - 55),
+        cp >= 97 && cp <= 102 => Ok(cp - 87),
+        True => Err(NoneError),
+      },
+      _ => Err(NoneError),
+    }
+  }
+
+  defp _parse_digit_for_base(base: IntBase, ch: String, index: Int) -> Result<Int, ParseIntError> {
+    radix = IntBase::radix(base)
+    match _digit_value(ch) {
+      Ok(value) => if(
+        value < radix,
+        Ok(value),
+        Err(ParseIntError("invalid digit for #{IntBase::label(base)} integer: #{ch} at index #{index}")),
+      ),
+      Err(_) => Err(ParseIntError("invalid digit for #{IntBase::label(base)} integer: #{ch} at index #{index}")),
+    }
+  }
+
+  defp _parse_literal_digit_for_base(base: IntBase, ch: String, index: Int) -> Result<Int, ParseIntLiteralError> {
+    radix = IntBase::radix(base)
+    match _digit_value(ch) {
+      Ok(value) => if(
+        value < radix,
+        Ok(value),
+        Err(
+          ParseIntLiteralError(
+            "invalid digit for #{IntBase::label(base)} integer literal: #{ch} at index #{index}",
+          ),
+        ),
+      ),
+      Err(_) => Err(
+        ParseIntLiteralError(
+          "invalid digit for #{IntBase::label(base)} integer literal: #{ch} at index #{index}",
+        ),
+      ),
+    }
+  }
+
+  defp _parse_digits_go(
+    chars: String,
+    base: IntBase,
+    acc: Int,
+    index: Int,
+    sign: Int,
+  ) -> Result<Int, ParseIntError> {
+    match chars {
+      "" => Ok(_apply_parse_sign(acc, sign)),
+      [head, ..tail] => _parse_digits_step(head, tail, base, acc, index, sign),
+    }
+  }
+
+  defp _parse_digits_step(
+    head: String,
+    tail: String,
+    base: IntBase,
+    acc: Int,
+    index: Int,
+    sign: Int,
+  ) -> Result<Int, ParseIntError> {
+    digit =? _parse_digit_for_base(base, head, index)
+    _parse_digits_go(
+      tail,
+      base,
+      acc * IntBase::radix(base) + digit,
+      index + 1,
+      sign,
+    )
+  }
+
+  defp _parse_literal_digits_go(
+    chars: String,
+    base: IntBase,
+    acc: Int,
+    index: Int,
+    sign: Int,
+  ) -> Result<Int, ParseIntLiteralError> {
+    match chars {
+      "" => Ok(_apply_parse_sign(acc, sign)),
+      [head, ..tail] => _parse_literal_digits_step(head, tail, base, acc, index, sign),
+    }
+  }
+
+  defp _parse_literal_digits_step(
+    head: String,
+    tail: String,
+    base: IntBase,
+    acc: Int,
+    index: Int,
+    sign: Int,
+  ) -> Result<Int, ParseIntLiteralError> {
+    digit =? _parse_literal_digit_for_base(base, head, index)
+    _parse_literal_digits_go(
+      tail,
+      base,
+      acc * IntBase::radix(base) + digit,
+      index + 1,
+      sign,
+    )
+  }
+
+  defp _parse_digits_unsigned(
+    chars: String,
+    base: IntBase,
+    sign: Int,
+    start_index: Int,
+  ) -> Result<Int, ParseIntError> {
+    match chars {
+      "" => Err(ParseIntError("empty integer input")),
+      _ => _parse_digits_go(chars, base, 0, start_index, sign),
+    }
+  }
+
+  defp _parse_literal_prefixed(
+    body: String,
+    base: IntBase,
+    sign: Int,
+    start_index: Int,
+  ) -> Result<Int, ParseIntLiteralError> {
+    match body {
+      "" => Err(ParseIntLiteralError("missing digits after integer base prefix: #{IntBase::prefix(base)}")),
+      _ => _parse_literal_digits_go(body, base, 0, start_index, sign),
+    }
+  }
+
+  defp _parse_literal_unsigned(
+    chars: String,
+    sign: Int,
+    start_index: Int,
+  ) -> Result<Int, ParseIntLiteralError> {
+    match chars {
+      "" => Err(ParseIntLiteralError("empty integer literal input")),
+      ["0", ..tail] => match tail {
+        "" => _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
+        ["b", ..body] => _parse_literal_prefixed(body, IntBase::Bin, sign, start_index + 2),
+        ["o", ..body] => _parse_literal_prefixed(body, IntBase::Oct, sign, start_index + 2),
+        ["d", ..body] => _parse_literal_prefixed(body, IntBase::Dec, sign, start_index + 2),
+        ["x", ..body] => _parse_literal_prefixed(body, IntBase::Hex, sign, start_index + 2),
+        [prefix, .._] => match _digit_value(prefix) {
+          Ok(value) => if(
+            value < 10,
+            _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
+            Err(ParseIntLiteralError("unknown integer base prefix: " ++ "0" ++ prefix)),
+          ),
+          Err(_) => Err(ParseIntLiteralError("unknown integer base prefix: " ++ "0" ++ prefix)),
+        },
+      },
+      _ => _parse_literal_digits_go(chars, IntBase::Dec, 0, start_index, sign),
+    }
+  }
+
+  @doc """
+  Parse base-10 text as an `Int`.
+  This is an alias for `Int::parse_dec`.
+  """
+  def parse(text: String) -> Result<Int, ParseIntError> {
+    Int::parse_dec(text)
+  }
+
+  @doc """
+  Parse base-10 digits as an `Int`.
+  Accepts an optional leading `+` or `-`.
+  """
+  def parse_dec(text: String) -> Result<Int, ParseIntError> {
+    match text {
+      "" => Err(ParseIntError("empty integer input")),
+      ["-", ..tail] => match tail {
+        "" => Err(ParseIntError("sign without digits")),
+        _ => _parse_digits_unsigned(tail, IntBase::Dec, -1, 1),
+      },
+      ["+", ..tail] => match tail {
+        "" => Err(ParseIntError("sign without digits")),
+        _ => _parse_digits_unsigned(tail, IntBase::Dec, 1, 1),
+      },
+      _ => _parse_digits_unsigned(text, IntBase::Dec, 1, 0),
+    }
+  }
+
+  @doc """
+  Parse base-16 digits as an `Int`.
+  Prefixes such as `0x` are not accepted here.
+  """
+  def parse_hex(text: String) -> Result<Int, ParseIntError> {
+    match text {
+      "" => Err(ParseIntError("empty integer input")),
+      ["-", ..tail] => match tail {
+        "" => Err(ParseIntError("sign without digits")),
+        _ => _parse_digits_unsigned(tail, IntBase::Hex, -1, 1),
+      },
+      ["+", ..tail] => match tail {
+        "" => Err(ParseIntError("sign without digits")),
+        _ => _parse_digits_unsigned(tail, IntBase::Hex, 1, 1),
+      },
+      _ => _parse_digits_unsigned(text, IntBase::Hex, 1, 0),
+    }
+  }
+
+  @doc """
+  Parse base-8 digits as an `Int`.
+  Prefixes such as `0o` are not accepted here.
+  """
+  def parse_oct(text: String) -> Result<Int, ParseIntError> {
+    match text {
+      "" => Err(ParseIntError("empty integer input")),
+      ["-", ..tail] => match tail {
+        "" => Err(ParseIntError("sign without digits")),
+        _ => _parse_digits_unsigned(tail, IntBase::Oct, -1, 1),
+      },
+      ["+", ..tail] => match tail {
+        "" => Err(ParseIntError("sign without digits")),
+        _ => _parse_digits_unsigned(tail, IntBase::Oct, 1, 1),
+      },
+      _ => _parse_digits_unsigned(text, IntBase::Oct, 1, 0),
+    }
+  }
+
+  @doc """
+  Parse base-2 digits as an `Int`.
+  Prefixes such as `0b` are not accepted here.
+  """
+  def parse_bin(text: String) -> Result<Int, ParseIntError> {
+    match text {
+      "" => Err(ParseIntError("empty integer input")),
+      ["-", ..tail] => match tail {
+        "" => Err(ParseIntError("sign without digits")),
+        _ => _parse_digits_unsigned(tail, IntBase::Bin, -1, 1),
+      },
+      ["+", ..tail] => match tail {
+        "" => Err(ParseIntError("sign without digits")),
+        _ => _parse_digits_unsigned(tail, IntBase::Bin, 1, 1),
+      },
+      _ => _parse_digits_unsigned(text, IntBase::Bin, 1, 0),
+    }
+  }
+
+  @doc """
+  Parse Surtr integer literal syntax from text.
+  Accepts plain decimal, `0d`, `0x`, `0o`, and `0b` forms.
+  """
+  def parse_literal(text: String) -> Result<Int, ParseIntLiteralError> {
+    match text {
+      "" => Err(ParseIntLiteralError("empty integer literal input")),
+      ["-", ..tail] => match tail {
+        "" => Err(ParseIntLiteralError("sign without digits")),
+        _ => _parse_literal_unsigned(tail, -1, 1),
+      },
+      ["+", ..tail] => match tail {
+        "" => Err(ParseIntLiteralError("sign without digits")),
+        _ => _parse_literal_unsigned(tail, 1, 1),
+      },
+      _ => _parse_literal_unsigned(text, 1, 0),
+    }
+  }
+
+  defp _pow2_go(remaining: Int, acc: Int) -> Int {
+    if(remaining == 0, acc, _pow2_go(remaining - 1, acc + acc))
+  }
+
+  defp _pow2(count: Int) -> Int {
+    _pow2_go(count, 1)
+  }
+
+  defp _positive_mod(value: Int, modulus: Int) -> Int {
+    match safe_mod(value, modulus) {
+      Ok(rem) => if(rem < 0, rem + modulus, rem),
+      Err(_) => 0,
+    }
+  }
+
+  defp _mask_bits(width_bits: Int) -> Int {
+    _pow2(width_bits) - 1
+  }
+
+  defp _wrap_unsigned_bits(value: Int, width_bits: Int) -> Int {
+    _positive_mod(value, _pow2(width_bits))
+  }
+
+  defp _validate_shift_count(bits: Int) -> Result<Int, NegativeShiftCount> {
+    if(bits < 0, Err(NegativeShiftCount(bits)), Ok(bits))
+  }
+
+  defp _validate_fixed_bit_index(index: Int, width_bits: Int) -> Result<Int> {
+    if(
+      index < 0,
+      Err(NegativeBitIndex(index)),
+      if(index < width_bits, Ok(index), Err(BitIndexOutOfRange(index, width_bits))),
+    )
+  }
+
+  defp _shr_logical_bits(value: Int, shift: Int, width_bits: Int) -> Int {
+    if(
+      shift >= width_bits,
+      0,
+      match safe_div(value, _pow2(shift)) {
+        Ok(quotient) => quotient,
+        Err(_) => 0,
+      },
+    )
+  }
+
+  @doc """
+  Resolve a `BitWidth` selector to its concrete bit count.
+  `BitWidth::Any(bits)` accepts only positive widths.
+  ## REPL
+  xldr(1)> Int::width_bits(BitWidth::W8)
+  Ok(8)
+  """
+  def width_bits(width: BitWidth) -> Result<Int, InvalidBitWidth> {
+    match width {
+      BitWidth::W8 => Ok(8),
+      BitWidth::W16 => Ok(16),
+      BitWidth::W32 => Ok(32),
+      BitWidth::W64 => Ok(64),
+      BitWidth::W128 => Ok(128),
+      BitWidth::Any(bits) when bits > 0 => Ok(bits),
+      BitWidth::Any(bits) => Err(InvalidBitWidth(bits)),
+    }
+  }
+
+  @doc """
+  Return the all-ones mask for `width`.
+  For example, `W8` returns `255`.
+  ## REPL
+  xldr(1)> Int::mask(BitWidth::W8)
+  Ok(255)
+  """
+  def mask(width: BitWidth) -> Result<Int, InvalidBitWidth> {
+    bits =? width_bits(width)
+    Ok(_mask_bits(bits))
+  }
+
+  @doc """
+  Wrap `value` into the unsigned range represented by `width`.
+  ## REPL
+  xldr(1)> Int::wrap_unsigned(-1, BitWidth::W8)
+  Ok(255)
+  """
+  def wrap_unsigned(value: Int, width: BitWidth) -> Result<Int, InvalidBitWidth> {
+    bits =? width_bits(width)
+    Ok(_wrap_unsigned_bits(value, bits))
+  }
+
+  @doc """
+  Wrap `value` into the signed two's-complement range represented by `width`.
+  ## REPL
+  xldr(1)> Int::wrap_signed(255, BitWidth::W8)
+  Ok(-1)
+  """
+  def wrap_signed(value: Int, width: BitWidth) -> Result<Int, InvalidBitWidth> {
+    bits =? width_bits(width)
+    unsigned = _wrap_unsigned_bits(value, bits)
+    modulus = _pow2(bits)
+    sign_bit = _pow2(bits - 1)
+    Ok(if(unsigned >= sign_bit, unsigned - modulus, unsigned))
+  }
+
+  @doc """
+  Return the fixed-width bitwise complement of `value`.
+  `value` is first wrapped into the unsigned range of `width`.
+  ## REPL
+  xldr(1)> Int::bit_not_in(0, BitWidth::W8)
+  Ok(255)
+  """
+  def bit_not_in(value: Int, width: BitWidth) -> Result<Int, InvalidBitWidth> {
+    bits =? width_bits(width)
+    width_mask = _mask_bits(bits)
+    wrapped = _wrap_unsigned_bits(value, bits)
+    Ok(bit_xor(width_mask, wrapped))
+  }
+
+  @doc """
+  Return whether the fixed-width bit at `index` is set on `value`.
+  Indexes must satisfy `0 <= index < width`.
+  ## REPL
+  xldr(1)> Int::test_bit_in(4, 2, BitWidth::W8)
+  Ok(True)
+  """
+  def test_bit_in(value: Int, index: Int, width: BitWidth) -> Result<Boolean> {
+    bits =? width_bits(width)
+    checked =? _validate_fixed_bit_index(index, bits)
+    wrapped = _wrap_unsigned_bits(value, bits)
+    bit_mask = _pow2(checked)
+    Ok(bit_and(wrapped, bit_mask) != 0)
+  }
+
+  @doc """
+  Return `value` with the fixed-width bit at `index` set.
+  Indexes must satisfy `0 <= index < width`.
+  ## REPL
+  xldr(1)> Int::set_bit_in(0, 1, BitWidth::W8)
+  Ok(2)
+  """
+  def set_bit_in(value: Int, index: Int, width: BitWidth) -> Result<Int> {
+    bits =? width_bits(width)
+    checked =? _validate_fixed_bit_index(index, bits)
+    wrapped = _wrap_unsigned_bits(value, bits)
+    bit_mask = _pow2(checked)
+    Ok(bit_or(wrapped, bit_mask))
+  }
+
+  @doc """
+  Return `value` with the fixed-width bit at `index` cleared.
+  Indexes must satisfy `0 <= index < width`.
+  ## REPL
+  xldr(1)> Int::clear_bit_in(7, 1, BitWidth::W8)
+  Ok(5)
+  """
+  def clear_bit_in(value: Int, index: Int, width: BitWidth) -> Result<Int> {
+    bits =? width_bits(width)
+    checked =? _validate_fixed_bit_index(index, bits)
+    wrapped = _wrap_unsigned_bits(value, bits)
+    bit_mask = _pow2(checked)
+    clear_mask = bit_xor(_mask_bits(bits), bit_mask)
+    Ok(bit_and(wrapped, clear_mask))
+  }
+
+  @doc """
+  Return `value` with the fixed-width bit at `index` toggled.
+  Indexes must satisfy `0 <= index < width`.
+  ## REPL
+  xldr(1)> Int::toggle_bit_in(5, 0, BitWidth::W8)
+  Ok(4)
+  """
+  def toggle_bit_in(value: Int, index: Int, width: BitWidth) -> Result<Int> {
+    bits =? width_bits(width)
+    checked =? _validate_fixed_bit_index(index, bits)
+    wrapped = _wrap_unsigned_bits(value, bits)
+    bit_mask = _pow2(checked)
+    Ok(bit_xor(wrapped, bit_mask))
+  }
+
+  @doc """
+  Shift `value` left inside the unsigned range represented by `width`.
+  Negative shift counts return `Err(NegativeShiftCount(...))`.
+  ## REPL
+  xldr(1)> Int::shl_in(3, 2, BitWidth::W8)
+  Ok(12)
+  """
+  def shl_in(value: Int, bits: Int, width: BitWidth) -> Result<Int> {
+    width_size =? width_bits(width)
+    shift =? _validate_shift_count(bits)
+    wrapped = _wrap_unsigned_bits(value, width_size)
+    Ok(_wrap_unsigned_bits(wrapped * _pow2(shift), width_size))
+  }
+
+  @doc """
+  Shift `value` right logically inside the unsigned range represented by `width`.
+  Negative shift counts return `Err(NegativeShiftCount(...))`.
+  ## REPL
+  xldr(1)> Int::shr_logical_in(128, 7, BitWidth::W8)
+  Ok(1)
+  """
+  def shr_logical_in(value: Int, bits: Int, width: BitWidth) -> Result<Int> {
+    width_size =? width_bits(width)
+    shift =? _validate_shift_count(bits)
+    wrapped = _wrap_unsigned_bits(value, width_size)
+    Ok(_shr_logical_bits(wrapped, shift, width_size))
+  }
+
+  @doc """
+  Rotate `value` left inside the unsigned range represented by `width`.
+  Negative shift counts return `Err(NegativeShiftCount(...))`.
+  ## REPL
+  xldr(1)> Int::rotl_in(129, 1, BitWidth::W8)
+  Ok(3)
+  """
+  def rotl_in(value: Int, bits: Int, width: BitWidth) -> Result<Int> {
+    width_size =? width_bits(width)
+    shift =? _validate_shift_count(bits)
+    normalized = _positive_mod(shift, width_size)
+    wrapped = _wrap_unsigned_bits(value, width_size)
+    left = _wrap_unsigned_bits(wrapped * _pow2(normalized), width_size)
+    right = _shr_logical_bits(wrapped, width_size - normalized, width_size)
+    Ok(bit_or(left, right))
+  }
+
+  @doc """
+  Rotate `value` right inside the unsigned range represented by `width`.
+  Negative shift counts return `Err(NegativeShiftCount(...))`.
+  ## REPL
+  xldr(1)> Int::rotr_in(3, 1, BitWidth::W8)
+  Ok(129)
+  """
+  def rotr_in(value: Int, bits: Int, width: BitWidth) -> Result<Int> {
+    width_size =? width_bits(width)
+    shift =? _validate_shift_count(bits)
+    normalized = _positive_mod(shift, width_size)
+    wrapped = _wrap_unsigned_bits(value, width_size)
+    left = _wrap_unsigned_bits(wrapped * _pow2(width_size - normalized), width_size)
+    right = _shr_logical_bits(wrapped, normalized, width_size)
+    Ok(bit_or(left, right))
+  }
+
+  @doc """
+  Shift `value` left by `bits`.
+  Negative shift counts return `Err(NegativeShiftCount(...))`.
+  ## REPL
+  xldr(1)> Int::shl(3, 2)
+  Ok(12)
+  """
+  @builtin
+  def shl(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>
+
+  @doc """
+  Shift `value` right by `bits`.
+  Negative shift counts return `Err(NegativeShiftCount(...))`.
+  ## REPL
+  xldr(1)> Int::shr(12, 2)
+  Ok(3)
+  """
+  @builtin
+  def shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>
+
+  @doc """
+  Return the absolute value of `value`.
+  ## REPL
+  xldr(1)> Int::abs(-4)
+  4
+  """
+  def abs(value: Int) -> Int {
+    if(value < 0, 0 - value, value)
+  }
+
+  @doc """
+  Return the smaller of `a` and `b`.
+  ## REPL
+  xldr(1)> Int::min(1, 2)
+  1
+  """
+  def min(a: Int, b: Int) -> Int {
+    if(a <= b, a, b)
+  }
+
+  @doc """
+  Return the larger of `a` and `b`.
+  ## REPL
+  xldr(1)> Int::max(1, 2)
+  2
+  """
+  def max(a: Int, b: Int) -> Int {
+    if(a >= b, a, b)
+  }
+
+  @doc """
+  Return `-1`, `0`, or `1` depending on the sign of `value`.
+  ## REPL
+  xldr(1)> Int::sign(-3)
+  -1
+  """
+  def sign(value: Int) -> Int {
+    if(value < 0, -1, if(value > 0, 1, 0))
+  }
+
+  @doc """
+  Return `True` when `value` is divisible by two.
+  ## REPL
+  xldr(1)> Int::is_even(4)
+  True
+  """
+  def is_even(value: Int) -> Boolean {
+    match safe_mod(value, 2) {
+      Ok(rem) => rem == 0,
+      Err(_) => False,
+    }
+  }
+
+  @doc """
+  Return `True` when `value` is not divisible by two.
+  ## REPL
+  xldr(1)> Int::is_odd(5)
+  True
+  """
+  def is_odd(value: Int) -> Boolean {
+    match safe_mod(value, 2) {
+      Ok(rem) => rem != 0,
+      Err(_) => False,
+    }
+  }
+}
+
+impl Add for Int {
+  @doc """
+  Return the sum of the two integer values.
+  ## REPL
+  xldr(1)> Add::add(1, 2)
+  3
+  """
+  @builtin def add(self: Self, rhs: Self) -> Self
+}
+
+impl Sub for Int {
+  @doc """
+  Return the difference of the two integer values.
+  ## REPL
+  xldr(1)> Sub::sub(5, 2)
+  3
+  """
+  @builtin def sub(self: Self, rhs: Self) -> Self
+}
+
+impl Mul for Int {
+  @doc """
+  Return the product of the two integer values.
+  ## REPL
+  xldr(1)> Mul::mul(3, 4)
+  12
+  """
+  @builtin def mul(self: Self, rhs: Self) -> Self
+}
+
+impl Numeric for Int {
+  @doc """
+  Divide by `rhs`, returning `Err(ZeroDivisionError)` for zero divisors.
+  ## REPL
+  xldr(1)> safe_div(8, 2)
+  Ok(4)
+  """
+  def safe_div(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError> {
+    Int::safe_div(self, rhs)
+  }
+
+  @doc """
+  Return the absolute value of the integer.
+  ## REPL
+  xldr(1)> abs(-3)
+  3
+  """
+  def abs(self: Self) -> Self {
+    Int::abs(self)
+  }
+
+  @doc """
+  Return the smaller of the two integer values.
+  ## REPL
+  xldr(1)> min(1, 2)
+  1
+  """
+  def min(self: Self, rhs: Self) -> Self {
+    Int::min(self, rhs)
+  }
+
+  @doc """
+  Return the larger of the two integer values.
+  ## REPL
+  xldr(1)> max(1, 2)
+  2
+  """
+  def max(self: Self, rhs: Self) -> Self {
+    Int::max(self, rhs)
+  }
+}
+
+impl Show for Int {
+  @doc """
+  Return the standard string rendering for `Int`.
+  ## REPL
+  xldr(1)> to_string(42)
+  "42"
+  """
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}
+
+impl From<Int> for Int {
+  @doc """
+  Return the value unchanged when converting `Int` to `Int`.
+  ## REPL
+  xldr(1)> from(42, Int)
+  42
+  """
+  def from(self: Self, to: TypeRef<Int>) -> Int {
+    self
+  }
+}
+
+impl From<String> for Int {
+  @doc """
+  Convert `Int` into its standard string representation.
+  ## REPL
+  xldr(1)> from(42, String)
+  "42"
+  """
+  def from(self: Self, to: TypeRef<String>) -> String {
+    to_string(self)
+  }
+}
+
+impl Eq for Int {
+  @doc """
+  Return `True` when both integer values are equal.
+  ## REPL
+  xldr(1)> eq(2, 2)
+  True
+  """
+  @builtin def eq(self: Self, rhs: Self) -> Boolean
+}
+
+impl Neq for Int {
+  @doc """
+  Return `True` when the integer values differ.
+  ## REPL
+  xldr(1)> neq(2, 3)
+  True
+  """
+  @builtin def neq(self: Self, rhs: Self) -> Boolean
+}
+
+impl Compare for Int {
+  @doc """
+  Return the three-way ordering between the two integer values.
+  ## REPL
+  xldr(1)> compare(1, 2)
+  Ordering::Less
+  """
+  def compare(self: Self, rhs: Self) -> Ordering {
+    if(
+      Lt::lt(self, rhs),
+      Ordering::Less,
+      if(Gt::gt(self, rhs), Ordering::Greater, Ordering::Equal),
+    )
+  }
+}
+
+impl Ord for Int {
+  @doc """
+  Return `True` when the left integer is strictly less than the right integer.
+  ## REPL
+  xldr(1)> lt(1, 2)
+  True
+  """
+  def lt(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less => True,
+      Ordering::Equal | Ordering::Greater => False,
+    }
+  }
+
+  @doc """
+  Return `True` when the left integer is less than or equal to the right integer.
+  ## REPL
+  xldr(1)> lte(2, 2)
+  True
+  """
+  def lte(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less | Ordering::Equal => True,
+      Ordering::Greater => False,
+    }
+  }
+
+  @doc """
+  Return `True` when the left integer is strictly greater than the right integer.
+  ## REPL
+  xldr(1)> gt(3, 2)
+  True
+  """
+  def gt(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less | Ordering::Equal => False,
+      Ordering::Greater => True,
+    }
+  }
+
+  @doc """
+  Return `True` when the left integer is greater than or equal to the right integer.
+  ## REPL
+  xldr(1)> gte(2, 2)
+  True
+  """
+  def gte(self: Self, rhs: Self) -> Boolean {
+    match Compare::compare(self, rhs) {
+      Ordering::Less => False,
+      Ordering::Equal | Ordering::Greater => True,
+    }
+  }
+}
+
+impl Lt for Int {
+  @doc """
+  Return `True` when the left integer is strictly less than the right integer.
+  ## REPL
+  xldr(1)> lt(1, 2)
+  True
+  """
+  @builtin def lt(self: Self, rhs: Self) -> Boolean
+}
+
+impl Lte for Int {
+  @doc """
+  Return `True` when the left integer is less than or equal to the right integer.
+  ## REPL
+  xldr(1)> lte(2, 2)
+  True
+  """
+  @builtin def lte(self: Self, rhs: Self) -> Boolean
+}
+
+impl Gt for Int {
+  @doc """
+  Return `True` when the left integer is strictly greater than the right integer.
+  ## REPL
+  xldr(1)> gt(3, 2)
+  True
+  """
+  @builtin def gt(self: Self, rhs: Self) -> Boolean
+}
+
+impl Gte for Int {
+  @doc """
+  Return `True` when the left integer is greater than or equal to the right integer.
+  ## REPL
+  xldr(1)> gte(2, 2)
+  True
+  """
+  @builtin def gte(self: Self, rhs: Self) -> Boolean
+}

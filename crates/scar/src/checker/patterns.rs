@@ -8,11 +8,13 @@ impl Checker {
             | ResolvedPattern::Wildcard(_) => true,
             ResolvedPattern::As(inner, _, _) => Self::is_total_bind_pattern(inner),
             ResolvedPattern::Tuple(items) => items.iter().all(Self::is_total_bind_pattern),
+            ResolvedPattern::Or(_) => false,
             ResolvedPattern::ListNil(_)
             | ResolvedPattern::ListCons(_, _)
             | ResolvedPattern::IntLit(_, _)
             | ResolvedPattern::StrLit(_, _)
             | ResolvedPattern::BoolLit(_, _)
+            | ResolvedPattern::DurationLit(_, _)
             | ResolvedPattern::Constructor(_, _)
             | ResolvedPattern::Extractor(_, _) => false,
         }
@@ -31,7 +33,7 @@ impl Checker {
             }
             ResolvedPattern::Annotated(id, ast_ty) => {
                 let expected =
-                    self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
+                    self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                 if !self.types_compatible(&expected, rhs_ty) {
                     return Err(TypeError {
                         message: format!(
@@ -50,7 +52,7 @@ impl Checker {
                 let (typed_inner, inner_ty) = self.check_pattern(inner, rhs_ty, span)?;
                 let alias_bind_ty = if let Some(ast_ty) = alias_ty {
                     let expected =
-                        self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
+                        self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                     if !self.types_compatible(&expected, &inner_ty) {
                         return Err(TypeError {
                             message: format!(
@@ -106,6 +108,11 @@ impl Checker {
                 }
                 Ok((TypedPattern::Tuple(rhs_ty.clone(), typed_items), rhs_ty))
             }
+            ResolvedPattern::Or(_) => Err(TypeError {
+                message: "Pattern alternatives are only supported in match expressions.".into(),
+                span: span.clone(),
+                hint: None,
+            }),
             ResolvedPattern::ListNil(pspan) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 match rhs_ty {
@@ -211,6 +218,20 @@ impl Checker {
                 }
                 Ok((TypedPattern::BoolLit(Ty::Bool, *b), rhs_ty))
             }
+            ResolvedPattern::DurationLit(pspan, n) => {
+                let rhs_ty = self.resolve_ty(rhs_ty);
+                if !Self::is_duration_ty(&rhs_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "duration literal pattern requires Duration, got {}",
+                            self.ty_name(&rhs_ty)
+                        ),
+                        span: pspan.clone(),
+                        hint: None,
+                    });
+                }
+                Ok((TypedPattern::DurationLit(rhs_ty.clone(), n.clone()), rhs_ty))
+            }
             ResolvedPattern::Constructor(ctor_id, inners) => {
                 if ctor_id.name != "Ok" {
                     return Err(TypeError {
@@ -272,7 +293,12 @@ impl Checker {
                             self.ty_name(&rhs_ty)
                         ),
                         span: extractor_id.span.clone(),
-                        hint: None,
+                        hint: Some(format!(
+                            "Extractor type signature: {}. RHS type is {}.",
+                            self.callable_signature_for_ty(&extractor_ty)
+                                .unwrap_or_else(|| self.ty_name(&extractor_ty)),
+                            self.ty_name(&rhs_ty)
+                        )),
                     });
                 }
                 if items.len() != seq_tys.len() {
@@ -284,7 +310,14 @@ impl Checker {
                             items.len()
                         ),
                         span: extractor_id.span.clone(),
-                        hint: None,
+                        hint: Some(format!(
+                            "Extractor success value(s): {}.",
+                            seq_tys
+                                .iter()
+                                .map(|ty| self.ty_name(ty))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )),
                     });
                 }
                 let mut typed_items = Vec::with_capacity(items.len());
@@ -323,7 +356,8 @@ impl Checker {
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
-            | TypedPattern::BoolLit(_, _) => {}
+            | TypedPattern::BoolLit(_, _)
+            | TypedPattern::DurationLit(_, _) => {}
             TypedPattern::Tuple(_, items) => {
                 let item_tys = match &rhs_ty {
                     Ty::Tuple(item_tys) => item_tys.clone(),
@@ -358,12 +392,15 @@ impl Checker {
     }
 
     pub(super) fn normalize_env_bindings(&mut self) {
+        let profile = self.profiler.start();
         let keys = self.env.vars.keys().copied().collect::<Vec<_>>();
         for key in keys {
             if let Some(ty) = self.env.vars.get(&key).cloned() {
                 self.env.vars.insert(key, self.resolve_ty(&ty));
             }
         }
+        self.profiler
+            .finish(ProfileEvent::NormalizeEnvBindings, profile);
     }
 
     pub(super) fn collect_pattern_result_error_types(&self, pat: &TypedPattern, out: &mut Vec<Ty>) {
@@ -397,7 +434,8 @@ impl Checker {
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
-            | TypedPattern::BoolLit(_, _) => {}
+            | TypedPattern::BoolLit(_, _)
+            | TypedPattern::DurationLit(_, _) => {}
         }
     }
 }

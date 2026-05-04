@@ -195,6 +195,7 @@ fn build_dump_json(
             "span_count": inspected.bytecode.spans.len(),
             "source_count": inspected.bytecode.sources.len(),
             "pc_span_count": inspected.bytecode.pc_spans.len(),
+            "process_spec_count": inspected.bytecode.runtime_process_specs.entries.len(),
             "bytecode_version": inspected.bytecode.compile_info.bytecode_version
         },
         "entrypoint_trace": entrypoint_trace,

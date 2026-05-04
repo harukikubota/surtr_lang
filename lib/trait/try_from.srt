@@ -1,9 +1,0 @@
-@@doc """
-Standard `TryFrom` trait declaration.
-`TryFrom<$To>` models fallible conversion from `Self` into `$To`.
-The target witness uses `TypeRef<$To>` for the same reason as `From`.
-"""
-@@autoimport
-deftrait TryFrom<$To> {
-  def try_from(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
-}

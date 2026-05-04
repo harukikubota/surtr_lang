@@ -1,0 +1,2 @@
+phase: resolve
+contains: pipe placeholder `_1` cannot be used as an expression

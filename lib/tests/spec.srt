@@ -1,0 +1,174 @@
+include "./spec_defs.srt"
+import SpecDefs;
+import Test;
+
+test("Spec") {
+  describe("control/value surface") {
+    it("combines if cond and match expressions") {
+      assert_eq(
+        (1, 2, "yes", ["F", "ten", "X"], ["ab", "even", "in-range", "out-range"]),
+        (
+          if(True, 1, 2),
+          cond {
+            False => 0,
+            False => 1,
+            True => fallback_value(),
+          },
+          match True {
+            True => "yes",
+            False => "no",
+          },
+          [
+            match False {
+              True => "T",
+              _ => "F",
+            },
+            match 10 {
+              1 => "one",
+              10 => "ten",
+              _ => "other",
+            },
+            match "x" {
+              "a" => "A",
+              "b" => "B",
+              _ => "X",
+            },
+          ],
+          [
+            match "b" {
+              "a" | "b" => "ab",
+              _ => "other",
+            },
+            match 8 {
+              num when is_even(num) => "even",
+              _ => "odd",
+            },
+            match 5 {
+              num when 0 < num `and` num < 10 => "in-range",
+              _ => "out-range",
+            },
+            match 12 {
+              num when 0 < num `and` num < 10 => "in-range",
+              _ => "out-range",
+            },
+          ],
+        ),
+      )
+    }
+  }
+
+  describe("control/block execution") {
+    it("runs only the selected blocks") {
+      capture_stdout()
+      assert_eq(
+        ["10", "0", "()", "()", "()", "()"],
+        [
+          to_string(take(True) { num = 10; num }),
+          to_string(take(False) { print("skip-take"); 99 }),
+          inspect(run_if(True) { print("run-if") }),
+          inspect(run_if(False) { print("skip-run-if") }),
+          inspect(if_then(True, print("if-then"))),
+          inspect(if_then(False, print("skip-if-then"))),
+        ],
+      )
+      if_let_then(Ok("alice"), Ok(name), print(name))
+      if_let_then(Err(NoneError), Ok(name), print(name))
+      assert_stdout_eq(["run-if", "if-then", "alice"])
+    }
+  }
+
+  describe("desugaring surface") {
+    it("supports if_let is_match and match result branching") {
+      result: Result<Int> = Ok(42)
+      assert_eq(
+        (42, -1, True, False, "42", "5"),
+        (
+          if_let(Ok(41), Ok(n), n + 1, 0),
+          if_let(Err(NoneError), Ok(n), n, -1),
+          is_match(Ok(1), Ok(_)),
+          is_match(Err(NoneError), Ok(_)),
+          match result {
+            Ok(val) => to_string(val),
+            Err(_) => "error",
+          },
+          to_string(match 1 {
+            1 => {
+              y = 2
+              y + 3
+            },
+            _ => 0,
+          }),
+        ),
+      )
+    }
+  }
+
+  describe("call surface") {
+    it("covers named args block literals and hole closures") {
+      block = {
+        tmp = 10
+        tmp * 10
+      }
+      keep_one: (_ -> Int) = always(1)
+      next = make()
+      idle: (-> Unit) = noop()
+      assert_eq(
+        (3, 6, 100, 1, 2, "()"),
+        (
+          add(y: 2, x: 1),
+          add3(z: 3, y: 2, x: 1),
+          block(),
+          keep_one("ignored"),
+          next(False),
+          inspect(idle()),
+        ),
+      )
+    }
+  }
+
+  describe("binding and type surface") {
+    it("keeps annotations shadowing tuples and lists stable") {
+      num: Int = 10
+      name: String = "hello"
+      x = 10
+      x = 20
+      pair = (1, "two")
+      (left, right) = pair
+      nums = [1, 2, 3]
+      strs = ["a", "b", "c"]
+      empty: List<Int> = []
+      assert_eq(
+        (
+          10,
+          "hello",
+          20,
+          "(1, \"two\")",
+          1,
+          "two",
+          1,
+          "two",
+          "two:1",
+          "[1, 2, 3]",
+          "[a, b, c]",
+          "[]",
+        ),
+        (
+          num,
+          name,
+          x,
+          inspect(pair),
+          pair._0,
+          pair._1,
+          left,
+          right,
+          match pair {
+            (n, text) => text ++ ":" ++ to_string(n),
+          },
+          to_string(nums),
+          to_string(strs),
+          to_string(empty),
+        ),
+      )
+    }
+  }
+}

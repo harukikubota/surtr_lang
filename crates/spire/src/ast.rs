@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use sindr::primitives::SurtrInt;
 
 /// Source location — attached to every AST node for downstream error reporting.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
@@ -10,7 +11,7 @@ pub struct Span {
 /// A plain identifier string. Kept as its own type for readability.
 pub type Symbol = String;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Visibility {
     #[default]
     Public,
@@ -22,7 +23,32 @@ pub enum Visibility {
 pub struct DeclAttrs {
     pub doc: Option<String>,
     pub auto_import: bool,
+    pub hidden: bool,
     pub visibility: Visibility,
+    pub process_spec: Option<ProcessSpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProcessKind {
+    ReadOnlyAgent,
+    StateAgent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProcessInstance {
+    Singleton,
+    Multi,
+}
+
+/// Compiler-managed metadata carried by lowered `defagent` modules.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessSpec {
+    pub process_name: Symbol,
+    pub kind: ProcessKind,
+    pub instance: ProcessInstance,
+    pub boot: bool,
+    pub registry: bool,
+    pub lazy: bool,
 }
 
 /// Surface builtin type head declaration: `List<$A>`, `Result<$T>`, `Int`, ...
@@ -35,7 +61,7 @@ pub struct BuiltinTypeHead {
 
 // ── Literals ──
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Lit {
     Int(SurtrInt),
     Float(f64),
@@ -46,11 +72,12 @@ pub enum Lit {
 
 // ── Binary operators ──
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum BinOp {
     Add,
     Sub,
     Mul,
+    Slash,
     Eq,
     Neq,
     Lt,
@@ -62,7 +89,7 @@ pub enum BinOp {
 
 // ── Type annotations (surface syntax) ──
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AstTy {
     /// `Int`, `String`, `Boolean`, `Unit`, `User`, ...
     Named(Span, Symbol),
@@ -96,14 +123,26 @@ pub enum AstPattern {
     StrLit(Span, String),
     /// Boolean literal in pattern position.
     BoolLit(Span, bool),
+    /// Duration literal in pattern position, e.g. `20ms`.
+    DurationLit(Span, SurtrInt),
     /// `Ok(inner)` / `Color::Red` / `KeyInput::Arrow(dir)` in pattern position.
     Constructor(Span, Symbol, Vec<AstPattern>),
     /// `uncons(head, tail)` / `User(name, age)` in MatchBlock position.
     Call(Span, Symbol, Vec<AstPattern>),
     /// `(head, tail, ...)`
     Tuple(Span, Vec<AstPattern>),
+    /// `left | right` inside a pattern.
+    Or(Span, Vec<AstPattern>),
     /// `inner @ alias` / `inner @ alias: Ty`
     As(Span, Box<AstPattern>, Symbol, Option<AstTy>),
+}
+
+/// Match arm: `pattern [when guard] => body`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AstMatchArm {
+    pub pattern: AstPattern,
+    pub guard: Option<Ast>,
+    pub body: Ast,
 }
 
 // ── Struct / Record fields ──
@@ -171,11 +210,23 @@ pub struct ClosureParam {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct DbgArg {
+    pub span: Span,
+    pub expr: Ast,
+}
+
 /// Record literal argument — positional or named.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RecordLitArg {
     Positional(Ast),
     Named(Symbol, Ast),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StructLitField {
+    Explicit(Symbol, Ast),
+    Shorthand(Symbol),
 }
 
 /// Interpolated string fragment.
@@ -190,6 +241,13 @@ pub enum InterpolatedPart {
 pub struct AstPath {
     pub span: Span,
     pub segments: Vec<Symbol>,
+}
+
+/// Parser-only backtick capture target for operator forms such as `&`+``.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FuncLiteralRef {
+    pub span: Span,
+    pub body: Symbol,
 }
 
 /// Import selector.
@@ -213,13 +271,19 @@ pub enum Ast {
     /// Variable reference: `x`, `print`
     Var(Span, Symbol),
 
+    /// Compiler-generated hidden builtin reference.
+    InternalVar(Span, Symbol),
+
     /// Qualified path reference: `Kernel::add`
     Path(Span, AstPath),
+
+    /// Parser-only backtick capture target such as `&`+``.
+    FuncLiteralRef(Span, FuncLiteralRef),
 
     /// Function application: `print("hello")`, `to_string(42)`, `add(y: 2, x: 1)`
     App(Span, Box<Ast>, Vec<RecordLitArg>),
 
-    /// Block of statements (implicit in top-level, explicit in `{}`)
+    /// Statement sequence used by declaration bodies and lowered closure bodies.
     Block(Span, Vec<Ast>),
 
     /// Binding: `x = 10`, `num: Int = 42`
@@ -243,7 +307,10 @@ pub enum Ast {
     /// Plain function composition: `f >> g`
     Compose(Span, Box<Ast>, Box<Ast>),
 
-    /// Kleisli composition: `f |=> g`
+    /// Lifted composition: `f >* g`
+    LiftedCompose(Span, Box<Ast>, Box<Ast>),
+
+    /// Kleisli composition: `f >=> g`
     KleisliCompose(Span, Box<Ast>, Box<Ast>),
 
     /// Empty list literal: `[]`
@@ -255,26 +322,38 @@ pub enum Ast {
     /// Fixed list literal: `[1, 2, 3]`
     ListLiteral(Span, Vec<Ast>),
 
+    /// Inclusive range literal: `[start..stop]`
+    RangeLiteral(Span, Box<Ast>, Box<Ast>),
+
     /// Tuple literal: `(1, 2, 3)`
     TupleLiteral(Span, Vec<Ast>),
+
+    /// Parenthesized expression preserved for operator RHS disambiguation.
+    Grouped(Span, Box<Ast>),
 
     /// Interpolated string: `"hi #{name}"`
     InterpolatedStr(Span, Vec<InterpolatedPart>),
 
+    /// Debug special form: `dbg!(expr1, expr2, ...)`
+    Dbg(Span, Vec<DbgArg>),
+
     /// Match expression
-    Match(Span, Box<Ast>, Vec<(AstPattern, Ast)>),
+    Match(Span, Box<Ast>, Vec<AstMatchArm>),
 
     /// Field access: `user.name`, `pair._0`
     FieldAccess(Span, Box<Ast>, Symbol),
 
     /// Struct definition: `defstruct User { name: String, age: Int }`
-    StructDef(Span, Symbol, Vec<StructField>),
+    StructDef(Span, Symbol, Vec<StructField>, DeclAttrs),
 
     /// Record definition: `defrecord Point(x: Float, y: Float)`
-    RecordDef(Span, Symbol, Vec<RecordField>),
+    RecordDef(Span, Symbol, Vec<RecordField>, DeclAttrs),
 
-    /// Struct literal: `User { name: "alice", age: 30 }`
-    StructLit(Span, Symbol, Vec<(Symbol, Ast)>),
+    /// Struct literal: `User { name: "alice", age, active: is_active }`
+    StructLit(Span, Symbol, Vec<StructLitField>),
+
+    /// Compiler-generated struct literal used for syntax sugars such as `100ms`.
+    InternalStructLit(Span, Symbol, Vec<StructLitField>),
 
     /// Constructor call: `Point(1.0, 2.0)` or `Point(x: 1.0, y: 2.0)`
     ConstructorCall(Span, Symbol, Vec<RecordLitArg>),
@@ -296,6 +375,9 @@ pub enum Ast {
         DeclAttrs,
     ),
 
+    /// Top-level constant definition: `const APP_NAME = "surtr"`
+    ConstDef(Span, Symbol, Option<AstTy>, Box<Ast>, DeclAttrs),
+
     ExtractorDef(
         Span,
         Symbol,
@@ -306,19 +388,22 @@ pub enum Ast {
         DeclAttrs,
     ),
 
-    /// Builtin declaration: `@@builtin def print(a: String) -> Unit`
+    /// Builtin declaration: `@builtin def print(a: String) -> Unit`
     BuiltinDecl(Span, Symbol, Vec<FunParam>, Option<AstTy>, DeclAttrs),
+
+    /// Display-only intrinsic declaration: `@intrinsic def dbg!(values: *$A) -> Unit`
+    IntrinsicDecl(Span, Symbol, String, DeclAttrs),
 
     BuiltinExtractorDecl(Span, Symbol, ExtractorParam, AstTy, DeclAttrs),
 
-    /// Builtin type declaration: `@@builtin type Int`
+    /// Builtin type declaration: `@builtin type Int`
     BuiltinTypeDecl(Span, BuiltinTypeHead, DeclAttrs),
 
     /// Declaration-only Result constructor contracts used by std modules.
     ///
     /// Surface syntax is intentionally special-cased:
-    /// `@@builtin type Ok($T) -> Result<$T>`
-    /// `@@builtin type Err(Error) -> Result<$T>`
+    /// `@builtin type Ok($T) -> Result<$T>`
+    /// `@builtin type Err(Error) -> Result<$T>`
     ///
     /// These are not real type declarations, but this syntax keeps them in the
     /// same declaration layer as the other std-module builtin contracts.
@@ -327,16 +412,19 @@ pub enum Ast {
     /// Module declaration: `defmod Kernel { ... }`
     Defmod(Span, Symbol, Vec<Ast>, DeclAttrs),
 
-    /// Impl definition: `impl User { def normalize(self) -> Self { self } }`
-    ImplDef(Span, Symbol, Vec<Ast>),
+    /// Parser-only namespace declaration: `namespace Auth { ... }`
+    Namespace(Span, Symbol, Vec<Ast>),
 
-    /// Trait definition: `deftrait Numeric<$T> { def add(self: Self, rhs: Self) -> Self }`
+    /// Impl definition: `impl User { def normalize(self) -> Self { self } }`
+    ImplDef(Span, Symbol, Vec<Ast>, DeclAttrs),
+
+    /// Trait definition: `deftrait Add { def add(self: Self, rhs: Self) -> Self }`
     TraitDef(Span, Symbol, Vec<TypeParam>, Vec<TraitMethodSig>, DeclAttrs),
 
     /// Trait impl definition:
     /// `impl Numeric for Int { ... }`
     /// `impl From<String> for Int { ... }`
-    TraitImplDef(Span, Symbol, Vec<AstTy>, AstTy, Vec<Ast>),
+    TraitImplDef(Span, Symbol, Vec<AstTy>, AstTy, Vec<Ast>, DeclAttrs),
 
     /// Import declaration
     Import(Span, AstPath, ImportSpec),
@@ -344,11 +432,14 @@ pub enum Ast {
     /// Script include directive: `include "./path/to/module.srt"`
     Include(Span, String),
 
-    /// Closure literal: `{|x, y| expr}` / `{|| expr}`
+    /// Closure literal: `{|x, y| expr}` / `{|| expr}` / `{ expr }`
     Closure(Span, Vec<ClosureParam>, Box<Ast>),
 
-    /// Captured function / partial application: `&print` / `&print(x)`
+    /// Captured function / placeholder capture head: `&print` / `&print(&1)`
     Capture(Span, Box<Ast>, Vec<Ast>),
+
+    /// Placeholder inside a capture expression: `&1`, `&2`, ...
+    CapturePlaceholder(Span, usize),
 
     /// Semicolon — explicit Unit coercion marker (wraps the discarded expr)
     Semi(Span, Box<Ast>),

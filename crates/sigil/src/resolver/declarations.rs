@@ -1,16 +1,21 @@
 use super::scope_init::initialize_scope;
 use super::scope_init::is_doc_only_builtin_decl;
 use super::*;
+use sindr::builtin::{builtin_type_meta_by_name, builtin_type_supports_inherent_impl};
+
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StagedModuleAst {
     pub module_path: String,
+    pub doc_module_path: Option<String>,
     pub ast: Vec<Ast>,
     pub module_doc: Option<String>,
     pub auto_import: bool,
+    pub process_spec: Option<spire::ast::ProcessSpec>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeclarationKind {
     Def,
     Extractor,
@@ -21,13 +26,14 @@ pub enum DeclarationKind {
     Deferror,
     Enum,
     EnumVariant,
+    Const,
     ResultCtor,
     ImplMethod,
     ImplCtorNew,
     BuiltinType,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeclarationEntry {
     pub module_path: String,
     pub name: String,
@@ -35,10 +41,17 @@ pub struct DeclarationEntry {
     pub kind: DeclarationKind,
     pub stage_index: usize,
     pub auto_import: bool,
+    pub hidden: bool,
     pub visibility: Visibility,
 }
 
 pub type DeclarationIndex = BTreeMap<String, DeclarationEntry>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ImplTargetResolution {
+    Unique(DeclarationKind),
+    Ambiguous,
+}
 
 pub(super) fn is_module_visible_declaration(kind: &DeclarationKind) -> bool {
     !matches!(kind, DeclarationKind::BuiltinType)
@@ -47,7 +60,10 @@ pub(super) fn is_module_visible_declaration(kind: &DeclarationKind) -> bool {
 pub(super) fn is_importable_declaration(kind: &DeclarationKind) -> bool {
     !matches!(
         kind,
-        DeclarationKind::BuiltinType | DeclarationKind::ImplCtorNew | DeclarationKind::Struct
+        DeclarationKind::BuiltinType
+            | DeclarationKind::ImplCtorNew
+            | DeclarationKind::Struct
+            | DeclarationKind::Const
     )
 }
 
@@ -59,12 +75,24 @@ fn normalize_impl_method_name(target: &str, method_name: &str) -> String {
     format!("{}::{}", target, method_name)
 }
 
-fn impl_method_module_path(module_path: &str, target: &str) -> String {
-    if module_path.is_empty() {
-        target.to_string()
+fn impl_method_module_path(_module_path: &str, target: &str) -> String {
+    target.to_string()
+}
+
+fn lower_impl_member_name(
+    current_module_path: Option<&str>,
+    target: &str,
+    method_name: &str,
+) -> String {
+    if current_module_path == Some(target) {
+        method_name.to_string()
     } else {
-        format!("{}::{}", module_path, target)
+        normalize_impl_method_name(target, method_name)
     }
+}
+
+fn type_decl_entry_module_path() -> String {
+    String::new()
 }
 
 pub(super) fn trait_method_qualified_name(trait_name: &str, method_name: &str) -> String {
@@ -127,6 +155,65 @@ pub(super) fn trait_impl_method_qualified_name(
         method_name,
         span_start
     )
+}
+
+pub(super) fn collect_stage_impl_target_resolutions(
+    stage: &[StagedModuleAst],
+) -> HashMap<String, ImplTargetResolution> {
+    let mut resolutions = HashMap::new();
+    for module in stage {
+        for stmt in &module.ast {
+            let (name, kind) = match stmt {
+                Ast::StructDef(_, name, _, _) => (name, DeclarationKind::Struct),
+                Ast::EnumDef(_, name, _, _, _) => (name, DeclarationKind::Enum),
+                Ast::RecordDef(_, name, _, _) => (name, DeclarationKind::Record),
+                Ast::DeferrorDef(_, name, _, _, _) => (name, DeclarationKind::Deferror),
+                _ => continue,
+            };
+            match resolutions.get(name) {
+                None => {
+                    resolutions.insert(name.clone(), ImplTargetResolution::Unique(kind));
+                }
+                Some(ImplTargetResolution::Unique(_)) | Some(ImplTargetResolution::Ambiguous) => {
+                    resolutions.insert(name.clone(), ImplTargetResolution::Ambiguous);
+                }
+            }
+        }
+    }
+    resolutions
+}
+
+fn resolve_impl_target_kind(
+    target: &str,
+    span: &Span,
+    targets: &HashMap<String, ImplTargetResolution>,
+) -> Result<DeclarationKind, ResolveError> {
+    match targets.get(target) {
+        Some(ImplTargetResolution::Unique(kind)) => Ok(kind.clone()),
+        Some(ImplTargetResolution::Ambiguous) => Err(ResolveError {
+            message: format!(
+                "impl target `{}` is ambiguous within the current stage",
+                target
+            ),
+            span: span.clone(),
+            related_labels: Vec::new(),
+        }),
+        None => {
+            let builtin_target = target.strip_prefix("Global::").unwrap_or(target);
+            if builtin_type_supports_inherent_impl(builtin_target) {
+                Ok(DeclarationKind::BuiltinType)
+            } else {
+                Err(ResolveError {
+                    message: format!(
+                        "impl target `{}` must be a standard type owner or a struct/enum defined in the current stage",
+                        target
+                    ),
+                    span: span.clone(),
+                    related_labels: Vec::new(),
+                })
+            }
+        }
+    }
 }
 
 fn rewrite_self_type(ty: AstTy, target: &str) -> AstTy {
@@ -244,6 +331,11 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 .map(|elem| rewrite_self_ast(elem, target))
                 .collect(),
         ),
+        Ast::RangeLiteral(span, start, stop) => Ast::RangeLiteral(
+            span,
+            Box::new(rewrite_self_ast(*start, target)),
+            Box::new(rewrite_self_ast(*stop, target)),
+        ),
         Ast::TupleLiteral(span, elems) => Ast::TupleLiteral(
             span,
             elems
@@ -269,11 +361,10 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             span,
             Box::new(rewrite_self_ast(*scrutinee, target)),
             arms.into_iter()
-                .map(|(pat, body)| {
-                    (
-                        rewrite_self_pattern(pat, target),
-                        rewrite_self_ast(body, target),
-                    )
+                .map(|arm| AstMatchArm {
+                    pattern: rewrite_self_pattern(arm.pattern, target),
+                    guard: arm.guard.map(|guard| rewrite_self_ast(guard, target)),
+                    body: rewrite_self_ast(arm.body, target),
                 })
                 .collect(),
         ),
@@ -285,7 +376,25 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             name,
             fields
                 .into_iter()
-                .map(|(field_name, expr)| (field_name, rewrite_self_ast(expr, target)))
+                .map(|field| match field {
+                    StructLitField::Explicit(field_name, expr) => {
+                        StructLitField::Explicit(field_name, rewrite_self_ast(expr, target))
+                    }
+                    StructLitField::Shorthand(field_name) => StructLitField::Shorthand(field_name),
+                })
+                .collect(),
+        ),
+        Ast::InternalStructLit(span, name, fields) => Ast::InternalStructLit(
+            span,
+            name,
+            fields
+                .into_iter()
+                .map(|field| match field {
+                    StructLitField::Explicit(field_name, expr) => {
+                        StructLitField::Explicit(field_name, rewrite_self_ast(expr, target))
+                    }
+                    StructLitField::Shorthand(field_name) => StructLitField::Shorthand(field_name),
+                })
                 .collect(),
         ),
         Ast::ConstructorCall(span, name, args) => Ast::ConstructorCall(
@@ -352,6 +461,13 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             Box::new(rewrite_self_ast(*body, target)),
             attrs,
         ),
+        Ast::ConstDef(span, name, ty, value, attrs) => Ast::ConstDef(
+            span,
+            name,
+            ty.map(|ty| rewrite_self_type(ty, target)),
+            Box::new(rewrite_self_ast(*value, target)),
+            attrs,
+        ),
         Ast::ExtractorDef(span, name, type_params, param, ret_ty, body, attrs) => {
             Ast::ExtractorDef(
                 span,
@@ -381,6 +497,9 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             ret_ty.map(|ret| rewrite_self_type(ret, target)),
             attrs,
         ),
+        Ast::IntrinsicDecl(span, name, signature, attrs) => {
+            Ast::IntrinsicDecl(span, name, signature, attrs)
+        }
         Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => Ast::BuiltinExtractorDecl(
             span,
             name,
@@ -427,6 +546,9 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 .map(|arg| rewrite_self_ast(arg, target))
                 .collect(),
         ),
+        Ast::FuncLiteralRef(span, func) => Ast::FuncLiteralRef(span, func),
+        Ast::CapturePlaceholder(span, index) => Ast::CapturePlaceholder(span, index),
+        Ast::Grouped(span, inner) => Ast::Grouped(span, Box::new(rewrite_self_ast(*inner, target))),
         Ast::Semi(span, inner) => Ast::Semi(span, Box::new(rewrite_self_ast(*inner, target))),
         other => other,
     }
@@ -435,8 +557,14 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
 pub(super) fn assign_declaration_uids(index: &DeclarationIndex) -> HashMap<String, u32> {
     let mut scope = initialize_scope();
     let mut declaration_uids = HashMap::with_capacity(index.len());
-    for fq_name in index.keys() {
-        declaration_uids.insert(fq_name.clone(), scope.reserve_id());
+    let mut entries = index.values().collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        left.stage_index
+            .cmp(&right.stage_index)
+            .then_with(|| left.fq_name.cmp(&right.fq_name))
+    });
+    for entry in entries {
+        declaration_uids.insert(entry.fq_name.clone(), scope.reserve_id());
     }
     declaration_uids
 }
@@ -460,95 +588,96 @@ pub(super) fn declaration_uid_kind_map(
 ///
 /// The index key is fully-qualified name `ModulePath::Name`.
 /// Only declaration forms covered by Issue 6 are collected:
-/// `def`, `defextractor`, `@@builtin def`, `@@builtin defextractor`, `@@builtin type`,
+/// `def`, `defextractor`, `@builtin def`, `@builtin defextractor`, `@builtin type`,
 /// `defstruct`, `defrecord`, `deferror`.
 pub fn precollect_declaration_index(
     module_stages: &[Vec<StagedModuleAst>],
 ) -> Result<DeclarationIndex, ResolveError> {
     let mut index = DeclarationIndex::new();
-    let mut seen_impl_targets = HashSet::new();
+    let mut seen_impl_targets: HashMap<String, Span> = HashMap::new();
+    let mut seen_public_consts: HashMap<String, (usize, String)> = HashMap::new();
     for (stage_index, stage) in module_stages.iter().enumerate() {
+        let stage_impl_targets = collect_stage_impl_target_resolutions(stage);
         for module in stage {
-            let mut local_types: HashMap<String, DeclarationKind> = HashMap::new();
             for stmt in &module.ast {
-                match stmt {
-                    Ast::StructDef(_, name, _) => {
-                        local_types.insert(name.clone(), DeclarationKind::Struct);
-                    }
-                    Ast::EnumDef(_, name, _, _, _) => {
-                        local_types.insert(name.clone(), DeclarationKind::Enum);
-                    }
-                    Ast::RecordDef(_, name, _) => {
-                        local_types.insert(name.clone(), DeclarationKind::Record);
-                    }
-                    Ast::DeferrorDef(_, name, _, _, _) => {
-                        local_types.insert(name.clone(), DeclarationKind::Deferror);
-                    }
-                    _ => {}
-                }
-            }
-
-            for stmt in &module.ast {
-                if let Ast::ImplDef(span, target, methods) = stmt {
-                    let Some(target_kind) = local_types.get(target) else {
-                        return Err(ResolveError {
-                            message: format!(
-                                "impl target `{}` must be a locally defined struct or enum",
-                                target
-                            ),
-                            span: span.clone(),
-                        });
-                    };
+                if let Ast::ImplDef(span, target, methods, _) = stmt {
+                    let target_kind = resolve_impl_target_kind(target, span, &stage_impl_targets)?;
                     if !matches!(
                         target_kind,
-                        &DeclarationKind::Struct | &DeclarationKind::Enum
+                        DeclarationKind::Struct
+                            | DeclarationKind::Enum
+                            | DeclarationKind::BuiltinType
                     ) {
                         return Err(ResolveError {
                             message: format!(
-                                "impl target `{}` must be struct or enum (record is not supported)",
+                                "impl target `{}` must be a standard type, struct, or enum (record is not supported)",
                                 target
                             ),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
 
-                    let target_fq = if module.module_path.is_empty() {
-                        target.clone()
-                    } else {
-                        format!("{}::{}", module.module_path, target)
-                    };
-                    if !seen_impl_targets.insert(target_fq.clone()) {
+                    let target_fq = target.clone();
+                    if let Some(first_span) = seen_impl_targets.get(&target_fq) {
                         return Err(ResolveError {
                             message: format!(
                                 "Multiple impl blocks for `{}` are not allowed",
                                 target_fq
                             ),
                             span: span.clone(),
+                            related_labels: vec![
+                                ResolveErrorLabel {
+                                    span: first_span.clone(),
+                                    message: "first definition".to_string(),
+                                },
+                                ResolveErrorLabel {
+                                    span: span.clone(),
+                                    message: "conflicting definition".to_string(),
+                                },
+                            ],
                         });
+                    } else {
+                        seen_impl_targets.insert(target_fq.clone(), span.clone());
                     }
 
                     let method_module_path = impl_method_module_path(&module.module_path, target);
                     for method in methods {
-                        let Ast::Def(method_span, method_name, _, _, _, _, attrs) = method else {
-                            return Err(ResolveError {
-                                message: "impl body may only contain `def` declarations"
-                                    .to_string(),
-                                span: span.clone(),
-                            });
-                        };
-
-                        let kind = if method_name == "new" {
-                            if !matches!(target_kind, &DeclarationKind::Struct) {
+                        let (method_span, method_name, kind, attrs) = match method {
+                            Ast::Def(method_span, method_name, _, _, _, _, attrs) => {
+                                let kind = if method_name == "new" {
+                                    if !matches!(target_kind, DeclarationKind::Struct) {
+                                        return Err(ResolveError {
+                                            message: "`new` is only allowed in impl blocks for struct types"
+                                                .to_string(),
+                                            span: method_span.clone(),
+                                        related_labels: Vec::new(),
+                                        });
+                                    }
+                                    DeclarationKind::ImplCtorNew
+                                } else {
+                                    DeclarationKind::ImplMethod
+                                };
+                                (method_span, method_name, kind, attrs)
+                            }
+                            Ast::BuiltinDecl(method_span, method_name, _, _, attrs) => {
+                                (method_span, method_name, DeclarationKind::Def, attrs)
+                            }
+                            Ast::ExtractorDef(method_span, method_name, _, _, _, _, attrs) => {
+                                (method_span, method_name, DeclarationKind::Extractor, attrs)
+                            }
+                            Ast::BuiltinExtractorDecl(method_span, method_name, _, _, attrs) => {
+                                (method_span, method_name, DeclarationKind::Extractor, attrs)
+                            }
+                            _ => {
                                 return Err(ResolveError {
                                     message:
-                                        "`new` is only allowed in impl blocks for struct types"
+                                        "impl body may only contain `def` / `defextractor` / `@builtin def` / `@builtin defextractor` declarations"
                                             .to_string(),
-                                    span: method_span.clone(),
+                                    span: span.clone(),
+                                related_labels: Vec::new(),
                                 });
                             }
-                            DeclarationKind::ImplCtorNew
-                        } else {
-                            DeclarationKind::ImplMethod
                         };
 
                         let fq_name = format!("{}::{}", method_module_path, method_name);
@@ -559,6 +688,7 @@ pub fn precollect_declaration_index(
                                     fq_name, prev.stage_index, prev.module_path
                                 ),
                                 span: method_span.clone(),
+                            related_labels: Vec::new(),
                             });
                         }
 
@@ -571,6 +701,7 @@ pub fn precollect_declaration_index(
                                 kind,
                                 stage_index,
                                 auto_import: false,
+                                hidden: attrs.hidden,
                                 visibility: entry_visibility(attrs),
                             },
                         );
@@ -591,6 +722,7 @@ pub fn precollect_declaration_index(
                                 fq_name, prev.stage_index, prev.module_path
                             ),
                             span: span.clone(),
+                        related_labels: Vec::new(),
                         });
                     }
                     index.insert(
@@ -602,6 +734,7 @@ pub fn precollect_declaration_index(
                             kind: DeclarationKind::Trait,
                             stage_index,
                             auto_import: attrs.auto_import,
+                            hidden: false,
                             visibility: Visibility::Public,
                         },
                     );
@@ -622,6 +755,7 @@ pub fn precollect_declaration_index(
                                     method_fq_name, prev.stage_index, prev.module_path
                                 ),
                                 span: method.span.clone(),
+                            related_labels: Vec::new(),
                             });
                         }
                         index.insert(
@@ -633,6 +767,7 @@ pub fn precollect_declaration_index(
                                 kind: DeclarationKind::TraitMethod,
                                 stage_index,
                                 auto_import: false,
+                                hidden: false,
                                 visibility: Visibility::Public,
                             },
                         );
@@ -640,22 +775,31 @@ pub fn precollect_declaration_index(
                     continue;
                 }
 
-                if let Ast::TraitImplDef(span, _trait_name, _trait_args, _target_ty, methods) = stmt
+                if let Ast::TraitImplDef(span, _trait_name, _trait_args, _target_ty, methods, _) =
+                    stmt
                 {
                     for method in methods {
-                        let Ast::Def(method_span, method_name, _, _, _, _, _) = method else {
-                            return Err(ResolveError {
-                                message: "trait impl body may only contain `def` declarations"
-                                    .to_string(),
-                                span: span.clone(),
-                            });
+                        let (method_span, method_name) = match method {
+                            Ast::Def(method_span, method_name, _, _, _, _, _)
+                            | Ast::BuiltinDecl(method_span, method_name, _, _, _) => {
+                                (method_span, method_name)
+                            }
+                            _ => {
+                                return Err(ResolveError {
+                                    message:
+                                        "trait impl body may only contain `def` / `@builtin def` declarations"
+                                            .to_string(),
+                                    span: span.clone(),
+                                    related_labels: Vec::new(),
+                                });
+                            }
                         };
                         let internal_name = trait_impl_method_qualified_name(
                             Some(module.module_path.as_str()),
                             _trait_name,
                             _trait_args,
                             _target_ty,
-                            method_name,
+                            &method_name,
                             method_span.start,
                         );
                         if let Some(prev) = index.get(&internal_name) {
@@ -665,6 +809,7 @@ pub fn precollect_declaration_index(
                                     internal_name, prev.stage_index, prev.module_path
                                 ),
                                 span: method_span.clone(),
+                            related_labels: Vec::new(),
                             });
                         }
                         index.insert(
@@ -680,6 +825,7 @@ pub fn precollect_declaration_index(
                                 kind: DeclarationKind::ImplMethod,
                                 stage_index,
                                 auto_import: false,
+                                hidden: false,
                                 visibility: Visibility::Private,
                             },
                         );
@@ -688,11 +834,17 @@ pub fn precollect_declaration_index(
                 }
 
                 if let Ast::EnumDef(span, name, _, variants, _) = stmt {
-                    let fq_name = if module.module_path.is_empty() {
-                        name.to_string()
-                    } else {
-                        format!("{}::{}", module.module_path, name)
-                    };
+                    if builtin_type_meta_by_name(name).is_some() {
+                        return Err(ResolveError {
+                            message: format!(
+                                "Type name `{}` is reserved by a canonical builtin type declaration",
+                                name
+                            ),
+                            span: span.clone(),
+                            related_labels: Vec::new(),
+                        });
+                    }
+                    let fq_name = name.to_string();
                     if let Some(prev) = index.get(&fq_name) {
                         return Err(ResolveError {
                             message: format!(
@@ -700,28 +852,26 @@ pub fn precollect_declaration_index(
                                 fq_name, prev.stage_index, prev.module_path
                             ),
                             span: span.clone(),
+                        related_labels: Vec::new(),
                         });
                     }
                     index.insert(
                         fq_name.clone(),
                         DeclarationEntry {
-                            module_path: module.module_path.clone(),
+                            module_path: type_decl_entry_module_path(),
                             name: name.clone(),
                             fq_name,
                             kind: DeclarationKind::Enum,
                             stage_index,
                             auto_import: false,
+                            hidden: false,
                             visibility: Visibility::Public,
                         },
                     );
 
                     for variant in variants {
                         let variant_name = format!("{}::{}", name, variant.name);
-                        let variant_fq_name = if module.module_path.is_empty() {
-                            variant_name.clone()
-                        } else {
-                            format!("{}::{}", module.module_path, variant_name)
-                        };
+                        let variant_fq_name = variant_name.clone();
                         if let Some(prev) = index.get(&variant_fq_name) {
                             return Err(ResolveError {
                                 message: format!(
@@ -729,17 +879,19 @@ pub fn precollect_declaration_index(
                                     variant_fq_name, prev.stage_index, prev.module_path
                                 ),
                                 span: variant.span.clone(),
+                            related_labels: Vec::new(),
                             });
                         }
                         index.insert(
                             variant_fq_name.clone(),
                             DeclarationEntry {
-                                module_path: module.module_path.clone(),
+                                module_path: type_decl_entry_module_path(),
                                 name: variant_name,
                                 fq_name: variant_fq_name,
                                 kind: DeclarationKind::EnumVariant,
                                 stage_index,
                                 auto_import: false,
+                                hidden: false,
                                 visibility: Visibility::Public,
                             },
                         );
@@ -747,63 +899,80 @@ pub fn precollect_declaration_index(
                     continue;
                 }
 
-                let (span, name, kind, visibility) = match stmt {
+                let (span, name, kind, visibility, hidden) = match stmt {
                     Ast::Def(span, name, _, _, _, _, attrs) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Def,
                         entry_visibility(attrs),
+                        false,
                     ),
                     Ast::ExtractorDef(span, name, _, _, _, _, attrs) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Extractor,
                         entry_visibility(attrs),
+                        false,
                     ),
-                    Ast::BuiltinDecl(span, name, _, _, _) => (
+                    Ast::ConstDef(span, name, _, _, attrs) => (
+                        span,
+                        name.as_str(),
+                        DeclarationKind::Const,
+                        entry_visibility(attrs),
+                        false,
+                    ),
+                    Ast::BuiltinDecl(span, name, _, _, attrs) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Def,
                         Visibility::Public,
+                        attrs.hidden,
                     ),
-                    Ast::BuiltinExtractorDecl(span, name, _, _, _) => (
+                    Ast::IntrinsicDecl(_, _, _, _) => continue,
+                    Ast::BuiltinExtractorDecl(span, name, _, _, attrs) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Extractor,
                         Visibility::Public,
+                        attrs.hidden,
                     ),
-                    Ast::ImplDef(_, _, _)
+                    Ast::ImplDef(_, _, _, _)
                     | Ast::TraitDef(_, _, _, _, _)
-                    | Ast::TraitImplDef(_, _, _, _, _) => continue,
-                    Ast::ResultCtorDecl(span, name, _, _, _) => (
+                    | Ast::TraitImplDef(_, _, _, _, _, _) => continue,
+                    Ast::ResultCtorDecl(span, name, _, _, attrs) => (
                         span,
                         name.as_str(),
                         DeclarationKind::ResultCtor,
                         Visibility::Public,
+                        attrs.hidden,
                     ),
-                    Ast::BuiltinTypeDecl(span, head, _) => (
+                    Ast::BuiltinTypeDecl(span, head, attrs) => (
                         span,
                         head.name.as_str(),
                         DeclarationKind::BuiltinType,
                         Visibility::Public,
+                        attrs.hidden,
                     ),
-                    Ast::StructDef(span, name, _) => (
+                    Ast::StructDef(span, name, _, _) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Struct,
                         Visibility::Public,
+                        false,
                     ),
-                    Ast::RecordDef(span, name, _) => (
+                    Ast::RecordDef(span, name, _, _) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Record,
                         Visibility::Public,
+                        false,
                     ),
                     Ast::DeferrorDef(span, name, _, _, _) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Deferror,
                         Visibility::Public,
+                        false,
                     ),
                     _ => continue,
                 };
@@ -813,7 +982,58 @@ pub fn precollect_declaration_index(
                     continue;
                 }
 
-                let fq_name = if module.module_path.is_empty() {
+                if matches!(
+                    stmt,
+                    Ast::StructDef(_, name, _, _)
+                        | Ast::RecordDef(_, name, _, _)
+                        | Ast::DeferrorDef(_, name, _, _, _)
+                        if builtin_type_meta_by_name(name).is_some()
+                ) {
+                    return Err(ResolveError {
+                        message: format!(
+                            "Type name `{}` is reserved by a canonical builtin type declaration",
+                            name
+                        ),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    });
+                }
+
+                let fq_name = if kind == DeclarationKind::Const {
+                    if visibility == Visibility::Public {
+                        if let Some((prev_stage, prev_module)) =
+                            seen_public_consts.get(name).cloned()
+                        {
+                            return Err(ResolveError {
+                                message: format!(
+                                    "Duplicate public const: {} (already declared in stage {} module {})",
+                                    name, prev_stage, prev_module
+                                ),
+                                span: span.clone(),
+                                related_labels: Vec::new(),
+                            });
+                        }
+                        seen_public_consts
+                            .insert(name.to_string(), (stage_index, module.module_path.clone()));
+                        if module.module_path.is_empty() {
+                            name.to_string()
+                        } else {
+                            format!("{}::{}", module.module_path, name)
+                        }
+                    } else if module.module_path.is_empty() {
+                        format!("__const__::{}", name)
+                    } else {
+                        format!("{}::__const__::{}", module.module_path, name)
+                    }
+                } else if matches!(
+                    kind,
+                    DeclarationKind::BuiltinType
+                        | DeclarationKind::Struct
+                        | DeclarationKind::Record
+                        | DeclarationKind::Deferror
+                ) {
+                    name.to_string()
+                } else if module.module_path.is_empty() {
                     name.to_string()
                 } else {
                     format!("{}::{}", module.module_path, name)
@@ -826,18 +1046,30 @@ pub fn precollect_declaration_index(
                             fq_name, prev.stage_index, prev.module_path
                         ),
                         span: span.clone(),
+                    related_labels: Vec::new(),
                     });
                 }
 
                 index.insert(
                     fq_name.clone(),
                     DeclarationEntry {
-                        module_path: module.module_path.clone(),
+                        module_path: if matches!(
+                            kind,
+                            DeclarationKind::BuiltinType
+                                | DeclarationKind::Struct
+                                | DeclarationKind::Record
+                                | DeclarationKind::Deferror
+                        ) {
+                            type_decl_entry_module_path()
+                        } else {
+                            module.module_path.clone()
+                        },
                         name: name.to_string(),
                         fq_name,
                         kind,
                         stage_index,
                         auto_import: false,
+                        hidden,
                         visibility,
                     },
                 );
@@ -850,110 +1082,225 @@ pub fn precollect_declaration_index(
 
 impl Resolver {
     pub(super) fn lower_impl_defs(&self, stmts: Vec<Ast>) -> Result<Vec<Ast>, ResolveError> {
-        let mut local_types: HashMap<String, DeclarationKind> = HashMap::new();
-        for stmt in &stmts {
-            match stmt {
-                Ast::StructDef(_, name, _) => {
-                    local_types.insert(name.clone(), DeclarationKind::Struct);
+        let local_impl_targets = if self.current_stage_impl_targets.is_none() {
+            let mut local_targets = HashMap::new();
+            for stmt in &stmts {
+                let (name, kind) = match stmt {
+                    Ast::StructDef(_, name, _, _) => (name, DeclarationKind::Struct),
+                    Ast::EnumDef(_, name, _, _, _) => (name, DeclarationKind::Enum),
+                    Ast::RecordDef(_, name, _, _) => (name, DeclarationKind::Record),
+                    Ast::DeferrorDef(_, name, _, _, _) => (name, DeclarationKind::Deferror),
+                    _ => continue,
+                };
+                match local_targets.get(name) {
+                    None => {
+                        local_targets.insert(name.clone(), ImplTargetResolution::Unique(kind));
+                    }
+                    Some(ImplTargetResolution::Unique(_))
+                    | Some(ImplTargetResolution::Ambiguous) => {
+                        local_targets.insert(name.clone(), ImplTargetResolution::Ambiguous);
+                    }
                 }
-                Ast::EnumDef(_, name, _, _, _) => {
-                    local_types.insert(name.clone(), DeclarationKind::Enum);
-                }
-                Ast::RecordDef(_, name, _) => {
-                    local_types.insert(name.clone(), DeclarationKind::Record);
-                }
-                Ast::DeferrorDef(_, name, _, _, _) => {
-                    local_types.insert(name.clone(), DeclarationKind::Deferror);
-                }
-                _ => {}
             }
-        }
+            Some(local_targets)
+        } else {
+            None
+        };
+        let impl_targets = self
+            .current_stage_impl_targets
+            .as_ref()
+            .or(local_impl_targets.as_ref())
+            .expect("impl target resolutions must exist");
 
         let mut lowered = Vec::new();
-        let mut seen_impl_targets = HashSet::new();
+        let mut seen_impl_targets: HashMap<String, Span> = HashMap::new();
 
         for stmt in stmts {
             match stmt {
-                Ast::ImplDef(span, target, methods) => {
-                    let Some(target_kind) = local_types.get(&target) else {
-                        return Err(ResolveError {
-                            message: format!(
-                                "impl target `{}` must be a locally defined struct or enum",
-                                target
-                            ),
-                            span,
-                        });
-                    };
+                Ast::ImplDef(span, target, methods, _attrs) => {
+                    let target_kind = resolve_impl_target_kind(&target, &span, impl_targets)?;
                     if !matches!(
                         target_kind,
-                        &DeclarationKind::Struct | &DeclarationKind::Enum
+                        DeclarationKind::Struct
+                            | DeclarationKind::Enum
+                            | DeclarationKind::BuiltinType
                     ) {
                         return Err(ResolveError {
                             message: format!(
-                                "impl target `{}` must be struct or enum (record is not supported)",
+                                "impl target `{}` must be a standard type, struct, or enum (record is not supported)",
                                 target
                             ),
                             span,
+                            related_labels: Vec::new(),
                         });
                     }
-                    if !seen_impl_targets.insert(target.clone()) {
+                    if let Some(first_span) = seen_impl_targets.get(&target) {
                         return Err(ResolveError {
                             message: format!(
                                 "Multiple impl blocks for `{}` are not allowed",
                                 target
                             ),
-                            span,
+                            span: span.clone(),
+                            related_labels: vec![
+                                ResolveErrorLabel {
+                                    span: first_span.clone(),
+                                    message: "first definition".to_string(),
+                                },
+                                ResolveErrorLabel {
+                                    span: span.clone(),
+                                    message: "conflicting definition".to_string(),
+                                },
+                            ],
                         });
+                    } else {
+                        seen_impl_targets.insert(target.clone(), span.clone());
                     }
 
+                    let lowered_module_path = self.current_module_path.as_deref();
                     for method in methods {
-                        let Ast::Def(
-                            method_span,
-                            method_name,
-                            type_params,
-                            params,
-                            ret_ty,
-                            body,
-                            attrs,
-                        ) = method
-                        else {
-                            return Err(ResolveError {
-                                message: "impl body may only contain `def` declarations"
-                                    .to_string(),
-                                span: span.clone(),
-                            });
-                        };
+                        match method {
+                            Ast::Def(
+                                method_span,
+                                method_name,
+                                type_params,
+                                params,
+                                ret_ty,
+                                body,
+                                attrs,
+                            ) => {
+                                if method_name == "new"
+                                    && !matches!(target_kind, DeclarationKind::Struct)
+                                {
+                                    return Err(ResolveError {
+                                        message:
+                                            "`new` is only allowed in impl blocks for struct types"
+                                                .to_string(),
+                                        span: method_span,
+                                        related_labels: Vec::new(),
+                                    });
+                                }
 
-                        if method_name == "new" && !matches!(target_kind, &DeclarationKind::Struct)
-                        {
-                            return Err(ResolveError {
-                                message: "`new` is only allowed in impl blocks for struct types"
-                                    .to_string(),
-                                span: method_span,
-                            });
+                                let lowered_name = lower_impl_member_name(
+                                    lowered_module_path,
+                                    &target,
+                                    &method_name,
+                                );
+                                let lowered_params = params
+                                    .into_iter()
+                                    .map(|param| FunParam {
+                                        name: param.name,
+                                        ty: rewrite_self_type(param.ty, &target),
+                                        span: param.span,
+                                    })
+                                    .collect::<Vec<_>>();
+                                let lowered_ret_ty =
+                                    ret_ty.map(|ty| rewrite_self_type(ty, &target));
+                                let lowered_body = rewrite_self_ast(*body, &target);
+
+                                lowered.push(Ast::Def(
+                                    method_span,
+                                    lowered_name,
+                                    type_params,
+                                    lowered_params,
+                                    lowered_ret_ty,
+                                    Box::new(lowered_body),
+                                    attrs,
+                                ));
+                            }
+                            Ast::ExtractorDef(
+                                method_span,
+                                method_name,
+                                type_params,
+                                param,
+                                ret_ty,
+                                body,
+                                attrs,
+                            ) => {
+                                let lowered_name = lower_impl_member_name(
+                                    lowered_module_path,
+                                    &target,
+                                    &method_name,
+                                );
+                                let lowered_param = ExtractorParam {
+                                    name: param.name,
+                                    ty: param.ty.map(|ty| rewrite_self_type(ty, &target)),
+                                    span: param.span,
+                                };
+                                let lowered_ret_ty = rewrite_self_type(ret_ty, &target);
+                                let lowered_body = rewrite_self_ast(*body, &target);
+
+                                lowered.push(Ast::ExtractorDef(
+                                    method_span,
+                                    lowered_name,
+                                    type_params,
+                                    lowered_param,
+                                    lowered_ret_ty,
+                                    Box::new(lowered_body),
+                                    attrs,
+                                ));
+                            }
+                            Ast::BuiltinDecl(method_span, method_name, params, ret_ty, attrs) => {
+                                let lowered_name = lower_impl_member_name(
+                                    lowered_module_path,
+                                    &target,
+                                    &method_name,
+                                );
+                                let lowered_params = params
+                                    .into_iter()
+                                    .map(|param| FunParam {
+                                        name: param.name,
+                                        ty: rewrite_self_type(param.ty, &target),
+                                        span: param.span,
+                                    })
+                                    .collect::<Vec<_>>();
+                                let lowered_ret_ty =
+                                    ret_ty.map(|ty| rewrite_self_type(ty, &target));
+
+                                lowered.push(Ast::BuiltinDecl(
+                                    method_span,
+                                    lowered_name,
+                                    lowered_params,
+                                    lowered_ret_ty,
+                                    attrs,
+                                ));
+                            }
+                            Ast::BuiltinExtractorDecl(
+                                method_span,
+                                method_name,
+                                param,
+                                ret_ty,
+                                attrs,
+                            ) => {
+                                let lowered_name = lower_impl_member_name(
+                                    lowered_module_path,
+                                    &target,
+                                    &method_name,
+                                );
+                                let lowered_param = ExtractorParam {
+                                    name: param.name,
+                                    ty: param.ty.map(|ty| rewrite_self_type(ty, &target)),
+                                    span: param.span,
+                                };
+                                let lowered_ret_ty = rewrite_self_type(ret_ty, &target);
+
+                                lowered.push(Ast::BuiltinExtractorDecl(
+                                    method_span,
+                                    lowered_name,
+                                    lowered_param,
+                                    lowered_ret_ty,
+                                    attrs,
+                                ));
+                            }
+                            _ => {
+                                return Err(ResolveError {
+                                    message:
+                                        "impl body may only contain `def` / `defextractor` / `@builtin def` / `@builtin defextractor` declarations"
+                                            .to_string(),
+                                    span: span.clone(),
+                                related_labels: Vec::new(),
+                                });
+                            }
                         }
-
-                        let lowered_name = normalize_impl_method_name(&target, &method_name);
-                        let lowered_params = params
-                            .into_iter()
-                            .map(|param| FunParam {
-                                name: param.name,
-                                ty: rewrite_self_type(param.ty, &target),
-                                span: param.span,
-                            })
-                            .collect::<Vec<_>>();
-                        let lowered_ret_ty = ret_ty.map(|ty| rewrite_self_type(ty, &target));
-                        let lowered_body = rewrite_self_ast(*body, &target);
-
-                        lowered.push(Ast::Def(
-                            method_span,
-                            lowered_name,
-                            type_params,
-                            lowered_params,
-                            lowered_ret_ty,
-                            Box::new(lowered_body),
-                            attrs,
-                        ));
                     }
                 }
                 other => lowered.push(other),
@@ -987,12 +1334,14 @@ impl Resolver {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     let qualified_name = self.qualify_current_declaration_name(name);
@@ -1019,12 +1368,14 @@ impl Resolver {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     let qualified_name = self.qualify_current_declaration_name(name);
@@ -1045,17 +1396,56 @@ impl Resolver {
                         .insert(uid, DeclarationKind::Extractor);
                     self.scope.define_with_id(name, uid);
                 }
-                Ast::TraitDef(span, name, _type_params, methods, _) => {
+                Ast::ConstDef(span, name, _, _, attrs) => {
                     if !declared_in_batch.insert(name.clone()) {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
+                        });
+                    }
+                    let qualified_name = if attrs.visibility == Visibility::Public {
+                        self.qualify_current_declaration_name(name)
+                    } else {
+                        self.qualify_current_declaration_name(&format!("__const__::{}", name))
+                    };
+                    let uid = self
+                        .declaration_uids
+                        .get(&qualified_name)
+                        .copied()
+                        .unwrap_or_else(|| {
+                            let fresh = self.scope.reserve_id();
+                            self.declaration_uids.insert(qualified_name.clone(), fresh);
+                            fresh
+                        });
+                    self.predeclared_ids
+                        .entry(name.clone())
+                        .or_default()
+                        .push_back(uid);
+                    self.declaration_uid_kinds
+                        .insert(uid, DeclarationKind::Const);
+                    self.scope.define_with_id(name, uid);
+                }
+                Ast::TraitDef(span, name, _type_params, methods, _) => {
+                    if !declared_in_batch.insert(name.clone()) {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: span.clone(),
+                            related_labels: Vec::new(),
+                        });
+                    }
+                    if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
+                        return Err(ResolveError {
+                            message: format!("Duplicate top-level definition: {}", name),
+                            span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     let qualified_trait = self.qualify_current_declaration_name(name);
@@ -1089,6 +1479,7 @@ impl Resolver {
                                     method_alias
                                 ),
                                 span: method.span.clone(),
+                                related_labels: Vec::new(),
                             });
                         }
                         if !self.allow_top_level_shadowing
@@ -1100,6 +1491,7 @@ impl Resolver {
                                     method_alias
                                 ),
                                 span: method.span.clone(),
+                                related_labels: Vec::new(),
                             });
                         }
                         let method_uid = self
@@ -1129,6 +1521,7 @@ impl Resolver {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: stmt.span().clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     // Builtins are keyed by fixed IDs from builtin metadata.
@@ -1144,11 +1537,13 @@ impl Resolver {
                     self.declaration_uid_kinds.insert(uid, DeclarationKind::Def);
                     self.scope.define_with_id(name, uid);
                 }
+                Ast::IntrinsicDecl(_, _, _, _) => continue,
                 Ast::BuiltinExtractorDecl(_, name, _, _, _) => {
                     if !declared_in_batch.insert(name.clone()) {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: stmt.span().clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     let uid = self
@@ -1168,12 +1563,14 @@ impl Resolver {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     let uid = self
@@ -1193,15 +1590,25 @@ impl Resolver {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", head.name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(&head.name).is_some() {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", head.name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
-                    let uid = self.scope.reserve_id();
+                    let uid = self
+                        .declaration_uids
+                        .get(&head.name)
+                        .copied()
+                        .unwrap_or_else(|| {
+                            let fresh = self.scope.reserve_id();
+                            self.declaration_uids.insert(head.name.clone(), fresh);
+                            fresh
+                        });
                     self.predeclared_ids
                         .entry(head.name.clone())
                         .or_default()
@@ -1209,22 +1616,34 @@ impl Resolver {
                     self.declaration_uid_kinds
                         .insert(uid, DeclarationKind::BuiltinType);
                 }
-                Ast::StructDef(span, name, _)
-                | Ast::RecordDef(span, name, _)
+                Ast::StructDef(span, name, _, _)
+                | Ast::RecordDef(span, name, _, _)
                 | Ast::DeferrorDef(span, name, _, _, _) => {
+                    if builtin_type_meta_by_name(name).is_some() {
+                        return Err(ResolveError {
+                            message: format!(
+                                "Type name `{}` is reserved by a canonical builtin type declaration",
+                                name
+                            ),
+                            span: span.clone(),
+                            related_labels: Vec::new(),
+                        });
+                    }
                     if !declared_in_batch.insert(name.clone()) {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
-                    let qualified_name = self.qualify_current_declaration_name(name);
+                    let qualified_name = name.clone();
                     let uid = self
                         .declaration_uids
                         .get(&qualified_name)
@@ -1239,8 +1658,8 @@ impl Resolver {
                         .or_default()
                         .push_back(uid);
                     let kind = match stmt {
-                        Ast::StructDef(_, _, _) => DeclarationKind::Struct,
-                        Ast::RecordDef(_, _, _) => DeclarationKind::Record,
+                        Ast::StructDef(..) => DeclarationKind::Struct,
+                        Ast::RecordDef(..) => DeclarationKind::Record,
                         Ast::DeferrorDef(_, _, _, _, _) => DeclarationKind::Deferror,
                         _ => unreachable!(),
                     };
@@ -1248,19 +1667,31 @@ impl Resolver {
                     self.scope.define_with_id(name, uid);
                 }
                 Ast::EnumDef(span, name, _, variants, _) => {
+                    if builtin_type_meta_by_name(name).is_some() {
+                        return Err(ResolveError {
+                            message: format!(
+                                "Type name `{}` is reserved by a canonical builtin type declaration",
+                                name
+                            ),
+                            span: span.clone(),
+                            related_labels: Vec::new(),
+                        });
+                    }
                     if !declared_in_batch.insert(name.clone()) {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            related_labels: Vec::new(),
                         });
                     }
-                    let qualified_enum = self.qualify_current_declaration_name(name);
+                    let qualified_enum = name.clone();
                     let uid = self
                         .declaration_uids
                         .get(&qualified_enum)
@@ -1287,6 +1718,7 @@ impl Resolver {
                                     qualified_ctor
                                 ),
                                 span: variant.span.clone(),
+                                related_labels: Vec::new(),
                             });
                         }
                         if !self.allow_top_level_shadowing
@@ -1298,17 +1730,16 @@ impl Resolver {
                                     qualified_ctor
                                 ),
                                 span: variant.span.clone(),
+                                related_labels: Vec::new(),
                             });
                         }
                         let ctor_uid = self
                             .declaration_uids
-                            .get(&self.qualify_current_declaration_name(&qualified_ctor))
+                            .get(&qualified_ctor)
                             .copied()
                             .unwrap_or_else(|| {
                                 let fresh = self.scope.reserve_id();
-                                let qualified_ctor_name =
-                                    self.qualify_current_declaration_name(&qualified_ctor);
-                                self.declaration_uids.insert(qualified_ctor_name, fresh);
+                                self.declaration_uids.insert(qualified_ctor.clone(), fresh);
                                 fresh
                             });
                         self.predeclared_ids
@@ -1320,7 +1751,7 @@ impl Resolver {
                         self.scope.define_with_id(&qualified_ctor, ctor_uid);
                     }
                 }
-                Ast::TraitImplDef(_, _, _, _, _) => {}
+                Ast::TraitImplDef(_, _, _, _, _, _) => {}
                 _ => {}
             }
         }

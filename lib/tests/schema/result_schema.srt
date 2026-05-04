@@ -1,0 +1,72 @@
+deferror MissingUser(detail: String) {
+  detail
+}
+
+deferror ApiError(detail: String) {
+  detail
+}
+
+defrecord User(name: String, age: Int)
+
+defmod ResultSchema {
+  def inc(x: Int) -> Int {
+    x + 1
+  }
+
+  def add2(x: Int, y: Int) -> Int {
+    x + y
+  }
+
+  def add3(x: Int, y: Int, z: Int) -> Int {
+    x + y + z
+  }
+
+  def safe_inc(x: Int) -> Result<Int> {
+    Ok(x + 1)
+  }
+
+  def result_pure(x: Int) -> Result<Int> {
+    Ok(x)
+  }
+
+  def safe_double_under_limit(x: Int) -> Result<Int> {
+    if(x < 5, Ok(x * 2), Err(NoneError))
+  }
+
+  def safe_step3(x: Int) -> Result<Int> {
+    Ok(x - 3)
+  }
+
+  def safe_add2(x: Int, y: Int) -> Result<Int> {
+    Ok(x + y)
+  }
+
+  def safe_add3(x: Int, y: Int, z: Int) -> Result<Int> {
+    Ok(x + y + z)
+  }
+
+  def recover_to_one() -> Result<Int> {
+    Ok(1)
+  }
+
+  def emit_next() -> Result<String> {
+    print("then-next")
+    Ok("next")
+  }
+
+  def parse_user_id(text: String) -> Result<Int> {
+    try_from(text, Int)
+  }
+
+  def load_user(id: Int) -> Result<User> {
+    if(id == 7, Ok(User("alice", 20)), Err(MissingUser("user #{to_string(id)}")))
+  }
+
+  def ensure_adult(user: User) -> Result<User> {
+    if(user.age >= 18, Ok(user), Err(MissingUser("minor #{user.name}")))
+  }
+
+  def render_user(user: User) -> String {
+    user.name ++ ":" ++ to_string(user.age)
+  }
+}

@@ -48,6 +48,9 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                             local_bound.insert(param.id.unique_id);
                         }
                     }
+                    Resolved::ConstDef(_, id, _, _, _) => {
+                        local_bound.insert(id.unique_id);
+                    }
                     Resolved::ExtractorDef(_, id, _, param, _, _, _) => {
                         local_bound.insert(id.unique_id);
                         local_bound.insert(param.id.unique_id);
@@ -89,6 +92,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         | Resolved::ContextMap(_, left, right)
         | Resolved::ContextBind(_, left, right)
         | Resolved::Compose(_, left, right)
+        | Resolved::LiftedCompose(_, left, right)
         | Resolved::KleisliCompose(_, left, right) => {
             collect_captures_inner(left, bound, free);
             collect_captures_inner(right, bound, free);
@@ -103,16 +107,26 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 collect_captures_inner(elem, bound, free);
             }
         }
+        Resolved::RangeLiteral(_, start, stop) => {
+            collect_captures_inner(start, bound, free);
+            collect_captures_inner(stop, bound, free);
+        }
         Resolved::TupleLiteral(_, elems) => {
             for elem in elems {
                 collect_captures_inner(elem, bound, free);
             }
         }
+        Resolved::Grouped(_, inner) => collect_captures_inner(inner, bound, free),
         Resolved::InterpolatedStr(_, parts) => {
             for part in parts {
                 if let ResolvedInterpolatedPart::Expr(expr) = part {
                     collect_captures_inner(expr, bound, free);
                 }
+            }
+        }
+        Resolved::Dbg(_, args) => {
+            for arg in args {
+                collect_captures_inner(arg, bound, free);
             }
         }
         Resolved::If(_, cond, then, else_opt) => {
@@ -131,19 +145,35 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             collect_captures_inner(pred, bound, free);
             collect_captures_inner(err, bound, free);
         }
+        Resolved::MapErr(_, value, err) | Resolved::Cause(_, value, err) => {
+            collect_captures_inner(value, bound, free);
+            collect_captures_inner(err, bound, free);
+        }
+        Resolved::RecoverKind(_, value, _, handler) => {
+            collect_captures_inner(value, bound, free);
+            collect_captures_inner(handler, bound, free);
+        }
         Resolved::Match(_, scrutinee, arms) => {
             collect_captures_inner(scrutinee, bound, free);
-            for (pat, body) in arms {
+            for arm in arms {
                 let mut arm_bound = bound.clone();
-                collect_bind_pattern_bindings(pat, &mut arm_bound);
-                collect_captures_inner(body, &mut arm_bound, free);
+                collect_bind_pattern_bindings(&arm.pattern, &mut arm_bound);
+                if let Some(guard) = &arm.guard {
+                    collect_captures_inner(guard, &mut arm_bound, free);
+                }
+                collect_captures_inner(&arm.body, &mut arm_bound, free);
             }
         }
         Resolved::FieldAccess(_, expr, _) => collect_captures_inner(expr, bound, free),
         Resolved::TypeRefWitness(_, _) => {}
         Resolved::StructLit(_, _, fields) => {
-            for (_, expr) in fields {
-                collect_captures_inner(expr, bound, free);
+            for field in fields {
+                match field {
+                    ResolvedStructLitField::Explicit(_, expr)
+                    | ResolvedStructLitField::Shorthand(_, expr) => {
+                        collect_captures_inner(expr, bound, free);
+                    }
+                }
             }
         }
         Resolved::ConstructorCall(_, _, args) => {
@@ -162,6 +192,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         | Resolved::RecordDef(_, _, _)
         | Resolved::DeferrorDef(_, _, _, _)
         | Resolved::EnumDef(_, _, _, _)
+        | Resolved::ConstDef(_, _, _, _, _)
         | Resolved::TraitDef(_, _, _, _, _)
         | Resolved::TraitImplDef(_, _, _, _, _)
         | Resolved::BuiltinDecl(_, _, _, _, _)
@@ -216,7 +247,7 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
                 collect_bind_pattern_bindings(inner, bound);
             }
         }
-        ResolvedPattern::Tuple(items) => {
+        ResolvedPattern::Tuple(items) | ResolvedPattern::Or(items) => {
             for item in items {
                 collect_bind_pattern_bindings(item, bound);
             }
@@ -233,6 +264,7 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
         | ResolvedPattern::ListNil(_)
         | ResolvedPattern::IntLit(_, _)
         | ResolvedPattern::StrLit(_, _)
-        | ResolvedPattern::BoolLit(_, _) => {}
+        | ResolvedPattern::BoolLit(_, _)
+        | ResolvedPattern::DurationLit(_, _) => {}
     }
 }

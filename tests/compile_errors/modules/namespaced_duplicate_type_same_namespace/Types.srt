@@ -1,0 +1,7 @@
+namespace Auth {
+  defrecord User(name: String)
+}
+
+namespace Auth {
+  defrecord User(name: String)
+}

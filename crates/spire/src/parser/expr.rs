@@ -1,17 +1,53 @@
 use crate::ast::*;
 use crate::error::ParseError;
 use crate::token::Token;
+use sindr::primitives::ToPrimitive;
 
 use super::Parser;
 
-impl Parser {
+#[derive(Debug, Clone, PartialEq)]
+enum FuncLiteralBodyKind {
+    Name(Symbol),
+    Path(AstPath),
+    Operator(String),
+}
+
+impl Parser<'_> {
+    fn parse_func_literal_body(body: &str, span: Span) -> Result<FuncLiteralBodyKind, ParseError> {
+        if Self::expr_binop_from_func_literal(body).is_some()
+            || Self::logical_binop_from_func_literal(body).is_some()
+        {
+            return Ok(FuncLiteralBodyKind::Operator(body.to_string()));
+        }
+
+        if body.contains("::") {
+            let segments = body.split("::").map(str::to_string).collect::<Vec<_>>();
+            let is_valid_path = segments.len() >= 2
+                && segments.iter().all(|segment| {
+                    let mut chars = segment.chars();
+                    matches!(chars.next(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_')
+                        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                });
+            if !is_valid_path {
+                return Err(ParseError::syntax(
+                    format!("Unsupported FuncLiteral body: `{}`", body),
+                    span,
+                ));
+            }
+            return Ok(FuncLiteralBodyKind::Path(AstPath { span, segments }));
+        }
+
+        Ok(FuncLiteralBodyKind::Name(body.to_string()))
+    }
+
     fn flow_op_kind(tok: &Token) -> Option<u8> {
         match tok {
             Token::PipeApply => Some(0),
             Token::PipeMap => Some(1),
             Token::PipeBind => Some(2),
             Token::Compose => Some(3),
-            Token::PipeCompose => Some(4),
+            Token::LiftCompose => Some(4),
+            Token::KleisliCompose => Some(5),
             _ => None,
         }
     }
@@ -33,7 +69,7 @@ impl Parser {
     }
 
     pub(super) fn parse_flow_expr(&mut self) -> Result<Ast, ParseError> {
-        let mut left = self.parse_logical_expr()?;
+        let mut left = self.parse_and_or_expr()?;
         loop {
             self.skip_newlines_before_flow_op();
 
@@ -43,7 +79,7 @@ impl Parser {
             };
             self.advance();
             self.skip_newlines();
-            let right = self.parse_logical_expr()?;
+            let right = self.parse_and_or_expr()?;
             let span = Span {
                 start: left.span().start,
                 end: right.span().end,
@@ -53,7 +89,8 @@ impl Parser {
                 1 => Ast::ContextMap(span, Box::new(left), Box::new(right)),
                 2 => Ast::ContextBind(span, Box::new(left), Box::new(right)),
                 3 => Ast::Compose(span, Box::new(left), Box::new(right)),
-                4 => Ast::KleisliCompose(span, Box::new(left), Box::new(right)),
+                4 => Ast::LiftedCompose(span, Box::new(left), Box::new(right)),
+                5 => Ast::KleisliCompose(span, Box::new(left), Box::new(right)),
                 _ => unreachable!("validated flow token"),
             };
         }
@@ -61,6 +98,20 @@ impl Parser {
     }
 
     pub(super) fn stmt_has_top_level_assignment_from(&self, start: usize) -> bool {
+        self.stmt_has_top_level_token_from(start, |token| {
+            matches!(token, Token::Bind | Token::SafeBind)
+        })
+    }
+
+    pub(super) fn stmt_has_top_level_at_from(&self, start: usize) -> bool {
+        self.stmt_has_top_level_token_from(start, |token| matches!(token, Token::At))
+    }
+
+    fn stmt_has_top_level_token_from(
+        &self,
+        start: usize,
+        predicate: impl Fn(&Token) -> bool,
+    ) -> bool {
         let mut paren_depth = 0usize;
         let mut bracket_depth = 0usize;
         let mut brace_depth = 0usize;
@@ -83,8 +134,10 @@ impl Parser {
                 {
                     break;
                 }
-                Token::Bind | Token::SafeBind
-                    if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 =>
+                _ if paren_depth == 0
+                    && bracket_depth == 0
+                    && brace_depth == 0
+                    && predicate(token) =>
                 {
                     return true;
                 }
@@ -102,6 +155,7 @@ impl Parser {
             Token::Plus => Some(BinOp::Add),
             Token::Minus => Some(BinOp::Sub),
             Token::Star => Some(BinOp::Mul),
+            Token::Slash => Some(BinOp::Slash),
             Token::Concat => Some(BinOp::Concat),
             _ => None,
         }
@@ -119,11 +173,20 @@ impl Parser {
         }
     }
 
+    pub(super) fn and_or_name(tok: &Token) -> Option<&'static str> {
+        match tok {
+            Token::AndAnd => Some("and"),
+            Token::OrOr => Some("or"),
+            _ => None,
+        }
+    }
+
     pub(super) fn expr_binop_from_func_literal(body: &str) -> Option<BinOp> {
         match body {
             "+" => Some(BinOp::Add),
             "-" => Some(BinOp::Sub),
             "*" => Some(BinOp::Mul),
+            "/" => Some(BinOp::Slash),
             "++" => Some(BinOp::Concat),
             _ => None,
         }
@@ -141,6 +204,23 @@ impl Parser {
         }
     }
 
+    pub(super) fn and_or_func_literal_name(body: &str) -> bool {
+        matches!(body, "and" | "or")
+    }
+
+    pub(super) fn comparison_func_literal_name(body: &str) -> bool {
+        // `le` / `ge` are accepted here as comparison-style helper aliases.
+        // They stay normal function calls, but parse at comparison precedence.
+        matches!(
+            body,
+            "eq" | "neq" | "lt" | "lte" | "gt" | "gte" | "le" | "ge"
+        )
+    }
+
+    pub(super) fn logical_func_literal_name(body: &str) -> bool {
+        Self::and_or_func_literal_name(body) || Self::comparison_func_literal_name(body)
+    }
+
     pub(super) fn lower_binop(left: Ast, op: BinOp, right: Ast) -> Ast {
         let span = Span {
             start: left.span().start,
@@ -149,19 +229,14 @@ impl Parser {
         Ast::BinOp(span, op, Box::new(left), Box::new(right))
     }
 
-    pub(super) fn lower_func_literal_call(
-        left: Ast,
-        func_span: Span,
-        name: Symbol,
-        right: Ast,
-    ) -> Ast {
+    pub(super) fn lower_func_literal_call(left: Ast, func: Ast, right: Ast) -> Ast {
         let span = Span {
             start: left.span().start,
             end: right.span().end,
         };
         Ast::App(
             span,
-            Box::new(Ast::Var(func_span, name)),
+            Box::new(func),
             vec![
                 RecordLitArg::Positional(left),
                 RecordLitArg::Positional(right),
@@ -183,21 +258,36 @@ impl Parser {
             let Some(Token::FuncLiteral(body)) = self.peek_n(0).cloned() else {
                 break;
             };
+            let func_span = self.peek_span();
+            let func_kind = Self::parse_func_literal_body(&body, func_span.clone())?;
 
-            if let Some(op) = Self::expr_binop_from_func_literal(&body) {
-                self.advance();
-                let right = self.parse_postfix()?;
-                left = Self::lower_binop(left, op, right);
-                continue;
-            }
-
-            if Self::logical_binop_from_func_literal(&body).is_some() {
+            if matches!(func_kind, FuncLiteralBodyKind::Operator(ref op_body)
+                if Self::logical_binop_from_func_literal(op_body).is_some())
+                || matches!(func_kind, FuncLiteralBodyKind::Name(ref name)
+                    if Self::logical_func_literal_name(name))
+            {
                 break;
             }
 
-            let func_span = self.advance().span.clone();
+            self.advance();
             let right = self.parse_postfix()?;
-            left = Self::lower_func_literal_call(left, func_span, body, right);
+            match func_kind {
+                FuncLiteralBodyKind::Operator(op_body) => {
+                    let op = Self::expr_binop_from_func_literal(&op_body)
+                        .expect("expr operator classification checked above");
+                    left = Self::lower_binop(left, op, right);
+                }
+                FuncLiteralBodyKind::Name(name) => {
+                    left = Self::lower_func_literal_call(left, Ast::Var(func_span, name), right);
+                }
+                FuncLiteralBodyKind::Path(path) => {
+                    left = Self::lower_func_literal_call(
+                        left,
+                        Ast::Path(path.span.clone(), path),
+                        right,
+                    );
+                }
+            }
         }
 
         Ok(left)
@@ -217,13 +307,64 @@ impl Parser {
             let Some(Token::FuncLiteral(body)) = self.peek_n(0).cloned() else {
                 break;
             };
+            let func_span = self.peek_span();
+            let func_kind = Self::parse_func_literal_body(&body, func_span.clone())?;
 
-            let Some(op) = Self::logical_binop_from_func_literal(&body) else {
+            if let FuncLiteralBodyKind::Operator(ref op_body) = func_kind {
+                if let Some(op) = Self::logical_binop_from_func_literal(op_body) {
+                    self.advance();
+                    let right = self.parse_expr_class_expr()?;
+                    left = Self::lower_binop(left, op, right);
+                    continue;
+                }
+            }
+
+            if matches!(func_kind, FuncLiteralBodyKind::Name(ref name)
+                if Self::comparison_func_literal_name(name))
+            {
+                self.advance();
+                let right = self.parse_expr_class_expr()?;
+                left = Self::lower_func_literal_call(left, Ast::Var(func_span, body), right);
+                continue;
+            }
+
+            break;
+        }
+
+        Ok(left)
+    }
+
+    pub(super) fn parse_and_or_expr(&mut self) -> Result<Ast, ParseError> {
+        let mut left = self.parse_logical_expr()?;
+
+        loop {
+            if let Some(name) = Self::and_or_name(self.peek()) {
+                let func_span = self.peek_span();
+                self.advance();
+                let right = self.parse_logical_expr()?;
+                left = Self::lower_func_literal_call(
+                    left,
+                    Ast::Var(func_span, name.to_string()),
+                    right,
+                );
+                continue;
+            }
+
+            let Some(Token::FuncLiteral(body)) = self.peek_n(0).cloned() else {
                 break;
             };
+            let func_span = self.peek_span();
+            let func_kind = Self::parse_func_literal_body(&body, func_span.clone())?;
+            let FuncLiteralBodyKind::Name(name) = func_kind else {
+                break;
+            };
+            if !Self::and_or_func_literal_name(&name) {
+                break;
+            }
+
             self.advance();
-            let right = self.parse_expr_class_expr()?;
-            left = Self::lower_binop(left, op, right);
+            let right = self.parse_logical_expr()?;
+            left = Self::lower_func_literal_call(left, Ast::Var(func_span, name), right);
         }
 
         Ok(left)
@@ -255,6 +396,10 @@ impl Parser {
             expr = Ast::FieldAccess(span, Box::new(expr), field);
         }
 
+        if self.is_timeout_modifier_start() {
+            expr = self.parse_timeout_modifier(expr)?;
+        }
+
         Ok(expr)
     }
 
@@ -264,9 +409,40 @@ impl Parser {
         let sp = self.peek_span();
 
         match self.peek().clone() {
+            Token::Bang => {
+                self.advance();
+                let inner = self.parse_primary()?;
+                let span = Span {
+                    start: sp.start,
+                    end: inner.span().end,
+                };
+                Ok(Ast::App(
+                    span.clone(),
+                    Box::new(Ast::Path(
+                        span.clone(),
+                        AstPath {
+                            span: span.clone(),
+                            segments: vec!["Boolean".into(), "not".into()],
+                        },
+                    )),
+                    vec![RecordLitArg::Positional(inner)],
+                ))
+            }
+
             // Literals
             Token::Int(n) => {
                 self.advance();
+                if self.is_duration_suffix_here() {
+                    let suffix_span = self.advance().span.clone();
+                    let int_expr = Ast::Lit(sp.clone(), Lit::Int(n));
+                    return Ok(self.duration_literal(
+                        int_expr,
+                        Span {
+                            start: sp.start,
+                            end: suffix_span.end,
+                        },
+                    ));
+                }
                 Ok(Ast::Lit(sp, Lit::Int(n)))
             }
             Token::Float(f) => {
@@ -277,10 +453,10 @@ impl Parser {
                 self.advance();
                 self.parse_string_or_interpolated(sp, s)
             }
-            Token::DocString(_) => Err(ParseError::syntax(
-                "Doc strings are only allowed after @@doc",
-                sp,
-            )),
+            Token::DocString(s) => {
+                self.advance();
+                self.parse_triple_string_or_interpolated(sp, s)
+            }
             Token::True => {
                 self.advance();
                 Ok(Ast::Lit(sp, Lit::Bool(true)))
@@ -346,35 +522,35 @@ impl Parser {
             Token::LBrack => self.parse_list_expr(sp),
 
             // Parenthesized expression
-            Token::LParen => {
-                self.advance();
-                self.skip_newlines();
-                let first = self.parse_expr()?;
-                self.skip_newlines();
-                if matches!(self.peek(), Token::Comma) {
-                    self.advance();
-                    self.skip_newlines();
-                    if matches!(self.peek(), Token::RParen) {
+            Token::LParen => self.with_parse_nesting(sp.clone(), |parser| {
+                parser.advance();
+                parser.skip_newlines();
+                let first = parser.parse_expr()?;
+                parser.skip_newlines();
+                if matches!(parser.peek(), Token::Comma) {
+                    parser.advance();
+                    parser.skip_newlines();
+                    if matches!(parser.peek(), Token::RParen) {
                         return Err(ParseError::syntax(
                             "1-tuple literals are not supported",
                             Span {
                                 start: sp.start,
-                                end: self.peek_span().end,
+                                end: parser.peek_span().end,
                             },
                         ));
                     }
-                    let mut items = vec![first, self.parse_expr()?];
-                    self.skip_newlines();
-                    while matches!(self.peek(), Token::Comma) {
-                        self.advance();
-                        self.skip_newlines();
-                        if matches!(self.peek(), Token::RParen) {
+                    let mut items = vec![first, parser.parse_expr()?];
+                    parser.skip_newlines();
+                    while matches!(parser.peek(), Token::Comma) {
+                        parser.advance();
+                        parser.skip_newlines();
+                        if matches!(parser.peek(), Token::RParen) {
                             break;
                         }
-                        items.push(self.parse_expr()?);
-                        self.skip_newlines();
+                        items.push(parser.parse_expr()?);
+                        parser.skip_newlines();
                     }
-                    let end = self.expect(&Token::RParen)?;
+                    let end = parser.expect(&Token::RParen)?;
                     Ok(Ast::TupleLiteral(
                         Span {
                             start: sp.start,
@@ -383,15 +559,21 @@ impl Parser {
                         items,
                     ))
                 } else {
-                    self.expect(&Token::RParen)?;
-                    Ok(first)
+                    let end = parser.expect(&Token::RParen)?;
+                    Ok(Ast::Grouped(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        Box::new(first),
+                    ))
                 }
-            }
+            }),
 
-            // Block expression: { stmt; stmt; expr }
+            // Zero-argument closure expression: { stmt; stmt; expr }
             Token::LBrace => self.parse_trailing_block_expr_from_lbrace(sp),
 
-            // Capture / partial application: &foo, &foo(1)
+            // Capture / placeholder capture: &foo, &foo(&1), &1
             Token::Amp => self.parse_capture_expr(sp),
 
             Token::FuncLiteral(_) => Err(ParseError::syntax(
@@ -419,6 +601,155 @@ impl Parser {
         }
     }
 
+    pub(super) fn is_duration_suffix_here(&self) -> bool {
+        matches!(self.peek(), Token::Ident(name) if name == "ms")
+    }
+
+    fn is_timeout_modifier_start(&self) -> bool {
+        matches!(self.peek(), Token::Annotator(name) if name == "timeout")
+    }
+
+    fn hidden_call(&self, name: &str, args: Vec<RecordLitArg>, span: Span) -> Ast {
+        Ast::App(
+            span.clone(),
+            Box::new(Ast::InternalVar(
+                Span {
+                    start: span.start,
+                    end: span.start,
+                },
+                name.to_string(),
+            )),
+            args,
+        )
+    }
+
+    fn duration_literal(&self, value: Ast, span: Span) -> Ast {
+        Ast::InternalStructLit(
+            span,
+            "Duration".into(),
+            vec![crate::ast::StructLitField::Explicit("millis".into(), value)],
+        )
+    }
+
+    fn std_hidden_ref(&self, span: Span, name: Symbol) -> Ast {
+        if name.starts_with("__")
+            && self
+                .context
+                .parse_rules
+                .allowed_top_level_decl_kinds
+                .allows(super::context::TopLevelDeclKind::BuiltinDecl)
+        {
+            Ast::InternalVar(span, name)
+        } else {
+            Ast::Var(span, name)
+        }
+    }
+
+    fn parse_timeout_duration_literal(&mut self) -> Result<Ast, ParseError> {
+        let sp = self.peek_span();
+        let Token::Int(n) = self.peek().clone() else {
+            return Err(ParseError::syntax(
+                "@timeout(...) requires a duration literal like `100ms`",
+                sp,
+            ));
+        };
+        self.advance();
+        if !self.is_duration_suffix_here() {
+            return Err(ParseError::syntax(
+                "@timeout(...) requires a duration literal like `100ms`",
+                sp,
+            ));
+        }
+        let suffix_span = self.advance().span.clone();
+        let int_expr = Ast::Lit(sp.clone(), Lit::Int(n));
+        Ok(self.duration_literal(
+            int_expr,
+            Span {
+                start: sp.start,
+                end: suffix_span.end,
+            },
+        ))
+    }
+
+    fn parse_timeout_modifier(&mut self, expr: Ast) -> Result<Ast, ParseError> {
+        let start = expr.span().start;
+        let modifier_span = self.peek_span();
+        let Token::Annotator(modifier) = self.peek().clone() else {
+            return Err(ParseError::syntax(
+                "Expected @timeout(...)",
+                self.peek_span(),
+            ));
+        };
+        self.advance();
+        if modifier != "timeout" {
+            return Err(ParseError::syntax(
+                format!("Unsupported call modifier: @{modifier}"),
+                modifier_span,
+            ));
+        }
+        self.expect(&Token::LParen)?;
+        let timeout_arg = self.parse_timeout_duration_literal()?;
+        self.skip_newlines();
+        let end_span = self.expect(&Token::RParen)?;
+
+        let (target, mut args) = match expr {
+            Ast::App(_, func, args) => (*func, args),
+            _ => {
+                return Err(ParseError::syntax(
+                    "@timeout(...) can only be applied to Task calls",
+                    Span {
+                        start,
+                        end: end_span.end,
+                    },
+                ));
+            }
+        };
+
+        let hidden_name = match &target {
+            Ast::Path(_, path) if path.segments.as_slice() == ["Task", "call"] => {
+                "__task_call_timeout"
+            }
+            Ast::Path(_, path) if path.segments.as_slice() == ["Task", "async"] => {
+                "__task_async_timeout"
+            }
+            Ast::Path(_, path) if path.segments.as_slice() == ["Task", "launch"] => {
+                "__task_launch_timeout"
+            }
+            Ast::Path(_, path) if path.segments.as_slice() == ["Task", "cast"] => {
+                "__task_cast_timeout"
+            }
+            _ => {
+                return Err(ParseError::syntax(
+                    "@timeout(...) is only supported on Task::call/async/launch/cast",
+                    Span {
+                        start,
+                        end: end_span.end,
+                    },
+                ));
+            }
+        };
+
+        if args.len() != 1 || matches!(args[0], RecordLitArg::Named(_, _)) {
+            return Err(ParseError::syntax(
+                "@timeout(...) expects a Task call with exactly one positional body argument",
+                Span {
+                    start,
+                    end: end_span.end,
+                },
+            ));
+        }
+
+        args.insert(0, RecordLitArg::Positional(timeout_arg));
+        Ok(self.hidden_call(
+            hidden_name,
+            args,
+            Span {
+                start,
+                end: end_span.end,
+            },
+        ))
+    }
+
     /// After seeing an identifier, figure out what it is:
     /// - `Name { field: val }` → StructLit (uppercase start + `{`)
     /// - `Name(args)` → ConstructorCall if uppercase, App if lowercase
@@ -431,6 +762,10 @@ impl Parser {
         name: Symbol,
         name_span: Span,
     ) -> Result<Ast, ParseError> {
+        if name == "dbg" && matches!(self.peek(), Token::Bang) {
+            return self.parse_dbg_special_form(name_span);
+        }
+
         if name == "self" && self.impl_target_stack.is_empty() {
             return Err(ParseError::syntax(
                 "`self` can only be used inside impl methods",
@@ -558,8 +893,9 @@ impl Parser {
             }
         }
 
-        // Struct literal: Name { field: val, ... }
+        // Struct literal: Name { field: val, shorthand, ... }
         if is_uppercase && matches!(self.peek(), Token::LBrace) {
+            use crate::ast::StructLitField;
             self.advance();
             self.skip_newlines();
             let mut fields = Vec::new();
@@ -567,9 +903,13 @@ impl Parser {
                 loop {
                     self.skip_newlines();
                     let (field_name, _) = self.expect_ident()?;
-                    self.expect(&Token::Colon)?;
-                    let val = self.parse_non_assignment_expr()?;
-                    fields.push((field_name, val));
+                    if matches!(self.peek(), Token::Colon) {
+                        self.advance();
+                        let val = self.parse_non_assignment_expr()?;
+                        fields.push(StructLitField::Explicit(field_name, val));
+                    } else {
+                        fields.push(StructLitField::Shorthand(field_name));
+                    }
                     self.skip_newlines();
                     if matches!(self.peek(), Token::Comma) {
                         self.advance();
@@ -597,7 +937,7 @@ impl Parser {
             let args = self.parse_call_args()?;
             self.skip_newlines();
             let end_span = self.expect(&Token::RParen)?;
-            let func = Ast::Var(name_span.clone(), name.clone());
+            let func = self.std_hidden_ref(name_span.clone(), name.clone());
 
             if is_uppercase {
                 self.reject_constructor_trailing_block()?;
@@ -622,7 +962,7 @@ impl Parser {
         // Lexer tokenizes `()` as Token::Unit.
         if matches!(self.peek(), Token::Unit) {
             let end_span = self.advance().span.clone();
-            let func = Ast::Var(name_span.clone(), name.clone());
+            let func = self.std_hidden_ref(name_span.clone(), name.clone());
             if is_uppercase {
                 self.reject_constructor_trailing_block()?;
                 let span = Span {
@@ -644,6 +984,12 @@ impl Parser {
         if matches!(self.peek(), Token::Colon) {
             self.advance();
             let ty = self.parse_type()?;
+            if matches!(self.peek(), Token::Arrow) {
+                return Err(ParseError::syntax(
+                    "Parenthesized type signatures must choose tuple or function syntax after the first element: use `,` and another type for a tuple, or put `->` before `)` for a function type (for example, `(Int -> String)`, not `(Int) -> String`).",
+                    self.peek_span(),
+                ));
+            }
             let assign_tok = self.peek().clone();
             match assign_tok {
                 Token::Bind | Token::SafeBind => {
@@ -698,7 +1044,68 @@ impl Parser {
         }
 
         // Just a variable
-        Ok(Ast::Var(name_span, name))
+        Ok(self.std_hidden_ref(name_span, name))
+    }
+
+    fn parse_dbg_special_form(&mut self, name_span: Span) -> Result<Ast, ParseError> {
+        let bang_span = self.advance().span.clone();
+        if matches!(self.peek(), Token::Unit) {
+            let unit_span = self.advance().span.clone();
+            return Err(ParseError::syntax(
+                "`dbg!` expects at least one argument",
+                Span {
+                    start: name_span.start,
+                    end: unit_span.end,
+                },
+            ));
+        }
+        if !matches!(self.peek(), Token::LParen) {
+            return Err(ParseError::syntax(
+                "Expected `(` after `dbg!`",
+                Span {
+                    start: name_span.start,
+                    end: bang_span.end,
+                },
+            ));
+        }
+
+        self.advance();
+        self.skip_newlines();
+        if matches!(self.peek(), Token::RParen) {
+            return Err(ParseError::syntax(
+                "`dbg!` expects at least one argument",
+                self.peek_span(),
+            ));
+        }
+
+        let mut args = Vec::new();
+        loop {
+            let expr = self.parse_non_assignment_expr()?;
+            args.push(DbgArg {
+                span: expr.span().clone(),
+                expr,
+            });
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+                if matches!(self.peek(), Token::RParen) {
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+
+        self.skip_newlines();
+        let end_span = self.expect(&Token::RParen)?;
+        Ok(Ast::Dbg(
+            Span {
+                start: name_span.start,
+                end: end_span.end,
+            },
+            args,
+        ))
     }
 
     /// `=` / `=?` are non-associative in a single statement.
@@ -746,22 +1153,74 @@ impl Parser {
         &mut self,
         sp: Span,
     ) -> Result<Ast, ParseError> {
-        self.expect(&Token::LBrace)?;
-        self.skip_newlines();
+        self.with_parse_nesting(sp.clone(), |parser| {
+            parser.expect(&Token::LBrace)?;
+            parser.skip_newlines();
 
-        if matches!(self.peek(), Token::Pipe) {
-            return self.parse_closure_literal(sp);
+            if matches!(parser.peek(), Token::Pipe) {
+                return parser.parse_closure_literal(sp);
+            }
+
+            let body_stmts = parser.parse_block_stmts()?;
+            if body_stmts.is_empty() {
+                return Err(ParseError::incomplete("expression", parser.peek_span()));
+            }
+            let end = parser.expect(&Token::RBrace)?;
+            let body = if body_stmts.len() == 1 {
+                body_stmts.into_iter().next().expect("checked non-empty")
+            } else {
+                Ast::Block(
+                    Span {
+                        start: body_stmts[0].span().start,
+                        end: body_stmts[body_stmts.len() - 1].span().end,
+                    },
+                    body_stmts,
+                )
+            };
+            Ok(Ast::Closure(
+                Span {
+                    start: sp.start,
+                    end: end.end,
+                },
+                Vec::new(),
+                Box::new(body),
+            ))
+        })
+    }
+
+    pub(super) fn parse_match_arm_body(&mut self) -> Result<Ast, ParseError> {
+        if matches!(self.peek(), Token::LBrace) {
+            let sp = self.peek_span();
+            return self.parse_match_arm_block_expr_from_lbrace(sp);
         }
+        self.parse_expr()
+    }
 
-        let stmts = self.parse_block_stmts()?;
-        let end = self.expect(&Token::RBrace)?;
-        Ok(Ast::Block(
-            Span {
-                start: sp.start,
-                end: end.end,
-            },
-            stmts,
-        ))
+    pub(super) fn parse_match_arm_block_expr_from_lbrace(
+        &mut self,
+        sp: Span,
+    ) -> Result<Ast, ParseError> {
+        self.with_parse_nesting(sp.clone(), |parser| {
+            parser.expect(&Token::LBrace)?;
+            parser.skip_newlines();
+
+            if matches!(parser.peek(), Token::Pipe) {
+                return parser.parse_closure_literal(sp);
+            }
+
+            let stmts = parser.parse_block_stmts()?;
+            if stmts.is_empty() {
+                return Err(ParseError::incomplete("expression", parser.peek_span()));
+            }
+            let end = parser.expect(&Token::RBrace)?;
+            Ok(Ast::Block(
+                Span {
+                    start: sp.start,
+                    end: end.end,
+                },
+                stmts,
+            ))
+        })
     }
 
     pub(super) fn reject_constructor_trailing_block(&self) -> Result<(), ParseError> {
@@ -774,24 +1233,9 @@ impl Parser {
         Ok(())
     }
 
-    pub(super) fn trailing_block_uses_closure_sugar(callee: &Ast) -> bool {
-        fn is_test_dsl_name(name: &str) -> bool {
-            matches!(name, "test" | "describe" | "it")
-        }
-
-        match callee {
-            Ast::Var(_, name) => is_test_dsl_name(name),
-            Ast::Path(_, path) => path
-                .segments
-                .last()
-                .is_some_and(|name| is_test_dsl_name(name)),
-            _ => false,
-        }
-    }
-
     pub(super) fn attach_trailing_block_arg(
         &mut self,
-        callee: &Ast,
+        _callee: &Ast,
         mut args: Vec<RecordLitArg>,
         mut call_end: usize,
     ) -> Result<(Vec<RecordLitArg>, usize), ParseError> {
@@ -811,12 +1255,6 @@ impl Parser {
 
         let trailing = self.parse_trailing_block_expr_from_lbrace(self.peek_span())?;
         call_end = trailing.span().end;
-        let trailing = match trailing {
-            Ast::Block(span, stmts) if Self::trailing_block_uses_closure_sugar(callee) => {
-                Ast::Closure(span.clone(), Vec::new(), Box::new(Ast::Block(span, stmts)))
-            }
-            other => other,
-        };
         args.push(RecordLitArg::Positional(trailing));
         Ok((args, call_end))
     }
@@ -853,67 +1291,84 @@ impl Parser {
     }
 
     pub(super) fn parse_list_expr(&mut self, sp: Span) -> Result<Ast, ParseError> {
-        self.expect(&Token::LBrack)?;
-        self.skip_newlines();
+        self.with_parse_nesting(sp.clone(), |parser| {
+            parser.expect(&Token::LBrack)?;
+            parser.skip_newlines();
 
-        if matches!(self.peek(), Token::RBrack) {
-            let end = self.expect(&Token::RBrack)?;
-            return Ok(Ast::ListNil(Span {
-                start: sp.start,
-                end: end.end,
-            }));
-        }
+            if matches!(parser.peek(), Token::RBrack) {
+                let end = parser.expect(&Token::RBrack)?;
+                return Ok(Ast::ListNil(Span {
+                    start: sp.start,
+                    end: end.end,
+                }));
+            }
 
-        let first = self.parse_expr()?;
-        self.skip_newlines();
-        if matches!(self.peek(), Token::Comma) {
-            self.advance();
-            self.skip_newlines();
-            if matches!(self.peek(), Token::DotDot) {
-                self.advance();
-                self.skip_newlines();
-                let tail = self.parse_expr()?;
-                self.skip_newlines();
-                let end = self.expect(&Token::RBrack)?;
-                return Ok(Ast::ListCons(
+            let first = parser.parse_expr()?;
+            parser.skip_newlines();
+            if matches!(parser.peek(), Token::DotDot) {
+                parser.advance();
+                parser.skip_newlines();
+                let stop = parser.parse_expr()?;
+                parser.skip_newlines();
+                let end = parser.expect(&Token::RBrack)?;
+                return Ok(Ast::RangeLiteral(
                     Span {
                         start: sp.start,
                         end: end.end,
                     },
                     Box::new(first),
-                    Box::new(tail),
+                    Box::new(stop),
+                ));
+            }
+            if matches!(parser.peek(), Token::Comma) {
+                parser.advance();
+                parser.skip_newlines();
+                if matches!(parser.peek(), Token::DotDot) {
+                    parser.advance();
+                    parser.skip_newlines();
+                    let tail = parser.parse_expr()?;
+                    parser.skip_newlines();
+                    let end = parser.expect(&Token::RBrack)?;
+                    return Ok(Ast::ListCons(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        Box::new(first),
+                        Box::new(tail),
+                    ));
+                }
+
+                let mut elems = vec![first];
+                elems.push(parser.parse_expr()?);
+                while matches!(parser.peek(), Token::Comma) {
+                    parser.advance();
+                    parser.skip_newlines();
+                    if matches!(parser.peek(), Token::RBrack) {
+                        break;
+                    }
+                    elems.push(parser.parse_expr()?);
+                }
+                parser.skip_newlines();
+                let end = parser.expect(&Token::RBrack)?;
+                return Ok(Ast::ListLiteral(
+                    Span {
+                        start: sp.start,
+                        end: end.end,
+                    },
+                    elems,
                 ));
             }
 
-            let mut elems = vec![first];
-            elems.push(self.parse_expr()?);
-            while matches!(self.peek(), Token::Comma) {
-                self.advance();
-                self.skip_newlines();
-                if matches!(self.peek(), Token::RBrack) {
-                    break;
-                }
-                elems.push(self.parse_expr()?);
-            }
-            self.skip_newlines();
-            let end = self.expect(&Token::RBrack)?;
-            return Ok(Ast::ListLiteral(
+            let end = parser.expect(&Token::RBrack)?;
+            Ok(Ast::ListLiteral(
                 Span {
                     start: sp.start,
                     end: end.end,
                 },
-                elems,
-            ));
-        }
-
-        let end = self.expect(&Token::RBrack)?;
-        Ok(Ast::ListLiteral(
-            Span {
-                start: sp.start,
-                end: end.end,
-            },
-            vec![first],
-        ))
+                vec![first],
+            ))
+        })
     }
 
     // ── Type annotation parsing ──
@@ -978,18 +1433,110 @@ impl Parser {
 
     pub(super) fn parse_capture_expr(&mut self, sp: Span) -> Result<Ast, ParseError> {
         self.expect(&Token::Amp)?;
-        let (name, name_span) = self.expect_ident()?;
-        let mut path_segments = vec![name.clone()];
-        let mut path_end = name_span.end;
-        while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
-            self.consume_path_separator()?;
-            let (seg, seg_span) = self.expect_ident()?;
-            path_end = seg_span.end;
-            path_segments.push(seg);
+        if let Token::Int(n) = self.peek().clone() {
+            let span = self.advance().span.clone();
+            let Some(index) = n.to_usize() else {
+                return Err(ParseError::syntax(
+                    "capture placeholder index must be a positive integer",
+                    span,
+                ));
+            };
+            if index == 0 {
+                return Err(ParseError::syntax(
+                    "capture placeholder index starts at &1",
+                    span,
+                ));
+            }
+            return Ok(Ast::CapturePlaceholder(
+                Span {
+                    start: sp.start,
+                    end: span.end,
+                },
+                index,
+            ));
         }
+        if matches!(self.peek(), Token::LParen) {
+            self.advance();
+            self.skip_newlines();
+            let inner = self.parse_expr()?;
+            self.skip_newlines();
+            let end_span = self.expect(&Token::RParen)?;
+            let message = match inner {
+                Ast::CapturePlaceholder(_, 1) => {
+                    "anonymous capture is not supported; use `&id` instead".to_string()
+                }
+                _ => "anonymous capture is not supported; extract a named function and capture it like `&fun_name(&1, &2)`".to_string(),
+            };
+            return Err(ParseError::syntax(
+                message,
+                Span {
+                    start: sp.start,
+                    end: end_span.end,
+                },
+            ));
+        }
+        let (target, mut end) = match self.peek().clone() {
+            Token::Ident(_) => {
+                let (name, name_span) = self.expect_ident()?;
+                let mut path_segments = vec![name.clone()];
+                let mut path_end = name_span.end;
+                while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
+                    self.consume_path_separator()?;
+                    let (seg, seg_span) = self.expect_ident()?;
+                    path_end = seg_span.end;
+                    path_segments.push(seg);
+                }
+
+                let target = if path_segments.len() == 1 {
+                    Ast::Var(name_span.clone(), name)
+                } else {
+                    Ast::Path(
+                        Span {
+                            start: name_span.start,
+                            end: path_end,
+                        },
+                        AstPath {
+                            span: Span {
+                                start: name_span.start,
+                                end: path_end,
+                            },
+                            segments: path_segments,
+                        },
+                    )
+                };
+                (target, path_end)
+            }
+            Token::FuncLiteral(body) => {
+                let func_span = self.advance().span.clone();
+                match Self::parse_func_literal_body(&body, func_span.clone())? {
+                    FuncLiteralBodyKind::Name(name) => {
+                        (Ast::Var(func_span.clone(), name), func_span.end)
+                    }
+                    FuncLiteralBodyKind::Path(path) => {
+                        let end = path.span.end;
+                        (Ast::Path(path.span.clone(), path), end)
+                    }
+                    FuncLiteralBodyKind::Operator(body) => (
+                        Ast::FuncLiteralRef(
+                            func_span.clone(),
+                            FuncLiteralRef {
+                                span: func_span.clone(),
+                                body,
+                            },
+                        ),
+                        func_span.end,
+                    ),
+                }
+            }
+            _ => {
+                return Err(ParseError::syntax(
+                    format!("Expected identifier, got {:?}", self.peek()),
+                    self.peek_span(),
+                ))
+            }
+        };
 
         let mut parsed_args = Vec::new();
-        let mut end = path_end;
         if matches!(self.peek(), Token::LParen) {
             self.advance();
             self.skip_newlines();
@@ -1025,24 +1572,6 @@ impl Parser {
             }
         }
 
-        let target = if path_segments.len() == 1 {
-            Ast::Var(name_span, name)
-        } else {
-            Ast::Path(
-                Span {
-                    start: name_span.start,
-                    end: path_end,
-                },
-                AstPath {
-                    span: Span {
-                        start: name_span.start,
-                        end: path_end,
-                    },
-                    segments: path_segments,
-                },
-            )
-        };
-
         Ok(Ast::Capture(
             Span {
                 start: sp.start,
@@ -1074,10 +1603,28 @@ impl Parser {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
             self.skip_newlines();
-            let pat = self.parse_match_pattern()?;
+            let mut patterns = expand_top_level_or_pattern(self.parse_match_pattern()?);
+            while matches!(self.peek(), Token::Pipe) {
+                self.advance();
+                self.skip_newlines();
+                patterns.extend(expand_top_level_or_pattern(self.parse_match_pattern()?));
+            }
+            let guard = if matches!(self.peek(), Token::When) {
+                self.advance();
+                self.skip_newlines();
+                Some(self.parse_non_assignment_expr()?)
+            } else {
+                None
+            };
             self.expect(&Token::FatArrow)?;
-            let body = self.parse_expr()?;
-            arms.push((pat, body));
+            let body = self.parse_match_arm_body()?;
+            for pattern in patterns {
+                arms.push(AstMatchArm {
+                    pattern,
+                    guard: guard.clone(),
+                    body: body.clone(),
+                });
+            }
             self.skip_newlines();
             if matches!(self.peek(), Token::Comma) {
                 self.advance();
@@ -1170,5 +1717,12 @@ impl Parser {
     /// Match pattern now reuses the same grammar as bind/safe-bind patterns.
     pub(super) fn is_true_literal(expr: &Ast) -> bool {
         matches!(expr, Ast::Lit(_, Lit::Bool(true)))
+    }
+}
+
+fn expand_top_level_or_pattern(pattern: AstPattern) -> Vec<AstPattern> {
+    match pattern {
+        AstPattern::Or(_, patterns) => patterns,
+        pattern => vec![pattern],
     }
 }

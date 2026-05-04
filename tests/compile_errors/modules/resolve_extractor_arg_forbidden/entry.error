@@ -1,0 +1,2 @@
+phase: resolve
+contains: write a normal def that returns Result or Option explicitly

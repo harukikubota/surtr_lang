@@ -24,13 +24,34 @@ pub(super) fn initialize_scope() -> Scope {
 fn is_global_runtime_builtin(name: &str) -> bool {
     matches!(
         name,
-        "print" | "to_string" | "inspect" | "safe_div" | "safe_mod" | "eprint" | "set_exit_code"
+        "print"
+            | "to_string"
+            | "inspect"
+            | "safe_div"
+            | "safe_mod"
+            | "eprint"
+            | "set_exit_code"
+            | "__process_pid"
+            | "__process_spawn"
+            | "__process_state"
+            | "__process_store"
+            | "__process_self"
+            | "__process_sleep"
+            | "__task_call"
+            | "__task_async"
+            | "__task_launch"
+            | "__task_cast"
+            | "__task_call_timeout"
+            | "__task_async_timeout"
+            | "__task_launch_timeout"
+            | "__task_cast_timeout"
     )
 }
 
 pub(super) fn resolve_decl_attrs(attrs: &DeclAttrs) -> ResolvedDeclAttrs {
     ResolvedDeclAttrs {
         doc: attrs.doc.clone(),
+        hidden: attrs.hidden,
         visibility: attrs.visibility,
     }
 }
@@ -40,7 +61,21 @@ pub(super) fn is_runtime_builtin_decl(name: &str) -> bool {
 }
 
 pub(super) fn is_special_form_builtin_decl(name: &str) -> bool {
-    matches!(name, "if" | "if_then" | "assert" | "ensure" | "and" | "or")
+    matches!(
+        name,
+        "if" | "if_then"
+            | "if_let"
+            | "if_let_then"
+            | "is_match"
+            | "assert"
+            | "ensure"
+            | "map_err"
+            | "cause"
+            | "recover"
+            | "recover_kind"
+            | "and"
+            | "or"
+    )
 }
 
 pub(super) fn is_doc_only_builtin_decl(name: &str) -> bool {

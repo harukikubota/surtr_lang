@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Process::self() is only available inside process handlers

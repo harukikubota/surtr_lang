@@ -14,7 +14,7 @@ def render(user: User) -> String {
   user.name ++ ":" ++ to_string(user.age)
 }
 
-lookup = &parse_id |=> &load_user
+lookup = &parse_id >=> &load_user
 summary: Result<String> = lookup("7") |>= ensure_adult() |*> render()
 
 match summary {

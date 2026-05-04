@@ -1,16 +1,38 @@
 use super::harness::{assert_compile_error, assert_output};
+use crate::common;
+use crate::support;
+use std::process::Stdio;
 
-#[test]
+fn assert_runtime_error_via_cli(source: &str, expected_substr: &str) {
+    let temp = common::unique_temp_dir("range-literal-runtime-error");
+    let source_path = temp.join("main.srt");
+    common::write_source(&source_path, source);
+
+    let output = common::surtr_command()
+        .current_dir(&temp)
+        .arg("run")
+        .arg("main.srt")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("surtr run should execute");
+
+    let stderr = common::normalize_text(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        stderr.contains(expected_substr),
+        "expected stderr containing `{expected_substr}`\nstdout:\n{}\nstderr:\n{stderr}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+}
+
 fn bindings_basic_print() {
     assert_output("num = 10\nnum2 = 5\nprint(to_string(num))", &["10"]);
 }
 
-#[test]
 fn bindings_shadowing_last_wins() {
     assert_output("x = 10\nx = 20\nprint(to_string(x))", &["20"]);
 }
 
-#[test]
 fn annotations_accept_matching_types() {
     assert_output(
         "num: Int = 10\nname: String = \"hello\"\nprint(to_string(num))\nprint(name)",
@@ -18,12 +40,10 @@ fn annotations_accept_matching_types() {
     );
 }
 
-#[test]
 fn annotations_reject_type_mismatch() {
     assert_compile_error("bad: Int = \"not an int\"", "expected Int, got String");
 }
 
-#[test]
 fn primitives_render_to_string() {
     assert_output(
         r#"int_val = 42
@@ -42,7 +62,6 @@ print(to_string(unit_val))"#,
     );
 }
 
-#[test]
 fn inspect_builtin_quotes_strings_and_preserves_error_rendering() {
     assert_output(
         r#"text = "hello"
@@ -64,7 +83,6 @@ print(inspect(Err(MyError)))"#,
     );
 }
 
-#[test]
 fn regex_generated_literal_and_builtin_wrappers_work_end_to_end() {
     assert_output(
         r#"rx =? re"(?<name>[A-Za-z]+)-(?<id>[0-9]+)"
@@ -86,12 +104,84 @@ print(Regex::replace_all(rx, "alice-42 bob-7", "X"))"#,
     );
 }
 
-#[test]
+fn io_get_and_get_line_read_injected_stdin() {
+    let (stdout, stderr) = support::run_project_script_with_input(
+        "language_features.srt",
+        r#"line =? IO::get_line("line> ")
+ch =? IO::get("char> ")
+print(line)
+print(ch)"#,
+        "surtr\nあtail",
+    )
+    .expect("io script should run");
+
+    assert_eq!(stdout, ["line> ", "char> ", "surtr", "あ"]);
+    assert!(stderr.is_empty());
+}
+
+fn io_get_does_not_conflict_with_regex_captures_get() {
+    let (stdout, stderr) = support::run_project_script_with_input(
+        "language_features.srt",
+        r#"rx =? Regex::compile("a(b)")
+caps =? Regex::captures(rx, "ab")
+cap =? RegexCaptures::get(caps, 1)
+ch =? IO::get("")
+print(cap)
+print(ch)"#,
+        "z",
+    )
+    .expect("io and regex get should run");
+
+    assert_eq!(stdout, ["b", "z"]);
+    assert!(stderr.is_empty());
+}
+
 fn int_negative_literal() {
     assert_output("x = -5\nprint(to_string(x))", &["-5"]);
 }
 
-#[test]
+fn range_literal_executes_for_int_and_string() {
+    assert_output(
+        "print(to_string([1..3]))\nprint(to_string([3..1]))\nprint(to_string([\"a\"..\"c\"]))\nprint(to_string([\"c\"..\"a\"]))",
+        &["[1, 2, 3]", "[]", "Ok([a, b, c])", "Ok([])"],
+    );
+}
+
+fn range_literal_dynamic_endpoints_execute() {
+    assert_output(
+        "start = 1\nstop = 3\nprint(to_string([start..stop]))\na = \"a\"\nc = \"c\"\nprint(to_string([a..c]))",
+        &["[1, 2, 3]", "Ok([a, b, c])"],
+    );
+}
+
+fn range_literal_rejects_mixed_endpoint_types() {
+    assert_compile_error(
+        r#"bad = [1.."c"]"#,
+        "range literal endpoints must both be Int or both be String",
+    );
+}
+
+fn range_literal_empty_string_literal_endpoint_uses_runtime_invalid_char_range() {
+    assert_runtime_error_via_cli(
+        r#"print(to_string(["".."c"]))"#,
+        "InvalidCharRange: start must be a single char",
+    );
+}
+
+fn range_literal_multichar_string_literal_endpoint_uses_runtime_invalid_char_range() {
+    assert_runtime_error_via_cli(
+        r#"print(to_string(["ab".."c"]))"#,
+        "InvalidCharRange: start must be a single char",
+    );
+}
+
+fn range_literal_multichar_string_literal_stop_uses_runtime_invalid_char_range() {
+    assert_runtime_error_via_cli(
+        r#"print(to_string(["q".."aaa"]))"#,
+        "InvalidCharRange: stop must be a single char",
+    );
+}
+
 fn arithmetic_int_ops() {
     assert_output(
         "print(to_string(10 + 5))\nprint(to_string(10 - 3))\nprint(to_string(4 * 3))\nprint(inspect(safe_div(10, 3)))\nprint(inspect(safe_mod(10, 3)))",
@@ -99,7 +189,6 @@ fn arithmetic_int_ops() {
     );
 }
 
-#[test]
 fn arithmetic_float_ops() {
     assert_output(
         "print(to_string(1.5 + 2.5))\nprint(inspect(safe_div(10.0, 3.0)))",
@@ -107,7 +196,6 @@ fn arithmetic_float_ops() {
     );
 }
 
-#[test]
 fn safe_xxx_zero_returns_zero_division_error_display() {
     assert_output(
         "print(inspect(safe_div(1, 0)))\nprint(inspect(safe_mod(1, 0)))",
@@ -118,7 +206,6 @@ fn safe_xxx_zero_returns_zero_division_error_display() {
     );
 }
 
-#[test]
 fn comparison_int_ops() {
     assert_output(
         "print(to_string(10 > 5))\nprint(to_string(10 < 5))\nprint(to_string(10 == 10))",
@@ -126,17 +213,14 @@ fn comparison_int_ops() {
     );
 }
 
-#[test]
 fn equality_string() {
     assert_output(r#"print(to_string("abc" == "abc"))"#, &["True"]);
 }
 
-#[test]
 fn inequality_boolean() {
     assert_output("print(to_string(True != False))", &["True"]);
 }
 
-#[test]
 fn kernel_and_or_short_circuit() {
     assert_output(
         r#"def log_true(label: String) -> Boolean {
@@ -155,9 +239,44 @@ print(to_string(or(False, log_true("or-rhs"))))
 print(to_string(or(True, log_false("or-skip"))))"#,
         &["and-rhs", "False", "False", "or-rhs", "True", "True"],
     );
+
+    assert_output(
+        r#"def log_true(label: String) -> Boolean {
+  print(label)
+  True
 }
 
-#[test]
+def log_false(label: String) -> Boolean {
+  print(label)
+  False
+}
+
+print(to_string(True && log_false("sym-and-rhs")))
+print(to_string(False && log_true("sym-and-skip")))
+print(to_string(False || log_true("sym-or-rhs")))
+print(to_string(True || log_false("sym-or-skip")))"#,
+        &[
+            "sym-and-rhs",
+            "False",
+            "False",
+            "sym-or-rhs",
+            "True",
+            "True",
+        ],
+    );
+}
+
+fn symbolic_boolean_operators_require_boolean_operands() {
+    assert_compile_error(
+        "print(to_string(True || 1))",
+        "if branches have different types",
+    );
+    assert_compile_error(
+        "print(to_string(1 && True))",
+        "if condition must be Boolean, got Int",
+    );
+}
+
 fn kernel_eq_neq_helpers_match_operator_behavior() {
     assert_output(
         r#"defenum Flag {
@@ -174,7 +293,6 @@ print(to_string(neq(Flag::On, Flag::Off)))"#,
     );
 }
 
-#[test]
 fn kernel_ordering_and_concat_helpers_match_operator_behavior() {
     assert_output(
         r#"print(to_string(compare(1, 2)))
@@ -198,27 +316,22 @@ print(to_string(lt(1.5, 2.0)))"#,
     );
 }
 
-#[test]
 fn concat_strings() {
     assert_output(r#"print("hello" ++ " world")"#, &["hello world"]);
 }
 
-#[test]
 fn arithmetic_precedence() {
     assert_output("print(to_string(2 + 3 * 4))", &["20"]);
 }
 
-#[test]
 fn equality_reject_mixed_types() {
     assert_compile_error("x = 1 == \"one\"", "Cannot compare");
 }
 
-#[test]
 fn list_literal_int() {
     assert_output("nums = [1, 2, 3]\nprint(to_string(nums))", &["[1, 2, 3]"]);
 }
 
-#[test]
 fn list_literal_string() {
     assert_output(
         r#"strs = ["a", "b", "c"]
@@ -227,12 +340,10 @@ print(to_string(strs))"#,
     );
 }
 
-#[test]
 fn list_empty_with_annotation() {
     assert_output("empty: List<Int> = []\nprint(to_string(empty))", &["[]"]);
 }
 
-#[test]
 fn list_cons_expr() {
     assert_output(
         "tail: List<Int> = [2, 3]\nnums = [1, ..tail]\nprint(to_string(nums))",
@@ -240,17 +351,14 @@ fn list_cons_expr() {
     );
 }
 
-#[test]
 fn list_reject_mixed_types() {
     assert_compile_error(r#"mixed = [1, "two"]"#, "expected Int, got String");
 }
 
-#[test]
 fn list_cons_rejects_non_list_tail() {
     assert_compile_error("nums = [1, ..2]", "list tail must be List<...>");
 }
 
-#[test]
 fn closure_literal_invocation() {
     assert_output(
         r#"add1: (Int -> Int) = {|x| x + 1}
@@ -259,7 +367,6 @@ print(to_string(add1(2)))"#,
     );
 }
 
-#[test]
 fn closure_argument_type_infers_from_add_constraint() {
     assert_output(
         r#"x = 10
@@ -269,7 +376,6 @@ print(to_string(fun(3)))"#,
     );
 }
 
-#[test]
 fn closure_builtin_capture() {
     assert_output(
         r#"printer = &print
@@ -278,7 +384,31 @@ printer("hello")"#,
     );
 }
 
-#[test]
+fn const_helper_and_hole_return_surface_work() {
+    assert_output(
+        r#"keep_one: (_ -> Int) = always(1)
+print(to_string(keep_one("ignored")))
+
+print(to_string(id("ok")))
+
+def make() -> (_ -> Int) {
+  always(2)
+}
+
+next = make()
+print(to_string(next(False)))
+
+ten = {|_| 10}
+print(to_string(ten([1, 2, 3])))
+
+idle: (-> Unit) = noop()
+print(inspect(idle()))
+idle2 = noop()
+print(inspect(idle2()))"#,
+        &["1", "ok", "2", "10", "()", "()"],
+    );
+}
+
 fn func_literal_infix_invocation_works() {
     assert_output(
         r#"def eq(left: Int, right: Int) -> Boolean {
@@ -291,7 +421,6 @@ print(to_string(7 `eq` 7))"#,
     );
 }
 
-#[test]
 fn expr_class_operators_are_same_precedence() {
     assert_output(
         r#"print(to_string(2 + 3 * 4))
@@ -300,7 +429,6 @@ print(to_string(2 `*` 3 + 4))"#,
     );
 }
 
-#[test]
 fn function_partial_application_composition() {
     assert_output(
         r#"def inc(x: Int) -> Int { x + 1 }
@@ -309,13 +437,12 @@ def compose(f: (Int -> Int), g: (Int -> Int), x: Int) -> Int {
   g(f(x))
 }
 
-apply_inc = &compose(&inc)
+apply_inc = &compose(&inc, &1, &2)
 print(to_string(apply_inc(&times2, 10)))"#,
         &["22"],
     );
 }
 
-#[test]
 fn function_partial_application_type_error() {
     assert_compile_error(
         r#"def inc(x: Int) -> Int { x + 1 }
@@ -324,11 +451,10 @@ def compose(f: (Int -> Int), g: (Int -> Int), x: Int) -> Int {
 }
 
 bad = &compose(inc(1))"#,
-        "expected (Int -> Int), got Int",
+        "capture call is missing placeholder arguments",
     );
 }
 
-#[test]
 fn function_forward_reference_succeeds() {
     assert_output(
         r#"print(to_string(double(21)))
@@ -338,7 +464,6 @@ def double(x: Int) -> Int { x * 2 }"#,
     );
 }
 
-#[test]
 fn struct_definition_and_field_access() {
     assert_output(
         r#"defstruct User {
@@ -356,11 +481,10 @@ user = User("alice", 30)
 print(to_string(user))
 print(to_string(user.name))
 print(to_string(user.age))"#,
-        &["User { name: alice, age: 30 }", "alice", "30"],
+        &["User(name: alice, age: 30)", "alice", "30"],
     );
 }
 
-#[test]
 fn record_constructor_positional() {
     assert_output(
         r#"defrecord Point(x: Float, y: Float)
@@ -371,7 +495,6 @@ print(to_string(point.x))"#,
     );
 }
 
-#[test]
 fn record_constructor_named_args() {
     assert_output(
         r#"defrecord Point(x: Float, y: Float)
@@ -381,7 +504,6 @@ print(to_string(point2.x))"#,
     );
 }
 
-#[test]
 fn struct_record_forward_references_and_type_annotation_succeed() {
     assert_output(
         r#"user: User = make_user("alice")
@@ -410,7 +532,6 @@ defrecord Point(x: Float, y: Float)"#,
     );
 }
 
-#[test]
 fn struct_property_update_via_associated_functions() {
     assert_output(
         r#"defstruct User {
@@ -444,7 +565,52 @@ print(to_string(renamed.age))"#,
     );
 }
 
-#[test]
+fn struct_literal_field_shorthand_matches_explicit_form() {
+    assert_output(
+        r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name, age }
+  }
+}
+
+user = User("alice", 30)
+print(to_string(user))
+print(to_string(user.name))
+print(to_string(user.age))"#,
+        &["User(name: alice, age: 30)", "alice", "30"],
+    );
+}
+
+fn struct_literal_field_shorthand_can_mix_with_explicit_fields() {
+    assert_output(
+        r#"defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name, age }
+  }
+
+  def with_age(self: Self, name: String, next_age: Int) -> Self {
+    User { name, age: next_age }
+  }
+}
+
+user = User("alice", 30)
+updated = User::with_age(user, "bob", 31)
+print(to_string(updated.name))
+print(to_string(updated.age))"#,
+        &["bob", "31"],
+    );
+}
+
 fn struct_constructor_sugar_mixed_named_positional_error() {
     assert_compile_error(
         r#"defstruct User {
@@ -463,7 +629,6 @@ user = User("alice", age: 30)"#,
     );
 }
 
-#[test]
 fn impl_method_call_mixed_named_positional_error() {
     assert_compile_error(
         r#"defstruct User {
@@ -487,7 +652,6 @@ updated = User::with_name_and_age(user, "bob", age: 31)"#,
     );
 }
 
-#[test]
 fn enum_state_transition_via_associated_functions() {
     assert_output(
         r#"defenum Light {
@@ -535,7 +699,6 @@ print(to_string(Light::is_stop(rebound)))"#,
     );
 }
 
-#[test]
 fn enum_impl_method_call_mixed_named_positional_error() {
     assert_compile_error(
         r#"defenum Light {
@@ -556,7 +719,6 @@ bad = Light::with_steps(light, steps: 1)"#,
     );
 }
 
-#[test]
 fn enum_self_rebinding_requires_self_type() {
     assert_compile_error(
         r#"defenum Light {
@@ -574,7 +736,6 @@ impl Light {
     );
 }
 
-#[test]
 fn function_named_args_reordered() {
     assert_output(
         r#"def add(x: Int, y: Int) -> Int { x + y }
@@ -583,7 +744,6 @@ print(to_string(add(y: 2, x: 1)))"#,
     );
 }
 
-#[test]
 fn function_named_args_mixed_with_positional_first() {
     assert_compile_error(
         r#"def add3(x: Int, y: Int, z: Int) -> Int { x + y + z }
@@ -592,7 +752,6 @@ print(to_string(add3(1, z: 3, y: 2)))"#,
     );
 }
 
-#[test]
 fn function_named_args_unknown_name_error() {
     assert_compile_error(
         r#"def add(x: Int, y: Int) -> Int { x + y }
@@ -601,7 +760,6 @@ print(to_string(add(z: 1, y: 2)))"#,
     );
 }
 
-#[test]
 fn function_named_args_duplicate_error() {
     assert_compile_error(
         r#"def add(x: Int, y: Int) -> Int { x + y }
@@ -610,7 +768,6 @@ print(to_string(add(1, x: 2)))"#,
     );
 }
 
-#[test]
 fn function_named_args_positional_after_named_error() {
     assert_compile_error(
         r#"def add(x: Int, y: Int) -> Int { x + y }
@@ -619,7 +776,6 @@ print(to_string(add(y: 2, 1)))"#,
     );
 }
 
-#[test]
 fn function_duplicate_name_is_compile_error() {
     assert_compile_error(
         r#"def f() -> Int { 1 }
@@ -628,7 +784,6 @@ def f() -> Int { 2 }"#,
     );
 }
 
-#[test]
 fn top_level_name_collision_between_struct_and_def_is_compile_error() {
     assert_compile_error(
         r#"defstruct User {
@@ -639,7 +794,6 @@ def User() -> Int { 1 }"#,
     );
 }
 
-#[test]
 fn if_expression_with_else() {
     assert_output(
         r#"flag = True
@@ -649,7 +803,6 @@ print(greeting)"#,
     );
 }
 
-#[test]
 fn if_expression_without_else_returns_unit() {
     assert_output(
         r#"flag = True
@@ -658,7 +811,6 @@ if_then(flag, print("flag is true"))"#,
     );
 }
 
-#[test]
 fn match_boolean_exhaustive() {
     assert_output(
         r#"flag = True
@@ -670,7 +822,6 @@ print(to_string(match flag {
     );
 }
 
-#[test]
 fn match_result_exhaustive() {
     assert_output(
         r#"result: Result<Int> = Ok(42)
@@ -682,7 +833,6 @@ match result {
     );
 }
 
-#[test]
 fn match_boolean_wildcard_arm() {
     assert_output(
         r#"flag = True
@@ -694,7 +844,6 @@ print(match flag {
     );
 }
 
-#[test]
 fn match_int_literal_patterns() {
     assert_output(
         r#"n = 2
@@ -707,7 +856,6 @@ print(match n {
     );
 }
 
-#[test]
 fn match_string_literal_patterns() {
     assert_output(
         r#"s = "b"
@@ -720,7 +868,6 @@ print(match s {
     );
 }
 
-#[test]
 fn match_list_patterns() {
     assert_output(
         r#"nums: List<Int> = [1, 2, 3]
@@ -732,7 +879,6 @@ print(match nums {
     );
 }
 
-#[test]
 fn match_boolean_non_exhaustive_error() {
     assert_compile_error(
         r#"flag = True
@@ -743,7 +889,6 @@ print(match flag {
     );
 }
 
-#[test]
 fn match_result_non_exhaustive_error() {
     assert_compile_error(
         r#"r: Result<Int> = Ok(1)
@@ -754,7 +899,6 @@ print(match r {
     );
 }
 
-#[test]
 fn match_int_non_exhaustive_error() {
     assert_compile_error(
         r#"n = 1
@@ -765,7 +909,6 @@ print(match n {
     );
 }
 
-#[test]
 fn cond_selects_first_true_branch_and_skips_later_branches() {
     assert_output(
         r#"print(to_string(cond {
@@ -777,18 +920,16 @@ fn cond_selects_first_true_branch_and_skips_later_branches() {
     );
 }
 
-#[test]
-fn cond_allows_block_bodies() {
+fn cond_keeps_arrow_body_expressions() {
     assert_output(
         r#"print(to_string(cond {
   False => 0,
-  True => { print("branch"); 42 },
+  True => 42,
 }))"#,
-        &["branch", "42"],
+        &["42"],
     );
 }
 
-#[test]
 fn cond_condition_must_be_boolean() {
     assert_compile_error(
         r#"print(to_string(cond {
@@ -799,7 +940,6 @@ fn cond_condition_must_be_boolean() {
     );
 }
 
-#[test]
 fn cond_branch_types_must_match() {
     assert_compile_error(
         r#"print(to_string(cond {
@@ -810,7 +950,6 @@ fn cond_branch_types_must_match() {
     );
 }
 
-#[test]
 fn string_interpolation_basic() {
     assert_output(
         r#"name = "alice"
@@ -821,7 +960,6 @@ print("score=#{score + 2}")"#,
     );
 }
 
-#[test]
 fn string_interpolation_result_type_error() {
     assert_compile_error(
         r#"r: Result<Int> = Ok(1)
@@ -830,11 +968,10 @@ print("r=#{r}")"#,
     );
 }
 
-#[test]
 fn function_definition_minimal() {
     assert_output(
         r#"def noop() {()}
-def const() -> Int { 1 }
+def keep_one() -> Int { 1 }
 def do_something(num: Int) -> Unit { () }
 def add_two(num: Int) -> Int { num + 2 }
 def add(x: Int, y: Int) -> Int { x + y }"#,
@@ -842,7 +979,6 @@ def add(x: Int, y: Int) -> Int { x + y }"#,
     );
 }
 
-#[test]
 fn function_call_locals_are_isolated() {
     assert_output(
         r#"def outer(x: Int, y: Int) -> Int {
@@ -862,7 +998,6 @@ print(to_string(outer(1, 2)))"#,
     );
 }
 
-#[test]
 fn function_call_missing_return_reports_unit_hint() {
     assert_compile_error(
         r#"def outer(x: Int, y: Int) -> Int {
@@ -882,7 +1017,6 @@ print(to_string(ret))"#,
     );
 }
 
-#[test]
 fn function_zero_arg_call() {
     assert_output(
         r#"def sf() -> Result<String> {
@@ -898,4 +1032,290 @@ match ret {
 }"#,
         &["ok"],
     );
+}
+
+pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
+    let cases: &[(&str, fn())] = &[
+        ("bindings_basic_print", bindings_basic_print as fn()),
+        (
+            "bindings_shadowing_last_wins",
+            bindings_shadowing_last_wins as fn(),
+        ),
+        (
+            "annotations_accept_matching_types",
+            annotations_accept_matching_types as fn(),
+        ),
+        (
+            "annotations_reject_type_mismatch",
+            annotations_reject_type_mismatch as fn(),
+        ),
+        (
+            "primitives_render_to_string",
+            primitives_render_to_string as fn(),
+        ),
+        (
+            "inspect_builtin_quotes_strings_and_preserves_error_rendering",
+            inspect_builtin_quotes_strings_and_preserves_error_rendering as fn(),
+        ),
+        (
+            "regex_generated_literal_and_builtin_wrappers_work_end_to_end",
+            regex_generated_literal_and_builtin_wrappers_work_end_to_end as fn(),
+        ),
+        (
+            "io_get_and_get_line_read_injected_stdin",
+            io_get_and_get_line_read_injected_stdin as fn(),
+        ),
+        (
+            "io_get_does_not_conflict_with_regex_captures_get",
+            io_get_does_not_conflict_with_regex_captures_get as fn(),
+        ),
+        ("int_negative_literal", int_negative_literal as fn()),
+        ("arithmetic_int_ops", arithmetic_int_ops as fn()),
+        ("arithmetic_float_ops", arithmetic_float_ops as fn()),
+        (
+            "safe_xxx_zero_returns_zero_division_error_display",
+            safe_xxx_zero_returns_zero_division_error_display as fn(),
+        ),
+        ("comparison_int_ops", comparison_int_ops as fn()),
+        ("equality_string", equality_string as fn()),
+        ("inequality_boolean", inequality_boolean as fn()),
+        (
+            "kernel_and_or_short_circuit",
+            kernel_and_or_short_circuit as fn(),
+        ),
+        (
+            "symbolic_boolean_operators_require_boolean_operands",
+            symbolic_boolean_operators_require_boolean_operands as fn(),
+        ),
+        (
+            "kernel_eq_neq_helpers_match_operator_behavior",
+            kernel_eq_neq_helpers_match_operator_behavior as fn(),
+        ),
+        (
+            "kernel_ordering_and_concat_helpers_match_operator_behavior",
+            kernel_ordering_and_concat_helpers_match_operator_behavior as fn(),
+        ),
+        ("concat_strings", concat_strings as fn()),
+        ("arithmetic_precedence", arithmetic_precedence as fn()),
+        (
+            "equality_reject_mixed_types",
+            equality_reject_mixed_types as fn(),
+        ),
+        ("list_literal_int", list_literal_int as fn()),
+        ("list_literal_string", list_literal_string as fn()),
+        (
+            "list_empty_with_annotation",
+            list_empty_with_annotation as fn(),
+        ),
+        ("list_cons_expr", list_cons_expr as fn()),
+        ("list_reject_mixed_types", list_reject_mixed_types as fn()),
+        (
+            "list_cons_rejects_non_list_tail",
+            list_cons_rejects_non_list_tail as fn(),
+        ),
+        (
+            "closure_literal_invocation",
+            closure_literal_invocation as fn(),
+        ),
+        (
+            "closure_argument_type_infers_from_add_constraint",
+            closure_argument_type_infers_from_add_constraint as fn(),
+        ),
+        ("closure_builtin_capture", closure_builtin_capture as fn()),
+        (
+            "const_helper_and_hole_return_surface_work",
+            const_helper_and_hole_return_surface_work as fn(),
+        ),
+        (
+            "func_literal_infix_invocation_works",
+            func_literal_infix_invocation_works as fn(),
+        ),
+        (
+            "expr_class_operators_are_same_precedence",
+            expr_class_operators_are_same_precedence as fn(),
+        ),
+        (
+            "function_partial_application_composition",
+            function_partial_application_composition as fn(),
+        ),
+        (
+            "function_partial_application_type_error",
+            function_partial_application_type_error as fn(),
+        ),
+        (
+            "function_forward_reference_succeeds",
+            function_forward_reference_succeeds as fn(),
+        ),
+        (
+            "struct_definition_and_field_access",
+            struct_definition_and_field_access as fn(),
+        ),
+        (
+            "record_constructor_positional",
+            record_constructor_positional as fn(),
+        ),
+        (
+            "record_constructor_named_args",
+            record_constructor_named_args as fn(),
+        ),
+        (
+            "struct_record_forward_references_and_type_annotation_succeed",
+            struct_record_forward_references_and_type_annotation_succeed as fn(),
+        ),
+        (
+            "struct_property_update_via_associated_functions",
+            struct_property_update_via_associated_functions as fn(),
+        ),
+        (
+            "struct_literal_field_shorthand_matches_explicit_form",
+            struct_literal_field_shorthand_matches_explicit_form as fn(),
+        ),
+        (
+            "struct_literal_field_shorthand_can_mix_with_explicit_fields",
+            struct_literal_field_shorthand_can_mix_with_explicit_fields as fn(),
+        ),
+        (
+            "struct_constructor_sugar_mixed_named_positional_error",
+            struct_constructor_sugar_mixed_named_positional_error as fn(),
+        ),
+        (
+            "impl_method_call_mixed_named_positional_error",
+            impl_method_call_mixed_named_positional_error as fn(),
+        ),
+        (
+            "enum_state_transition_via_associated_functions",
+            enum_state_transition_via_associated_functions as fn(),
+        ),
+        (
+            "enum_impl_method_call_mixed_named_positional_error",
+            enum_impl_method_call_mixed_named_positional_error as fn(),
+        ),
+        (
+            "enum_self_rebinding_requires_self_type",
+            enum_self_rebinding_requires_self_type as fn(),
+        ),
+        (
+            "function_named_args_reordered",
+            function_named_args_reordered as fn(),
+        ),
+        (
+            "function_named_args_mixed_with_positional_first",
+            function_named_args_mixed_with_positional_first as fn(),
+        ),
+        (
+            "function_named_args_unknown_name_error",
+            function_named_args_unknown_name_error as fn(),
+        ),
+        (
+            "function_named_args_duplicate_error",
+            function_named_args_duplicate_error as fn(),
+        ),
+        (
+            "function_named_args_positional_after_named_error",
+            function_named_args_positional_after_named_error as fn(),
+        ),
+        (
+            "function_duplicate_name_is_compile_error",
+            function_duplicate_name_is_compile_error as fn(),
+        ),
+        (
+            "top_level_name_collision_between_struct_and_def_is_compile_error",
+            top_level_name_collision_between_struct_and_def_is_compile_error as fn(),
+        ),
+        ("if_expression_with_else", if_expression_with_else as fn()),
+        (
+            "if_expression_without_else_returns_unit",
+            if_expression_without_else_returns_unit as fn(),
+        ),
+        ("match_boolean_exhaustive", match_boolean_exhaustive as fn()),
+        ("match_result_exhaustive", match_result_exhaustive as fn()),
+        (
+            "match_boolean_wildcard_arm",
+            match_boolean_wildcard_arm as fn(),
+        ),
+        (
+            "match_int_literal_patterns",
+            match_int_literal_patterns as fn(),
+        ),
+        (
+            "match_string_literal_patterns",
+            match_string_literal_patterns as fn(),
+        ),
+        ("match_list_patterns", match_list_patterns as fn()),
+        (
+            "match_boolean_non_exhaustive_error",
+            match_boolean_non_exhaustive_error as fn(),
+        ),
+        (
+            "match_result_non_exhaustive_error",
+            match_result_non_exhaustive_error as fn(),
+        ),
+        (
+            "match_int_non_exhaustive_error",
+            match_int_non_exhaustive_error as fn(),
+        ),
+        (
+            "cond_selects_first_true_branch_and_skips_later_branches",
+            cond_selects_first_true_branch_and_skips_later_branches as fn(),
+        ),
+        (
+            "cond_keeps_arrow_body_expressions",
+            cond_keeps_arrow_body_expressions as fn(),
+        ),
+        (
+            "cond_condition_must_be_boolean",
+            cond_condition_must_be_boolean as fn(),
+        ),
+        (
+            "cond_branch_types_must_match",
+            cond_branch_types_must_match as fn(),
+        ),
+        (
+            "string_interpolation_basic",
+            string_interpolation_basic as fn(),
+        ),
+        (
+            "string_interpolation_result_type_error",
+            string_interpolation_result_type_error as fn(),
+        ),
+        (
+            "range_literal_executes_for_int_and_string",
+            range_literal_executes_for_int_and_string as fn(),
+        ),
+        (
+            "range_literal_dynamic_endpoints_execute",
+            range_literal_dynamic_endpoints_execute as fn(),
+        ),
+        (
+            "range_literal_rejects_mixed_endpoint_types",
+            range_literal_rejects_mixed_endpoint_types as fn(),
+        ),
+        (
+            "range_literal_empty_string_literal_endpoint_uses_runtime_invalid_char_range",
+            range_literal_empty_string_literal_endpoint_uses_runtime_invalid_char_range as fn(),
+        ),
+        (
+            "range_literal_multichar_string_literal_endpoint_uses_runtime_invalid_char_range",
+            range_literal_multichar_string_literal_endpoint_uses_runtime_invalid_char_range
+                as fn(),
+        ),
+        (
+            "range_literal_multichar_string_literal_stop_uses_runtime_invalid_char_range",
+            range_literal_multichar_string_literal_stop_uses_runtime_invalid_char_range as fn(),
+        ),
+        (
+            "function_definition_minimal",
+            function_definition_minimal as fn(),
+        ),
+        (
+            "function_call_locals_are_isolated",
+            function_call_locals_are_isolated as fn(),
+        ),
+        (
+            "function_call_missing_return_reports_unit_hint",
+            function_call_missing_return_reports_unit_hint as fn(),
+        ),
+        ("function_zero_arg_call", function_zero_arg_call as fn()),
+    ];
+    super::run_bucket_cases("core_language", cases, bucket, bucket_count)
 }

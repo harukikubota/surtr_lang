@@ -1,0 +1,6 @@
+def inc(value: Int) -> Result<Int> {
+  Ok(value + 1)
+}
+
+value: Option<Int> = Option::Some(1)
+out = value |>= inc()

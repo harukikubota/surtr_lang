@@ -1,0 +1,23 @@
+@doc """
+Standard `Numeric` trait declaration.
+`Numeric` provides helper functions shared by concrete numeric types.
+As with other function-bearing surfaces in Surtr, `deftrait` introduces its own
+namespace, but it carries signatures only and no concrete method bodies.
+Dispatch is compile-time only: implementations lower to existing concrete
+opcodes, builtins, or user functions rather than introducing runtime trait
+objects.
+
+## REPL
+xldr(1)> Numeric::abs(-4)
+4
+"""
+deftrait Numeric {
+  # Divide and return `Err(ZeroDivisionError)` on zero.
+  def safe_div(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError>
+  # Return the absolute value.
+  def abs(self: Self) -> Self
+  # Return the minimum value.
+  def min(self: Self, rhs: Self) -> Self
+  # Return the maximum value.
+  def max(self: Self, rhs: Self) -> Self
+}

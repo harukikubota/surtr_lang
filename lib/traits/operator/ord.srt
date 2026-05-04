@@ -1,0 +1,19 @@
+@doc """
+Standard `Ord` trait declaration.
+`Ord` is a compatibility helper trait for grouped ordering functions.
+Operator dispatch uses the per-operator `Lt`, `Lte`, `Gt`, and `Gte` traits.
+
+## REPL
+xldr(1)> lte(1, 2)
+True
+"""
+deftrait Ord {
+  # Return `True` when the left value is strictly smaller.
+  def lt(self: Self, rhs: Self) -> Boolean
+  # Return `True` when the left value is smaller or equal.
+  def lte(self: Self, rhs: Self) -> Boolean
+  # Return `True` when the left value is strictly greater.
+  def gt(self: Self, rhs: Self) -> Boolean
+  # Return `True` when the left value is greater or equal.
+  def gte(self: Self, rhs: Self) -> Boolean
+}

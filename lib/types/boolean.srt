@@ -1,0 +1,110 @@
+@doc """
+Standard `Boolean` type declaration.
+Represents `True` and `False`, the values used by `if` and boolean `match`.
+This exact top-level declaration is part of the compiler-checked builtin type
+contract.
+"""
+@builtin type Boolean
+
+impl Boolean {
+  @doc """
+  Return the logical negation of `value`.
+
+  Prefix `!expr` is syntax sugar for `Boolean::not(expr)`.
+
+  ## REPL
+  xldr(1)> Boolean::not(True)
+  False
+  xldr(2)> !False
+  True
+  """
+  def not(value: Boolean) -> Boolean {
+    if(value, False, True)
+  }
+
+  @doc """
+  Return `True` when exactly one input is `True`.
+  ## REPL
+  xldr(1)> Boolean::xor(True, False)
+  True
+  """
+  def xor(left: Boolean, right: Boolean) -> Boolean {
+    if(left, not(right), right)
+  }
+
+  @doc """
+  Return `True` when both inputs have the same truth value.
+  ## REPL
+  xldr(1)> Boolean::eqv(True, True)
+  True
+  """
+  def eqv(left: Boolean, right: Boolean) -> Boolean {
+    if(left, right, not(right))
+  }
+
+  @doc """
+  Return material implication `left -> right`.
+  ## REPL
+  xldr(1)> Boolean::implies(True, False)
+  False
+  """
+  def implies(left: Boolean, right: Boolean) -> Boolean {
+    if(left, right, True)
+  }
+}
+
+impl Show for Boolean {
+  @doc """
+  Return the standard string rendering for `Boolean`.
+  ## REPL
+  xldr(1)> to_string(True)
+  "True"
+  """
+  def to_string(self: Self) -> String {
+    inspect(self)
+  }
+}
+
+impl From<Boolean> for Boolean {
+  @doc """
+  Return the value unchanged when converting `Boolean` to `Boolean`.
+  ## REPL
+  xldr(1)> from(True, Boolean)
+  True
+  """
+  def from(self: Self, to: TypeRef<Boolean>) -> Boolean {
+    self
+  }
+}
+
+impl From<String> for Boolean {
+  @doc """
+  Convert `Boolean` into its standard string representation.
+  ## REPL
+  xldr(1)> from(True, String)
+  "True"
+  """
+  def from(self: Self, to: TypeRef<String>) -> String {
+    to_string(self)
+  }
+}
+
+impl Eq for Boolean {
+  @doc """
+  Return `True` when both boolean values are equal.
+  ## REPL
+  xldr(1)> eq(True, True)
+  True
+  """
+  @builtin def eq(self: Self, rhs: Self) -> Boolean
+}
+
+impl Neq for Boolean {
+  @doc """
+  Return `True` when the boolean values differ.
+  ## REPL
+  xldr(1)> neq(True, False)
+  True
+  """
+  @builtin def neq(self: Self, rhs: Self) -> Boolean
+}

@@ -2,6 +2,7 @@ use crate::ast::*;
 use crate::error::ParseError;
 use crate::lexer::tokenize;
 use crate::token::{Spanned, Token};
+use std::collections::VecDeque;
 
 mod chumsky_program;
 mod completion;
@@ -26,11 +27,8 @@ pub use diagnostic::{
     ParseDiagnostic,
 };
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct EntryAnnotation {
-    pub name: String,
-    pub span: Span,
-}
+pub const MAX_PARSE_NESTING: usize = 32;
+pub const MAX_PARSE_NESTING_MESSAGE: &str = "maximum parse nesting depth exceeded";
 
 /// Parse Surtr source text into an abstract syntax tree.
 pub fn parse(source: &str) -> Result<Vec<Ast>, ParseError> {
@@ -40,7 +38,10 @@ pub fn parse(source: &str) -> Result<Vec<Ast>, ParseError> {
 /// Parse Surtr source text with explicit compile-unit context.
 pub fn parse_with_context(source: &str, context: ParserContext) -> Result<Vec<Ast>, ParseError> {
     let tokens = tokenize(source)?;
-    chumsky_program::parse_program_with_chumsky(&tokens, context)
+    reject_excessive_delimiter_nesting(&tokens)?;
+    let ast = chumsky_program::parse_program_with_chumsky(source, &tokens, context.clone())?;
+    validate::validate_program_by_context(&context, &ast)?;
+    lower_namespaces(ast)
 }
 
 /// Parse Surtr source with parser diagnostic metadata for editor tooling.
@@ -49,136 +50,97 @@ pub fn parse_with_context_diagnostic(
     context: ParserContext,
 ) -> Result<Vec<Ast>, ParseDiagnostic> {
     let tokens = tokenize(source).map_err(ParseDiagnostic::from)?;
-    chumsky_program::parse_program_with_chumsky_diagnostic(&tokens, context)
-        .map_err(ParseDiagnostic::from)
+    reject_excessive_delimiter_nesting(&tokens).map_err(ParseDiagnostic::from)?;
+    let ast =
+        chumsky_program::parse_program_with_chumsky_diagnostic(source, &tokens, context.clone())
+            .map_err(ParseDiagnostic::from)?;
+    validate::validate_program_by_context(&context, &ast).map_err(ParseDiagnostic::from)?;
+    lower_namespaces(ast).map_err(ParseDiagnostic::from)
 }
 
-/// Strip `@@test <expr>` annotations while preserving source span offsets.
-pub fn strip_test_annotations(source: &str) -> String {
-    let tokens = match tokenize(source) {
-        Ok(tokens) => tokens,
-        Err(_) => return source.to_string(),
-    };
-
-    let mut chars = source.chars().collect::<Vec<_>>();
-    let mut i = 0usize;
-    while i < tokens.len() {
-        if let Token::Annotator(name) = &tokens[i].token {
-            if name == "test" {
-                let mut j = i + 1;
-                while j < tokens.len() && !matches!(tokens[j].token, Token::Newline | Token::Eof) {
-                    j += 1;
-                }
-                let end = if j > i + 1 {
-                    tokens[j - 1].span.end
-                } else {
-                    tokens[i].span.end
-                };
-                for ch in chars.iter_mut().take(end).skip(tokens[i].span.start) {
-                    if *ch != '\n' {
-                        *ch = ' ';
-                    }
-                }
-                i = j;
-                continue;
-            }
-        }
-        i += 1;
-    }
-
-    chars.into_iter().collect::<String>()
-}
-
-/// Collect `@@entrypoint` annotations and return source with annotation tokens stripped.
-pub fn collect_entrypoint_annotations(
-    source: &str,
-) -> Result<(String, Vec<EntryAnnotation>), ParseError> {
-    let tokens = tokenize(source)?;
-    let mut chars = source.chars().collect::<Vec<_>>();
-    let mut annotations = Vec::new();
-
-    let mut i = 0usize;
-    while i < tokens.len() {
-        let token = &tokens[i];
-        if let Token::Annotator(name) = &token.token {
-            if name == "entrypoint" {
-                for ch in chars.iter_mut().take(token.span.end).skip(token.span.start) {
-                    if *ch != '\n' {
-                        *ch = ' ';
-                    }
-                }
-                let mut j = i + 1;
-                while j < tokens.len() && matches!(tokens[j].token, Token::Newline) {
-                    j += 1;
-                }
-                if j >= tokens.len() || !matches!(tokens[j].token, Token::Def) {
+fn reject_excessive_delimiter_nesting(tokens: &[Spanned<Token>]) -> Result<(), ParseError> {
+    let mut depth = 0usize;
+    for token in tokens {
+        match token.token {
+            Token::LParen | Token::LBrack | Token::LBrace => {
+                depth += 1;
+                if depth > MAX_PARSE_NESTING {
                     return Err(ParseError::syntax(
-                        "@@entrypoint must annotate a function definition (`def`)",
+                        MAX_PARSE_NESTING_MESSAGE,
                         token.span.clone(),
                     ));
                 }
-                let mut k = j + 1;
-                while k < tokens.len() && matches!(tokens[k].token, Token::Newline) {
-                    k += 1;
-                }
-                let def_name = match tokens.get(k).map(|sp| &sp.token) {
-                    Some(Token::Ident(name)) => name.clone(),
-                    _ => {
-                        return Err(ParseError::syntax(
-                            "@@entrypoint must target `def <name>(...)`",
-                            tokens[j].span.clone(),
-                        ));
-                    }
-                };
-                annotations.push(EntryAnnotation {
-                    name: def_name,
-                    span: token.span.clone(),
-                });
             }
+            Token::RParen | Token::RBrack | Token::RBrace => {
+                depth = depth.saturating_sub(1);
+            }
+            _ => {}
         }
-        i += 1;
     }
-
-    Ok((chars.into_iter().collect::<String>(), annotations))
+    Ok(())
 }
 
-struct Parser {
-    tokens: Vec<Spanned<Token>>,
+struct Parser<'a> {
+    source: &'a str,
+    tokens: &'a [Spanned<Token>],
+    synthetic_tokens: VecDeque<Spanned<Token>>,
     pos: usize,
     context: ParserContext,
     impl_target_stack: Vec<Symbol>,
     allow_trailing_call_block: bool,
+    parse_nesting_depth: usize,
 }
 
-impl Parser {
-    fn new(tokens: Vec<Spanned<Token>>, context: ParserContext) -> Self {
+impl<'a> Parser<'a> {
+    fn new(source: &'a str, tokens: &'a [Spanned<Token>], context: ParserContext) -> Self {
         Self {
+            source,
             tokens,
+            synthetic_tokens: VecDeque::new(),
             pos: 0,
             context,
             impl_target_stack: Vec::new(),
             allow_trailing_call_block: true,
+            parse_nesting_depth: 0,
         }
     }
 
     // ── Helpers ──
 
     fn peek(&self) -> &Token {
-        &self.tokens[self.pos].token
+        if let Some(token) = self.synthetic_tokens.front() {
+            &token.token
+        } else {
+            &self.tokens[self.pos].token
+        }
     }
 
     fn peek_n(&self, n: usize) -> Option<&Token> {
-        self.tokens.get(self.pos + n).map(|sp| &sp.token)
+        if n < self.synthetic_tokens.len() {
+            self.synthetic_tokens.get(n).map(|sp| &sp.token)
+        } else {
+            self.tokens
+                .get(self.pos + n - self.synthetic_tokens.len())
+                .map(|sp| &sp.token)
+        }
     }
 
     fn peek_span(&self) -> Span {
-        self.tokens[self.pos].span.clone()
+        if let Some(token) = self.synthetic_tokens.front() {
+            token.span.clone()
+        } else {
+            self.tokens[self.pos].span.clone()
+        }
     }
 
-    fn advance(&mut self) -> &Spanned<Token> {
-        let t = &self.tokens[self.pos];
-        self.pos += 1;
-        t
+    fn advance(&mut self) -> Spanned<Token> {
+        if let Some(token) = self.synthetic_tokens.pop_front() {
+            token
+        } else {
+            let token = self.tokens[self.pos].clone();
+            self.pos += 1;
+            token
+        }
     }
 
     fn expected_token_name(expected: &Token) -> &'static str {
@@ -218,7 +180,7 @@ impl Parser {
                 Ok(sp)
             }
             Token::Compose => {
-                let composed = self.advance().span.clone();
+                let composed = self.advance().span;
                 let first = Span {
                     start: composed.start,
                     end: composed.start + 1,
@@ -227,13 +189,10 @@ impl Parser {
                     start: composed.start + 1,
                     end: composed.end,
                 };
-                self.tokens.insert(
-                    self.pos,
-                    Spanned {
-                        token: Token::Gt,
-                        span: second,
-                    },
-                );
+                self.synthetic_tokens.push_front(Spanned {
+                    token: Token::Gt,
+                    span: second,
+                });
                 Ok(first)
             }
             Token::Eof => Err(ParseError::incomplete(">", sp)),
@@ -288,13 +247,64 @@ impl Parser {
         }
     }
 
+    fn source_text_for_span(&self, span: &Span) -> String {
+        self.source
+            .chars()
+            .skip(span.start)
+            .take(span.end.saturating_sub(span.start))
+            .collect()
+    }
+
+    fn with_parse_nesting<T>(
+        &mut self,
+        span: Span,
+        f: impl FnOnce(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<T, ParseError> {
+        self.parse_nesting_depth += 1;
+        if self.parse_nesting_depth > MAX_PARSE_NESTING {
+            self.parse_nesting_depth -= 1;
+            return Err(ParseError::syntax(MAX_PARSE_NESTING_MESSAGE, span));
+        }
+        let result = f(self);
+        self.parse_nesting_depth -= 1;
+        result
+    }
+
     fn stmt_has_explicit_separator(stmt: &Ast) -> bool {
         matches!(stmt, Ast::Semi(_, _))
+    }
+
+    fn anonymous_callable_call_target(stmt: &Ast) -> Option<&Ast> {
+        match stmt {
+            Ast::Bind(_, _, rhs) | Ast::SafeBind(_, _, rhs) | Ast::Semi(_, rhs) => {
+                Self::anonymous_callable_call_target(rhs)
+            }
+            Ast::Capture(_, _, _)
+            | Ast::Closure(_, _, _)
+            | Ast::Grouped(_, _)
+            | Ast::App(_, _, _) => Some(stmt),
+            _ => None,
+        }
+    }
+
+    fn starts_immediate_anonymous_callable_call(&self, stmt: &Ast) -> bool {
+        let next_starts_call = matches!(self.peek(), Token::LParen | Token::Unit);
+        if !next_starts_call {
+            return false;
+        }
+
+        Self::anonymous_callable_call_target(stmt).is_some()
     }
 
     fn ensure_stmt_boundary(&self, stmt: &Ast, allow_rbrace: bool) -> Result<(), ParseError> {
         if Self::stmt_has_explicit_separator(stmt) {
             return Ok(());
+        }
+        if self.starts_immediate_anonymous_callable_call(stmt) {
+            return Err(ParseError::syntax(
+                "Immediate calls on anonymous callable expressions are not supported; bind the callable to a name and call it as `fn(args)`",
+                self.peek_span(),
+            ));
         }
         let ok = matches!(self.peek(), Token::Newline | Token::Eof)
             || (allow_rbrace && matches!(self.peek(), Token::RBrace));
@@ -322,6 +332,30 @@ impl Parser {
         self.advance();
         Ok(Span { start, end })
     }
+
+    fn expect_qualified_ident(
+        &mut self,
+        max_segments: usize,
+        label: &str,
+    ) -> Result<(Symbol, Span), ParseError> {
+        let (first, first_span) = self.expect_ident()?;
+        let start = first_span.start;
+        let mut end = first_span.end;
+        let mut segments = vec![first];
+        while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
+            self.consume_path_separator()?;
+            let (segment, span) = self.expect_ident()?;
+            end = span.end;
+            segments.push(segment);
+            if segments.len() > max_segments {
+                return Err(ParseError::syntax(
+                    format!("{label} path must not exceed {max_segments} segments"),
+                    Span { start, end },
+                ));
+            }
+        }
+        Ok((segments.join("::"), Span { start, end }))
+    }
 }
 
 fn shift_span(span: Span, delta: usize) -> Span {
@@ -329,6 +363,178 @@ fn shift_span(span: Span, delta: usize) -> Span {
         start: span.start + delta,
         end: span.end + delta,
     }
+}
+
+fn lower_namespaces(ast: Vec<Ast>) -> Result<Vec<Ast>, ParseError> {
+    let mut out = Vec::new();
+    for node in ast {
+        lower_namespace_node(node, None, &mut out)?;
+    }
+    Ok(out)
+}
+
+fn lower_namespace_node(
+    node: Ast,
+    namespace: Option<&str>,
+    out: &mut Vec<Ast>,
+) -> Result<(), ParseError> {
+    match node {
+        Ast::Namespace(span, name, body) => {
+            if namespace.is_some() {
+                return Err(ParseError::syntax(
+                    "Nested namespace declarations are not allowed",
+                    span,
+                ));
+            }
+            for inner in body {
+                lower_namespace_node(inner, Some(name.as_str()), out)?;
+            }
+            Ok(())
+        }
+        other => {
+            out.push(apply_namespace_to_decl(other, namespace)?);
+            Ok(())
+        }
+    }
+}
+
+fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, ParseError> {
+    let Some(namespace) = namespace else {
+        return Ok(node);
+    };
+    match node {
+        Ast::Defmod(span, name, body, attrs) => Ok(Ast::Defmod(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "module")?,
+            body,
+            attrs,
+        )),
+        Ast::ImplDef(span, target, methods, attrs) => Ok(Ast::ImplDef(
+            span.clone(),
+            qualify_namespace_head(namespace, &target, 2, &span, "impl target")?,
+            methods,
+            attrs,
+        )),
+        Ast::TraitDef(span, name, type_params, methods, attrs) => Ok(Ast::TraitDef(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "trait")?,
+            type_params,
+            methods,
+            attrs,
+        )),
+        Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
+            Ok(Ast::TraitImplDef(
+                span.clone(),
+                qualify_namespace_head(namespace, &trait_name, 2, &span, "trait")?,
+                trait_args,
+                qualify_namespace_type(target_ty, namespace)?,
+                methods,
+                attrs,
+            ))
+        }
+        Ast::StructDef(span, name, fields, attrs) => Ok(Ast::StructDef(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+            fields,
+            attrs,
+        )),
+        Ast::RecordDef(span, name, fields, attrs) => Ok(Ast::RecordDef(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+            fields,
+            attrs,
+        )),
+        Ast::DeferrorDef(span, name, fields, show_expr, attrs) => Ok(Ast::DeferrorDef(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+            fields,
+            show_expr,
+            attrs,
+        )),
+        Ast::EnumDef(span, name, type_params, variants, attrs) => Ok(Ast::EnumDef(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+            type_params,
+            variants,
+            attrs,
+        )),
+        Ast::BuiltinTypeDecl(span, mut head, attrs) => {
+            head.name = qualify_namespace_head(namespace, &head.name, 2, &span, "type")?;
+            Ok(Ast::BuiltinTypeDecl(span, head, attrs))
+        }
+        Ast::Namespace(span, _, _) => Err(ParseError::syntax(
+            "Nested namespace declarations are not allowed",
+            span,
+        )),
+        other => Ok(other),
+    }
+}
+
+fn qualify_namespace_head(
+    namespace: &str,
+    name: &str,
+    max_segments: usize,
+    span: &Span,
+    label: &str,
+) -> Result<String, ParseError> {
+    let segments = name.split("::").collect::<Vec<_>>();
+    if segments.len() > max_segments {
+        return Err(ParseError::syntax(
+            format!("{label} path must not exceed {max_segments} segments"),
+            span.clone(),
+        ));
+    }
+    if segments.len() == max_segments {
+        return Ok(name.to_string());
+    }
+    Ok(format!("{namespace}::{name}"))
+}
+
+fn qualify_namespace_type(ty: AstTy, namespace: &str) -> Result<AstTy, ParseError> {
+    match ty {
+        AstTy::Named(span, name) => {
+            if name == "Self" || name.starts_with('$') || name == "_" || name == "Hole" {
+                Ok(AstTy::Named(span, name))
+            } else {
+                Ok(AstTy::Named(
+                    span.clone(),
+                    qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+                ))
+            }
+        }
+        AstTy::ImplTrait(span, name) => Ok(AstTy::ImplTrait(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "trait")?,
+        )),
+        AstTy::Generic(span, name, args) => Ok(AstTy::Generic(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+            args.into_iter()
+                .map(|arg| qualify_namespace_type(arg, namespace))
+                .collect::<Result<Vec<_>, ParseError>>()?,
+        )),
+        AstTy::Tuple(span, items) => Ok(AstTy::Tuple(
+            span,
+            items
+                .into_iter()
+                .map(|item| qualify_namespace_type(item, namespace))
+                .collect::<Result<Vec<_>, ParseError>>()?,
+        )),
+        AstTy::Func(span, params, ret) => Ok(AstTy::Func(
+            span,
+            params
+                .into_iter()
+                .map(|param| qualify_namespace_type(param, namespace))
+                .collect::<Result<Vec<_>, ParseError>>()?,
+            Box::new(qualify_namespace_type(*ret, namespace)?),
+        )),
+    }
+}
+
+pub fn rebase_ast_spans(ast: Vec<Ast>, delta: usize) -> Vec<Ast> {
+    ast.into_iter()
+        .map(|node| shift_ast_span(node, delta))
+        .collect()
 }
 
 fn ast_ty_span(ty: &AstTy) -> &Span {
@@ -351,10 +557,24 @@ fn pattern_span(pat: &AstPattern) -> &Span {
         | AstPattern::IntLit(span, _)
         | AstPattern::StrLit(span, _)
         | AstPattern::BoolLit(span, _)
+        | AstPattern::DurationLit(span, _)
         | AstPattern::Constructor(span, _, _)
         | AstPattern::Call(span, _, _)
         | AstPattern::Tuple(span, _)
+        | AstPattern::Or(span, _)
         | AstPattern::As(span, _, _, _) => span,
+    }
+}
+
+fn pattern_depth(pat: &AstPattern) -> usize {
+    match pat {
+        AstPattern::ListCons(_, head, tail) => 1 + pattern_depth(head).max(pattern_depth(tail)),
+        AstPattern::Constructor(_, _, inners)
+        | AstPattern::Call(_, _, inners)
+        | AstPattern::Tuple(_, inners)
+        | AstPattern::Or(_, inners) => 1 + inners.iter().map(pattern_depth).max().unwrap_or(0),
+        AstPattern::As(_, inner, _, _) => 1 + pattern_depth(inner),
+        _ => 1,
     }
 }
 
@@ -410,6 +630,7 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
         AstPattern::IntLit(span, n) => AstPattern::IntLit(shift_span(span, delta), n),
         AstPattern::StrLit(span, s) => AstPattern::StrLit(shift_span(span, delta), s),
         AstPattern::BoolLit(span, b) => AstPattern::BoolLit(shift_span(span, delta), b),
+        AstPattern::DurationLit(span, n) => AstPattern::DurationLit(shift_span(span, delta), n),
         AstPattern::Constructor(span, name, inners) => AstPattern::Constructor(
             shift_span(span, delta),
             name,
@@ -427,6 +648,13 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
                 .collect(),
         ),
         AstPattern::Tuple(span, items) => AstPattern::Tuple(
+            shift_span(span, delta),
+            items
+                .into_iter()
+                .map(|item| shift_pattern(item, delta))
+                .collect(),
+        ),
+        AstPattern::Or(span, items) => AstPattern::Or(
             shift_span(span, delta),
             items
                 .into_iter()
@@ -492,6 +720,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
     match ast {
         Ast::Lit(span, lit) => Ast::Lit(shift_span(span, delta), lit),
         Ast::Var(span, name) => Ast::Var(shift_span(span, delta), name),
+        Ast::InternalVar(span, name) => Ast::InternalVar(shift_span(span, delta), name),
         Ast::Path(span, path) => Ast::Path(shift_span(span, delta), shift_ast_path(path, delta)),
         Ast::App(span, func, args) => Ast::App(
             shift_span(span, delta),
@@ -543,6 +772,11 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*left, delta)),
             Box::new(shift_ast_span(*right, delta)),
         ),
+        Ast::LiftedCompose(span, left, right) => Ast::LiftedCompose(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*left, delta)),
+            Box::new(shift_ast_span(*right, delta)),
+        ),
         Ast::KleisliCompose(span, left, right) => Ast::KleisliCompose(
             shift_span(span, delta),
             Box::new(shift_ast_span(*left, delta)),
@@ -561,12 +795,21 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|e| shift_ast_span(e, delta))
                 .collect(),
         ),
+        Ast::RangeLiteral(span, start, stop) => Ast::RangeLiteral(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*start, delta)),
+            Box::new(shift_ast_span(*stop, delta)),
+        ),
         Ast::TupleLiteral(span, elems) => Ast::TupleLiteral(
             shift_span(span, delta),
             elems
                 .into_iter()
                 .map(|e| shift_ast_span(e, delta))
                 .collect(),
+        ),
+        Ast::Grouped(span, inner) => Ast::Grouped(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*inner, delta)),
         ),
         Ast::InterpolatedStr(span, parts) => Ast::InterpolatedStr(
             shift_span(span, delta),
@@ -580,11 +823,24 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 })
                 .collect(),
         ),
+        Ast::Dbg(span, args) => Ast::Dbg(
+            shift_span(span, delta),
+            args.into_iter()
+                .map(|arg| DbgArg {
+                    span: shift_span(arg.span, delta),
+                    expr: shift_ast_span(arg.expr, delta),
+                })
+                .collect(),
+        ),
         Ast::Match(span, expr, arms) => Ast::Match(
             shift_span(span, delta),
             Box::new(shift_ast_span(*expr, delta)),
             arms.into_iter()
-                .map(|(pat, body)| (shift_match_pattern(pat, delta), shift_ast_span(body, delta)))
+                .map(|arm| AstMatchArm {
+                    pattern: shift_match_pattern(arm.pattern, delta),
+                    guard: arm.guard.map(|guard| shift_ast_span(guard, delta)),
+                    body: shift_ast_span(arm.body, delta),
+                })
                 .collect(),
         ),
         Ast::FieldAccess(span, expr, field) => Ast::FieldAccess(
@@ -592,7 +848,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*expr, delta)),
             field,
         ),
-        Ast::StructDef(span, name, fields) => Ast::StructDef(
+        Ast::StructDef(span, name, fields, attrs) => Ast::StructDef(
             shift_span(span, delta),
             name,
             fields
@@ -604,8 +860,9 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     visibility: f.visibility,
                 })
                 .collect(),
+            shift_decl_attrs(attrs),
         ),
-        Ast::RecordDef(span, name, fields) => Ast::RecordDef(
+        Ast::RecordDef(span, name, fields, attrs) => Ast::RecordDef(
             shift_span(span, delta),
             name,
             fields
@@ -617,13 +874,32 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     visibility: f.visibility,
                 })
                 .collect(),
+            shift_decl_attrs(attrs),
         ),
         Ast::StructLit(span, name, fields) => Ast::StructLit(
             shift_span(span, delta),
             name,
             fields
                 .into_iter()
-                .map(|(name, expr)| (name, shift_ast_span(expr, delta)))
+                .map(|field| match field {
+                    StructLitField::Explicit(name, expr) => {
+                        StructLitField::Explicit(name, shift_ast_span(expr, delta))
+                    }
+                    StructLitField::Shorthand(name) => StructLitField::Shorthand(name),
+                })
+                .collect(),
+        ),
+        Ast::InternalStructLit(span, name, fields) => Ast::InternalStructLit(
+            shift_span(span, delta),
+            name,
+            fields
+                .into_iter()
+                .map(|field| match field {
+                    StructLitField::Explicit(name, expr) => {
+                        StructLitField::Explicit(name, shift_ast_span(expr, delta))
+                    }
+                    StructLitField::Shorthand(name) => StructLitField::Shorthand(name),
+                })
                 .collect(),
         ),
         Ast::ConstructorCall(span, name, args) => Ast::ConstructorCall(
@@ -693,6 +969,13 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*body, delta)),
             shift_decl_attrs(attrs),
         ),
+        Ast::ConstDef(span, name, ty, value, attrs) => Ast::ConstDef(
+            shift_span(span, delta),
+            name,
+            ty.map(|ty| shift_ast_ty(ty, delta)),
+            Box::new(shift_ast_span(*value, delta)),
+            shift_decl_attrs(attrs),
+        ),
         Ast::ExtractorDef(span, name, type_params, param, ret_ty, body, attrs) => {
             Ast::ExtractorDef(
                 shift_span(span, delta),
@@ -721,6 +1004,12 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             ret_ty.map(|ty| shift_ast_ty(ty, delta)),
             shift_decl_attrs(attrs),
         ),
+        Ast::IntrinsicDecl(span, name, signature, attrs) => Ast::IntrinsicDecl(
+            shift_span(span, delta),
+            name,
+            signature,
+            shift_decl_attrs(attrs),
+        ),
         Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => Ast::BuiltinExtractorDecl(
             shift_span(span, delta),
             name,
@@ -732,6 +1021,13 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             shift_span(span, delta),
             shift_builtin_type_head(head, delta),
             shift_decl_attrs(attrs),
+        ),
+        Ast::Namespace(span, name, body) => Ast::Namespace(
+            shift_span(span, delta),
+            name,
+            body.into_iter()
+                .map(|stmt| shift_ast_span(stmt, delta))
+                .collect(),
         ),
         Ast::ResultCtorDecl(span, name, param_ty, ret_ty, attrs) => Ast::ResultCtorDecl(
             shift_span(span, delta),
@@ -746,13 +1042,14 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
             shift_decl_attrs(attrs),
         ),
-        Ast::ImplDef(span, target, methods) => Ast::ImplDef(
+        Ast::ImplDef(span, target, methods, attrs) => Ast::ImplDef(
             shift_span(span, delta),
             target,
             methods
                 .into_iter()
                 .map(|method| shift_ast_span(method, delta))
                 .collect(),
+            shift_decl_attrs(attrs),
         ),
         Ast::TraitDef(span, name, type_params, methods, attrs) => Ast::TraitDef(
             shift_span(span, delta),
@@ -789,19 +1086,22 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .collect(),
             shift_decl_attrs(attrs),
         ),
-        Ast::TraitImplDef(span, trait_name, trait_args, target, methods) => Ast::TraitImplDef(
-            shift_span(span, delta),
-            trait_name,
-            trait_args
-                .into_iter()
-                .map(|arg| shift_ast_ty(arg, delta))
-                .collect(),
-            shift_ast_ty(target, delta),
-            methods
-                .into_iter()
-                .map(|method| shift_ast_span(method, delta))
-                .collect(),
-        ),
+        Ast::TraitImplDef(span, trait_name, trait_args, target, methods, attrs) => {
+            Ast::TraitImplDef(
+                shift_span(span, delta),
+                trait_name,
+                trait_args
+                    .into_iter()
+                    .map(|arg| shift_ast_ty(arg, delta))
+                    .collect(),
+                shift_ast_ty(target, delta),
+                methods
+                    .into_iter()
+                    .map(|method| shift_ast_span(method, delta))
+                    .collect(),
+                shift_decl_attrs(attrs),
+            )
+        }
         Ast::Import(span, path, spec) => {
             Ast::Import(shift_span(span, delta), shift_ast_path(path, delta), spec)
         }
@@ -823,6 +1123,16 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*target, delta)),
             args.into_iter().map(|a| shift_ast_span(a, delta)).collect(),
         ),
+        Ast::FuncLiteralRef(span, func) => Ast::FuncLiteralRef(
+            shift_span(span, delta),
+            FuncLiteralRef {
+                span: shift_span(func.span, delta),
+                body: func.body,
+            },
+        ),
+        Ast::CapturePlaceholder(span, index) => {
+            Ast::CapturePlaceholder(shift_span(span, delta), index)
+        }
         Ast::Semi(span, inner) => Ast::Semi(
             shift_span(span, delta),
             Box::new(shift_ast_span(*inner, delta)),
@@ -837,7 +1147,9 @@ impl Ast {
         match self {
             Ast::Lit(s, _)
             | Ast::Var(s, _)
+            | Ast::InternalVar(s, _)
             | Ast::Path(s, _)
+            | Ast::FuncLiteralRef(s, _)
             | Ast::App(s, _, _)
             | Ast::Block(s, _)
             | Ast::Bind(s, _, _)
@@ -847,34 +1159,43 @@ impl Ast {
             | Ast::ContextMap(s, _, _)
             | Ast::ContextBind(s, _, _)
             | Ast::Compose(s, _, _)
+            | Ast::LiftedCompose(s, _, _)
             | Ast::KleisliCompose(s, _, _)
             | Ast::ListNil(s)
             | Ast::ListCons(s, _, _)
             | Ast::ListLiteral(s, _)
+            | Ast::RangeLiteral(s, _, _)
             | Ast::TupleLiteral(s, _)
+            | Ast::Grouped(s, _)
             | Ast::InterpolatedStr(s, _)
+            | Ast::Dbg(s, _)
             | Ast::Match(s, _, _)
             | Ast::FieldAccess(s, _, _)
-            | Ast::StructDef(s, _, _)
-            | Ast::RecordDef(s, _, _)
+            | Ast::StructDef(s, _, _, _)
+            | Ast::RecordDef(s, _, _, _)
             | Ast::StructLit(s, _, _)
+            | Ast::InternalStructLit(s, _, _)
             | Ast::ConstructorCall(s, _, _)
             | Ast::DeferrorDef(s, _, _, _, _)
             | Ast::EnumDef(s, _, _, _, _)
             | Ast::Def(s, _, _, _, _, _, _)
+            | Ast::ConstDef(s, _, _, _, _)
             | Ast::ExtractorDef(s, _, _, _, _, _, _)
             | Ast::BuiltinDecl(s, _, _, _, _)
+            | Ast::IntrinsicDecl(s, _, _, _)
             | Ast::BuiltinExtractorDecl(s, _, _, _, _)
             | Ast::BuiltinTypeDecl(s, _, _)
+            | Ast::Namespace(s, _, _)
             | Ast::ResultCtorDecl(s, _, _, _, _)
             | Ast::Defmod(s, _, _, _)
-            | Ast::ImplDef(s, _, _)
+            | Ast::ImplDef(s, _, _, _)
             | Ast::TraitDef(s, _, _, _, _)
-            | Ast::TraitImplDef(s, _, _, _, _)
+            | Ast::TraitImplDef(s, _, _, _, _, _)
             | Ast::Import(s, _, _)
             | Ast::Include(s, _)
             | Ast::Closure(s, _, _)
             | Ast::Capture(s, _, _)
+            | Ast::CapturePlaceholder(s, _)
             | Ast::Semi(s, _) => s,
         }
     }

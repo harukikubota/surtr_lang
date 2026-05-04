@@ -1,23 +1,26 @@
 use std::collections::HashMap;
 
+#[cfg(feature = "viewer-schema")]
 use schemars::{schema::RootSchema, schema_for, JsonSchema};
 use serde::{Deserialize, Serialize};
 
 use crate::builtin::builtin_meta_by_id;
 use crate::ir::{
     Bytecode, Constant, EldrInspect, ErrTemplate, FunctionEntry, Opcode, OpcodeSource,
-    SourceFileEntry,
+    RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec, SourceFileEntry,
 };
 
 pub const VIEWER_SCHEMA_VERSION: u32 = 1;
 pub const VIEWER_FORMAT: &str = "eldr_viewer";
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct ViewerFile {
     pub schema_version: u32,
     pub format: String,
     pub header: ViewerHeader,
     pub chunks: Vec<ChunkView>,
+    pub process_specs: Vec<ProcessSpecView>,
     pub functions: Vec<FunctionView>,
     pub constants: Vec<ConstantView>,
     pub opcodes: Vec<OpcodeRowView>,
@@ -25,7 +28,8 @@ pub struct ViewerFile {
     pub errors: Vec<ErrorTemplateView>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct ViewerHeader {
     pub magic: String,
     pub version: u32,
@@ -33,7 +37,8 @@ pub struct ViewerHeader {
     pub num_chunks: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct ChunkView {
     pub chunk_id: String,
     pub tag: String,
@@ -42,7 +47,8 @@ pub struct ChunkView {
     pub padded_size: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct FunctionView {
     pub function_id: String,
     pub fun_idx: u32,
@@ -56,7 +62,8 @@ pub struct FunctionView {
     pub opcode_pcs: Vec<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 #[serde(tag = "kind")]
 pub enum ConstantView {
     Int { idx: u32, value: String },
@@ -67,7 +74,8 @@ pub enum ConstantView {
     Unit { idx: u32 },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct OpcodeRowView {
     pub pc: u32,
     pub function_id: Option<String>,
@@ -76,7 +84,8 @@ pub struct OpcodeRowView {
     pub label: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 #[serde(tag = "kind")]
 pub enum OpcodeView {
     LoadConst {
@@ -154,6 +163,10 @@ pub enum OpcodeView {
     },
     GetTag,
     EqTag,
+    Dbg {
+        template_id: u32,
+        arg_count: u8,
+    },
     CallBuiltin {
         builtin_id: u16,
         builtin: String,
@@ -169,9 +182,6 @@ pub enum OpcodeView {
     },
     CaptureClosure {
         capture_count: u8,
-    },
-    CapturePartial {
-        arg_count: u8,
     },
     MakeError {
         template_id: u32,
@@ -199,7 +209,8 @@ pub enum OpcodeView {
     Halt,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct SourceFileView {
     pub source_id: String,
     pub name: Option<String>,
@@ -208,7 +219,8 @@ pub struct SourceFileView {
     pub text: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct SourceRefView {
     pub source_id: String,
     pub span_start: u32,
@@ -217,7 +229,8 @@ pub struct SourceRefView {
     pub column: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct ErrorTemplateView {
     pub template_id: u32,
     pub kind: String,
@@ -226,6 +239,36 @@ pub struct ErrorTemplateView {
     pub source_ref: Option<SourceRefView>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
+pub struct ProcessSpecView {
+    pub process_name: String,
+    pub module_path: String,
+    pub kind: ProcessSpecKindView,
+    pub instance: ProcessSpecInstanceView,
+    pub boot: bool,
+    pub registry: bool,
+    pub lazy: bool,
+    pub init_fun_idx: u32,
+    pub get_fun_idx: u32,
+    pub set_fun_idx: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
+pub enum ProcessSpecKindView {
+    ReadOnlyAgent,
+    StateAgent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
+pub enum ProcessSpecInstanceView {
+    Singleton,
+    Multi,
+}
+
+#[cfg(feature = "viewer-schema")]
 pub fn viewer_schema() -> RootSchema {
     schema_for!(ViewerFile)
 }
@@ -265,6 +308,13 @@ pub fn viewer_file_from_inspect(inspected: &EldrInspect) -> ViewerFile {
                 payload_offset: chunk.payload_offset as u32,
                 padded_size: chunk.padded_size as u32,
             })
+            .collect(),
+        process_specs: inspected
+            .bytecode
+            .runtime_process_specs
+            .entries
+            .iter()
+            .map(process_spec_view)
             .collect(),
         functions: inspected
             .bytecode
@@ -458,6 +508,13 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
         },
         Opcode::GetTag => OpcodeView::GetTag,
         Opcode::EqTag => OpcodeView::EqTag,
+        Opcode::Dbg {
+            template_id,
+            arg_count,
+        } => OpcodeView::Dbg {
+            template_id: *template_id,
+            arg_count: *arg_count,
+        },
         Opcode::CallBuiltin {
             builtin_id,
             arity,
@@ -486,7 +543,6 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
         Opcode::CaptureClosure(count) => OpcodeView::CaptureClosure {
             capture_count: *count,
         },
-        Opcode::CapturePartial(count) => OpcodeView::CapturePartial { arg_count: *count },
         Opcode::MakeError { template_id } => OpcodeView::MakeError {
             template_id: *template_id,
         },
@@ -554,6 +610,27 @@ fn error_template_view(
     }
 }
 
+fn process_spec_view(spec: &RuntimeProcessSpec) -> ProcessSpecView {
+    ProcessSpecView {
+        process_name: spec.process_name.clone(),
+        module_path: spec.module_path.clone(),
+        kind: match spec.kind {
+            RuntimeProcessKind::ReadOnlyAgent => ProcessSpecKindView::ReadOnlyAgent,
+            RuntimeProcessKind::StateAgent => ProcessSpecKindView::StateAgent,
+        },
+        instance: match spec.instance {
+            RuntimeProcessInstance::Singleton => ProcessSpecInstanceView::Singleton,
+            RuntimeProcessInstance::Multi => ProcessSpecInstanceView::Multi,
+        },
+        boot: spec.boot,
+        registry: spec.registry,
+        lazy: spec.lazy,
+        init_fun_idx: spec.init_fun_idx,
+        get_fun_idx: spec.get_fun_idx,
+        set_fun_idx: spec.set_fun_idx,
+    }
+}
+
 fn source_lookup(sources: &[SourceFileEntry]) -> HashMap<String, String> {
     let mut lookup = HashMap::new();
     for source in sources {
@@ -609,11 +686,14 @@ mod tests {
     use crate::ir::{
         Bytecode, CompileInfo, Constant, DocEntry, DocKind, EldrChunkInfo, EldrHeader, EldrInspect,
         ErrTemplate, FunctionEntry, FunctionFlags, LabelEntry, Opcode, OpcodeSource,
+        RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable,
         SourceFileEntry, SourceMap,
     };
     use crate::primitives::int;
 
-    use super::{viewer_file_from_inspect, viewer_schema, VIEWER_FORMAT, VIEWER_SCHEMA_VERSION};
+    #[cfg(feature = "viewer-schema")]
+    use super::viewer_schema;
+    use super::{viewer_file_from_inspect, VIEWER_FORMAT, VIEWER_SCHEMA_VERSION};
 
     #[test]
     fn viewer_model_contains_core_sections() {
@@ -643,6 +723,7 @@ mod tests {
                 format: "sample".into(),
                 num_params: 0,
             }],
+            dbg_templates: Vec::new(),
             functions: vec![FunctionEntry {
                 fun_idx: 0,
                 entry_pc: 0,
@@ -700,6 +781,20 @@ mod tests {
                 text: Some("print(42)".into()),
             }],
             pc_spans: Vec::new(),
+            runtime_process_specs: RuntimeProcessSpecTable {
+                entries: vec![RuntimeProcessSpec {
+                    process_name: "Counter".into(),
+                    module_path: "Agents::Counter".into(),
+                    kind: RuntimeProcessKind::StateAgent,
+                    instance: RuntimeProcessInstance::Singleton,
+                    boot: true,
+                    registry: true,
+                    lazy: false,
+                    init_fun_idx: 0,
+                    get_fun_idx: 0,
+                    set_fun_idx: Some(0),
+                }],
+            },
         };
         let inspected = EldrInspect {
             header: EldrHeader {
@@ -720,6 +815,7 @@ mod tests {
         let viewer = viewer_file_from_inspect(&inspected);
         assert_eq!(viewer.schema_version, VIEWER_SCHEMA_VERSION);
         assert_eq!(viewer.format, VIEWER_FORMAT);
+        assert_eq!(viewer.process_specs.len(), 1);
         assert_eq!(viewer.functions.len(), 1);
         assert_eq!(viewer.constants.len(), 1);
         assert_eq!(viewer.opcodes.len(), 4);
@@ -728,6 +824,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "viewer-schema")]
     fn viewer_schema_is_buildable() {
         let schema = viewer_schema();
         assert_eq!(

@@ -22,6 +22,7 @@ impl Resolver {
                     start: prev_span.start,
                     end: span.end,
                 },
+                related_labels: Vec::new(),
             });
         }
         seen.insert(name.clone(), span.clone());
@@ -30,6 +31,7 @@ impl Resolver {
             name,
             qualified_name: None,
             unique_id: uid,
+            compiler_generated: false,
             span,
         })
     }
@@ -56,16 +58,19 @@ impl Resolver {
             AstPattern::IntLit(span, n) => Ok(ResolvedPattern::IntLit(span, n)),
             AstPattern::StrLit(span, s) => Ok(ResolvedPattern::StrLit(span, s)),
             AstPattern::BoolLit(span, b) => Ok(ResolvedPattern::BoolLit(span, b)),
+            AstPattern::DurationLit(span, n) => Ok(ResolvedPattern::DurationLit(span, n)),
             AstPattern::Constructor(span, ctor_name, inners) => {
                 let ctor_uid = self.scope.lookup(&ctor_name).ok_or_else(|| ResolveError {
                     message: format!("Undefined constructor: {}", ctor_name),
                     span: span.clone(),
+                    related_labels: Vec::new(),
                 })?;
                 Ok(ResolvedPattern::Constructor(
                     ResolvedId {
                         name: ctor_name,
                         qualified_name: None,
                         unique_id: ctor_uid,
+                        compiler_generated: false,
                         span,
                     },
                     inners
@@ -82,6 +87,7 @@ impl Resolver {
                         format!("Undefined MatchBlock head: {}", head_name)
                     },
                     span: span.clone(),
+                    related_labels: Vec::new(),
                 })?;
                 let head_kind = self
                     .declaration_uid_kinds
@@ -99,11 +105,13 @@ impl Resolver {
                     .ok_or_else(|| ResolveError {
                         message: format!("Unknown MatchBlock head: {}", head_name),
                         span: span.clone(),
+                        related_labels: Vec::new(),
                     })?;
                 let resolved_id = ResolvedId {
                     name: head_name.clone(),
                     qualified_name: None,
                     unique_id: head_uid,
+                    compiler_generated: false,
                     span: span.clone(),
                 };
                 let resolved_inners = inners
@@ -115,10 +123,11 @@ impl Resolver {
                         if Self::is_constructor_style_head(&head_name) {
                             return Err(ResolveError {
                                 message: format!(
-                                    "Extractor names must not use constructor-style names like `{}`; implement `{}`::deconstruct(...) instead",
+                                    "Extractor names must not use constructor-style names like `{}`; implement `impl {} {{ defextractor deconstruct(...) ... }}` instead",
                                     head_name, head_name
                                 ),
                                 span,
+                            related_labels: Vec::new(),
                             });
                         }
                         Ok(ResolvedPattern::Extractor(resolved_id, resolved_inners))
@@ -136,18 +145,17 @@ impl Resolver {
                                     head_name, head_name
                                 ),
                                 span,
+                            related_labels: Vec::new(),
                             });
                         };
-                        if !matches!(
-                            extractor_kind,
-                            DeclarationKind::ImplMethod | DeclarationKind::Def
-                        ) {
+                        if !matches!(extractor_kind, DeclarationKind::Extractor) {
                             return Err(ResolveError {
                                 message: format!(
-                                    "Attached extractor for `{}` must be implemented as `impl {} {{ def deconstruct(...) ... }}`",
+                                    "Attached extractor for `{}` must be implemented as `impl {} {{ defextractor deconstruct(...) ... }}`",
                                     head_name, head_name
                                 ),
                                 span,
+                            related_labels: Vec::new(),
                             });
                         }
                         Ok(ResolvedPattern::Extractor(
@@ -155,6 +163,7 @@ impl Resolver {
                                 name: format!("{}::deconstruct", head_name),
                                 qualified_name: extractor_qualified_name,
                                 unique_id: extractor_uid,
+                                compiler_generated: false,
                                 span,
                             },
                             resolved_inners,
@@ -169,6 +178,7 @@ impl Resolver {
                                 head_name
                             ),
                             span,
+                            related_labels: Vec::new(),
                         })
                     }
                     other => Err(ResolveError {
@@ -177,10 +187,17 @@ impl Resolver {
                             head_name, other
                         ),
                         span,
+                        related_labels: Vec::new(),
                     }),
                 }
             }
             AstPattern::Tuple(_, items) => Ok(ResolvedPattern::Tuple(
+                items
+                    .into_iter()
+                    .map(|item| self.resolve_pattern_inner(item, seen))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            AstPattern::Or(_, items) => Ok(ResolvedPattern::Or(
                 items
                     .into_iter()
                     .map(|item| self.resolve_pattern_inner(item, seen))
@@ -200,13 +217,20 @@ impl Resolver {
 
     pub(super) fn resolve_match_arm(
         &mut self,
-        pat: AstPattern,
-        body: Ast,
-    ) -> Result<(ResolvedPattern, Resolved), ResolveError> {
+        arm: AstMatchArm,
+    ) -> Result<ResolvedMatchArm, ResolveError> {
         self.with_child_scope(|child| {
-            let resolved_pat = child.resolve_pattern(pat)?;
-            let resolved_body = child.resolve_node(body)?;
-            Ok((resolved_pat, resolved_body))
+            let resolved_pat = child.resolve_pattern(arm.pattern)?;
+            let resolved_guard = match arm.guard {
+                Some(guard) => Some(child.resolve_node(guard)?),
+                None => None,
+            };
+            let resolved_body = child.resolve_node(arm.body)?;
+            Ok(ResolvedMatchArm {
+                pattern: resolved_pat,
+                guard: resolved_guard,
+                body: resolved_body,
+            })
         })
     }
 }

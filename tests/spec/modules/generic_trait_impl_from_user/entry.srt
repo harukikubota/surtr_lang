@@ -1,0 +1,2 @@
+print(inspect(from(Boxed::Box(5), Option)))
+print(inspect(from(Boxed::Box("ok"), Option)))

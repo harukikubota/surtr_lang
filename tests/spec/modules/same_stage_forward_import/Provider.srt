@@ -1,0 +1,5 @@
+defmod Provider {
+  def value() -> Int {
+    41
+  }
+}

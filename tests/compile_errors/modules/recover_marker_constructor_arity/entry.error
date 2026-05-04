@@ -1,0 +1,2 @@
+phase: typecheck
+contains: function expects 1 argument(s), got 0

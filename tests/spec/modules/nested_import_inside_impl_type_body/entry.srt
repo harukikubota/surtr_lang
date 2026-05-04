@@ -1,0 +1,3 @@
+user = User::new("surtr")
+print(User::greeting(user))
+print(User::excited(user))

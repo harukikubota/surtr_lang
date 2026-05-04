@@ -1,0 +1,28 @@
+defstruct Permissions {
+  bits: Int,
+  width: BitWidth,
+}
+
+impl Permissions {
+  def new(bits: Int, width: BitWidth) -> Self {
+    Permissions { bits: bits, width: width }
+  }
+}
+
+deftrait BitPack {
+  def normalize(self: Self) -> Result<Self>
+  def lowest_bit_on(self: Self) -> Result<Boolean>
+}
+
+impl BitPack for Permissions {
+  def normalize(self: Self) -> Result<Self> {
+    normalized =? Int::wrap_unsigned(self.bits, self.width)
+    masked =? Int::mask(self.width)
+    Ok(Permissions::new(Int::bit_and(normalized, masked), self.width))
+  }
+
+  def lowest_bit_on(self: Self) -> Result<Boolean> {
+    normalized =? BitPack::normalize(self)
+    Int::test_bit_in(normalized.bits, 0, normalized.width)
+  }
+}

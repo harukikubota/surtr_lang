@@ -1,0 +1,608 @@
+@doc """
+Standard `List` type declaration.
+`List` is the homogeneous sequence type used by list literals and list
+patterns.
+The canonical builtin head is `List<$A>`, and the compiler validates that exact
+shape at this file's top level.
+"""
+@builtin type List<$A>
+
+@doc """
+Stepper for `List::reduce_while`.
+`Resume(next)` continues with the next accumulator, while `Stop(done)` ends the
+reduction immediately.
+"""
+defenum ReduceStep<$A> {
+  Resume($A),
+  Stop($A),
+}
+
+impl List {
+  @doc """
+  Prepend one element onto the front of a list.
+  `cons` is the canonical value-level constructor for list growth.
+  ## REPL
+  xldr(1)> List::cons(1, [2, 3])
+  [1, 2, 3]
+  """
+  def cons(head: $A, tail: List<$A>) -> List<$A> {
+    [head, ..tail]
+  }
+
+  @doc """
+  Return the first element of a list, or `Err(NoneError)` for `[]`.
+  ## REPL
+  xldr(1)> List::first([1, 2])
+  Ok(1)
+  """
+  def first(values: List<$A>) -> Result<$A, NoneError> {
+    match values {
+      [head, .._] => Ok(head),
+      [] => Err(NoneError),
+    }
+  }
+
+  @doc """
+  Return the last element of a list, or `Err(NoneError)` for `[]`.
+  ## REPL
+  xldr(1)> List::last([1, 2])
+  Ok(2)
+  """
+  def last(values: List<$A>) -> Result<$A, NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => Ok(_last_go(head, tail)),
+    }
+  }
+
+  @doc """
+  Return the number of elements in a list.
+  This stays a core helper so the runtime can keep the O(1) handle-based length
+  contract.
+  ## REPL
+  xldr(1)> List::len([1, 2, 3])
+  3
+  """
+  @builtin def len(values: List<$A>) -> Int
+
+  defp _list_reverse_go(values: List<$A>, acc: List<$A>) -> List<$A> {
+    match values {
+      [] => acc,
+      [head, ..tail] => _list_reverse_go(tail, cons(head, acc)),
+    }
+  }
+
+  defp _append_reverse(values: List<$A>, acc: List<$A>) -> List<$A> {
+    match values {
+      [] => acc,
+      [head, ..tail] => _append_reverse(tail, cons(head, acc)),
+    }
+  }
+
+  defp _index_out_of_bounds(index: Int, len: Int) -> Result<$A, IndexOutOfBounds> {
+    Err(IndexOutOfBounds("index #{index} out of bounds for len #{len}"))
+  }
+
+  defp _last_go(current: $A, rest: List<$A>) -> $A {
+    match rest {
+      [] => current,
+      [head, ..tail] => _last_go(head, tail),
+    }
+  }
+
+  defp _at_go(values: List<$A>, index: Int, original_index: Int, len: Int) -> Result<$A, IndexOutOfBounds> {
+    match values {
+      [] => _index_out_of_bounds(original_index, len),
+      [head, ..tail] => if(index == 0, Ok(head), _at_go(tail, index - 1, original_index, len)),
+    }
+  }
+
+  defp _take_go(values: List<$A>, remaining: Int) -> List<$A> {
+    if(
+      remaining <= 0,
+      [],
+      match values {
+        [] => [],
+        [head, ..tail] => cons(head, _take_go(tail, remaining - 1)),
+      },
+    )
+  }
+
+  defp _drop_go(values: List<$A>, remaining: Int) -> List<$A> {
+    if(
+      remaining <= 0,
+      values,
+      match values {
+        [] => [],
+        [_, ..tail] => _drop_go(tail, remaining - 1),
+      },
+    )
+  }
+
+  defp _partition_go(values: List<$A>, pred: ($A -> Boolean)) -> (List<$A>, List<$A>) {
+    match values {
+      [] => ([], []),
+      [head, ..tail] => _partition_cons(head, tail, pred),
+    }
+  }
+
+  defp _partition_cons(head: $A, tail: List<$A>, pred: ($A -> Boolean)) -> (List<$A>, List<$A>) {
+    rest = _partition_go(tail, pred)
+    if(
+      pred(head),
+      (cons(head, rest._0), rest._1),
+      (rest._0, cons(head, rest._1)),
+    )
+  }
+
+  defp _take_while_go(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
+    match values {
+      [] => [],
+      [head, ..tail] => if(pred(head), cons(head, _take_while_go(tail, pred)), []),
+    }
+  }
+
+  defp _drop_while_go(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
+    match values {
+      [] => [],
+      [head, ..tail] => if(pred(head), _drop_while_go(tail, pred), values),
+    }
+  }
+
+  defp _max_by_go(values: List<$A>, current: $A, cmp: ($A, $A -> Ordering)) -> $A {
+    match values {
+      [] => current,
+      [head, ..tail] => _max_by_go(
+        tail,
+        match cmp(head, current) {
+          Ordering::Less | Ordering::Equal => current,
+          Ordering::Greater => head,
+        },
+        cmp,
+      ),
+    }
+  }
+
+  defp _min_by_go(values: List<$A>, current: $A, cmp: ($A, $A -> Ordering)) -> $A {
+    match values {
+      [] => current,
+      [head, ..tail] => _min_by_go(
+        tail,
+        match cmp(head, current) {
+          Ordering::Less => head,
+          Ordering::Equal | Ordering::Greater => current,
+        },
+        cmp,
+      ),
+    }
+  }
+
+  defp _insert_sorted(value: $A, sorted: List<$A>, cmp: ($A, $A -> Ordering)) -> List<$A> {
+    match sorted {
+      [] => [value],
+      [head, ..tail] => match cmp(value, head) {
+        Ordering::Less => [value, ..sorted],
+        Ordering::Equal | Ordering::Greater => [head, .._insert_sorted(value, tail, cmp)],
+      },
+    }
+  }
+
+  defp _dedup_groups(groups: List<($A, Int)>) -> List<$A> {
+    match groups {
+      [] => [],
+      [head, ..tail] => [head._0, .._dedup_groups(tail)],
+    }
+  }
+
+  @doc """
+  Append `right` after `left`.
+  This keeps the left-to-right order of both lists.
+  ## REPL
+  xldr(1)> List::append([1], [2, 3])
+  [1, 2, 3]
+  """
+  def append(left: List<$A>, right: List<$A>) -> List<$A> {
+    match left {
+      [] => right,
+      [head, ..tail] => cons(head, append(tail, right)),
+    }
+  }
+
+  @doc """
+  Map each element to a list and concatenate the results.
+  ## REPL
+  xldr(1)> List::flat_map([1, 2], {|n| [n, n + 10]})
+  [1, 11, 2, 12]
+  """
+  def flat_map(values: List<$A>, f: ($A -> List<$B>)) -> List<$B> {
+    reverse(
+      reduce(values, [], {|acc, x|
+        _append_reverse(f(x), acc)
+      }),
+    )
+  }
+
+  @doc """
+  Concatenate a list of lists into one list.
+  ## REPL
+  xldr(1)> List::concat([[1, 2], [3]])
+  [1, 2, 3]
+  """
+  def concat(values: List<List<$A>>) -> List<$A> {
+    match values {
+      [] => [],
+      [head, ..tail] => append(head, concat(tail)),
+    }
+  }
+
+  @doc """
+  Reverse the order of a list.
+  ## REPL
+  xldr(1)> List::reverse([1, 2, 3])
+  [3, 2, 1]
+  """
+  def reverse(values: List<$A>) -> List<$A> {
+    _list_reverse_go(values, [])
+  }
+
+  @doc """
+  Return the element at `index`.
+  Negative indices and out-of-range access return `Err(IndexOutOfBounds(...))`.
+  ## REPL
+  xldr(1)> List::at([1, 2, 3], 1)
+  Ok(2)
+  """
+  def at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds> {
+    value_len = len(values)
+    if(index < 0, _index_out_of_bounds(index, value_len), _at_go(values, index, index, value_len))
+  }
+
+  @doc """
+  Fold a list from left to right.
+  ## REPL
+  xldr(1)> List::reduce([1, 2, 3], 0, {|acc, n| acc + n})
+  6
+  """
+  def reduce(values: List<$A>, init: $B, f: ($B, $A -> $B)) -> $B {
+    match values {
+      [] => init,
+      [head, ..tail] => reduce(tail, f(init, head), f),
+    }
+  }
+
+  @doc """
+  Fold a list from left to right with early exit.
+  ## REPL
+  xldr(1)> List::reduce_while([1, 2, 3], 0, {|acc, n| if(acc + n < 3, ReduceStep::Resume(acc + n), ReduceStep::Stop(acc + n))})
+  3
+  """
+  def reduce_while(values: List<$A>, init: $B, f: ($B, $A -> ReduceStep<$B>)) -> $B {
+    match values {
+      [] => init,
+      [head, ..tail] => match f(init, head) {
+        ReduceStep::Resume(next) => reduce_while(tail, next, f),
+        ReduceStep::Stop(done) => done,
+      },
+    }
+  }
+
+  @doc """
+  Map a plain unary callable over each element and keep the list shape.
+  This matches the semantics of `|*>` on `List`.
+  ## REPL
+  xldr(1)> List::map([1, 2], {|n| n + 1})
+  [2, 3]
+  """
+  def map(values: List<$A>, f: ($A -> $B)) -> List<$B> {
+    reverse(
+      reduce(values, [], {|acc, x|
+        cons(f(x), acc)
+      }),
+    )
+  }
+
+  @doc """
+  Keep only the elements that satisfy `pred`.
+  ## REPL
+  xldr(1)> List::filter([1, 2, 3], {|n| Int::is_even(n)})
+  [2]
+  """
+  def filter(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
+    reverse(
+      reduce(values, [], {|acc, x|
+        if(pred(x), cons(x, acc), acc)
+      }),
+    )
+  }
+
+  @doc """
+  Return the first element that satisfies `pred`.
+  ## REPL
+  xldr(1)> List::find([1, 2, 3], {|n| n > 1})
+  Ok(2)
+  """
+  def find(values: List<$A>, pred: ($A -> Boolean)) -> Result<$A, NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => if(pred(head), Ok(head), find(tail, pred)),
+    }
+  }
+
+  @doc """
+  Return the first successful mapped value.
+  ## REPL
+  xldr(1)> List::find_map([1, 2, 3], {|n| if(n > 1, Ok(to_string(n)), Err(NoneError))})
+  Ok("2")
+  """
+  def find_map(values: List<$A>, f: ($A -> Result<$B>)) -> Result<$B, NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => match f(head) {
+        Ok(value) => Ok(value),
+        Err(_) => find_map(tail, f),
+      },
+    }
+  }
+
+  @doc """
+  Return `True` when at least one element satisfies `pred`.
+  ## REPL
+  xldr(1)> List::any([1, 2, 3], {|n| n > 2})
+  True
+  """
+  def any(values: List<$A>, pred: ($A -> Boolean)) -> Boolean {
+    match values {
+      [] => False,
+      [head, ..tail] => if(pred(head), True, any(tail, pred)),
+    }
+  }
+
+  @doc """
+  Return `True` when every element satisfies `pred`.
+  ## REPL
+  xldr(1)> List::all([2, 4], {|n| Int::is_even(n)})
+  True
+  """
+  def all(values: List<$A>, pred: ($A -> Boolean)) -> Boolean {
+    match values {
+      [] => True,
+      [head, ..tail] => if(pred(head), all(tail, pred), False),
+    }
+  }
+
+  @doc """
+  Count how many elements satisfy `pred`.
+  ## REPL
+  xldr(1)> List::count([1, 2, 3], {|n| n > 1})
+  2
+  """
+  def count(values: List<$A>, pred: ($A -> Boolean)) -> Int {
+    reduce(values, 0, {|acc, value|
+      if(pred(value), acc + 1, acc)
+    })
+  }
+
+  @doc """
+  Sum all integer elements in a list.
+  Empty lists return `0`.
+  ## REPL
+  xldr(1)> List::sum([1, 2, 3])
+  6
+  """
+  def sum(values: List<Int>) -> Int {
+    reduce(values, 0, {|acc, value|
+      acc + value
+    })
+  }
+
+  @doc """
+  Return the largest element in a list.
+  Requires `Compare` for the element type.
+  Empty lists return `Err(NoneError)`.
+  ## REPL
+  xldr(1)> List::max([1, 3, 2])
+  Ok(3)
+  """
+  def max<$A: Compare>(values: List<$A>) -> Result<$A, NoneError> {
+    max_by(values, {|left, right| Compare::compare(left, right)})
+  }
+
+  @doc """
+  Return the smallest element in a list.
+  Requires `Compare` for the element type.
+  Empty lists return `Err(NoneError)`.
+  ## REPL
+  xldr(1)> List::min([1, 3, 2])
+  Ok(1)
+  """
+  def min<$A: Compare>(values: List<$A>) -> Result<$A, NoneError> {
+    min_by(values, {|left, right| Compare::compare(left, right)})
+  }
+
+  @doc """
+  Return the largest element according to `cmp`.
+  `cmp(left, right)` must return `Ordering::Greater` when `left` should win.
+  Empty lists return `Err(NoneError)`.
+  ## REPL
+  xldr(1)> List::max_by([1, 3, 2], {|l, r| if(l < r, Ordering::Less, if(l > r, Ordering::Greater, Ordering::Equal))})
+  Ok(3)
+  """
+  def max_by(values: List<$A>, cmp: ($A, $A -> Ordering)) -> Result<$A, NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => Ok(_max_by_go(tail, head, cmp)),
+    }
+  }
+
+  @doc """
+  Return the smallest element according to `cmp`.
+  `cmp(left, right)` must return `Ordering::Less` when `left` should win.
+  Empty lists return `Err(NoneError)`.
+  ## REPL
+  xldr(1)> List::min_by([1, 3, 2], {|l, r| if(l < r, Ordering::Less, if(l > r, Ordering::Greater, Ordering::Equal))})
+  Ok(1)
+  """
+  def min_by(values: List<$A>, cmp: ($A, $A -> Ordering)) -> Result<$A, NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => Ok(_min_by_go(tail, head, cmp)),
+    }
+  }
+
+  @doc """
+  Return a new list sorted according to `cmp`.
+  The comparator should return `Ordering::Less` when `left` should appear
+  before `right`.
+  Equal keys keep their original input order.
+  ## REPL
+  xldr(1)> List::sort_by(["a", "abcd", "xy"], {|l, r| Compare::compare(String::len(l), String::len(r))})
+  [a, xy, abcd]
+  """
+  def sort_by(values: List<$A>, cmp: ($A, $A -> Ordering)) -> List<$A> {
+    reduce(values, [], {|acc, value|
+      _insert_sorted(value, acc, cmp)
+    })
+  }
+
+  @doc """
+  Return a new list sorted in ascending order.
+  Requires `Compare` for the element type.
+  ## REPL
+  xldr(1)> List::sort([3, 1, 2, 1])
+  [1, 1, 2, 3]
+  """
+  def sort<$A: Compare>(values: List<$A>) -> List<$A> {
+    sort_by(values, {|left, right| Compare::compare(left, right)})
+  }
+
+  @doc """
+  Keep at most the first `count` elements.
+  `count <= 0` returns `[]`.
+  ## REPL
+  xldr(1)> List::take([1, 2, 3], 2)
+  [1, 2]
+  """
+  def take(values: List<$A>, count: Int) -> List<$A> {
+    _take_go(values, count)
+  }
+
+  @doc """
+  Skip the first `count` elements.
+  `count <= 0` returns the input unchanged.
+  ## REPL
+  xldr(1)> List::drop([1, 2, 3], 1)
+  [2, 3]
+  """
+  def drop(values: List<$A>, count: Int) -> List<$A> {
+    _drop_go(values, count)
+  }
+
+  @doc """
+  Keep the longest prefix whose elements satisfy `pred`.
+  ## REPL
+  xldr(1)> List::take_while([1, 2, 3], {|n| n < 3})
+  [1, 2]
+  """
+  def take_while(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
+    _take_while_go(values, pred)
+  }
+
+  @doc """
+  Drop the longest prefix whose elements satisfy `pred`.
+  ## REPL
+  xldr(1)> List::drop_while([1, 2, 3], {|n| n < 3})
+  [3]
+  """
+  def drop_while(values: List<$A>, pred: ($A -> Boolean)) -> List<$A> {
+    _drop_while_go(values, pred)
+  }
+
+  @doc """
+  Split a list into the longest matching prefix and the remaining suffix.
+  ## REPL
+  xldr(1)> List::span([1, 2, 3], {|n| n < 3})
+  ([1, 2], [3])
+  """
+  def span(values: List<$A>, pred: ($A -> Boolean)) -> (List<$A>, List<$A>) {
+    (take_while(values, pred), drop_while(values, pred))
+  }
+
+  @doc """
+  Split a list into elements that satisfy `pred` and the rest.
+  Both output lists keep the original order.
+  ## REPL
+  xldr(1)> List::partition([1, 2, 3], {|n| Int::is_even(n)})
+  ([2], [1, 3])
+  """
+  def partition(values: List<$A>, pred: ($A -> Boolean)) -> (List<$A>, List<$A>) {
+    _partition_go(values, pred)
+  }
+
+  @doc """
+  Count repeated values while keeping first-seen group order.
+  Requires `Eq` for the element type and returns `(value, count)` tuples.
+  ## REPL
+  xldr(1)> List::group_count([1, 1, 2, 2, 2])
+  [(1, 2), (2, 3)]
+  """
+  @builtin def group_count(values: List<$A>) -> List<($A, Int)>
+
+  @doc """
+  Remove duplicate values while keeping the first-seen order.
+  ## REPL
+  xldr(1)> List::dedup([1, 1, 2, 2, 3])
+  [1, 2, 3]
+  """
+  def dedup(values: List<$A>) -> List<$A> {
+    _dedup_groups(group_count(values))
+  }
+
+  @doc """
+  Pair elements from two lists until either side runs out.
+  Each output element is a `(left, right)` tuple.
+  ## REPL
+  xldr(1)> List::zip([1, 2], ["a", "b"])
+  [(1, "a"), (2, "b")]
+  """
+  @builtin def zip(left: List<$A>, right: List<$B>) -> List<($A, $B)>
+}
+
+@doc """
+`Functor` implementation for `List`.
+This is the source-level meaning of `values |*> f`.
+"""
+impl Functor<$A, $B, List<$B>> for List<$A> {
+  def map(self: Self, f: ($A -> $B)) -> List<$B> {
+    List::map(self, f)
+  }
+}
+
+@doc """
+`Chainable` implementation for `List`.
+This is the source-level meaning of `values |>= f`.
+"""
+impl Chainable<$A, List<$B>> for List<$A> {
+  def chain(self: Self, f: ($A -> List<$B>)) -> List<$B> {
+    List::flat_map(self, f)
+  }
+}
+
+@doc """
+`LiftComposable` implementation for `List`-returning unary functions.
+This is the source-level meaning of `left >* right` for `List`.
+"""
+impl LiftComposable<$A, $B, $C, List<$C>> for ($A -> List<$B>) {
+  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> List<$C>) {
+    {|value| Functor::map(self(value), rhs)}
+  }
+}
+
+@doc """
+`KleisliComposable` implementation for `List`-returning unary functions.
+This is the source-level meaning of `left >=> right` for `List`.
+"""
+impl KleisliComposable<$A, $B, List<$C>> for ($A -> List<$B>) {
+  def kleisli_compose(self: Self, rhs: ($B -> List<$C>)) -> ($A -> List<$C>) {
+    {|value| Chainable::chain(self(value), rhs)}
+  }
+}

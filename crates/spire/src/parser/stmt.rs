@@ -5,7 +5,7 @@ use crate::token::Token;
 use super::context::{DeclLevel, ParseUnitKind, TopLevelDeclKind};
 use super::{validate, ParseRules, Parser};
 
-impl Parser {
+impl Parser<'_> {
     pub(super) fn parse_stmt(&mut self) -> Result<Ast, ParseError> {
         self.skip_newlines();
 
@@ -15,11 +15,16 @@ impl Parser {
                 Token::Annotator(_)
                     | Token::Def
                     | Token::Defp
+                    | Token::Defagent
                     | Token::Defmod
+                    | Token::Namespace
                     | Token::Deftrait
                     | Token::Impl
                     | Token::Import
                     | Token::Include
+                    | Token::Private
+                    | Token::Public
+                    | Token::Const
                     | Token::Defstruct
                     | Token::Defrecord
                     | Token::Deferror
@@ -37,11 +42,19 @@ impl Parser {
         let stmt = match self.peek() {
             Token::Annotator(_) => self.parse_annotated_decl()?,
             Token::Def | Token::Defp => self.parse_def()?,
+            Token::Defagent => {
+                return Err(ParseError::syntax(
+                    "`defagent` declarations must be preceded by @agent(...)",
+                    self.peek_span(),
+                ))
+            }
             Token::Defmod => self.parse_defmod()?,
+            Token::Namespace => self.parse_namespace()?,
             Token::Deftrait => self.parse_trait_def()?,
             Token::Impl => self.parse_impl_def()?,
             Token::Import => self.parse_import()?,
             Token::Include => self.parse_include()?,
+            Token::Private | Token::Public | Token::Const => self.parse_const_def()?,
             Token::Defstruct => self.parse_struct_def()?,
             Token::Defrecord => self.parse_record_def()?,
             Token::Deferror => self.parse_deferror_def()?,
@@ -70,7 +83,12 @@ impl Parser {
                                 self.tokens.get(save).map(|sp| &sp.token),
                                 Some(Token::LParen | Token::LBrack)
                             ) && self
-                                .stmt_has_top_level_assignment_from(save);
+                                .stmt_has_top_level_assignment_from(save)
+                                || matches!(
+                                    self.tokens.get(save).map(|sp| &sp.token),
+                                    Some(Token::Ident(_))
+                                ) && self.stmt_has_top_level_assignment_from(save)
+                                    && self.stmt_has_top_level_at_from(save);
                             self.pos = save;
                             if looks_like_bind {
                                 return Err(err);
@@ -119,6 +137,40 @@ impl Parser {
         } else {
             ParseRules::module_member()
         };
+
+        let result = (|| {
+            let mut stmts = Vec::new();
+            self.skip_newlines();
+
+            while !matches!(self.peek(), Token::RBrace) {
+                if matches!(self.peek(), Token::Eof) {
+                    return Err(ParseError::incomplete("}", self.peek_span()));
+                }
+                let stmt = self.parse_stmt()?;
+                self.ensure_stmt_boundary(&stmt, true)?;
+                stmts.push(stmt);
+                while matches!(self.peek(), Token::Newline) {
+                    self.advance();
+                }
+            }
+
+            Ok(stmts)
+        })();
+
+        self.context = prev_context;
+        result
+    }
+
+    pub(super) fn parse_namespace_body_stmts(&mut self) -> Result<Vec<Ast>, ParseError> {
+        let prev_context = self.context.clone();
+        self.context.level = DeclLevel::Top;
+        self.context.module_path = None;
+        self.context.parse_rules =
+            if prev_context.parse_rules == crate::parser::context::ParseRules::std_module() {
+                crate::parser::context::ParseRules::std_module()
+            } else {
+                crate::parser::context::ParseRules::module_source_without_builtin()
+            };
 
         let result = (|| {
             let mut stmts = Vec::new();

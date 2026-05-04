@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use spire::ast::Symbol;
 
 /// Surtr type — every typed node carries one of these.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Ty {
     Int,
     Float,
@@ -22,8 +23,20 @@ pub enum Ty {
     /// method parameter positions such as `From<$To>::from(_, TypeRef<$To>)`.
     TypeRef(Box<Ty>),
 
+    /// Compiler-reserved lazy special-form marker used only in std builtin
+    /// declarations. User code cannot name or transport Lazy values directly.
+    Lazy(Box<Ty>),
+
     /// Compiler-managed lens path capability: `Lens<S, A>`
     Lens(Box<Ty>, Box<Ty>),
+
+    /// Process identifier capability: `PID<ProcessName>`
+    Pid(Symbol),
+
+    /// Compiler-reserved ignored-input closure marker.
+    /// This is not a first-class data type and only appears in restricted
+    /// callable surface positions.
+    Hole,
 
     /// Built-in function with a known name (for codegen dispatch)
     BuiltinFunc {

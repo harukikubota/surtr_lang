@@ -2,17 +2,23 @@
 
 use std::io::{self, IsTerminal, Write};
 
+#[cfg(feature = "line-editor")]
 use rustyline::completion::{Completer, Pair};
+#[cfg(feature = "line-editor")]
 use rustyline::error::ReadlineError;
+#[cfg(feature = "line-editor")]
 use rustyline::highlight::Highlighter;
+#[cfg(feature = "line-editor")]
 use rustyline::hint::{Hinter, HistoryHinter};
+#[cfg(feature = "line-editor")]
 use rustyline::history::DefaultHistory;
+#[cfg(feature = "line-editor")]
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
+#[cfg(feature = "line-editor")]
 use rustyline::{Context, Editor, Helper};
 
 use crate::repl::logic::core::{xldr_version, ReplEngine};
-use crate::repl::logic::output::ReplOutput;
-use crate::repl::logic::ReplResult;
+use crate::repl::logic::{present_for_cli, styled, ReplResult};
 
 // ── Options ───────────────────────────────────────────────────────────────────
 
@@ -22,11 +28,13 @@ pub enum BannerMode {
     Detailed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplOptions {
     pub quiet: bool,
     pub banner: BannerMode,
     pub version: bool,
+    pub script_path: Option<String>,
+    pub module_path: Option<String>,
 }
 
 impl Default for ReplOptions {
@@ -35,17 +43,21 @@ impl Default for ReplOptions {
             quiet: false,
             banner: BannerMode::Light,
             version: false,
+            script_path: None,
+            module_path: None,
         }
     }
 }
 
 // ── Line editor helper ────────────────────────────────────────────────────────
 
+#[cfg(feature = "line-editor")]
 struct ReplHelper {
     hinter: HistoryHinter,
     symbols: Vec<String>,
 }
 
+#[cfg(feature = "line-editor")]
 impl ReplHelper {
     fn new() -> Self {
         Self {
@@ -59,9 +71,12 @@ impl ReplHelper {
     }
 }
 
+#[cfg(feature = "line-editor")]
 impl Helper for ReplHelper {}
+#[cfg(feature = "line-editor")]
 impl Highlighter for ReplHelper {}
 
+#[cfg(feature = "line-editor")]
 impl Validator for ReplHelper {
     fn validate(
         &self,
@@ -71,6 +86,7 @@ impl Validator for ReplHelper {
     }
 }
 
+#[cfg(feature = "line-editor")]
 impl Hinter for ReplHelper {
     type Hint = String;
 
@@ -79,6 +95,7 @@ impl Hinter for ReplHelper {
     }
 }
 
+#[cfg(feature = "line-editor")]
 impl Completer for ReplHelper {
     type Candidate = Pair;
 
@@ -88,7 +105,10 @@ impl Completer for ReplHelper {
         pos: usize,
         _ctx: &Context<'_>,
     ) -> Result<(usize, Vec<Pair>), ReadlineError> {
-        const COMMANDS: &[&str] = &[":quit", ":doc", ":save", ":v"];
+        const COMMANDS: &[&str] = &[
+            ":help", ":h", ":quit", ":exit", ":doc", ":sig", ":info", ":type", ":lens", ":error",
+            ":save", ":v",
+        ];
         let start = line[..pos]
             .rfind(char::is_whitespace)
             .map(|idx| idx + 1)
@@ -129,72 +149,110 @@ pub fn cli_command(options: ReplOptions) -> Result<(), i32> {
         print_banner(options.banner);
     }
 
-    let mut engine = ReplEngine::new().map_err(|e| {
-        eprintln!("Error initializing source loader: {}", e);
-        1
-    })?;
+    let mut engine = match (&options.module_path, &options.script_path) {
+        (Some(module_path), Some(script_path)) => {
+            ReplEngine::from_preload_files(Some(module_path), Some(script_path)).map_err(|e| {
+                e.emit();
+                1
+            })?
+        }
+        (Some(module_path), None) => {
+            ReplEngine::from_preload_files(Some(module_path), None).map_err(|e| {
+                e.emit();
+                1
+            })?
+        }
+        (None, Some(script_path)) => {
+            ReplEngine::from_preload_files(None, Some(script_path)).map_err(|e| {
+                e.emit();
+                1
+            })?
+        }
+        (None, None) => ReplEngine::new().map_err(|e| {
+            eprintln!("Error initializing source loader: {}", e);
+            1
+        })?,
+    };
 
     if io::stdin().is_terminal() {
-        let mut editor: Editor<ReplHelper, DefaultHistory> = Editor::new().map_err(|e| {
-            eprintln!("Error initializing line editor: {}", e);
-            1
-        })?;
-        editor.set_helper(Some(ReplHelper::new()));
+        run_terminal_repl(&mut engine)?;
+    } else {
+        run_plain_repl(&mut engine)?;
+    }
 
-        loop {
-            let prompt = engine.prompt();
-            let symbols = engine.completion_symbols();
-            if let Some(helper) = editor.helper_mut() {
-                helper.set_symbols(symbols);
-            }
-            match editor.readline(&prompt) {
-                Ok(line) => {
-                    if !line.trim().is_empty() {
-                        let _ = editor.add_history_entry(line.as_str());
-                    }
-                    let result = engine.handle_line(&line);
-                    print_result(&result);
-                    if result.should_exit {
-                        break;
-                    }
+    Ok(())
+}
+
+#[cfg(feature = "line-editor")]
+fn run_terminal_repl(engine: &mut ReplEngine) -> Result<(), i32> {
+    let mut editor: Editor<ReplHelper, DefaultHistory> = Editor::new().map_err(|e| {
+        eprintln!("Error initializing line editor: {}", e);
+        1
+    })?;
+    editor.set_helper(Some(ReplHelper::new()));
+
+    loop {
+        let prompt = engine.prompt();
+        let symbols = engine.completion_symbols();
+        if let Some(helper) = editor.helper_mut() {
+            helper.set_symbols(symbols);
+        }
+        match editor.readline(&prompt) {
+            Ok(line) => {
+                if !line.trim().is_empty() {
+                    let _ = editor.add_history_entry(line.as_str());
                 }
-                Err(ReadlineError::Interrupted) => {
-                    return Err(130);
-                }
-                Err(ReadlineError::Eof) => {
+                let result = engine.handle_line(&line);
+                print_result(&result, styled::color_enabled_from_env());
+                if result.should_exit {
                     break;
                 }
-                Err(e) => {
-                    eprintln!("Error reading input: {}", e);
-                    return Err(1);
-                }
             }
-        }
-    } else {
-        let stdin = io::stdin();
-        loop {
-            print!("{}", engine.prompt());
-            if io::stdout().flush().is_err() {
+            Err(ReadlineError::Interrupted) => {
+                return Err(130);
+            }
+            Err(ReadlineError::Eof) => {
+                break;
+            }
+            Err(e) => {
+                eprintln!("Error reading input: {}", e);
                 return Err(1);
             }
+        }
+    }
 
-            let mut line = String::new();
-            let read = match stdin.read_line(&mut line) {
-                Ok(n) => n,
-                Err(e) => {
-                    eprintln!("Error reading input: {}", e);
-                    return Err(1);
-                }
-            };
-            if read == 0 {
-                break;
+    Ok(())
+}
+
+#[cfg(not(feature = "line-editor"))]
+fn run_terminal_repl(engine: &mut ReplEngine) -> Result<(), i32> {
+    run_plain_repl(engine)
+}
+
+fn run_plain_repl(engine: &mut ReplEngine) -> Result<(), i32> {
+    let stdin = io::stdin();
+    loop {
+        print!("{}", engine.prompt());
+        if io::stdout().flush().is_err() {
+            return Err(1);
+        }
+
+        let mut line = String::new();
+        let read = match stdin.read_line(&mut line) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("Error reading input: {}", e);
+                return Err(1);
             }
-            let line = line.trim_end_matches(&['\r', '\n'][..]);
-            let result = engine.handle_line(line);
-            print_result(&result);
-            if result.should_exit {
-                break;
-            }
+        };
+        if read == 0 {
+            break;
+        }
+        let line = line.trim_end_matches(&['\r', '\n'][..]);
+        let result = engine.handle_line(line);
+        print_result(&result, styled::color_enabled_from_env());
+        if result.should_exit {
+            break;
         }
     }
 
@@ -223,39 +281,8 @@ fn print_banner(mode: BannerMode) {
     }
 }
 
-fn print_result(result: &ReplResult) {
-    match &result.output {
-        ReplOutput::EvalSuccess { rendered, .. } => {
-            for line in rendered {
-                println!("> {}", line);
-            }
-        }
-        ReplOutput::CommandOutput { rendered } => {
-            for line in rendered {
-                println!("> {}", line);
-            }
-        }
-        ReplOutput::DocResolved {
-            symbol,
-            signature,
-            summary,
-            source_snippet,
-        } => {
-            println!("> {}", symbol);
-            if let Some(sig) = signature {
-                println!("> sig: {}", sig);
-            }
-            if let Some(text) = source_snippet.as_ref().or(summary.as_ref()) {
-                for line in text.lines() {
-                    if !line.trim().is_empty() {
-                        println!("> {}", line);
-                    }
-                }
-            }
-        }
-        ReplOutput::EvalError { .. } | ReplOutput::StatusMessage(_) => {
-            // Errors already printed to stderr by diagnostics / runtime reporter.
-        }
-        _ => {}
+fn print_result(result: &ReplResult, color: bool) {
+    for line in present_for_cli(result, color) {
+        println!("{line}");
     }
 }

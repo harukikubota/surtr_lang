@@ -1,0 +1,13 @@
+@doc """
+Standard `Lt` operator trait declaration.
+`Lt` models the `<` / `lt(...)` contract.
+
+## REPL
+xldr(1)> lt(1, 2)
+True
+"""
+@autoimport
+deftrait Lt {
+  # Return `True` when the left value is strictly smaller.
+  def lt(self: Self, rhs: Self) -> Boolean
+}

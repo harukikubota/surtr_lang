@@ -1,0 +1,10 @@
+@doc """
+Standard `LiftComposable` flow operator trait declaration.
+`LiftComposable<$A, $B, $C, $Mapped>` models composing a contextual unary
+callable with a plain unary callable. The `>*` operator lowers through this
+trait.
+"""
+deftrait LiftComposable<$A, $B, $C, $Mapped> {
+  # Compose the receiver contextual callable before a plain mapper.
+  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> $Mapped)
+}

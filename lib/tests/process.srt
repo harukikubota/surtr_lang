@@ -1,0 +1,48 @@
+include "./schema/process_schema.srt"
+
+import ProcessSchema::call_fixture;
+import Test;
+
+test("Process") {
+  describe("Task::call and Task::async") {
+    it("returns the inner task result") {
+      call_fixture("build") |>= assert_eq("call:build")
+    }
+
+    it("supports async work that sleeps before returning") {
+      result = Task::async({||
+        Process::sleep(1ms)
+        Ok("async:ready")
+      })
+      assert_eq("Ok(\"async:ready\")", inspect(result))
+    }
+  }
+
+  describe("Task::cast and Task::launch") {
+    it("runs cast bodies and captures stdout") {
+      capture_stdout()
+      result = Task::cast({||
+        print("cast:worker")
+      })
+      assert_eq("Ok(())", inspect(result))
+      assert_stdout_eq(["cast:worker"])
+    }
+
+    it("runs launch bodies and still returns Ok") {
+      capture_stdout()
+      result = Task::launch({||
+        print("launch:worker")
+        Err(NoneError)
+      })
+      assert_eq("Ok(())", inspect(result))
+      assert_stdout_eq(["launch:worker"])
+    }
+  }
+
+  describe("Process::sleep") {
+    it("accepts converted durations") {
+      d: Duration =? try_from(1, Duration)
+      assert_eq("Ok(())", inspect(Process::sleep(d)))
+    }
+  }
+}

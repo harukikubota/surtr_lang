@@ -1,2 +1,0 @@
-v = if_then(True, print("x"))
-print(to_string(v))

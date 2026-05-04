@@ -1,0 +1,12 @@
+def main() -> Unit {
+  name = "surtr"
+  msg = """
+  hello
+  #{name}
+  """
+  print(msg)
+  print(inspect(String::split(msg, "\n")))
+  print(inspect(String::lines(msg)))
+}
+
+main()

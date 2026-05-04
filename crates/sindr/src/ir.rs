@@ -94,6 +94,10 @@ pub enum Opcode {
     },
     GetTag,
     EqTag,
+    Dbg {
+        template_id: u32,
+        arg_count: u8,
+    },
 
     // Built-in function call
     CallBuiltin {
@@ -111,7 +115,6 @@ pub enum Opcode {
         span_end: u32,
     },
     CaptureClosure(u8),
-    CapturePartial(u8),
     MakeError {
         template_id: u32,
     },
@@ -195,10 +198,10 @@ impl Opcode {
             Self::GetField { .. } => "GetField",
             Self::GetTag => "GetTag",
             Self::EqTag => "EqTag",
+            Self::Dbg { .. } => "Dbg",
             Self::CallBuiltin { .. } => "CallBuiltin",
             Self::Call { .. } => "Call",
             Self::CaptureClosure(..) => "CaptureClosure",
-            Self::CapturePartial(..) => "CapturePartial",
             Self::MakeError { .. } => "MakeError",
             Self::MakeErrorLiteral { .. } => "MakeErrorLiteral",
             Self::CallClosure { .. } => "CallClosure",
@@ -236,6 +239,8 @@ pub struct FunctionFlags {
     pub public: bool,
     #[serde(default)]
     pub closure: bool,
+    #[serde(default)]
+    pub partial_apply_wrapper: bool,
     #[serde(default)]
     pub builtin_wrapper: bool,
     #[serde(default)]
@@ -367,6 +372,39 @@ pub struct PcSpanEntry {
     pub span_id: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeProcessKind {
+    ReadOnlyAgent,
+    StateAgent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeProcessInstance {
+    Singleton,
+    Multi,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeProcessSpec {
+    pub process_name: String,
+    pub module_path: String,
+    pub kind: RuntimeProcessKind,
+    pub instance: RuntimeProcessInstance,
+    pub boot: bool,
+    pub registry: bool,
+    pub lazy: bool,
+    pub init_fun_idx: u32,
+    pub get_fun_idx: u32,
+    #[serde(default)]
+    pub set_fun_idx: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeProcessSpecTable {
+    #[serde(default)]
+    pub entries: Vec<RuntimeProcessSpec>,
+}
+
 /// A compiled Surtr program, ready for Eldr to execute.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Bytecode {
@@ -375,9 +413,11 @@ pub struct Bytecode {
     pub num_locals: usize,
     pub type_registry: TypeRegistry,
     pub error_templates: Vec<ErrTemplate>,
+    #[serde(default)]
+    pub dbg_templates: Vec<DbgTemplate>,
     pub functions: Vec<FunctionEntry>,
     pub source_map: Option<SourceMap>,
-    /// Symbol-level documentation carried from `@@doc` through `.eldr`.
+    /// Symbol-level documentation carried from `@doc` through `.eldr`.
     #[serde(default)]
     pub docs: Vec<DocEntry>,
     #[serde(default)]
@@ -398,6 +438,8 @@ pub struct Bytecode {
     pub sources: Vec<SourceFileEntry>,
     #[serde(default)]
     pub pc_spans: Vec<PcSpanEntry>,
+    #[serde(default)]
+    pub runtime_process_specs: RuntimeProcessSpecTable,
 }
 
 impl Default for Bytecode {
@@ -408,6 +450,7 @@ impl Default for Bytecode {
             num_locals: 0,
             type_registry: TypeRegistry::new(),
             error_templates: Vec::new(),
+            dbg_templates: Vec::new(),
             functions: Vec::new(),
             source_map: None,
             docs: Vec::new(),
@@ -420,6 +463,7 @@ impl Default for Bytecode {
             spans: Vec::new(),
             sources: Vec::new(),
             pc_spans: Vec::new(),
+            runtime_process_specs: RuntimeProcessSpecTable::default(),
         }
     }
 }
@@ -437,8 +481,12 @@ pub struct BytecodeChunk {
     /// Base offset of error templates in the VM-wide pool when this chunk is produced.
     pub error_template_base: u32,
     pub error_templates: Vec<ErrTemplate>,
+    /// Base offset of dbg templates in the VM-wide pool when this chunk is produced.
+    pub dbg_template_base: u32,
+    pub dbg_templates: Vec<DbgTemplate>,
     pub functions: Vec<FunctionEntry>,
     pub docs: Vec<DocEntry>,
+    pub runtime_process_specs: Vec<RuntimeProcessSpec>,
 }
 
 /// Function table entry.
@@ -502,6 +550,23 @@ pub struct ErrTemplate {
     pub num_params: u8,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbgArgTemplate {
+    pub span_start: u32,
+    pub span_end: u32,
+    pub ty_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbgTemplate {
+    pub id: u32,
+    pub span_start: u32,
+    pub span_end: u32,
+    #[serde(default)]
+    pub source_name: Option<String>,
+    pub args: Vec<DbgArgTemplate>,
+}
+
 pub fn populate_error_template_lines(error_templates: &mut [ErrTemplate], source: &str) {
     for template in error_templates {
         let (line, column) = line_column_for_offset(source, template.span_start as usize);
@@ -514,10 +579,8 @@ pub fn line_column_for_offset(source: &str, offset: usize) -> (u32, u32) {
     let mut line = 1u32;
     let mut column = 1u32;
 
-    for (idx, ch) in source.char_indices() {
-        if idx >= offset {
-            break;
-        }
+    let limit = offset.min(source.chars().count());
+    for ch in source.chars().take(limit) {
         if ch == '\n' {
             line += 1;
             column = 1;
@@ -545,12 +608,19 @@ pub fn synthesize_source_map(
     opcodes: &[Opcode],
     functions: &[FunctionEntry],
     error_templates: &[ErrTemplate],
+    dbg_templates: &[DbgTemplate],
     source: &str,
     source_name: Option<&str>,
 ) -> Option<SourceMap> {
     let mut entries = Vec::new();
     for (opcode_index, opcode) in opcodes.iter().enumerate() {
-        let span = opcode_span(opcode, functions, error_templates, opcode_index as u32)?;
+        let span = opcode_span(
+            opcode,
+            functions,
+            error_templates,
+            dbg_templates,
+            opcode_index as u32,
+        )?;
         let (line, column) = line_column_for_offset(source, span.0 as usize);
         entries.push(OpcodeSource {
             opcode_index: opcode_index as u32,
@@ -657,6 +727,7 @@ impl Bytecode {
     const CHUNK_FUNCS: [u8; 4] = *b"Func";
     const CHUNK_TYPES: [u8; 4] = *b"Type";
     const CHUNK_ERRORS: [u8; 4] = *b"ErrT";
+    const CHUNK_DBGS: [u8; 4] = *b"DbgT";
     const CHUNK_COMPILE_INFO: [u8; 4] = *b"CInf";
     const CHUNK_LABELS: [u8; 4] = *b"LblT";
     const CHUNK_IMPORTS: [u8; 4] = *b"ImpT";
@@ -667,6 +738,7 @@ impl Bytecode {
     const CHUNK_SOURCES: [u8; 4] = *b"SrcP";
     const CHUNK_PC_SPANS: [u8; 4] = *b"PcSp";
     const CHUNK_DOCS: [u8; 4] = *b"Docs";
+    const CHUNK_PROCESS_SPECS: [u8; 4] = *b"Proc";
 
     pub fn refresh_viewer_metadata(&mut self) {
         self.compile_info.num_locals = self.num_locals;
@@ -702,6 +774,7 @@ impl Bytecode {
                 Self::CHUNK_ERRORS,
                 serialize_chunk(&bytecode.error_templates)?,
             ),
+            (Self::CHUNK_DBGS, serialize_chunk(&bytecode.dbg_templates)?),
             (
                 Self::CHUNK_COMPILE_INFO,
                 serialize_chunk(&bytecode.compile_info)?,
@@ -714,6 +787,10 @@ impl Bytecode {
             (Self::CHUNK_SPANS, serialize_chunk(&bytecode.spans)?),
             (Self::CHUNK_SOURCES, serialize_chunk(&bytecode.sources)?),
             (Self::CHUNK_PC_SPANS, serialize_chunk(&bytecode.pc_spans)?),
+            (
+                Self::CHUNK_PROCESS_SPECS,
+                serialize_chunk(&bytecode.runtime_process_specs)?,
+            ),
         ];
 
         if !bytecode.docs.is_empty() {
@@ -770,6 +847,8 @@ fn decode_payloads(
     let functions = deserialize_required::<Vec<FunctionEntry>>(payloads, "Func")?;
     let type_registry = deserialize_required::<TypeRegistry>(payloads, "Type")?;
     let error_templates = deserialize_required::<Vec<ErrTemplate>>(payloads, "ErrT")?;
+    let dbg_templates =
+        deserialize_optional::<Vec<DbgTemplate>>(payloads, "DbgT")?.unwrap_or_default();
     let compile_info = deserialize_required::<CompileInfo>(payloads, "CInf")?;
     let labels = deserialize_required::<Vec<LabelEntry>>(payloads, "LblT")?;
     let imports = deserialize_required::<Vec<ImportEntry>>(payloads, "ImpT")?;
@@ -780,6 +859,8 @@ fn decode_payloads(
     let sources = deserialize_required::<Vec<SourceFileEntry>>(payloads, "SrcP")?;
     let pc_spans = deserialize_required::<Vec<PcSpanEntry>>(payloads, "PcSp")?;
     let docs = deserialize_optional::<Vec<DocEntry>>(payloads, "Docs")?.unwrap_or_default();
+    let runtime_process_specs =
+        deserialize_optional::<RuntimeProcessSpecTable>(payloads, "Proc")?.unwrap_or_default();
 
     Ok(Bytecode {
         opcodes,
@@ -787,6 +868,7 @@ fn decode_payloads(
         num_locals: compile_info.num_locals,
         type_registry,
         error_templates,
+        dbg_templates,
         functions,
         source_map: rebuild_source_map(&spans, &pc_spans),
         docs,
@@ -799,6 +881,7 @@ fn decode_payloads(
         spans,
         sources,
         pc_spans,
+        runtime_process_specs,
     })
 }
 
@@ -938,6 +1021,7 @@ fn is_known_chunk_tag(tag: &str) -> bool {
             | "Func"
             | "Type"
             | "ErrT"
+            | "DbgT"
             | "CInf"
             | "LblT"
             | "ImpT"
@@ -947,6 +1031,7 @@ fn is_known_chunk_tag(tag: &str) -> bool {
             | "SpnT"
             | "SrcP"
             | "PcSp"
+            | "Proc"
             | "Docs"
     )
 }
@@ -1215,6 +1300,7 @@ fn opcode_span(
     opcode: &Opcode,
     functions: &[FunctionEntry],
     error_templates: &[ErrTemplate],
+    dbg_templates: &[DbgTemplate],
     opcode_index: u32,
 ) -> Option<(u32, u32)> {
     match opcode {
@@ -1234,6 +1320,15 @@ fn opcode_span(
             ..
         } => Some((*span_start, (*span_end).max(*span_start + 1))),
         Opcode::MakeError { template_id } => error_templates
+            .iter()
+            .find(|template| template.id == *template_id)
+            .map(|template| {
+                (
+                    template.span_start,
+                    template.span_end.max(template.span_start + 1),
+                )
+            }),
+        Opcode::Dbg { template_id, .. } => dbg_templates
             .iter()
             .find(|template| template.id == *template_id)
             .map(|template| {
@@ -1269,7 +1364,8 @@ mod tests {
     use super::{
         checked_payload_len, line_column_for_offset, populate_error_template_lines,
         stable_hash_hex, Bytecode, BytecodeFormatError, CompileInfo, Constant, DocEntry, DocKind,
-        ErrTemplate, FunctionEntry, FunctionFlags, Opcode, OpcodeSource, SourceFileEntry,
+        ErrTemplate, FunctionEntry, FunctionFlags, Opcode, OpcodeSource, RuntimeProcessInstance,
+        RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable, SourceFileEntry,
         SourceMap,
     };
     use crate::primitives::int;
@@ -1282,6 +1378,7 @@ mod tests {
             name: "User".to_string(),
             kind: TypeKind::Struct,
             field_names: vec!["name".to_string(), "age".to_string()],
+            private_flags: vec![false, false],
         });
         registry
     }
@@ -1302,6 +1399,7 @@ mod tests {
                 format: "bad".to_string(),
                 num_params: 0,
             }],
+            dbg_templates: Vec::new(),
             functions: vec![FunctionEntry {
                 fun_idx: 0,
                 entry_pc: 1,
@@ -1315,6 +1413,7 @@ mod tests {
                 flags: FunctionFlags {
                     public: true,
                     closure: false,
+                    partial_apply_wrapper: false,
                     builtin_wrapper: false,
                     tail_entry: false,
                     generated: false,
@@ -1348,6 +1447,20 @@ mod tests {
                 text: Some("let x = 42".to_string()),
             }],
             pc_spans: Vec::new(),
+            runtime_process_specs: RuntimeProcessSpecTable {
+                entries: vec![RuntimeProcessSpec {
+                    process_name: "Counter".to_string(),
+                    module_path: "Agents::Counter".to_string(),
+                    kind: RuntimeProcessKind::StateAgent,
+                    instance: RuntimeProcessInstance::Singleton,
+                    boot: true,
+                    registry: true,
+                    lazy: false,
+                    init_fun_idx: 0,
+                    get_fun_idx: 0,
+                    set_fun_idx: Some(0),
+                }],
+            },
         };
         bytecode.refresh_viewer_metadata();
         bytecode
@@ -1422,6 +1535,7 @@ mod tests {
         assert_eq!(inspected.header.version, 1);
         assert!(inspected.chunks.len() >= 14);
         assert_eq!(inspected.chunks[0].tag, "Code");
+        assert!(inspected.chunks.iter().any(|chunk| chunk.tag == "Proc"));
         assert!(inspected.chunks[0].payload_offset >= 16);
         assert!(inspected.chunks[0].padded_size >= inspected.chunks[0].size as usize);
     }
@@ -1436,8 +1550,8 @@ mod tests {
     #[test]
     fn line_column_for_offset_tracks_utf8_columns() {
         let source = "あい\nうえお";
-        assert_eq!(line_column_for_offset(source, "あ".len()), (1, 2));
-        assert_eq!(line_column_for_offset(source, "あい\nう".len()), (2, 2));
+        assert_eq!(line_column_for_offset(source, 1), (1, 2));
+        assert_eq!(line_column_for_offset(source, 4), (2, 2));
     }
 
     #[test]

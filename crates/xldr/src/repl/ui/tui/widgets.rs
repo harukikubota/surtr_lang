@@ -7,7 +7,9 @@ use ratatui::{
     Frame,
 };
 
-use super::app::{App, FocusPane, ResultEntryKind};
+use crate::repl::logic::PresentedResultKind;
+
+use super::app::{App, FocusPane};
 
 pub(super) fn draw(frame: &mut Frame, app: &App) {
     let completion_h = if app.completion.visible { 5u16 } else { 1 };
@@ -97,10 +99,11 @@ impl Widget for ResultsPaneWidget<'_> {
             entry_lines.push(Line::raw(entry.source.clone()));
 
             let rendered_style = match entry.kind {
-                ResultEntryKind::EvalError => Style::default().fg(Color::Red),
-                ResultEntryKind::Info => Style::default().fg(Color::Yellow),
-                ResultEntryKind::CommandOutput => Style::default().fg(Color::Cyan),
-                ResultEntryKind::EvalSuccess => Style::default().fg(Color::Green),
+                PresentedResultKind::EvalError => Style::default().fg(Color::Red),
+                PresentedResultKind::Info => Style::default().fg(Color::Yellow),
+                PresentedResultKind::PlainText => Style::default().fg(Color::Cyan),
+                PresentedResultKind::Diagnostic => Style::default().fg(Color::Red),
+                PresentedResultKind::EvalSuccess => Style::default().fg(Color::Green),
             };
             for line in entry.rendered_lines.iter() {
                 entry_lines.push(Line::styled(line.clone(), rendered_style));
@@ -146,7 +149,12 @@ fn draw_docs(frame: &mut Frame, app: &App, area: Rect) {
             .iter()
             .map(|d| {
                 let sig = d.signature.clone().unwrap_or_default();
-                let summary = d.summary.clone().unwrap_or_default();
+                let summary = d
+                    .body
+                    .as_deref()
+                    .and_then(|body| body.lines().find(|line| !line.trim().is_empty()))
+                    .unwrap_or_default()
+                    .to_string();
                 let focused = app.selected_doc == Some(d.idx);
                 let marker = if focused { ">" } else { " " };
                 let suffix = if summary.is_empty() {

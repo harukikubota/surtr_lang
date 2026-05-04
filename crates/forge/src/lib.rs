@@ -5,58 +5,87 @@ pub mod opcode;
 pub mod registry;
 
 pub use codegen::{
-    codegen, BindingInfo, ChunkMeta, ForgeCheckpoint, ForgeSession, ReplTypeKind, TypeDefDisplay,
+    codegen, codegen_typed_program, compose_bytecode_with_chunk, BindingInfo, ChunkMeta,
+    ForgeCheckpoint, ForgeSession, ReplCallableDisplay, ReplCallableKind, ReplLensInfo,
+    ReplLensSegmentInfo, ReplTypeKind, TypeDefDisplay,
 };
 
 #[cfg(test)]
 mod tests {
-    use super::codegen;
+    use std::sync::OnceLock;
+
+    use super::{codegen, codegen_typed_program};
     use crate::bytecode::Constant;
     use crate::opcode::Opcode;
     use crate::registry::TypeKind;
+    use scar::typed::{
+        TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode, TypedPattern,
+    };
+    use scar::types::Ty;
+    use sigil::resolved::ResolvedId;
     use sindr::builtin::builtin_id_by_name;
-    use spire::ast::Ast;
+    use sindr::primitives::int;
+    use spire::ast::{Ast, Lit, Span, Visibility};
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
+    const SPECIAL_TYPES_SOURCE: &str = include_str!("../../../lib/types/special_types.srt");
     const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
-    const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/trait/numeric.srt");
-    const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/trait/show.srt");
-    const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/trait/eq.srt");
-    const COMPARE_MODULE_SOURCE: &str = include_str!("../../../lib/trait/compare.srt");
-    const ORD_MODULE_SOURCE: &str = include_str!("../../../lib/trait/ord.srt");
-    const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/trait/concat.srt");
-    const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/from.srt");
-    const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../lib/trait/try_from.srt");
-    const INT_MODULE_SOURCE: &str = include_str!("../../../lib/int.srt");
-    const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/string.srt");
-    const REGEX_MODULE_SOURCE: &str = include_str!("../../../lib/regex.srt");
-    const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/boolean.srt");
-    const ORDERING_MODULE_SOURCE: &str = include_str!("../../../lib/ordering.srt");
-    const ERROR_MODULE_SOURCE: &str = include_str!("../../../lib/error.srt");
-    const LIST_MODULE_SOURCE: &str = include_str!("../../../lib/list.srt");
-    const GENERATOR_MODULE_SOURCE: &str = include_str!("../../../lib/generator.srt");
-    const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../lib/hash_map.srt");
-    const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/result.srt");
+    const ADD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/add.srt");
+    const SUB_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/sub.srt");
+    const MUL_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/mul.srt");
+    const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/traits/numeric.srt");
+    const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/traits/show.srt");
+    const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/eq.srt");
+    const NEQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/neq.srt");
+    const COMPARE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/compare.srt");
+    const LT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/lt.srt");
+    const LTE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/lte.srt");
+    const GT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/gt.srt");
+    const GTE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/gte.srt");
+    const ORD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/ord.srt");
+    const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/concat.srt");
+    const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/traits/from.srt");
+    const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../lib/traits/try_from.srt");
+    const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/functor.srt");
+    const CHAINABLE_MODULE_SOURCE: &str =
+        include_str!("../../../lib/traits/operator/chainable.srt");
+    const PIPE_APPLY_MODULE_SOURCE: &str =
+        include_str!("../../../lib/traits/operator/pipe_apply.srt");
+    const COMPOSE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/compose.srt");
+    const COMPOSABLE_MODULE_SOURCE: &str =
+        include_str!("../../../lib/traits/operator/composable.srt");
+    const LIFT_COMPOSABLE_MODULE_SOURCE: &str =
+        include_str!("../../../lib/traits/operator/lift_composable.srt");
+    const KLEISLI_COMPOSABLE_MODULE_SOURCE: &str =
+        include_str!("../../../lib/traits/operator/kleisli_composable.srt");
+    const INT_MODULE_SOURCE: &str = include_str!("../../../lib/types/int.srt");
+    const STRING_MODULE_SOURCE: &str = include_str!("../../../lib/types/string.srt");
+    const REGEX_MODULE_SOURCE: &str = include_str!("../../../lib/types/regex.srt");
+    const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../lib/types/boolean.srt");
+    const ORDERING_MODULE_SOURCE: &str = include_str!("../../../lib/types/ordering.srt");
+    const ERROR_MODULE_SOURCE: &str = include_str!("../../../lib/types/error.srt");
+    const LIST_MODULE_SOURCE: &str = include_str!("../../../lib/types/list.srt");
+    const GENERATOR_MODULE_SOURCE: &str = include_str!("../../../lib/types/generator.srt");
+    const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../lib/types/hash_map.srt");
+    const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/types/result.srt");
+    const DURATION_MODULE_SOURCE: &str = include_str!("../../../lib/types/duration.srt");
+    const PROCESS_MODULE_SOURCE: &str = include_str!("../../../lib/process.srt");
+    const OPTION_MODULE_SOURCE: &str = include_str!("../../../lib/types/option.srt");
     const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/lens.srt");
-    const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/float.srt");
-
-    fn strip_test_annotations(source: &str) -> String {
-        source
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("@@test"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
+    const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/types/float.srt");
+    const RANDOM_MODULE_SOURCE: &str = include_str!("../../../lib/Random.srt");
+    const STYLED_DOC_MODULE_SOURCE: &str = include_str!("../../../lib/styled_doc.srt");
+    const TEST_MODULE_SOURCE: &str = include_str!("../../../lib/test.srt");
 
     fn parse_std_module_stage(
         source: &str,
-        fallback_module_path: &str,
+        _fallback_module_path: &str,
     ) -> Vec<sigil::StagedModuleAst> {
         let ast = spire::parse_with_context(
-            &strip_test_annotations(source),
+            source,
             spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
         )
-        .unwrap_or_else(|err| panic!("std module {fallback_module_path} should parse: {err:?}"));
+        .unwrap_or_else(|err| panic!("std module {_fallback_module_path} should parse: {err:?}"));
 
         let shared_imports = ast
             .iter()
@@ -76,9 +105,23 @@ mod tests {
                     module_ast.extend(body);
                     lowered.push(sigil::StagedModuleAst {
                         module_path,
+                        doc_module_path: None,
                         ast: module_ast,
                         module_doc: attrs.doc,
                         auto_import: attrs.auto_import,
+                        process_spec: attrs.process_spec,
+                    });
+                }
+                Ast::ImplDef(span, target, methods, attrs) => {
+                    let mut module_ast = shared_imports.clone();
+                    module_ast.push(Ast::ImplDef(span, target.clone(), methods, attrs.clone()));
+                    lowered.push(sigil::StagedModuleAst {
+                        module_path: target,
+                        doc_module_path: None,
+                        ast: module_ast,
+                        module_doc: attrs.doc,
+                        auto_import: attrs.auto_import,
+                        process_spec: attrs.process_spec,
                     });
                 }
                 Ast::Import(_, _, _) => {}
@@ -104,10 +147,12 @@ mod tests {
             let mut global_ast = shared_imports.clone();
             global_ast.extend(shared_result_ctor_contracts);
             lowered.push(sigil::StagedModuleAst {
-                module_path: fallback_module_path.to_string(),
+                module_path: String::new(),
+                doc_module_path: None,
                 ast: global_ast,
                 module_doc: None,
                 auto_import: false,
+                process_spec: None,
             });
         }
 
@@ -116,9 +161,11 @@ mod tests {
             global_ast.extend(shared_global_defs);
             lowered.push(sigil::StagedModuleAst {
                 module_path: String::new(),
+                doc_module_path: None,
                 ast: global_ast,
                 module_doc: None,
                 auto_import: false,
+                process_spec: None,
             });
         }
 
@@ -129,16 +176,32 @@ mod tests {
         vec![
             parse_std_module_stage(BUILTIN_PRELUDE_SOURCE, "Bootstrap"),
             [
+                ("SpecialTypes", SPECIAL_TYPES_SOURCE),
                 ("Kernel", KERNEL_PRELUDE_SOURCE),
+                ("Add", ADD_MODULE_SOURCE),
+                ("Sub", SUB_MODULE_SOURCE),
+                ("Mul", MUL_MODULE_SOURCE),
+                ("Eq", EQ_MODULE_SOURCE),
+                ("Neq", NEQ_MODULE_SOURCE),
+                ("Compare", COMPARE_MODULE_SOURCE),
+                ("Lt", LT_MODULE_SOURCE),
+                ("Lte", LTE_MODULE_SOURCE),
+                ("Gt", GT_MODULE_SOURCE),
+                ("Gte", GTE_MODULE_SOURCE),
+                ("Concat", CONCAT_MODULE_SOURCE),
                 ("Numeric", NUMERIC_MODULE_SOURCE),
                 ("Show", SHOW_MODULE_SOURCE),
-                ("Eq", EQ_MODULE_SOURCE),
                 ("Ordering", ORDERING_MODULE_SOURCE),
-                ("Compare", COMPARE_MODULE_SOURCE),
                 ("Ord", ORD_MODULE_SOURCE),
-                ("Concat", CONCAT_MODULE_SOURCE),
                 ("From", FROM_MODULE_SOURCE),
                 ("TryFrom", TRY_FROM_MODULE_SOURCE),
+                ("Functor", FUNCTOR_MODULE_SOURCE),
+                ("Chainable", CHAINABLE_MODULE_SOURCE),
+                ("PipeApply", PIPE_APPLY_MODULE_SOURCE),
+                ("Compose", COMPOSE_MODULE_SOURCE),
+                ("Composable", COMPOSABLE_MODULE_SOURCE),
+                ("LiftComposable", LIFT_COMPOSABLE_MODULE_SOURCE),
+                ("KleisliComposable", KLEISLI_COMPOSABLE_MODULE_SOURCE),
                 ("Int", INT_MODULE_SOURCE),
                 ("String", STRING_MODULE_SOURCE),
                 ("Regex", REGEX_MODULE_SOURCE),
@@ -148,30 +211,260 @@ mod tests {
                 ("Generator", GENERATOR_MODULE_SOURCE),
                 ("HashMap", HASH_MAP_MODULE_SOURCE),
                 ("Result", RESULT_MODULE_SOURCE),
+                ("Duration", DURATION_MODULE_SOURCE),
+                ("Process", PROCESS_MODULE_SOURCE),
+                ("Option", OPTION_MODULE_SOURCE),
                 ("Lens", LENS_MODULE_SOURCE),
                 ("Float", FLOAT_MODULE_SOURCE),
+                ("Random", RANDOM_MODULE_SOURCE),
+                ("StyledDoc", STYLED_DOC_MODULE_SOURCE),
             ]
             .into_iter()
             .flat_map(|(name, source)| parse_std_module_stage(source, name))
             .collect(),
+            [("Test", TEST_MODULE_SOURCE)]
+                .into_iter()
+                .flat_map(|(name, source)| parse_std_module_stage(source, name))
+                .collect(),
         ]
     }
 
+    fn cached_std_modules_and_declarations(
+    ) -> &'static (Vec<Vec<sigil::StagedModuleAst>>, sigil::DeclarationIndex) {
+        static CACHE: OnceLock<(Vec<Vec<sigil::StagedModuleAst>>, sigil::DeclarationIndex)> =
+            OnceLock::new();
+
+        CACHE.get_or_init(|| {
+            let module_stages = std_module_stages();
+            let declaration_index = sigil::precollect_declaration_index(&module_stages)
+                .expect("std modules should precollect");
+            (module_stages, declaration_index)
+        })
+    }
+
     fn typed_with_builtin_prelude(source: &str) -> Vec<scar::typed::TypedNode> {
-        let module_stages = std_module_stages();
+        let (module_stages, declaration_index) = cached_std_modules_and_declarations();
         let user_ast = spire::parse_with_context(source, spire::ParserContext::project(0))
             .expect("source should parse");
-        let declaration_index = sigil::precollect_declaration_index(&module_stages)
-            .expect("std modules should precollect");
         let resolved =
-            sigil::resolve_staged_program(&module_stages, user_ast, &declaration_index, None)
+            sigil::resolve_staged_program(module_stages, user_ast, declaration_index, None)
                 .expect("source should resolve");
         scar::typecheck(resolved).expect("source should typecheck")
+    }
+
+    fn typed_module_program_with_builtin_prelude(source: &str) -> scar::typed::TypedProgram {
+        let (module_stages, _) = cached_std_modules_and_declarations();
+        let ast = spire::parse_with_context(source, spire::ParserContext::project(0))
+            .expect("source should parse");
+        let shared_imports = ast
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Ast::Import(_, _, _) => Some(stmt.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let lowered = ast
+            .into_iter()
+            .filter_map(|stmt| match stmt {
+                Ast::Defmod(_, module_path, body, attrs) => {
+                    let mut module_ast = shared_imports.clone();
+                    module_ast.extend(body);
+                    Some(sigil::StagedModuleAst {
+                        module_path,
+                        doc_module_path: None,
+                        ast: module_ast,
+                        module_doc: attrs.doc,
+                        auto_import: attrs.auto_import,
+                        process_spec: attrs.process_spec,
+                    })
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let mut all_stages = module_stages.clone();
+        all_stages.push(lowered);
+        let declaration_index = sigil::precollect_declaration_index(&all_stages)
+            .expect("module stages should precollect");
+        let resolved = sigil::resolve_staged_program_from_state(
+            &all_stages,
+            Vec::new(),
+            &declaration_index,
+            None,
+            0,
+            sigil::ResolveResumeState::default(),
+        )
+        .expect("definition source should resolve");
+        scar::typecheck_staged_program(resolved).expect("definition source should typecheck")
     }
 
     fn codegen_source(source: &str) -> sindr::ir::Bytecode {
         let typed = typed_with_builtin_prelude(source);
         codegen(typed).expect("codegen should succeed")
+    }
+
+    fn test_span() -> Span {
+        Span { start: 0, end: 0 }
+    }
+
+    fn resolved_id(name: &str, unique_id: u32) -> ResolvedId {
+        ResolvedId {
+            name: name.to_string(),
+            qualified_name: None,
+            unique_id,
+            compiler_generated: false,
+            span: test_span(),
+        }
+    }
+
+    fn int_lit(value: i64) -> TypedNode {
+        TypedNode {
+            ty: Ty::Int,
+            span: test_span(),
+            node: TypedInner::Lit(Lit::Int(int(value))),
+        }
+    }
+
+    fn unit_lit() -> TypedNode {
+        TypedNode {
+            ty: Ty::Unit,
+            span: test_span(),
+            node: TypedInner::Lit(Lit::Unit),
+        }
+    }
+
+    fn list_nil() -> TypedNode {
+        TypedNode {
+            ty: Ty::List(Box::new(Ty::Int)),
+            span: test_span(),
+            node: TypedInner::ListNil,
+        }
+    }
+
+    fn list_cons_expr(depth: usize) -> TypedNode {
+        let mut node = list_nil();
+        for value in (0..depth).rev() {
+            node = TypedNode {
+                ty: Ty::List(Box::new(Ty::Int)),
+                span: test_span(),
+                node: TypedInner::ListCons(Box::new(int_lit(value as i64)), Box::new(node)),
+            };
+        }
+        node
+    }
+
+    fn list_cons_bind_pattern(depth: usize) -> TypedPattern {
+        let mut pat = TypedPattern::ListNil(Ty::List(Box::new(Ty::Int)));
+        for _ in 0..depth {
+            pat = TypedPattern::ListCons(
+                Ty::List(Box::new(Ty::Int)),
+                Box::new(TypedPattern::Wildcard(Ty::Int)),
+                Box::new(pat),
+            );
+        }
+        pat
+    }
+
+    fn list_cons_match_pattern(depth: usize) -> TypedMatchPattern {
+        let mut pat = TypedMatchPattern::ListNil;
+        for _ in 0..depth {
+            pat = TypedMatchPattern::ListCons(Box::new(TypedMatchPattern::Wildcard), Box::new(pat));
+        }
+        pat
+    }
+
+    fn nested_tail_blocks(depth: usize, leaf: TypedNode) -> TypedNode {
+        let mut node = leaf;
+        for _ in 0..depth {
+            node = TypedNode {
+                ty: node.ty.clone(),
+                span: test_span(),
+                node: TypedInner::Block(vec![node]),
+            };
+        }
+        node
+    }
+
+    fn codegen_typed(stmts: Vec<TypedNode>) -> sindr::ir::Bytecode {
+        codegen(stmts).expect("typed codegen should succeed")
+    }
+
+    #[test]
+    fn deep_list_cons_expression_codegen_uses_normal_test_stack() {
+        let bytecode = codegen_typed(vec![list_cons_expr(512)]);
+        let cons_count = bytecode
+            .opcodes
+            .iter()
+            .filter(|op| matches!(op, Opcode::ListCons))
+            .count();
+
+        assert_eq!(cons_count, 512);
+    }
+
+    #[test]
+    fn deep_list_cons_bind_pattern_codegen_uses_normal_test_stack() {
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: test_span(),
+            node: TypedInner::Bind(list_cons_bind_pattern(512), Box::new(list_cons_expr(512))),
+        };
+        let bytecode = codegen_typed(vec![node]);
+        let list_head_count = bytecode
+            .opcodes
+            .iter()
+            .filter(|op| matches!(op, Opcode::ListHead))
+            .count();
+
+        assert_eq!(list_head_count, 1024);
+    }
+
+    #[test]
+    fn deep_list_cons_match_pattern_codegen_uses_normal_test_stack() {
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: test_span(),
+            node: TypedInner::Match(
+                Box::new(list_cons_expr(512)),
+                vec![TypedMatchArm {
+                    pattern: list_cons_match_pattern(512),
+                    guard: None,
+                    body: unit_lit(),
+                }],
+            ),
+        };
+        let bytecode = codegen_typed(vec![node]);
+        let list_head_count = bytecode
+            .opcodes
+            .iter()
+            .filter(|op| matches!(op, Opcode::ListHead))
+            .count();
+
+        assert_eq!(list_head_count, 1024);
+    }
+
+    #[test]
+    fn deep_tail_block_function_codegen_uses_normal_test_stack() {
+        let body = nested_tail_blocks(512, int_lit(1));
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: test_span(),
+            node: TypedInner::Def(
+                0,
+                resolved_id("deep", 1),
+                Vec::new(),
+                Vec::<TypedFunParam>::new(),
+                Ty::Int,
+                Box::new(body),
+                Visibility::Public,
+            ),
+        };
+        let bytecode = codegen_typed(vec![node]);
+
+        assert_eq!(bytecode.functions.len(), 1);
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::Return)));
     }
 
     #[test]
@@ -449,9 +742,9 @@ Lens::view(Expr.Add, expr)"#,
     }
 
     #[test]
-    fn bounded_numeric_generic_helpers_emit_specialized_functions() {
+    fn bounded_add_generic_helpers_emit_specialized_functions() {
         let bytecode = codegen_source(
-            r#"def double<$N: Numeric>(x: $N) -> $N { x + x }
+            r#"def double<$N: Add>(x: $N) -> $N { x + x }
 a = double(21)
 b = double(1.5)"#,
         );
@@ -471,5 +764,54 @@ b = double(1.5)"#,
             .opcodes
             .iter()
             .any(|op| matches!(op, Opcode::AddFloat)));
+    }
+
+    #[test]
+    fn compare_bound_list_helpers_emit_specialized_functions() {
+        let bytecode = codegen_source(
+            r#"largest = List::max([1, 3, 2])
+smallest = List::min([1.5, 3.25, 2.0])
+sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
+        );
+
+        let function_names = bytecode
+            .functions
+            .iter()
+            .filter_map(|entry| entry.qualified_name.as_deref())
+            .collect::<Vec<_>>();
+
+        assert!(function_names.contains(&"List::max"));
+        assert!(function_names.contains(&"List::min"));
+        assert!(function_names.contains(&"List::sort"));
+    }
+
+    #[test]
+    fn codegen_typed_program_embeds_runtime_process_specs() {
+        let typed = typed_module_program_with_builtin_prelude(
+            r#"@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)
+defagent Counter {
+  @init
+  def init() -> Result<Int> { Ok(41) }
+
+  @get
+  def get(state: Int, label: String) -> Result<String> {
+    Ok(label ++ ":" ++ to_string(state + 1))
+  }
+
+  @set
+  def set(state: Int, next: Int) -> Result<Int> {
+    Ok(next)
+  }
+}"#,
+        );
+
+        let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
+        assert_eq!(bytecode.runtime_process_specs.entries.len(), 1);
+        let spec = &bytecode.runtime_process_specs.entries[0];
+        assert_eq!(spec.process_name, "Counter");
+        assert_eq!(spec.module_path, "Counter");
+        assert!(spec.boot);
+        assert!(spec.registry);
+        assert_eq!(spec.set_fun_idx.is_some(), true);
     }
 }

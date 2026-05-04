@@ -1,6 +1,109 @@
 use super::*;
+use sindr::names::{builtin_type_name, TypeName};
 
 impl Checker {
+    pub(super) fn is_duration_ty(ty: &Ty) -> bool {
+        matches!(ty, Ty::Struct(name, _) if name == "Duration")
+    }
+
+    fn match_result_not_allowed_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "MatchResult is extractor-only and can only be used in extractor definitions"
+                .into(),
+            span: span.clone(),
+            hint: Some(
+                "Use MatchResult only as a defextractor / @builtin defextractor return type or inside an extractor body. Ordinary APIs should return Result, Option, or a user-defined enum explicitly."
+                    .into(),
+            ),
+        }
+    }
+
+    fn seq_not_allowed_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "Seq is not a surface type in this version of Surtr".into(),
+            span: span.clone(),
+            hint: Some(
+                "Use tuple payloads for extractor success values, such as MatchResult<(A, B), Error>."
+                    .into(),
+            ),
+        }
+    }
+
+    pub(super) fn error_function_param_not_allowed_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "Error cannot be used as a user-defined function parameter type".into(),
+            span: span.clone(),
+            hint: Some(
+                "Keep Error inside Err(...), and inspect it only from an Err(...) match arm."
+                    .into(),
+            ),
+        }
+    }
+
+    fn lazy_type_not_allowed_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "Lazy<T> is reserved for std-module special-form declarations".into(),
+            span: span.clone(),
+            hint: Some(
+                "Use ordinary expression syntax at call sites; the compiler applies lazy special-form evaluation automatically."
+                    .into(),
+            ),
+        }
+    }
+
+    pub(super) fn ty_exposes_error_value(ty: &Ty) -> bool {
+        match ty {
+            Ty::Error => true,
+            Ty::Result(ok, _) => Self::ty_exposes_error_value(ok),
+            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
+                Self::ty_exposes_error_value(inner)
+            }
+            Ty::Lens(source, focus) => {
+                Self::ty_exposes_error_value(source) || Self::ty_exposes_error_value(focus)
+            }
+            Ty::Tuple(items) | Ty::Enum(_, items) => items.iter().any(Self::ty_exposes_error_value),
+            Ty::Func(params, ret) => {
+                params.iter().any(Self::ty_exposes_error_value) || Self::ty_exposes_error_value(ret)
+            }
+            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
+                params.iter().any(Self::ty_exposes_error_value) || Self::ty_exposes_error_value(ret)
+            }
+            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
+                .iter()
+                .any(|(_, field_ty)| Self::ty_exposes_error_value(field_ty)),
+            Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Hole
+            | Ty::Var(_)
+            | Ty::Pid(_) => false,
+        }
+    }
+
+    pub(super) fn allows_std_error_function_param_exception(id: &ResolvedId) -> bool {
+        matches!(
+            id.qualified_name.as_deref(),
+            Some("Result::tap_err") | Some("Result::_tap_err_value") | Some("Test::_finish_it_err")
+        )
+    }
+
+    fn match_result_type_allowed(&self, context: TypeSyntaxContext) -> bool {
+        matches!(
+            context,
+            TypeSyntaxContext::ExtractorReturn | TypeSyntaxContext::ExtractorBody
+        ) || self.in_extractor_body
+    }
+
+    pub(super) fn local_type_syntax_context(&self) -> TypeSyntaxContext {
+        if self.in_extractor_body {
+            TypeSyntaxContext::ExtractorBody
+        } else {
+            TypeSyntaxContext::BindingAnnotation
+        }
+    }
+
     fn type_ref_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
             message:
@@ -11,6 +114,87 @@ impl Checker {
                 "Use TypeRef<$T> only in deftrait / impl Trait method parameters, not in ordinary signatures or return types."
                     .into(),
             ),
+        }
+    }
+
+    fn resolve_pid_surface_ty(&self, span: &Span, args: &[AstTy]) -> Result<Ty, TypeError> {
+        if args.len() != 1 {
+            return Err(TypeError {
+                message: "PID<T> requires exactly 1 type argument".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        Ok(Ty::Pid(self.pid_marker_from_ast(&args[0])?))
+    }
+
+    fn ast_ty_is_none_error_marker(ast_ty: &AstTy) -> bool {
+        match ast_ty {
+            AstTy::Named(_, name) | AstTy::Generic(_, name, _) => {
+                Self::surface_type_name(name) == "NoneError"
+            }
+            _ => false,
+        }
+    }
+
+    fn pid_marker_from_ast(&self, ast_ty: &AstTy) -> Result<String, TypeError> {
+        match ast_ty {
+            AstTy::Named(_, name) => Ok(name.clone()),
+            other => Err(TypeError {
+                message: "PID<T> expects a process marker such as PID<Counter>".into(),
+                span: Self::ast_ty_span(other).clone(),
+                hint: Some(
+                    "Use the generated process surface marker name, for example PID<Counter>."
+                        .into(),
+                ),
+            }),
+        }
+    }
+
+    fn clause_block_type_not_allowed_error(&self, span: &Span, surface_name: &str) -> TypeError {
+        let (rendered, special_form, hint) = match surface_name {
+            "MatchArms" => (
+                "MatchArms<$Scrutinee, $Result>",
+                "`match`",
+                "Use the dedicated `match value { pattern => expr, ... }` surface instead of passing or storing its clause block as a value type.",
+            ),
+            "CondClauses" => (
+                "CondClauses<$Result>",
+                "`cond`",
+                "Use the dedicated `cond { cond1 => expr1, ..., True => exprN }` surface instead of passing or storing its clause block as a value type.",
+            ),
+            other => (
+                other,
+                "special form",
+                "Do not use this compiler-reserved clause-block type in ordinary user signatures.",
+            ),
+        };
+        TypeError {
+            message: format!("{rendered} is reserved for the {special_form} special form"),
+            span: span.clone(),
+            hint: Some(hint.into()),
+        }
+    }
+
+    fn hole_not_allowed_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "`_` is only allowed as an ignored-input marker inside callable types used by variable annotations or function return signatures.".into(),
+            span: span.clone(),
+            hint: Some(
+                "Use `_` only in signatures such as `(_ -> Int)` or `(... -> (_ -> Int))`; it cannot appear as a plain value type, function parameter type, or container element."
+                    .into(),
+            ),
+        }
+    }
+
+    fn resolve_hole_surface_ty(
+        &self,
+        span: &Span,
+        context: TypeSyntaxContext,
+    ) -> Result<Ty, TypeError> {
+        match context {
+            TypeSyntaxContext::HoleClosureParam => Ok(Ty::Hole),
+            _ => Err(self.hole_not_allowed_error(span)),
         }
     }
 
@@ -149,6 +333,10 @@ impl Checker {
         }
     }
 
+    fn surface_type_name<'a>(name: &'a str) -> &'a str {
+        name.strip_prefix("Global::").unwrap_or(name)
+    }
+
     pub(super) fn resolve_ast_ty_in_context(
         &self,
         ast_ty: &AstTy,
@@ -159,56 +347,104 @@ impl Checker {
         }
 
         match ast_ty {
-            AstTy::Named(span, name) => match name.as_str() {
-                "Int" => Ok(Ty::Int),
-                "Float" => Ok(Ty::Float),
-                "String" => Ok(Ty::Str),
-                "Boolean" => Ok(Ty::Bool),
-                "Unit" => Ok(Ty::Unit),
-                "Error" => Ok(Ty::Error),
-                "Regex" => Ok(Ty::Enum("Regex".into(), Vec::new())),
-                "RegexCaptures" => Ok(Ty::Enum("RegexCaptures".into(), Vec::new())),
-                "RegexMatch" => Ok(Ty::Enum("RegexMatch".into(), Vec::new())),
-                other => {
-                    if let Some(def) = self.env.lookup_type_def(other) {
-                        match &def.kind {
-                            crate::env::TypeKind::Struct => {
-                                Ok(Ty::Struct(def.name.clone(), def.fields.clone()))
-                            }
-                            crate::env::TypeKind::Record => {
-                                Ok(Ty::Record(def.name.clone(), def.fields.clone()))
-                            }
-                            crate::env::TypeKind::Error => Ok(Ty::Error),
-                            crate::env::TypeKind::Enum => {
-                                if def.type_params.is_empty() {
-                                    Ok(Ty::Enum(def.name.clone(), Vec::new()))
-                                } else {
-                                    Err(TypeError {
-                                        message: format!(
-                                            "Type {} requires {} type argument(s)",
-                                            other,
-                                            def.type_params.len()
-                                        ),
-                                        span: span.clone(),
-                                        hint: None,
-                                    })
+            AstTy::Named(span, name) => {
+                match Self::surface_type_name(name) {
+                    "_" | "Hole" => self.resolve_hole_surface_ty(span, context),
+                    "MatchArms" | "CondClauses" => Err(self
+                        .clause_block_type_not_allowed_error(span, Self::surface_type_name(name))),
+                    "Seq" => Err(self.seq_not_allowed_error(span)),
+                    builtin_name => match builtin_type_name(builtin_name) {
+                        Some(TypeName::Int) => Ok(Ty::Int),
+                        Some(TypeName::Float) => Ok(Ty::Float),
+                        Some(TypeName::String) => Ok(Ty::Str),
+                        Some(TypeName::Boolean) => Ok(Ty::Bool),
+                        Some(TypeName::Unit) => Ok(Ty::Unit),
+                        Some(TypeName::Error) => Ok(Ty::Error),
+                        Some(TypeName::Regex) => {
+                            Ok(Ty::Enum(TypeName::Regex.as_str().into(), Vec::new()))
+                        }
+                        Some(TypeName::RegexCaptures) => Ok(Ty::Enum(
+                            TypeName::RegexCaptures.as_str().into(),
+                            Vec::new(),
+                        )),
+                        Some(TypeName::RegexMatch) => {
+                            Ok(Ty::Enum(TypeName::RegexMatch.as_str().into(), Vec::new()))
+                        }
+                        Some(TypeName::RandomGenerator) => Ok(Ty::Enum(
+                            TypeName::RandomGenerator.as_str().into(),
+                            Vec::new(),
+                        )),
+                        Some(
+                            TypeName::List
+                            | TypeName::HashMap
+                            | TypeName::Generator
+                            | TypeName::Result
+                            | TypeName::Duration
+                            | TypeName::Lazy
+                            | TypeName::TypeRef
+                            | TypeName::Hole
+                            | TypeName::Closure
+                            | TypeName::MatchArms
+                            | TypeName::CondClauses
+                            | TypeName::Lens
+                            | TypeName::Pid,
+                        )
+                        | None => {
+                            if let Some(def) = self.env.lookup_type_def(name) {
+                                match &def.kind {
+                                    crate::env::TypeKind::Struct => {
+                                        Ok(Ty::Struct(def.name.clone(), def.fields.clone()))
+                                    }
+                                    crate::env::TypeKind::Record => {
+                                        Ok(Ty::Record(def.name.clone(), def.fields.clone()))
+                                    }
+                                    crate::env::TypeKind::ConcreteError => Ok(Ty::Error),
+                                    crate::env::TypeKind::Enum => {
+                                        if def.type_params.is_empty() {
+                                            Ok(Ty::Enum(def.name.clone(), Vec::new()))
+                                        } else {
+                                            Err(TypeError {
+                                                message: format!(
+                                                    "Type {} requires {} type argument(s)",
+                                                    name,
+                                                    def.type_params.len()
+                                                ),
+                                                span: span.clone(),
+                                                hint: None,
+                                            })
+                                        }
+                                    }
                                 }
+                            } else {
+                                Err(TypeError {
+                                    message: format!("Unknown type: {}", name),
+                                    span: span.clone(),
+                                    hint: None,
+                                })
                             }
                         }
-                    } else {
-                        Err(TypeError {
-                            message: format!("Unknown type: {}", other),
-                            span: span.clone(),
-                            hint: None,
-                        })
-                    }
+                    },
                 }
-            },
-            AstTy::Generic(span, name, _) if name == "TypeRef" => {
+            }
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 Err(self.type_ref_not_allowed_error(span))
             }
-            AstTy::Generic(span, name, args) => match name.as_str() {
+            AstTy::Generic(span, name, _)
+                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
+            {
+                Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
+            }
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Lazy" => {
+                Err(self.lazy_type_not_allowed_error(span))
+            }
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
+                Err(self.seq_not_allowed_error(span))
+            }
+            AstTy::Generic(span, name, args) => match Self::surface_type_name(name) {
                 "MatchResult" => {
+                    if !self.match_result_type_allowed(context) {
+                        return Err(self.match_result_not_allowed_error(span));
+                    }
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
                             message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
@@ -284,6 +520,7 @@ impl Checker {
                         self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::General)?;
                     Ok(Ty::Lens(Box::new(source), Box::new(focus)))
                 }
+                "PID" => self.resolve_pid_surface_ty(span, args),
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
@@ -296,13 +533,19 @@ impl Checker {
                     let ok =
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     let err = if args.len() == 2 {
-                        if context != TypeSyntaxContext::FunctionReturn {
+                        let allow_none_error_surface = context != TypeSyntaxContext::FunctionReturn
+                            && Self::ast_ty_is_none_error_marker(&args[1]);
+                        if context != TypeSyntaxContext::FunctionReturn && !allow_none_error_surface
+                        {
                             return Err(TypeError {
                                 message:
                                     "Result<T, E> is only allowed in function return signatures."
                                         .into(),
                                 span: span.clone(),
-                                hint: Some("Use Result<T> in local code.".into()),
+                                hint: Some(
+                                    "Use Result<T> in local code, or Result<T, NoneError> / T? for optional-style values."
+                                        .into(),
+                                ),
                             });
                         }
                         self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::ErrorMarker)?
@@ -311,9 +554,9 @@ impl Checker {
                     };
                     Ok(Ty::Result(Box::new(ok), Box::new(err)))
                 }
-                other => {
-                    let def = self.env.lookup_type_def(other).ok_or_else(|| TypeError {
-                        message: format!("Unknown generic type: {}", other),
+                _ => {
+                    let def = self.env.lookup_type_def(name).ok_or_else(|| TypeError {
+                        message: format!("Unknown generic type: {}", name),
                         span: span.clone(),
                         hint: None,
                     })?;
@@ -321,7 +564,7 @@ impl Checker {
                         return Err(TypeError {
                             message: format!(
                                 "Type {} requires {} type argument(s), got {}",
-                                other,
+                                name,
                                 def.type_params.len(),
                                 args.len()
                             ),
@@ -338,7 +581,7 @@ impl Checker {
                         _ => Err(TypeError {
                             message: format!(
                                 "Generic type {} is not supported in this context",
-                                other
+                                name
                             ),
                             span: span.clone(),
                             hint: None,
@@ -363,9 +606,21 @@ impl Checker {
             AstTy::Func(_, params, ret) => {
                 let params = params
                     .iter()
-                    .map(|p| self.resolve_ast_ty_in_context(p, TypeSyntaxContext::General))
+                    .map(|p| {
+                        self.resolve_ast_ty_in_context(
+                            p,
+                            match context {
+                                TypeSyntaxContext::BindingAnnotation
+                                | TypeSyntaxContext::FunctionReturn
+                                | TypeSyntaxContext::HoleClosureParam => {
+                                    TypeSyntaxContext::HoleClosureParam
+                                }
+                                _ => TypeSyntaxContext::General,
+                            },
+                        )
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
-                let ret = self.resolve_ast_ty_in_context(ret, TypeSyntaxContext::General)?;
+                let ret = self.resolve_ast_ty_in_context(ret, context)?;
                 Ok(Ty::Func(params, Box::new(ret)))
             }
             AstTy::ImplTrait(span, name) => Err(TypeError {
@@ -411,6 +666,17 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
+            AstTy::Named(span, name) if matches!(Self::surface_type_name(name), "_" | "Hole") => {
+                self.resolve_hole_surface_ty(span, context)
+            }
+            AstTy::Named(span, name)
+                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
+            {
+                Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
+            }
+            AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
+                Err(self.seq_not_allowed_error(span))
+            }
             AstTy::ImplTrait(_, trait_name) => {
                 if context == TypeSyntaxContext::ErrorMarker {
                     return Err(TypeError {
@@ -427,10 +693,20 @@ impl Checker {
                 }
                 Ok(fresh)
             }
-            AstTy::Generic(span, name, _) if name == "TypeRef" => {
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 return Err(self.type_ref_not_allowed_error(span));
             }
-            AstTy::Generic(span, name, args) if name == "List" => {
+            AstTy::Generic(span, name, _)
+                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
+            {
+                return Err(
+                    self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name))
+                );
+            }
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
+                Err(self.seq_not_allowed_error(span))
+            }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "List" => {
                 if args.len() != 1 {
                     return Err(TypeError {
                         message: "List<T> requires exactly 1 type argument".into(),
@@ -445,7 +721,7 @@ impl Checker {
                 )?;
                 Ok(Ty::List(Box::new(inner)))
             }
-            AstTy::Generic(span, name, args) if name == "HashMap" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "HashMap" => {
                 if args.len() != 1 {
                     return Err(TypeError {
                         message: "HashMap<V> requires exactly 1 type argument".into(),
@@ -460,7 +736,7 @@ impl Checker {
                 )?;
                 Ok(Ty::Enum("HashMap".into(), vec![value]))
             }
-            AstTy::Generic(span, name, args) if name == "Generator" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Generator" => {
                 if args.len() != 2 {
                     return Err(TypeError {
                         message: "Generator<State, Item> requires exactly 2 type arguments".into(),
@@ -480,7 +756,7 @@ impl Checker {
                 )?;
                 Ok(Ty::Enum("Generator".into(), vec![state, item]))
             }
-            AstTy::Generic(span, name, args) if name == "Lens" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Lens" => {
                 if args.len() != 2 {
                     return Err(TypeError {
                         message: "Lens<S, A> requires exactly 2 type arguments".into(),
@@ -500,7 +776,13 @@ impl Checker {
                 )?;
                 Ok(Ty::Lens(Box::new(source), Box::new(focus)))
             }
-            AstTy::Generic(span, name, args) if name == "MatchResult" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "PID" => {
+                self.resolve_pid_surface_ty(span, args)
+            }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "MatchResult" => {
+                if !self.match_result_type_allowed(context) {
+                    return Err(self.match_result_not_allowed_error(span));
+                }
                 if args.is_empty() || args.len() > 2 {
                     return Err(TypeError {
                         message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
@@ -531,7 +813,7 @@ impl Checker {
                 }
                 Ok(Ty::Enum("MatchResult".into(), vec![value]))
             }
-            AstTy::Generic(span, name, args) if name == "Result" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Result" => {
                 if args.is_empty() || args.len() > 2 {
                     return Err(TypeError {
                         message: "Result<T> or Result<T, E> requires 1 or 2 type arguments".into(),
@@ -630,16 +912,19 @@ impl Checker {
                     .map(|param| {
                         self.resolve_signature_ast_ty_in_context(
                             param,
-                            TypeSyntaxContext::General,
+                            match context {
+                                TypeSyntaxContext::BindingAnnotation
+                                | TypeSyntaxContext::FunctionReturn
+                                | TypeSyntaxContext::HoleClosureParam => {
+                                    TypeSyntaxContext::HoleClosureParam
+                                }
+                                _ => TypeSyntaxContext::General,
+                            },
                             tyvars,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let ret = self.resolve_signature_ast_ty_in_context(
-                    ret,
-                    TypeSyntaxContext::General,
-                    tyvars,
-                )?;
+                let ret = self.resolve_signature_ast_ty_in_context(ret, context, tyvars)?;
                 Ok(Ty::Func(params, Box::new(ret)))
             }
             _ => self.resolve_ast_ty_in_context(ast_ty, context),
@@ -688,6 +973,17 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
+            AstTy::Named(span, name) if matches!(Self::surface_type_name(name), "_" | "Hole") => {
+                self.resolve_hole_surface_ty(span, context)
+            }
+            AstTy::Named(span, name)
+                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
+            {
+                Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
+            }
+            AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
+                Err(self.seq_not_allowed_error(span))
+            }
             AstTy::ImplTrait(span, trait_name) => Err(TypeError {
                 message: format!(
                     "`impl {}` is not supported inside trait method signatures",
@@ -696,10 +992,20 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             }),
-            AstTy::Generic(span, name, _) if name == "TypeRef" => {
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 return Err(self.type_ref_not_allowed_error(span));
             }
-            AstTy::Generic(span, name, args) if name == "List" => {
+            AstTy::Generic(span, name, _)
+                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
+            {
+                return Err(
+                    self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name))
+                );
+            }
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
+                Err(self.seq_not_allowed_error(span))
+            }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "List" => {
                 if args.len() != 1 {
                     return Err(TypeError {
                         message: "List<T> requires exactly 1 type argument".into(),
@@ -715,7 +1021,7 @@ impl Checker {
                 )?;
                 Ok(Ty::List(Box::new(inner)))
             }
-            AstTy::Generic(span, name, args) if name == "HashMap" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "HashMap" => {
                 if args.len() != 1 {
                     return Err(TypeError {
                         message: "HashMap<V> requires exactly 1 type argument".into(),
@@ -731,7 +1037,7 @@ impl Checker {
                 )?;
                 Ok(Ty::Enum("HashMap".into(), vec![value]))
             }
-            AstTy::Generic(span, name, args) if name == "Generator" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Generator" => {
                 if args.len() != 2 {
                     return Err(TypeError {
                         message: "Generator<State, Item> requires exactly 2 type arguments".into(),
@@ -753,7 +1059,7 @@ impl Checker {
                 )?;
                 Ok(Ty::Enum("Generator".into(), vec![state, item]))
             }
-            AstTy::Generic(span, name, args) if name == "Lens" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Lens" => {
                 if args.len() != 2 {
                     return Err(TypeError {
                         message: "Lens<S, A> requires exactly 2 type arguments".into(),
@@ -775,7 +1081,13 @@ impl Checker {
                 )?;
                 Ok(Ty::Lens(Box::new(source), Box::new(focus)))
             }
-            AstTy::Generic(span, name, args) if name == "MatchResult" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "PID" => {
+                self.resolve_pid_surface_ty(span, args)
+            }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "MatchResult" => {
+                if !self.match_result_type_allowed(context) {
+                    return Err(self.match_result_not_allowed_error(span));
+                }
                 if args.is_empty() || args.len() > 2 {
                     return Err(TypeError {
                         message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
@@ -808,7 +1120,7 @@ impl Checker {
                 }
                 Ok(Ty::Enum("MatchResult".into(), vec![value]))
             }
-            AstTy::Generic(span, name, args) if name == "Result" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Result" => {
                 if args.is_empty() || args.len() > 2 {
                     return Err(TypeError {
                         message: "Result<T> or Result<T, E> requires 1 or 2 type arguments".into(),
@@ -911,18 +1223,21 @@ impl Checker {
                     .map(|param| {
                         self.resolve_trait_signature_ast_ty_in_context(
                             param,
-                            TypeSyntaxContext::General,
+                            match context {
+                                TypeSyntaxContext::BindingAnnotation
+                                | TypeSyntaxContext::FunctionReturn
+                                | TypeSyntaxContext::HoleClosureParam => {
+                                    TypeSyntaxContext::HoleClosureParam
+                                }
+                                _ => TypeSyntaxContext::General,
+                            },
                             self_ty,
                             tyvars,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let ret = self.resolve_trait_signature_ast_ty_in_context(
-                    ret,
-                    TypeSyntaxContext::General,
-                    self_ty,
-                    tyvars,
-                )?;
+                let ret =
+                    self.resolve_trait_signature_ast_ty_in_context(ret, context, self_ty, tyvars)?;
                 Ok(Ty::Func(params, Box::new(ret)))
             }
             _ => self.resolve_ast_ty_in_context(ast_ty, context),
@@ -953,11 +1268,48 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
-            AstTy::Generic(span, name, _) if name == "TypeRef" => {
+            AstTy::Named(span, name) if matches!(Self::surface_type_name(name), "_" | "Hole") => {
+                self.resolve_hole_surface_ty(span, context)
+            }
+            AstTy::Named(span, name)
+                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
+            {
+                Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
+            }
+            AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
+                Err(self.seq_not_allowed_error(span))
+            }
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 Err(self.type_ref_not_allowed_error(span))
             }
-            AstTy::Generic(span, name, args) => match name.as_str() {
+            AstTy::Generic(span, name, _)
+                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
+            {
+                Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
+            }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Lazy" => {
+                if args.len() != 1 {
+                    return Err(TypeError {
+                        message: "Lazy<T> requires exactly 1 type argument".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let inner = self.resolve_builtin_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
+                Ok(Ty::Lazy(Box::new(inner)))
+            }
+            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
+                Err(self.seq_not_allowed_error(span))
+            }
+            AstTy::Generic(span, name, args) => match Self::surface_type_name(name) {
                 "MatchResult" => {
+                    if !self.match_result_type_allowed(context) {
+                        return Err(self.match_result_not_allowed_error(span));
+                    }
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
                             message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
@@ -1057,6 +1409,7 @@ impl Checker {
                     )?;
                     Ok(Ty::Lens(Box::new(source), Box::new(focus)))
                 }
+                "PID" => self.resolve_pid_surface_ty(span, args),
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
@@ -1119,16 +1472,19 @@ impl Checker {
                     .map(|p| {
                         self.resolve_builtin_ast_ty_in_context(
                             p,
-                            TypeSyntaxContext::General,
+                            match context {
+                                TypeSyntaxContext::BindingAnnotation
+                                | TypeSyntaxContext::FunctionReturn
+                                | TypeSyntaxContext::HoleClosureParam => {
+                                    TypeSyntaxContext::HoleClosureParam
+                                }
+                                _ => TypeSyntaxContext::General,
+                            },
                             tyvars,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let ret = self.resolve_builtin_ast_ty_in_context(
-                    ret,
-                    TypeSyntaxContext::General,
-                    tyvars,
-                )?;
+                let ret = self.resolve_builtin_ast_ty_in_context(ret, context, tyvars)?;
                 Ok(Ty::Func(params, Box::new(ret)))
             }
             _ => self.resolve_ast_ty_in_context(ast_ty, context),
@@ -1146,7 +1502,7 @@ impl Checker {
             });
         };
 
-        if name == "Error" {
+        if Self::surface_type_name(name) == "Error" {
             return Ok(Ty::Error);
         }
 
@@ -1157,7 +1513,7 @@ impl Checker {
         });
 
         if let Ok(def) = def {
-            if def.kind != crate::env::TypeKind::Error {
+            if def.kind != crate::env::TypeKind::ConcreteError {
                 return Err(TypeError {
                     message: "The error marker E in Result<T, E> must be a deferror-defined type."
                         .into(),
@@ -1181,9 +1537,11 @@ impl Checker {
     }
 
     pub(super) fn types_compatible(&mut self, expected: &Ty, got: &Ty) -> bool {
+        let profile = self.profiler.start();
         let expected = self.resolve_ty(expected);
         let got = self.resolve_ty(got);
-        match (&expected, &got) {
+        let result = match (&expected, &got) {
+            (Ty::Hole, Ty::Hole) => true,
             (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.bind_tyvar(*var, ty),
             (Ty::Int, Ty::Int)
             | (Ty::Float, Ty::Float)
@@ -1192,7 +1550,10 @@ impl Checker {
             | (Ty::Unit, Ty::Unit)
             | (Ty::Error, Ty::Error) => true,
             (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
-            (Ty::TypeRef(a), Ty::TypeRef(b)) => self.types_compatible(a, b),
+            (Ty::TypeRef(a), Ty::TypeRef(b)) | (Ty::Lazy(a), Ty::Lazy(b)) => {
+                self.types_compatible(a, b)
+            }
+            (Ty::Pid(a), Ty::Pid(b)) => a == b || a.starts_with('$') || b.starts_with('$'),
             (Ty::Lens(src_a, focus_a), Ty::Lens(src_b, focus_b)) => {
                 self.types_compatible(src_a, src_b) && self.types_compatible(focus_a, focus_b)
             }
@@ -1224,38 +1585,44 @@ impl Checker {
                         .all(|(left, right)| self.types_compatible(left, right))
             }
             _ => false,
-        }
+        };
+        self.profiler.finish(ProfileEvent::TypesCompatible, profile);
+        result
     }
 
     pub(super) fn bind_tyvar(&mut self, var: u32, ty: &Ty) -> bool {
+        let profile = self.profiler.start();
         let ty = self.resolve_ty(ty);
-        if ty == Ty::Var(var) {
-            return true;
-        }
-        if self.ty_contains_var(&ty, var) {
-            return false;
-        }
-        let var_bounds = self.tyvar_bound_names(var);
-        match &ty {
-            Ty::Var(other) => {
-                let mut combined = var_bounds;
-                for bound in self.tyvar_bound_names(*other) {
-                    if !combined.iter().any(|existing| existing == &bound) {
-                        combined.push(bound);
+        let result = if ty == Ty::Var(var) {
+            true
+        } else if self.ty_contains_var(&ty, var) {
+            false
+        } else {
+            let var_bounds = self.tyvar_bound_names(var);
+            match &ty {
+                Ty::Var(other) => {
+                    let mut combined = var_bounds;
+                    for bound in self.tyvar_bound_names(*other) {
+                        if !combined.iter().any(|existing| existing == &bound) {
+                            combined.push(bound);
+                        }
+                    }
+                    combined.sort();
+                    self.tyvar_bounds.insert(var, combined.clone());
+                    self.tyvar_bounds.insert(*other, combined);
+                }
+                _ => {
+                    if !self.ty_satisfies_bounds(&ty, &var_bounds) {
+                        self.profiler.finish(ProfileEvent::BindTyVar, profile);
+                        return false;
                     }
                 }
-                combined.sort();
-                self.tyvar_bounds.insert(var, combined.clone());
-                self.tyvar_bounds.insert(*other, combined);
             }
-            _ => {
-                if !self.ty_satisfies_bounds(&ty, &var_bounds) {
-                    return false;
-                }
-            }
-        }
-        self.substitutions.insert(var, ty);
-        true
+            self.substitutions.insert(var, ty);
+            true
+        };
+        self.profiler.finish(ProfileEvent::BindTyVar, profile);
+        result
     }
 
     pub(super) fn ty_satisfies_bounds(&self, ty: &Ty, bounds: &[String]) -> bool {
@@ -1274,8 +1641,10 @@ impl Checker {
     pub(super) fn ty_contains_var(&self, ty: &Ty, needle: u32) -> bool {
         match self.resolve_ty(ty) {
             Ty::Var(var) => var == needle,
+            Ty::Hole => false,
             Ty::List(inner) => self.ty_contains_var(&inner, needle),
-            Ty::TypeRef(inner) => self.ty_contains_var(&inner, needle),
+            Ty::TypeRef(inner) | Ty::Lazy(inner) => self.ty_contains_var(&inner, needle),
+            Ty::Pid(_) => false,
             Ty::Lens(source, focus) => {
                 self.ty_contains_var(&source, needle) || self.ty_contains_var(&focus, needle)
             }
@@ -1310,7 +1679,10 @@ impl Checker {
                 None => Ty::Var(*var),
             },
             Ty::List(inner) => Ty::List(Box::new(self.resolve_ty(inner))),
+            Ty::Hole => Ty::Hole,
             Ty::TypeRef(inner) => Ty::TypeRef(Box::new(self.resolve_ty(inner))),
+            Ty::Lazy(inner) => Ty::Lazy(Box::new(self.resolve_ty(inner))),
+            Ty::Pid(name) => Ty::Pid(name.clone()),
             Ty::Lens(source, focus) => Ty::Lens(
                 Box::new(self.resolve_ty(source)),
                 Box::new(self.resolve_ty(focus)),
@@ -1367,7 +1739,8 @@ impl Checker {
         ty: &Ty,
         fresh: &mut HashMap<u32, Ty>,
     ) -> Ty {
-        match ty {
+        let profile = self.profiler.start();
+        let result = match ty {
             Ty::Var(var) => fresh
                 .entry(*var)
                 .or_insert_with(|| {
@@ -1380,9 +1753,12 @@ impl Checker {
                 })
                 .clone(),
             Ty::List(inner) => Ty::List(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
+            Ty::Hole => Ty::Hole,
             Ty::TypeRef(inner) => {
                 Ty::TypeRef(Box::new(self.instantiate_ty_with_fresh(inner, fresh)))
             }
+            Ty::Lazy(inner) => Ty::Lazy(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
+            Ty::Pid(name) => Ty::Pid(name.clone()),
             Ty::Lens(source, focus) => Ty::Lens(
                 Box::new(self.instantiate_ty_with_fresh(source, fresh)),
                 Box::new(self.instantiate_ty_with_fresh(focus, fresh)),
@@ -1457,7 +1833,10 @@ impl Checker {
                 Box::new(self.instantiate_ty_with_fresh(err, fresh)),
             ),
             other => other.clone(),
-        }
+        };
+        self.profiler
+            .finish(ProfileEvent::InstantiateTyWithFresh, profile);
+        result
     }
 
     pub(super) fn instantiate_builtin_ty(&mut self, ty: &Ty) -> Ty {
@@ -1469,8 +1848,9 @@ impl Checker {
         &mut self,
         variant: &crate::env::EnumVariantInfo,
     ) -> crate::env::EnumVariantInfo {
+        let profile = self.profiler.start();
         let mut fresh = HashMap::new();
-        crate::env::EnumVariantInfo {
+        let instantiated = crate::env::EnumVariantInfo {
             constructor_name: variant.constructor_name.clone(),
             short_name: variant.short_name.clone(),
             enum_name: variant.enum_name.clone(),
@@ -1482,7 +1862,10 @@ impl Checker {
                 .map(|ty| self.instantiate_ty_with_fresh(ty, &mut fresh))
                 .collect(),
             discriminant: variant.discriminant.clone(),
-        }
+        };
+        self.profiler
+            .finish(ProfileEvent::InstantiateEnumVariant, profile);
+        instantiated
     }
 
     pub(super) fn ty_name(&self, ty: &Ty) -> String {
@@ -1493,8 +1876,11 @@ impl Checker {
             Ty::Bool => "Boolean".into(),
             Ty::Unit => "Unit".into(),
             Ty::Error => "Error".into(),
+            Ty::Hole => "_".into(),
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
+            Ty::Lazy(inner) => format!("Lazy<{}>", self.ty_name(inner)),
             Ty::TypeRef(inner) => format!("TypeRef<{}>", self.ty_name(inner)),
+            Ty::Pid(name) => format!("PID<{}>", name),
             Ty::Lens(source, focus) => {
                 format!("Lens<{}, {}>", self.ty_name(source), self.ty_name(focus))
             }
@@ -1543,7 +1929,9 @@ impl Checker {
     pub(super) fn ty_contains_lens(&self, ty: &Ty) -> bool {
         match self.resolve_ty(ty) {
             Ty::Lens(_, _) => true,
-            Ty::List(inner) | Ty::TypeRef(inner) => self.ty_contains_lens(inner.as_ref()),
+            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
+                self.ty_contains_lens(inner.as_ref())
+            }
             Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_lens(item)),
             Ty::Func(params, ret) => {
                 params.iter().any(|param| self.ty_contains_lens(param))
@@ -1560,7 +1948,15 @@ impl Checker {
             Ty::Result(ok, err) => {
                 self.ty_contains_lens(ok.as_ref()) || self.ty_contains_lens(err.as_ref())
             }
-            Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Var(_) | Ty::Error => false,
+            Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Var(_)
+            | Ty::Error
+            | Ty::Hole
+            | Ty::Pid(_) => false,
         }
     }
 
@@ -1570,6 +1966,17 @@ impl Checker {
             focus_ty: self.resolve_ty(&path.focus_ty),
             may_fail: path.may_fail,
             segments: path.segments,
+        }
+    }
+
+    fn resolve_trait_call_origin(&self, origin: TraitCallOrigin) -> TraitCallOrigin {
+        match origin {
+            TraitCallOrigin::Explicit => TraitCallOrigin::Explicit,
+            TraitCallOrigin::Operator { op, lhs_ty, rhs_ty } => TraitCallOrigin::Operator {
+                op,
+                lhs_ty: self.resolve_ty(&lhs_ty),
+                rhs_ty: self.resolve_ty(&rhs_ty),
+            },
         }
     }
 
@@ -1590,12 +1997,14 @@ impl Checker {
                 method_name,
                 receiver_ty,
                 dispatch,
+                origin,
                 args,
             } => TypedInner::TraitCall {
                 trait_name,
                 method_name,
                 receiver_ty: self.resolve_ty(&receiver_ty),
                 dispatch,
+                origin: self.resolve_trait_call_origin(origin),
                 args: args
                     .into_iter()
                     .map(|arg| self.resolve_typed_node(arg))
@@ -1627,14 +2036,6 @@ impl Checker {
                 Box::new(self.resolve_typed_node(*right)),
             ),
             TypedInner::Pipe(left, right) => TypedInner::Pipe(
-                Box::new(self.resolve_typed_node(*left)),
-                Box::new(self.resolve_typed_node(*right)),
-            ),
-            TypedInner::ResultMap(left, right) => TypedInner::ResultMap(
-                Box::new(self.resolve_typed_node(*left)),
-                Box::new(self.resolve_typed_node(*right)),
-            ),
-            TypedInner::ResultBind(left, right) => TypedInner::ResultBind(
                 Box::new(self.resolve_typed_node(*left)),
                 Box::new(self.resolve_typed_node(*right)),
             ),
@@ -1671,6 +2072,15 @@ impl Checker {
                     })
                     .collect(),
             ),
+            TypedInner::Dbg(args) => TypedInner::Dbg(
+                args.into_iter()
+                    .map(|arg| TypedDbgArg {
+                        span: arg.span,
+                        ty_name: arg.ty_name,
+                        expr: self.resolve_typed_node(arg.expr),
+                    })
+                    .collect(),
+            ),
             TypedInner::If(cond, then, else_opt) => TypedInner::If(
                 Box::new(self.resolve_typed_node(*cond)),
                 Box::new(self.resolve_typed_node(*then)),
@@ -1685,14 +2095,26 @@ impl Checker {
                 Box::new(self.resolve_typed_node(*pred)),
                 Box::new(self.resolve_typed_node(*err)),
             ),
+            TypedInner::MapErr(value, err) => TypedInner::MapErr(
+                Box::new(self.resolve_typed_node(*value)),
+                Box::new(self.resolve_typed_node(*err)),
+            ),
+            TypedInner::Cause(value, err) => TypedInner::Cause(
+                Box::new(self.resolve_typed_node(*value)),
+                Box::new(self.resolve_typed_node(*err)),
+            ),
+            TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
+                Box::new(self.resolve_typed_node(*value)),
+                Box::new(self.resolve_typed_node(*marker)),
+                Box::new(self.resolve_typed_node(*handler)),
+            ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
                 Box::new(self.resolve_typed_node(*scrutinee)),
                 arms.into_iter()
-                    .map(|(pat, body)| {
-                        (
-                            self.resolve_typed_match_pattern(pat),
-                            self.resolve_typed_node(body),
-                        )
+                    .map(|arm| TypedMatchArm {
+                        pattern: self.resolve_typed_match_pattern(arm.pattern),
+                        guard: arm.guard.map(|guard| self.resolve_typed_node(guard)),
+                        body: self.resolve_typed_node(arm.body),
                     })
                     .collect(),
             ),
@@ -1700,6 +2122,10 @@ impl Checker {
                 TypedInner::FieldAccess(Box::new(self.resolve_typed_node(*expr)), idx)
             }
             TypedInner::LensPath(path) => TypedInner::LensPath(self.resolve_typed_lens_path(path)),
+            TypedInner::PendingLensPath(path) => TypedInner::PendingLensPath(PendingLensPath {
+                source_ty_hint: path.source_ty_hint.map(|ty| self.resolve_ty(&ty)),
+                segments: path.segments,
+            }),
             TypedInner::LensView {
                 source,
                 path,
@@ -1714,22 +2140,26 @@ impl Checker {
                 path,
                 value,
                 source_is_result,
+                mode,
             } => TypedInner::LensSet {
                 source: Box::new(self.resolve_typed_node(*source)),
                 path: self.resolve_typed_lens_path(path),
                 value: Box::new(self.resolve_typed_node(*value)),
                 source_is_result,
+                mode,
             },
             TypedInner::LensOver {
                 source,
                 path,
                 update_fun,
                 source_is_result,
+                mode,
             } => TypedInner::LensOver {
                 source: Box::new(self.resolve_typed_node(*source)),
                 path: self.resolve_typed_lens_path(path),
                 update_fun: Box::new(self.resolve_typed_node(*update_fun)),
                 source_is_result,
+                mode,
             },
             TypedInner::StructLit(tag, fields) => TypedInner::StructLit(
                 tag,
@@ -1827,11 +2257,11 @@ impl Checker {
                     .map(|arg| self.resolve_typed_node(arg))
                     .collect(),
             ),
-            TypedInner::StructDef(tag, name, field_names) => {
-                TypedInner::StructDef(tag, name, field_names)
+            TypedInner::StructDef(tag, name, field_names, private_flags) => {
+                TypedInner::StructDef(tag, name, field_names, private_flags)
             }
-            TypedInner::RecordDef(tag, name, field_names) => {
-                TypedInner::RecordDef(tag, name, field_names)
+            TypedInner::RecordDef(tag, name, field_names, private_flags) => {
+                TypedInner::RecordDef(tag, name, field_names, private_flags)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::TraitDef(name, methods) => TypedInner::TraitDef(name, methods),
@@ -1862,6 +2292,7 @@ impl Checker {
             TypedPattern::IntLit(ty, n) => TypedPattern::IntLit(self.resolve_ty(&ty), n),
             TypedPattern::StrLit(ty, s) => TypedPattern::StrLit(self.resolve_ty(&ty), s),
             TypedPattern::BoolLit(ty, b) => TypedPattern::BoolLit(self.resolve_ty(&ty), b),
+            TypedPattern::DurationLit(ty, n) => TypedPattern::DurationLit(self.resolve_ty(&ty), n),
             TypedPattern::Tuple(ty, items) => TypedPattern::Tuple(
                 self.resolve_ty(&ty),
                 items
@@ -1911,6 +2342,14 @@ impl Checker {
             TypedMatchPattern::BoolLit(value) => TypedMatchPattern::BoolLit(value),
             TypedMatchPattern::IntLit(value) => TypedMatchPattern::IntLit(value),
             TypedMatchPattern::StrLit(value) => TypedMatchPattern::StrLit(value),
+            TypedMatchPattern::DurationLit(value) => TypedMatchPattern::DurationLit(value),
+            TypedMatchPattern::ErrorKind(value) => TypedMatchPattern::ErrorKind(value),
+            TypedMatchPattern::Or(items) => TypedMatchPattern::Or(
+                items
+                    .into_iter()
+                    .map(|item| self.resolve_typed_match_pattern(item))
+                    .collect(),
+            ),
             TypedMatchPattern::Tuple(items) => TypedMatchPattern::Tuple(
                 items
                     .into_iter()

@@ -1,0 +1,371 @@
+defenum ExtractMeldKind {
+  Sequence,
+  Triplet,
+}
+
+defrecord ExtractedMeld(kind: ExtractMeldKind, tile_id: Int, suit_index: Int, rank: Int)
+defrecord ExtractBranch(mentsu: List<ExtractedMeld>, unresolved: List<Int>)
+defrecord ExtractedShape(pair_id: Int, melds: List<ExtractedMeld>)
+defrecord SuitBranchMatrix(
+  man: List<ExtractBranch>,
+  pin: List<ExtractBranch>,
+  sou: List<ExtractBranch>,
+  honor: List<ExtractBranch>,
+)
+
+defmod MahjongExtractor {
+  @doc """
+  ExtractedMeld を順子として分解する pattern-side API。
+  `match meld { sequence(tile_id, suit, rank) => ... }` の形で使う。
+  """
+  defextractor sequence(meld: ExtractedMeld) -> MatchResult<(Int, Int, Int), Error> {
+    match meld.kind {
+      ExtractMeldKind::Sequence => MatchResult::Success((meld.tile_id, meld.suit_index, meld.rank)),
+      _ => MatchResult::NoMatch,
+    }
+  }
+
+  @doc """
+  ExtractedMeld を刻子として分解する pattern-side API。
+  `match meld { triplet(tile_id, suit, rank) => ... }` の形で使う。
+  """
+  defextractor triplet(meld: ExtractedMeld) -> MatchResult<(Int, Int, Int), Error> {
+    match meld.kind {
+      ExtractMeldKind::Triplet => MatchResult::Success((meld.tile_id, meld.suit_index, meld.rank)),
+      _ => MatchResult::NoMatch,
+    }
+  }
+
+  defp _insert_sorted(ids: List<Int>, value: Int) -> List<Int> {
+    match ids {
+      [] => [value],
+      [head, ..tail] => if(value <= head, [value, ..ids], [head, .._insert_sorted(tail, value)]),
+    }
+  }
+
+  defp _sort_ids(ids: List<Int>) -> List<Int> {
+    List::reduce(ids, [], {|acc, id|
+      _insert_sorted(acc, id)
+    })
+  }
+
+  defp _contains_id(ids: List<Int>, target: Int) -> Boolean {
+    List::any(ids, &`==`(&1, target))
+  }
+
+  defp _remove_first(ids: List<Int>, target: Int) -> Result<List<Int>> {
+    match ids {
+      [] => Err(NoneError),
+      [head, ..tail] => if(
+        head == target,
+        Ok(tail),
+        {
+          rest =? _remove_first(tail, target)
+          Ok([head, ..rest])
+        },
+      ),
+    }
+  }
+
+  defp _remove_n(ids: List<Int>, target: Int, n: Int) -> Result<List<Int>> {
+    if(
+      n <= 0,
+      Ok(ids),
+      {
+        next =? _remove_first(ids, target)
+        _remove_n(next, target, n - 1)
+      },
+    )
+  }
+
+  defp _id_count(ids: List<Int>, target: Int) -> Int {
+    List::count(ids, &`==`(&1, target))
+  }
+
+  defp _remove_sequence(ids: List<Int>, start_id: Int) -> Result<List<Int>> {
+    ids
+      |> _remove_first(start_id)
+      |>= _remove_first(start_id + 1)
+      |>= _remove_first(start_id + 2)
+  }
+
+  defp _triplet_meld(id: Int) -> ExtractedMeld {
+    ExtractedMeld(
+      kind: ExtractMeldKind::Triplet,
+      tile_id: id,
+      suit_index: MahjongTypes::suit_index_from_id(id),
+      rank: MahjongTypes::suit_rank_from_id(id),
+    )
+  }
+
+  defp _sequence_meld(start_id: Int) -> ExtractedMeld {
+    ExtractedMeld(
+      kind: ExtractMeldKind::Sequence,
+      tile_id: start_id,
+      suit_index: MahjongTypes::suit_index_from_id(start_id),
+      rank: MahjongTypes::suit_rank_from_id(start_id),
+    )
+  }
+
+  defp _prepend_mentsu(meld: ExtractedMeld, branch: ExtractBranch) -> ExtractBranch {
+    ExtractBranch(
+      mentsu: [meld, ..branch.mentsu],
+      unresolved: branch.unresolved,
+    )
+  }
+
+  defp _prepend_to_all(meld: ExtractedMeld, branches: List<ExtractBranch>) -> List<ExtractBranch> {
+    List::map(branches, {|branch|
+      _prepend_mentsu(meld, branch)
+    })
+  }
+
+  defp _prepend_unresolved(value: Int, branch: ExtractBranch) -> ExtractBranch {
+    ExtractBranch(
+      mentsu: branch.mentsu,
+      unresolved: [value, ..branch.unresolved],
+    )
+  }
+
+  defp _prepend_unresolved_to_all(value: Int, branches: List<ExtractBranch>) -> List<ExtractBranch> {
+    List::map(branches, {|branch|
+      _prepend_unresolved(value, branch)
+    })
+  }
+
+  defp _suited_triplet_branches(input: List<Int>, head: Int) -> Result<List<ExtractBranch>> {
+    rest =? _remove_n(input, head, 3)
+    branches =? suited_branches(rest)
+    Ok(_prepend_to_all(_triplet_meld(head), branches))
+  }
+
+  defp _suited_sequence_branches(input: List<Int>, head: Int) -> Result<List<ExtractBranch>> {
+    rest =? _remove_sequence(input, head)
+    branches =? suited_branches(rest)
+    Ok(_prepend_to_all(_sequence_meld(head), branches))
+  }
+
+  defp _honor_triplet_branches(input: List<Int>, head: Int) -> Result<List<ExtractBranch>> {
+    rest =? _remove_n(input, head, 3)
+    branches =? honor_branches(rest)
+    Ok(_prepend_to_all(_triplet_meld(head), branches))
+  }
+
+  @doc """
+  再帰分解（順子+刻子）:
+  入力を `(mentsu, unresolved)` の枝リストとして返す探索関数。
+  """
+  def suited_branches(input: List<Int>) -> Result<List<ExtractBranch>> {
+    match input {
+      [] => Ok([ExtractBranch(mentsu: [], unresolved: [])]),
+      [head, ..tail] => {
+        triplet_branches =? if(
+          _id_count(input, head) >= 3,
+          _suited_triplet_branches(input, head),
+          Ok([]),
+        )
+
+        sequence_branches =? if(
+          MahjongTypes::can_start_sequence_id(head),
+          {
+            second = head + 1
+            third = head + 2
+            if(
+              and(_contains_id(input, second), _contains_id(input, third)),
+              _suited_sequence_branches(input, head),
+              Ok([]),
+            )
+          },
+          Ok([]),
+        )
+
+        tail_branches =? suited_branches(tail)
+        unresolved_branches = _prepend_unresolved_to_all(head, tail_branches)
+
+        branches = List::concat([triplet_branches, sequence_branches, unresolved_branches])
+        if(
+          List::len(branches) > 0,
+          Ok(branches),
+          Ok([ExtractBranch(mentsu: [], unresolved: input)]),
+        )
+      },
+    }
+  }
+
+  @doc """
+  再帰分解（刻子のみ）:
+  字牌側の枝探索。
+  """
+  def honor_branches(input: List<Int>) -> Result<List<ExtractBranch>> {
+    match input {
+      [] => Ok([ExtractBranch(mentsu: [], unresolved: [])]),
+      [head, ..tail] => {
+        triplet_branches =? if(
+          _id_count(input, head) >= 3,
+          _honor_triplet_branches(input, head),
+          Ok([]),
+        )
+
+        tail_branches =? honor_branches(tail)
+        unresolved_branches = _prepend_unresolved_to_all(head, tail_branches)
+
+        branches = List::concat([triplet_branches, unresolved_branches])
+        Ok(branches)
+      },
+    }
+  }
+
+  defp _success_only(branches: List<ExtractBranch>) -> List<ExtractBranch> {
+    List::filter(branches, {|branch|
+      List::len(branch.unresolved) == 0
+    })
+  }
+
+  defp _split_ids_by_suit_go(
+    ids: List<Int>,
+    man_rev: List<Int>,
+    pin_rev: List<Int>,
+    sou_rev: List<Int>,
+    honor_rev: List<Int>,
+  ) -> (List<Int>, List<Int>, List<Int>, List<Int>) {
+    match ids {
+      [] => (
+        List::reverse(man_rev),
+        List::reverse(pin_rev),
+        List::reverse(sou_rev),
+        List::reverse(honor_rev),
+      ),
+      [head, ..tail] => {
+        suit_index = MahjongTypes::suit_index_from_id(head)
+        if(
+          suit_index == 0,
+          _split_ids_by_suit_go(tail, [head, ..man_rev], pin_rev, sou_rev, honor_rev),
+          if(
+            suit_index == 1,
+            _split_ids_by_suit_go(tail, man_rev, [head, ..pin_rev], sou_rev, honor_rev),
+            if(
+              suit_index == 2,
+              _split_ids_by_suit_go(tail, man_rev, pin_rev, [head, ..sou_rev], honor_rev),
+              _split_ids_by_suit_go(tail, man_rev, pin_rev, sou_rev, [head, ..honor_rev]),
+            ),
+          ),
+        )
+      },
+    }
+  }
+
+  defp _split_ids_by_suit(ids: List<Int>) -> (List<Int>, List<Int>, List<Int>, List<Int>) {
+    _split_ids_by_suit_go(ids, [], [], [], [])
+  }
+
+  defp _suited_success(ids: List<Int>) -> Result<List<ExtractBranch>> {
+    branches =? suited_branches(ids)
+    Ok(_success_only(branches))
+  }
+
+  defp _honor_success(ids: List<Int>) -> Result<List<ExtractBranch>> {
+    branches =? honor_branches(ids)
+    Ok(_success_only(branches))
+  }
+
+  defp _build_suit_matrix(ids: List<Int>) -> Result<SuitBranchMatrix> {
+    split = _split_ids_by_suit(ids)
+    man =? _suited_success(split._0)
+    pin =? _suited_success(split._1)
+    sou =? _suited_success(split._2)
+    honor =? _honor_success(split._3)
+    Ok(SuitBranchMatrix(man: man, pin: pin, sou: sou, honor: honor))
+  }
+
+  defp _branch_mentsu(branch: ExtractBranch) -> List<ExtractedMeld> {
+    branch.mentsu
+  }
+
+  defp _concat_each(left: List<ExtractedMeld>, rights: List<List<ExtractedMeld>>) -> List<List<ExtractedMeld>> {
+    List::map(rights, {|right|
+      List::concat([left, right])
+    })
+  }
+
+  defp _cross_mentsu(lefts: List<List<ExtractedMeld>>, rights: List<List<ExtractedMeld>>) -> List<List<ExtractedMeld>> {
+    match lefts {
+      [] => [],
+      [head, ..tail] => List::concat([
+        _concat_each(head, rights),
+        _cross_mentsu(tail, rights),
+      ]),
+    }
+  }
+
+  defp _matrix_to_shapes(pair_id: Int, matrix: SuitBranchMatrix) -> List<ExtractedShape> {
+    man_sets = List::map(matrix.man, &_branch_mentsu)
+    pin_sets = List::map(matrix.pin, &_branch_mentsu)
+    sou_sets = List::map(matrix.sou, &_branch_mentsu)
+    honor_sets = List::map(matrix.honor, &_branch_mentsu)
+
+    mp = _cross_mentsu(man_sets, pin_sets)
+    mps = _cross_mentsu(mp, sou_sets)
+    all_sets = _cross_mentsu(mps, honor_sets)
+    List::map(all_sets, {|melds|
+      ExtractedShape(pair_id: pair_id, melds: melds)
+    })
+  }
+
+  defp _non_empty_matrix(matrix: SuitBranchMatrix) -> Boolean {
+    and(
+      List::len(matrix.man) > 0,
+      and(List::len(matrix.pin) > 0, and(List::len(matrix.sou) > 0, List::len(matrix.honor) > 0)),
+    )
+  }
+
+  defp _pair_candidate_ids(groups: List<(Int, Int)>) -> List<Int> {
+    List::flat_map(groups, {|entry|
+      if(entry._1 >= 2, [entry._0], [])
+    })
+  }
+
+  defp _shapes_from_pair(sorted_ids: List<Int>, pair_id: Int) -> Result<List<ExtractedShape>> {
+    rest =? _remove_n(sorted_ids, pair_id, 2)
+    matrix =? _build_suit_matrix(rest)
+    if(_non_empty_matrix(matrix), Ok(_matrix_to_shapes(pair_id, matrix)), Ok([]))
+  }
+
+  defp _extract_with_pairs(sorted_ids: List<Int>, pair_ids: List<Int>) -> Result<List<ExtractedShape>> {
+    match pair_ids {
+      [] => Ok([]),
+      [head, ..tail] => {
+        current =? _shapes_from_pair(sorted_ids, head)
+        rest =? _extract_with_pairs(sorted_ids, tail)
+        Ok(List::concat([current, rest]))
+      },
+    }
+  }
+
+  def extract_standard_shapes(valid: ValidHand14) -> Result<List<ExtractedShape>> {
+    sorted_ids = valid.tiles |> List::map(&MahjongTypes::tile_id) |> _sort_ids()
+    pair_ids = sorted_ids |> List::group_count() |> _pair_candidate_ids()
+    shapes =? _extract_with_pairs(sorted_ids, pair_ids)
+    if(
+      List::len(shapes) > 0,
+      Ok(shapes),
+      Err(HandValidationError("hand has no standard decomposition")),
+    )
+  }
+
+  defp _sequence_starts_go(melds: List<ExtractedMeld>, suit_index: Int) -> List<Int> {
+    match melds {
+      [] => [],
+      [head, ..tail] => {
+        current = match head {
+          sequence(_, meld_suit, rank) => if(meld_suit == suit_index, [rank], []),
+          _ => [],
+        }
+        List::concat([current, _sequence_starts_go(tail, suit_index)])
+      },
+    }
+  }
+
+  def sequence_starts_by_suit(shape: ExtractedShape, suit_index: Int) -> List<Int> {
+    _sequence_starts_go(shape.melds, suit_index)
+  }
+}

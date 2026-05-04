@@ -1,0 +1,2 @@
+phase: parse
+contains: maximum parse nesting depth exceeded

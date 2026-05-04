@@ -1,0 +1,35 @@
+@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)
+defagent Counter {
+  @init
+  def init() -> Result<Int> {
+    Ok(41)
+  }
+
+  @get
+  def get(state: Int, label: String) -> Result<String> {
+    Ok(label ++ ":" ++ to_string(state + 1))
+  }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> {
+    Ok(next)
+  }
+}
+
+@agent(kind: State, instance: Singleton, boot: true, lazy: false)
+defagent Clock {
+  @init
+  def init() -> Result<Int> {
+    Ok(7)
+  }
+
+  @get
+  def get(state: Int, label: String) -> Result<String> {
+    Ok(label ++ ":" ++ to_string(state))
+  }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> {
+    Ok(next)
+  }
+}

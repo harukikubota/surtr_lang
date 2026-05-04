@@ -8,11 +8,20 @@ impl Checker {
         params: &[ResolvedFunParam],
         ret_ty: &Option<AstTy>,
     ) -> Result<TypedNode, TypeError> {
-        if Self::is_special_form_builtin_decl_name(&id.name) {
+        let is_kernel_is_match =
+            id.name == "is_match" && id.qualified_name.as_deref() == Some("Kernel::is_match");
+        let is_special_form = if id.name == "is_match" {
+            is_kernel_is_match
+        } else {
+            Self::is_special_form_builtin_decl_name(&id.name)
+        };
+        if is_special_form {
             return self.check_special_form_builtin_decl(span, id, params, ret_ty);
         }
 
-        let meta = builtin_meta_by_name(&id.name).ok_or_else(|| TypeError {
+        let builtin_name =
+            sindr::builtin::builtin_runtime_name(&id.name, id.qualified_name.as_deref());
+        let meta = sindr::builtin::builtin_meta_by_name(builtin_name).ok_or_else(|| TypeError {
             message: format!("Unknown builtin declaration: {}", id.name),
             span: span.clone(),
             hint: None,
@@ -47,7 +56,7 @@ impl Checker {
         self.env.bind_var(
             id.unique_id,
             Ty::BuiltinFunc {
-                name: id.name.clone(),
+                name: meta.name.into(),
                 params: param_tys,
                 ret: Box::new(ret),
             },
@@ -70,8 +79,14 @@ impl Checker {
         let expected_qname = match id.name.as_str() {
             "if" => "Kernel::if",
             "if_then" => "Kernel::if_then",
+            "if_let" => "Kernel::if_let",
+            "if_let_then" => "Kernel::if_let_then",
+            "is_match" => "Kernel::is_match",
             "assert" => "Kernel::assert",
             "ensure" => "Kernel::ensure",
+            "map_err" => "Result::map_err",
+            "cause" => "Result::cause",
+            "recover_kind" => "Result::recover_kind",
             "and" => "Kernel::and",
             "or" => "Kernel::or",
             _ => unreachable!(),
@@ -92,8 +107,8 @@ impl Checker {
             "if" => {
                 params.len() == 3
                     && Self::is_named_type(&params[0].ty, "Boolean")
-                    && Self::is_zero_arg_func_to_named(&params[1].ty, "$A")
-                    && Self::is_zero_arg_func_to_named(&params[2].ty, "$A")
+                    && Self::is_lazy_of_named(&params[1].ty, "$A")
+                    && Self::is_lazy_of_named(&params[2].ty, "$A")
                     && ret_ty
                         .as_ref()
                         .is_some_and(|ty| Self::is_named_type(ty, "$A"))
@@ -101,13 +116,38 @@ impl Checker {
             "if_then" => {
                 params.len() == 2
                     && Self::is_named_type(&params[0].ty, "Boolean")
-                    && Self::is_zero_arg_func_to_unit(&params[1].ty)
+                    && Self::is_lazy_of_unit(&params[1].ty)
                     && ret_ty.as_ref().is_some_and(Self::is_unit_type)
+            }
+            "if_let" => {
+                params.len() == 4
+                    && Self::is_named_type(&params[0].ty, "$A")
+                    && Self::is_named_type(&params[1].ty, "$Pattern")
+                    && Self::is_lazy_of_named(&params[2].ty, "$B")
+                    && Self::is_lazy_of_named(&params[3].ty, "$B")
+                    && ret_ty
+                        .as_ref()
+                        .is_some_and(|ty| Self::is_named_type(ty, "$B"))
+            }
+            "if_let_then" => {
+                params.len() == 3
+                    && Self::is_named_type(&params[0].ty, "$A")
+                    && Self::is_named_type(&params[1].ty, "$Pattern")
+                    && Self::is_lazy_of_unit(&params[2].ty)
+                    && ret_ty.as_ref().is_some_and(Self::is_unit_type)
+            }
+            "is_match" => {
+                params.len() == 2
+                    && Self::is_named_type(&params[0].ty, "$A")
+                    && Self::is_named_type(&params[1].ty, "$Pattern")
+                    && ret_ty
+                        .as_ref()
+                        .is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
             }
             "assert" => {
                 params.len() == 2
                     && Self::is_named_type(&params[0].ty, "Boolean")
-                    && Self::is_named_type(&params[1].ty, "Error")
+                    && Self::is_lazy_of_named(&params[1].ty, "Error")
                     && ret_ty
                         .as_ref()
                         .is_some_and(|ty| Self::is_result_of_named(ty, "Unit"))
@@ -116,7 +156,24 @@ impl Checker {
                 params.len() == 3
                     && Self::is_named_type(&params[0].ty, "$A")
                     && Self::is_unary_func_from_named_to_named(&params[1].ty, "$A", "Boolean")
-                    && Self::is_named_type(&params[2].ty, "Error")
+                    && Self::is_lazy_of_named(&params[2].ty, "Error")
+                    && ret_ty
+                        .as_ref()
+                        .is_some_and(|ty| Self::is_result_of_named(ty, "$A"))
+            }
+            "map_err" | "cause" => {
+                params.len() == 2
+                    && Self::is_result_of_named(&params[0].ty, "$T")
+                    && Self::is_lazy_of_named(&params[1].ty, "Error")
+                    && ret_ty
+                        .as_ref()
+                        .is_some_and(|ty| Self::is_result_of_named(ty, "$T"))
+            }
+            "recover_kind" => {
+                params.len() == 3
+                    && Self::is_result_of_named(&params[0].ty, "$A")
+                    && Self::is_lazy_of_named(&params[1].ty, "Error")
+                    && Self::is_unary_func_from_named_to_result(&params[2].ty, "Error", "$A")
                     && ret_ty
                         .as_ref()
                         .is_some_and(|ty| Self::is_result_of_named(ty, "$A"))
@@ -124,7 +181,7 @@ impl Checker {
             "and" | "or" => {
                 params.len() == 2
                     && Self::is_named_type(&params[0].ty, "Boolean")
-                    && Self::is_named_type(&params[1].ty, "Boolean")
+                    && Self::is_lazy_of_named(&params[1].ty, "Boolean")
                     && ret_ty
                         .as_ref()
                         .is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
@@ -134,12 +191,18 @@ impl Checker {
 
         if !shape_ok {
             let expected = match id.name.as_str() {
-                "if" => "@@builtin def if(flag: Boolean, then_branch: (-> $A), else_branch: (-> $A)) -> $A",
-                "if_then" => "@@builtin def if_then(flag: Boolean, then_branch: (-> ())) -> ()",
-                "assert" => "@@builtin def assert(flag: Boolean, err: Error) -> Result<Unit>",
-                "ensure" => "@@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Error) -> Result<$A>",
-                "and" => "@@builtin def and(left: Boolean, right: Boolean) -> Boolean",
-                "or" => "@@builtin def or(left: Boolean, right: Boolean) -> Boolean",
+                "if" => "@builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A",
+                "if_then" => "@builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit",
+                "if_let" => "@builtin def if_let(value: $A, pattern: $Pattern, then_branch: Lazy<$B>, else_branch: Lazy<$B>) -> $B",
+                "if_let_then" => "@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: Lazy<Unit>) -> Unit",
+                "is_match" => "@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean",
+                "assert" => "@builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>",
+                "ensure" => "@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>",
+                "map_err" => "@builtin def map_err(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
+                "cause" => "@builtin def cause(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
+                "recover_kind" => "@builtin def recover_kind(value: Result<$A>, marker: Lazy<Error>, handler: (Error -> Result<$A>)) -> Result<$A>",
+                "and" => "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean",
+                "or" => "@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean",
                 _ => unreachable!(),
             };
             return Err(TypeError {
@@ -253,7 +316,7 @@ impl Checker {
         };
         let ret = self.resolve_builtin_ast_ty_in_context(
             ret_ty,
-            TypeSyntaxContext::FunctionReturn,
+            TypeSyntaxContext::ExtractorReturn,
             &mut tyvars,
         )?;
         self.require_match_result_seq_ty(&ret, &param.id.span, &format!("Extractor {}", id.name))?;
@@ -318,8 +381,8 @@ impl Checker {
 
         if !shape_ok {
             let expected = match id.name.as_str() {
-                "Ok" => "@@builtin type Ok($T) -> Result<$T>",
-                "Err" => "@@builtin type Err(Error) -> Result<$T>",
+                "Ok" => "@builtin type Ok($T) -> Result<$T>",
+                "Err" => "@builtin type Err(Error) -> Result<$T>",
                 _ => unreachable!(),
             };
             return Err(TypeError {
@@ -347,17 +410,18 @@ impl Checker {
         Self::is_named_type(ast_ty, "Unit")
     }
 
-    pub(super) fn is_zero_arg_func_to_named(ast_ty: &AstTy, expected_name: &str) -> bool {
+    pub(super) fn is_lazy_of_named(ast_ty: &AstTy, expected_name: &str) -> bool {
         matches!(
             ast_ty,
-            AstTy::Func(_, params, ret)
-                if params.is_empty()
-                    && matches!(ret.as_ref(), AstTy::Named(_, name) if name == expected_name)
+            AstTy::Generic(_, name, args)
+                if name == "Lazy"
+                    && args.len() == 1
+                    && matches!(&args[0], AstTy::Named(_, param_name) if param_name == expected_name)
         )
     }
 
-    pub(super) fn is_zero_arg_func_to_unit(ast_ty: &AstTy) -> bool {
-        Self::is_zero_arg_func_to_named(ast_ty, "Unit")
+    pub(super) fn is_lazy_of_unit(ast_ty: &AstTy) -> bool {
+        Self::is_lazy_of_named(ast_ty, "Unit")
     }
 
     pub(super) fn is_unary_func_from_named_to_named(
@@ -374,12 +438,32 @@ impl Checker {
         )
     }
 
+    pub(super) fn is_unary_func_from_named_to_result(
+        ast_ty: &AstTy,
+        expected_param_name: &str,
+        expected_result_name: &str,
+    ) -> bool {
+        matches!(
+            ast_ty,
+            AstTy::Func(_, params, ret)
+                if params.len() == 1
+                    && matches!(&params[0], AstTy::Named(_, name) if name == expected_param_name)
+                    && Self::is_result_of_named(ret.as_ref(), expected_result_name)
+        )
+    }
+
     pub(super) fn is_special_form_builtin_decl_name(name: &str) -> bool {
         matches!(
             name,
             "if" | "if_then"
+                | "if_let"
+                | "if_let_then"
+                | "is_match"
                 | "assert"
                 | "ensure"
+                | "map_err"
+                | "cause"
+                | "recover_kind"
                 | "and"
                 | "or"
                 | "eq"
@@ -424,6 +508,50 @@ impl Checker {
         Ok(())
     }
 
+    fn check_body_in_isolated_scope(
+        &mut self,
+        local_bindings: &[(u32, Ty)],
+        function_return_ty: Ty,
+        function_symbol: String,
+        impl_target: Option<String>,
+        in_extractor_body: bool,
+        body: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let saved_function_return_ty = self.function_return_ty.clone();
+        let saved_current_function_symbol = self.current_function_symbol.clone();
+        let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
+        let saved_in_extractor_body = self.in_extractor_body;
+        let saved_closure_depth = self.closure_depth;
+        let saved_lens_bindings = self.lens_bindings.clone();
+
+        self.env.push_var_scope();
+        self.function_return_ty = Some(function_return_ty);
+        self.current_function_symbol = Some(function_symbol);
+        self.current_impl_struct_target = impl_target;
+        self.in_extractor_body = in_extractor_body;
+        for (unique_id, ty) in local_bindings {
+            self.env.bind_var(*unique_id, ty.clone());
+        }
+
+        // Function and trait method bodies are embedded in a top-level typed
+        // definition. Check the body now, but defer subtree normalization to the
+        // single resolve_typed_node pass in check_program.
+        let profile = self.profiler.start();
+        let result = self.check_node(body);
+        self.profiler
+            .finish(ProfileEvent::CheckBodyIsolated, profile);
+
+        self.env.pop_var_scope();
+        self.function_return_ty = saved_function_return_ty;
+        self.current_function_symbol = saved_current_function_symbol;
+        self.current_impl_struct_target = saved_current_impl_struct_target;
+        self.in_extractor_body = saved_in_extractor_body;
+        self.closure_depth = saved_closure_depth;
+        self.lens_bindings = saved_lens_bindings;
+
+        result
+    }
+
     pub(super) fn check_def(
         &mut self,
         span: &Span,
@@ -434,8 +562,8 @@ impl Checker {
         body: &Resolved,
         attrs: &ResolvedDeclAttrs,
     ) -> Result<TypedNode, TypeError> {
-        let mut fun_env = self.env.clone();
         let mut typed_params = Vec::new();
+        let mut local_bindings = Vec::new();
         let mut tyvars = HashMap::new();
         self.seed_signature_type_params(type_params, &mut tyvars);
 
@@ -445,6 +573,14 @@ impl Checker {
                 TypeSyntaxContext::General,
                 &mut tyvars,
             )?;
+            if !self.allow_error_function_params
+                && !Self::allows_std_error_function_param_exception(id)
+                && Self::ty_exposes_error_value(&param_ty)
+            {
+                return Err(
+                    self.error_function_param_not_allowed_error(Self::ast_ty_span(&param.ty))
+                );
+            }
             if self.ty_contains_lens(&param_ty) {
                 return Err(TypeError {
                     message:
@@ -454,7 +590,7 @@ impl Checker {
                     hint: None,
                 });
             }
-            fun_env.bind_var(param.id.unique_id, param_ty.clone());
+            local_bindings.push((param.id.unique_id, param_ty.clone()));
             typed_params.push(TypedFunParam {
                 id: param.id.clone(),
                 ty: param_ty.clone(),
@@ -521,25 +657,25 @@ impl Checker {
             }
         }
 
-        let mut body_checker = self.spawn_child_checker(fun_env);
-        if let Some((impl_target, _method)) = Self::split_impl_method_name(&id.name) {
-            if self
-                .env
+        let impl_target = Self::split_impl_method_id(id).and_then(|(impl_target, _method)| {
+            self.env
                 .lookup_type_def(&impl_target)
                 .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
-            {
-                body_checker.current_impl_struct_target = Some(impl_target);
-            }
-        }
-        body_checker.function_return_ty = Some(expected_ret.clone());
-        body_checker.current_function_symbol = Some(current_symbol);
-        let typed_body = body_checker.check_node(body)?;
-        let typed_body = body_checker.resolve_typed_node(typed_body);
-        self.absorb_child_progress(&body_checker);
+                .then_some(impl_target)
+        });
+        let typed_body = self.check_body_in_isolated_scope(
+            &local_bindings,
+            expected_ret.clone(),
+            current_symbol,
+            impl_target,
+            false,
+            body,
+        )?;
 
         if !self.types_compatible(&expected_ret, &typed_body.ty) {
-            let hint = if matches!(typed_body.ty, Ty::Unit) {
-                body_checker.describe_unit_return_hint(&typed_body)
+            let actual_ret = self.resolve_ty(&typed_body.ty);
+            let hint = if matches!(actual_ret, Ty::Unit) {
+                self.describe_unit_return_hint(&typed_body)
             } else {
                 None
             };
@@ -548,16 +684,16 @@ impl Checker {
                     format!(
                         "expected {}, got {}",
                         self.ty_name(&expected_ret),
-                        self.ty_name(&typed_body.ty)
+                        self.ty_name(&actual_ret)
                     )
                 } else {
                     format!(
                         "def {} without an explicit return type must return Unit, got {}",
                         id.name,
-                        self.ty_name(&typed_body.ty)
+                        self.ty_name(&actual_ret)
                     )
                 },
-                span: body_checker.return_mismatch_span(&typed_body),
+                span: self.return_mismatch_span(&typed_body),
                 hint,
             });
         }
@@ -608,7 +744,6 @@ impl Checker {
         body: &Resolved,
         attrs: &ResolvedDeclAttrs,
     ) -> Result<TypedNode, TypeError> {
-        let mut fun_env = self.env.clone();
         let mut tyvars = HashMap::new();
         self.seed_signature_type_params(type_params, &mut tyvars);
 
@@ -629,7 +764,7 @@ impl Checker {
                 hint: None,
             });
         }
-        fun_env.bind_var(param.id.unique_id, param_ty.clone());
+        let local_bindings = vec![(param.id.unique_id, param_ty.clone())];
         let typed_param = TypedFunParam {
             id: param.id.clone(),
             ty: param_ty,
@@ -637,7 +772,7 @@ impl Checker {
 
         let expected_ret = self.resolve_signature_ast_ty_in_context(
             ret_ty,
-            TypeSyntaxContext::FunctionReturn,
+            TypeSyntaxContext::ExtractorReturn,
             &mut tyvars,
         )?;
         if self.ty_contains_lens(&expected_ret) {
@@ -656,16 +791,19 @@ impl Checker {
         )?;
 
         let current_symbol = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
-        let mut body_checker = self.spawn_child_checker(fun_env);
-        body_checker.function_return_ty = Some(expected_ret.clone());
-        body_checker.current_function_symbol = Some(current_symbol);
-        let typed_body = body_checker.check_node(body)?;
-        let typed_body = body_checker.resolve_typed_node(typed_body);
-        self.absorb_child_progress(&body_checker);
+        let typed_body = self.check_body_in_isolated_scope(
+            &local_bindings,
+            expected_ret.clone(),
+            current_symbol,
+            None,
+            true,
+            body,
+        )?;
 
         if !self.types_compatible(&expected_ret, &typed_body.ty) {
-            let hint = if matches!(typed_body.ty, Ty::Unit) {
-                body_checker.describe_unit_return_hint(&typed_body)
+            let actual_ret = self.resolve_ty(&typed_body.ty);
+            let hint = if matches!(actual_ret, Ty::Unit) {
+                self.describe_unit_return_hint(&typed_body)
             } else {
                 None
             };
@@ -673,9 +811,9 @@ impl Checker {
                 message: format!(
                     "expected {}, got {}",
                     self.ty_name(&expected_ret),
-                    self.ty_name(&typed_body.ty)
+                    self.ty_name(&actual_ret)
                 ),
-                span: body_checker.return_mismatch_span(&typed_body),
+                span: self.return_mismatch_span(&typed_body),
                 hint,
             });
         }
@@ -727,8 +865,7 @@ impl Checker {
         target_ast_ty: &AstTy,
         methods: &[ResolvedTraitImplMethod],
     ) -> Result<Vec<TypedNode>, TypeError> {
-        let target_ty =
-            self.resolve_ast_ty_in_context(target_ast_ty, TypeSyntaxContext::General)?;
+        let (_, target_ty, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
         let target_name = self
             .trait_target_name(&target_ty)
             .ok_or_else(|| TypeError {
@@ -756,18 +893,18 @@ impl Checker {
         }];
 
         for method in methods {
-            let trait_method = trait_info
-                .methods
-                .get(&method.method_name)
-                .cloned()
-                .ok_or_else(|| TypeError {
-                    message: format!(
-                        "Trait impl {} for {} defines unknown method `{}`",
-                        trait_id.name, target_name, method.method_name
-                    ),
-                    span: method.span.clone(),
-                    hint: None,
-                })?;
+            let trait_method =
+                trait_info
+                    .methods
+                    .get(&method.method_name)
+                    .ok_or_else(|| TypeError {
+                        message: format!(
+                            "Trait impl {} for {} defines unknown method `{}`",
+                            trait_id.name, target_name, method.method_name
+                        ),
+                        span: method.span.clone(),
+                        hint: None,
+                    })?;
 
             let inline_method = TraitImplMethodInfo {
                 method_name: method.method_name.clone(),
@@ -779,42 +916,48 @@ impl Checker {
                 attrs: method.attrs.clone(),
                 span: method.span.clone(),
                 dispatch_override: None,
+                is_builtin: method.is_builtin,
             };
             let (param_tys, expected_ret, type_params) = self.resolve_trait_impl_method_signature(
                 &trait_info,
                 trait_args,
                 &inline_method,
-                &target_ty,
+                target_ast_ty,
                 &trait_method.ret_ty,
             )?;
 
-            let mut fun_env = self.env.clone();
             let mut typed_params = Vec::new();
+            let mut local_bindings = Vec::new();
             for (param, param_ty) in method.params.iter().zip(param_tys.iter()) {
-                fun_env.bind_var(param.id.unique_id, param_ty.clone());
+                local_bindings.push((param.id.unique_id, param_ty.clone()));
                 typed_params.push(TypedFunParam {
                     id: param.id.clone(),
                     ty: param_ty.clone(),
                 });
             }
 
-            let mut body_checker = self.spawn_child_checker(fun_env);
-            if self
+            if method.is_builtin {
+                continue;
+            }
+
+            let impl_target = self
                 .env
                 .lookup_type_def(&target_name)
                 .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
-            {
-                body_checker.current_impl_struct_target = Some(target_name.clone());
-            }
-            body_checker.function_return_ty = Some(expected_ret.clone());
-            body_checker.current_function_symbol = Some(method.function_id.name.clone());
-            let typed_body = body_checker.check_node(&method.body)?;
-            let typed_body = body_checker.resolve_typed_node(typed_body);
-            self.absorb_child_progress(&body_checker);
+                .then_some(target_name.clone());
+            let typed_body = self.check_body_in_isolated_scope(
+                &local_bindings,
+                expected_ret.clone(),
+                method.function_id.name.clone(),
+                impl_target,
+                false,
+                &method.body,
+            )?;
 
             if !self.types_compatible(&expected_ret, &typed_body.ty) {
-                let hint = if matches!(typed_body.ty, Ty::Unit) {
-                    body_checker.describe_unit_return_hint(&typed_body)
+                let actual_ret = self.resolve_ty(&typed_body.ty);
+                let hint = if matches!(actual_ret, Ty::Unit) {
+                    self.describe_unit_return_hint(&typed_body)
                 } else {
                     None
                 };
@@ -822,9 +965,9 @@ impl Checker {
                     message: format!(
                         "expected {}, got {}",
                         self.ty_name(&expected_ret),
-                        self.ty_name(&typed_body.ty)
+                        self.ty_name(&actual_ret)
                     ),
-                    span: body_checker.return_mismatch_span(&typed_body),
+                    span: self.return_mismatch_span(&typed_body),
                     hint,
                 });
             }
@@ -875,8 +1018,7 @@ impl Checker {
         target_ast_ty: &AstTy,
         _methods: &[ResolvedTraitImplMethod],
     ) -> Result<TypedNode, TypeError> {
-        let target_ty =
-            self.resolve_ast_ty_in_context(target_ast_ty, TypeSyntaxContext::General)?;
+        let (_, target_ty, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
         let target_name = self
             .trait_target_name(&target_ty)
             .ok_or_else(|| TypeError {
@@ -936,11 +1078,15 @@ impl Checker {
             .bind_var(id.unique_id, Ty::Struct(id.name.clone(), ty_fields.clone()));
 
         let field_names: Vec<String> = ty_fields.iter().map(|(n, _)| n.clone()).collect();
+        let private_flags: Vec<bool> = fields
+            .iter()
+            .map(|field| field.visibility == spire::ast::Visibility::Private)
+            .collect();
 
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::StructDef(tag, id.name.clone(), field_names),
+            node: TypedInner::StructDef(tag, id.name.clone(), field_names, private_flags),
         })
     }
 
@@ -952,9 +1098,7 @@ impl Checker {
         variants: &[ResolvedEnumVariant],
     ) -> Result<TypedNode, TypeError> {
         let enum_variants = self
-            .env
-            .enum_variants_of(&id.name)
-            .cloned()
+            .lookup_enum_variants_of(&id.name)
             .ok_or_else(|| TypeError {
                 message: format!("Unknown enum type declaration: {}", id.name),
                 span: span.clone(),
@@ -970,10 +1114,10 @@ impl Checker {
         }
 
         let typed_variants = enum_variants
-            .into_iter()
+            .iter()
             .map(|variant| TypedEnumVariantDef {
                 tag: variant.tag,
-                constructor_name: variant.constructor_name,
+                constructor_name: variant.constructor_name.clone(),
                 field_names: variant
                     .payload
                     .iter()
@@ -1024,11 +1168,15 @@ impl Checker {
             .bind_var(id.unique_id, Ty::Record(id.name.clone(), ty_fields.clone()));
 
         let field_names: Vec<String> = ty_fields.iter().map(|(n, _)| n.clone()).collect();
+        let private_flags: Vec<bool> = fields
+            .iter()
+            .map(|field| field.visibility == spire::ast::Visibility::Private)
+            .collect();
 
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::RecordDef(tag, id.name.clone(), field_names),
+            node: TypedInner::RecordDef(tag, id.name.clone(), field_names, private_flags),
         })
     }
 
@@ -1036,7 +1184,7 @@ impl Checker {
         &mut self,
         span: &Span,
         id: &ResolvedId,
-        field_vals: &[(String, Resolved)],
+        field_vals: &[ResolvedStructLitField],
     ) -> Result<TypedNode, TypeError> {
         let def = self
             .env
@@ -1048,7 +1196,9 @@ impl Checker {
             })?
             .clone();
 
-        if self.current_impl_struct_target.as_deref() != Some(id.name.as_str()) {
+        if !id.compiler_generated
+            && self.current_impl_struct_target.as_deref() != Some(id.name.as_str())
+        {
             return Err(TypeError {
                 message: format!(
                     "Struct literal `{}` is only allowed inside `impl {} {{ ... }}` method bodies",
@@ -1065,7 +1215,11 @@ impl Checker {
         let tag = def.tag;
 
         let mut seen = HashSet::new();
-        for (name, _) in field_vals {
+        for field in field_vals {
+            let name = match field {
+                ResolvedStructLitField::Explicit(name, _)
+                | ResolvedStructLitField::Shorthand(name, _) => name,
+            };
             if !def.fields.iter().any(|(field_name, _)| field_name == name) {
                 return Err(TypeError {
                     message: format!("Unknown field '{}' in {}", name, id.name),
@@ -1084,15 +1238,22 @@ impl Checker {
 
         let mut typed_fields = Vec::new();
         for (def_name, def_ty) in &def.fields {
-            let (_, resolved_val) =
-                field_vals
-                    .iter()
-                    .find(|(n, _)| n == def_name)
-                    .ok_or_else(|| TypeError {
-                        message: format!("Missing field '{}' in {}", def_name, id.name),
-                        span: span.clone(),
-                        hint: None,
-                    })?;
+            let resolved_val = field_vals
+                .iter()
+                .find_map(|field| match field {
+                    ResolvedStructLitField::Explicit(name, resolved_val)
+                    | ResolvedStructLitField::Shorthand(name, resolved_val)
+                        if name == def_name =>
+                    {
+                        Some(resolved_val)
+                    }
+                    _ => None,
+                })
+                .ok_or_else(|| TypeError {
+                    message: format!("Missing field '{}' in {}", def_name, id.name),
+                    span: span.clone(),
+                    hint: None,
+                })?;
             let typed_val = self.check_node(resolved_val)?;
             if self.ty_contains_lens(&typed_val.ty) {
                 return Err(TypeError {
@@ -1175,7 +1336,7 @@ impl Checker {
                         ),
                     });
                 }
-                if !self.is_concrete_error_value(&inner) {
+                if self.is_abstract_error_marker_value(&inner) {
                     return Err(TypeError {
                         message: "Error is abstract and cannot be constructed directly.".into(),
                         span: inner.span.clone(),
@@ -1199,12 +1360,11 @@ impl Checker {
             });
         }
 
-        if let Some(variant) = self
-            .env
-            .enum_variant_by_constructor_id(id.unique_id)
-            .cloned()
-        {
+        if let Some(variant) = self.lookup_enum_variant_by_constructor_id(id.unique_id) {
             let variant = self.instantiate_enum_variant(&variant);
+            if variant.enum_name == "MatchResult" && !self.in_extractor_body {
+                return Err(self.match_result_value_not_allowed_error(span));
+            }
             if args.len() != variant.payload.len() {
                 return Err(TypeError {
                     message: format!(
@@ -1271,6 +1431,8 @@ impl Checker {
         if let Some(ty) = self.env.lookup_var(id.unique_id).cloned() {
             match &ty {
                 Ty::BuiltinFunc { params, ret, .. } => {
+                    let callable_hint =
+                        Some(self.call_target_signature_hint_for_id(id, params, ret.as_ref()));
                     if args.len() != params.len() {
                         return Err(TypeError {
                             message: format!(
@@ -1279,7 +1441,7 @@ impl Checker {
                                 args.len()
                             ),
                             span: span.clone(),
-                            hint: None,
+                            hint: callable_hint.clone(),
                         });
                     }
 
@@ -1315,7 +1477,7 @@ impl Checker {
                                     self.ty_name(&typed_val.ty)
                                 ),
                                 span: typed_val.span.clone(),
-                                hint: None,
+                                hint: callable_hint.clone(),
                             });
                         }
                         typed_args.push(typed_val);
@@ -1335,8 +1497,14 @@ impl Checker {
                     });
                 }
                 Ty::UserFunc { params, ret, .. } => {
-                    let typed_args =
-                        self.typecheck_user_function_args(span, id.unique_id, params, args)?;
+                    let callable_hint = self.call_target_signature_hint_for_id(id, params, ret);
+                    let typed_args = self.typecheck_user_function_args(
+                        span,
+                        id.unique_id,
+                        params,
+                        args,
+                        Some(callable_hint.as_str()),
+                    )?;
                     return Ok(TypedNode {
                         ty: ret.as_ref().clone(),
                         span: span.clone(),
@@ -1351,6 +1519,8 @@ impl Checker {
                     });
                 }
                 Ty::Func(params, ret) => {
+                    let callable_hint =
+                        self.callable_signature_hint(&Ty::Func(params.clone(), ret.clone()));
                     if args
                         .iter()
                         .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
@@ -1369,7 +1539,7 @@ impl Checker {
                                 args.len()
                             ),
                             span: span.clone(),
-                            hint: None,
+                            hint: callable_hint.clone(),
                         });
                     }
 
@@ -1399,7 +1569,7 @@ impl Checker {
                                     self.ty_name(&typed.ty)
                                 ),
                                 span: typed.span.clone(),
-                                hint: None,
+                                hint: callable_hint.clone(),
                             });
                         }
                         typed_args.push(typed);
@@ -1442,8 +1612,8 @@ impl Checker {
                     ),
                     span: span.clone(),
                     hint: Some(format!(
-                        "Define `impl {} {{ def new(...) -> Self {{ ... }} }}`.",
-                        id.name
+                        "Define `impl {} {{ def new(...) -> Self {{ ... }} }}` or `impl {} {{ def new(...) -> Result<Self, Error> {{ ... }} }}`.",
+                        id.name, id.name
                     )),
                 });
             };
@@ -1473,12 +1643,18 @@ impl Checker {
                 }
             };
 
-            let typed_args = self.typecheck_user_function_args(span, new_uid, &params, args)?;
+            let typed_args =
+                self.typecheck_user_function_args(span, new_uid, &params, args, None)?;
             let expected_self_ty = Ty::Struct(id.name.clone(), def.fields.clone());
-            if !self.types_compatible(&expected_self_ty, &ret_ty) {
+            let returns_self = self.types_compatible(&expected_self_ty, &ret_ty);
+            let returns_result_self = match self.resolve_ty(&ret_ty) {
+                Ty::Result(ok, _) => self.types_compatible(&expected_self_ty, ok.as_ref()),
+                _ => false,
+            };
+            if !(returns_self || returns_result_self) {
                 return Err(TypeError {
                     message: format!(
-                        "`{}` must return Self ({}), got {}",
+                        "`{}` must return Self ({}) or Result<Self, E>, got {}",
                         new_name,
                         self.ty_name(&expected_self_ty),
                         self.ty_name(&ret_ty)
@@ -1499,6 +1675,7 @@ impl Checker {
                             name: new_name,
                             qualified_name: None,
                             unique_id: new_uid,
+                            compiler_generated: false,
                             span: id.span.clone(),
                         }),
                     }),
@@ -1509,7 +1686,7 @@ impl Checker {
 
         if !matches!(
             def.kind,
-            crate::env::TypeKind::Record | crate::env::TypeKind::Error
+            crate::env::TypeKind::Record | crate::env::TypeKind::ConcreteError
         ) {
             return Err(TypeError {
                 message: format!("{} is not a constructor-call type", id.name),
@@ -1637,7 +1814,7 @@ impl Checker {
 
         let result_ty = match def.kind {
             crate::env::TypeKind::Record => Ty::Record(id.name.clone(), def.fields.clone()),
-            crate::env::TypeKind::Error => Ty::Error,
+            crate::env::TypeKind::ConcreteError => Ty::Error,
             crate::env::TypeKind::Struct | crate::env::TypeKind::Enum => {
                 unreachable!("validated above")
             }
@@ -1763,12 +1940,20 @@ impl Checker {
     pub(super) fn is_concrete_error_value(&self, node: &TypedNode) -> bool {
         match &node.node {
             TypedInner::Var(id) => self.env.is_error_constructor(id.unique_id),
-            TypedInner::App(func, _) => match &func.node {
+            TypedInner::App(func, args) if args.is_empty() => match &func.node {
                 TypedInner::Var(id) => self.env.is_error_constructor(id.unique_id),
+                TypedInner::Closure(_, _, body) => self.is_concrete_error_value(body),
                 _ => false,
             },
+            TypedInner::App(func, _) => {
+                matches!(&func.node, TypedInner::Var(id) if self.env.is_error_constructor(id.unique_id))
+            }
             _ => false,
         }
+    }
+
+    pub(super) fn is_abstract_error_marker_value(&self, node: &TypedNode) -> bool {
+        matches!(&node.node, TypedInner::Var(id) if id.name == "Error" && !self.env.is_error_constructor(id.unique_id))
     }
 
     pub(super) fn ensure_guard_error_value(
@@ -1787,14 +1972,45 @@ impl Checker {
                 hint: None,
             });
         }
-        if !self.is_concrete_error_value(node) {
+        Ok(())
+    }
+
+    pub(super) fn ensure_result_error_arg(
+        &self,
+        node: &TypedNode,
+        form_name: &str,
+    ) -> Result<(), TypeError> {
+        if !matches!(node.ty, Ty::Error) {
             return Err(TypeError {
                 message: format!(
-                    "{} error branch must be a concrete deferror value.",
-                    form_name
+                    "{} error argument must evaluate to Error, got {}",
+                    form_name,
+                    self.ty_name(&node.ty)
                 ),
                 span: node.span.clone(),
-                hint: Some("Use a deferror constructor or value, not a plain expression.".into()),
+                hint: None,
+            });
+        }
+        Ok(())
+    }
+
+    pub(super) fn ensure_recover_kind_marker(&self, node: &TypedNode) -> Result<(), TypeError> {
+        if !matches!(node.ty, Ty::Error) {
+            return Err(TypeError {
+                message: format!(
+                    "recover_kind marker must evaluate to Error, got {}",
+                    self.ty_name(&node.ty)
+                ),
+                span: node.span.clone(),
+                hint: None,
+            });
+        }
+        if !self.is_concrete_error_value(node) {
+            return Err(TypeError {
+                message: "recover_kind marker must be a concrete deferror name or constructor"
+                    .into(),
+                span: node.span.clone(),
+                hint: Some("Pass a deferror name like Timeout or a constructor call like Timeout(\"detail\").".into()),
             });
         }
         Ok(())

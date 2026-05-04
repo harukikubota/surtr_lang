@@ -126,15 +126,15 @@ top-level 宣言名として直接見えます。
 
 ### 5.2 Trait System V1
 
-Surtr には V1 の trait system があります。最初の trait は `Numeric` です。
+Surtr には V1 の trait system があります。まずは capability trait と operator dispatch trait を分けて読むと理解しやすいです。
 
 ```surtr
 deftrait Numeric {
-  def add(self: Self, rhs: Self) -> Self
+  def abs(self: Self) -> Self
 }
 
 def twice<$N: Numeric>(x: $N) -> $N {
-  x + x
+  Numeric::abs(x)
 }
 
 def show_abs(x: impl Numeric) -> String {
@@ -147,6 +147,8 @@ def show_abs(x: impl Numeric) -> String {
 - `deftrait` は method 宣言だけを持つ
 - trait は `deftrait Name<$T, ...> { ... }` のように型引数を取れる
 - 実装は `impl Numeric for Int { ... }` の形で書く
+- `+`, `-`, `*` は `Numeric` ではなく `Add` / `Sub` / `Mul` の dispatch
+- `Compare` は三値比較の正本で、`Ord` は互換 helper
 - trait 側の型引数を使う実装は `impl Trait<Concrete> for Type { ... }` の形で書く
 - `impl Trait` は parameter 位置だけで使える
 - 戻り値でも同じ型を使いたいときは `<$N: Numeric>` のように名前付き bound を使う
@@ -157,7 +159,7 @@ target type を明示する trait では、compiler-reserved な witness type
 これは ordinary value ではなく、「どの型へ変換するか」を表すための特別な型です。
 
 ```surtr
-@@builtin type TypeRef<$T>
+@builtin type TypeRef<$T>
 
 deftrait From<$To> {
   def from(self: Self, to: TypeRef<$To>) -> $To
@@ -215,6 +217,61 @@ deftrait Decode<$To> {
 このときも `TypeRef<$To>` は ordinary value にはならず、
 trait method parameter の中だけで target type witness として使われます。
 
+ignored-input callable を表す `_` も、同じく compiler-special な扱いを持ちます。
+
+```surtr
+keep_one: (_ -> Int) = always(1)
+```
+
+この `_` は generic wildcard ではなく、internal な `Hole` marker の surface です。  
+「何か 1 つ受けるが、その値は見ない callable」を stable に表示・注釈するためにあります。
+
+`TypeRef<$T>` と `Hole` のまとまった説明は `./special-types.md` を参照してください。
+
+### 5.4 関数コールと関数値
+
+Surtr では、次の見た目がそれぞれ別物です。
+
+- call 式: `add(1, 2)`
+- capture: `&add`, `&User::get_name`, `&add(&1, 10)`
+- closure: `{|x| x + 1}`
+- backtick FuncLiteral: ``1 `add` 2``
+
+まず普通の call はその場で実行されます。
+
+```surtr
+def add(x: Int, y: Int) -> Int { x + y }
+
+sum = add(1, 2)
+```
+
+一方で、関数演算子の compose 系が欲しいのは「実行結果」ではなく「あとで呼ぶ値」です。  
+そのため、関数値が欲しいときは capture か closure を使います。
+
+```surtr
+inc = &add(&1, 1)
+show_name = &User::get_name
+render = {|name| "[" ++ name ++ "]"}
+pipeline = &String::trim >> render
+```
+
+裸の関数参照は値になりません。
+
+```surtr
+pipeline = trim >> render   # 不可
+pipeline = &trim >> render  # 可
+```
+
+backtick FuncLiteral は中置 call の sugar です。
+
+```surtr
+10 `+` 5
+7 `eq` 7
+```
+
+これは関数値ではないので、`f = `eq`` のような束縛はできません。  
+関数コール・capture・closure・FuncLiteral の違いをまとまって見たいときは `./callables.md` を参照してください。
+
 ## 6. 条件分岐とパターンマッチ
 
 Surtr では `if` と `match` が重要です。
@@ -229,7 +286,7 @@ print(greeting)
 
 `if` は値を返す分岐です。内部契約としては
 `if(Boolean, (-> A), (-> A)) -> A`
-のように branch が関数型で表されますが、通常の source では明示的な block を
+のように branch が関数型で表されますが、通常の source では明示的な closure を
 書く必要はありません。
 
 ```surtr
@@ -274,7 +331,9 @@ Surtr には `defstruct` / `defrecord` / `defenum` があります。
 
 ### `defstruct`
 
-`defstruct` は名前付きフィールドを持つデータ型です。
+`defstruct` は名前付きフィールドを持つデータ型です。  
+構造体リテラル、`new`、`deconstruct`、private field、property access、`match` での分解は
+`./structs.md` にまとめています。
 
 ```surtr
 defstruct User {
@@ -284,7 +343,7 @@ defstruct User {
 
 impl User {
   def new(name: String, age: Int) -> Self {
-    User { name: name, age: age }
+    User { name, age }
   }
 }
 
@@ -292,6 +351,13 @@ user: User = User("alice", 30)
 print(to_string(user.name))
 print(to_string(user.age))
 ```
+
+ここでは最小限だけ押さえると十分です。
+
+- `User(...)` は `User::new(...)` の糖衣
+- `User { ... }` は `impl User` 内でのみ使う
+- `User { name, age }` は `User { name: name, age: age }` の shorthand
+- 分解は field pattern ではなく `User::deconstruct` を通す
 
 ### `defrecord`
 
@@ -407,7 +473,13 @@ def pick() -> Result<Int> {
 例外送出ではなく、`Either` 的な分岐を短く書くための記法だと考えると追いやすくなります。
 
 `=?` は Result 専用というより、Surtr では「失敗を伝播する束縛」の入口です。  
+通常の user code では `Result<T>` を返す関数の中で使います。
 現在きちんと使える対象は `Result`、`List`、`String` です。
+`Option` は標準 enum として存在しますが、`=?` や Result 文脈の関数演算子では特別扱いしません。
+必要な場合は `from(value, Result)` で明示的に `Result` へ変換します。
+欠損を field として持ちつつ Result パイプへそのまま流したい場合は、
+`Option<T>` より `T?` を使う方が自然です。
+そのため `num: Int =? Option::Some(1)` はエラーです。
 
 ```surtr
 [head, ..tail] =? [1, 2, 3]
@@ -420,6 +492,10 @@ print(to_string(tail))
 print(first)   # => "s"
 print(tail)    # => "ource"
 ```
+
+LHS には list/string 分解、literal match、Extractor を再帰的に書けます。  
+途中で `Err(...)` が出ればそのまま早期伝播し、`NoMatch` は error として返されます。  
+REPL ではその失敗を表示しますが、セッション自体は継続します。
 
 `Result` の内部表現は enum-like な 2 分岐の tagged value ですが、Surtr の言語仕様では `defenum` と同一 contract にはしません。  
 あくまで `Result` は dedicated な失敗表現であり、`Ok` / `Err` もその専用 constructor として見せます。
@@ -447,6 +523,16 @@ List::map([1, 2], &to_string)
 List::find_map([1, 2], &lookup)
 ```
 
+固定範囲をその場で書きたいときは range literal も使えます。
+
+```surtr
+nums = [1..3]          # => [1, 2, 3]
+chars = ["a".."c"]     # => Ok([a, b, c])
+```
+
+`Int` range はそのまま `List<Int>` になり、`String` range は char validation を伴うので `Result<List<String>, Error>` になります。
+constant literal は compile-time に畳まれますが、surface 契約は変わりません。`String` endpoint が不正な場合は literal でも変数でも `Generator::range_char` と同じ `InvalidCharRange` が runtime に返ります。
+
 ここでの単位元は `[]` です。  
 Surtr は一般化された `pure` を置かず、`[]` と `List::cons` / `[x]` をはっきり分けています。
 `[head, ..tail]` の分解は pattern 位置専用で、`List` と `String` のどちらにも使えます。
@@ -462,7 +548,8 @@ Surtr のパイプ系は大きく 2 種類あります。
   - `|>=`
 - compose 系
   - `>>`
-  - `|=>`
+  - `>*`
+  - `>=>`
 
 ### 10.1 `|>` は「値を流す」
 
@@ -479,8 +566,22 @@ Surtr では call 式の第一引数へ左辺値を注入するので、Elixir �
 capture や closure も使えます。
 
 ```surtr
-print(to_string(4 |> &add(1)))
+print(to_string(4 |> &add(&1, 1)))
 print(to_string(4 |> {|x| x + 1}))
+print(" alice " |> String::trim() |> String::surround("[", "]"))
+```
+
+関数値を変数に束縛して渡すこともできます。
+
+```surtr
+inc_fn: (Int -> Int) = &inc
+print(to_string(4 |> inc_fn))
+```
+
+call 式が関数値を返す場合は、括弧で囲むと「返ってきた関数へ適用する」という意味になります。
+
+```surtr
+print(to_string(4 |> (make_adder(10))))
 ```
 
 bare capture を値として観察したいときは `inspect(...)` を使います。
@@ -537,31 +638,38 @@ def expand(n: Int) -> List<Int> { [n, n + 10] }
 print(to_string([1, 2, 3] |>= expand()))
 ```
 
-### 10.4 `>>` と `|=>` は「関数値をつなぐ」
+### 10.4 `>>`, `>*`, `>=>` は「関数値をつなぐ」
 
 ここが apply 系との一番大きな違いです。  
 compose 系は「値」ではなく「関数値」をつなぎます。
 
 ```surtr
 pipeline = &trim >> &render
-result_pipeline = &parse |=> &validate
+result_pipeline = &parse >=> &validate
+lifted_pipeline = &parse >* &render
 ```
 
-Surtr では、compose の左右は capture か closure だけです。
+Surtr では、compose の左右は関数値です。capture、closure、または関数型の変数を渡せます。
 
 ```surtr
-&parse |=> &validate
-{|x| parse(x)} |=> {|y| validate(y)}
+&parse >=> &validate
+{|x| parse(x)} >=> {|y| validate(y)}
+&parse >* &render
+parser = &parse
+validator = &validate
+parser >=> validator
+normalizer = &String::trim >> {|text| "[" ++ text ++ "]"}
 ```
 
 次のような call 式は compose できません。
 
 ```surtr
-parse() |=> validate()   # 不可
+parse() >=> validate()   # 不可
+parse() >* render()      # 不可
 inc() >> render()        # 不可
 ```
 
-理由は単純で、`parse()` は関数そのものではなく「実行結果の値」だからです。
+理由は単純で、`parse()` は compose 位置では関数値として扱わないからです。関数値を返す call 式を使いたい場合は `(make_parser()) >=> (make_validator())` のように括弧で明示します。
 
 ### 10.5 裸の関数参照は使わない
 
@@ -569,14 +677,14 @@ Surtr では裸の関数参照を関数値として扱いません。
 
 ```surtr
 value |> normalize       # 不可
-pipeline = parse |=> validate  # 不可
+pipeline = parse >=> validate  # 不可
 ```
 
 関数値がほしいなら `&` を付けます。
 
 ```surtr
 value |> &normalize
-pipeline = &parse |=> &validate
+pipeline = &parse >=> &validate
 ```
 
 ### 10.6 Backtick FuncLiteral
@@ -590,6 +698,7 @@ def eq(left: Int, right: Int) -> Boolean {
 
 print(to_string(10 `+` 5))
 print(to_string(7 `eq` 7))
+print("a" `concat` "b")
 ```
 
 この構文は「関数値を作る」ものではなく、その場で 2 引数 call として解釈されます。
@@ -597,8 +706,7 @@ print(to_string(7 `eq` 7))
 - ``left `name` right`` は `name(left, right)` と同じ
 - ``left `+` right`` のような operator 版は対応する通常演算と同じ
 - 単独の `` `eq` `` のような書き方はできない
-- V1 では unqualified name と symbolic operator だけを対象にする
-- `` `Type::method` `` のような qualified backtick path は未対応
+- qualified path も使えるので、``left `Type::method` right`` は `Type::method(left, right)` と同じ
 
 優先度は通常の pipeline / compose より強く、comparison より強い `Expr` クラスとして扱います。  
 `+`, `-`, `*`, `++` は同列・左結合です。
@@ -607,10 +715,11 @@ print(to_string(7 `eq` 7))
 print(to_string(2 + 3 * 4))   # => 20
 ```
 
-一方、capture 側の operator 版や placeholder capture はまだありません。
+capture 側でも backtick 版を使えます。
 
 ```surtr
-f = &`+`   # 未実装
+inc = &`+`(&1, 1)
+not_fn = &`Boolean::not`
 ```
 
 ## 11. 組込み関数
@@ -626,14 +735,14 @@ f = &`+`   # 未実装
 - `set_exit_code(Int) -> Unit`
 
 `safe_div` と `safe_mod` は、失敗を例外ではなく `Result<_, ZeroDivisionError>` で返します。  
-`+`, `-`, `*` は内部では `Numeric` trait dispatch を通りますが、VM では引き続き具体的な opcode / builtin へ lower されます。
+`+`, `-`, `*` は内部では `Add` / `Sub` / `Mul` trait dispatch を通りますが、VM では引き続き具体的な opcode / builtin へ lower されます。
 
-## 12. 標準モジュールの前提
+## 12. 標準定義ソースの前提
 
-現在の Surtr では、標準モジュールを次の順で先に読み込みます。
+現在の Surtr では、標準定義ソースを次の順で先に読み込みます。
 
 ```text
-Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, HashMap, Result, Lens, Float] -> user source
+Bootstrap -> [SpecialTypes, Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> user source
 ```
 
 役割の分け方は次のとおりです。
@@ -641,41 +750,42 @@ Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, T
 - `Bootstrap`
   - auto-import の起点になる安定アンカー
   - `NoneError` などの bootstrap concrete error
+- `SpecialTypes`
+  - `Unit`, `TypeRef<$T>`, `Hole` の canonical builtin type 宣言
 - `Kernel`
   - auto import される最小の標準 API
   - `defmod Kernel` 配下に置かれる `print` のような cross-cutting builtin
-  - 専用 file を持たない `Unit` の type 宣言
 - `Numeric`
   - compile-time trait dispatch の基準になる trait 宣言
   - `Int` / `Float` が共有する `add`, `sub`, `mul`, `safe_div`, `abs`, `min`, `max` の契約
 - 各 type module
   - `Int` や `String` のような型ごとの helper と説明
-  - その型自身の `@@builtin type` 宣言
+  - その型自身の `@builtin type` 宣言
 
-auto import されるのは `Bootstrap` と `Kernel` だけです。  
-他の type module も標準モジュールとして一緒にロードされますが、名前空間としては別レイヤーで保ちます。
+auto import されるのは `Bootstrap`, `Kernel`、`@autoimport impl Result` の helper surface と、`@autoimport` が付いた標準 trait です。  
+他の type module も標準定義ソースとして一緒にロードされますが、名前空間としては別レイヤーで保ちます。
 
-## 13. `@@doc` と source ドキュメント
+## 13. `@doc` と source ドキュメント
 
-Surtr の標準モジュールは、説明文も source に載せます。
+Surtr の標準定義ソースは、説明文も source に載せます。
 
 ```surtr
-@@doc """
+@doc """
 Standard `Int` type declaration.
 User-visible integer values backed by BigInt.
 """
-@@builtin type Int
+@builtin type Int
 ```
 
-この `@@doc` は単なるコメントではなく、定義に紐付いた metadata として扱われます。  
+この `@doc` は単なるコメントではなく、定義に紐付いた metadata として扱われます。  
 つまり、標準ライブラリの説明は `lib/*.srt` を開いた時点で読めるようにしておく、という設計です。
 
 利用者として押さえておくとよい点は次のとおりです。
 
 - canonical builtin type head は各対応 file のトップレベルに並ぶ
-- `Unit` だけは専用 module file を持たず `kernel.srt` に置かれる
+- compiler-special type (`Unit`, `TypeRef<$T>`, `Hole`) は `special_types.srt` に集約される
 - 各 `defmod Name { ... }` がモジュール API になる
-- builtin type、module、関数、標準 error には `@@doc` を付けられる
+- builtin type、module、関数、標準 error には `@doc` を付けられる
 
 ## 14. `Result<T>` と `Result<T, E>` の見え方
 
@@ -717,4 +827,4 @@ value: Result<Int> = Ok(42)
 - マクロシステム拡張
 - 並列コンパイル
 
-細かい構文や外部契約を確認したい場合は、次に [言語リファレンス](./language-reference.md) を読むのがおすすめです。標準モジュールの配置や `@@doc` の約束を見たい場合は [標準ライブラリガイド](./standard-library.md) を参照してください。
+細かい構文や外部契約を確認したい場合は、次に [言語リファレンス](./language-reference.md) を読むのがおすすめです。標準定義ソースの配置や `@doc` の約束を見たい場合は [標準ライブラリガイド](./standard-library.md) を参照してください。

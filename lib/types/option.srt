@@ -1,0 +1,141 @@
+@doc """
+Standard `Option` enum.
+`Option<$T>` represents an optional value in user code.
+It is not part of Surtr's failure-propagation machinery: `=?` still rejects
+`Option`, and missing values only participate in Result control flow after an
+explicit conversion.
+The type sugar `T?` does not build `Option<T>`; it lowers to
+`Result<T, NoneError>` instead.
+For data-model fields, prefer `T?` when the value should compose with Lens
+updates or `Result`-returning helper functions.
+Using `Option<T>` in a struct field is still valid, but Result-oriented updates
+usually need explicit conversion in and out of `Option`.
+`Option` does support the contextual operators `|*>` and `|>=` in its own
+container family.
+
+Example:
+
+`user.nickname |> from(Result) |>= normalize_name |> from(Option)`
+
+The equivalent `nickname: String?` field can stay in `Result` form through the
+whole update pipeline.
+
+## REPL
+xldr(1)> Option::is_some(Option::Some(1))
+True
+"""
+defenum Option<$T> {
+  Some($T),
+  None,
+}
+
+impl Option {
+  @doc """
+  Return `True` when the option is `Some(...)`.
+  ## REPL
+  xldr(1)> Option::is_some(Option::Some(1))
+  True
+  """
+  def is_some(value: Option<$T>) -> Boolean {
+    match value {
+      Option::Some(_) => True,
+      Option::None => False,
+    }
+  }
+
+  @doc """
+  Return `True` when the option is `None`.
+  ## REPL
+  xldr(1)> Option::is_none(Option::None)
+  True
+  """
+  def is_none(value: Option<$T>) -> Boolean {
+    Boolean::not(Option::is_some(value))
+  }
+
+  @doc """
+  Wrap the value in `Option::Some(...)`.
+  ## REPL
+  xldr(1)> Option::wrap(1)
+  Option::Some(1)
+  """
+  def wrap(value: $T) -> Option<$T> {
+    Option::Some(value)
+  }
+}
+
+@doc """
+`Functor` implementation for `Option`.
+This is the source-level meaning of `value |*> f`.
+"""
+impl Functor<$A, $B, Option<$B>> for Option<$A> {
+  def map(self: Self, f: ($A -> $B)) -> Option<$B> {
+    match self {
+      Option::Some(value) => Option::Some(f(value)),
+      Option::None => Option::None,
+    }
+  }
+}
+
+@doc """
+`Chainable` implementation for `Option`.
+This is the source-level meaning of `value |>= f`.
+"""
+impl Chainable<$A, Option<$B>> for Option<$A> {
+  def chain(self: Self, f: ($A -> Option<$B>)) -> Option<$B> {
+    match self {
+      Option::Some(value) => f(value),
+      Option::None => Option::None,
+    }
+  }
+}
+
+@doc """
+`LiftComposable` implementation for `Option`-returning unary functions.
+This is the source-level meaning of `left >* right` for `Option`.
+"""
+impl LiftComposable<$A, $B, $C, Option<$C>> for ($A -> Option<$B>) {
+  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Option<$C>) {
+    {|value| Functor::map(self(value), rhs)}
+  }
+}
+
+@doc """
+`KleisliComposable` implementation for `Option`-returning unary functions.
+This is the source-level meaning of `left >=> right` for `Option`.
+"""
+impl KleisliComposable<$A, $B, Option<$C>> for ($A -> Option<$B>) {
+  def kleisli_compose(self: Self, rhs: ($B -> Option<$C>)) -> ($A -> Option<$C>) {
+    {|value| Chainable::chain(self(value), rhs)}
+  }
+}
+
+impl From<Result<$T>> for Option<$T> {
+  @doc """
+  Convert `Option<$T>` into `Result<$T>` using `NoneError` for missing values.
+  ## REPL
+  xldr(1)> from(Option::Some(1), Result)
+  Ok(1)
+  """
+  def from(self: Self, to: TypeRef<Result<$T>>) -> Result<$T> {
+    match self {
+      Option::Some(value) => Ok(value),
+      Option::None => Err(NoneError),
+    }
+  }
+}
+
+impl From<Option<$T>> for Result<$T> {
+  @doc """
+  Convert `Result<$T>` into `Option<$T>`, dropping the concrete error value.
+  ## REPL
+  xldr(1)> from(Ok(1), Option)
+  Option::Some(1)
+  """
+  def from(self: Self, to: TypeRef<Option<$T>>) -> Option<$T> {
+    match self {
+      Ok(value) => Option::Some(value),
+      Err(_) => Option::None,
+    }
+  }
+}

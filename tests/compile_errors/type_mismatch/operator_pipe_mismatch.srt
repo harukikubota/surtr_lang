@@ -1,0 +1,5 @@
+def inc(x: Int) -> Int {
+  x + 1
+}
+
+result = "oops" |> &inc

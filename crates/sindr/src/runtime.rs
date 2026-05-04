@@ -19,6 +19,8 @@ pub struct TypeEntry {
     pub name: String,
     pub kind: TypeKind,
     pub field_names: Vec<String>,
+    #[serde(default)]
+    pub private_flags: Vec<bool>,
 }
 
 /// Registry of all user-defined types in a compiled program.
@@ -61,6 +63,9 @@ pub enum Value {
     Regex(RegexHandle),
     RegexCaptures(RegexCapturesHandle),
     RegexMatch(RegexMatchHandle),
+    RandomGenerator(RandomGeneratorHandle),
+    Pid(PidHandle),
+    PendingFuture(u64),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -82,10 +87,21 @@ pub struct RegexMatchHandle {
     pub end: usize,
 }
 
-/// Shared runtime handle for immutable insertion-ordered string-keyed maps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RandomGeneratorHandle {
+    pub state: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PidHandle {
+    pub id: u64,
+    pub process_name: String,
+}
+
+/// Shared runtime handle for immutable string-keyed maps.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HashMapHandle {
-    pub entries: Vec<(String, Value)>,
+    pub entries: HashMap<String, Value>,
 }
 
 pub type ListRef = Option<Rc<ListNode>>;
@@ -108,7 +124,7 @@ pub enum ListNode {
 pub struct Callable {
     pub target: CallableTarget,
     pub lexical_captures: Vec<Value>,
-    pub partial_args: Vec<Value>,
+    pub metadata: CallableMetadata,
 }
 
 /// Callable target reference.
@@ -118,7 +134,64 @@ pub enum CallableTarget {
     Function(FunctionId),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallableMetadata {
+    pub origin: CallableOrigin,
+    pub module: Option<String>,
+    pub name: Option<String>,
+    pub full_signature: Option<String>,
+    pub applied_args: usize,
+}
+
+impl Default for CallableMetadata {
+    fn default() -> Self {
+        Self {
+            origin: CallableOrigin::Unknown,
+            module: None,
+            name: None,
+            full_signature: None,
+            applied_args: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallableOrigin {
+    Unknown,
+    Closure,
+    Capture,
+}
+
 impl Value {
+    fn render_named_value(
+        type_name: &str,
+        field_names: &[String],
+        private_flags: &[bool],
+        fields: &[Value],
+        registry: &TypeRegistry,
+    ) -> String {
+        let hidden_field_count = private_flags.iter().filter(|flag| **flag).count();
+        let mut parts = field_names
+            .iter()
+            .zip(
+                private_flags
+                    .iter()
+                    .copied()
+                    .chain(std::iter::repeat(false)),
+            )
+            .zip(fields.iter())
+            .filter_map(|((name, is_private), val)| {
+                (!is_private).then(|| format!("{}: {}", name, val.to_display_string(registry)))
+            })
+            .collect::<Vec<_>>();
+
+        if hidden_field_count > 0 {
+            parts.push("..private".to_string());
+        }
+
+        format!("{}({})", type_name, parts.join(", "))
+    }
+
     /// Display string for `to_string` built-in.
     pub fn to_display_string(&self, registry: &TypeRegistry) -> String {
         match self {
@@ -154,12 +227,12 @@ impl Value {
                     return "HashMap()".to_string();
                 }
                 let inner = handle
-                    .entries
-                    .iter()
+                    .sorted_entries()
+                    .into_iter()
                     .map(|(key, value)| {
                         format!(
                             "{} => {}",
-                            quote_surtr_string_literal(key),
+                            quote_surtr_string_literal(&key),
                             value.to_display_string(registry)
                         )
                     })
@@ -177,16 +250,19 @@ impl Value {
             }
             Value::Tagged { tag, fields } => {
                 if let Some(entry) = registry.lookup(*tag) {
-                    let pairs = entry
-                        .field_names
-                        .iter()
-                        .zip(fields.iter())
-                        .map(|(name, val)| format!("{}: {}", name, val.to_display_string(registry)))
-                        .collect::<Vec<_>>()
-                        .join(", ");
+                    if entry.name == "Duration" {
+                        if let Some(Value::Int(ms)) = fields.first() {
+                            return format!("{ms}ms");
+                        }
+                    }
                     match entry.kind {
-                        TypeKind::Struct => format!("{} {{ {} }}", entry.name, pairs),
-                        TypeKind::Record => format!("{}({})", entry.name, pairs),
+                        TypeKind::Struct | TypeKind::Record => Self::render_named_value(
+                            &entry.name,
+                            &entry.field_names,
+                            &entry.private_flags,
+                            fields,
+                            registry,
+                        ),
                         TypeKind::EnumVariant => {
                             let payload = fields
                                 .iter()
@@ -229,10 +305,9 @@ impl Value {
                 CallableTarget::Builtin(id) => format!("<builtin:{}>", id),
                 CallableTarget::Function(fun_idx) => {
                     format!(
-                        "<function:{}; lexical_captures={}; partial_args={}>",
+                        "<function:{}; lexical_captures={}>",
                         fun_idx,
-                        callable.lexical_captures.len(),
-                        callable.partial_args.len()
+                        callable.lexical_captures.len()
                     )
                 }
             },
@@ -242,6 +317,9 @@ impl Value {
                 format!("RegexCaptures(groups: {})", handle.groups.len())
             }
             Value::RegexMatch(handle) => format!("RegexMatch({}..{})", handle.start, handle.end),
+            Value::RandomGenerator(_) => "RandomGenerator(<opaque>)".to_string(),
+            Value::Pid(handle) => format!("PID({}#{})", handle.process_name, handle.id),
+            Value::PendingFuture(future_id) => format!("<pending:future#{future_id}>"),
         }
     }
 }
@@ -262,10 +340,39 @@ fn quote_surtr_string_literal(input: &str) -> String {
     out
 }
 
+fn visible_runtime_error_message(message: &str) -> &str {
+    message
+        .split_once("\t@@lhs=")
+        .map(|(head, _)| head)
+        .unwrap_or(message)
+}
+
+fn split_runtime_error_diagnostic(
+    kind: &str,
+    message: &str,
+) -> (String, Option<RuntimeErrorDiagnostic>) {
+    if kind != "PatternMismatch" {
+        return (message.to_string(), None);
+    }
+    let Some((base, rest)) = message.split_once("\t@@lhs=") else {
+        return (message.to_string(), None);
+    };
+    let Some((lhs, rhs)) = rest.split_once("\t@@rhs=") else {
+        return (message.to_string(), None);
+    };
+    (
+        base.to_string(),
+        Some(RuntimeErrorDiagnostic::LiteralPatternMismatch {
+            lhs: lhs.to_string(),
+            rhs: rhs.to_string(),
+        }),
+    )
+}
+
 impl HashMapHandle {
     pub fn empty() -> Self {
         Self {
-            entries: Vec::new(),
+            entries: HashMap::new(),
         }
     }
 
@@ -282,60 +389,50 @@ impl HashMapHandle {
     }
 
     pub fn contains_key(&self, key: &str) -> bool {
-        self.entries.iter().any(|(existing, _)| existing == key)
+        self.entries.contains_key(key)
     }
 
     pub fn get(&self, key: &str) -> Option<Value> {
-        self.entries
-            .iter()
-            .find_map(|(existing, value)| (existing == key).then(|| value.clone()))
+        self.entries.get(key).cloned()
     }
 
     pub fn insert(&self, key: String, value: Value) -> Self {
         let mut entries = self.entries.clone();
-        if let Some((_, existing_value)) = entries.iter_mut().find(|(existing, _)| existing == &key)
-        {
-            *existing_value = value;
-        } else {
-            entries.push((key, value));
-        }
+        entries.insert(key, value);
         Self { entries }
     }
 
     pub fn remove(&self, key: &str) -> Self {
-        let mut removed = false;
-        let entries = self
-            .entries
-            .iter()
-            .filter_map(|(existing_key, existing_value)| {
-                if !removed && existing_key == key {
-                    removed = true;
-                    None
-                } else {
-                    Some((existing_key.clone(), existing_value.clone()))
-                }
-            })
-            .collect::<Vec<_>>();
-
-        if removed {
-            Self { entries }
-        } else {
-            self.clone()
+        if !self.entries.contains_key(key) {
+            return self.clone();
         }
+        let mut entries = self.entries.clone();
+        entries.remove(key);
+        Self { entries }
     }
 
     pub fn keys(&self) -> Vec<String> {
-        self.entries
-            .iter()
-            .map(|(key, _)| key.clone())
-            .collect::<Vec<_>>()
+        self.sorted_entries()
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect()
     }
 
     pub fn values(&self) -> Vec<Value> {
-        self.entries
+        self.sorted_entries()
+            .into_iter()
+            .map(|(_, value)| value)
+            .collect()
+    }
+
+    pub fn sorted_entries(&self) -> Vec<(String, Value)> {
+        let mut entries = self
+            .entries
             .iter()
-            .map(|(_, value)| value.clone())
-            .collect::<Vec<_>>()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
     }
 }
 
@@ -411,14 +508,42 @@ impl Iterator for ListIter {
 
 /// Rich error value produced by `deferror`.
 #[derive(Debug, Clone, PartialEq)]
+pub enum RuntimeErrorDiagnostic {
+    LiteralPatternMismatch { lhs: String, rhs: String },
+}
+
+/// Rich error value produced by `deferror`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct RichError {
     pub kind: String,
     pub message: String,
     pub location: Location,
     pub cause: Option<Box<RichError>>,
+    pub diagnostic: Option<RuntimeErrorDiagnostic>,
 }
 
 impl RichError {
+    pub fn new(
+        kind: impl Into<String>,
+        message: impl Into<String>,
+        location: Location,
+        cause: Option<Box<RichError>>,
+    ) -> Self {
+        let kind = kind.into();
+        let (message, diagnostic) = split_runtime_error_diagnostic(&kind, &message.into());
+        Self {
+            kind,
+            message,
+            location,
+            cause,
+            diagnostic,
+        }
+    }
+
+    pub fn visible_message(&self) -> &str {
+        visible_runtime_error_message(&self.message)
+    }
+
     pub fn to_display_string(&self) -> String {
         self.to_display_lines().join("\n")
     }
@@ -438,10 +563,14 @@ impl RichError {
     }
 
     pub fn to_eprint_lines(&self) -> Vec<String> {
-        let mut lines = vec![format!("Error: {}: {}", self.kind, self.message)];
+        let mut lines = vec![format!("Error: {}: {}", self.kind, self.visible_message())];
         let mut next = self.cause.as_deref();
         while let Some(cause) = next {
-            lines.push(format!("Caused by: {}: {}", cause.kind, cause.message));
+            lines.push(format!(
+                "Caused by: {}: {}",
+                cause.kind,
+                cause.visible_message()
+            ));
             next = cause.cause.as_deref();
         }
         lines
@@ -461,7 +590,12 @@ impl RichError {
     }
 
     fn push_display_lines(&self, lines: &mut Vec<String>, first_prefix: &str, child_prefix: &str) {
-        lines.push(format!("{}{}({:?})", first_prefix, self.kind, self.message));
+        lines.push(format!(
+            "{}{}({:?})",
+            first_prefix,
+            self.kind,
+            self.visible_message()
+        ));
         if let Some(cause) = self.cause.as_deref() {
             cause.push_display_lines(
                 lines,
@@ -486,8 +620,8 @@ pub struct Location {
 #[cfg(test)]
 mod tests {
     use super::{
-        Callable, CallableTarget, HashMapHandle, ListHandle, Location, RichError, TypeEntry,
-        TypeKind, TypeRegistry, Value,
+        Callable, CallableMetadata, CallableTarget, HashMapHandle, ListHandle, Location, RichError,
+        TypeEntry, TypeKind, TypeRegistry, Value,
     };
     use crate::primitives::int;
 
@@ -514,12 +648,21 @@ mod tests {
             name: "User".into(),
             kind: TypeKind::Struct,
             field_names: vec!["name".into(), "age".into()],
+            private_flags: vec![false, false],
         });
         registry.register(TypeEntry {
             tag: 11,
             name: "Pair".into(),
             kind: TypeKind::Record,
             field_names: vec!["left".into(), "right".into()],
+            private_flags: vec![false, false],
+        });
+        registry.register(TypeEntry {
+            tag: 12,
+            name: "SecretUser".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["name".into(), "password".into()],
+            private_flags: vec![false, true],
         });
 
         let user = Value::Tagged {
@@ -530,12 +673,20 @@ mod tests {
             tag: 11,
             fields: vec![Value::Int(int(1)), Value::Int(int(2))],
         };
+        let secret_user = Value::Tagged {
+            tag: 12,
+            fields: vec![Value::Str("alice".into()), Value::Str("s3cr3t".into())],
+        };
 
         assert_eq!(
             user.to_display_string(&registry),
-            "User { name: alice, age: 20 }"
+            "User(name: alice, age: 20)"
         );
         assert_eq!(pair.to_display_string(&registry), "Pair(left: 1, right: 2)");
+        assert_eq!(
+            secret_user.to_display_string(&registry),
+            "SecretUser(name: alice, ..private)"
+        );
     }
 
     #[test]
@@ -553,6 +704,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         }));
         assert_eq!(value.to_display_string(&registry), "TestError(\"boom\")");
     }
@@ -572,6 +724,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         };
         value.append_cause_tail(RichError {
             kind: "Inner".into(),
@@ -585,6 +738,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         });
         value.append_cause_tail(RichError {
             kind: "Leaf".into(),
@@ -598,6 +752,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         });
 
         let rendered = Value::Error(Box::new(value));
@@ -619,11 +774,11 @@ mod tests {
     }
 
     #[test]
-    fn hash_map_handle_insert_overwrite_and_remove_keep_order() {
+    fn hash_map_handle_insert_overwrite_and_remove_use_sorted_key_order() {
         let empty = HashMapHandle::empty();
-        let with_a = empty.insert("a".into(), Value::Int(int(1)));
-        let with_ab = with_a.insert("b".into(), Value::Int(int(2)));
-        let with_overwrite = with_ab.insert("a".into(), Value::Int(int(3)));
+        let with_b = empty.insert("b".into(), Value::Int(int(2)));
+        let with_ba = with_b.insert("a".into(), Value::Int(int(1)));
+        let with_overwrite = with_ba.insert("a".into(), Value::Int(int(3)));
 
         assert_eq!(with_overwrite.len(), 2);
         assert_eq!(
@@ -670,17 +825,17 @@ mod tests {
         let builtin = Value::Callable(Callable {
             target: CallableTarget::Builtin(3),
             lexical_captures: Vec::new(),
-            partial_args: Vec::new(),
+            metadata: CallableMetadata::default(),
         });
         let function = Value::Callable(Callable {
             target: CallableTarget::Function(7),
             lexical_captures: vec![Value::Unit],
-            partial_args: vec![Value::Bool(true), Value::Bool(false)],
+            metadata: CallableMetadata::default(),
         });
         assert_eq!(builtin.to_display_string(&registry), "<builtin:3>");
         assert_eq!(
             function.to_display_string(&registry),
-            "<function:7; lexical_captures=1; partial_args=2>"
+            "<function:7; lexical_captures=1>"
         );
     }
 
@@ -701,6 +856,7 @@ mod tests {
                     span_end: 1,
                 },
                 cause: None,
+                diagnostic: None,
             }))],
         };
         assert_eq!(
@@ -724,6 +880,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         };
         rich.append_cause_tail(RichError {
             kind: "Lower".into(),
@@ -737,6 +894,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         });
 
         let value = Value::Tagged {
@@ -763,6 +921,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         };
         rich.append_cause_tail(RichError {
             kind: "Lower".into(),
@@ -776,6 +935,7 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
+            diagnostic: None,
         });
 
         assert_eq!(
@@ -784,6 +944,29 @@ mod tests {
                 "Error: Higher: higher".to_string(),
                 "Caused by: Lower: lower".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn rich_error_eprint_lines_hide_runtime_literal_metadata() {
+        let rich = RichError {
+            kind: "PatternMismatch".into(),
+            message: "Pattern did not match.\t@@lhs=\"1\"\t@@rhs=\"2\"".into(),
+            location: Location {
+                file: "<repl>".into(),
+                func: "f".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 1,
+            },
+            cause: None,
+            diagnostic: None,
+        };
+
+        assert_eq!(
+            rich.to_eprint_lines(),
+            vec!["Error: PatternMismatch: Pattern did not match.".to_string()]
         );
     }
 }

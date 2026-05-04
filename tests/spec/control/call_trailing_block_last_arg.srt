@@ -1,8 +1,0 @@
-def take(flag: Boolean, value: Int) -> Int {
-  if(flag, value, 0)
-}
-
-print(to_string(take(True) { num = 10; num }))
-
-v = if_then(True) { print("x") }
-print(to_string(v))

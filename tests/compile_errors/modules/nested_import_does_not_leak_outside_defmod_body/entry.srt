@@ -1,0 +1,2 @@
+print(to_string(Counter::start()))
+print(to_string(inc(1)))
