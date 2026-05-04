@@ -1,0 +1,25 @@
+defstruct Slug {
+  value: String,
+}
+
+impl From<Slug> for String {
+  def from(self: Self, to: TypeRef<Slug>) -> Slug {
+    Slug::new(String::replace(String::trim(self), " ", "-"))
+  }
+}
+
+impl Show for Slug {
+  def to_string(self: Self) -> String {
+    self.value
+  }
+}
+
+impl Slug {
+  def new(value: String) -> Self {
+    Slug { value: value }
+  }
+
+  def segments(self: Self) -> List<String> {
+    String::split(self.value, "-")
+  }
+}
