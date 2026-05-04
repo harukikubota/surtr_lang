@@ -1,0 +1,21 @@
+defstruct Timeout {
+  value: Duration,
+}
+
+impl Show for Timeout {
+  def to_string(self: Self) -> String {
+    inspect(self.value)
+  }
+}
+
+impl Compare for Timeout {
+  def compare(self: Self, rhs: Self) -> Ordering {
+    Compare::compare(self.value, rhs.value)
+  }
+}
+
+impl Timeout {
+  def new(value: Duration) -> Self {
+    Timeout { value: value }
+  }
+}

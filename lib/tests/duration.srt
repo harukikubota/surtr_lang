@@ -1,0 +1,70 @@
+include "./schema/duration_schema.srt"
+
+import Test;
+
+test("Duration") {
+  describe("construction") {
+    it("supports duration literals and millis access") {
+      d: Duration =? try_from(7, Duration)
+      assert_eq((250ms, 250, 7), (250ms, Duration::millis(250ms), Duration::millis(d)))
+    }
+
+    it("rejects negative durations") {
+      assert_err_contains("duration must be non-negative: -1", Duration(-1))
+    }
+  }
+
+  describe("arithmetic") {
+    it("adds durations through Add") {
+      assert_eq(30ms, 10ms + 20ms)
+    }
+
+    it("subtracts durations when the result stays non-negative") {
+      assert_eq("Ok(10ms)", inspect(Duration::sub(20ms, 10ms)))
+    }
+
+    it("reports invalid negative subtraction") {
+      assert_err_contains("duration subtraction would be negative: 10ms - 20ms", Duration::sub(10ms, 20ms))
+    }
+  }
+
+  describe("ordering traits") {
+    it("supports equality and inequality") {
+      assert_eq((True, True), (10ms == 10ms, 10ms != 20ms))
+    }
+
+    it("supports compare and relational helpers") {
+      assert_eq(
+        (Ordering::Less, True, True, True, True),
+        (compare(10ms, 20ms), 10ms < 20ms, 20ms >= 20ms, lt(10ms, 20ms), gte(20ms, 20ms)),
+      )
+    }
+  }
+
+  describe("pattern integration") {
+    it("extracts millis through the Duration extractor") {
+      match 20ms {
+        Duration(ms) => assert_eq(20, ms),
+      }
+    }
+
+    it("matches exact duration literals") {
+      assert_eq("hit", match 20ms {
+        20ms => "hit",
+        _ => "miss",
+      })
+    }
+  }
+
+  describe("trait integration") {
+    it("compares user wrappers around durations") {
+      assert_eq(
+        ("30ms", Ordering::Greater),
+        (
+          to_string(Timeout::new(30ms)),
+          compare(Timeout::new(30ms), Timeout::new(20ms))
+        ),
+      )
+    }
+  }
+}
