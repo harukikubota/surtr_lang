@@ -156,8 +156,8 @@ test("Result") {
 
     it("recover_kind accepts constructor markers with payload") {
       assert_eq(
-        "Ok(24)",
-        inspect(recover_kind(Err(ResultSchema::ApiError("boom")), ResultSchema::ApiError("ignored"), {|err| Ok(String::len(inspect(err)))})),
+        "Ok(16)",
+        inspect(recover_kind(Err(ApiError("boom")), ApiError("ignored"), {|err| Ok(String::len(inspect(err)))})),
       )
     }
   }

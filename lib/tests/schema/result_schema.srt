@@ -2,6 +2,10 @@ deferror MissingUser(detail: String) {
   detail
 }
 
+deferror ApiError(detail: String) {
+  detail
+}
+
 defrecord User(name: String, age: Int)
 
 defmod ResultSchema {

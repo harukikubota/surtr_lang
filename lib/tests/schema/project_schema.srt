@@ -1,4 +1,8 @@
 defmod ProjectSchema {
+  def add(x: Int, y: Int) -> Int {
+    x + y
+  }
+
   def api_entry(cfg: Config) -> Config {
     cfg = Config::entry_fun(cfg, "Api::main")
     Config::add_path(cfg, "./api")
