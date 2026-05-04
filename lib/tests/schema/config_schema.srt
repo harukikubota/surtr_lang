@@ -1,0 +1,7 @@
+defmod ConfigSchema {
+  def app_config() -> Config {
+    cfg = Config::new("App")
+    cfg = Config::entry_fun(cfg, "App::main")
+    Config::add_path(cfg, "./lib")
+  }
+}
