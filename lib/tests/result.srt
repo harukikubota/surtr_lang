@@ -1,3 +1,22 @@
+include "./schema/result_schema.srt"
+
+import ResultSchema::{
+  add2,
+  add3,
+  emit_next,
+  ensure_adult,
+  inc,
+  load_user,
+  parse_user_id,
+  recover_to_one,
+  render_user,
+  result_pure,
+  safe_add2,
+  safe_add3,
+  safe_double_under_limit,
+  safe_inc,
+  safe_step3,
+};
 import Result::{
   all,
   cause,
@@ -25,47 +44,6 @@ import Result::{
   zip3,
 };
 import Test;
-
-def inc(x: Int) -> Int {
-  x + 1
-}
-
-def add2(x: Int, y: Int) -> Int {
-  x + y
-}
-
-def add3(x: Int, y: Int, z: Int) -> Int {
-  x + y + z
-}
-
-def safe_inc(x: Int) -> Result<Int> {
-  Ok(x + 1)
-}
-
-def result_pure(x: Int) -> Result<Int> {
-  Ok(x)
-}
-
-def safe_double_under_limit(x: Int) -> Result<Int> {
-  if(x < 5, Ok(x * 2), Err(NoneError))
-}
-
-def safe_step3(x: Int) -> Result<Int> {
-  Ok(x - 3)
-}
-
-def safe_add2(x: Int, y: Int) -> Result<Int> {
-  Ok(x + y)
-}
-
-def safe_add3(x: Int, y: Int, z: Int) -> Result<Int> {
-  Ok(x + y + z)
-}
-
-def emit_next() -> Result<String> {
-  print("then-next")
-  Ok("next")
-}
 
 test("Result") {
   describe("is_ok") {
@@ -109,10 +87,46 @@ test("Result") {
       assert_eq("Ok(1)", inspect(chain(Ok(1), Ok(()))))
     }
 
+    it("propagates right Err after Ok") {
+      assert_eq(
+        "Err(ZeroDivisionError(\"division by zero\"))",
+        inspect(chain(Ok(1), Err(ZeroDivisionError))),
+      )
+    }
+
+    it("keeps left Err when right succeeds") {
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(chain(Err(NoneError), Ok(()))))
+    }
+
     it("chains right Err") {
       assert_eq(
         "Err(ZeroDivisionError(\"division by zero\"))\n|_ NoneError(\"None Value.\")",
         inspect(chain(Err(NoneError), Err(ZeroDivisionError))),
+      )
+    }
+  }
+
+  describe("recover / recover_kind") {
+    it("recover keeps Ok without running the handler") {
+      assert_eq("Ok(7)", inspect(recover(Ok(7), &recover_to_one)))
+    }
+
+    it("recover handles Err values") {
+      assert_eq("Ok(1)", inspect(recover(Err(NoneError), &recover_to_one)))
+    }
+
+    it("recover_kind keeps Ok values") {
+      assert_eq("Ok(7)", inspect(recover_kind(Ok(7), NoneError, {|err| Ok(String::len(inspect(err)))})))
+    }
+
+    it("recover_kind handles matching errors") {
+      assert_eq("Ok(24)", inspect(recover_kind(Err(NoneError), NoneError, {|err| Ok(String::len(inspect(err)))})))
+    }
+
+    it("recover_kind keeps non-matching errors") {
+      assert_eq(
+        "Err(ZeroDivisionError(\"division by zero\"))",
+        inspect(recover_kind(Err(ZeroDivisionError), NoneError, {|err| Ok(String::len(inspect(err)))})),
       )
     }
   }
@@ -122,12 +136,27 @@ test("Result") {
       assert_eq("Ok(2)", inspect(lift(Ok(&inc), Ok(1))))
     }
 
+    it("lift propagates function errors first") {
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(lift(Err(NoneError), Ok(1))))
+    }
+
     it("lift2 applies wrapped binary function") {
       assert_eq("Ok(3)", inspect(lift2(Ok(&add2), Ok(1), Ok(2))))
     }
 
+    it("lift2 propagates argument errors") {
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(lift2(Ok(&add2), Err(NoneError), Ok(2))))
+    }
+
     it("lift3 applies wrapped ternary function") {
       assert_eq("Ok(6)", inspect(lift3(Ok(&add3), Ok(1), Ok(2), Ok(3))))
+    }
+
+    it("lift3 stops at the first Err input") {
+      assert_eq(
+        "Err(NoneError(\"None Value.\"))",
+        inspect(lift3(Ok(&add3), Ok(1), Err(NoneError), Ok(3))),
+      )
     }
 
     it("with keeps value-first order") {
@@ -148,12 +177,30 @@ test("Result") {
       assert_eq("Ok(2)", inspect(flat_lift(Ok(&safe_inc), Ok(1))))
     }
 
+    it("flat_lift propagates argument errors") {
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(flat_lift(Ok(&safe_inc), Err(NoneError))))
+    }
+
     it("flat_lift2 flattens nested result") {
       assert_eq("Ok(3)", inspect(flat_lift2(Ok(&safe_add2), Ok(1), Ok(2))))
     }
 
+    it("flat_lift2 propagates function errors") {
+      assert_eq(
+        "Err(NoneError(\"None Value.\"))",
+        inspect(flat_lift2(Err(NoneError), Ok(1), Ok(2))),
+      )
+    }
+
     it("flat_lift3 flattens nested result") {
       assert_eq("Ok(6)", inspect(flat_lift3(Ok(&safe_add3), Ok(1), Ok(2), Ok(3))))
+    }
+
+    it("flat_lift3 propagates Err inputs") {
+      assert_eq(
+        "Err(NoneError(\"None Value.\"))",
+        inspect(flat_lift3(Ok(&safe_add3), Ok(1), Ok(2), Err(NoneError))),
+      )
     }
 
     it("flat_with keeps value-first order") {
@@ -174,8 +221,16 @@ test("Result") {
       assert_eq("Ok((1, 2))", inspect(zip(Ok(1), Ok(2))))
     }
 
+    it("zip short-circuits on Err") {
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(zip(Err(NoneError), Ok(2))))
+    }
+
     it("zips three results") {
       assert_eq("Ok((1, 2, 3))", inspect(zip3(Ok(1), Ok(2), Ok(3))))
+    }
+
+    it("zip3 returns the first Err") {
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(zip3(Ok(1), Err(NoneError), Ok(3))))
     }
 
     it("collects all Ok values") {
@@ -188,6 +243,10 @@ test("Result") {
 
     it("flattens nested Ok") {
       assert_eq("Ok(1)", inspect(flatten(Ok(Ok(1)))))
+    }
+
+    it("keeps outer Err values") {
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(flatten(Err(NoneError))))
     }
   }
 
@@ -206,8 +265,24 @@ test("Result") {
       assert_stdout_eq(["tap_err:NoneError(\"None Value.\")"])
     }
 
+    it("tap_ok skips handlers for Err") {
+      capture_stdout()
+      result = tap_ok(Err(NoneError), {|_| print("unexpected")})
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(result))
+      assert_stdout_eq([])
+    }
+
+    it("tap_err skips handlers for Ok") {
+      capture_stdout()
+      result = tap_err(Ok(1), {|_| print("unexpected")})
+      assert_eq("Ok(1)", inspect(result))
+      assert_stdout_eq([])
+    }
+
     it("then runs next when Ok") {
+      capture_stdout()
       assert_eq("Ok(\"next\")", inspect(then(Ok(1), &emit_next)))
+      assert_stdout_eq(["then-next"])
     }
 
     it("then short-circuits on Err") {
@@ -309,6 +384,20 @@ test("Result") {
     it("fmap matches bind with pure after mapping") {
       value: Result<Int> = Ok(2)
       assert_eq(value |*> inc(), value |>= {|x| result_pure(inc(x))})
+    }
+  }
+
+  describe("trait integration") {
+    it("supports realistic user pipelines through result operators") {
+      lookup = &parse_user_id >=> &load_user
+      summary: Result<String> = lookup("7") |>= ensure_adult() |*> render_user()
+      assert_eq("Ok(\"alice:20\")", inspect(summary))
+    }
+
+    it("propagates user-defined errors through the same pipeline") {
+      lookup = &parse_user_id >=> &load_user
+      summary: Result<String> = lookup("9") |>= ensure_adult() |*> render_user()
+      assert_eq("Err(MissingUser(\"user 9\"))", inspect(summary))
     }
   }
 }
