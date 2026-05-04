@@ -1,2 +1,0 @@
-def add1(x: Int) -> Int { x + 1 }
-print(to_string(add1(41)))

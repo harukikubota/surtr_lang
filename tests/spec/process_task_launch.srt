@@ -1,5 +1,0 @@
-value = Task::launch({||
-  print("launch-body")
-  Err(NoneError)
-})
-print(inspect(value))

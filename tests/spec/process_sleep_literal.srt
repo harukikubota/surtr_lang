@@ -1,1 +1,0 @@
-print(inspect(Process::sleep(5ms)))

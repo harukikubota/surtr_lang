@@ -1,2 +1,0 @@
-value = Task::call({|| Ok("task:" ++ to_string(20 + 22))})
-print(inspect(value))

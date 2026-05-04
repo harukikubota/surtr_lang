@@ -1,4 +1,0 @@
-value = Task::cast({||
-  print("cast-body")
-})
-print(inspect(value))

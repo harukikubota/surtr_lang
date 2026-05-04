@@ -181,6 +181,9 @@ fn execute_test_script(
 
     summary.total = summary.passed + summary.failed;
     if summary.total == 0 {
+        if script.file_path.contains("lib/tests/spec/") {
+            return Ok(summary);
+        }
         if !quiet {
             print_color_line(
                 &format!("No tests found in {}.", script.file_path),
@@ -277,7 +280,13 @@ fn collect_all_test_selectors() -> RuneResult<Vec<String>> {
     let selectors = paths
         .into_iter()
         .filter(|path| !is_schema_test_path(&root, path))
-        .filter(|path| path.file_name().and_then(|name| name.to_str()) != Some("prelude.srt"))
+        .filter(|path| !is_spec_module_path(&root, path))
+        .filter(|path| {
+            !matches!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some("prelude.srt") | Some("spec_defs.srt")
+            )
+        })
         .filter_map(|path| selector_for_test_path(&root, &path))
         .collect();
     Ok(selectors)
@@ -324,6 +333,19 @@ fn is_schema_test_path(root: &Path, path: &Path) -> bool {
         .ok()
         .and_then(|relative| relative.components().next())
         .is_some_and(|component| component.as_os_str() == "schema")
+}
+
+fn is_spec_module_path(root: &Path, path: &Path) -> bool {
+    let mut components = match path.strip_prefix(root).ok() {
+        Some(relative) => relative.components(),
+        None => return false,
+    };
+
+    matches!(
+        (components.next(), components.next()),
+        (Some(first), Some(second))
+            if first.as_os_str() == "spec" && second.as_os_str() == "modules"
+    )
 }
 
 fn compile_test_script(script: &TestScript, env: ExecutionEnv) -> RuneResult<Bytecode> {

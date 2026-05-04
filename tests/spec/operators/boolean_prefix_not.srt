@@ -1,3 +1,0 @@
-print(to_string(!True))
-print(to_string(!False))
-print(to_string(!(1 < 2)))

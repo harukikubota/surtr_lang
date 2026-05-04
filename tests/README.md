@@ -11,8 +11,11 @@ Coverage runner:
 - HTML report: `cargo cov-html`
 - JSON summary: `cargo cov-json`
 
+- `lib/tests/spec.srt`
+  - Canonical aggregate PureSurtr success suite
+  - Runner: `rune test spec`
 - `tests/spec/**.srt` + `.expected`
-  - End-to-end behavior fixtures (`stdout` match)
+  - Success fixtures kept on disk when file boundaries, include/import resolution, or other non-PureSurtr behavior is the thing under test
   - Runner: `tests/integration/run_srt.rs` (`spec_fixtures_bucket_0..3`)
 - `tests/compile_errors/**.srt` + `.error`
   - Compile error fixtures (`phase` and `contains` expectations)

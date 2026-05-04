@@ -1,4 +1,0 @@
-num: Int = 10
-name: String = "hello"
-print(to_string(num))
-print(name)

@@ -1,2 +1,0 @@
-value = Task::async({|| Ok("task:" ++ to_string(20 + 22))})
-print(inspect(value))
