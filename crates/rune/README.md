@@ -19,7 +19,7 @@ Spire -> Sigil -> Scar -> Forge -> Eldr
 ```bash
 surtr --version
 surtr run <file.srt|file.eldr> [--entry <name>] [--vm-dump <path>] [--vm-dump-on error|always]
-surtr repl [--quiet] [--banner] [--version]
+surtr repl [--quiet] [--banner] [--version] [--module <file.srt>] [--script <file.srt>]
 surtr build <file.srt> [output.eldr]
 surtr dump <file.eldr> [--format json]
 ```
@@ -49,6 +49,7 @@ EOF
 
 cargo run -p rune -- run main.srt
 cargo run -p rune -- repl
+cargo run -p rune -- repl --script main.srt
 cargo run -p rune -- build main.srt main.eldr
 cargo run -p rune -- run main.eldr
 cargo run -p rune -- dump main.eldr --format json | jq .

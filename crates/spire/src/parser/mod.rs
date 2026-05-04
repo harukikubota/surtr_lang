@@ -39,7 +39,8 @@ pub fn parse(source: &str) -> Result<Vec<Ast>, ParseError> {
 pub fn parse_with_context(source: &str, context: ParserContext) -> Result<Vec<Ast>, ParseError> {
     let tokens = tokenize(source)?;
     reject_excessive_delimiter_nesting(&tokens)?;
-    let ast = chumsky_program::parse_program_with_chumsky(source, &tokens, context)?;
+    let ast = chumsky_program::parse_program_with_chumsky(source, &tokens, context.clone())?;
+    validate::validate_program_by_context(&context, &ast)?;
     lower_namespaces(ast)
 }
 
@@ -50,8 +51,10 @@ pub fn parse_with_context_diagnostic(
 ) -> Result<Vec<Ast>, ParseDiagnostic> {
     let tokens = tokenize(source).map_err(ParseDiagnostic::from)?;
     reject_excessive_delimiter_nesting(&tokens).map_err(ParseDiagnostic::from)?;
-    let ast = chumsky_program::parse_program_with_chumsky_diagnostic(source, &tokens, context)
-        .map_err(ParseDiagnostic::from)?;
+    let ast =
+        chumsky_program::parse_program_with_chumsky_diagnostic(source, &tokens, context.clone())
+            .map_err(ParseDiagnostic::from)?;
+    validate::validate_program_by_context(&context, &ast).map_err(ParseDiagnostic::from)?;
     lower_namespaces(ast).map_err(ParseDiagnostic::from)
 }
 

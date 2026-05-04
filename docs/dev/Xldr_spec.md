@@ -64,7 +64,11 @@ Xldr は対話セッション中に次を保持する。
 - module stage の import 可視性は「前 stage + 同一 stage」とする。同一 stage 内の標準 module / 通常 module は file 読み込み順に依存せず明示 import / auto import でき、later stage 参照は compile error とする
 - loader は追加標準 module も `./lib/**/*.srt` から収集し、`lib/tests/**` と built-in 標準 module と重複するものはデフォルト入力から除外する
 - REPL user chunk は標準 module 読み込み後に `SourceKind::ReplChunk` として追加される
-- REPL user chunk の top-level 宣言は `def` / `import` のみ許可し、型定義・`impl`・`defmod` は parse error とする
+- `surtr repl --module <file>` は追加の module source を 1 件だけ preload し、`Std + 単品 module` として成立する場合に限って受理する
+- `surtr repl --script <file>` は追加の script source を 1 件だけ preload し、top-level expr があれば REPL 開始前に一度だけ実行する
+- `--module` と `--script` を併用した場合は `module -> script` の順で同一 compile unit として読む
+- preload 後の対話入力自体は引き続き `SourceKind::ReplChunk` として扱い、REPL 増分ポリシーは広げない
+- REPL user chunk の top-level 宣言は `def` / `import` のみ許可し、`const`、型定義、`impl`、`defmod` は parse error とする
 - REPL user chunk の top-level `def` は、セッション内の暗黙擬似モジュールに属する関数として扱う
 - したがって REPL は「module 外に関数がある」例外ではなく、明示 `defmod` を省略した module-like namespace 実行として扱う
 - 初期補完候補には `Ok`, `Err` と builtin 名を含める

@@ -3840,21 +3840,80 @@ fn test_std_module_compile_unit_accepts_builtin_type_decl() {
 #[test]
 fn test_script_compile_unit_accepts_top_level_def_import_and_include() {
     let ast = parse_with_context(
-        "def add(x: Int, y: Int) -> Int { x + y }\ninclude './mylib.srt'\nimport Kernel::add;",
+        "include './mylib.srt'\ndef add(x: Int, y: Int) -> Int { x + y }\nimport Kernel::add;",
         ParserContext::script(1),
     )
     .expect("script compile unit should accept top-level def, include, and import");
     assert!(matches!(
         ast.as_slice(),
         [
-            Ast::Def(_, name, _, _, _, _, _),
             Ast::Include(_, include_path),
+            Ast::Def(_, name, _, _, _, _, _),
             Ast::Import(_, AstPath { segments, .. }, ImportSpec::Single(import_name))
-        ] if name == "add"
-            && include_path == "./mylib.srt"
+        ] if include_path == "./mylib.srt"
+            && name == "add"
             && segments.as_slice() == ["Kernel"]
             && import_name == "add"
     ));
+}
+
+#[test]
+fn test_script_compile_unit_accepts_namespace_types_traits_and_impls() {
+    let ast = parse_with_context(
+        r#"const LIMIT = 1
+
+namespace Auth {
+  defrecord User(name: String)
+  defmod Repo {
+    def load() -> Unit { () }
+  }
+}
+
+deferror Oops(reason: String) { reason }
+
+defenum Role { Admin }
+
+deftrait Named {
+  def name(self: Self) -> String
+}
+
+impl Auth::User {
+  def rename(self: Self, next: String) -> Self { self }
+}
+
+impl Show for Auth::User {
+  def to_string(self: Self) -> String { "ok" }
+}"#,
+        ParserContext::script(1),
+    )
+    .expect("script compile unit should accept widened top-level declarations");
+
+    assert!(ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::ConstDef(_, name, _, _, _) if name == "LIMIT")));
+    assert!(ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::RecordDef(_, name, _, _) if name == "Auth::User")));
+    assert!(ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::Defmod(_, name, _, _) if name == "Auth::Repo")));
+    assert!(ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::DeferrorDef(_, name, _, _, _) if name == "Oops")));
+    assert!(ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::EnumDef(_, name, _, _, _) if name == "Role")));
+    assert!(ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::TraitDef(_, name, _, _, _) if name == "Named")));
+    assert!(ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::ImplDef(_, target, _, _) if target == "Auth::User")));
+    assert!(ast.iter().any(|stmt| matches!(
+        stmt,
+        Ast::TraitImplDef(_, trait_name, _, AstTy::Named(_, target), _, _)
+            if trait_name == "Show" && target == "Auth::User"
+    )));
 }
 
 #[test]
@@ -3867,12 +3926,27 @@ fn test_module_compile_unit_rejects_top_level_include() {
 }
 
 #[test]
-fn test_script_compile_unit_rejects_top_level_struct_def() {
-    let err = parse_with_context("defstruct User { name: String }", ParserContext::script(1))
-        .expect_err("script compile unit should reject top-level type declarations");
+fn test_script_compile_unit_rejects_top_level_defmod() {
+    let err = parse_with_context(
+        "defmod User { def label() -> String { \"x\" } }",
+        ParserContext::script(1),
+    )
+    .expect_err("script compile unit should reject explicit top-level defmod");
     assert!(err
         .message()
-        .contains("This top-level declaration is not allowed in the current source policy"));
+        .contains("defmod is not allowed at script top-level"));
+}
+
+#[test]
+fn test_script_compile_unit_rejects_declaration_after_top_level_expression() {
+    let err = parse_with_context(
+        "print(\"start\")\ndefrecord User(name: String)",
+        ParserContext::script(1),
+    )
+    .expect_err("script compile unit should reject declarations after expressions");
+    assert!(err
+        .message()
+        .contains("top-level definition cannot appear after top-level expression"));
 }
 
 #[test]
@@ -3882,9 +3956,14 @@ fn test_repl_compile_unit_rejects_top_level_impl_block() {
         ParserContext::repl(1),
     )
     .expect_err("repl chunk should reject top-level impl declarations");
-    assert!(err
-        .message()
-        .contains("This top-level declaration is not allowed in the current source policy"));
+    assert!(err.message().contains("REPL"));
+}
+
+#[test]
+fn test_repl_compile_unit_rejects_top_level_const() {
+    let err = parse_with_context("const LIMIT = 1", ParserContext::repl(1))
+        .expect_err("repl chunk should reject top-level const declarations");
+    assert!(err.message().contains("REPL"));
 }
 
 #[test]

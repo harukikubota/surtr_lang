@@ -28,11 +28,13 @@ pub enum BannerMode {
     Detailed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplOptions {
     pub quiet: bool,
     pub banner: BannerMode,
     pub version: bool,
+    pub script_path: Option<String>,
+    pub module_path: Option<String>,
 }
 
 impl Default for ReplOptions {
@@ -41,6 +43,8 @@ impl Default for ReplOptions {
             quiet: false,
             banner: BannerMode::Light,
             version: false,
+            script_path: None,
+            module_path: None,
         }
     }
 }
@@ -145,10 +149,30 @@ pub fn cli_command(options: ReplOptions) -> Result<(), i32> {
         print_banner(options.banner);
     }
 
-    let mut engine = ReplEngine::new().map_err(|e| {
-        eprintln!("Error initializing source loader: {}", e);
-        1
-    })?;
+    let mut engine = match (&options.module_path, &options.script_path) {
+        (Some(module_path), Some(script_path)) => {
+            ReplEngine::from_preload_files(Some(module_path), Some(script_path)).map_err(|e| {
+                e.emit();
+                1
+            })?
+        }
+        (Some(module_path), None) => {
+            ReplEngine::from_preload_files(Some(module_path), None).map_err(|e| {
+                e.emit();
+                1
+            })?
+        }
+        (None, Some(script_path)) => {
+            ReplEngine::from_preload_files(None, Some(script_path)).map_err(|e| {
+                e.emit();
+                1
+            })?
+        }
+        (None, None) => ReplEngine::new().map_err(|e| {
+            eprintln!("Error initializing source loader: {}", e);
+            1
+        })?,
+    };
 
     if io::stdin().is_terminal() {
         run_terminal_repl(&mut engine)?;

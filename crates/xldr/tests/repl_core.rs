@@ -179,8 +179,78 @@ fn core_rejects_repl_forbidden_top_level_declarations() {
     let err = engine.handle_line("defstruct User { name: String }");
     assert!(!err.should_exit);
     assert!(matches!(err.output, ReplOutput::EvalError { .. }));
-    assert!(rendered_text(&err)
-        .contains("This top-level declaration is not allowed in the current source policy"));
+    assert!(rendered_text(&err).contains("This top-level declaration is not allowed in REPL"));
+}
+
+#[test]
+fn core_from_script_source_exposes_preloaded_docs_and_keeps_repl_policy() {
+    let mut engine = ReplEngine::from_script_source(
+        "preload.srt",
+        r#"
+@doc """
+Greets from preload.
+"""
+def greet() -> String { "hello" }
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let doc = engine.handle_line(":doc greet");
+    let doc = doc_text(&doc);
+    assert!(doc.contains("Greets from preload."), "{doc}");
+
+    let call = engine.handle_line("greet()");
+    assert!(rendered_text(&call).contains("hello"));
+
+    let err = engine.handle_line("defstruct User { name: String }");
+    assert!(rendered_text(&err).contains("REPL"), "{}", rendered_text(&err));
+}
+
+#[test]
+fn core_from_module_source_exposes_preloaded_module_definitions() {
+    let mut engine = ReplEngine::from_module_source(
+        "math.srt",
+        r#"
+defmod Math {
+  @doc """
+  Add two ints.
+  """
+  def add2(x: Int, y: Int) -> Int { x + y }
+}
+"#,
+    )
+    .expect("module preload should bootstrap");
+
+    let doc = engine.handle_line(":doc Math::add2");
+    let doc = doc_text(&doc);
+    assert!(doc.contains("Add two ints."), "{doc}");
+
+    let imported = engine.handle_line("import Math::add2");
+    assert!(rendered_text(&imported).contains("Imported Math::add2"));
+
+    let call = engine.handle_line("add2(1, 2)");
+    assert!(rendered_text(&call).contains("3"));
+}
+
+#[test]
+fn core_from_module_source_rejects_include_directive() {
+    let result = ReplEngine::from_module_source(
+        "math.srt",
+        r#"
+defmod Math {
+  def add2(x: Int, y: Int) -> Int { x + y }
+}
+
+include "./extra.srt"
+"#,
+    );
+    let err = match result {
+        Ok(_) => panic!("module preload with include must fail"),
+        Err(err) => err,
+    };
+
+    let rendered = format!("{err:?}");
+    assert!(rendered.contains("include"), "{rendered}");
 }
 
 #[test]

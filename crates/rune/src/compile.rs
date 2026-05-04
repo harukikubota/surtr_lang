@@ -7,6 +7,7 @@ use forge::bytecode::{
 };
 use sindr::policy::EntryPoint;
 use spire::ast::{Ast, Span};
+use spire::error::ParseError;
 
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
 
@@ -414,43 +415,54 @@ fn parse_program_with_module_sources<'a>(
     }
 
     let user_source = sources.source(user_source_id).unwrap_or("");
-    let user_ast = match spire::parse_with_context(
-        user_source,
-        spire::ParserContext::script(user_source_id.0)
-            .with_rules(xldr::derive_parse_rules(source_kind)),
-    ) {
-        Ok(ast) => ast,
-        Err(script_err) => {
-            if xldr::derive_primary_module_path(user_source).is_none() {
-                return Err(RuneError::diagnostic(
-                    1,
-                    sources,
-                    user_source_id,
-                    "parse",
-                    diagnostics::parse_error_spec(
-                        user_source,
-                        script_err.message(),
-                        script_err.span().clone(),
-                    ),
-                ));
-            }
-
-            spire::parse_with_context(
-                user_source,
-                spire::ParserContext::module(user_source_id.0, None)
-                    .with_rules(xldr::derive_parse_rules(xldr::SourceKind::Module)),
+    if should_treat_as_module_source(user_source) {
+        let user_ast = spire::parse_with_context(
+            user_source,
+            spire::ParserContext::module(user_source_id.0, None)
+                .with_rules(xldr::derive_parse_rules(xldr::SourceKind::Module)),
+        )
+        .map_err(|e| {
+            RuneError::diagnostic(
+                1,
+                sources,
+                user_source_id,
+                "parse",
+                diagnostics::parse_error_spec(user_source, e.message(), e.span().clone()),
             )
-            .map_err(|e| {
-                RuneError::diagnostic(
-                    1,
-                    sources,
-                    user_source_id,
-                    "parse",
-                    diagnostics::parse_error_spec(user_source, e.message(), e.span().clone()),
-                )
-            })?
-        }
-    };
+        })?;
+
+        let lowered =
+            xldr::lower_module_source_ast(user_ast, Some(compile_sources.user_module_path.as_str()));
+        staged_module_asts.to_mut().push(
+            lowered
+                .into_iter()
+                .map(|module| sigil::StagedModuleAst {
+                    module_path: module.module_path,
+                    doc_module_path: module.doc_module_path,
+                    ast: module.ast,
+                    module_doc: module.module_doc,
+                    auto_import: module.auto_import,
+                    process_spec: module.process_spec,
+                })
+                .collect(),
+        );
+        return Ok((staged_module_asts, Vec::new()));
+    }
+
+    let user_ast = parse_script_ast_for_compile(user_source, user_source_id.0, source_kind)
+        .map_err(|script_err: ParseError| {
+            RuneError::diagnostic(
+                1,
+                sources,
+                user_source_id,
+                "parse",
+                diagnostics::parse_error_spec(
+                    user_source,
+                    script_err.message(),
+                    script_err.span().clone(),
+                ),
+            )
+        })?;
 
     if is_direct_module_source(&user_ast) {
         let lowered = xldr::lower_module_source_ast(
@@ -482,6 +494,7 @@ fn is_direct_module_source(ast: &[Ast]) -> bool {
             matches!(
                 stmt,
                 Ast::Defmod(_, _, _, _)
+                    | Ast::ConstDef(_, _, _, _, _)
                     | Ast::Import(_, _, _)
                     | Ast::Def(..)
                     | Ast::ExtractorDef(..)
@@ -668,15 +681,23 @@ pub(crate) fn prepare_script_compile_plan(
     source: &str,
     cli_entry: Option<&str>,
 ) -> Result<ScriptCompilePlan, ScriptPlanError> {
+    if should_treat_as_module_source(source) {
+        let selected_entry_name = cli_entry.map(|name| name.to_string());
+        let normalized_entrypoint = selected_entry_name.as_ref().map(|name| {
+            EntryPoint::script_short_name(name, xldr::script_pseudo_module_path(file_path))
+        });
+
+        return Ok(ScriptCompilePlan {
+            source_for_parse: source.to_string(),
+            selected_entry_name,
+            normalized_entrypoint,
+            include_directives: Vec::new(),
+        });
+    }
+
     let (source_for_parse, include_directives) = match collect_include_directives(source) {
         Ok(collected) => collected,
-        Err(err) => {
-            if xldr::derive_primary_module_path(source).is_some() {
-                (source.to_string(), Vec::new())
-            } else {
-                return Err(err);
-            }
-        }
+        Err(err) => return Err(err),
     };
 
     let selected_entry_name = match cli_entry {
@@ -699,11 +720,8 @@ pub(crate) fn prepare_script_compile_plan(
 fn collect_include_directives(
     source: &str,
 ) -> Result<(String, Vec<IncludeDirective>), ScriptPlanError> {
-    let ast = spire::parse_with_context(
-        source,
-        spire::ParserContext::script(0).with_rules(spire::ParseRules::script()),
-    )
-    .map_err(|e| ScriptPlanError::new(e.message().to_string(), e.span().clone()))?;
+    let ast = parse_compat_script_ast(source)
+        .map_err(|e: ParseError| ScriptPlanError::new(e.message().to_string(), e.span().clone()))?;
 
     let mut chars = source.chars().collect::<Vec<_>>();
     let mut directives = Vec::new();
@@ -722,6 +740,39 @@ fn collect_include_directives(
     }
 
     Ok((chars.into_iter().collect::<String>(), directives))
+}
+
+fn parse_compat_script_ast(source: &str) -> Result<Vec<Ast>, ParseError> {
+    spire::parse_with_context(
+        source,
+        spire::ParserContext::project(0)
+            .with_rules(spire::ParseRules::compatibility_script_host()),
+    )
+}
+
+fn parse_script_ast_for_compile(
+    source: &str,
+    source_id: u32,
+    source_kind: xldr::SourceKind,
+) -> Result<Vec<Ast>, ParseError> {
+    let strict_context =
+        spire::ParserContext::script(source_id).with_rules(xldr::derive_parse_rules(source_kind));
+    match spire::parse_with_context(source, strict_context) {
+        Ok(ast) => Ok(ast),
+        Err(strict_err) => spire::parse_with_context(
+            source,
+            spire::ParserContext::project(source_id)
+                .with_rules(spire::ParseRules::compatibility_script_host()),
+        )
+        .or(Err(strict_err)),
+    }
+}
+
+fn should_treat_as_module_source(source: &str) -> bool {
+    xldr::derive_primary_module_path(source).is_some()
+        || parse_compat_script_ast(source)
+            .ok()
+            .is_some_and(|ast| ast.iter().any(|stmt| matches!(stmt, Ast::Defmod(_, _, _, _))))
 }
 
 fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast> {
@@ -818,6 +869,21 @@ print(to_string(1))
   def add(x: Int, y: Int) -> Int {
     x + y
   }
+}"#,
+            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::module()),
+        )
+        .expect("module source should parse");
+
+        assert!(is_direct_module_source(&ast));
+    }
+
+    #[test]
+    fn direct_module_source_with_top_level_const_is_detected() {
+        let ast = spire::parse_with_context(
+            r#"const APP_NAME = "surtr"
+
+defmod Helper {
+  def name() -> String { APP_NAME }
 }"#,
             spire::ParserContext::module(0, None).with_rules(spire::ParseRules::module()),
         )

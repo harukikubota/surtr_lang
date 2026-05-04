@@ -11,7 +11,7 @@ Usage:\n\
   surtr check <file.srt> [--format json]\n\
   surtr run <file.srt|file.eldr> [--entry <name>] [--vm-dump <path>] [--vm-dump-on error|always] [-- <arg>...]\n\
   surtr test [--quiet|-q] <lib-relative-name|--all>\n\
-  surtr repl [--quiet] [--banner] [--version]\n\
+  surtr repl [--quiet] [--banner] [--version] [--module <file.srt>] [--script <file.srt>]\n\
   surtr build <file.srt> [output.eldr]\n\
   surtr dump <file.eldr|entry.srt> [--format json] [--entry <name>]\n\
   surtr tui [file.eldr]";

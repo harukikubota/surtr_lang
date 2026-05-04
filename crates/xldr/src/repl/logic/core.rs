@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::panic;
 
-use diagnostics::{SourceId, SourceRegistry};
+use diagnostics::{DiagnosticSpec, SourceId, SourceRegistry};
 use eldr::builtin::inspect_value;
 use eldr::value::{TypeKind, Value};
 use forge::bytecode::populate_error_template_lines;
@@ -84,6 +84,75 @@ impl std::fmt::Display for EldrLoadError {
             EldrLoadError::Load(e) => write!(f, "loader error: {}", e),
         }
     }
+}
+
+/// Error returned when preloading source files into a REPL engine.
+#[derive(Debug, Clone)]
+pub enum ReplLoadError {
+    SourceReadFailed {
+        file_name: String,
+        message: String,
+    },
+    Diagnostic {
+        sources: SourceRegistry,
+        source_id: SourceId,
+        spec: DiagnosticSpec,
+    },
+    Load(LoadError),
+    Runtime {
+        file_name: String,
+        message: String,
+    },
+}
+
+impl ReplLoadError {
+    pub fn emit(&self) {
+        match self {
+            Self::SourceReadFailed { file_name, message } => {
+                eprintln!("repl: cannot read {}: {}", file_name, message);
+            }
+            Self::Diagnostic {
+                sources,
+                source_id,
+                spec,
+            } => diagnostics::report_error_by_id(sources, *source_id, spec.clone()),
+            Self::Load(error) => eprintln!("repl: {}", error),
+            Self::Runtime { file_name, message } => {
+                eprintln!("repl: runtime error while preloading {}: {}", file_name, message);
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for ReplLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SourceReadFailed { file_name, message } => {
+                write!(f, "cannot read {}: {}", file_name, message)
+            }
+            Self::Diagnostic { .. } => write!(f, "preload diagnostic"),
+            Self::Load(error) => write!(f, "{}", error),
+            Self::Runtime { file_name, message } => {
+                write!(f, "runtime error while preloading {}: {}", file_name, message)
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct PreloadedChunkState {
+    sources: SourceRegistry,
+    builtin_source_id: SourceId,
+    repl_source_id: SourceId,
+    repl_module_path: String,
+    module_stages: Vec<Vec<StagedModule>>,
+    declaration_index: sigil::DeclarationIndex,
+    sigil_session: sigil::SigilSession,
+    scar_checkpoint: scar::ScarCheckpoint,
+    vm: eldr::VM,
+    docs: Vec<DocEntry>,
+    symbols: BTreeSet<String>,
+    auto_import_modules: BTreeSet<String>,
 }
 
 #[derive(Debug, Default)]
@@ -215,6 +284,90 @@ impl ReplEngine {
             .bootstrap_std_modules_scope_only()
             .map_err(EldrLoadError::Load)?;
         Ok(engine)
+    }
+
+    pub fn from_script_file(path: &str) -> Result<Self, ReplLoadError> {
+        Self::from_preload_files(None, Some(path))
+    }
+
+    pub fn from_module_file(path: &str) -> Result<Self, ReplLoadError> {
+        Self::from_preload_files(Some(path), None)
+    }
+
+    pub fn from_script_source(file_name: &str, source: &str) -> Result<Self, ReplLoadError> {
+        Self::from_preload_sources(None, Some((file_name, source)))
+    }
+
+    pub fn from_module_source(file_name: &str, source: &str) -> Result<Self, ReplLoadError> {
+        Self::from_preload_sources(Some((file_name, source)), None)
+    }
+
+    pub fn from_preload_files(
+        module_path: Option<&str>,
+        script_path: Option<&str>,
+    ) -> Result<Self, ReplLoadError> {
+        let module_source = match module_path {
+            Some(path) => Some((
+                path,
+                fs::read_to_string(path).map_err(|e| ReplLoadError::SourceReadFailed {
+                    file_name: path.to_string(),
+                    message: e.to_string(),
+                })?,
+            )),
+            None => None,
+        };
+        let script_source = match script_path {
+            Some(path) => Some((
+                path,
+                fs::read_to_string(path).map_err(|e| ReplLoadError::SourceReadFailed {
+                    file_name: path.to_string(),
+                    message: e.to_string(),
+                })?,
+            )),
+            None => None,
+        };
+
+        Self::from_preload_sources(
+            module_source.as_ref().map(|(path, source)| (*path, source.as_str())),
+            script_source.as_ref().map(|(path, source)| (*path, source.as_str())),
+        )
+    }
+
+    pub fn from_preload_sources(
+        module: Option<(&str, &str)>,
+        script: Option<(&str, &str)>,
+    ) -> Result<Self, ReplLoadError> {
+        let state = compile_preloaded_repl_chunk(module, script)?;
+        let forge_session = forge::ForgeSession::from_bytecode(&state.vm.snapshot_bytecode());
+
+        Ok(Self {
+            sources: state.sources,
+            builtin_source_id: state.builtin_source_id,
+            module_stages: state.module_stages,
+            declaration_index: state.declaration_index,
+            repl_source_id: state.repl_source_id,
+            repl_module_path: state.repl_module_path.clone(),
+            sigil_session: state.sigil_session,
+            scar_session: {
+                let mut session = scar::ScarSession::new();
+                session.rollback(state.scar_checkpoint);
+                session
+            },
+            forge_session,
+            vm: state.vm,
+            pending: String::new(),
+            next_line: 1,
+            results: Vec::new(),
+            result_metas: Vec::new(),
+            symbols: state.symbols,
+            docs: state.docs,
+            auto_import_modules: state.auto_import_modules,
+            error_display_mode: ErrorDisplayMode::Full,
+        })
+        .map(|mut engine| {
+            engine.sync_scar_fun_index_with_vm();
+            engine
+        })
     }
 
     fn bootstrap_std_modules(&mut self) -> Result<(), LoadError> {
@@ -4445,6 +4598,513 @@ impl ReplEngine {
             }
         }
     }
+}
+
+fn compile_preloaded_repl_chunk(
+    module: Option<(&str, &str)>,
+    script: Option<(&str, &str)>,
+) -> Result<PreloadedChunkState, ReplLoadError> {
+    let std_module_inputs = collect_additional_default_std_module_inputs().map_err(ReplLoadError::Load)?;
+    let mut module_input_stages = vec![std_module_inputs];
+    if let Some((file_name, source)) = module {
+        module_input_stages.push(vec![crate::ModuleInput {
+            file_name: file_name.to_string(),
+            source: source.to_string(),
+            module_path: preload_module_path(file_name, source),
+        }]);
+    }
+    let mut repl_sources =
+        loader::collect_repl_sources_with_module_stages(&module_input_stages).map_err(ReplLoadError::Load)?;
+
+    let (user_file_name, user_source) = script.unwrap_or(("<repl-preload>", ""));
+    let user_source_id = repl_sources.sources.register(user_file_name, user_source);
+    let compile_sources = crate::CompileSources {
+        module_source_ids: repl_sources
+            .module_stages
+            .iter()
+            .flat_map(|stage| stage.iter().map(|entry| entry.source_id))
+            .collect(),
+        sources: repl_sources.sources.clone(),
+        user_source_id,
+        user_module_path: crate::script_pseudo_module_path(user_file_name),
+        builtin_source_id: repl_sources.builtin_source_id,
+        builtin_module_path: Some("Bootstrap".to_string()),
+        module_stages: repl_sources.module_stages.clone(),
+    };
+    let snapshot = crate::default_stdlib_semantic_snapshot().map_err(ReplLoadError::Load)?;
+    let (module_stage_asts, raw_module_stages, user_ast) =
+        parse_preload_sources(&compile_sources, &snapshot)?;
+
+    let docs = crate::collect_doc_entries_with_base(
+        &snapshot.docs,
+        if module_stage_asts.len() > snapshot.default_stage_count {
+            &module_stage_asts[snapshot.default_stage_count..]
+        } else {
+            &[]
+        },
+        &user_ast,
+        Some(compile_sources.user_module_path.as_str()),
+    );
+
+    let declaration_index = if module_stage_asts.len() == snapshot.default_stage_count {
+        snapshot.declaration_index.clone()
+    } else {
+        sigil::precollect_declaration_index(&module_stage_asts).map_err(|e| {
+            let spec = diagnostics::simple_error("ResolveError", &e.message, e.span, None);
+            ReplLoadError::Diagnostic {
+                sources: compile_sources.sources.clone(),
+                source_id: compile_sources.builtin_source_id,
+                spec,
+            }
+        })?
+    };
+
+    let module_resolved = sigil::resolve_staged_program_from_state(
+        &module_stage_asts,
+        Vec::new(),
+        &declaration_index,
+        Some(compile_sources.user_module_path.clone()),
+        snapshot.default_stage_count,
+        snapshot.resolve_state,
+    )
+    .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
+
+    let mut sigil_session =
+        sigil::SigilSession::with_module_path(Some(repl_sources.repl_module_path.clone()));
+    let mut scope = sigil::build_scope_for_module(
+        &module_stage_asts,
+        Some(compile_sources.user_module_path.as_str()),
+        module_stage_asts.len(),
+    )
+    .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
+    scope.advance_next_id_to(module_resolved.resume_state.next_local_id);
+    sigil_session.replace_scope_with_declarations(scope, &declaration_index);
+
+    let mut resolved = module_resolved.resolved;
+    if !user_ast.is_empty() {
+        let user_resolved = sigil_session
+            .resolve(user_ast.clone())
+            .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
+        resolved.extend(user_resolved);
+    }
+
+    let mut scar_session = scar::ScarSession::new();
+    scar_session.rollback(snapshot.scar_checkpoint.clone());
+    let next_fun_idx = snapshot
+        .bytecode
+        .functions
+        .iter()
+        .map(|entry| entry.fun_idx.saturating_add(1))
+        .max()
+        .unwrap_or(0);
+    scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
+    let typed = scar_session
+        .typecheck_with_context(
+            resolved,
+            scar::TypecheckContext {
+                runtime_policy: derive_runtime_policy(
+                    CompileUnitKind::Script,
+                    SourceKind::Script,
+                    None,
+                ),
+                enforce_builtin_type_contracts: false,
+                allow_error_function_params: false,
+            },
+        )
+        .map_err(|e| ReplLoadError::Diagnostic {
+            sources: compile_sources.sources.clone(),
+            source_id: diagnostic_source_id(&compile_sources, &e.span),
+            spec: diagnostics::type_error_spec_by_id(
+                &compile_sources.sources,
+                diagnostic_source_id(&compile_sources, &e.span),
+                &diagnostics::TypeErrorDiagnostic::new(e.message, local_diagnostic_span(&compile_sources, &e.span), e.hint),
+            ),
+        })?;
+
+    let mut forge_session = forge::ForgeSession::from_bytecode(&snapshot.bytecode);
+    let (mut chunk, meta) = forge_session.codegen_chunk(typed).map_err(|e| ReplLoadError::Diagnostic {
+        sources: compile_sources.sources.clone(),
+        source_id: diagnostic_source_id(&compile_sources, &e.span),
+        spec: diagnostics::simple_error(
+            "CodegenError",
+            &e.message,
+            local_diagnostic_span(&compile_sources, &e.span),
+            None,
+        ),
+    })?;
+    chunk.docs = docs.clone();
+    for stage in &raw_module_stages {
+        for module in stage {
+            if let Some(source) = compile_sources.sources.source(module.source_id) {
+                populate_error_template_lines(&mut chunk.error_templates, source);
+            }
+        }
+    }
+    if let Some(source) = compile_sources.sources.source(user_source_id) {
+        populate_error_template_lines(&mut chunk.error_templates, source);
+    }
+
+    let source_context = compile_sources
+        .sources
+        .owned_context(user_source_id)
+        .or_else(|| compile_sources.sources.owned_context(compile_sources.builtin_source_id));
+    let mut vm = match source_context {
+        Some((source, file_name)) => eldr::VM::new(snapshot.bytecode.clone()).with_source(source, file_name),
+        None => eldr::VM::new(snapshot.bytecode.clone()),
+    };
+    vm.push_atomic(chunk).map_err(|e| ReplLoadError::Runtime {
+        file_name: compile_sources
+            .sources
+            .file_name(user_source_id)
+            .unwrap_or("<repl-preload>")
+            .to_string(),
+        message: e.to_string(),
+    })?;
+
+    let mut symbols: BTreeSet<String> = ["Ok", "Err"]
+        .into_iter()
+        .map(str::to_string)
+        .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
+        .collect();
+    for entry in vm.bytecode().functions.iter() {
+        if let Some(name) = &entry.qualified_name {
+            symbols.insert(name.clone());
+            if let Some(short) = name.rsplit("::").next() {
+                symbols.insert(short.to_string());
+            }
+        }
+    }
+    for entry in vm.bytecode().type_registry.entries.iter() {
+        symbols.insert(entry.name.clone());
+        if let Some(short) = entry.name.rsplit("::").next() {
+            symbols.insert(short.to_string());
+        }
+    }
+    for binding in &meta.bindings {
+        symbols.insert(binding.name.clone());
+    }
+    for imported in apply_preload_visible_names(&mut sigil_session, &user_ast, &snapshot.auto_import_modules, &declaration_index, &raw_module_stages, &module_stage_asts)? {
+        symbols.insert(imported);
+    }
+
+    let auto_import_modules = module_stage_asts
+        .iter()
+        .flat_map(|stage| stage.iter())
+        .filter(|module| module.auto_import)
+        .map(|module| module.module_path.clone())
+        .collect();
+
+    Ok(PreloadedChunkState {
+        sources: repl_sources.sources,
+        builtin_source_id: repl_sources.builtin_source_id,
+        repl_source_id: repl_sources.repl_source_id,
+        repl_module_path: repl_sources.repl_module_path,
+        module_stages: raw_module_stages,
+        declaration_index,
+        sigil_session,
+        scar_checkpoint: scar_session.checkpoint(),
+        vm,
+        docs,
+        symbols,
+        auto_import_modules,
+    })
+}
+
+fn parse_preload_sources(
+    compile_sources: &crate::CompileSources,
+    snapshot: &crate::DefaultStdlibSnapshot,
+) -> Result<
+    (
+        Vec<Vec<sigil::StagedModuleAst>>,
+        Vec<Vec<StagedModule>>,
+        Vec<Ast>,
+    ),
+    ReplLoadError,
+> {
+    let mut module_stage_asts = snapshot.module_stages.clone();
+    let mut raw_module_stages = compile_sources.module_stages.clone();
+    let mut suffix_stages = crate::parse_module_stages_from_compile_sources_suffix(
+        compile_sources,
+        CompileUnitKind::Script,
+        snapshot.default_stage_count,
+    )
+    .map_err(|e| ReplLoadError::Diagnostic {
+        sources: compile_sources.sources.clone(),
+        source_id: e.source_id,
+        spec: diagnostics::parse_error_spec(
+            compile_sources.sources.source(e.source_id).unwrap_or(""),
+            e.message(),
+            e.span(),
+        ),
+    })?;
+    if !suffix_stages.is_empty() {
+        module_stage_asts.append(&mut suffix_stages);
+    }
+
+    let user_source = compile_sources
+        .sources
+        .source(compile_sources.user_source_id)
+        .unwrap_or("");
+    let user_ast = spire::parse_with_context(
+        user_source,
+        spire::ParserContext::script(compile_sources.user_source_id.0)
+            .with_rules(derive_parse_rules(SourceKind::Script)),
+    )
+    .map_err(|e| ReplLoadError::Diagnostic {
+        sources: compile_sources.sources.clone(),
+        source_id: compile_sources.user_source_id,
+        spec: diagnostics::parse_error_spec(user_source, e.message(), e.span().clone()),
+    })?;
+
+    if is_direct_module_source(&user_ast) {
+        let lowered =
+            crate::lower_module_source_ast(user_ast, Some(compile_sources.user_module_path.as_str()));
+        if !lowered.is_empty() {
+            module_stage_asts.push(
+                lowered
+                    .iter()
+                    .map(|module| sigil::StagedModuleAst {
+                        module_path: module.module_path.clone(),
+                        doc_module_path: module.doc_module_path.clone(),
+                        ast: crate::rebase_module_ast_spans(
+                            module.ast.clone(),
+                            compile_sources.user_source_id,
+                        ),
+                        module_doc: module.module_doc.clone(),
+                        auto_import: module.auto_import,
+                        process_spec: module.process_spec.clone(),
+                    })
+                    .collect(),
+            );
+            raw_module_stages.push(vec![StagedModule {
+                source_id: compile_sources.user_source_id,
+                module_path: compile_sources.user_module_path.clone(),
+                source_kind: SourceKind::Script,
+            }]);
+        }
+        Ok((module_stage_asts, raw_module_stages, Vec::new()))
+    } else {
+        Ok((module_stage_asts, raw_module_stages, user_ast))
+    }
+}
+
+fn preload_module_path(file_name: &str, source: &str) -> String {
+    crate::derive_primary_module_path(source)
+        .filter(|module_path| !module_path.is_empty())
+        .unwrap_or_else(|| {
+            let normalized = file_name.replace('\\', "/");
+            let mut body = normalized.trim().trim_start_matches("./").to_string();
+            if let Some(stripped) = body.strip_suffix(".srt") {
+                body = stripped.to_string();
+            }
+            let segments = body
+                .split('/')
+                .filter(|segment| !segment.is_empty())
+                .collect::<Vec<_>>();
+            if segments.is_empty() {
+                "Main".to_string()
+            } else {
+                segments.join("::")
+            }
+        })
+}
+
+fn is_direct_module_source(ast: &[Ast]) -> bool {
+    !ast.is_empty()
+        && ast.iter().all(|stmt| {
+            matches!(
+                stmt,
+                Ast::Defmod(_, _, _, _)
+                    | Ast::ConstDef(_, _, _, _, _)
+                    | Ast::Import(_, _, _)
+                    | Ast::Def(..)
+                    | Ast::ExtractorDef(..)
+                    | Ast::TraitDef(_, _, _, _, _)
+                    | Ast::TraitImplDef(_, _, _, _, _, _)
+                    | Ast::StructDef(..)
+                    | Ast::RecordDef(..)
+                    | Ast::DeferrorDef(_, _, _, _, _)
+                    | Ast::EnumDef(_, _, _, _, _)
+                    | Ast::ImplDef(_, _, _, _)
+                    | Ast::BuiltinDecl(_, _, _, _, _)
+                    | Ast::BuiltinExtractorDecl(_, _, _, _, _)
+                    | Ast::BuiltinTypeDecl(_, _, _)
+                    | Ast::ResultCtorDecl(_, _, _, _, _)
+            )
+        })
+}
+
+fn preload_resolve_error(
+    compile_sources: &crate::CompileSources,
+    error: &sigil::error::ResolveError,
+) -> ReplLoadError {
+    let source_id = diagnostic_source_id(compile_sources, &error.span);
+    let source = compile_sources.sources.source(source_id).unwrap_or("");
+    ReplLoadError::Diagnostic {
+        sources: compile_sources.sources.clone(),
+        source_id,
+        spec: diagnostics::resolve_error_spec(source, &error.message, local_diagnostic_span(compile_sources, &error.span)),
+    }
+}
+
+fn diagnostic_source_id(compile_sources: &crate::CompileSources, span: &Span) -> SourceId {
+    if let Some((source_id, _)) = crate::decode_rebased_module_span(span) {
+        return source_id;
+    }
+    compile_sources.user_source_id
+}
+
+fn local_diagnostic_span(compile_sources: &crate::CompileSources, span: &Span) -> Span {
+    if let Some((_, local_span)) = crate::decode_rebased_module_span(span) {
+        return local_span;
+    }
+    let source = compile_sources
+        .sources
+        .source(compile_sources.user_source_id)
+        .unwrap_or("");
+    if source.chars().count() >= span.end {
+        span.clone()
+    } else {
+        Span { start: 0, end: 0 }
+    }
+}
+
+fn apply_preload_imports(
+    sigil_session: &mut sigil::SigilSession,
+    declaration_index: &sigil::DeclarationIndex,
+    raw_module_stages: &[Vec<StagedModule>],
+    module_stage_asts: &[Vec<sigil::StagedModuleAst>],
+    user_ast: &[Ast],
+    auto_import_modules: &BTreeSet<String>,
+) -> Result<Vec<String>, ReplLoadError> {
+    let mut imported_symbols = Vec::new();
+    let current_stage_index = raw_module_stages.len().max(module_stage_asts.len());
+    let auto_import_traits = declaration_index
+        .values()
+        .filter(|entry| entry.kind == sigil::DeclarationKind::Trait && entry.auto_import)
+        .map(|entry| entry.name.clone())
+        .collect::<BTreeSet<_>>();
+
+    for stmt in user_ast {
+        let Ast::Import(_span, path, spec) = stmt else {
+            continue;
+        };
+        let module_name = path.segments.join("::");
+        if auto_import_modules.contains(&module_name) || auto_import_traits.contains(&module_name) {
+            return Err(ReplLoadError::Load(LoadError::BootstrapFailed {
+                phase: "resolve".into(),
+                file_name: "<repl-preload>".into(),
+                message: format!(
+                    "Duplicate import: `{}` is auto-imported and cannot be explicitly imported",
+                    module_name
+                ),
+            }));
+        }
+
+        match spec {
+            ImportSpec::All => {
+                for entry in declaration_index
+                    .values()
+                    .filter(|entry| entry.module_path == module_name && entry.stage_index < current_stage_index)
+                {
+                    let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| ReplLoadError::Load(
+                        LoadError::BootstrapFailed {
+                            phase: "resolve".into(),
+                            file_name: "<repl-preload>".into(),
+                            message: format!(
+                                "Import target `{}` is not available in the current stage",
+                                entry.fq_name
+                            ),
+                        }
+                    ))?;
+                    sigil_session.define_with_id(&entry.name, uid);
+                    imported_symbols.push(entry.name.clone());
+                }
+            }
+            ImportSpec::Single(name) => {
+                let fq_name = format!("{}::{}", module_name, name);
+                let entry = declaration_index.get(&fq_name).ok_or_else(|| ReplLoadError::Load(
+                    LoadError::BootstrapFailed {
+                        phase: "resolve".into(),
+                        file_name: "<repl-preload>".into(),
+                        message: format!("Unknown import member: {}", fq_name),
+                    }
+                ))?;
+                let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| ReplLoadError::Load(
+                    LoadError::BootstrapFailed {
+                        phase: "resolve".into(),
+                        file_name: "<repl-preload>".into(),
+                        message: format!(
+                            "Import target `{}` is not available in the current stage",
+                            fq_name
+                        ),
+                    }
+                ))?;
+                sigil_session.define_with_id(name, uid);
+                imported_symbols.push(name.clone());
+            }
+            ImportSpec::List(names) => {
+                for name in names {
+                    let fq_name = format!("{}::{}", module_name, name);
+                    let entry = declaration_index.get(&fq_name).ok_or_else(|| ReplLoadError::Load(
+                        LoadError::BootstrapFailed {
+                            phase: "resolve".into(),
+                            file_name: "<repl-preload>".into(),
+                            message: format!("Unknown import member: {}", fq_name),
+                        }
+                    ))?;
+                    let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| ReplLoadError::Load(
+                        LoadError::BootstrapFailed {
+                            phase: "resolve".into(),
+                            file_name: "<repl-preload>".into(),
+                            message: format!(
+                                "Import target `{}` is not available in the current stage",
+                                fq_name
+                            ),
+                        }
+                    ))?;
+                    sigil_session.define_with_id(name, uid);
+                    imported_symbols.push(name.clone());
+                }
+            }
+        }
+    }
+
+    Ok(imported_symbols)
+}
+
+fn apply_preload_visible_names(
+    sigil_session: &mut sigil::SigilSession,
+    user_ast: &[Ast],
+    auto_import_modules: &BTreeSet<String>,
+    declaration_index: &sigil::DeclarationIndex,
+    raw_module_stages: &[Vec<StagedModule>],
+    module_stage_asts: &[Vec<sigil::StagedModuleAst>],
+) -> Result<Vec<String>, ReplLoadError> {
+    let mut visible = apply_preload_imports(
+        sigil_session,
+        declaration_index,
+        raw_module_stages,
+        module_stage_asts,
+        user_ast,
+        auto_import_modules,
+    )?;
+
+    for stmt in user_ast {
+        match stmt {
+            Ast::Def(_, name, ..)
+            | Ast::ExtractorDef(_, name, ..)
+            | Ast::ConstDef(_, name, ..)
+            | Ast::StructDef(_, name, ..)
+            | Ast::RecordDef(_, name, ..)
+            | Ast::DeferrorDef(_, name, ..)
+            | Ast::EnumDef(_, name, ..)
+            | Ast::TraitDef(_, name, ..) => visible.push(name.clone()),
+            _ => {}
+        }
+    }
+
+    Ok(visible)
 }
 
 impl ReplEngine {

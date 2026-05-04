@@ -507,9 +507,89 @@ fn repl_human_diagnostic_stays_on_stderr() {
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
     assert!(!stdout.contains("This top-level declaration is not allowed"));
-    assert!(
-        stderr.contains("This top-level declaration is not allowed in the current source policy")
+    assert!(stderr.contains("This top-level declaration is not allowed in REPL chunks"));
+}
+
+#[test]
+fn repl_script_preload_flag_exposes_preloaded_docs_and_defs() {
+    let temp = unique_temp_dir("repl-script-preload");
+    let source_path = temp.join("preload.srt");
+    fs::write(
+        &source_path,
+        r#"
+@doc """
+Greets from preload.
+"""
+def greet() -> String { "hello" }
+"#,
+    )
+    .expect("failed to write preload script");
+
+    let output = run_repl_session_with_args(
+        &[
+            "--script",
+            source_path.to_str().expect("source path must be utf-8"),
+        ],
+        ":doc greet\ngreet()\n:quit\n",
     );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("Greets from preload."), "{stdout}");
+    assert!(stdout.contains("hello"), "{stdout}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn repl_module_and_script_preload_flags_share_one_compile_unit() {
+    let temp = unique_temp_dir("repl-module-script-preload");
+    let module_path = temp.join("helper.srt");
+    let script_path = temp.join("main.srt");
+    fs::write(
+        &module_path,
+        r#"
+defmod Helper {
+  def inc(x: Int) -> Int { x + 1 }
+}
+"#,
+    )
+    .expect("failed to write preload module");
+    fs::write(
+        &script_path,
+        r#"
+import Helper::inc
+
+def from_script() -> Int { inc(1) }
+"#,
+    )
+    .expect("failed to write preload script");
+
+    let output = run_repl_session_with_args(
+        &[
+            "--module",
+            module_path.to_str().expect("module path must be utf-8"),
+            "--script",
+            script_path.to_str().expect("script path must be utf-8"),
+        ],
+        "from_script()\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("2"), "{stdout}");
+
+    let _ = fs::remove_dir_all(temp);
 }
 
 #[test]

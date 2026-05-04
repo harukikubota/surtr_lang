@@ -20,7 +20,7 @@ pub use loader::{
 };
 
 use diagnostics::SourceId;
-pub use repl::logic::core::{EldrLoadError, ReplEngine};
+pub use repl::logic::core::{EldrLoadError, ReplEngine, ReplLoadError};
 pub use repl::ui::cli::{cli_command, BannerMode, ReplOptions};
 use serde::{Deserialize, Serialize};
 use sindr::builtin::{BUILTIN_METAS, BUILTIN_TYPE_METAS};

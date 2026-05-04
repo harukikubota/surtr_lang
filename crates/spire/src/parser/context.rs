@@ -60,9 +60,17 @@ impl ParseRules {
             allow_top_level_expr: true,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Def,
+                TopLevelDeclKind::Namespace,
+                TopLevelDeclKind::ImplDef,
+                TopLevelDeclKind::TraitDef,
+                TopLevelDeclKind::TraitImplDef,
                 TopLevelDeclKind::ConstDef,
                 TopLevelDeclKind::Import,
                 TopLevelDeclKind::Include,
+                TopLevelDeclKind::StructDef,
+                TopLevelDeclKind::RecordDef,
+                TopLevelDeclKind::DeferrorDef,
+                TopLevelDeclKind::EnumDef,
             ]),
         }
     }
@@ -149,7 +157,6 @@ impl ParseRules {
             allow_top_level_expr: true,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
                 TopLevelDeclKind::Def,
-                TopLevelDeclKind::ConstDef,
                 TopLevelDeclKind::Import,
             ]),
         }
@@ -175,9 +182,29 @@ impl ParseRules {
         }
     }
 
+    pub fn compatibility_script_host() -> Self {
+        Self {
+            allow_top_level_expr: true,
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Def,
+                TopLevelDeclKind::Namespace,
+                TopLevelDeclKind::ImplDef,
+                TopLevelDeclKind::TraitDef,
+                TopLevelDeclKind::TraitImplDef,
+                TopLevelDeclKind::ConstDef,
+                TopLevelDeclKind::Import,
+                TopLevelDeclKind::Include,
+                TopLevelDeclKind::StructDef,
+                TopLevelDeclKind::RecordDef,
+                TopLevelDeclKind::DeferrorDef,
+                TopLevelDeclKind::EnumDef,
+            ]),
+        }
+    }
+
     pub fn permissive_for_tests() -> Self {
         Self {
-            allow_top_level_expr: false,
+            allow_top_level_expr: true,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Any,
         }
     }

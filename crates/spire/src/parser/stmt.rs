@@ -165,6 +165,12 @@ impl Parser<'_> {
         let prev_context = self.context.clone();
         self.context.level = DeclLevel::Top;
         self.context.module_path = None;
+        self.context.parse_rules =
+            if prev_context.parse_rules == crate::parser::context::ParseRules::std_module() {
+                crate::parser::context::ParseRules::std_module()
+            } else {
+                crate::parser::context::ParseRules::module_source_without_builtin()
+            };
 
         let result = (|| {
             let mut stmts = Vec::new();

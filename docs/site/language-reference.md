@@ -505,12 +505,25 @@ Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt
 - `import` は file declaration area と `defmod` / `impl Type` / `impl Trait for Type` body に書ける
 - `def` / `defp` / `defextractor` / closure / top-level expr の中では使えない
 
+### script / REPL の top-level ルール
+
+- script source では top-level expr を許可する
+- script source の declaration area には `include` / `import` / `const` / top-level `def` / `namespace` / `defstruct` / `defrecord` / `defenum` / `deferror` / `deftrait` / `impl Type` / `impl Trait for Type` を書ける
+- script source の explicit top-level `defmod` は禁止する。共有 helper は `namespace + defmod` か include module file に置く
+- script source の `include` は file 先頭に連続して置く必要があり、宣言や top-level expr の後には書けない
+- script source で最初の top-level expr が現れた後は、それ以降の宣言を置けない
+- REPL chunk では top-level `def` / `import` だけを許可し、`const`、型定義、`impl`、`defmod` は許可しない
+- `surtr repl --script <file.srt>` は REPL 開始前に script を 1 件 preload できる
+- `surtr repl --module <file.srt>` は REPL 開始前に module source を 1 件 preload できる
+- preload は `module -> script` の順で同一 compile unit として読み、その後の対話入力だけを `ReplChunk` 制約で扱う
+
 ### include の意味
 
 - `include` も `Bootstrap` に属する builtin function として文書化される
 - 実際の surface では compile-time declaration syntax として扱う
 - script source でのみ使える loader directive
 - `include "./path/to/module.srt"` の形だけを受け付ける
+- source file 先頭に連続して置かなければならない
 - block 内や式位置では使えない
 
 ### builtin type の置き場所

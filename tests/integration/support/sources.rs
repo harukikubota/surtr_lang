@@ -130,11 +130,22 @@ pub(super) fn parse_user_source(
     mode: TestCompileMode,
 ) -> Result<Vec<spire::ast::Ast>, String> {
     let user_ast = match mode {
-        TestCompileMode::Script => spire::parse_with_context(
-            source,
-            spire::ParserContext::script(0)
-                .with_rules(xldr::derive_parse_rules(SourceKind::Script)),
-        ),
+        TestCompileMode::Script => {
+            let strict = spire::parse_with_context(
+                source,
+                spire::ParserContext::script(0)
+                    .with_rules(xldr::derive_parse_rules(SourceKind::Script)),
+            );
+            match strict {
+                Ok(ast) => Ok(ast),
+                Err(strict_err) => spire::parse_with_context(
+                    source,
+                    spire::ParserContext::project(0)
+                        .with_rules(spire::ParseRules::compatibility_script_host()),
+                )
+                .or(Err(strict_err)),
+            }
+        }
         TestCompileMode::Project => {
             spire::parse_with_context(source, spire::ParserContext::project(0))
         }

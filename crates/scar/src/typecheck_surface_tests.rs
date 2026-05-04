@@ -1091,6 +1091,34 @@ fn user_function_calls_typecheck_inside_script_module_scope() {
 }
 
 #[test]
+fn namespaced_type_and_trait_impl_typecheck_inside_script_module_scope() {
+    let typed = typecheck_with_builtin_prelude_in_script_module(
+        r#"namespace Auth {
+  defrecord User(name: String)
+}
+
+impl Show for Auth::User {
+  def to_string(self: Self) -> String { "user" }
+}
+
+value: Auth::User = Auth::User("alice")
+print(to_string(value))"#,
+    );
+    assert!(
+        typed
+            .iter()
+            .any(|node| matches!(node.node, TypedInner::RecordDef(_, _, _, _))),
+        "expected namespaced record definition to survive typechecking"
+    );
+    assert!(
+        typed
+            .iter()
+            .any(|node| matches!(node.node, TypedInner::TraitImplDef(_, _))),
+        "expected namespaced trait impl to survive typechecking"
+    );
+}
+
+#[test]
 fn generic_user_function_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def id(x: $A) -> $A { x }
