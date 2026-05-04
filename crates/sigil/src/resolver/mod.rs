@@ -34,6 +34,7 @@ use self::declarations::{
     trait_impl_method_qualified_name, trait_method_qualified_name,
 };
 use self::imports::{build_global_scope, build_module_scope};
+use self::expr::validate_trait_impl_pairs_in_nodes;
 
 const STAGE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
 
@@ -207,6 +208,8 @@ pub fn resolve_staged_program_from_state(
         resolved.extend(user_resolver.resolve_program(user_ast)?);
         next_local_id = user_resolver.scope.next_id();
     }
+
+    validate_trait_impl_pairs_in_nodes(&resolved)?;
 
     Ok(ResolvedStagedProgram {
         resolved,

@@ -1345,7 +1345,7 @@ impl Resolver {
             }
             resolved.push(self.resolve_node(stmt)?);
         }
-        self.validate_trait_impl_pairs(&resolved)?;
+        validate_trait_impl_pairs_in_nodes(&resolved)?;
         self.predeclared_ids.clear();
         Ok(resolved)
     }
@@ -2655,39 +2655,46 @@ impl Resolver {
         }
     }
 
-    fn validate_trait_impl_pairs(&self, resolved: &[Resolved]) -> Result<(), ResolveError> {
-        let mut seen_pairs: HashMap<String, Span> = HashMap::new();
-        for node in resolved {
-            let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, _) = node else {
-                continue;
-            };
-            let trait_name = trait_instance_key(
-                trait_id.qualified_name.as_deref().unwrap_or(&trait_id.name),
-                trait_args,
-            );
-            let pair_key = format!("{} for {}", trait_name, Self::ast_ty_symbol_key(target_ty));
-            if let Some(first_span) = seen_pairs.get(&pair_key) {
-                return Err(ResolveError {
-                    message: format!(
-                        "Multiple trait impl blocks for `{}` are not allowed",
-                        pair_key
-                    ),
-                    span: span.clone(),
-                    related_labels: vec![
-                        ResolveErrorLabel {
-                            span: first_span.clone(),
-                            message: "first definition".to_string(),
-                        },
-                        ResolveErrorLabel {
-                            span: span.clone(),
-                            message: "conflicting definition".to_string(),
-                        },
-                    ],
-                });
-            } else {
-                seen_pairs.insert(pair_key.clone(), span.clone());
-            }
+}
+
+pub(super) fn validate_trait_impl_pairs_in_nodes(
+    resolved: &[Resolved],
+) -> Result<(), ResolveError> {
+    let mut seen_pairs: HashMap<String, Span> = HashMap::new();
+    for node in resolved {
+        let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, _) = node else {
+            continue;
+        };
+        let trait_name = trait_instance_key(
+            trait_id.qualified_name.as_deref().unwrap_or(&trait_id.name),
+            trait_args,
+        );
+        let pair_key = format!(
+            "{} for {}",
+            trait_name,
+            Resolver::ast_ty_symbol_key(target_ty)
+        );
+        if let Some(first_span) = seen_pairs.get(&pair_key) {
+            return Err(ResolveError {
+                message: format!(
+                    "Multiple trait impl blocks for `{}` are not allowed",
+                    pair_key
+                ),
+                span: span.clone(),
+                related_labels: vec![
+                    ResolveErrorLabel {
+                        span: first_span.clone(),
+                        message: "first definition".to_string(),
+                    },
+                    ResolveErrorLabel {
+                        span: span.clone(),
+                        message: "conflicting definition".to_string(),
+                    },
+                ],
+            });
+        } else {
+            seen_pairs.insert(pair_key.clone(), span.clone());
         }
-        Ok(())
     }
+    Ok(())
 }

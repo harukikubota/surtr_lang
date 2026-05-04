@@ -48,6 +48,7 @@ value = dbg!(dbg(1), 2)"#,
 fn staged_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
     StagedModuleAst {
         module_path: module_path.to_string(),
+        doc_module_path: None,
         ast,
         module_doc: None,
         auto_import: matches!(module_path, "Bootstrap" | "Kernel" | "Result"),
@@ -58,6 +59,7 @@ fn staged_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
 fn staged_auto_import_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
     StagedModuleAst {
         module_path: module_path.to_string(),
+        doc_module_path: None,
         ast,
         module_doc: None,
         auto_import: true,
@@ -162,6 +164,7 @@ defagent Counter {
     let module = match ast.into_iter().next().expect("lowered module should exist") {
         Ast::Defmod(_, module_path, ast, attrs) => StagedModuleAst {
             module_path,
+            doc_module_path: None,
             ast,
             module_doc: attrs.doc,
             auto_import: attrs.auto_import,
@@ -3335,6 +3338,198 @@ fn test_build_scope_for_module_includes_qualified_public_const() {
         scope.lookup("APP_NAME").is_some(),
         "APP_NAME should remain accessible by bare public-const name"
     );
+}
+
+#[test]
+fn test_nested_import_inside_defmod_resolves_within_module_scope() {
+    let module_stages = vec![vec![
+        staged_module(
+            "String",
+            parse_module_ast(r#"def trim(text: String) -> String { text }"#, "String"),
+        ),
+        staged_module(
+            "Parser",
+            parse_module_ast(
+                r#"import String;
+def parse(line: String) -> String { trim(line) }"#,
+                "Parser",
+            ),
+        ),
+    ]];
+
+    let resolved = resolve_user_with_modules("print(Parser::parse(\" ok \"))", &module_stages)
+        .expect("nested defmod import should resolve");
+    assert!(!resolved.is_empty());
+}
+
+#[test]
+fn test_nested_import_inside_inherent_impl_resolves_without_leaking() {
+    let module_stages = vec![vec![
+        staged_module(
+            "String",
+            parse_module_ast(r#"def trim(text: String) -> String { text }"#, "String"),
+        ),
+        staged_module(
+            "User",
+            parse_module_ast(
+                r#"import String;
+defstruct User { name: String }
+impl User {
+  def normalize(self: Self, name: String) -> String { trim(name) }
+}"#,
+                "User",
+            ),
+        ),
+    ]];
+
+    let ok = resolve_user_with_modules(r#"print(User::normalize(User(name: "x"), " ok "))"#, &module_stages)
+        .expect("impl-local import should resolve inside impl methods");
+    assert!(!ok.is_empty());
+
+    let leak_err = resolve_user_with_modules(
+        r#"def helper(name: String) -> String { trim(name) }
+print(helper("ok"))"#,
+        &module_stages,
+    )
+    .expect_err("impl-local import must not leak to sibling top-level defs");
+    assert!(
+        leak_err.message.contains("Undefined function trim/1")
+            || leak_err.message.contains("Undefined variable: trim"),
+        "actual error: {}",
+        leak_err.message
+    );
+}
+
+#[test]
+fn test_nested_import_inside_trait_impl_resolves() {
+    let module_stages = vec![vec![
+        staged_module(
+            "String",
+            parse_module_ast(r#"def trim(text: String) -> String { text }"#, "String"),
+        ),
+        staged_module(
+            "Show",
+            parse_module_ast(
+                r#"deftrait Show {
+  def to_string(self: Self) -> String
+}"#,
+                "Show",
+            ),
+        ),
+        staged_module(
+            "User",
+            parse_module_ast(
+                r#"import String;
+defstruct User { name: String }
+impl Show::Show for User {
+  def to_string(self: Self) -> String { trim(self.name) }
+}"#,
+                "User",
+            ),
+        ),
+    ]];
+
+    let resolved = resolve_user_with_modules(
+        r#"value = User(name: "ok")
+print(Show::Show::to_string(value))"#,
+        &module_stages,
+    )
+    .expect("trait-impl-local import should resolve inside trait impl methods");
+    assert!(!resolved.is_empty());
+}
+
+#[test]
+fn test_nested_import_duplicate_conflict_still_errors() {
+    let module_stages = vec![vec![
+        staged_module(
+            "String",
+            parse_module_ast(r#"def trim(text: String) -> String { text }"#, "String"),
+        ),
+        staged_module(
+            "Names",
+            parse_module_ast(r#"def trim(text: String) -> String { text }"#, "Names"),
+        ),
+        staged_module(
+            "Parser",
+            parse_module_ast(
+                r#"import String;
+import Names;
+def parse(line: String) -> String { trim(line) }"#,
+                "Parser",
+            ),
+        ),
+    ]];
+
+    let err = resolve_user_with_modules("print(Parser::parse(\"ok\"))", &module_stages)
+        .expect_err("conflicting nested imports should fail");
+    assert!(
+        err.message.contains("Import conflict") || err.message.contains("Duplicate import"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_nested_import_shadows_auto_import_within_body_only() {
+    fn find_called_uid(node: &Resolved, name: &str) -> Option<u32> {
+        match node {
+            Resolved::App(_, func, args) => match func.as_ref() {
+                Resolved::Var(_, called_id) if called_id.name == name => Some(called_id.unique_id),
+                _ => args.iter().find_map(|arg| match arg {
+                    ResolvedRecordLitArg::Positional(inner) | ResolvedRecordLitArg::Named(_, inner) => {
+                        find_called_uid(inner, name)
+                    }
+                }),
+            },
+            Resolved::Block(_, nodes) => nodes.iter().find_map(|node| find_called_uid(node, name)),
+            _ => None,
+        }
+    }
+
+    let module_stages = vec![
+        vec![staged_module(
+            "Kernel",
+            parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Kernel"),
+        )],
+        vec![staged_module(
+            "Helper",
+            parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x - y }"#, "Helper"),
+        )],
+        vec![staged_module(
+            "Parser",
+            parse_module_ast(
+                r#"import Helper::add;
+def parse() -> Int { add(7, 3) }"#,
+                "Parser",
+            ),
+        )],
+    ];
+
+    let resolved = resolve_user_with_modules(r#"print(to_string(Parser::parse()))"#, &module_stages)
+        .expect("nested explicit import should shadow auto-import inside that body");
+
+    let helper_add_uid = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, _, _)
+                if id.qualified_name.as_deref() == Some("Helper::add") =>
+            {
+                Some(id.unique_id)
+            }
+            _ => None,
+        })
+        .expect("helper add should be resolved");
+
+    let parser_add_uid = resolved.iter().find_map(|node| match node {
+        Resolved::Def(_, id, _, _, _, body, _)
+            if id.qualified_name.as_deref() == Some("Parser::parse") =>
+        {
+            find_called_uid(body.as_ref(), "add")
+        }
+        _ => None,
+    });
+
+    assert_eq!(parser_add_uid, Some(helper_add_uid));
 }
 
 #[test]

@@ -23,6 +23,8 @@ import Math::add
 - `Bootstrap` / `Kernel` の明示 import は compile error
 - 同一 file での重複 import は compile error
 - `Type::new` のように import 対象外の宣言がある
+- `import` は file declaration area に加えて `defmod` / `impl Type` / `impl Trait for Type` body に書ける
+- `def` / `defp` / `defextractor` / closure / top-level expr の中では使えない
 
 ## `include`
 

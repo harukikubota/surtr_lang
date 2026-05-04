@@ -105,6 +105,7 @@ mod tests {
                     module_ast.extend(body);
                     lowered.push(sigil::StagedModuleAst {
                         module_path,
+                        doc_module_path: None,
                         ast: module_ast,
                         module_doc: attrs.doc,
                         auto_import: attrs.auto_import,
@@ -116,6 +117,7 @@ mod tests {
                     module_ast.push(Ast::ImplDef(span, target.clone(), methods, attrs.clone()));
                     lowered.push(sigil::StagedModuleAst {
                         module_path: target,
+                        doc_module_path: None,
                         ast: module_ast,
                         module_doc: attrs.doc,
                         auto_import: attrs.auto_import,
@@ -146,6 +148,7 @@ mod tests {
             global_ast.extend(shared_result_ctor_contracts);
             lowered.push(sigil::StagedModuleAst {
                 module_path: String::new(),
+                doc_module_path: None,
                 ast: global_ast,
                 module_doc: None,
                 auto_import: false,
@@ -158,6 +161,7 @@ mod tests {
             global_ast.extend(shared_global_defs);
             lowered.push(sigil::StagedModuleAst {
                 module_path: String::new(),
+                doc_module_path: None,
                 ast: global_ast,
                 module_doc: None,
                 auto_import: false,
@@ -267,6 +271,7 @@ mod tests {
                     module_ast.extend(body);
                     Some(sigil::StagedModuleAst {
                         module_path,
+                        doc_module_path: None,
                         ast: module_ast,
                         module_doc: attrs.doc,
                         auto_import: attrs.auto_import,

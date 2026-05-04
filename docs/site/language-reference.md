@@ -498,15 +498,17 @@ Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt
 ### import の意味
 
 - `import` は `Bootstrap` に属する builtin function として文書化される
-- 実際の surface では top-level macro syntax として扱う
+- 実際の surface では compile-time declaration syntax として扱う
 - `import Mod` は、その module の import 可能 member を現在 scope に unqualified で入れる
 - `import Mod::fun` は単一 member だけを入れる
 - `Struct` 名や `new` のように import 不可の宣言もある
+- `import` は file declaration area と `defmod` / `impl Type` / `impl Trait for Type` body に書ける
+- `def` / `defp` / `defextractor` / closure / top-level expr の中では使えない
 
 ### include の意味
 
 - `include` も `Bootstrap` に属する builtin function として文書化される
-- 実際の surface では top-level macro syntax として扱う
+- 実際の surface では compile-time declaration syntax として扱う
 - script source でのみ使える loader directive
 - `include "./path/to/module.srt"` の形だけを受け付ける
 - block 内や式位置では使えない
@@ -588,7 +590,7 @@ defmod Bootstrap {
 }
 ```
 
-これらは `Bootstrap::import` / `Bootstrap::include` の canonical source ですが、`import` / `include` 自体の top-level 制約はそのままです。
+これらは `Bootstrap::import` / `Bootstrap::include` の canonical source です。`import` は file declaration area と `defmod` / `impl Type` / `impl Trait for Type` body に書け、`include` は引き続き file top-level だけで使えます。
 
 ## 11. 現在のスコープ外
 

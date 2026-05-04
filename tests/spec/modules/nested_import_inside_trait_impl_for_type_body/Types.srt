@@ -1,0 +1,23 @@
+defmod Formatting {
+  def wrap(text: String) -> String {
+    "[" ++ text ++ "]"
+  }
+}
+
+defstruct User {
+  name: String,
+}
+
+impl User {
+  def new(name: String) -> Self {
+    User { name }
+  }
+}
+
+impl Show for User {
+  import Formatting::wrap;
+
+  def to_string(self: Self) -> String {
+    wrap(self.name)
+  }
+}

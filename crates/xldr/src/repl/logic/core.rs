@@ -4594,6 +4594,7 @@ pub(crate) fn parse_module_stages_from_sources(
 
                 stage_ast.push(sigil::StagedModuleAst {
                     module_path: lowered.module_path,
+                    doc_module_path: lowered.doc_module_path,
                     ast: crate::rebase_module_ast_spans(lowered.ast, module.source_id),
                     module_doc: lowered.module_doc,
                     auto_import: lowered.auto_import,

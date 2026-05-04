@@ -1,0 +1,25 @@
+defmod Greeting {
+  def decorate(name: String) -> String {
+    "hello " ++ name
+  }
+}
+
+defstruct User {
+  name: String,
+}
+
+impl User {
+  import Greeting::decorate;
+
+  def new(name: String) -> Self {
+    User { name }
+  }
+
+  def greeting(self) -> String {
+    decorate(self.name)
+  }
+
+  def excited(self) -> String {
+    decorate(self.name) ++ "!"
+  }
+}

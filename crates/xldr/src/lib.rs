@@ -63,6 +63,7 @@ pub fn decode_rebased_module_span(span: &spire::ast::Span) -> Option<(SourceId, 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoweredModuleAst {
     pub module_path: String,
+    pub doc_module_path: Option<String>,
     pub ast: Vec<spire::ast::Ast>,
     pub declared_span: Option<spire::ast::Span>,
     pub module_doc: Option<String>,
@@ -76,8 +77,55 @@ pub(crate) fn lowered_module_is_impl_owner(lowered: &LoweredModuleAst) -> bool {
             .ast
             .iter()
             .find(|stmt| !matches!(stmt, spire::ast::Ast::Import(_, _, _))),
-        Some(spire::ast::Ast::ImplDef(_, _, _, _))
+        Some(
+            spire::ast::Ast::ImplDef(_, _, _, _)
+                | spire::ast::Ast::TraitImplDef(_, _, _, _, _, _)
+        )
     )
+}
+
+fn partition_nested_imports(
+    body: Vec<spire::ast::Ast>,
+) -> (Vec<spire::ast::Ast>, Vec<spire::ast::Ast>) {
+    let mut imports = Vec::new();
+    let mut rest = Vec::new();
+    for stmt in body {
+        if matches!(stmt, spire::ast::Ast::Import(_, _, _)) {
+            imports.push(stmt);
+        } else {
+            rest.push(stmt);
+        }
+    }
+    (imports, rest)
+}
+
+fn first_non_import_index(ast: &[spire::ast::Ast]) -> usize {
+    ast.iter()
+        .take_while(|stmt| matches!(stmt, spire::ast::Ast::Import(_, _, _)))
+        .count()
+}
+
+fn find_result_owner_module(lowered: &[LoweredModuleAst]) -> Option<usize> {
+    lowered.iter().position(|module| {
+        module.module_path == "Result"
+            && matches!(
+                module
+                    .ast
+                    .iter()
+                    .find(|stmt| !matches!(stmt, spire::ast::Ast::Import(_, _, _))),
+                Some(spire::ast::Ast::ImplDef(_, target, _, _)) if target == "Result"
+            )
+    })
+}
+
+fn find_fallback_namespace_module(
+    lowered: &[LoweredModuleAst],
+    fallback_module_path: Option<&str>,
+) -> Option<usize> {
+    let fallback = fallback_module_path?;
+    lowered
+        .iter()
+        .position(|module| module.module_path == fallback && !lowered_module_is_impl_owner(module))
 }
 
 fn format_ast_ty(ty: &spire::ast::AstTy) -> String {
@@ -662,16 +710,20 @@ fn collect_doc_entries_into(
 ) {
     for stage in module_stages {
         for module in stage {
+            let doc_module_path = module
+                .doc_module_path
+                .as_deref()
+                .unwrap_or(module.module_path.as_str());
             if let Some(doc) = &module.module_doc {
                 docs.push(DocEntry {
-                    qualified_name: module.module_path.clone(),
+                    qualified_name: doc_module_path.to_string(),
                     kind: DocKind::Module,
-                    module_path: module.module_path.clone(),
+                    module_path: doc_module_path.to_string(),
                     signature: None,
                     doc: doc.clone(),
                 });
             }
-            collect_doc_entries_for_ast(&module.ast, &module.module_path, docs);
+            collect_doc_entries_for_ast(&module.ast, doc_module_path, docs);
         }
     }
 
@@ -781,6 +833,7 @@ pub fn lower_module_source_ast(
                 module_ast.extend(body);
                 lowered.push(LoweredModuleAst {
                     module_path,
+                    doc_module_path: None,
                     ast: module_ast,
                     declared_span: Some(span),
                     module_doc: attrs.doc,
@@ -792,6 +845,8 @@ pub fn lower_module_source_ast(
                 let declared_span = span.clone();
                 let module_path = target.clone();
                 let mut module_ast = shared_imports.clone();
+                let (local_imports, methods) = partition_nested_imports(methods);
+                module_ast.extend(local_imports);
                 module_ast.push(spire::ast::Ast::ImplDef(
                     span,
                     target,
@@ -800,6 +855,36 @@ pub fn lower_module_source_ast(
                 ));
                 lowered.push(LoweredModuleAst {
                     module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    declared_span: Some(declared_span),
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: attrs.process_spec,
+                });
+            }
+            spire::ast::Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
+                let declared_span = span.clone();
+                let module_path = match &target_ty {
+                    spire::ast::AstTy::Named(_, name)
+                    | spire::ast::AstTy::ImplTrait(_, name)
+                    | spire::ast::AstTy::Generic(_, name, _) => name.clone(),
+                    _ => fallback_module_path.unwrap_or_default().to_string(),
+                };
+                let mut module_ast = shared_imports.clone();
+                let (local_imports, methods) = partition_nested_imports(methods);
+                module_ast.extend(local_imports);
+                module_ast.push(spire::ast::Ast::TraitImplDef(
+                    span,
+                    trait_name,
+                    trait_args,
+                    target_ty,
+                    methods,
+                    attrs.clone(),
+                ));
+                lowered.push(LoweredModuleAst {
+                    module_path,
+                    doc_module_path: fallback_module_path.map(str::to_string),
                     ast: module_ast,
                     declared_span: Some(declared_span),
                     module_doc: attrs.doc,
@@ -841,13 +926,11 @@ pub fn lower_module_source_ast(
     }
 
     if !shared_namespace_consts.is_empty() {
-        if lowered.len() == 1 {
-            let insert_at = lowered[0]
-                .ast
-                .iter()
-                .take_while(|stmt| matches!(stmt, spire::ast::Ast::Import(_, _, _)))
-                .count();
-            lowered[0]
+        if let Some(idx) = find_fallback_namespace_module(&lowered, fallback_module_path)
+            .or_else(|| (lowered.len() == 1).then_some(0))
+        {
+            let insert_at = first_non_import_index(&lowered[idx].ast);
+            lowered[idx]
                 .ast
                 .splice(insert_at..insert_at, shared_namespace_consts);
         } else {
@@ -855,6 +938,7 @@ pub fn lower_module_source_ast(
             shared_ast.extend(shared_namespace_consts);
             lowered.push(LoweredModuleAst {
                 module_path: fallback_module_path.unwrap_or_default().to_string(),
+                doc_module_path: None,
                 ast: shared_ast,
                 declared_span: None,
                 module_doc: None,
@@ -865,13 +949,11 @@ pub fn lower_module_source_ast(
     }
 
     if !shared_result_ctor_contracts.is_empty() {
-        if lowered.len() == 1 {
-            let insert_at = lowered[0]
-                .ast
-                .iter()
-                .take_while(|stmt| matches!(stmt, spire::ast::Ast::Import(_, _, _)))
-                .count();
-            lowered[0]
+        if let Some(idx) =
+            find_result_owner_module(&lowered).or_else(|| (lowered.len() == 1).then_some(0))
+        {
+            let insert_at = first_non_import_index(&lowered[idx].ast);
+            lowered[idx]
                 .ast
                 .splice(insert_at..insert_at, shared_result_ctor_contracts);
         } else {
@@ -879,6 +961,7 @@ pub fn lower_module_source_ast(
             shared_ast.extend(shared_result_ctor_contracts);
             lowered.push(LoweredModuleAst {
                 module_path: fallback_module_path.unwrap_or_default().to_string(),
+                doc_module_path: None,
                 ast: shared_ast,
                 declared_span: None,
                 module_doc: None,
@@ -893,6 +976,7 @@ pub fn lower_module_source_ast(
         shared_ast.extend(shared_global_defs);
         lowered.push(LoweredModuleAst {
             module_path: fallback_module_path.unwrap_or_default().to_string(),
+            doc_module_path: None,
             ast: shared_ast,
             declared_span: None,
             module_doc: None,
@@ -1365,6 +1449,78 @@ defmod AppConfig {
     }
 
     #[test]
+    fn lower_module_source_keeps_defmod_local_imports_in_that_module() {
+        let ast = spire::parse_with_context(
+            r#"defmod Parser {
+  import String;
+  def parse(line: String) -> String { trim(line) }
+}"#,
+            spire::ParserContext::module(1, None),
+        )
+        .expect("module source should parse");
+
+        let lowered = lower_module_source_ast(ast, None);
+        assert_eq!(lowered.len(), 1);
+        assert_eq!(lowered[0].module_path, "Parser");
+        assert!(matches!(
+            lowered[0].ast.as_slice(),
+            [
+                spire::ast::Ast::Import(_, _, spire::ast::ImportSpec::All),
+                spire::ast::Ast::Def(_, name, _, _, _, _, _)
+            ] if name == "parse"
+        ));
+    }
+
+    #[test]
+    fn lower_module_source_hoists_impl_local_imports_into_impl_owner_module() {
+        let ast = spire::parse_with_context(
+            r#"impl User {
+  def normalize(self: Self, name: String) -> String { trim(name) }
+  import String;
+}"#,
+            spire::ParserContext::module(1, None),
+        )
+        .expect("module source should parse");
+
+        let lowered = lower_module_source_ast(ast, None);
+        assert_eq!(lowered.len(), 1);
+        assert_eq!(lowered[0].module_path, "User");
+        assert!(matches!(
+            lowered[0].ast.as_slice(),
+            [
+                spire::ast::Ast::Import(_, _, spire::ast::ImportSpec::All),
+                spire::ast::Ast::ImplDef(_, target, methods, _)
+            ] if target == "User"
+                && matches!(methods.as_slice(), [spire::ast::Ast::Def(_, name, _, _, _, _, _)] if name == "normalize")
+        ));
+    }
+
+    #[test]
+    fn lower_module_source_hoists_trait_impl_local_imports_into_trait_impl_module() {
+        let ast = spire::parse_with_context(
+            r#"impl Show for User {
+  def to_string(self: Self) -> String { trim("x") }
+  import String;
+}"#,
+            spire::ParserContext::module(1, None),
+        )
+        .expect("module source should parse");
+
+        let lowered = lower_module_source_ast(ast, None);
+        assert_eq!(lowered.len(), 1);
+        assert_eq!(lowered[0].module_path, "User");
+        assert!(matches!(
+            lowered[0].ast.as_slice(),
+            [
+                spire::ast::Ast::Import(_, _, spire::ast::ImportSpec::All),
+                spire::ast::Ast::TraitImplDef(_, trait_name, _, spire::ast::AstTy::Named(_, target), methods, _)
+            ] if trait_name == "Show"
+                && target == "User"
+                && matches!(methods.as_slice(), [spire::ast::Ast::Def(_, name, _, _, _, _, _)] if name == "to_string")
+        ));
+    }
+
+    #[test]
     fn collect_doc_entries_includes_deferror_docs() {
         let ast = spire::parse_with_context(
             r#"defmod Bootstrap {
@@ -1382,6 +1538,7 @@ deferror NoneError { "None Value." }"#,
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
                 module_path: module.module_path,
+                doc_module_path: module.doc_module_path,
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
@@ -1411,6 +1568,7 @@ deferror NoneError { "None Value." }"#,
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
                 module_path: module.module_path,
+                doc_module_path: module.doc_module_path,
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
@@ -1495,6 +1653,7 @@ deferror NoneError { "None Value." }"#,
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
                 module_path: module.module_path,
+                doc_module_path: module.doc_module_path,
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
@@ -1527,6 +1686,7 @@ deferror NoneError { "None Value." }"#,
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
                 module_path: module.module_path,
+                doc_module_path: module.doc_module_path,
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
@@ -1597,6 +1757,7 @@ defagent Counter {
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
                 module_path: module.module_path,
+                doc_module_path: module.doc_module_path,
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
@@ -1653,6 +1814,7 @@ impl Numeric for Int {
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
                 module_path: module.module_path,
+                doc_module_path: module.doc_module_path,
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
@@ -1696,6 +1858,7 @@ impl User {
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
                 module_path: module.module_path,
+                doc_module_path: module.doc_module_path,
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
@@ -1744,6 +1907,7 @@ impl Show for Int {
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
                 module_path: module.module_path,
+                doc_module_path: module.doc_module_path,
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
@@ -1793,6 +1957,7 @@ defrecord Point(x: Float, y: Float)"#,
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
                 module_path: module.module_path,
+                doc_module_path: module.doc_module_path,
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,
@@ -1835,6 +2000,7 @@ impl User {
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
                 module_path: module.module_path,
+                doc_module_path: module.doc_module_path,
                 ast: module.ast,
                 module_doc: module.module_doc,
                 auto_import: module.auto_import,

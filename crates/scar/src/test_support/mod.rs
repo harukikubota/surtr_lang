@@ -100,6 +100,38 @@ fn parse_std_module_stage(
     let mut shared_global_defs = Vec::new();
     let mut shared_result_ctor_contracts = Vec::new();
 
+    fn partition_nested_imports(body: Vec<Ast>) -> (Vec<Ast>, Vec<Ast>) {
+        let mut imports = Vec::new();
+        let mut rest = Vec::new();
+        for stmt in body {
+            if matches!(stmt, Ast::Import(_, _, _)) {
+                imports.push(stmt);
+            } else {
+                rest.push(stmt);
+            }
+        }
+        (imports, rest)
+    }
+
+    fn first_non_import_index(ast: &[Ast]) -> usize {
+        ast.iter()
+            .take_while(|stmt| matches!(stmt, Ast::Import(_, _, _)))
+            .count()
+    }
+
+    fn find_result_owner_module(lowered: &[sigil::StagedModuleAst]) -> Option<usize> {
+        lowered.iter().position(|module| {
+            module.module_path == "Result"
+                && matches!(
+                    module
+                        .ast
+                        .iter()
+                        .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
+                    Some(Ast::ImplDef(_, target, _, _)) if target == "Result"
+                )
+        })
+    }
+
     for stmt in ast {
         match stmt {
             Ast::Defmod(_, module_path, body, attrs) => {
@@ -107,6 +139,7 @@ fn parse_std_module_stage(
                 module_ast.extend(body);
                 lowered.push(sigil::StagedModuleAst {
                     module_path,
+                    doc_module_path: None,
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
@@ -115,9 +148,39 @@ fn parse_std_module_stage(
             }
             Ast::ImplDef(span, target, methods, attrs) => {
                 let mut module_ast = shared_imports.clone();
+                let (local_imports, methods) = partition_nested_imports(methods);
+                module_ast.extend(local_imports);
                 module_ast.push(Ast::ImplDef(span, target.clone(), methods, attrs.clone()));
                 lowered.push(sigil::StagedModuleAst {
                     module_path: target,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: attrs.process_spec,
+                });
+            }
+            Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
+                let module_path = match &target_ty {
+                    spire::ast::AstTy::Named(_, name)
+                    | spire::ast::AstTy::ImplTrait(_, name)
+                    | spire::ast::AstTy::Generic(_, name, _) => name.clone(),
+                    _ => String::new(),
+                };
+                let mut module_ast = shared_imports.clone();
+                let (local_imports, methods) = partition_nested_imports(methods);
+                module_ast.extend(local_imports);
+                module_ast.push(Ast::TraitImplDef(
+                    span,
+                    trait_name,
+                    trait_args,
+                    target_ty,
+                    methods,
+                    attrs.clone(),
+                ));
+                lowered.push(sigil::StagedModuleAst {
+                    module_path,
+                    doc_module_path: None,
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
@@ -134,25 +197,26 @@ fn parse_std_module_stage(
     // keep normal top-level std declarations in the global declaration
     // layer, but attach `Result` constructor contracts to the sole `defmod`
     // when present so Scar sees `Result::Ok` / `Result::Err`.
-    if !shared_result_ctor_contracts.is_empty() && lowered.len() == 1 {
-        let insert_at = lowered[0]
-            .ast
-            .iter()
-            .take_while(|stmt| matches!(stmt, Ast::Import(_, _, _)))
-            .count();
-        lowered[0]
-            .ast
-            .splice(insert_at..insert_at, shared_result_ctor_contracts);
-    } else if !shared_result_ctor_contracts.is_empty() {
+    if !shared_result_ctor_contracts.is_empty() {
+        if let Some(idx) =
+            find_result_owner_module(&lowered).or_else(|| (lowered.len() == 1).then_some(0))
+        {
+            let insert_at = first_non_import_index(&lowered[idx].ast);
+            lowered[idx]
+                .ast
+                .splice(insert_at..insert_at, shared_result_ctor_contracts);
+        } else {
         let mut global_ast = shared_imports.clone();
         global_ast.extend(shared_result_ctor_contracts);
         lowered.push(sigil::StagedModuleAst {
             module_path: String::new(),
+            doc_module_path: None,
             ast: global_ast,
             module_doc: None,
             auto_import: false,
             process_spec: None,
         });
+        }
     }
 
     if !shared_global_defs.is_empty() {
@@ -160,6 +224,7 @@ fn parse_std_module_stage(
         global_ast.extend(shared_global_defs);
         lowered.push(sigil::StagedModuleAst {
             module_path: String::new(),
+            doc_module_path: None,
             ast: global_ast,
             module_doc: None,
             auto_import: false,
@@ -242,6 +307,7 @@ fn parse_user_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
                 module_ast.extend(body);
                 lowered.push(sigil::StagedModuleAst {
                     module_path,
+                    doc_module_path: None,
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
@@ -253,6 +319,7 @@ fn parse_user_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
                 module_ast.push(Ast::ImplDef(span, target.clone(), methods, attrs.clone()));
                 lowered.push(sigil::StagedModuleAst {
                     module_path: target,
+                    doc_module_path: None,
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
@@ -269,6 +336,7 @@ fn parse_user_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
         global_ast.extend(shared_global_defs);
         lowered.push(sigil::StagedModuleAst {
             module_path: String::new(),
+            doc_module_path: None,
             ast: global_ast,
             module_doc: None,
             auto_import: false,

@@ -462,6 +462,7 @@ fn parse_program_with_module_sources<'a>(
                 .into_iter()
                 .map(|module| sigil::StagedModuleAst {
                     module_path: module.module_path,
+                    doc_module_path: module.doc_module_path,
                     ast: module.ast,
                     module_doc: module.module_doc,
                     auto_import: module.auto_import,

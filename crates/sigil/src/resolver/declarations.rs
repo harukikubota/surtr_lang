@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq)]
 pub struct StagedModuleAst {
     pub module_path: String,
+    pub doc_module_path: Option<String>,
     pub ast: Vec<Ast>,
     pub module_doc: Option<String>,
     pub auto_import: bool,

@@ -119,6 +119,7 @@ impl ParseRules {
         Self {
             allow_top_level_expr: false,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Import,
                 TopLevelDeclKind::Def,
                 TopLevelDeclKind::ExtractorDef,
                 TopLevelDeclKind::TraitDef,
@@ -131,6 +132,7 @@ impl ParseRules {
         Self {
             allow_top_level_expr: false,
             allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
+                TopLevelDeclKind::Import,
                 TopLevelDeclKind::Def,
                 TopLevelDeclKind::ExtractorDef,
                 TopLevelDeclKind::TraitDef,

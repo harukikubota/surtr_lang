@@ -3694,6 +3694,79 @@ fn test_defmod_body_accepts_defextractor() {
 }
 
 #[test]
+fn test_defmod_body_accepts_import() {
+    let ast = parse_with_context(
+        r#"defmod Parser {
+  import String;
+  def parse(line: String) -> String { trim(line) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("defmod should accept import declarations");
+
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::Defmod(_, name, body, _)]
+            if name == "Parser"
+                && matches!(body.as_slice(),
+                    [
+                        Ast::Import(_, AstPath { segments, .. }, ImportSpec::All),
+                        Ast::Def(_, def_name, _, _, _, _, _)
+                    ]
+                    if segments.as_slice() == ["String"] && def_name == "parse")
+    ));
+}
+
+#[test]
+fn test_impl_body_accepts_import() {
+    let ast = parse_with_context(
+        r#"impl User {
+  import String;
+  def normalize(self: Self, name: String) -> String { trim(name) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("impl should accept import declarations");
+
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::ImplDef(_, target, body, _)]
+            if target == "User"
+                && matches!(body.as_slice(),
+                    [
+                        Ast::Import(_, AstPath { segments, .. }, ImportSpec::All),
+                        Ast::Def(_, def_name, _, _, _, _, _)
+                    ]
+                    if segments.as_slice() == ["String"] && def_name == "normalize")
+    ));
+}
+
+#[test]
+fn test_trait_impl_body_accepts_import() {
+    let ast = parse_with_context(
+        r#"impl Show for User {
+  import String;
+  def to_string(self: Self) -> String { trim("x") }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("trait impl should accept import declarations");
+
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::TraitImplDef(_, trait_name, _, AstTy::Named(_, target), body, _)]
+            if trait_name == "Show"
+                && target == "User"
+                && matches!(body.as_slice(),
+                    [
+                        Ast::Import(_, AstPath { segments, .. }, ImportSpec::All),
+                        Ast::Def(_, def_name, _, _, _, _, _)
+                    ]
+                    if segments.as_slice() == ["String"] && def_name == "to_string")
+    ));
+}
+
+#[test]
 fn test_module_compile_unit_accepts_import() {
     let ast = parse_with_context("import Kernel::add;", ParserContext::module(1, None))
         .expect("module compile unit should accept import declarations");

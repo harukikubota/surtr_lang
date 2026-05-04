@@ -3216,6 +3216,7 @@ defagent Counter {
     let staged_module = match ast.into_iter().next().expect("lowered module should exist") {
         spire::ast::Ast::Defmod(_, module_path, ast, attrs) => sigil::StagedModuleAst {
             module_path,
+            doc_module_path: None,
             ast,
             module_doc: attrs.doc,
             auto_import: attrs.auto_import,

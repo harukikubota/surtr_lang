@@ -836,6 +836,15 @@ impl Parser<'_> {
                 if matches!(self.peek(), Token::Eof) {
                     return Err(ParseError::incomplete("}", self.peek_span()));
                 }
+                if matches!(self.peek(), Token::Import) {
+                    let import = self.parse_import()?;
+                    self.ensure_stmt_boundary(&import, true)?;
+                    methods.push(import);
+                    while matches!(self.peek(), Token::Newline) {
+                        self.advance();
+                    }
+                    continue;
+                }
                 if !matches!(self.peek(), Token::Def | Token::Annotator(_)) {
                     return Err(ParseError::syntax(
                         "trait impl body may only contain `def` declarations",
@@ -895,6 +904,15 @@ impl Parser<'_> {
         while !matches!(self.peek(), Token::RBrace) {
             if matches!(self.peek(), Token::Eof) {
                 return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            if matches!(self.peek(), Token::Import) {
+                let import = self.parse_import()?;
+                self.ensure_stmt_boundary(&import, true)?;
+                methods.push(import);
+                while matches!(self.peek(), Token::Newline) {
+                    self.advance();
+                }
+                continue;
             }
             if !matches!(
                 self.peek(),

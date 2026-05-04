@@ -1,0 +1,7 @@
+defmod Counter {
+  import Helper::inc;
+
+  def start() -> Int {
+    inc(inc(1))
+  }
+}
