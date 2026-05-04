@@ -67,6 +67,18 @@ test("Result") {
         inspect(map_err(Err(NoneError), ZeroDivisionError)),
       )
     }
+
+    it("accepts an existing Error value from Err binding") {
+      rebound = match Err(ZeroDivisionError) {
+        Ok(_) => map_err(Err(NoneError), NoneError),
+        Err(e) => map_err(Err(NoneError), e),
+      }
+
+      assert_eq(
+        "Err(ZeroDivisionError(\"division by zero\"))",
+        inspect(rebound),
+      )
+    }
   }
 
   describe("cause") {
@@ -78,6 +90,18 @@ test("Result") {
       assert_eq(
         "Err(ZeroDivisionError(\"division by zero\"))\n|_ NoneError(\"None Value.\")",
         inspect(cause(Err(NoneError), ZeroDivisionError)),
+      )
+    }
+
+    it("accepts an existing Error value from Err binding") {
+      wrapped = match Err(ZeroDivisionError) {
+        Ok(_) => cause(Err(NoneError), NoneError),
+        Err(e) => cause(Err(NoneError), e),
+      }
+
+      assert_eq(
+        "Err(ZeroDivisionError(\"division by zero\"))\n|_ NoneError(\"None Value.\")",
+        inspect(wrapped),
       )
     }
   }
@@ -127,6 +151,13 @@ test("Result") {
       assert_eq(
         "Err(ZeroDivisionError(\"division by zero\"))",
         inspect(recover_kind(Err(ZeroDivisionError), NoneError, {|err| Ok(String::len(inspect(err)))})),
+      )
+    }
+
+    it("recover_kind accepts constructor markers with payload") {
+      assert_eq(
+        "Ok(24)",
+        inspect(recover_kind(Err(ResultSchema::ApiError("boom")), ResultSchema::ApiError("ignored"), {|err| Ok(String::len(inspect(err)))})),
       )
     }
   }

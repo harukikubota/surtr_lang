@@ -69,6 +69,8 @@ pub(super) fn is_special_form_builtin_decl(name: &str) -> bool {
             | "is_match"
             | "assert"
             | "ensure"
+            | "map_err"
+            | "cause"
             | "recover"
             | "recover_kind"
             | "and"

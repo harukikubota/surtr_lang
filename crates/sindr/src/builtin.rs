@@ -142,12 +142,12 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "map_err",
         arity: 2,
-        sig_str: "(Result<$T>, Error) -> Result<$T>",
+        sig_str: "(Result<$T>, Lazy<Error>) -> Result<$T>",
     },
     BuiltinMeta {
         name: "cause",
         arity: 2,
-        sig_str: "(Result<$T>, Error) -> Result<$T>",
+        sig_str: "(Result<$T>, Lazy<Error>) -> Result<$T>",
     },
     BuiltinMeta {
         name: "chain",

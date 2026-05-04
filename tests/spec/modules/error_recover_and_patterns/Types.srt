@@ -9,3 +9,7 @@ deferror ConnectionReset {
 deferror DnsFailure {
   "dns failure"
 }
+
+deferror TimeoutWithDetail(detail: String) {
+  detail
+}

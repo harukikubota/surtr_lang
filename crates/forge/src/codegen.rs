@@ -2668,6 +2668,12 @@ impl Codegen {
             TypedInner::Ensure(value, pred, err) => {
                 self.emit_ensure(node, value, pred, err)?;
             }
+            TypedInner::MapErr(value, err) => {
+                self.emit_result_error_transform(node, value, err, "map_err")?;
+            }
+            TypedInner::Cause(value, err) => {
+                self.emit_result_error_transform(node, value, err, "cause")?;
+            }
             TypedInner::RecoverKind(value, marker, handler) => {
                 self.emit_recover_kind(node, value, marker, handler)?;
             }
@@ -4946,7 +4952,7 @@ impl Codegen {
         &mut self,
         node: &TypedNode,
         value: &TypedNode,
-        marker: &ResolvedId,
+        marker: &TypedNode,
         handler: &TypedNode,
     ) -> Result<(), CodegenError> {
         self.emit_node(value)?;
@@ -4974,7 +4980,10 @@ impl Codegen {
         self.emit(Opcode::StoreLocal(err_slot));
 
         let mismatch_label = self.fresh_label();
-        let marker_kind = marker.name.rsplit("::").next().unwrap_or(&marker.name);
+        let marker_kind = Self::recover_kind_marker_kind(marker).ok_or_else(|| CodegenError {
+            message: "recover_kind marker must resolve to a deferror constructor".into(),
+            span: marker.span.clone(),
+        })?;
         self.emit_error_kind_test_from_local(err_slot, marker_kind, mismatch_label)?;
         self.emit_callable_ref(handler)?;
         self.emit(Opcode::LoadLocal(err_slot));
@@ -4990,6 +4999,59 @@ impl Codegen {
 
         self.patch_label(end_label);
         Ok(())
+    }
+
+    fn emit_result_error_transform(
+        &mut self,
+        node: &TypedNode,
+        value: &TypedNode,
+        err: &TypedNode,
+        builtin_name: &str,
+    ) -> Result<(), CodegenError> {
+        self.emit_node(value)?;
+        let result_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(result_slot));
+
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetTag);
+        let err_tag = self.add_constant(Constant::Tag(1));
+        self.emit(Opcode::LoadConst(err_tag));
+        self.emit(Opcode::EqTag);
+
+        let err_path = self.fresh_label();
+        let end_label = self.fresh_label();
+        self.emit_jump_if_true(err_path);
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit_jump(end_label);
+
+        self.patch_label(err_path);
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit_node(err)?;
+        let builtin_id = Self::builtin_id(builtin_name).ok_or_else(|| CodegenError {
+            message: format!("Unknown builtin: {}", builtin_name),
+            span: node.span.clone(),
+        })?;
+        self.emit(Opcode::CallBuiltin {
+            builtin_id,
+            arity: 2,
+            span_start: node.span.start as u32,
+            span_end: node.span.end as u32,
+        });
+
+        self.patch_label(end_label);
+        Ok(())
+    }
+
+    fn recover_kind_marker_kind(marker: &TypedNode) -> Option<&str> {
+        match &marker.node {
+            TypedInner::Var(id) => Some(id.name.rsplit("::").next().unwrap_or(&id.name)),
+            TypedInner::App(func, _) => match &func.node {
+                TypedInner::Var(id) => Some(id.name.rsplit("::").next().unwrap_or(&id.name)),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     fn emit_error_kind_test_from_local(

@@ -1248,8 +1248,13 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_node(middle, rewrites);
                 Self::rewrite_fun_indices_in_node(right, rewrites);
             }
-            TypedInner::RecoverKind(value, _, handler) => {
+            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 Self::rewrite_fun_indices_in_node(value, rewrites);
+                Self::rewrite_fun_indices_in_node(err, rewrites);
+            }
+            TypedInner::RecoverKind(value, marker, handler) => {
+                Self::rewrite_fun_indices_in_node(value, rewrites);
+                Self::rewrite_fun_indices_in_node(marker, rewrites);
                 Self::rewrite_fun_indices_in_node(handler, rewrites);
             }
             TypedInner::Match(scrutinee, arms) => {
@@ -1887,6 +1892,8 @@ impl Checker {
             Resolved::If(..) => "If".to_string(),
             Resolved::Ensure(..) => "Ensure".to_string(),
             Resolved::Assert(..) => "Assert".to_string(),
+            Resolved::MapErr(..) => "MapErr".to_string(),
+            Resolved::Cause(..) => "Cause".to_string(),
             Resolved::RecoverKind(..) => "RecoverKind".to_string(),
             Resolved::Semi(..) => "Semi".to_string(),
             _ => "Expr".to_string(),
@@ -1917,6 +1924,8 @@ impl Checker {
             Resolved::If(..) => "If",
             Resolved::Ensure(..) => "Ensure",
             Resolved::Assert(..) => "Assert",
+            Resolved::MapErr(..) => "MapErr",
+            Resolved::Cause(..) => "Cause",
             Resolved::RecoverKind(..) => "RecoverKind",
             Resolved::Semi(..) => "Semi",
             _ => "Expr",

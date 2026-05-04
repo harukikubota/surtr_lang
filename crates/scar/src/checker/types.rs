@@ -2095,9 +2095,17 @@ impl Checker {
                 Box::new(self.resolve_typed_node(*pred)),
                 Box::new(self.resolve_typed_node(*err)),
             ),
+            TypedInner::MapErr(value, err) => TypedInner::MapErr(
+                Box::new(self.resolve_typed_node(*value)),
+                Box::new(self.resolve_typed_node(*err)),
+            ),
+            TypedInner::Cause(value, err) => TypedInner::Cause(
+                Box::new(self.resolve_typed_node(*value)),
+                Box::new(self.resolve_typed_node(*err)),
+            ),
             TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
                 Box::new(self.resolve_typed_node(*value)),
-                marker,
+                Box::new(self.resolve_typed_node(*marker)),
                 Box::new(self.resolve_typed_node(*handler)),
             ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(

@@ -6,6 +6,15 @@ abstract surface, most often inside `Result<T>`.
 The important point is that user code does not normally construct `Error`
 directly; it defines concrete error values and lets them be viewed through this
 shared abstraction.
+
+`Error` is not a user-owned data shape. In ordinary user code it cannot appear
+as a local variable annotation, a user-defined parameter type, or a user-defined
+return type. It survives only in compiler-managed positions such as `Err(...)`,
+pattern-bound `Err(err)` arms, and standard-module helpers that observe or
+forward an existing error.
+
+Code that mentions `Error` is therefore talking about the shared abstract view.
+The runtime value is always some concrete `deferror` instance.
 """
 @builtin type Error
 

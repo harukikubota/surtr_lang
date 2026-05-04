@@ -9,5 +9,9 @@ retry:Timeout
 Error: Timeout: timeout
 Ok("retry")
 Err(DnsFailure("dns failure"))
+Ok("ok")
+retry:TimeoutWithDetail
+Error: TimeoutWithDetail: runtime
+Ok("retry")
 matched:ConnectionReset
 Error: ConnectionReset: connection reset

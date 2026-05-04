@@ -84,6 +84,8 @@ impl Checker {
             "is_match" => "Kernel::is_match",
             "assert" => "Kernel::assert",
             "ensure" => "Kernel::ensure",
+            "map_err" => "Result::map_err",
+            "cause" => "Result::cause",
             "recover_kind" => "Result::recover_kind",
             "and" => "Kernel::and",
             "or" => "Kernel::or",
@@ -159,10 +161,18 @@ impl Checker {
                         .as_ref()
                         .is_some_and(|ty| Self::is_result_of_named(ty, "$A"))
             }
+            "map_err" | "cause" => {
+                params.len() == 2
+                    && Self::is_result_of_named(&params[0].ty, "$T")
+                    && Self::is_lazy_of_named(&params[1].ty, "Error")
+                    && ret_ty
+                        .as_ref()
+                        .is_some_and(|ty| Self::is_result_of_named(ty, "$T"))
+            }
             "recover_kind" => {
                 params.len() == 3
                     && Self::is_result_of_named(&params[0].ty, "$A")
-                    && Self::is_named_type(&params[1].ty, "Error")
+                    && Self::is_lazy_of_named(&params[1].ty, "Error")
                     && Self::is_unary_func_from_named_to_result(&params[2].ty, "Error", "$A")
                     && ret_ty
                         .as_ref()
@@ -188,7 +198,9 @@ impl Checker {
                 "is_match" => "@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean",
                 "assert" => "@builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>",
                 "ensure" => "@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>",
-                "recover_kind" => "@builtin def recover_kind(value: Result<$A>, marker: Error, handler: (Error -> Result<$A>)) -> Result<$A>",
+                "map_err" => "@builtin def map_err(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
+                "cause" => "@builtin def cause(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
+                "recover_kind" => "@builtin def recover_kind(value: Result<$A>, marker: Lazy<Error>, handler: (Error -> Result<$A>)) -> Result<$A>",
                 "and" => "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean",
                 "or" => "@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean",
                 _ => unreachable!(),
@@ -449,6 +461,8 @@ impl Checker {
                 | "is_match"
                 | "assert"
                 | "ensure"
+                | "map_err"
+                | "cause"
                 | "recover_kind"
                 | "and"
                 | "or"
@@ -1958,14 +1972,45 @@ impl Checker {
                 hint: None,
             });
         }
-        if !self.is_concrete_error_value(node) {
+        Ok(())
+    }
+
+    pub(super) fn ensure_result_error_arg(
+        &self,
+        node: &TypedNode,
+        form_name: &str,
+    ) -> Result<(), TypeError> {
+        if !matches!(node.ty, Ty::Error) {
             return Err(TypeError {
                 message: format!(
-                    "{} error branch must be a concrete deferror value.",
-                    form_name
+                    "{} error argument must evaluate to Error, got {}",
+                    form_name,
+                    self.ty_name(&node.ty)
                 ),
                 span: node.span.clone(),
-                hint: Some("Use a deferror constructor or value, not a plain expression.".into()),
+                hint: None,
+            });
+        }
+        Ok(())
+    }
+
+    pub(super) fn ensure_recover_kind_marker(&self, node: &TypedNode) -> Result<(), TypeError> {
+        if !matches!(node.ty, Ty::Error) {
+            return Err(TypeError {
+                message: format!(
+                    "recover_kind marker must evaluate to Error, got {}",
+                    self.ty_name(&node.ty)
+                ),
+                span: node.span.clone(),
+                hint: None,
+            });
+        }
+        if !self.is_concrete_error_value(node) {
+            return Err(TypeError {
+                message: "recover_kind marker must be a concrete deferror name or constructor"
+                    .into(),
+                span: node.span.clone(),
+                hint: Some("Pass a deferror name like Timeout or a constructor call like Timeout(\"detail\").".into()),
             });
         }
         Ok(())

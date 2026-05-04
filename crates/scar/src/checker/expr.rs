@@ -350,6 +350,8 @@ impl Checker {
             Resolved::If(span, cond, then, else_opt) => self.check_if(span, cond, then, else_opt),
             Resolved::Assert(span, cond, err) => self.check_assert(span, cond, err),
             Resolved::Ensure(span, value, pred, err) => self.check_ensure(span, value, pred, err),
+            Resolved::MapErr(span, value, err) => self.check_map_err(span, value, err),
+            Resolved::Cause(span, value, err) => self.check_cause(span, value, err),
             Resolved::RecoverKind(span, value, marker, handler) => {
                 self.check_recover_kind(span, value, marker, handler)
             }
@@ -879,6 +881,8 @@ impl Checker {
             | Resolved::If(span, _, _, _)
             | Resolved::Assert(span, _, _)
             | Resolved::Ensure(span, _, _, _)
+            | Resolved::MapErr(span, _, _)
+            | Resolved::Cause(span, _, _)
             | Resolved::RecoverKind(span, _, _, _)
             | Resolved::Match(span, _, _)
             | Resolved::FieldAccess(span, _, _)
@@ -5039,34 +5043,56 @@ impl Checker {
         })
     }
 
+    pub(super) fn check_map_err(
+        &mut self,
+        span: &Span,
+        value: &Resolved,
+        err: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let typed_value = self.check_result_value(value, "map_err")?;
+        let raw_err = self.check_node(err)?;
+        let typed_err = self.maybe_call_zero_arg_function(raw_err, span.clone());
+        self.ensure_result_error_arg(&typed_err, "map_err")?;
+
+        Ok(TypedNode {
+            ty: typed_value.ty.clone(),
+            span: span.clone(),
+            node: TypedInner::MapErr(Box::new(typed_value), Box::new(typed_err)),
+        })
+    }
+
+    pub(super) fn check_cause(
+        &mut self,
+        span: &Span,
+        value: &Resolved,
+        err: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let typed_value = self.check_result_value(value, "cause")?;
+        let raw_err = self.check_node(err)?;
+        let typed_err = self.maybe_call_zero_arg_function(raw_err, span.clone());
+        self.ensure_result_error_arg(&typed_err, "cause")?;
+
+        Ok(TypedNode {
+            ty: typed_value.ty.clone(),
+            span: span.clone(),
+            node: TypedInner::Cause(Box::new(typed_value), Box::new(typed_err)),
+        })
+    }
+
     pub(super) fn check_recover_kind(
         &mut self,
         span: &Span,
         value: &Resolved,
-        marker: &ResolvedId,
+        marker: &Resolved,
         handler: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        if !self.env.is_error_constructor(marker.unique_id) {
-            return Err(TypeError {
-                message: "recover_kind marker must be a concrete deferror name".into(),
-                span: marker.span.clone(),
-                hint: Some("Pass a deferror constructor name such as Timeout, not a value.".into()),
-            });
-        }
-
-        let typed_value = self.check_node(value)?;
+        let typed_value = self.check_result_value(value, "recover_kind")?;
         let value_ty = self.resolve_ty(&typed_value.ty);
-        let Ty::Result(ok_ty, _) = &value_ty else {
-            return Err(TypeError {
-                message: format!(
-                    "recover_kind value must be Result<...>, got {}",
-                    self.ty_name(&value_ty)
-                ),
-                span: typed_value.span.clone(),
-                hint: None,
-            });
-        };
+        let Ty::Result(ok_ty, _) = &value_ty else { unreachable!() };
         let ok_ty = ok_ty.as_ref().clone();
+        let typed_marker = self.check_node(marker)?;
+        let typed_marker = self.maybe_call_zero_arg_function(typed_marker, span.clone());
+        self.ensure_recover_kind_marker(&typed_marker)?;
         let expected_handler = Ty::Func(
             vec![Ty::Error],
             Box::new(Ty::Result(Box::new(ok_ty.clone()), Box::new(Ty::Error))),
@@ -5101,10 +5127,33 @@ impl Checker {
             span: span.clone(),
             node: TypedInner::RecoverKind(
                 Box::new(typed_value),
-                marker.clone(),
+                Box::new(typed_marker),
                 Box::new(typed_handler),
             ),
         })
+    }
+
+    fn check_result_value(
+        &mut self,
+        value: &Resolved,
+        form_name: &str,
+    ) -> Result<TypedNode, TypeError> {
+        let typed_value = self.check_node(value)?;
+        let value_ty = self.resolve_ty(&typed_value.ty);
+        let expected_result_ty =
+            Ty::Result(Box::new(self.env.fresh_tyvar()), Box::new(Ty::Error));
+        if !self.types_compatible(&expected_result_ty, &value_ty) {
+            return Err(TypeError {
+                message: format!(
+                    "{} value must be Result<...>, got {}",
+                    form_name,
+                    self.ty_name(&value_ty)
+                ),
+                span: typed_value.span.clone(),
+                hint: None,
+            });
+        }
+        Ok(typed_value)
     }
 
     fn resolve_lens_segment_for_source_ty(

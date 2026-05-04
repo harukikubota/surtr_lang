@@ -472,6 +472,42 @@ impl Checker {
                     generated_defs,
                 )?),
             ),
+            TypedInner::MapErr(value, err) => TypedInner::MapErr(
+                Box::new(self.rewrite_specializations_in_node(
+                    *value,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                Box::new(self.rewrite_specializations_in_node(
+                    *err,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+            ),
+            TypedInner::Cause(value, err) => TypedInner::Cause(
+                Box::new(self.rewrite_specializations_in_node(
+                    *value,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                Box::new(self.rewrite_specializations_in_node(
+                    *err,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+            ),
             TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
                 Box::new(self.rewrite_specializations_in_node(
                     *value,
@@ -481,7 +517,14 @@ impl Checker {
                     specialization_fun_idxs,
                     generated_defs,
                 )?),
-                marker,
+                Box::new(self.rewrite_specializations_in_node(
+                    *marker,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
                 Box::new(self.rewrite_specializations_in_node(
                     *handler,
                     defs_by_fun_idx,
@@ -1040,8 +1083,13 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(pred, ordered, seen);
                 self.collect_bound_tyvars_in_node(err, ordered, seen);
             }
-            TypedInner::RecoverKind(value, _, handler) => {
+            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 self.collect_bound_tyvars_in_node(value, ordered, seen);
+                self.collect_bound_tyvars_in_node(err, ordered, seen);
+            }
+            TypedInner::RecoverKind(value, marker, handler) => {
+                self.collect_bound_tyvars_in_node(value, ordered, seen);
+                self.collect_bound_tyvars_in_node(marker, ordered, seen);
                 self.collect_bound_tyvars_in_node(handler, ordered, seen);
             }
             TypedInner::Match(scrutinee, arms) => {
@@ -1294,9 +1342,17 @@ impl Checker {
                 Box::new(self.substitute_typed_node_with_mapping(*pred, mapping)),
                 Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
             ),
+            TypedInner::MapErr(value, err) => TypedInner::MapErr(
+                Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
+                Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
+            ),
+            TypedInner::Cause(value, err) => TypedInner::Cause(
+                Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
+                Box::new(self.substitute_typed_node_with_mapping(*err, mapping)),
+            ),
             TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
                 Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
-                marker,
+                Box::new(self.substitute_typed_node_with_mapping(*marker, mapping)),
                 Box::new(self.substitute_typed_node_with_mapping(*handler, mapping)),
             ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
@@ -1794,8 +1850,13 @@ impl Checker {
                     || Self::typed_node_has_pending_trait_call(pred)
                     || Self::typed_node_has_pending_trait_call(err)
             }
-            TypedInner::RecoverKind(value, _, handler) => {
+            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
                 Self::typed_node_has_pending_trait_call(value)
+                    || Self::typed_node_has_pending_trait_call(err)
+            }
+            TypedInner::RecoverKind(value, marker, handler) => {
+                Self::typed_node_has_pending_trait_call(value)
+                    || Self::typed_node_has_pending_trait_call(marker)
                     || Self::typed_node_has_pending_trait_call(handler)
             }
             TypedInner::Match(scrutinee, arms) => {

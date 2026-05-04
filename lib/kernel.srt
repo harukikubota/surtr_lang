@@ -157,6 +157,8 @@ defmod Kernel {
 
   Like `if`, this is a special form. The error branch is evaluated only when
   the condition is `False`, so success does not pay to build diagnostics.
+  Call sites may construct a fresh `deferror` or forward an existing `Error`
+  value obtained elsewhere.
 
   Ordinary expression form stays available:
   `assert(user.age >= 0, InvalidUserAge(user.age))`
@@ -175,7 +177,8 @@ defmod Kernel {
 
   The first argument is evaluated once, passed to the predicate, and returned
   inside `Ok(...)` when the predicate succeeds.
-  The error branch is evaluated only when validation fails.
+  The error branch is evaluated only when validation fails. Call sites may
+  construct a fresh `deferror` or forward an existing `Error` value.
 
   The predicate must be a unary callable value such as a capture or closure:
   `ensure(num, &is_even, SomeError)` or `ensure(num, {|x| x > 0 }, SomeError)`.

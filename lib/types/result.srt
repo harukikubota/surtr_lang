@@ -90,12 +90,17 @@ impl Result {
   - `Ok(value)` stays `Ok(value)`
   - `Err(old)` becomes `Err(err)`
 
+  This is a special form. The error argument is declared as `Lazy<Error>` so
+  call sites can pass a concrete `deferror` name or constructor directly, or
+  reuse an `Error` value already obtained from `Err(e)` pattern matching. The
+  expression is evaluated only when `result` is `Err(...)`.
+
   Use `cause(...)` when the previous error should remain in the chain.
   ## REPL
   xldr(1)> Result::map_err(Err(NoneError), EmptyList)
   Err(EmptyList("Empty List."))
   """
-  @builtin def map_err(result: Result<$T>, err: Error) -> Result<$T>
+  @builtin def map_err(result: Result<$T>, err: Lazy<Error>) -> Result<$T>
 
   @doc """
   Add a higher-level domain error on top of an existing `Err(...)`.
@@ -103,12 +108,16 @@ impl Result {
   - `Ok(value)` stays `Ok(value)`
   - `Err(old)` becomes `Err(err)` and the previous error is appended to the new error's cause chain
 
+  This is also a special form. The error argument is surface-typed as
+  `Lazy<Error>` so the compiler can delay constructing the new error, or
+  forwarding an existing `Error` value, until the input is actually `Err(...)`.
+
   This keeps `Error` runtime-managed and opaque while still allowing domain layering.
   ## REPL
   xldr(1)> Result::cause(Ok(1), EmptyList)
   Ok(1)
   """
-  @builtin def cause(result: Result<$T>, err: Error) -> Result<$T>
+  @builtin def cause(result: Result<$T>, err: Lazy<Error>) -> Result<$T>
 
   @doc """
   Sequence a `Result<$T>` with a later `Result<()>` operation.
@@ -144,14 +153,16 @@ impl Result {
   @doc """
   Recover from one concrete error kind.
 
-  This is a special form: `marker` is treated as a `deferror` kind marker and
-  is not evaluated as an ordinary `Error` value. The handler is evaluated only
-  when `value` is `Err(...)` with the same concrete kind.
+  This is a special form: `marker` is surface-typed as `Lazy<Error>`, but it
+  is used only as a concrete `deferror` kind marker. `Timeout` and
+  `Timeout("detail")` are both accepted. Payload arguments are resolved and type
+  checked, but not evaluated at runtime. The handler is evaluated only when
+  `value` is `Err(...)` with the same concrete kind.
   ## REPL
   xldr(1)> Result::recover_kind(Err(NoneError), NoneError, {|_| Ok(1)})
   Ok(1)
   """
-  @builtin def recover_kind(value: Result<$A>, marker: Error, handler: (Error -> Result<$A>)) -> Result<$A>
+  @builtin def recover_kind(value: Result<$A>, marker: Lazy<Error>, handler: (Error -> Result<$A>)) -> Result<$A>
 
   @doc """
   Apply a function wrapped in `Result` to a value wrapped in `Result`.

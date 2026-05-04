@@ -110,8 +110,14 @@ pub enum Resolved {
     /// `ensure(value, pred, err)` special form
     Ensure(Span, Box<Resolved>, Box<Resolved>, Box<Resolved>),
 
+    /// `Result::map_err(value, err)` special form
+    MapErr(Span, Box<Resolved>, Box<Resolved>),
+
+    /// `Result::cause(value, err)` special form
+    Cause(Span, Box<Resolved>, Box<Resolved>),
+
     /// `Result::recover_kind(value, ErrorKind, handler)` special form
-    RecoverKind(Span, Box<Resolved>, ResolvedId, Box<Resolved>),
+    RecoverKind(Span, Box<Resolved>, Box<Resolved>, Box<Resolved>),
 
     /// Match expression
     Match(Span, Box<Resolved>, Vec<ResolvedMatchArm>),

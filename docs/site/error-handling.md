@@ -10,6 +10,28 @@ Surtr では例外機構を持ちません。
 - 失敗値は `Err(error)`
 - `Err(...)` を見つけたら、そのまま呼び出し元へ早期リターンできる
 
+## `Error` は抽象、実体は常に具象 error
+
+Surtr でコード中に `Error` と書かれていても、それは「失敗値の共通な見え方」を指す抽象名です。  
+runtime にある実体は常に `deferror` で定義した具象 error です。
+
+```surtr
+deferror InvalidPort(port: Int) { "invalid port" }
+
+ret: Result<Int> = Err(InvalidPort(0))
+```
+
+このとき `Err(...)` の中に入っている実値は `InvalidPort(0)` であり、`Error(...)` のような別の concrete value が存在するわけではありません。
+
+あわせて、`Error` は user-owned な一般データ型としては使えません。
+
+- ユーザー定義関数の引数型に `Error` は書けない
+- ユーザー定義関数の戻り値型に `Error` は書けない
+- 変数や field の型注釈に `Error` は書けない
+- `Error` が生きられるのは `Err(...)` の内側、`match` の `Err(err)` で取り出したスコープ、標準モジュール内の `Error` を受ける helper の中だけ
+
+つまり、ユーザーコードが `Error` を保存したり運び回ったりするのではなく、具象 error を `Result` の失敗枝として流し、その観測だけを抽象 `Error` 越しに行うのが Surtr の流儀です。
+
 ```surtr
 def parse_port(text: String) -> Result<Int> {
   value: Int =? try_from(text, Int)
@@ -81,6 +103,9 @@ def render_bool(text: String) -> String {
 - `Ok(...)` branch で成功値を使う
 - `Err(...)` branch で回復、変換、再送出を選ぶ
 - recover しないなら `Err(err)` をそのまま返す
+
+`Err(err)` arm で束縛した `err` は抽象 `Error` として見えますが、中身は依然として具象 error です。  
+そのため `Error::kind(err)` や `Error::format(err)` のような共通 helper で観測でき、`Result::map_err(..., err)` や `assert(..., err)` のような標準 helper へそのまま渡せます。
 
 ## `=?` SafeBind と早期リターン
 

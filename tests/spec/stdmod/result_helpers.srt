@@ -27,6 +27,11 @@ def emit_next() -> Result<String> {
   Ok("next")
 }
 
+def side_effect_label() -> String {
+  print("side-effect")
+  "detail"
+}
+
 print(to_string(Result::is_ok(Ok(1))))
 print(to_string(Result::is_ok(Err(NoneError))))
 print(to_string(Result::is_err(Ok(1))))
@@ -35,6 +40,8 @@ print(inspect(Result::map_err(Ok(1), ZeroDivisionError)))
 print(inspect(Result::map_err(Err(NoneError), ZeroDivisionError)))
 print(inspect(Result::cause(Ok(1), ZeroDivisionError)))
 print(inspect(Result::cause(Err(NoneError), ZeroDivisionError)))
+print(inspect(Result::map_err(Ok(1), IndexOutOfBounds(side_effect_label()))))
+print(inspect(Result::cause(Ok(1), IndexOutOfBounds(side_effect_label()))))
 print(inspect(Result::chain(Ok(7), Ok(()))))
 print(inspect(Result::chain(Ok(7), Err(IndexOutOfBounds("tail")))))
 print(inspect(Result::chain(Err(NoneError), Ok(()))))

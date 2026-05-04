@@ -181,7 +181,9 @@ pub enum TypedInner {
     If(Box<TypedNode>, Box<TypedNode>, Option<Box<TypedNode>>),
     Assert(Box<TypedNode>, Box<TypedNode>),
     Ensure(Box<TypedNode>, Box<TypedNode>, Box<TypedNode>),
-    RecoverKind(Box<TypedNode>, ResolvedId, Box<TypedNode>),
+    MapErr(Box<TypedNode>, Box<TypedNode>),
+    Cause(Box<TypedNode>, Box<TypedNode>),
+    RecoverKind(Box<TypedNode>, Box<TypedNode>, Box<TypedNode>),
     Match(Box<TypedNode>, Vec<TypedMatchArm>),
 
     /// Field access — field name resolved to index by Scar

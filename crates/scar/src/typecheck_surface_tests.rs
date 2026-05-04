@@ -1022,6 +1022,20 @@ deferror NotFound {
 }
 
 #[test]
+fn recover_kind_constructor_marker_typechecks() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"value = Result::recover_kind(Err(NotFound("runtime")), NotFound("marker"), {|err| Ok(1)})
+deferror NotFound(detail: String) {
+  detail
+}"#,
+    );
+    let typed = typecheck(resolved).expect("recover_kind constructor marker should typecheck");
+    assert!(typed
+        .iter()
+        .any(|node| matches!(node.node, TypedInner::Bind(_, _))));
+}
+
+#[test]
 fn forward_reference_type_tags_are_deterministic_across_runs() {
     let source = r#"user: User = User("alice", 30)
 pair = Pair(first: 1, second: "two")
@@ -1534,20 +1548,14 @@ guard = ensure(4, is_even(), NoneError)"#,
 #[test]
 fn assert_rejects_non_concrete_error_expression() {
     let err = typecheck_with_rules(
-        r#"deferror SomeError(detail: String) { detail }
-deferror OtherError(detail: String) { detail }
-
-def make_error(flag: Boolean) -> Error {
-  if(flag, SomeError("left"), OtherError("right"))
-}
-
-guard = assert(False, make_error(True))"#,
+        r#"def bad_code() -> Int { 1 }
+guard = assert(False, bad_code())"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("plain Error expression must fail");
+    .expect_err("non-Error expression must fail");
     assert!(err
         .message
-        .contains("assert error branch must be a concrete deferror value"));
+        .contains("assert error branch must evaluate to Error, got Int"));
 }
 
 #[test]
@@ -1657,6 +1665,41 @@ guard = ensure(-1, &is_positive, {|| SomeError("boom") })"#,
     let bind = typed.last().expect("binding should exist");
     match &bind.node {
         TypedInner::Bind(_, rhs) => assert!(matches!(rhs.node, TypedInner::Ensure(_, _, _))),
+        other => panic!("expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn assert_accepts_existing_error_value() {
+    let typed = typecheck_with_rules(
+        r#"guard = match Err(NoneError) {
+  Ok(_) => assert(False, NoneError),
+  Err(e) => assert(False, e),
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("existing Error value should typecheck");
+    let bind = typed.last().expect("binding should exist");
+    match &bind.node {
+        TypedInner::Bind(_, rhs) => assert!(matches!(rhs.node, TypedInner::Match(_, _))),
+        other => panic!("expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn ensure_accepts_existing_error_value() {
+    let typed = typecheck_with_rules(
+        r#"def is_positive(value: Int) -> Boolean { value > 0 }
+guard = match Err(NoneError) {
+  Ok(_) => ensure(-1, &is_positive, NoneError),
+  Err(e) => ensure(-1, &is_positive, e),
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("existing Error value should typecheck");
+    let bind = typed.last().expect("binding should exist");
+    match &bind.node {
+        TypedInner::Bind(_, rhs) => assert!(matches!(rhs.node, TypedInner::Match(_, _))),
         other => panic!("expected bind, got {:?}", other),
     }
 }
@@ -2825,8 +2868,13 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
                     || has_pending_trait_call(pred)
                     || has_pending_trait_call(err)
             }
-            TypedInner::RecoverKind(value, _, handler) => {
-                has_pending_trait_call(value) || has_pending_trait_call(handler)
+            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
+                has_pending_trait_call(value) || has_pending_trait_call(err)
+            }
+            TypedInner::RecoverKind(value, marker, handler) => {
+                has_pending_trait_call(value)
+                    || has_pending_trait_call(marker)
+                    || has_pending_trait_call(handler)
             }
             TypedInner::Match(scrutinee, arms) => {
                 has_pending_trait_call(scrutinee)

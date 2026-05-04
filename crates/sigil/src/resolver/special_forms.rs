@@ -141,6 +141,38 @@ impl Resolver {
         ))
     }
 
+    pub(super) fn resolve_map_err(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+    ) -> Result<Resolved, ResolveError> {
+        let positional = collect_positional_args(span.clone(), args, "map_err", 2)?;
+        let mut iter = positional.into_iter();
+        let value = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let err = self.resolve_error_constructor_expr(
+            iter.next().expect("checked arg length"),
+            "map_err",
+            "error argument",
+        )?;
+        Ok(Resolved::MapErr(span, Box::new(value), Box::new(err)))
+    }
+
+    pub(super) fn resolve_cause(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+    ) -> Result<Resolved, ResolveError> {
+        let positional = collect_positional_args(span.clone(), args, "cause", 2)?;
+        let mut iter = positional.into_iter();
+        let value = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let err = self.resolve_error_constructor_expr(
+            iter.next().expect("checked arg length"),
+            "cause",
+            "error argument",
+        )?;
+        Ok(Resolved::Cause(span, Box::new(value), Box::new(err)))
+    }
+
     pub(super) fn resolve_recover_kind(
         &mut self,
         span: Span,
@@ -149,41 +181,62 @@ impl Resolver {
         let positional = collect_positional_args(span.clone(), args, "recover_kind", 3)?;
         let mut iter = positional.into_iter();
         let value = self.resolve_node(iter.next().expect("checked arg length"))?;
-        let marker =
-            self.resolve_error_marker(iter.next().expect("checked arg length"), "recover_kind")?;
+        let marker = self.resolve_error_constructor_expr(
+            iter.next().expect("checked arg length"),
+            "recover_kind",
+            "marker",
+        )?;
         let handler = self.resolve_node(iter.next().expect("checked arg length"))?;
         Ok(Resolved::RecoverKind(
             span,
             Box::new(value),
-            marker,
+            Box::new(marker),
             Box::new(handler),
         ))
     }
 
-    fn resolve_error_marker(&self, expr: Ast, form_name: &str) -> Result<ResolvedId, ResolveError> {
-        let (span, name) = match expr {
-            Ast::Var(span, name) => (span, name),
-            Ast::Path(span, path) => (span, path.segments.join("::")),
-            other => {
-                return Err(ResolveError {
-                    message: format!("{} marker must be a deferror name", form_name),
+    fn resolve_error_constructor_expr(
+        &mut self,
+        expr: Ast,
+        form_name: &str,
+        role_name: &str,
+    ) -> Result<Resolved, ResolveError> {
+        match expr {
+            Ast::Var(..) | Ast::Path(..) | Ast::ConstructorCall(..) => self.resolve_node(expr),
+            Ast::App(span, func, args) => match *func {
+                Ast::Var(..) | Ast::Path(..) => {
+                    let resolved_func = self.resolve_node(*func)?;
+                    let resolved_args = args
+                        .into_iter()
+                        .map(|arg| match arg {
+                            RecordLitArg::Positional(expr) => {
+                                Ok(ResolvedRecordLitArg::Positional(self.resolve_node(expr)?))
+                            }
+                            RecordLitArg::Named(name, expr) => {
+                                Ok(ResolvedRecordLitArg::Named(name, self.resolve_node(expr)?))
+                            }
+                        })
+                        .collect::<Result<Vec<_>, ResolveError>>()?;
+                    Ok(Resolved::App(span, Box::new(resolved_func), resolved_args))
+                }
+                other => Err(ResolveError {
+                    message: format!(
+                        "{} {} must be a deferror name or constructor",
+                        form_name, role_name
+                    ),
                     span: other.span().clone(),
                     related_labels: Vec::new(),
-                });
-            }
-        };
-        let uid = self.scope.lookup(&name).ok_or_else(|| ResolveError {
-            message: format!("Undefined error marker: {}", name),
-            span: span.clone(),
-            related_labels: Vec::new(),
-        })?;
-        Ok(ResolvedId {
-            name,
-            qualified_name: self.declaration_fq_name_for_uid(uid),
-            unique_id: uid,
-            compiler_generated: false,
-            span,
-        })
+                }),
+            },
+            other => Err(ResolveError {
+                message: format!(
+                    "{} {} must be a deferror name or constructor",
+                    form_name, role_name
+                ),
+                span: other.span().clone(),
+                related_labels: Vec::new(),
+            }),
+        }
     }
 
     pub(super) fn resolve_if_let(

@@ -147,6 +147,8 @@ variant 判定だけなら `Result::is_ok(...)` / `Result::is_err(...)` も使�
 - recoverable failure を受ける抽象型
 - `deferror` で定義した具体 error がここへ流れ込む
 - `Error` 自体をユーザーが直接具体化する前提ではない
+- source で `Error` が見えても、runtime 実体は常に具体 `deferror`
+- user-defined parameter / return / local annotation に `Error` は持ち出さない
 
 ## 3. リテラル
 

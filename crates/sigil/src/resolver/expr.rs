@@ -20,6 +20,7 @@ impl Resolver {
             "is_match" => Some(2),
             "assert" => Some(2),
             "ensure" => Some(3),
+            "map_err" | "cause" => Some(2),
             "and" | "or" => Some(2),
             _ => None,
         }
@@ -1394,6 +1395,12 @@ impl Resolver {
                     if name == "ensure" {
                         return self.resolve_ensure(span, args);
                     }
+                    if name == "map_err" {
+                        return self.resolve_map_err(span, args);
+                    }
+                    if name == "cause" {
+                        return self.resolve_cause(span, args);
+                    }
                     if name == "recover_kind" {
                         return self.resolve_recover_kind(span, args);
                     }
@@ -1411,6 +1418,18 @@ impl Resolver {
                     }
                 }
                 if let Ast::Path(_, ref path) = *func {
+                    if path.segments.len() == 2
+                        && path.segments[0] == "Result"
+                        && path.segments[1] == "map_err"
+                    {
+                        return self.resolve_map_err(span, args);
+                    }
+                    if path.segments.len() == 2
+                        && path.segments[0] == "Result"
+                        && path.segments[1] == "cause"
+                    {
+                        return self.resolve_cause(span, args);
+                    }
                     if path.segments.len() == 2
                         && path.segments[0] == "Result"
                         && path.segments[1] == "recover_kind"

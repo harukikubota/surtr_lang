@@ -1,0 +1,1 @@
+value = Result::map_err(Err(Timeout), NotAnError("bad"))

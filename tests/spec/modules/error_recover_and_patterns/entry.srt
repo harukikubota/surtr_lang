@@ -24,10 +24,24 @@ print(inspect(Result::recover_kind(Err(DnsFailure), Timeout, {|err|
   print(Error::format(err))
   Ok("retry")
 })))
+print(inspect(Result::recover_kind(Ok("ok"), TimeoutWithDetail(side_effect()), {|err|
+  print("retry:" ++ Error::kind(err))
+  Ok("retry")
+})))
+print(inspect(Result::recover_kind(Err(TimeoutWithDetail("runtime")), TimeoutWithDetail("marker"), {|err|
+  print("retry:" ++ Error::kind(err))
+  print(Error::format(err))
+  Ok("retry")
+})))
 
 match Err(ConnectionReset) {
   Ok(value) => print(value),
   Err(Timeout | ConnectionReset @ e: Error) => print("matched:" ++ Error::kind(e) ++ "\n" ++ Error::format(e)),
   Err(DnsFailure) => print("dns"),
   Err(err) => print("other:" ++ Error::kind(err)),
+}
+
+def side_effect() -> String {
+  print("marker-side-effect")
+  "marker"
 }

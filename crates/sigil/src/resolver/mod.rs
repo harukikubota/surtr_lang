@@ -359,9 +359,13 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
             rebase_resolved_node(pred, base, offset);
             rebase_resolved_node(err, base, offset);
         }
-        Resolved::RecoverKind(_, value, id, handler) => {
+        Resolved::MapErr(_, value, err) | Resolved::Cause(_, value, err) => {
             rebase_resolved_node(value, base, offset);
-            rebase_resolved_id(id, base, offset);
+            rebase_resolved_node(err, base, offset);
+        }
+        Resolved::RecoverKind(_, value, marker, handler) => {
+            rebase_resolved_node(value, base, offset);
+            rebase_resolved_node(marker, base, offset);
             rebase_resolved_node(handler, base, offset);
         }
         Resolved::Match(_, scrutinee, arms) => {

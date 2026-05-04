@@ -1364,6 +1364,21 @@ x = ensure(1, &is_even, SomeError)"#,
 }
 
 #[test]
+fn test_recover_kind_constructor_marker_conversion() {
+    let resolved = parse_and_resolve(
+        r#"deferror Timeout(detail: String) { detail }
+x = Result::recover_kind(Err(Timeout("runtime")), Timeout("marker"), {|err| Ok(1)})"#,
+    )
+    .expect("recover_kind constructor marker should resolve");
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => {
+            assert!(matches!(rhs.as_ref(), Resolved::RecoverKind(_, _, _, _)));
+        }
+        other => panic!("Expected Bind with RecoverKind, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_and_conversion() {
     let resolved = parse_and_resolve(
         r#"def rhs() -> Boolean { True }
