@@ -1,0 +1,15 @@
+defstruct Counter {
+  value: Int,
+}
+
+impl Show for Counter {
+  def to_string(self: Self) -> String {
+    "Counter(" ++ inspect(self.value) ++ ")"
+  }
+}
+
+impl Counter {
+  def new(value: Int) -> Self {
+    Counter { value: value }
+  }
+}
