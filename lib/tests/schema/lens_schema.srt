@@ -1,0 +1,25 @@
+defmod LensSchema {
+  def demo_fixture() -> ((Config, Result<String>), (String, Int), BitWidth) {
+    (
+      (Config::new("App"), Ok("ally")),
+      ("score", 7),
+      BitWidth::Any(5),
+    )
+  }
+
+  def pending_fixture() -> ((Config, Result<String>), (String, Int), BitWidth) {
+    (
+      (Config::new("Guest"), Err(NoneError)),
+      ("score", 1),
+      BitWidth::Any(2),
+    )
+  }
+
+  def rename(value: String) -> Result<String> {
+    Ok(value ++ "!")
+  }
+
+  def bump(value: Int) -> Result<Int> {
+    Ok(value + 1)
+  }
+}

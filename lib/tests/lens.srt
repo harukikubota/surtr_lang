@@ -1,0 +1,101 @@
+include "./schema/lens_schema.srt"
+
+import LensSchema::{bump, demo_fixture, pending_fixture, rename};
+import Test;
+
+test("Lens") {
+  describe("view and sugar") {
+    it("views nested fields through compose and slash helpers") {
+      fixture = demo_fixture()
+      outer = Lens::compose(Tuple._0, Tuple._0)
+      path = outer / Config.entrypoint
+      slash = Tuple._0 / Tuple._0 / Config.entrypoint
+      assert_eq("Main::main", Lens::view(path, fixture))
+      assert_eq(Lens::view(path, fixture), Lens::view(slash, fixture))
+    }
+
+    it("reads nested values with value-side sugar") {
+      fixture = demo_fixture()
+      assert_eq("Main::main", fixture._0._0.entrypoint)
+      assert_eq("Ok(\"ally\")", inspect(fixture._0._1))
+      assert_eq(7, fixture._1._1)
+    }
+
+    it("supports deferred tuple lens bindings") {
+      second = Tuple._1
+      assert_eq(7, Lens::view(second, demo_fixture()._1))
+    }
+  }
+
+  describe("set and over") {
+    it("sets nested fields through composed paths") {
+      fixture = demo_fixture()
+      updated =? Lens::set(Tuple._0 / Tuple._0 / Config.entrypoint, fixture, "App::main")
+      assert_eq("App::main", updated._0._0.entrypoint)
+      assert_eq("Ok(Ok(\"ally\"))", inspect(updated._0._1))
+    }
+
+    it("updates nested tuple fields with over") {
+      fixture = demo_fixture()
+      updated =? Lens::over(Tuple._1 / Tuple._1, fixture, {|value| bump(value)})
+      assert_eq(8, updated._1._1)
+    }
+
+    it("stores plain values into Result-backed fields") {
+      fixture = demo_fixture()
+      updated =? Lens::set(Tuple._0 / Tuple._1, fixture, "captain")
+      assert_eq("Ok(Ok(\"captain\"))", inspect(updated._0._1))
+    }
+
+    it("over updates only successful Result payloads") {
+      ok_fixture = demo_fixture()
+      pending = pending_fixture()
+      ok_updated =? Lens::over(Tuple._0 / Tuple._1, ok_fixture, {|value| rename(value)})
+      pending_updated =? Lens::over(Tuple._0 / Tuple._1, pending, {|value| rename(value)})
+      assert_eq("Ok(\"ally!\")", inspect(ok_updated._0._1))
+      assert_eq(inspect(pending._0._1), inspect(pending_updated._0._1))
+    }
+
+    it("over_result can rewrite the whole Result focus") {
+      updated =? Lens::over_result(Tuple._0 / Tuple._1, pending_fixture(), {|_| Ok(Ok("fallback"))})
+      assert_eq("Ok(Ok(\"fallback\"))", inspect(updated._0._1))
+    }
+
+    it("propagates updater errors") {
+      assert_err_contains(
+        "ZeroDivisionError",
+        Lens::over(Tuple._0 / Tuple._0 / Config.entrypoint, demo_fixture(), {|_| Err(ZeroDivisionError)}),
+      )
+      assert_err_contains(
+        "ZeroDivisionError",
+        Lens::over_result(Tuple._0 / Tuple._1, demo_fixture(), {|_| Err(ZeroDivisionError)}),
+      )
+    }
+  }
+
+  describe("variant paths") {
+    it("views matching variants") {
+      assert_eq("Ok(5)", inspect(Lens::view(BitWidth.Any, demo_fixture()._2)))
+    }
+
+    it("updates inside matching variants") {
+      fixture = demo_fixture()
+      updated =? Lens::set(Tuple._2 / BitWidth.Any, fixture, 9)
+      assert_eq("BitWidth::Any(9)", inspect(updated._2))
+    }
+
+    it("applies over inside matching variants") {
+      fixture = demo_fixture()
+      updated =? Lens::over(Tuple._2 / BitWidth.Any, fixture, {|value| bump(value)})
+      assert_eq("BitWidth::Any(6)", inspect(updated._2))
+    }
+
+    it("reports variant mismatches") {
+      fixture = demo_fixture()
+      replaced = (fixture._0, fixture._1, BitWidth::W8)
+      assert_err_contains("VariantMismatch", Lens::view(BitWidth.Any, replaced._2))
+      assert_err_contains("VariantMismatch", Lens::set(Tuple._2 / BitWidth.Any, replaced, 9))
+      assert_err_contains("VariantMismatch", Lens::over(Tuple._2 / BitWidth.Any, replaced, {|value| bump(value)}))
+    }
+  }
+}
