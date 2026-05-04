@@ -162,15 +162,25 @@ fn module_path_from_fixture_file(path: &Path) -> String {
         .replace("__", "::")
 }
 
+fn parse_stage_dir_order(path: &Path) -> Option<usize> {
+    let name = path.file_name()?.to_str()?;
+    let suffix = name.strip_prefix("stage")?;
+    if suffix.is_empty() {
+        return None;
+    }
+    suffix.parse().ok()
+}
+
 fn collect_module_fixture_stages(case_dir: &Path) -> Vec<Vec<ModuleInput>> {
-    let explicit_stage_dirs = sorted_immediate_subdirs(case_dir)
+    let mut explicit_stage_dirs = sorted_immediate_subdirs(case_dir)
         .into_iter()
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("stage"))
-        })
+        .filter_map(|path| parse_stage_dir_order(&path).map(|order| (order, path)))
         .collect::<Vec<_>>();
+    explicit_stage_dirs.sort_by(|(left_order, left_path), (right_order, right_path)| {
+        left_order
+            .cmp(right_order)
+            .then_with(|| left_path.cmp(right_path))
+    });
 
     if explicit_stage_dirs.is_empty() {
         let stage = collect_files_with_extension(case_dir, "srt")
@@ -191,7 +201,7 @@ fn collect_module_fixture_stages(case_dir: &Path) -> Vec<Vec<ModuleInput>> {
     } else {
         explicit_stage_dirs
             .into_iter()
-            .map(|stage_dir| {
+            .map(|(_, stage_dir)| {
                 collect_files_with_extension(&stage_dir, "srt")
                     .into_iter()
                     .map(|path| ModuleInput {
@@ -202,6 +212,21 @@ fn collect_module_fixture_stages(case_dir: &Path) -> Vec<Vec<ModuleInput>> {
                     .collect()
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_stage_dir_order;
+    use std::path::Path;
+
+    #[test]
+    fn stage_dir_requires_numeric_suffix() {
+        assert_eq!(parse_stage_dir_order(Path::new("stage1")), Some(1));
+        assert_eq!(parse_stage_dir_order(Path::new("stage02")), Some(2));
+        assert_eq!(parse_stage_dir_order(Path::new("stage")), None);
+        assert_eq!(parse_stage_dir_order(Path::new("stage-notes")), None);
+        assert_eq!(parse_stage_dir_order(Path::new("notes")), None);
     }
 }
 

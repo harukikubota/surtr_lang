@@ -512,10 +512,12 @@ Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt
 - script source の explicit top-level `defmod` は禁止する。共有 helper は `namespace + defmod` か include module file に置く
 - script source の `include` は file 先頭に連続して置く必要があり、宣言や top-level expr の後には書けない
 - script source で最初の top-level expr が現れた後は、それ以降の宣言を置けない
+- script source の bare top-level `def` は暗黙の script namespace に属し、同一 script の top-level expr と top-level `def` body からは bare call できる
+- `namespace` / `impl` / include 先 module file / 他 module から script helper を参照する場合は canonical path を使う
 - REPL chunk では top-level `def` / `import` だけを許可し、`const`、型定義、`impl`、`defmod` は許可しない
 - `surtr repl --script <file.srt>` は REPL 開始前に script を 1 件 preload できる
 - `surtr repl --module <file.srt>` は REPL 開始前に module source を 1 件 preload できる
-- preload は `module -> script` の順で同一 compile unit として読み、その後の対話入力だけを `ReplChunk` 制約で扱う
+- preload は `module -> script` の順で同一 compile unit として読む。`--script` preload は `include` を先に解決して script を一度実行し、その結果を引き継いだうえで、その後の対話入力だけを `ReplChunk` 制約で扱う
 
 ### include の意味
 
@@ -524,6 +526,7 @@ Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt
 - script source でのみ使える loader directive
 - `include "./path/to/module.srt"` の形だけを受け付ける
 - source file 先頭に連続して置かなければならない
+- `include` 先の file は module source として読み込まれ、`surtr repl --script` preload でも同じ規則を使う
 - block 内や式位置では使えない
 
 ### builtin type の置き場所

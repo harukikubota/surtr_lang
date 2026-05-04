@@ -207,6 +207,43 @@ def greet() -> String { "hello" }
 }
 
 #[test]
+fn core_from_script_file_resolves_include_and_executes_preload_before_repl() {
+    let dir = tempfile_dir("xldr-repl-core-script-include");
+    let module_path = dir.join("m.srt");
+    let script_path = dir.join("a.srt");
+    fs::write(
+        &module_path,
+        r#"
+defmod M {
+  def one() -> Int { 1 }
+}
+"#,
+    )
+    .expect("failed to write preload module");
+    fs::write(
+        &script_path,
+        r#"
+include "./m.srt"
+import M::one
+answer = one()
+"#,
+    )
+    .expect("failed to write preload script");
+
+    let mut engine =
+        ReplEngine::from_script_file(script_path.to_str().expect("script path must be utf-8"))
+            .expect("script preload with include should bootstrap");
+
+    let value = engine.handle_line("answer + 1");
+    let value_text = rendered_text(&value);
+    assert!(
+        value_text.contains("2"),
+        "kind={}\nvalue_text={value_text:?}",
+        output_kind(&value.output)
+    );
+}
+
+#[test]
 fn core_from_module_source_exposes_preloaded_module_definitions() {
     let mut engine = ReplEngine::from_module_source(
         "math.srt",

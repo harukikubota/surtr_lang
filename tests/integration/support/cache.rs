@@ -11,10 +11,7 @@ use super::sources::{
     compile_chunk_typecheck_context_for_mode, compile_unit_kind_for_mode, default_stdlib_snapshot,
     parse_module_stage_suffix, parse_module_stages, std_typecheck_context_for_mode,
 };
-use super::types::{
-    CachedCompilePrefix, CachedModulePipeline, CachedPhaseSessions, SharedCompilePrefix,
-    TestCompileMode,
-};
+use super::types::{CachedCompilePrefix, CachedModulePipeline, SharedCompilePrefix, TestCompileMode};
 
 fn stable_hash_bytes(bytes: &[u8]) -> String {
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
@@ -378,66 +375,4 @@ pub(super) fn cached_compile_prefix(
         .expect("compile prefix cache poisoned")
         .insert(cache_key, Ok(Arc::clone(&prefix)));
     Ok(prefix)
-}
-
-fn phase_session_cache_key(compile_sources: &CompileSources, mode: TestCompileMode) -> String {
-    let mut key = module_pipeline_cache_key(compile_sources, mode);
-    key.push('\x1f');
-    key.push_str(&compile_sources.user_module_path);
-    key
-}
-
-pub(super) fn cached_phase_sessions(
-    compile_sources: &CompileSources,
-    mode: TestCompileMode,
-) -> Result<Arc<Mutex<CachedPhaseSessions>>, String> {
-    static PHASE_SESSION_CACHE: OnceLock<
-        Mutex<HashMap<String, Result<Arc<Mutex<CachedPhaseSessions>>, String>>>,
-    > = OnceLock::new();
-
-    let cache = PHASE_SESSION_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let cache_key = phase_session_cache_key(compile_sources, mode);
-
-    if let Some(cached) = cache
-        .lock()
-        .expect("phase session cache poisoned")
-        .get(&cache_key)
-    {
-        return cached.clone();
-    }
-
-    let cached_modules = cached_module_pipeline(compile_sources, mode)?;
-    let std_resolved = sigil::resolve_staged_program(
-        &cached_modules.module_asts,
-        Vec::new(),
-        &cached_modules.declaration_index,
-        None,
-    )
-    .map_err(|e| format!("phase=resolve; message={}", e))?;
-
-    let mut scar_session = scar::ScarSession::new();
-    scar_session
-        .typecheck_with_context(std_resolved, std_typecheck_context_for_mode(mode))
-        .map_err(|e| format!("phase=typecheck; message={}", e))?;
-
-    let scope = sigil::build_scope_for_module(
-        &cached_modules.module_asts,
-        Some(compile_sources.user_module_path.as_str()),
-        cached_modules.module_asts.len(),
-    )
-    .map_err(|e| format!("phase=resolve; message={}", e))?;
-    let mut sigil_session =
-        sigil::SigilSession::with_module_path(Some(compile_sources.user_module_path.clone()));
-    sigil_session.replace_scope_with_declarations(scope, &cached_modules.declaration_index);
-
-    let sessions = Arc::new(Mutex::new(CachedPhaseSessions {
-        sigil_session,
-        scar_session,
-    }));
-
-    cache
-        .lock()
-        .expect("phase session cache poisoned")
-        .insert(cache_key, Ok(Arc::clone(&sessions)));
-    Ok(sessions)
 }

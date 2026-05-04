@@ -3,6 +3,11 @@ def fallback() -> Result<String> {
   Ok("fallback")
 }
 
+def side_effect() -> String {
+  print("marker-side-effect")
+  "marker"
+}
+
 print(Error::kind(Timeout))
 print(Error::message(Timeout))
 print(Error::format(Timeout))
@@ -39,9 +44,4 @@ match Err(ConnectionReset) {
   Err(Timeout | ConnectionReset @ e: Error) => print("matched:" ++ Error::kind(e) ++ "\n" ++ Error::format(e)),
   Err(DnsFailure) => print("dns"),
   Err(err) => print("other:" ++ Error::kind(err)),
-}
-
-def side_effect() -> String {
-  print("marker-side-effect")
-  "marker"
 }

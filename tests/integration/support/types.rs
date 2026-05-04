@@ -46,9 +46,4 @@ pub(super) struct CachedCompilePrefix {
     pub(super) bytecode: Bytecode,
 }
 
-pub(super) struct CachedPhaseSessions {
-    pub(super) sigil_session: sigil::SigilSession,
-    pub(super) scar_session: scar::ScarSession,
-}
-
 pub(super) type SharedCompilePrefix = Arc<CachedCompilePrefix>;

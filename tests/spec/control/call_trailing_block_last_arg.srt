@@ -2,11 +2,11 @@ def take(flag: Boolean, block: (-> Int)) -> Int {
   if(flag, block(), 0)
 }
 
-print(to_string(take(True) { num = 10; num }))
-
 def run_if(flag: Boolean, block: (-> Unit)) -> Unit {
   if_then(flag, block())
 }
+
+print(to_string(take(True) { num = 10; num }))
 
 v = run_if(True) { print("x") }
 print(to_string(v))

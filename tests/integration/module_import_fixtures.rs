@@ -161,7 +161,7 @@ fn module_compile_error_fixtures_bucket_3() {
 }
 
 #[test]
-fn direct_module_file_compiles_without_module_resolution_stub_error() {
+fn direct_module_file_requires_module_loading_path_instead_of_script_cli_mode() {
     let module_path =
         repo_root().join("tests/compile_errors/modules/duplicate_import_all_all/Kernel.srt");
     let output = surtr_command()
@@ -177,8 +177,15 @@ fn direct_module_file_compiles_without_module_resolution_stub_error() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.status.success(),
-        "direct module compile should succeed for {}\nstdout:\n{}\nstderr:\n{}",
+        !output.status.success(),
+        "script-mode CLI should reject direct module file {}\nstdout:\n{}\nstderr:\n{}",
+        module_path.display(),
+        stdout,
+        stderr
+    );
+    assert!(
+        stderr.contains("defmod is not allowed at script top-level"),
+        "expected strict script parse failure for {}\nstdout:\n{}\nstderr:\n{}",
         module_path.display(),
         stdout,
         stderr

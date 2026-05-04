@@ -1,6 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::panic;
+use std::path::{Path, PathBuf};
 
 use diagnostics::{DiagnosticSpec, SourceId, SourceRegistry};
 use eldr::builtin::inspect_value;
@@ -139,6 +140,19 @@ impl std::fmt::Display for ReplLoadError {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct PreloadIncludeDirective {
+    file_path: String,
+    span: Span,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedScriptPreload {
+    file_name: String,
+    source_for_parse: String,
+    include_modules: Vec<crate::ModuleInput>,
+}
+
 #[derive(Clone)]
 struct PreloadedChunkState {
     sources: SourceRegistry,
@@ -153,6 +167,8 @@ struct PreloadedChunkState {
     docs: Vec<DocEntry>,
     symbols: BTreeSet<String>,
     auto_import_modules: BTreeSet<String>,
+    script_runtime_inputs: Vec<String>,
+    script_preload_docs: Vec<DocEntry>,
 }
 
 #[derive(Debug, Default)]
@@ -365,8 +381,48 @@ impl ReplEngine {
             error_display_mode: ErrorDisplayMode::Full,
         })
         .map(|mut engine| {
+            engine.append_docs(state.script_preload_docs.clone());
             engine.sync_scar_fun_index_with_vm();
             engine
+        })
+        .and_then(|mut engine| {
+            let script_runtime_inputs = state.script_runtime_inputs;
+            for input in script_runtime_inputs {
+                let result = engine.handle_line(&input);
+                if result.should_exit {
+                    return Err(ReplLoadError::Runtime {
+                        file_name: "<repl-preload>".to_string(),
+                        message: "preloaded script requested REPL exit".to_string(),
+                    });
+                }
+                match result.output {
+                    ReplOutput::EvalSuccess { .. }
+                    | ReplOutput::PlainText { .. }
+                    | ReplOutput::StyledDoc { .. }
+                    | ReplOutput::StatusMessage(_) => {}
+                    ReplOutput::EvalError { rendered, .. } => {
+                        return Err(ReplLoadError::Runtime {
+                            file_name: "<repl-preload>".to_string(),
+                            message: rendered.join("\n"),
+                        });
+                    }
+                    ReplOutput::Diagnostic {
+                        rendered,
+                        summary_tail,
+                    } => {
+                        return Err(ReplLoadError::Runtime {
+                            file_name: "<repl-preload>".to_string(),
+                            message: rendered
+                                .into_iter()
+                                .chain(summary_tail.into_iter())
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                        });
+                    }
+                    ReplOutput::DocResolved { .. } | ReplOutput::EvalStarted { .. } => {}
+                }
+            }
+            Ok(engine)
         })
     }
 
@@ -1069,7 +1125,12 @@ impl ReplEngine {
             matches
         } else if canonical != symbol || Self::definition_doc_kind(&canonical).is_some() {
             let preferred_kind = Self::definition_doc_kind(&canonical);
-            self.visible_doc_entries(&canonical, preferred_kind)
+            let visible = self.visible_doc_entries(&canonical, preferred_kind.clone());
+            if visible.is_empty() {
+                self.script_preload_doc_entries(&canonical, preferred_kind)
+            } else {
+                visible
+            }
         } else if let Some(decl) = self.visible_declaration(symbol) {
             let expected_signature = self.declaration_signature(decl);
             let mut matches = self
@@ -1093,7 +1154,7 @@ impl ReplEngine {
             });
             matches
         } else {
-            Vec::new()
+            self.script_preload_doc_entries(symbol, None)
         };
 
         match matches.as_slice() {
@@ -1269,6 +1330,28 @@ impl ReplEngine {
         matches
     }
 
+    fn script_preload_doc_entries<'a>(
+        &'a self,
+        symbol: &str,
+        kind: Option<DocKind>,
+    ) -> Vec<&'a DocEntry> {
+        let mut matches = self
+            .docs
+            .iter()
+            .filter(|entry| kind.as_ref().is_none_or(|kind| &entry.kind == kind))
+            .filter(|entry| entry.module_path.starts_with("__Script::"))
+            .filter(|entry| Self::symbol_matches(&entry.qualified_name, symbol))
+            .collect::<Vec<_>>();
+        matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+        matches.dedup_by(|a, b| {
+            a.qualified_name == b.qualified_name
+                && a.kind == b.kind
+                && a.signature == b.signature
+                && a.doc == b.doc
+        });
+        matches
+    }
+
     fn doc_entry_matches_visible_symbol(&self, entry: &DocEntry, symbol: &str) -> bool {
         if !Self::symbol_matches(&entry.qualified_name, symbol) {
             return false;
@@ -1277,6 +1360,8 @@ impl ReplEngine {
             return entry.qualified_name == symbol;
         }
         self.visible_uid_matches(symbol, &entry.qualified_name)
+            || (entry.module_path.starts_with("__Script::")
+                && self.sigil_session.lookup_uid(symbol).is_some())
     }
 
     fn visible_uid_matches(&self, visible_name: &str, qualified_name: &str) -> bool {
@@ -4605,6 +4690,7 @@ fn compile_preloaded_repl_chunk(
     script: Option<(&str, &str)>,
 ) -> Result<PreloadedChunkState, ReplLoadError> {
     let std_module_inputs = collect_additional_default_std_module_inputs().map_err(ReplLoadError::Load)?;
+    let prepared_script = prepare_script_preload(script)?;
     let mut module_input_stages = vec![std_module_inputs];
     if let Some((file_name, source)) = module {
         module_input_stages.push(vec![crate::ModuleInput {
@@ -4613,10 +4699,22 @@ fn compile_preloaded_repl_chunk(
             module_path: preload_module_path(file_name, source),
         }]);
     }
+    if let Some(script) = prepared_script.as_ref() {
+        for module in &script.include_modules {
+            module_input_stages.push(vec![module.clone()]);
+        }
+    }
     let mut repl_sources =
         loader::collect_repl_sources_with_module_stages(&module_input_stages).map_err(ReplLoadError::Load)?;
 
-    let (user_file_name, user_source) = script.unwrap_or(("<repl-preload>", ""));
+    let user_file_name = prepared_script
+        .as_ref()
+        .map(|script| script.file_name.as_str())
+        .unwrap_or("<repl-preload>");
+    let user_source = prepared_script
+        .as_ref()
+        .map(|script| script.source_for_parse.as_str())
+        .unwrap_or("");
     let user_source_id = repl_sources.sources.register(user_file_name, user_source);
     let compile_sources = crate::CompileSources {
         module_source_ids: repl_sources
@@ -4632,9 +4730,14 @@ fn compile_preloaded_repl_chunk(
         module_stages: repl_sources.module_stages.clone(),
     };
     let snapshot = crate::default_stdlib_semantic_snapshot().map_err(ReplLoadError::Load)?;
-    let (module_stage_asts, raw_module_stages, user_ast) =
+    let (module_stage_asts, raw_module_stages, user_ast, script_runtime_inputs) =
         parse_preload_sources(&compile_sources, &snapshot)?;
 
+    let script_preload_docs = crate::collect_doc_entries(
+        &[],
+        &user_ast,
+        Some(compile_sources.user_module_path.as_str()),
+    );
     let docs = crate::collect_doc_entries_with_base(
         &snapshot.docs,
         if module_stage_asts.len() > snapshot.default_stage_count {
@@ -4681,10 +4784,24 @@ fn compile_preloaded_repl_chunk(
     sigil_session.replace_scope_with_declarations(scope, &declaration_index);
 
     let mut resolved = module_resolved.resolved;
+    let mut preload_imported = Vec::new();
     if !user_ast.is_empty() {
+        preload_imported = apply_preload_imports(
+            &mut sigil_session,
+            &declaration_index,
+            &raw_module_stages,
+            &module_stage_asts,
+            &user_ast,
+            &snapshot.auto_import_modules,
+        )?;
         let user_resolved = sigil_session
             .resolve(user_ast.clone())
             .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
+        bind_preload_script_qualified_names(
+            &mut sigil_session,
+            &user_ast,
+            &compile_sources.user_module_path,
+        );
         resolved.extend(user_resolved);
     }
 
@@ -4783,8 +4900,8 @@ fn compile_preloaded_repl_chunk(
     for binding in &meta.bindings {
         symbols.insert(binding.name.clone());
     }
-    for imported in apply_preload_visible_names(&mut sigil_session, &user_ast, &snapshot.auto_import_modules, &declaration_index, &raw_module_stages, &module_stage_asts)? {
-        symbols.insert(imported);
+    for visible in apply_preload_visible_names(&user_ast, preload_imported) {
+        symbols.insert(visible);
     }
 
     let auto_import_modules = module_stage_asts
@@ -4807,6 +4924,8 @@ fn compile_preloaded_repl_chunk(
         docs,
         symbols,
         auto_import_modules,
+        script_runtime_inputs,
+        script_preload_docs,
     })
 }
 
@@ -4818,11 +4937,12 @@ fn parse_preload_sources(
         Vec<Vec<sigil::StagedModuleAst>>,
         Vec<Vec<StagedModule>>,
         Vec<Ast>,
+        Vec<String>,
     ),
     ReplLoadError,
 > {
     let mut module_stage_asts = snapshot.module_stages.clone();
-    let mut raw_module_stages = compile_sources.module_stages.clone();
+    let raw_module_stages = compile_sources.module_stages.clone();
     let mut suffix_stages = crate::parse_module_stages_from_compile_sources_suffix(
         compile_sources,
         CompileUnitKind::Script,
@@ -4855,37 +4975,15 @@ fn parse_preload_sources(
         source_id: compile_sources.user_source_id,
         spec: diagnostics::parse_error_spec(user_source, e.message(), e.span().clone()),
     })?;
+    let (preload_ast, script_runtime_inputs) =
+        split_preload_script_ast(&user_ast, user_source);
 
-    if is_direct_module_source(&user_ast) {
-        let lowered =
-            crate::lower_module_source_ast(user_ast, Some(compile_sources.user_module_path.as_str()));
-        if !lowered.is_empty() {
-            module_stage_asts.push(
-                lowered
-                    .iter()
-                    .map(|module| sigil::StagedModuleAst {
-                        module_path: module.module_path.clone(),
-                        doc_module_path: module.doc_module_path.clone(),
-                        ast: crate::rebase_module_ast_spans(
-                            module.ast.clone(),
-                            compile_sources.user_source_id,
-                        ),
-                        module_doc: module.module_doc.clone(),
-                        auto_import: module.auto_import,
-                        process_spec: module.process_spec.clone(),
-                    })
-                    .collect(),
-            );
-            raw_module_stages.push(vec![StagedModule {
-                source_id: compile_sources.user_source_id,
-                module_path: compile_sources.user_module_path.clone(),
-                source_kind: SourceKind::Script,
-            }]);
-        }
-        Ok((module_stage_asts, raw_module_stages, Vec::new()))
-    } else {
-        Ok((module_stage_asts, raw_module_stages, user_ast))
-    }
+    Ok((
+        module_stage_asts,
+        raw_module_stages,
+        preload_ast,
+        script_runtime_inputs,
+    ))
 }
 
 fn preload_module_path(file_name: &str, source: &str) -> String {
@@ -4909,29 +5007,245 @@ fn preload_module_path(file_name: &str, source: &str) -> String {
         })
 }
 
-fn is_direct_module_source(ast: &[Ast]) -> bool {
-    !ast.is_empty()
-        && ast.iter().all(|stmt| {
-            matches!(
-                stmt,
-                Ast::Defmod(_, _, _, _)
-                    | Ast::ConstDef(_, _, _, _, _)
-                    | Ast::Import(_, _, _)
-                    | Ast::Def(..)
-                    | Ast::ExtractorDef(..)
-                    | Ast::TraitDef(_, _, _, _, _)
-                    | Ast::TraitImplDef(_, _, _, _, _, _)
-                    | Ast::StructDef(..)
-                    | Ast::RecordDef(..)
-                    | Ast::DeferrorDef(_, _, _, _, _)
-                    | Ast::EnumDef(_, _, _, _, _)
-                    | Ast::ImplDef(_, _, _, _)
-                    | Ast::BuiltinDecl(_, _, _, _, _)
-                    | Ast::BuiltinExtractorDecl(_, _, _, _, _)
-                    | Ast::BuiltinTypeDecl(_, _, _)
-                    | Ast::ResultCtorDecl(_, _, _, _, _)
-            )
+fn split_preload_script_ast(ast: &[Ast], source: &str) -> (Vec<Ast>, Vec<String>) {
+    let first_runtime_index = ast
+        .iter()
+        .position(|stmt| !is_preload_declaration(stmt))
+        .unwrap_or(ast.len());
+    let preload_ast = ast[..first_runtime_index].to_vec();
+    let runtime_inputs = ast[first_runtime_index..]
+        .iter()
+        .filter_map(|stmt| {
+            let span = ast_span(stmt)?;
+            let snippet = source
+                .chars()
+                .skip(span.start)
+                .take(span.end.saturating_sub(span.start))
+                .collect::<String>();
+            let trimmed = snippet.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
         })
+        .collect();
+    (preload_ast, runtime_inputs)
+}
+
+fn is_preload_declaration(stmt: &Ast) -> bool {
+    matches!(
+        stmt,
+        Ast::Import(_, _, _)
+            | Ast::Def(..)
+            | Ast::ExtractorDef(..)
+            | Ast::ConstDef(..)
+            | Ast::StructDef(..)
+            | Ast::RecordDef(..)
+            | Ast::DeferrorDef(..)
+            | Ast::EnumDef(..)
+            | Ast::TraitDef(..)
+            | Ast::TraitImplDef(..)
+            | Ast::ImplDef(..)
+            | Ast::Namespace(..)
+            | Ast::BuiltinDecl(..)
+            | Ast::IntrinsicDecl(..)
+            | Ast::BuiltinExtractorDecl(..)
+            | Ast::BuiltinTypeDecl(..)
+            | Ast::ResultCtorDecl(..)
+    )
+}
+
+fn ast_span(stmt: &Ast) -> Option<&Span> {
+    match stmt {
+        Ast::Lit(span, _)
+        | Ast::Var(span, _)
+        | Ast::InternalVar(span, _)
+        | Ast::Path(span, _)
+        | Ast::FuncLiteralRef(span, _)
+        | Ast::App(span, _, _)
+        | Ast::Block(span, _)
+        | Ast::Bind(span, _, _)
+        | Ast::SafeBind(span, _, _)
+        | Ast::BinOp(span, _, _, _)
+        | Ast::Pipe(span, _, _)
+        | Ast::ContextMap(span, _, _)
+        | Ast::ContextBind(span, _, _)
+        | Ast::Compose(span, _, _)
+        | Ast::LiftedCompose(span, _, _)
+        | Ast::KleisliCompose(span, _, _)
+        | Ast::ListNil(span)
+        | Ast::ListCons(span, _, _)
+        | Ast::ListLiteral(span, _)
+        | Ast::RangeLiteral(span, _, _)
+        | Ast::TupleLiteral(span, _)
+        | Ast::Grouped(span, _)
+        | Ast::InterpolatedStr(span, _)
+        | Ast::Dbg(span, _)
+        | Ast::Match(span, _, _)
+        | Ast::FieldAccess(span, _, _)
+        | Ast::StructDef(span, _, _, _)
+        | Ast::RecordDef(span, _, _, _)
+        | Ast::StructLit(span, _, _)
+        | Ast::InternalStructLit(span, _, _)
+        | Ast::ConstructorCall(span, _, _)
+        | Ast::DeferrorDef(span, _, _, _, _)
+        | Ast::EnumDef(span, _, _, _, _)
+        | Ast::Def(span, _, _, _, _, _, _)
+        | Ast::ConstDef(span, _, _, _, _)
+        | Ast::ExtractorDef(span, _, _, _, _, _, _)
+        | Ast::BuiltinDecl(span, _, _, _, _)
+        | Ast::IntrinsicDecl(span, _, _, _)
+        | Ast::BuiltinExtractorDecl(span, _, _, _, _)
+        | Ast::BuiltinTypeDecl(span, _, _)
+        | Ast::ResultCtorDecl(span, _, _, _, _)
+        | Ast::Defmod(span, _, _, _)
+        | Ast::Namespace(span, _, _)
+        | Ast::ImplDef(span, _, _, _)
+        | Ast::TraitDef(span, _, _, _, _)
+        | Ast::TraitImplDef(span, _, _, _, _, _)
+        | Ast::Import(span, _, _)
+        | Ast::Include(span, _)
+        | Ast::Closure(span, _, _)
+        | Ast::Capture(span, _, _)
+        | Ast::CapturePlaceholder(span, _)
+        | Ast::Semi(span, _) => Some(span),
+    }
+}
+
+fn prepare_script_preload(
+    script: Option<(&str, &str)>,
+) -> Result<Option<PreparedScriptPreload>, ReplLoadError> {
+    let Some((file_name, source)) = script else {
+        return Ok(None);
+    };
+
+    let (source_for_parse, directives) = collect_preload_include_directives(file_name, source)?;
+    let mut include_modules = Vec::with_capacity(directives.len());
+    for directive in directives {
+        include_modules.push(resolve_preload_include_module_input(
+            file_name,
+            source,
+            &directive,
+        )?);
+    }
+
+    Ok(Some(PreparedScriptPreload {
+        file_name: file_name.to_string(),
+        source_for_parse,
+        include_modules,
+    }))
+}
+
+fn collect_preload_include_directives(
+    file_name: &str,
+    source: &str,
+) -> Result<(String, Vec<PreloadIncludeDirective>), ReplLoadError> {
+    let ast = spire::parse_with_context(
+        source,
+        spire::ParserContext::script(0).with_rules(derive_parse_rules(SourceKind::Script)),
+    )
+    .map_err(|e| preload_script_parse_error(file_name, source, &e))?;
+
+    let mut chars = source.chars().collect::<Vec<_>>();
+    let mut directives = Vec::new();
+    for stmt in &ast {
+        if let Ast::Include(span, file_path) = stmt {
+            directives.push(PreloadIncludeDirective {
+                file_path: file_path.clone(),
+                span: span.clone(),
+            });
+            for ch in chars.iter_mut().take(span.end).skip(span.start) {
+                if *ch != '\n' {
+                    *ch = ' ';
+                }
+            }
+        }
+    }
+
+    Ok((chars.into_iter().collect(), directives))
+}
+
+fn resolve_preload_include_module_input(
+    script_file_path: &str,
+    script_source: &str,
+    directive: &PreloadIncludeDirective,
+) -> Result<crate::ModuleInput, ReplLoadError> {
+    let resolved_path = resolve_preload_include_file_path(script_file_path, &directive.file_path);
+    let display_path = normalize_preload_display_path(&resolved_path);
+    let module_source = fs::read_to_string(&resolved_path).map_err(|e| {
+        preload_script_load_error(
+            script_file_path,
+            script_source,
+            directive.span.clone(),
+            format!(
+                "include failed to read `{}`: {}",
+                resolved_path.display(),
+                e
+            ),
+        )
+    })?;
+    let module_path = crate::derive_primary_module_path(&module_source)
+        .filter(|module_path| !module_path.is_empty())
+        .unwrap_or_else(|| preload_module_path(&display_path, &module_source));
+
+    Ok(crate::ModuleInput {
+        file_name: display_path,
+        source: module_source,
+        module_path,
+    })
+}
+
+fn resolve_preload_include_file_path(script_file_path: &str, raw_path: &str) -> PathBuf {
+    let candidate = Path::new(raw_path);
+    if candidate.is_absolute() {
+        return candidate.to_path_buf();
+    }
+
+    let base_dir = Path::new(script_file_path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    base_dir.join(candidate)
+}
+
+fn normalize_preload_display_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn preload_script_parse_error(
+    file_name: &str,
+    source: &str,
+    error: &spire::error::ParseError,
+) -> ReplLoadError {
+    preload_script_diagnostic(
+        file_name,
+        source,
+        diagnostics::parse_error_spec(source, error.message(), error.span().clone()),
+    )
+}
+
+fn preload_script_load_error(
+    file_name: &str,
+    source: &str,
+    span: Span,
+    message: String,
+) -> ReplLoadError {
+    preload_script_diagnostic(
+        file_name,
+        source,
+        diagnostics::simple_error("LoadError", message, span, None),
+    )
+}
+
+fn preload_script_diagnostic(
+    file_name: &str,
+    source: &str,
+    spec: diagnostics::DiagnosticSpec,
+) -> ReplLoadError {
+    let mut sources = SourceRegistry::new();
+    let source_id = sources.register(file_name, source.to_string());
+    ReplLoadError::Diagnostic {
+        sources,
+        source_id,
+        spec,
+    }
 }
 
 fn preload_resolve_error(
@@ -4944,6 +5258,39 @@ fn preload_resolve_error(
         sources: compile_sources.sources.clone(),
         source_id,
         spec: diagnostics::resolve_error_spec(source, &error.message, local_diagnostic_span(compile_sources, &error.span)),
+    }
+}
+
+fn bind_preload_script_qualified_names(
+    sigil_session: &mut sigil::SigilSession,
+    user_ast: &[Ast],
+    module_path: &str,
+) {
+    for stmt in user_ast {
+        let Some(name) = preload_decl_name(stmt) else {
+            continue;
+        };
+        let Some(uid) = sigil_session.lookup_uid(name) else {
+            continue;
+        };
+        let qualified = format!("{module_path}::{name}");
+        if sigil_session.lookup_uid(&qualified).is_none() {
+            sigil_session.define_with_id(&qualified, uid);
+        }
+    }
+}
+
+fn preload_decl_name(stmt: &Ast) -> Option<&str> {
+    match stmt {
+        Ast::Def(_, name, ..)
+        | Ast::ExtractorDef(_, name, ..)
+        | Ast::ConstDef(_, name, ..)
+        | Ast::StructDef(_, name, ..)
+        | Ast::RecordDef(_, name, ..)
+        | Ast::DeferrorDef(_, name, ..)
+        | Ast::EnumDef(_, name, ..)
+        | Ast::TraitDef(_, name, ..) => Some(name.as_str()),
+        _ => None,
     }
 }
 
@@ -5073,23 +5420,7 @@ fn apply_preload_imports(
     Ok(imported_symbols)
 }
 
-fn apply_preload_visible_names(
-    sigil_session: &mut sigil::SigilSession,
-    user_ast: &[Ast],
-    auto_import_modules: &BTreeSet<String>,
-    declaration_index: &sigil::DeclarationIndex,
-    raw_module_stages: &[Vec<StagedModule>],
-    module_stage_asts: &[Vec<sigil::StagedModuleAst>],
-) -> Result<Vec<String>, ReplLoadError> {
-    let mut visible = apply_preload_imports(
-        sigil_session,
-        declaration_index,
-        raw_module_stages,
-        module_stage_asts,
-        user_ast,
-        auto_import_modules,
-    )?;
-
+fn apply_preload_visible_names(user_ast: &[Ast], mut visible: Vec<String>) -> Vec<String> {
     for stmt in user_ast {
         match stmt {
             Ast::Def(_, name, ..)
@@ -5104,7 +5435,7 @@ fn apply_preload_visible_names(
         }
     }
 
-    Ok(visible)
+    visible
 }
 
 impl ReplEngine {

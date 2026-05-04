@@ -1,3 +1,15 @@
+def inc(value: Int) -> Int {
+  value + 1
+}
+
+def double_if_small(value: Int) -> Option<Int> {
+  if(value < 10, Option::Some(value * 2), Option::None)
+}
+
+def maybe_inc(value: Int) -> Option<Int> {
+  if(value < 10, Option::Some(value + 1), Option::None)
+}
+
 some: Option<Int> = Option::Some(7)
 none: Option<Int> = Option::None
 wrapped: Option<String> = Option::wrap("wrapped")
@@ -23,18 +35,6 @@ print(inspect(from(Option::Some(1), Result)))
 print(inspect(from(Ok(9), Option)))
 print(inspect(from(Err(NoneError), Option)))
 print(inspect(wrapped))
-
-def inc(value: Int) -> Int {
-  value + 1
-}
-
-def double_if_small(value: Int) -> Option<Int> {
-  if(value < 10, Option::Some(value * 2), Option::None)
-}
-
-def maybe_inc(value: Int) -> Option<Int> {
-  if(value < 10, Option::Some(value + 1), Option::None)
-}
 
 lifted = &maybe_inc >* &inc
 chained = &maybe_inc >=> &double_if_small

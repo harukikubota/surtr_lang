@@ -1,61 +1,12 @@
 use xldr::CompileSources;
 
-use super::cache::{cached_compile_prefix, cached_module_pipeline, cached_phase_sessions};
+use super::cache::{cached_compile_prefix, cached_module_pipeline};
 use super::compile::compile_sources_with_mode;
 use super::sources::{
     compile_chunk_typecheck_context_for_mode, compile_unit_kind_for_mode, default_stdlib_snapshot,
     parse_module_stage_suffix, parse_module_stages, parse_user_program, parse_user_source,
-    typecheck_context_for_mode,
 };
 use super::types::{CompileFailurePhase, TestCompileMode};
-
-fn resolve_sources_with_mode(
-    compile_sources: &CompileSources,
-    mode: TestCompileMode,
-) -> Result<(), String> {
-    let user_ast = parse_user_program(compile_sources, mode)?;
-    let sessions = cached_phase_sessions(compile_sources, mode)?;
-    let mut sessions = sessions
-        .lock()
-        .map_err(|_| "phase=resolve; message=phase session cache poisoned".to_string())?;
-    let sigil_checkpoint = sessions.sigil_session.checkpoint();
-    let resolved_result = sessions
-        .sigil_session
-        .resolve(user_ast)
-        .map_err(|e| format!("phase=resolve; message={}", e));
-    sessions.sigil_session.rollback(sigil_checkpoint);
-    resolved_result?;
-    Ok(())
-}
-
-fn typecheck_sources_with_mode(
-    compile_sources: &CompileSources,
-    mode: TestCompileMode,
-) -> Result<(), String> {
-    let user_ast = parse_user_program(compile_sources, mode)?;
-    let sessions = cached_phase_sessions(compile_sources, mode)?;
-    let mut sessions = sessions
-        .lock()
-        .map_err(|_| "phase=typecheck; message=phase session cache poisoned".to_string())?;
-    let sigil_checkpoint = sessions.sigil_session.checkpoint();
-    let scar_checkpoint = sessions.scar_session.checkpoint();
-    let resolved_result = sessions
-        .sigil_session
-        .resolve(user_ast)
-        .map_err(|e| format!("phase=resolve; message={}", e));
-    let typecheck_result = match resolved_result {
-        Ok(resolved) => sessions
-            .scar_session
-            .typecheck_with_context(resolved, typecheck_context_for_mode(mode))
-            .map(|_| ())
-            .map_err(|e| format!("phase=typecheck; message={}", e)),
-        Err(e) => Err(e),
-    };
-    sessions.sigil_session.rollback(sigil_checkpoint);
-    sessions.scar_session.rollback(scar_checkpoint);
-    typecheck_result?;
-    Ok(())
-}
 
 fn resolve_sources_in_compile_order(
     compile_sources: &CompileSources,
@@ -148,12 +99,12 @@ fn check_source_phase(
         CompileFailurePhase::Resolve => {
             let compile_sources =
                 super::sources::collect_script_compile_sources(source_name, source)?;
-            resolve_sources_with_mode(&compile_sources, mode)
+            resolve_sources_in_compile_order(&compile_sources, mode)
         }
         CompileFailurePhase::Typecheck => {
             let compile_sources =
                 super::sources::collect_script_compile_sources(source_name, source)?;
-            typecheck_sources_with_mode(&compile_sources, mode)
+            typecheck_sources_in_compile_order(&compile_sources, mode)
         }
         CompileFailurePhase::Codegen => {
             let compile_sources =

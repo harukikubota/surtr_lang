@@ -415,40 +415,6 @@ fn parse_program_with_module_sources<'a>(
     }
 
     let user_source = sources.source(user_source_id).unwrap_or("");
-    if should_treat_as_module_source(user_source) {
-        let user_ast = spire::parse_with_context(
-            user_source,
-            spire::ParserContext::module(user_source_id.0, None)
-                .with_rules(xldr::derive_parse_rules(xldr::SourceKind::Module)),
-        )
-        .map_err(|e| {
-            RuneError::diagnostic(
-                1,
-                sources,
-                user_source_id,
-                "parse",
-                diagnostics::parse_error_spec(user_source, e.message(), e.span().clone()),
-            )
-        })?;
-
-        let lowered =
-            xldr::lower_module_source_ast(user_ast, Some(compile_sources.user_module_path.as_str()));
-        staged_module_asts.to_mut().push(
-            lowered
-                .into_iter()
-                .map(|module| sigil::StagedModuleAst {
-                    module_path: module.module_path,
-                    doc_module_path: module.doc_module_path,
-                    ast: module.ast,
-                    module_doc: module.module_doc,
-                    auto_import: module.auto_import,
-                    process_spec: module.process_spec,
-                })
-                .collect(),
-        );
-        return Ok((staged_module_asts, Vec::new()));
-    }
-
     let user_ast = parse_script_ast_for_compile(user_source, user_source_id.0, source_kind)
         .map_err(|script_err: ParseError| {
             RuneError::diagnostic(
@@ -464,53 +430,7 @@ fn parse_program_with_module_sources<'a>(
             )
         })?;
 
-    if is_direct_module_source(&user_ast) {
-        let lowered = xldr::lower_module_source_ast(
-            user_ast,
-            Some(compile_sources.user_module_path.as_str()),
-        );
-        staged_module_asts.to_mut().push(
-            lowered
-                .into_iter()
-                .map(|module| sigil::StagedModuleAst {
-                    module_path: module.module_path,
-                    doc_module_path: module.doc_module_path,
-                    ast: module.ast,
-                    module_doc: module.module_doc,
-                    auto_import: module.auto_import,
-                    process_spec: module.process_spec,
-                })
-                .collect(),
-        );
-        Ok((staged_module_asts, Vec::new()))
-    } else {
-        Ok((staged_module_asts, user_ast))
-    }
-}
-
-fn is_direct_module_source(ast: &[Ast]) -> bool {
-    !ast.is_empty()
-        && ast.iter().all(|stmt| {
-            matches!(
-                stmt,
-                Ast::Defmod(_, _, _, _)
-                    | Ast::ConstDef(_, _, _, _, _)
-                    | Ast::Import(_, _, _)
-                    | Ast::Def(..)
-                    | Ast::ExtractorDef(..)
-                    | Ast::TraitDef(_, _, _, _, _)
-                    | Ast::TraitImplDef(_, _, _, _, _, _)
-                    | Ast::StructDef(..)
-                    | Ast::RecordDef(..)
-                    | Ast::DeferrorDef(_, _, _, _, _)
-                    | Ast::EnumDef(_, _, _, _, _)
-                    | Ast::ImplDef(_, _, _, _)
-                    | Ast::BuiltinDecl(_, _, _, _, _)
-                    | Ast::BuiltinExtractorDecl(_, _, _, _, _)
-                    | Ast::BuiltinTypeDecl(_, _, _)
-                    | Ast::ResultCtorDecl(_, _, _, _, _)
-            )
-        })
+    Ok((staged_module_asts, user_ast))
 }
 
 pub(crate) fn compile_source(
@@ -681,20 +601,6 @@ pub(crate) fn prepare_script_compile_plan(
     source: &str,
     cli_entry: Option<&str>,
 ) -> Result<ScriptCompilePlan, ScriptPlanError> {
-    if should_treat_as_module_source(source) {
-        let selected_entry_name = cli_entry.map(|name| name.to_string());
-        let normalized_entrypoint = selected_entry_name.as_ref().map(|name| {
-            EntryPoint::script_short_name(name, xldr::script_pseudo_module_path(file_path))
-        });
-
-        return Ok(ScriptCompilePlan {
-            source_for_parse: source.to_string(),
-            selected_entry_name,
-            normalized_entrypoint,
-            include_directives: Vec::new(),
-        });
-    }
-
     let (source_for_parse, include_directives) = match collect_include_directives(source) {
         Ok(collected) => collected,
         Err(err) => return Err(err),
@@ -720,7 +626,7 @@ pub(crate) fn prepare_script_compile_plan(
 fn collect_include_directives(
     source: &str,
 ) -> Result<(String, Vec<IncludeDirective>), ScriptPlanError> {
-    let ast = parse_compat_script_ast(source)
+    let ast = spire::parse_with_context(source, spire::ParserContext::script(0))
         .map_err(|e: ParseError| ScriptPlanError::new(e.message().to_string(), e.span().clone()))?;
 
     let mut chars = source.chars().collect::<Vec<_>>();
@@ -741,15 +647,6 @@ fn collect_include_directives(
 
     Ok((chars.into_iter().collect::<String>(), directives))
 }
-
-fn parse_compat_script_ast(source: &str) -> Result<Vec<Ast>, ParseError> {
-    spire::parse_with_context(
-        source,
-        spire::ParserContext::project(0)
-            .with_rules(spire::ParseRules::compatibility_script_host()),
-    )
-}
-
 fn parse_script_ast_for_compile(
     source: &str,
     source_id: u32,
@@ -757,22 +654,7 @@ fn parse_script_ast_for_compile(
 ) -> Result<Vec<Ast>, ParseError> {
     let strict_context =
         spire::ParserContext::script(source_id).with_rules(xldr::derive_parse_rules(source_kind));
-    match spire::parse_with_context(source, strict_context) {
-        Ok(ast) => Ok(ast),
-        Err(strict_err) => spire::parse_with_context(
-            source,
-            spire::ParserContext::project(source_id)
-                .with_rules(spire::ParseRules::compatibility_script_host()),
-        )
-        .or(Err(strict_err)),
-    }
-}
-
-fn should_treat_as_module_source(source: &str) -> bool {
-    xldr::derive_primary_module_path(source).is_some()
-        || parse_compat_script_ast(source)
-            .ok()
-            .is_some_and(|ast| ast.iter().any(|stmt| matches!(stmt, Ast::Defmod(_, _, _, _))))
+    spire::parse_with_context(source, strict_context)
 }
 
 fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast> {
@@ -807,12 +689,11 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
 #[cfg(test)]
 mod tests {
     use super::{
-        diagnostic_location_for_span, is_direct_module_source, load_error_span,
-        module_source_collection_error_as_rune_error, prepare_script_compile_plan,
-        source_id_for_span,
+        diagnostic_location_for_span, load_error_span, module_source_collection_error_as_rune_error,
+        parse_script_ast_for_compile, prepare_script_compile_plan, source_id_for_span,
     };
     use crate::error::RuneError;
-    use spire::ast::{Ast, Span};
+    use spire::ast::Span;
     use xldr::{SourceKind, StagedModule};
 
     #[test]
@@ -863,41 +744,20 @@ print(to_string(1))
     }
 
     #[test]
-    fn direct_module_source_is_detected() {
-        let ast = spire::parse_with_context(
-            r#"defmod Helper {
-  def add(x: Int, y: Int) -> Int {
-    x + y
-  }
-}"#,
-            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::module()),
+    fn parse_script_ast_for_compile_rejects_legacy_definition_after_expression() {
+        let err = parse_script_ast_for_compile(
+            "print(\"start\")\ndef helper() -> Unit { () }\n",
+            0,
+            SourceKind::Script,
         )
-        .expect("module source should parse");
+        .expect_err("legacy script ordering should fail under strict parsing");
 
-        assert!(is_direct_module_source(&ast));
-    }
-
-    #[test]
-    fn direct_module_source_with_top_level_const_is_detected() {
-        let ast = spire::parse_with_context(
-            r#"const APP_NAME = "surtr"
-
-defmod Helper {
-  def name() -> String { APP_NAME }
-}"#,
-            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::module()),
-        )
-        .expect("module source should parse");
-
-        assert!(is_direct_module_source(&ast));
-    }
-
-    #[test]
-    fn plain_script_is_not_treated_as_module_source() {
-        let ast = spire::parse(r#"print(to_string(1))"#).expect("script source should parse");
-
-        assert!(matches!(ast.last(), Some(Ast::App(_, _, _))));
-        assert!(!is_direct_module_source(&ast));
+        assert!(
+            err.message()
+                .contains("top-level definition cannot appear after top-level expression"),
+            "unexpected error: {}",
+            err.message()
+        );
     }
 
     #[test]

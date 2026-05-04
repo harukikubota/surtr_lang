@@ -238,12 +238,12 @@ fn run_source_cache_keys_selected_entrypoint() {
 
     write_source(
         &source_path,
-        r#"print("top")
-
-def start() -> Result<()> {
+        r#"def start() -> Result<()> {
   print("entry")
   Ok(())
 }
+
+print("top")
 "#,
     );
 
@@ -710,13 +710,8 @@ include './extra.srt'"#,
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("This top-level declaration is not allowed in the current source policy"),
-        "expected module policy diagnostic, got:\n{}",
-        stderr
-    );
-    assert!(
-        stderr.contains("include"),
-        "expected include in diagnostic, got:\n{}",
+        stderr.contains("defmod is not allowed at script top-level"),
+        "expected strict script diagnostic, got:\n{}",
         stderr
     );
 
@@ -964,12 +959,12 @@ fn run_source_cli_entry_executes_selected_function_only() {
     let source_path = temp.join("sample.srt");
     write_source(
         &source_path,
-        r#"print("top-level")
-
-def start() -> Result<()> {
+        r#"def start() -> Result<()> {
   print("start")
   Ok(())
 }
+
+print("top-level")
 "#,
     );
 

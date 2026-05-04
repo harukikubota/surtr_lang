@@ -1,4 +1,5 @@
-use crate::common::{repo_root, surtr_command, unique_temp_dir, write_source};
+use crate::common::{module_spec_fixtures, repo_root, surtr_command, unique_temp_dir, write_source};
+use crate::support;
 use serde_json::Value;
 use std::fs;
 
@@ -133,14 +134,35 @@ fn dump_outputs_valid_json_for_jq() {
 
 #[test]
 fn dump_outputs_runtime_process_specs_for_agent_modules() {
-    let fixture = repo_root().join("tests/spec/modules/process_state_agent_singleton_surface");
-    let source_path = fixture.join("Agents.srt");
+    let fixture = module_spec_fixtures()
+        .into_iter()
+        .find(|fixture| {
+            fixture.case.case_dir
+                == repo_root().join("tests/spec/modules/process_state_agent_singleton_surface")
+        })
+        .expect("process_state_agent_singleton_surface fixture should exist");
+    let module_sources =
+        support::collect_module_sources(&fixture.case.module_stages).expect("module sources");
+    let compile_sources = support::compose_script_sources(
+        &fixture.case.entry_path.to_string_lossy(),
+        fixture.case.entry_source,
+        module_sources,
+    );
+    let bytecode = support::compile_script_sources(&compile_sources)
+        .expect("module fixture bytecode should compile");
+    let temp = unique_temp_dir("surtr_dump_process_specs_module");
+    let eldr_path = temp.join("module_fixture.eldr");
+
+    fs::write(
+        &eldr_path,
+        bytecode.encode().expect("encode should succeed"),
+    )
+    .expect("failed to write eldr file");
 
     let dump = surtr_command()
-        .current_dir(&fixture)
         .args([
             "dump",
-            source_path.to_str().expect("source path must be utf-8"),
+            eldr_path.to_str().expect("eldr path must be utf-8"),
             "--format",
             "json",
         ])
@@ -165,6 +187,8 @@ fn dump_outputs_runtime_process_specs_for_agent_modules() {
     assert_eq!(specs[0]["instance"], "Singleton");
     assert_eq!(specs[0]["boot"], true);
     assert_eq!(specs[0]["set_fun_idx"].is_number(), true);
+
+    let _ = fs::remove_dir_all(temp);
 }
 
 #[test]

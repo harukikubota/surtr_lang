@@ -65,9 +65,12 @@ Xldr は対話セッション中に次を保持する。
 - loader は追加標準 module も `./lib/**/*.srt` から収集し、`lib/tests/**` と built-in 標準 module と重複するものはデフォルト入力から除外する
 - REPL user chunk は標準 module 読み込み後に `SourceKind::ReplChunk` として追加される
 - `surtr repl --module <file>` は追加の module source を 1 件だけ preload し、`Std + 単品 module` として成立する場合に限って受理する
-- `surtr repl --script <file>` は追加の script source を 1 件だけ preload し、top-level expr があれば REPL 開始前に一度だけ実行する
+- `surtr repl --script <file>` は追加の script source を 1 件だけ preload し、`include` を解決したうえで declaration area を compile し、top-level expr があれば REPL 開始前に一度だけ実行する
 - `--module` と `--script` を併用した場合は `module -> script` の順で同一 compile unit として読む
+- preload mode は CLI 入口の `--module` / `--script` 引数で確定し、Xldr 側で source token を読んで mode 推定しない
+- `include` や `Project::add_path(...)` で追加される file は module source として扱い、script と module の判定を再度行わない
 - preload 後の対話入力自体は引き続き `SourceKind::ReplChunk` として扱い、REPL 増分ポリシーは広げない
+- preload script が導入した binding / function / doc metadata は、そのまま後続の REPL 対話入力から参照できる
 - REPL user chunk の top-level 宣言は `def` / `import` のみ許可し、`const`、型定義、`impl`、`defmod` は parse error とする
 - REPL user chunk の top-level `def` は、セッション内の暗黙擬似モジュールに属する関数として扱う
 - したがって REPL は「module 外に関数がある」例外ではなく、明示 `defmod` を省略した module-like namespace 実行として扱う

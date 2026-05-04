@@ -226,3 +226,20 @@ fn compile_error_fixtures_bucket_2() {
 fn compile_error_fixtures_bucket_3() {
     run_compile_error_fixture_bucket(3, COMPILE_ERROR_FIXTURE_BUCKETS);
 }
+
+#[test]
+fn script_mode_rejects_definition_after_top_level_expression_without_compatibility_fallback() {
+    let err = support::compile_script(
+        "fixture.srt",
+        r#"print("start")
+
+def helper() -> Unit { () }"#,
+    )
+    .expect_err("legacy script ordering should fail under strict script parsing");
+
+    assert_eq!(extract_phase_tag(&err), Some("parse"));
+    assert!(
+        err.contains("top-level definition cannot appear after top-level expression"),
+        "unexpected error: {err}"
+    );
+}

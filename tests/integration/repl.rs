@@ -547,6 +547,50 @@ def greet() -> String { "hello" }
 }
 
 #[test]
+fn repl_script_preload_flag_resolves_include_and_keeps_preloaded_binding() {
+    let temp = unique_temp_dir("repl-script-preload-include");
+    let module_path = temp.join("m.srt");
+    let script_path = temp.join("a.srt");
+    fs::write(
+        &module_path,
+        r#"
+defmod M {
+  def one() -> Int { 1 }
+}
+"#,
+    )
+    .expect("failed to write preload module");
+    fs::write(
+        &script_path,
+        r#"
+include "./m.srt"
+import M::one
+answer = one()
+"#,
+    )
+    .expect("failed to write preload script");
+
+    let output = run_repl_session_with_args(
+        &[
+            "--script",
+            script_path.to_str().expect("script path must be utf-8"),
+        ],
+        "answer\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("1"), "{stdout}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn repl_module_and_script_preload_flags_share_one_compile_unit() {
     let temp = unique_temp_dir("repl-module-script-preload");
     let module_path = temp.join("helper.srt");

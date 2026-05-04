@@ -1,3 +1,8 @@
+def fallback_value() -> Int {
+  print("fallback")
+  2
+}
+
 print(to_string(cond {
   False => 0,
   1 < 2 => 1,
@@ -8,8 +13,3 @@ print(to_string(cond {
   False => 1,
   True => fallback_value(),
 }))
-
-def fallback_value() -> Int {
-  print("fallback")
-  2
-}
