@@ -1,6 +1,6 @@
 # Regex
 
-`Regex` は Rust `regex` crate をラップした標準モジュールです。
+`Regex` は Rust `regex` crate をラップした標準定義ソースです。
 compile した正規表現値を `Regex` として保持し、マッチ判定、キャプチャ取得、置換、分割を行います。
 
 ## 最初の 3 点

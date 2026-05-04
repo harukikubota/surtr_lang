@@ -37,7 +37,7 @@ include "./src/helper.srt"
 - 文字列リテラル path だけを受け付ける
 - file-based composition 用
 - script source の先頭に連続して置く
-- include 先の file は module source として読む
+- include 先の file は definition source として読む
 - REPL top-level ではなく source file 側で使う前提
 - `surtr repl --script file.srt` でも同じ規則で `include` を解決し、script を一度実行してから対話を始める
 
@@ -86,7 +86,7 @@ print(to_string(add(3, 4)))
 ## どこで確認するか
 
 - surface の正本: `../../doc/要件定義v9.md`
-- 標準モジュールの説明: `./standard-modules.md`
+- 標準定義ソースの説明: `./standard-modules.md`
 - 実例: `../../tests/spec/modules/`
 
 ## 確認したソース

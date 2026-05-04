@@ -77,7 +77,7 @@ xldr(3)>
 
 - pattern 利用は `./pattern-matching.md`
 - extractor 利用は `./extractors.md`
-- 標準モジュール全体は `./standard-modules.md`
+- 標準定義ソース全体は `./standard-modules.md`
 - `TypeRef` / `Hole` / `Unit` は `./special-types.md`
 
 ## 確認したソース

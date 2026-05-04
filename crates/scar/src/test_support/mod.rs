@@ -288,7 +288,7 @@ pub(crate) fn session_from_cached_std_prelude() -> ScarSession {
 
 fn parse_user_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
     let ast = spire::parse_with_context(source, spire::ParserContext::module(0, None))
-        .expect("module source should parse");
+        .expect("definition source should parse");
 
     let shared_imports = ast
         .iter()

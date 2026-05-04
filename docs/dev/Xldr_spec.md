@@ -55,20 +55,20 @@ Xldr は対話セッション中に次を保持する。
 
 ### 3.2 初期化
 
-- セッション開始時に標準 module source を `Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float, Config, Project, Random, IO, StyledDoc, Test]` の順で読み込む
+- セッション開始時に標準 definition source を `Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float, Config, Project, Random, IO, StyledDoc, Test]` の順で読み込む
 - `Bootstrap` source は auto-import アンカーとして先頭に置き、標準 concrete error もここで登録する
 - `SpecialTypes` source では `Unit`, `TypeRef<$T>`, `Hole`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>` の canonical builtin type head を登録する
 - `Kernel` source では `defmod Kernel` 配下の cross-cutting builtin を登録する
 - 各 type file の top-level では対応する canonical builtin type head を登録する
 - 現行実装の事前ロードファイルは `lib/bootstrap.srt` の後に、`lib/types/special_types.srt`, `lib/kernel.srt`, `lib/traits/operator/*.srt`, `lib/traits/*.srt`, type modules, `lib/lens.srt`, `lib/Config.srt`, `lib/Project.srt`, `lib/Random.srt`, `lib/IO.srt`, `lib/styled_doc.srt`, `lib/test.srt` を同一段として読み込む
-- module stage の import 可視性は「前 stage + 同一 stage」とする。同一 stage 内の標準 module / 通常 module は file 読み込み順に依存せず明示 import / auto import でき、later stage 参照は compile error とする
-- loader は追加標準 module も `./lib/**/*.srt` から収集し、`lib/tests/**` と built-in 標準 module と重複するものはデフォルト入力から除外する
-- REPL user chunk は標準 module 読み込み後に `SourceKind::ReplChunk` として追加される
-- `surtr repl --module <file>` は追加の module source を 1 件だけ preload し、`Std + 単品 module` として成立する場合に限って受理する
+- module stage の import 可視性は「前 stage + 同一 stage」とする。同一 stage 内の標準定義ソース / 通常 module は file 読み込み順に依存せず明示 import / auto import でき、later stage 参照は compile error とする
+- loader は追加標準定義ソースも `./lib/**/*.srt` から収集し、`lib/tests/**` と built-in 標準定義ソースと重複するものはデフォルト入力から除外する
+- REPL user chunk は標準定義ソース読み込み後に `SourceKind::ReplChunk` として追加される
+- `surtr repl --module <file>` は追加の definition source を 1 件だけ preload し、`Std + 単品 definition` として成立する場合に限って受理する
 - `surtr repl --script <file>` は追加の script source を 1 件だけ preload し、`include` を解決したうえで declaration area を compile し、top-level expr があれば REPL 開始前に一度だけ実行する
 - `--module` と `--script` を併用した場合は `module -> script` の順で同一 compile unit として読む
 - preload mode は CLI 入口の `--module` / `--script` 引数で確定し、Xldr 側で source token を読んで mode 推定しない
-- `include` や `Project::add_path(...)` で追加される file は module source として扱い、script と module の判定を再度行わない
+- `include` や `Project::add_path(...)` で追加される file は definition source として扱い、script と definition の判定を再度行わない
 - preload 後の対話入力自体は引き続き `SourceKind::ReplChunk` として扱い、REPL 増分ポリシーは広げない
 - preload script が導入した binding / function / doc metadata は、そのまま後続の REPL 対話入力から参照できる
 - REPL user chunk の top-level 宣言は `def` / `import` のみ許可し、`const`、型定義、`impl`、`defmod` は parse error とする

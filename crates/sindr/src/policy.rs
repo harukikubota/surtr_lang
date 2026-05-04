@@ -1,7 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompileUnitKind {
     Script,
-    Module,
+    DefinitionCheck,
     Project,
     Repl,
 }

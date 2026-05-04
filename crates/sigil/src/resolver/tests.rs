@@ -13,7 +13,7 @@ fn parse_module_ast(src: &str, module_path: &str) -> Vec<Ast> {
         spire::ParserContext::module(0, Some(module_path.to_string()))
             .with_rules(permissive_module_rules()),
     )
-    .expect("module source should parse")
+    .expect("definition source should parse")
 }
 
 fn parse_and_resolve(src: &str) -> Result<Vec<Resolved>, ResolveError> {
@@ -159,7 +159,7 @@ defagent Counter {
         spire::ParserContext::module(0, Some("Counter".to_string()))
             .with_rules(permissive_module_rules()),
     )
-    .expect("module source should parse");
+    .expect("definition source should parse");
 
     let module = match ast.into_iter().next().expect("lowered module should exist") {
         Ast::Defmod(_, module_path, ast, attrs) => StagedModuleAst {

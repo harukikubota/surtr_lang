@@ -117,7 +117,7 @@ Before:
 変更:
 
 - `crates/scar/src/lib.rs` の `#[cfg(test)]` helper に `OnceLock` cache を追加
-- 標準 module stages と `DeclarationIndex` をテストプロセス内で共有
+- 標準定義ソース stages と `DeclarationIndex` をテストプロセス内で共有
 - override を使う契約テストや user module を追加する helper は従来通り個別構築
 
 After:

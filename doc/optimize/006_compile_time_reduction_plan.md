@@ -246,12 +246,12 @@ Status: Done
 
 Status: Done
 
-既存の `003_compile_time_followup_profile.md` / `004_forge_test_prelude_cache.md` と同じ方向で、`scar` test helper の標準 module parse / precollect を `OnceLock` で共有する。
+既存の `003_compile_time_followup_profile.md` / `004_forge_test_prelude_cache.md` と同じ方向で、`scar` test helper の標準定義ソース parse / precollect を `OnceLock` で共有する。
 
 対象:
 
 - `scar` の unit / integration test helper
-- 標準 module stages
+- 標準定義ソース stages
 - `DeclarationIndex`
 - builtin prelude 相当の初期環境
 
@@ -264,7 +264,7 @@ Status: Done
 実施結果:
 
 - `crates/scar/tests/support/mod.rs` に `CachedStdPrelude` と `OnceLock` cache を追加した
-- cache は標準 module stages / `DeclarationIndex` / std resolved length / typechecked `ScarCheckpoint` を保持する
+- cache は標準定義ソース stages / `DeclarationIndex` / std resolved length / typechecked `ScarCheckpoint` を保持する
 - 各 test は checkpoint から新しい `ScarSession` を復元して実行するため、test 間で mutable session state を共有しない
 - production path には影響しない integration-test helper 内の変更に限定した
 

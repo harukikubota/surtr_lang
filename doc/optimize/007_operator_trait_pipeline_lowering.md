@@ -69,7 +69,7 @@ impl Chainable<$A, List<$B>> for List<$A> {
 ## 実装方針
 
 - `lib/traits/operator/functor.srt` と `lib/traits/operator/chainable.srt` を追加する
-- 標準 module load order は `List` / `Result` より前に `Functor` / `Chainable` を読む
+- 標準定義ソース load order は `List` / `Result` より前に `Functor` / `Chainable` を読む
 - `lib/types/result.srt` に `Functor` / `Chainable` impl を追加し、`Result` map / bind の意味論を Surtr source へ移す
 - `lib/types/list.srt` に `Functor` / `Chainable` impl を追加し、既存 `List::map` / `List::flat_map` へ委譲する
 - Scar の trait target 解決で `Ty::List(_) -> "List"` を許可し、generic builtin container を trait impl target として扱えるようにする

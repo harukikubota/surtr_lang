@@ -84,7 +84,7 @@ feature 有効時の確認:
 - `cargo nextest run -p scar` / `cargo nextest run -p forge`:
   - 型検査・codegen の crate-local tests は 1 件あたり 0.7s 以上のものが多く、compiler pipeline 側の改善余地が見える
 - `./target/debug/surtr build tests/profile/heavy_compile.srt /tmp/heavy.eldr` と `.eldr run`:
-  - Surtr source compile と VM 実行を分離して、標準 module load / typecheck / codegen / VM のどこが支配的かを見る
+  - Surtr source compile と VM 実行を分離して、標準定義ソース load / typecheck / codegen / VM のどこが支配的かを見る
 - `cargo llvm-lines` または `cargo bloat`:
   - monomorphization が重い型や関数を探す。特に parser / typechecker の generic-heavy な経路を見る
 - incremental rebuild:

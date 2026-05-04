@@ -142,7 +142,7 @@ fn dump_outputs_runtime_process_specs_for_agent_modules() {
         })
         .expect("process_state_agent_singleton_surface fixture should exist");
     let module_sources =
-        support::collect_module_sources(&fixture.case.module_stages).expect("module sources");
+        support::collect_module_sources(&fixture.case.module_stages).expect("definition sources");
     let compile_sources = support::compose_script_sources(
         &fixture.case.entry_path.to_string_lossy(),
         fixture.case.entry_source,

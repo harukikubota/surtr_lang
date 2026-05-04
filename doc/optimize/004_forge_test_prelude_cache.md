@@ -12,7 +12,7 @@
 ## 変更点
 
 - `crates/forge/src/lib.rs` の test helper に `OnceLock` cache を追加
-- 標準 module stages と `DeclarationIndex` をテストプロセス内で共有
+- 標準定義ソース stages と `DeclarationIndex` をテストプロセス内で共有
 - production codegen には影響なし
 
 ## Before / After
@@ -31,5 +31,5 @@
 ## 読み取り
 
 - Forge tests は 16 件だけなので、Scar ほど大きな差は出ない
-- それでも標準 module parse / precollect の再実行が少し減り、summary と real が微減した
+- それでも標準定義ソース parse / precollect の再実行が少し減り、summary と real が微減した
 - 次に大きく効く対象は Forge より Rune integration のプロセス起動回数か、Scar の type environment 初期化共有

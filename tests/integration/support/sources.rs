@@ -116,7 +116,7 @@ pub(super) fn std_typecheck_context_for_mode(mode: TestCompileMode) -> scar::Typ
     scar::TypecheckContext {
         runtime_policy: xldr::derive_runtime_policy(
             compile_unit_kind_for_mode(mode),
-            SourceKind::StdModule,
+            SourceKind::StdDefinitionSource,
             None,
         ),
         enforce_builtin_type_contracts: true,

@@ -71,8 +71,8 @@ fn module_pipeline_cache_key(compile_sources: &CompileSources, mode: TestCompile
                 .unwrap_or("");
             let source_kind = match module.source_kind {
                 SourceKind::Script => "script",
-                SourceKind::Module => "module",
-                SourceKind::StdModule => "std",
+                SourceKind::DefinitionSource => "module",
+                SourceKind::StdDefinitionSource => "std",
                 SourceKind::ReplChunk => "repl",
             };
 

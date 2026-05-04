@@ -28,7 +28,7 @@ ret: Result<Int> = Err(InvalidPort(0))
 - ユーザー定義関数の引数型に `Error` は書けない
 - ユーザー定義関数の戻り値型に `Error` は書けない
 - 変数や field の型注釈に `Error` は書けない
-- `Error` が生きられるのは `Err(...)` の内側、`match` の `Err(err)` で取り出したスコープ、標準モジュール内の `Error` を受ける helper の中だけ
+- `Error` が生きられるのは `Err(...)` の内側、`match` の `Err(err)` で取り出したスコープ、標準定義ソース内の `Error` を受ける helper の中だけ
 
 つまり、ユーザーコードが `Error` を保存したり運び回ったりするのではなく、具象 error を `Result` の失敗枝として流し、その観測だけを抽象 `Error` 越しに行うのが Surtr の流儀です。
 

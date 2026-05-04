@@ -131,7 +131,7 @@ compile / surface 契約との対応は次のとおり。
 
 - source に現れる `Error` は abstract failure view であり、runtime 実体は常に concrete `deferror` 由来の `RichError`
 - user code は `Error` を一般の first-class data として保持しない
-- `Error` が surface 上で生存するのは `Err(Error)`、`match` の `Err(err)` で束縛された局所スコープ、標準 module 内の `Error` 観測 helper の引数位置に限る
+- `Error` が surface 上で生存するのは `Err(Error)`、`match` の `Err(err)` で束縛された局所スコープ、標準定義ソース内の `Error` 観測 helper の引数位置に限る
 - `Result::map_err` / `Result::cause` / `assert` / `ensure` は、この既存 `Error` 値を forward してよい
 - `Result::recover_kind` だけは existing `Error` value ではなく concrete `deferror` kind marker surface を受ける
 

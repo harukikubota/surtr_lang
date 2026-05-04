@@ -73,7 +73,7 @@ xldr(2)>
 
 - 変換の呼び出し surface は `./definitions-and-usage.md`
 - 型注釈は `./type-annotations.md`
-- 標準モジュール内での位置づけは `./standard-modules.md`
+- 標準定義ソース内での位置づけは `./standard-modules.md`
 - 制約一覧は `./language-reference.md`
 
 ## 確認したソース

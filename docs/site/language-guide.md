@@ -737,9 +737,9 @@ not_fn = &`Boolean::not`
 `safe_div` と `safe_mod` は、失敗を例外ではなく `Result<_, ZeroDivisionError>` で返します。  
 `+`, `-`, `*` は内部では `Add` / `Sub` / `Mul` trait dispatch を通りますが、VM では引き続き具体的な opcode / builtin へ lower されます。
 
-## 12. 標準モジュールの前提
+## 12. 標準定義ソースの前提
 
-現在の Surtr では、標準モジュールを次の順で先に読み込みます。
+現在の Surtr では、標準定義ソースを次の順で先に読み込みます。
 
 ```text
 Bootstrap -> [SpecialTypes, Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> user source
@@ -763,11 +763,11 @@ Bootstrap -> [SpecialTypes, Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, C
   - その型自身の `@builtin type` 宣言
 
 auto import されるのは `Bootstrap`, `Kernel`、`@autoimport impl Result` の helper surface と、`@autoimport` が付いた標準 trait です。  
-他の type module も標準モジュールとして一緒にロードされますが、名前空間としては別レイヤーで保ちます。
+他の type module も標準定義ソースとして一緒にロードされますが、名前空間としては別レイヤーで保ちます。
 
 ## 13. `@doc` と source ドキュメント
 
-Surtr の標準モジュールは、説明文も source に載せます。
+Surtr の標準定義ソースは、説明文も source に載せます。
 
 ```surtr
 @doc """
@@ -827,4 +827,4 @@ value: Result<Int> = Ok(42)
 - マクロシステム拡張
 - 並列コンパイル
 
-細かい構文や外部契約を確認したい場合は、次に [言語リファレンス](./language-reference.md) を読むのがおすすめです。標準モジュールの配置や `@doc` の約束を見たい場合は [標準ライブラリガイド](./standard-library.md) を参照してください。
+細かい構文や外部契約を確認したい場合は、次に [言語リファレンス](./language-reference.md) を読むのがおすすめです。標準定義ソースの配置や `@doc` の約束を見たい場合は [標準ライブラリガイド](./standard-library.md) を参照してください。

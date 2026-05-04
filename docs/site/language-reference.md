@@ -450,7 +450,7 @@ private field と property access を含む構造体全体の契約は `./struct
 
 ## 8. 標準エラー
 
-標準モジュール層で最初から提供される汎用 error には、少なくとも次が含まれます。
+標準定義ソース層で最初から提供される汎用 error には、少なくとも次が含まれます。
 
 ```surtr
 deferror NoneError { "None Value." }
@@ -481,9 +481,9 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 一方で `defstruct` / `defrecord` / `deferror` / `defenum` / `@builtin type` は
 関数 namespace の内側ではなく、top-level 宣言名として直接見えます。
 
-### 標準モジュール
+### 標準定義ソース
 
-現在の標準モジュール層は次の順序でロードされます。
+現在の標準定義ソース層は次の順序でロードされます。
 
 ```text
 Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Option, Task, Lens, Float, Config, Project, Random, IO] -> ユーザ拡張
@@ -493,7 +493,7 @@ Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt
 
 - `Bootstrap`, `Kernel`, `Result` と `@autoimport` 付き標準 trait は auto import 対象
 - `Bootstrap` / `Kernel` の明示 `import` は compile error
-- それ以外の標準モジュールは auto import しない
+- それ以外の標準定義ソースは auto import しない
 
 ### import の意味
 
@@ -516,7 +516,7 @@ Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt
 - `namespace` / `impl` / include 先 module file / 他 module から script helper を参照する場合は canonical path を使う
 - REPL chunk では top-level `def` / `import` だけを許可し、`const`、型定義、`impl`、`defmod` は許可しない
 - `surtr repl --script <file.srt>` は REPL 開始前に script を 1 件 preload できる
-- `surtr repl --module <file.srt>` は REPL 開始前に module source を 1 件 preload できる
+- `surtr repl --module <file.srt>` は REPL 開始前に definition source を 1 件 preload できる
 - preload は `module -> script` の順で同一 compile unit として読む。`--script` preload は `include` を先に解決して script を一度実行し、その結果を引き継いだうえで、その後の対話入力だけを `ReplChunk` 制約で扱う
 
 ### include の意味
@@ -526,12 +526,12 @@ Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt
 - script source でのみ使える loader directive
 - `include "./path/to/module.srt"` の形だけを受け付ける
 - source file 先頭に連続して置かなければならない
-- `include` 先の file は module source として読み込まれ、`surtr repl --script` preload でも同じ規則を使う
+- `include` 先の file は definition source として読み込まれ、`surtr repl --script` preload でも同じ規則を使う
 - block 内や式位置では使えない
 
 ### builtin type の置き場所
 
-各 builtin type は、対応する標準 module file のトップレベルで宣言します。
+各 builtin type は、対応する標準定義ソース file のトップレベルで宣言します。
 
 ```surtr
 // kernel.srt
@@ -571,7 +571,7 @@ import Kernel::print;
 
 ## 10. `@builtin` と `@doc`
 
-`@builtin def ...` は標準モジュール source でのみ使えます。
+`@builtin def ...` は標準定義ソースでのみ使えます。
 
 - user script では使えない
 - user module では使えない
@@ -579,8 +579,8 @@ import Kernel::print;
 
 これは「builtin をユーザーが追加するための構文」ではなく、「処理系内の共有 builtin テーブルを Surtr source 側から宣言するための構文」です。
 
-`@builtin type ...` も同じく標準モジュール source 専用です。  
-各標準 module file の top-level に置いて、compiler が canonical head と照合します。
+`@builtin type ...` も同じく標準定義ソース専用です。  
+各標準定義ソース file の top-level に置いて、compiler が canonical head と照合します。
 
 `@doc """..."""` は `defmod` / `def` / `deferror` / `@builtin type` / `@builtin def` の直前に置けます。  
 標準ライブラリではこの仕組みを使って source に API 説明を埋め込みます。
@@ -592,7 +592,7 @@ import Kernel::print;
 @builtin type Err(Error) -> Result<$T>
 ```
 
-これらは通常の関数本体付き `def` ではなく、標準モジュール `result.srt` で compiler が特別扱いする surface contract です。
+これらは通常の関数本体付き `def` ではなく、標準定義ソース `result.srt` で compiler が特別扱いする surface contract です。
 
 `Bootstrap` では次のような macro doc anchor を置けます。
 

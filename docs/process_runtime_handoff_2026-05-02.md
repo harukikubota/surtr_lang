@@ -11,7 +11,7 @@
 
 ## 実装内容の要約
 
-初期の VM 管理プロセス基盤として、`defagent` surface 構文、VM 内部の PID 値、プロセステーブル、隠し builtin、Task 標準モジュール、サンプル、仕様テストを追加しました。
+初期の VM 管理プロセス基盤として、`defagent` surface 構文、VM 内部の PID 値、プロセステーブル、隠し builtin、Task 標準定義ソース、サンプル、仕様テストを追加しました。
 
 主な到達点は次のとおりです。
 
@@ -33,7 +33,7 @@
 - `crates/eldr/src/builtin.rs`: process/task builtin の VM 実装。
 - `lib/kernel.srt`: 隠し builtin 宣言。
 - `lib/process.srt`: `Task` surface API。
-- `crates/xldr/src/loader.rs`: `process.srt` を標準モジュールとして loader に登録。
+- `crates/xldr/src/loader.rs`: `process.srt` を標準定義ソースとして loader に登録。
 - `tests/spec/modules/process_*`: agent surface の成功系仕様テスト。
 - `tests/compile_errors/modules/process_readonly_agent_rejects_set`: read-only agent の不正 set を拒否する compile error test。
 

@@ -15,7 +15,7 @@
 Rust clean build の baseline は `006_compile_time_reduction_plan.md` の feature 調整後を採用する。
 追加の clean build 短縮では、依存 crate を増やさず、既存依存の feature / crate boundary / test 配置を優先して見直す。
 
-Surtr source compile では、ユーザー source よりも標準 module 群の初期化が支配的になっている。
+Surtr source compile では、ユーザー source よりも標準定義ソース群の初期化が支配的になっている。
 `tests/profile/heavy_compile.srt` で確認した値は次の通り。
 
 ```bash

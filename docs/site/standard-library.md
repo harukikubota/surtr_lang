@@ -1,8 +1,8 @@
 # Surtr Standard Library Layout
 
-このページは、Surtr の標準モジュール構成を利用者向けにまとめたものです。
+このページは、Surtr の標準定義ソース構成を利用者向けにまとめたものです。
 
-標準モジュールは単なる補助ファイルではなく、language surface の一部です。  
+標準定義ソースは単なる補助ファイルではなく、language surface の一部です。  
 `lib/*.srt` に書かれた `@doc` は source 上の説明であり、将来的には `.eldr` の `Docs` chunk からも参照できる前提で扱います。
 
 Surtr 全体では、関数は常に何らかの namespace に属します。標準ライブラリでもこの方針は同じです。
@@ -14,14 +14,14 @@ Surtr 全体では、関数は常に何らかの namespace に属します。標
 
 ## 1. ロード順
 
-標準モジュールの初期ロード順は次で固定されています。
+標準定義ソースの初期ロード順は次で固定されています。
 
 ```text
 Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> user source
 ```
 
 このうち auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@autoimport` が付いた標準 trait です。  
-他の標準モジュールは標準モジュールとして同梱されますが、名前空間としては明示 import 前提です。
+他の標準定義ソースは標準定義ソースとして同梱されますが、名前空間としては明示 import 前提です。
 
 ## 2. 各モジュールの役割
 
@@ -84,7 +84,7 @@ primitive module をまたぐ読みやすさを優先して `Kernel` に置き�
 この分離により、「型そのものの compiler 契約」と「その型の helper / docs / 将来 API」を同じ file に置きつつ、役割は混ぜずに管理できます。
 `impl Type` や `impl Trait for Type` は、この module API とは別の型専用 namespace として並びます。
 
-`Numeric` だけは type module ではなく、トップレベル trait 宣言専用の標準 module です。
+`Numeric` だけは type module ではなく、トップレベル trait 宣言専用の標準定義ソースです。
 
 - `numeric.srt` に `deftrait Numeric` を置く
 - `int.srt` のトップレベルに `impl Numeric for Int` を置く
@@ -120,7 +120,7 @@ primitive module をまたぐ読みやすさを優先して `Kernel` に置き�
 ```
 
 compiler はこの head 自体を契約として扱います。  
-そのため、標準モジュール側で name や generic parameter が変わっていると compile error になります。
+そのため、標準定義ソース側で name や generic parameter が変わっていると compile error になります。
 
 特に次は重要です。
 
@@ -178,7 +178,7 @@ compiler-special type の詳しい説明は `./special-types.md` を参照して
 
 ## 5. `@doc` の使い方
 
-標準モジュールの説明は `@doc """..."""` で source に直接載せます。
+標準定義ソースの説明は `@doc """..."""` で source に直接載せます。
 
 ```surtr
 @doc """
@@ -202,7 +202,7 @@ defmod String {
 
 `@doc` を source に置く利点は次のとおりです。
 
-- 標準モジュールと説明文がずれにくい
+- 標準定義ソースと説明文がずれにくい
 - dump や REPL の docs UI に同じ情報を流せる
 - Rust 実装ではなく Surtr surface として API を説明できる
 - language-provided macro surface も bootstrap module の function docs として揃えられる
@@ -398,7 +398,7 @@ defenum Option<$T> {
 
 ## REPL Model
 
-REPL は起動時に標準 module と preload script を読み切った OnceRead universe で動きます。
+REPL は起動時に標準定義ソースと preload script を読み切った OnceRead universe で動きます。
 
 - REPL 中の `include` は扱わない
 - REPL 中の `import` は、起動時に読み込まれた固定 universe に対する既存 symbol の導入としては使える
@@ -596,9 +596,9 @@ path の停止点をまとめて見たいときに使います。
 
 関数境界を越えたいときは `Lens` 自体ではなく、`Lens::view(...)` 済みの値を渡します。
 
-## 13. パイプ / bind 系と標準モジュールの関係
+## 13. パイプ / bind 系と標準定義ソースの関係
 
-標準モジュール側から見ると、各演算子との対応は次です。
+標準定義ソース側から見ると、各演算子との対応は次です。
 
 | 構文 | 標準 surface / 役割 |
 |---|---|

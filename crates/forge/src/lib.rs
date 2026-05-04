@@ -294,8 +294,8 @@ mod tests {
             0,
             sigil::ResolveResumeState::default(),
         )
-        .expect("module source should resolve");
-        scar::typecheck_staged_program(resolved).expect("module source should typecheck")
+        .expect("definition source should resolve");
+        scar::typecheck_staged_program(resolved).expect("definition source should typecheck")
     }
 
     fn codegen_source(source: &str) -> sindr::ir::Bytecode {

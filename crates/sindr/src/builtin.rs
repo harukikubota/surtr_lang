@@ -602,7 +602,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     },
 ];
 
-/// Canonical builtin type declarations accepted from std-module sources.
+/// Canonical builtin type declarations accepted from standard definition sources.
 ///
 /// These entries define the exact source-level heads the compiler accepts,
 /// including generic parameter names such as `List<$A>` and `Result<$T>`.
