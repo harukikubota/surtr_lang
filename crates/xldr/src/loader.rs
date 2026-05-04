@@ -234,8 +234,8 @@ const REPL_PSEUDO_MODULE_PATH: &str = "__Repl::Session";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {
     Script,
-    Module,
-    StdModule,
+    DefinitionSource,
+    StdDefinitionSource,
     ReplChunk,
 }
 
@@ -265,7 +265,7 @@ impl SourceDescriptor {
         Self {
             file_name: file_name.into(),
             source: source.into(),
-            kind: SourceKind::Module,
+            kind: SourceKind::DefinitionSource,
             module_path: Some(module_path.into()),
         }
     }
@@ -278,7 +278,7 @@ impl SourceDescriptor {
         Self {
             file_name: file_name.into(),
             source: source.into(),
-            kind: SourceKind::StdModule,
+            kind: SourceKind::StdDefinitionSource,
             module_path: Some(module_path.into()),
         }
     }
@@ -1039,19 +1039,28 @@ mod tests {
         );
         assert_eq!(
             loaded.module_stages[0][0].source_kind,
-            SourceKind::StdModule
+            SourceKind::StdDefinitionSource
         );
         assert_eq!(
             loaded.module_stages[1][0].source_kind,
-            SourceKind::StdModule
+            SourceKind::StdDefinitionSource
         );
         assert_eq!(
             loaded.module_stages[1][1].source_kind,
-            SourceKind::StdModule
+            SourceKind::StdDefinitionSource
         );
-        assert_eq!(loaded.module_stages[2][0].source_kind, SourceKind::Module);
-        assert_eq!(loaded.module_stages[3][0].source_kind, SourceKind::Module);
-        assert_eq!(loaded.module_stages[3][1].source_kind, SourceKind::Module);
+        assert_eq!(
+            loaded.module_stages[2][0].source_kind,
+            SourceKind::DefinitionSource
+        );
+        assert_eq!(
+            loaded.module_stages[3][0].source_kind,
+            SourceKind::DefinitionSource
+        );
+        assert_eq!(
+            loaded.module_stages[3][1].source_kind,
+            SourceKind::DefinitionSource
+        );
         let std_paths = loaded.module_stages[1]
             .iter()
             .map(|module| module.module_path.as_str())

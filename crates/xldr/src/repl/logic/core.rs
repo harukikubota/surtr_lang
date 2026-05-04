@@ -486,7 +486,7 @@ impl ReplEngine {
             scar::TypecheckContext {
                 runtime_policy: derive_runtime_policy(
                     CompileUnitKind::Repl,
-                    SourceKind::StdModule,
+                    SourceKind::StdDefinitionSource,
                     None,
                 ),
                 enforce_builtin_type_contracts: true,
@@ -669,7 +669,7 @@ impl ReplEngine {
             scar::TypecheckContext {
                 runtime_policy: derive_runtime_policy(
                     CompileUnitKind::Repl,
-                    SourceKind::StdModule,
+                    SourceKind::StdDefinitionSource,
                     None,
                 ),
                 enforce_builtin_type_contracts: true,

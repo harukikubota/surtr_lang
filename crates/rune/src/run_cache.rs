@@ -186,8 +186,9 @@ fn push_module_pipeline_key(key: &mut String, compile_sources: &xldr::CompileSou
 fn source_kind_key(kind: xldr::SourceKind) -> &'static str {
     match kind {
         xldr::SourceKind::Script => "script",
-        xldr::SourceKind::Module => "module",
-        xldr::SourceKind::StdModule => "std",
+        // Keep serialized key values stable for backward-compatible cache reuse.
+        xldr::SourceKind::DefinitionSource => "module",
+        xldr::SourceKind::StdDefinitionSource => "std",
         xldr::SourceKind::ReplChunk => "repl",
     }
 }

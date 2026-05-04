@@ -777,8 +777,8 @@ impl ModuleStageParseError {
 pub fn derive_parse_rules(source_kind: SourceKind) -> spire::ParseRules {
     match source_kind {
         SourceKind::Script => spire::ParseRules::script(),
-        SourceKind::Module => spire::ParseRules::module(),
-        SourceKind::StdModule => spire::ParseRules::std_module(),
+        SourceKind::DefinitionSource => spire::ParseRules::module(),
+        SourceKind::StdDefinitionSource => spire::ParseRules::std_module(),
         SourceKind::ReplChunk => spire::ParseRules::repl_chunk(),
     }
 }
@@ -790,20 +790,20 @@ pub fn derive_runtime_policy(
 ) -> RuntimeSourcePolicy {
     let base = match source_kind {
         SourceKind::Script => RuntimeSourcePolicy::script(),
-        SourceKind::Module => RuntimeSourcePolicy::module(),
-        SourceKind::StdModule => RuntimeSourcePolicy::std_module(),
+        SourceKind::DefinitionSource => RuntimeSourcePolicy::module(),
+        SourceKind::StdDefinitionSource => RuntimeSourcePolicy::std_module(),
         SourceKind::ReplChunk => RuntimeSourcePolicy::repl_chunk(),
     };
 
     let policy = match source_kind {
         SourceKind::Script => ExitCodePolicy::Anywhere,
         SourceKind::ReplChunk => ExitCodePolicy::Forbidden,
-        SourceKind::Module | SourceKind::StdModule
+        SourceKind::DefinitionSource | SourceKind::StdDefinitionSource
             if compile_unit_kind == CompileUnitKind::Project =>
         {
             ExitCodePolicy::EntryOnly
         }
-        SourceKind::Module | SourceKind::StdModule => ExitCodePolicy::Forbidden,
+        SourceKind::DefinitionSource | SourceKind::StdDefinitionSource => ExitCodePolicy::Forbidden,
     };
 
     base.with_exit_code_policy(policy, entrypoint)
@@ -919,7 +919,7 @@ pub fn lower_module_source_ast(
                 shared_global_defs.push(stmt);
             }
             _ => {
-                // Defensive fallback. Parser policy should keep this unreachable for module sources.
+                // Defensive fallback. Parser policy should keep this unreachable for definition sources.
                 shared_global_defs.push(stmt);
             }
         }
@@ -1302,8 +1302,9 @@ fn stdlib_semantic_cache_key(module_sources: &ModuleSources) -> String {
 fn source_kind_key(kind: SourceKind) -> &'static str {
     match kind {
         SourceKind::Script => "script",
-        SourceKind::Module => "module",
-        SourceKind::StdModule => "std",
+        // Keep cache key strings stable for backward compatibility with existing cache entries.
+        SourceKind::DefinitionSource => "module",
+        SourceKind::StdDefinitionSource => "std",
         SourceKind::ReplChunk => "repl",
     }
 }
@@ -1330,7 +1331,7 @@ defmod B {
 }"#,
             spire::ParserContext::module(1, None),
         )
-        .expect("module source should parse");
+        .expect("definition source should parse");
 
         let lowered = lower_module_source_ast(ast, None);
         assert_eq!(lowered.len(), 3);
@@ -1387,7 +1388,7 @@ impl Result {
 }"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
-        .expect("std module source should parse");
+        .expect("standard definition source should parse");
 
         let lowered = lower_module_source_ast(ast, None);
         assert_eq!(lowered.len(), 1);
@@ -1412,7 +1413,7 @@ impl Int {
 }"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
-        .expect("std module source should parse");
+        .expect("standard definition source should parse");
 
         let lowered = lower_module_source_ast(ast, None);
         assert_eq!(lowered.len(), 2);
@@ -1438,7 +1439,7 @@ defmod AppConfig {
 }"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::module()),
         )
-        .expect("module source should parse");
+        .expect("definition source should parse");
 
         let lowered = lower_module_source_ast(ast, Some("AppConfig"));
         assert_eq!(lowered.len(), 1);
@@ -1457,7 +1458,7 @@ defmod AppConfig {
 }"#,
             spire::ParserContext::module(1, None),
         )
-        .expect("module source should parse");
+        .expect("definition source should parse");
 
         let lowered = lower_module_source_ast(ast, None);
         assert_eq!(lowered.len(), 1);
@@ -1480,7 +1481,7 @@ defmod AppConfig {
 }"#,
             spire::ParserContext::module(1, None),
         )
-        .expect("module source should parse");
+        .expect("definition source should parse");
 
         let lowered = lower_module_source_ast(ast, None);
         assert_eq!(lowered.len(), 1);
@@ -1504,7 +1505,7 @@ defmod AppConfig {
 }"#,
             spire::ParserContext::module(1, None),
         )
-        .expect("module source should parse");
+        .expect("definition source should parse");
 
         let lowered = lower_module_source_ast(ast, None);
         assert_eq!(lowered.len(), 1);
@@ -1531,7 +1532,7 @@ defmod AppConfig {
 deferror NoneError { "None Value." }"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
-        .expect("std module source should parse");
+        .expect("standard definition source should parse");
 
         let lowered = lower_module_source_ast(ast, Some("Bootstrap"));
         let stages = vec![lowered
@@ -1561,7 +1562,7 @@ deferror NoneError { "None Value." }"#,
 @builtin type Closure"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
-        .expect("std module source should parse");
+        .expect("standard definition source should parse");
 
         let lowered = lower_module_source_ast(ast, Some("SpecialTypes"));
         let stages = vec![lowered
@@ -1646,7 +1647,7 @@ deferror NoneError { "None Value." }"#,
 }"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
-        .expect("std module source should parse");
+        .expect("standard definition source should parse");
 
         let lowered = lower_module_source_ast(ast, Some("Bootstrap"));
         let stages = vec![lowered
@@ -1679,7 +1680,7 @@ deferror NoneError { "None Value." }"#,
 }"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
-        .expect("std module source should parse");
+        .expect("standard definition source should parse");
 
         let lowered = lower_module_source_ast(ast, Some("Bootstrap"));
         let stages = vec![lowered
@@ -1750,7 +1751,7 @@ defagent Counter {
 }"#,
             spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
         )
-        .expect("std module source should parse");
+        .expect("standard definition source should parse");
 
         let lowered = lower_module_source_ast(ast, Some("Bootstrap"));
         let stages = vec![lowered

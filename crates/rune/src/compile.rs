@@ -238,7 +238,7 @@ pub(crate) fn collect_default_script_compile_sources(
             file_path,
             source,
             format!(
-                "{}: failed to collect module sources: {}",
+                "{}: failed to collect definition sources: {}",
                 env.command_name(),
                 e
             ),
@@ -257,7 +257,7 @@ pub(crate) fn collect_default_script_compile_sources(
                 file_path,
                 source,
                 format!(
-                    "{}: failed to collect module sources: {}",
+                    "{}: failed to collect definition sources: {}",
                     env.command_name(),
                     e
                 ),
@@ -772,7 +772,7 @@ print(to_string(1))
         let err = module_source_collection_error_as_rune_error(
             "main.srt",
             "print(\"ok\")\n",
-            "run: failed to collect module sources: broken",
+            "run: failed to collect definition sources: broken",
         );
         match err {
             RuneError::Diagnostic { diagnostic, .. } => {
@@ -781,7 +781,7 @@ print(to_string(1))
                 assert!(diagnostic
                     .spec
                     .message
-                    .contains("failed to collect module sources"));
+                    .contains("failed to collect definition sources"));
             }
             other => panic!("expected diagnostic error, got {:?}", other),
         }
@@ -804,7 +804,7 @@ print(to_string(1))
             module_stages: vec![vec![StagedModule {
                 source_id: module_source_id,
                 module_path: "MahjongCli".into(),
-                source_kind: SourceKind::Module,
+                source_kind: SourceKind::DefinitionSource,
             }]],
         };
         let base = xldr::module_span_base_for_source(module_source_id);
@@ -839,7 +839,7 @@ print(to_string(1))
             module_stages: vec![vec![StagedModule {
                 source_id: module_source_id,
                 module_path: "MahjongCli".into(),
-                source_kind: SourceKind::Module,
+                source_kind: SourceKind::DefinitionSource,
             }]],
         };
         let span = Span { start: 50, end: 51 };
