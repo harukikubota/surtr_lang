@@ -1,0 +1,32 @@
+include "./schema/ordering_schema.srt"
+
+import Test;
+
+test("Ordering") {
+  describe("enum surface") {
+    it("renders through Show") {
+      assert_eq("Ordering::Less", to_string(Ordering::Less))
+    }
+  }
+
+  describe("integration with Compare") {
+    it("is returned by integer comparison") {
+      assert_eq((Ordering::Less, Ordering::Equal, Ordering::Greater), (
+        compare(1, 2),
+        compare(2, 2),
+        compare(3, 2),
+      ))
+    }
+
+    it("is returned by float and duration comparison") {
+      assert_eq((Ordering::Less, Ordering::Greater), (compare(1.5, 2.0), compare(30ms, 20ms)))
+    }
+
+    it("is returned by user-defined Compare impls") {
+      assert_eq(
+        Ordering::Less,
+        compare(Ranked::new(1), Ranked::new(2))
+      )
+    }
+  }
+}
