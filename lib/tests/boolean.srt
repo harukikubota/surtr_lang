@@ -1,0 +1,38 @@
+include "./schema/boolean_schema.srt"
+
+import Test;
+
+test("Boolean") {
+  describe("helpers") {
+    it("negates values and supports prefix bang") {
+      assert_eq((False, True, False), (Boolean::not(True), !False, !(1 < 2)))
+    }
+
+    it("supports xor eqv and implication") {
+      assert_eq((True, True, False), (
+        Boolean::xor(True, False),
+        Boolean::eqv(True, True),
+        Boolean::implies(True, False),
+      ))
+    }
+  }
+
+  describe("trait integrations") {
+    it("renders through Show and converts with From") {
+      assert_eq(("True", True, "False"), (to_string(True), from(True, Boolean), from(False, String)))
+    }
+
+    it("supports Eq and Neq helpers") {
+      assert_eq((True, True), (eq(True, True), neq(True, False)))
+    }
+
+    it("uses boolean helpers through user-defined records") {
+      gate = Gate::new(True, True)
+      denied = Gate::new(False, True)
+      assert_eq(
+        ("Gate(allow=True, audit=True)", True, False),
+        (to_string(gate), Gate::permits(gate), Gate::permits(denied)),
+      )
+    }
+  }
+}
