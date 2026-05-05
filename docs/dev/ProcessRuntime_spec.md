@@ -1,9 +1,7 @@
-# Surtr Process Runtime 仕様書（V2）
+# Surtr Process Runtime 仕様書
 
 > Surtr の process 定義、BootPlan、Supervisor、handler dependency、標準 I/O handler、
 > および VM に渡す正規化済み process runtime 契約の正本仕様。
-> `doc/surtr_process_runtime_spec_changes_v2.md` を正式仕様として昇格したもの。
-> `doc/surtr_process_design_summary_excluding_pubsub_v0.md` は参考メモであり、本書と矛盾する場合は本書を優先する。
 
 対象: Process Runtime Architecture 改修  
 除外: PubSub / distributed process / generic receive / user-facing generic send / yield / boundary layer 本実装

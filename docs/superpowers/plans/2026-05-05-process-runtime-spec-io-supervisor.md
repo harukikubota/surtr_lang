@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `doc/surtr_process_runtime_spec_changes_v2.md` the formal process runtime specification and implement the required Rust/PureSurtr I/O handler replacement plus user-visible supervisor/process surfaces.
+**Goal:** Make `docs/dev/ProcessRuntime_spec.md` the formal process runtime specification and implement the required Rust/PureSurtr I/O handler replacement plus user-visible supervisor/process surfaces.
 
 **Architecture:** Treat input2 as the new formal contract, then implement the smallest stable runtime schema that can carry Agent, GenServer, Supervisor, RuntimeSupervisor, DynamicSupervisor, Task, handler dependencies, and boot entries. Keep the current Agent lowering working while adding the new surface in staged slices, with runtime I/O handler replacement backed by Eldr-owned standard handler slots.
 
@@ -20,7 +20,7 @@
 - Modify: `docs/dev/Xldr_spec.md`
 
 - [ ] Copy input2 into `docs/dev/ProcessRuntime_spec.md`, preserving it as the formal spec.
-- [ ] Add a short status header explaining that v2 is formal, `doc/surtr_process_design_summary_excluding_pubsub_v0.md` is reference-only, and PubSub/distributed/generic receive/yield remain out of scope.
+- [ ] Add a short status header explaining that the process runtime spec is formal and that PubSub/distributed/generic receive/yield remain out of scope.
 - [ ] Update `EldrVM_spec.md` to point VM process semantics to the new spec and summarize standard I/O handler replacement.
 - [ ] Update `テスト方針.md` so `surtr test --all` and Test DSL I/O capture are defined in terms of handler-backed per-test buffers.
 - [ ] Update `Xldr_spec.md` only for load-order names if new standard modules are added.

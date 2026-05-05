@@ -3,7 +3,7 @@
 > 目的: V9 正本でまだ固定していない未解決事項だけを追跡する。
 > 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md`、開発者向け spec は `docs/dev/` 配下を正本とする。`doc/` は draft / input / tmp 置き場として扱う。
 
-最終更新日: 2026-04-30
+最終更新日: 2026-05-05
 
 ---
 
@@ -264,6 +264,40 @@
 - テスト方針:
   - literal 導入時は `unit/spire` / `unit/forge` / `spec` を同時に固定する。
   - runtime 表現変更時は insertion-order と display 契約を回帰基準にする。
+
+### OI-017 Worker API 最終形
+
+- 背景:
+  - process runtime の大枠は `docs/dev/ProcessRuntime_spec.md` に固定したが、worker の user-facing API はまだ足場段階である。
+  - 検討メモでは `spawn`, `DynamicSupervisor::spawn`, `adopt`, `handoff`, `join`, `await`, `on_down`, `Process::exit`, `Process::sleep` の整列が未決として残っている。
+- 未確定点:
+  - `Worker::spawn` と `DynamicSupervisor::spawn` の最終 surface をどう並べるか
+  - `adopt` / `handoff` を user-facing API として公開するか、runtime intrinsic に留めるか
+  - `join` / `await` / `on_down` を generic `receive` の代替となる目的別 API としてどう分けるか
+  - `Process::exit` と `Process::sleep` を worker lifecycle API とどう整合させるか
+- 受け入れ条件:
+  - worker 生成、所有権移譲、終了観測の surface が REPL / script / project で一貫する。
+  - current process ownership を default とする方針と `DynamicSupervisor` 配下運用の両方を矛盾なく説明できる。
+- テスト方針:
+  - `spec/process_runtime/**` に worker spawn / await / on_down / supervisor 経由 spawn の成立ケースを追加する。
+  - `compile_errors/process_runtime/**` に不正な ownership / lifecycle API 組み合わせを追加する。
+
+### OI-018 Process Runtime の最終同期項目
+
+- 背景:
+  - process runtime の基本契約は固まったが、ツーリング表示、boundary layer、VM 可視化、標準ライブラリ再編は最終段階で同期する想定のままである。
+  - 現行実装でも `:doc`, `:sig`, `:type`, `:info`, `:lens`、runtime stats、標準 `Process` / `Task` API は存在するが、process-aware な見せ方は未完成である。
+- 未確定点:
+  - REPL / tooling 表示で init route、process API、singleton slot、supervisor tree をどこまで露出するか
+  - domain error / runtime error / boot error を host outcome としてどう正規化するか
+  - `RuntimeProcessSpec`, singleton slot, process table, deadline queue, waiting table, hidden message dispatch, supervisor tree をどの debug surface で見せるか
+  - `Process`, `Task`, `File`, `Env`, `StdIn`, `StdOut`, `StdErr`, `Logger`, `DynamicSupervisor` の標準ライブラリ再編境界をどう切るか
+- 受け入れ条件:
+  - 開発者向け spec と REPL / CLI / dump / viewer の観測導線が矛盾しない。
+  - process runtime の host 境界と標準ライブラリ境界が `docs/dev/` と実装の両方で説明できる。
+- テスト方針:
+  - `unit/xldr` / `integration/repl` / `rune` integration で process-aware な表示と失敗形状を固定する。
+  - `integration/build_roundtrip` / `run_eldr` / viewer 系テストで runtime metadata の可視化形状を固定する。
 
 ---
 
