@@ -79,18 +79,21 @@ v1 の期待効果:
 - `rune` integration tests の同一 process bucket で効果が出る
 - disk invalidation を持たないため、実装リスクを小さく保てる
 
-### 3. v2: disk semantic cache
+### 3. v2: shared semantic prefix cache
 
-v2 は v1 snapshot を安定 DTO 化し、disk cache として保存する。
-cache file は次に固定する。
+v2 は v1 snapshot の上に、test-related compilation で共有する semantic prefix cache を載せる。
+最下層は process-local stdlib snapshot、最上層は最終 `.eldr` artifact cache とし、その中間に semantic prefix cache を置く。
+
+test 系の prefix cache directory は用途ごとに分ける。
 
 ```txt
-target/surtr-stdlib-cache/std.semantic
+target/test-fixture-cache/prefix
+target/surtr-test-cache/prefix
 ```
 
 cache key は次の値から作る。
 
-- semantic snapshot schema version
+- semantic prefix schema version
 - compiler version
 - `BUILTIN_METAS` content hash
 - `BUILTIN_TYPE_METAS` content hash
@@ -100,8 +103,11 @@ cache key は次の値から作る。
 cache miss、corrupt cache、version mismatch、hash mismatch は silent rebuild とする。
 cache が壊れていてもユーザー visible error にせず、通常の source compile へ戻す。
 
-disk snapshot は Rust private struct をそのまま永続化しない。
+disk prefix payload は Rust private struct をそのまま永続化しない。
 `serde` 可能な安定 DTO を定義し、復元時に `SigilSession` / `ScarSession` / doc metadata へ変換する。
+
+test-related compilation では final `.eldr` cache を引き続き top-layer artifact cache として使う。
+`SURTR_TEST_CACHE` が制御するのは integration support の `target/test-fixture-cache/eldr` だけであり、shared semantic prefix cache 自体は別レイヤとして扱う。
 
 ### 4. `.eldr` との関係
 
@@ -137,7 +143,7 @@ v2 以降では semantic snapshot を使い、この復元コストと「user-de
 
 1. snapshot DTO と schema version を定義する
 2. cache key を計算する helper を追加する
-3. `target/surtr-stdlib-cache/std.semantic` の read / validate / write を追加する
+3. test runner ごとの prefix cache directory の read / validate / write を追加する
 4. corrupt / old cache の fallback test を追加する
 5. REPL `.eldr` load で semantic cache を使うか検討する
 
@@ -164,7 +170,7 @@ cargo nextest run -p rune --test integration run_srt::spec_fixtures_bucket_0
 - default stdlib snapshot が通常 compile と同じ typed / bytecode 結果を生む
 - include module は snapshot 後段で通常通り参照できる
 - 追加 std module は default snapshot に吸収されない
-- stdlib source hash が変わると v2 cache が invalidation される
+- stdlib source hash が変わると v2 prefix cache が invalidation される
 - corrupt cache / old schema cache は silent rebuild される
 - `.eldr` decode / run は semantic snapshot の有無に影響されない
 
@@ -174,14 +180,16 @@ cargo nextest run -p rune --test integration run_srt::spec_fixtures_bucket_0
 - `lib/*.srt` と `BUILTIN_METAS` / `BUILTIN_TYPE_METAS` が標準 library 意味論の正本であり続ける
 - snapshot は派生物であり、正本 source と矛盾した場合は破棄して再構築する
 - v1 は process-local cache のみで完了可能にする
-- v2 disk cache は失敗しても通常 compile へ fallback する
+- v2 shared semantic prefix cache は失敗しても通常 compile へ fallback する
 
 ## v1 実装後メモ
 
 - 実装日: 2026-04-29
-- 実装範囲: process-local `OnceLock` snapshot のみ。disk cache は未実装。
+- 実装範囲: process-local `OnceLock` snapshot に加え、test-related compilation 向けの shared semantic prefix cache が導入された。
 - snapshot は default stdlib の parsed module stages / declaration index / Sigil resume state / Scar checkpoint / precompiled bytecode / doc metadata を保持する。
 - `rune::compile_source` は default stdlib stage を snapshot から復元し、追加 std module / include / user source だけを後段として resolve / typecheck / codegen する。
+- test-related compilation では shared semantic prefix cache が stdlib snapshot の上に載り、integration support は `target/test-fixture-cache/prefix`、`rune test` は `target/surtr-test-cache/prefix` を使う。
+- final `.eldr` caches は引き続き top-layer artifact cache として残る。`SURTR_TEST_CACHE` は integration support の `target/test-fixture-cache/eldr` だけを gate し、prefix cache には影響しない。
 - `.eldr` 形式は変更しない。precompiled stdlib bytecode の top-level `Halt` 手前へ user chunk top-level を合成し、関数 body と PC を再配置する。
 
 計測:

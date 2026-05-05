@@ -29,6 +29,18 @@ use sindr::policy::{CompileUnitKind, EntryPoint, ExitCodePolicy, RuntimeSourcePo
 
 pub const MODULE_SPAN_STRIDE: usize = 1_000_000;
 
+fn stable_hash_bytes(bytes: &[u8]) -> String {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = FNV_OFFSET;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{hash:016x}")
+}
+
 pub fn module_span_base_for_source(source_id: SourceId) -> usize {
     (source_id.0 as usize + 1) * MODULE_SPAN_STRIDE
 }
@@ -78,8 +90,7 @@ pub(crate) fn lowered_module_is_impl_owner(lowered: &LoweredModuleAst) -> bool {
             .iter()
             .find(|stmt| !matches!(stmt, spire::ast::Ast::Import(_, _, _))),
         Some(
-            spire::ast::Ast::ImplDef(_, _, _, _)
-                | spire::ast::Ast::TraitImplDef(_, _, _, _, _, _)
+            spire::ast::Ast::ImplDef(_, _, _, _) | spire::ast::Ast::TraitImplDef(_, _, _, _, _, _)
         )
     )
 }
@@ -863,7 +874,14 @@ pub fn lower_module_source_ast(
                     process_spec: attrs.process_spec,
                 });
             }
-            spire::ast::Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
+            spire::ast::Ast::TraitImplDef(
+                span,
+                trait_name,
+                trait_args,
+                target_ty,
+                methods,
+                attrs,
+            ) => {
                 let declared_span = span.clone();
                 let module_path = match &target_ty {
                     spire::ast::AstTy::Named(_, name)
@@ -1030,6 +1048,7 @@ pub struct DefaultStdlibSnapshot {
 }
 
 const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 3;
+const TEST_SEMANTIC_PREFIX_CACHE_SCHEMA: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedStdlibSemanticEnvelope {
@@ -1047,6 +1066,163 @@ struct CachedStdlibSemanticPayload {
     docs: Vec<DocEntry>,
     auto_import_modules: BTreeSet<String>,
     default_stage_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedTestSemanticPrefixEnvelope {
+    schema: u32,
+    key: String,
+    payload: CachedTestSemanticPrefixPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedTestSemanticPrefixPayload {
+    pub declaration_index: sigil::DeclarationIndex,
+    pub resolve_state: sigil::ResolveResumeState,
+    pub scar_checkpoint: scar::ScarCheckpoint,
+    pub bytecode: Bytecode,
+}
+
+pub fn cached_lib_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
+    static CACHE: OnceLock<Result<Vec<ModuleInput>, LoadError>> = OnceLock::new();
+    CACHE.get_or_init(collect_lib_module_inputs).clone()
+}
+
+pub fn cached_additional_default_std_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
+    static CACHE: OnceLock<Result<Vec<ModuleInput>, LoadError>> = OnceLock::new();
+    CACHE
+        .get_or_init(collect_additional_default_std_module_inputs)
+        .clone()
+}
+
+pub fn current_exe_fingerprint() -> Result<String, String> {
+    static FINGERPRINT: OnceLock<Result<String, String>> = OnceLock::new();
+    FINGERPRINT
+        .get_or_init(|| {
+            let exe =
+                env::current_exe().map_err(|e| format!("failed to locate current exe: {}", e))?;
+            let bytes =
+                fs::read(&exe).map_err(|e| format!("failed to read {}: {}", exe.display(), e))?;
+            Ok(stable_hash_bytes(&bytes))
+        })
+        .clone()
+}
+
+pub fn test_semantic_prefix_cache_key(
+    compile_unit_kind: CompileUnitKind,
+    compile_sources: &CompileSources,
+) -> Result<String, String> {
+    let fingerprint = current_exe_fingerprint()?;
+    Ok(test_semantic_prefix_cache_key_with_fingerprint(
+        &fingerprint,
+        compile_unit_kind,
+        compile_sources,
+    ))
+}
+
+pub fn test_semantic_prefix_cache_key_with_fingerprint(
+    current_exe_fingerprint: &str,
+    compile_unit_kind: CompileUnitKind,
+    compile_sources: &CompileSources,
+) -> String {
+    let user_file_name = compile_sources
+        .sources
+        .file_name(compile_sources.user_source_id)
+        .unwrap_or("<unknown>");
+    let user_source = compile_sources
+        .sources
+        .source(compile_sources.user_source_id)
+        .unwrap_or("");
+
+    let mut key = String::new();
+    key.push_str("surtr-test-semantic-prefix-v");
+    key.push_str(&TEST_SEMANTIC_PREFIX_CACHE_SCHEMA.to_string());
+    key.push('\x1f');
+    key.push_str(current_exe_fingerprint);
+    key.push('\x1f');
+    key.push_str(&STDLIB_SEMANTIC_CACHE_SCHEMA.to_string());
+    key.push('\x1f');
+    key.push_str(match compile_unit_kind {
+        CompileUnitKind::Script => "script",
+        CompileUnitKind::DefinitionCheck => "definition-check",
+        CompileUnitKind::Project => "project",
+        CompileUnitKind::Repl => "repl",
+    });
+    key.push('\x1f');
+    key.push_str(user_file_name);
+    key.push('\x1f');
+    key.push_str(&compile_sources.user_module_path);
+    key.push('\x1f');
+    key.push_str(&stable_hash_hex(user_source));
+
+    for stage in &compile_sources.module_stages {
+        key.push('|');
+        for module in stage {
+            let file_name = compile_sources
+                .sources
+                .file_name(module.source_id)
+                .unwrap_or("<unknown>");
+            let source = compile_sources
+                .sources
+                .source(module.source_id)
+                .unwrap_or("");
+            key.push_str(file_name);
+            key.push('\x1e');
+            key.push_str(&module.module_path);
+            key.push('\x1e');
+            key.push_str(source_kind_key(module.source_kind));
+            key.push('\x1e');
+            key.push_str(&stable_hash_hex(source));
+            key.push('\x1f');
+        }
+    }
+
+    stable_hash_hex(&key)
+}
+
+pub fn load_cached_test_semantic_prefix(
+    cache_path: &Path,
+    expected_key: &str,
+) -> Option<CachedTestSemanticPrefixPayload> {
+    let bytes = fs::read(cache_path).ok()?;
+    let envelope: CachedTestSemanticPrefixEnvelope = bincode::deserialize(&bytes).ok()?;
+    if envelope.schema != TEST_SEMANTIC_PREFIX_CACHE_SCHEMA || envelope.key != expected_key {
+        return None;
+    }
+    Some(envelope.payload)
+}
+
+pub fn store_cached_test_semantic_prefix(
+    cache_path: &Path,
+    key: &str,
+    payload: CachedTestSemanticPrefixPayload,
+) {
+    let Some(parent) = cache_path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let envelope = CachedTestSemanticPrefixEnvelope {
+        schema: TEST_SEMANTIC_PREFIX_CACHE_SCHEMA,
+        key: key.to_string(),
+        payload,
+    };
+    let Ok(bytes) = bincode::serialize(&envelope) else {
+        return;
+    };
+    let temp_path = cache_path.with_extension(format!("{}.tmp", std::process::id()));
+    if fs::write(&temp_path, bytes).is_err() {
+        let _ = fs::remove_file(&temp_path);
+        return;
+    }
+    if fs::rename(&temp_path, cache_path).is_err() {
+        if fs::copy(&temp_path, cache_path).is_err() {
+            let _ = fs::remove_file(&temp_path);
+            return;
+        }
+        let _ = fs::remove_file(&temp_path);
+    }
 }
 
 pub fn default_stdlib_semantic_snapshot() -> Result<Arc<DefaultStdlibSnapshot>, LoadError> {
@@ -1373,6 +1549,43 @@ defmod B {
         std::fs::write(&cache_path, b"not a semantic cache").expect("write corrupt cache");
 
         let loaded = load_cached_stdlib_semantic_snapshot(&cache_path, "expected-key");
+
+        assert!(loaded.is_none());
+        let _ = std::fs::remove_file(cache_path);
+    }
+
+    #[test]
+    fn test_semantic_prefix_cache_roundtrips_payload() {
+        let cache_path = std::env::temp_dir().join(format!(
+            "surtr-test-prefix-cache-{}.semantic",
+            std::process::id()
+        ));
+        let payload = CachedTestSemanticPrefixPayload {
+            declaration_index: sigil::DeclarationIndex::new(),
+            resolve_state: sigil::ResolveResumeState { next_local_id: 7 },
+            scar_checkpoint: scar::ScarSession::new().checkpoint(),
+            bytecode: forge::bytecode::Bytecode::default(),
+        };
+
+        store_cached_test_semantic_prefix(&cache_path, "expected-key", payload.clone());
+
+        let loaded = load_cached_test_semantic_prefix(&cache_path, "expected-key")
+            .expect("payload should roundtrip");
+
+        assert_eq!(loaded.resolve_state.next_local_id, 7);
+        assert_eq!(loaded.declaration_index, payload.declaration_index);
+        let _ = std::fs::remove_file(cache_path);
+    }
+
+    #[test]
+    fn test_semantic_prefix_cache_rejects_corrupt_file() {
+        let cache_path = std::env::temp_dir().join(format!(
+            "surtr-corrupt-test-prefix-cache-{}.semantic",
+            std::process::id()
+        ));
+        std::fs::write(&cache_path, b"not a semantic prefix cache").expect("write corrupt cache");
+
+        let loaded = load_cached_test_semantic_prefix(&cache_path, "expected-key");
 
         assert!(loaded.is_none());
         let _ = std::fs::remove_file(cache_path);

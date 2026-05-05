@@ -375,32 +375,14 @@ fn fixture_cache_root() -> PathBuf {
         .join("eldr")
 }
 
-fn stable_hash_bytes(bytes: &[u8]) -> String {
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
-
-    let mut hash = FNV_OFFSET;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    format!("{hash:016x}")
-}
-
 fn binary_fingerprint() -> Result<String, RuneError> {
-    let exe = env::current_exe()
-        .map_err(|e| RuneError::message(1, format!("test: failed to locate current exe: {}", e)))?;
-    let bytes = fs::read(&exe).map_err(|e| {
-        RuneError::message(
-            1,
-            format!("test: failed to read current exe {}: {}", exe.display(), e),
-        )
-    })?;
-    Ok(stable_hash_bytes(&bytes))
+    xldr::current_exe_fingerprint().map_err(|e| {
+        RuneError::message(1, format!("test: failed to fingerprint current exe: {}", e))
+    })
 }
 
 fn library_sources_fingerprint() -> Result<String, RuneError> {
-    let modules = xldr::collect_lib_module_inputs().map_err(|e| {
+    let modules = xldr::cached_lib_module_inputs().map_err(|e| {
         RuneError::message(1, format!("test: failed to collect lib sources: {}", e))
     })?;
     let mut payload = String::new();
@@ -430,7 +412,10 @@ fn cached_eldr_path(
     key.push('\x1f');
     key.push_str(&stable_hash_hex(&script.source));
     key.push('\x1f');
-    key.push_str(&include_sources_fingerprint(&script.file_path, include_directives)?);
+    key.push_str(&include_sources_fingerprint(
+        &script.file_path,
+        include_directives,
+    )?);
     Ok(fixture_cache_root().join(format!("{}.eldr", stable_hash_hex(&key))))
 }
 

@@ -75,7 +75,7 @@ fn default_module_sources() -> Result<ModuleSources, String> {
 
     DEFAULT_MODULE_SOURCES
         .get_or_init(|| {
-            let module_inputs = xldr::collect_additional_default_std_module_inputs()
+            let module_inputs = xldr::cached_additional_default_std_module_inputs()
                 .map_err(|e| format!("phase=load; message={}", e))?;
             xldr::collect_module_sources_with_module_stages(&[module_inputs])
                 .map_err(|e| format!("phase=load; message={}", e))
@@ -132,7 +132,8 @@ pub(super) fn parse_user_source(
     let user_ast = match mode {
         TestCompileMode::Script => spire::parse_with_context(
             source,
-            spire::ParserContext::script(0).with_rules(xldr::derive_parse_rules(SourceKind::Script)),
+            spire::ParserContext::script(0)
+                .with_rules(xldr::derive_parse_rules(SourceKind::Script)),
         ),
         TestCompileMode::Project => {
             spire::parse_with_context(source, spire::ParserContext::project(0))

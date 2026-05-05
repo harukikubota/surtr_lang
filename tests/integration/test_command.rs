@@ -320,19 +320,34 @@ test("Math") {
     );
 
     let cache_dir = temp.join("target/surtr-test-cache/eldr");
+    let prefix_dir = temp.join("target/surtr-test-cache/prefix");
     assert!(
         cache_dir.is_dir(),
         "cache dir should exist: {}",
         cache_dir.display()
     );
+    assert!(
+        prefix_dir.is_dir(),
+        "prefix cache dir should exist: {}",
+        prefix_dir.display()
+    );
     let first_files = fs::read_dir(&cache_dir)
         .expect("cache dir should be readable")
         .map(|entry| entry.expect("cache entry should load").path())
+        .collect::<Vec<_>>();
+    let first_prefix_files = fs::read_dir(&prefix_dir)
+        .expect("prefix cache dir should be readable")
+        .map(|entry| entry.expect("prefix cache entry should load").path())
         .collect::<Vec<_>>();
     assert_eq!(
         first_files.len(),
         1,
         "expected exactly one cached test artifact"
+    );
+    assert_eq!(
+        first_prefix_files.len(),
+        1,
+        "expected exactly one cached semantic prefix"
     );
 
     let second = run_surtr(&temp, &["test", "math"]);
@@ -347,14 +362,27 @@ test("Math") {
         .expect("cache dir should be readable")
         .map(|entry| entry.expect("cache entry should load").path())
         .collect::<Vec<_>>();
+    let second_prefix_files = fs::read_dir(&prefix_dir)
+        .expect("prefix cache dir should be readable")
+        .map(|entry| entry.expect("prefix cache entry should load").path())
+        .collect::<Vec<_>>();
     assert_eq!(
         second_files.len(),
         1,
         "cache should reuse the same artifact count"
     );
     assert_eq!(
+        second_prefix_files.len(),
+        1,
+        "prefix cache should reuse the same artifact count"
+    );
+    assert_eq!(
         first_files, second_files,
         "cache key should stay stable across identical runs"
+    );
+    assert_eq!(
+        first_prefix_files, second_prefix_files,
+        "prefix cache key should stay stable across identical runs"
     );
 
     let _ = fs::remove_dir_all(temp);

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -242,4 +243,45 @@ def helper() -> Unit { () }"#,
         err.contains("top-level definition cannot appear after top-level expression"),
         "unexpected error: {err}"
     );
+}
+
+#[test]
+fn compile_error_phase_primes_semantic_prefix_cache_without_final_bytecode_cache() {
+    let prefix_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-fixture-cache/prefix");
+    let _ = fs::remove_dir_all(&prefix_dir);
+
+    let module_sources = support::collect_module_sources(&[vec![xldr::ModuleInput {
+        file_name: "Helper.srt".into(),
+        source: "defmod Helper {\n  def id(x: Int) -> Int { x }\n}\n".into(),
+        module_path: "Helper".into(),
+    }]])
+    .expect("module sources should load");
+    let compile_sources = support::compose_script_sources(
+        "fixture.srt",
+        "import Helper;\nbad: Int = \"bad type\"\n",
+        module_sources,
+    );
+    let err = support::check_script_sources_phase(&compile_sources, "typecheck")
+        .expect_err("type mismatch should fail in the typecheck phase");
+
+    assert!(
+        err.contains("expected Int, got String"),
+        "unexpected compile failure: {err}"
+    );
+    assert!(
+        prefix_dir.is_dir(),
+        "semantic prefix cache dir should exist: {}",
+        prefix_dir.display()
+    );
+    let prefix_files = fs::read_dir(&prefix_dir)
+        .expect("prefix cache dir should be readable")
+        .map(|entry| entry.expect("prefix cache entry should load").path())
+        .collect::<Vec<_>>();
+    assert!(
+        !prefix_files.is_empty(),
+        "expected at least one cached semantic prefix after compile-error path"
+    );
+
+    let _ = fs::remove_dir_all(&prefix_dir);
 }
