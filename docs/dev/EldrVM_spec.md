@@ -32,6 +32,9 @@ Eldr は次を担わない。
 - `opcodes`, `constants`, `type_registry`, `error_templates`, `functions` を持つ
 - `source_map` は `Option<SourceMap>` で付与する
 - `docs` は `@doc` 由来の symbol metadata を保持する
+- `runtime_process_specs` と `runtime_boot_plan` は、compiler が
+  process surface と `supervisor_init` を正規化した VM 入力である。
+  surface 文法の正本は [ProcessRuntime spec](./ProcessRuntime_spec.md) とする。
 
 ### 2.2 `BytecodeChunk`
 
@@ -93,6 +96,31 @@ Eldr は次を担わない。
 - 同一モジュール（REPL セッションを含む）で、トップレベル定義名の重複は禁止する
 - 対象: `def` / `defstruct` / `defrecord` / `deferror` / `deftrait`
 - 本規約はファイル実行と REPL で同一に適用する
+
+### 3.7 Process Runtime 入力契約
+
+Eldr は `defagent`、`defgenserver`、`defsupervisor`、`supervisor_init` などの
+surface syntax を直接読まない。Compiler はこれらを immutable な
+`RuntimeProcessSpec` table と `RuntimeBootPlan` に正規化してから VM に渡す。
+
+VM 側の責務は次の通り。
+
+- `RuntimeProcessSpec` に基づく process instance / singleton slot の管理
+- `RuntimeBootPlan` に基づく standard singleton と user singleton の boot
+- `RuntimeHandlerSpec` に基づく Agent / GenServer / Supervisor / Task handler dispatch
+- Lazy init の retry、deadline、Ready 待ち caller の管理
+- `Process::sleep`、Task、call timeout の scheduler-backed waiting / wakeup
+- process-local handler dependency (`ctx.<slot>`) の runtime context 解決
+- `StdIn` / `StdOut` / `StdErr` builtin handler と handler override の適用
+
+`Process::sleep(duration)` は host thread 全体を block せず、呼び出した process だけを
+`Waiting(Timer)` に移す。Ready 前の process への call は Ready 待ちに入り、
+call timeout は Ready 待ち時間を含む。
+
+標準 I/O は VM 内部の stdout/stderr/stdin バッファへ直接触る契約ではなく、
+`StdIn` / `StdOut` / `StdErr` builtin handler への message call として扱う。
+Rust tests と Pure Surtr `Test` DSL は、この handler backend を差し替えて同じ
+buffer semantics を観測できなければならない。
 
 ---
 
@@ -198,6 +226,11 @@ Opcode は以下のカテゴリを持つ。
 - locals 範囲外アクセス
 - invalid tag
 - top-level `Return`
+- `RuntimeBootPlan` と singleton slot の不整合
+- process init timeout (`ProcessInitTimeout`)
+- process init が `Err` を返した場合の init failure (`ProcessInitFailed`)
+- handler init failure
+- handler write / read が VM 継続不能な形で失敗した場合
 
 `Value::Error` は正常なデータフローであり、`RuntimeError` と混同しない。
 
@@ -215,7 +248,7 @@ Opcode は以下のカテゴリを持つ。
 - `Result::recover` は compiler が lowering する special form であり、runtime builtin としては持たない
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
 - `HashMap` の runtime 表現は immutable map を基準にし、duplicate key 更新時は後勝ちで値を上書きする
-- process / task / duration 系の hidden builtin は owner module (`Process`, `Task`, `Duration`) 側の `@hidden @builtin ...` 宣言に対応し、`CallBuiltin` で実装する。VM は process table / PID capability / handler callable invocation を経由し、StateAgent の `set` は handler が `Ok(next_state)` を返した場合のみ VM 管理 state を更新し、`Err` の場合は旧 state を保持する。
+- process / task / duration 系の hidden builtin は owner module (`Process`, `Task`, `Duration`) 側の `@hidden @builtin ...` 宣言に対応し、`CallBuiltin` で実装する。VM は process table / PID capability / handler callable invocation を経由する。詳細な process runtime 契約は [ProcessRuntime spec](./ProcessRuntime_spec.md) を正とする。
 - `Process::sleep(duration)` は runtime builtin とし、`Duration` 値を受け取って `Result<Unit>` を返す。
 - task timeout は `@timeout(100ms)` literal から hidden builtin 呼び出しへ lower し、dynamic timeout は初期フェーズでは許可しない。
 - regex 系は Rust `regex` crate のラッパーとして builtin 実装し、regex 未サポート構文は `RegexCompileError` として返す
