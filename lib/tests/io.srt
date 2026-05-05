@@ -1,0 +1,25 @@
+import IO;
+import Test;
+
+test("IO") {
+  it("reads stdin pushed by the test handler") {
+    push_stdin("alpha\nbeta\n")
+    assert_ok_eq("alpha", IO::get_line(""))
+    assert_ok_eq("beta", IO::get_line(""))
+  }
+
+  it("reads stdin characters pushed by the test handler") {
+    push_stdin("xy")
+    assert_ok_eq("x", IO::get(""))
+    assert_ok_eq("y", IO::get(""))
+  }
+
+  it("captures stderr through the test handler") {
+    value: Result<Int> = Err(NoneError)
+    match value {
+      Ok(_) => (),
+      Err(err) => eprint(err),
+    }
+    assert_stderr_eq(["Error: NoneError: None Value."])
+  }
+}

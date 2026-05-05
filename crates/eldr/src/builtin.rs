@@ -226,6 +226,14 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_test_capture_stderr,
     },
     BuiltinImpl {
+        name: "__test_push_stdin",
+        func: builtin_test_push_stdin,
+    },
+    BuiltinImpl {
+        name: "__test_begin_it",
+        func: builtin_test_begin_it,
+    },
+    BuiltinImpl {
         name: "compile",
         func: builtin_regex_compile,
     },
@@ -1272,6 +1280,17 @@ fn builtin_test_capture_stderr(vm: &mut VM, _args: Vec<Value>) -> Result<Value, 
         .map(Value::Str)
         .collect::<Vec<_>>();
     Ok(Value::List(ListHandle::from_items(items)))
+}
+
+fn builtin_test_push_stdin(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let input = decode_string_arg(&args[0], "__test_push_stdin", "input")?;
+    vm.push_stdin_input(input);
+    Ok(Value::Unit)
+}
+
+fn builtin_test_begin_it(vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    vm.begin_test_case_io();
+    Ok(Value::Unit)
 }
 
 fn builtin_list_group_count(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

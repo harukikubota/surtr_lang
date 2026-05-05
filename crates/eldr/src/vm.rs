@@ -641,6 +641,16 @@ impl VM {
         self.stdin_input_cursor = 0;
     }
 
+    pub fn push_stdin_input(&mut self, input: impl AsRef<str>) {
+        match self.stdin_input.as_mut() {
+            Some(buffer) => buffer.push_str(input.as_ref()),
+            None => {
+                self.stdin_input = Some(input.as_ref().to_string());
+                self.stdin_input_cursor = 0;
+            }
+        }
+    }
+
     /// Access source text if attached.
     pub fn source(&self) -> Option<&str> {
         self.source.as_deref()
@@ -939,6 +949,12 @@ impl VM {
         }
         self.test_stdout_cursor = 0;
         self.test_stderr_cursor = 0;
+    }
+
+    pub(crate) fn begin_test_case_io(&mut self) {
+        self.reset_captured_io();
+        self.stdin_input = None;
+        self.stdin_input_cursor = 0;
     }
 
     pub(crate) fn emit_stdout_line(&mut self, line: String) {

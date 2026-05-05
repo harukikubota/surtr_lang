@@ -19,6 +19,8 @@ defmod Test {
   @builtin def __test_fail_current(detail: String) -> Unit
   @builtin def __test_capture_stdout() -> List<String>
   @builtin def __test_capture_stderr() -> List<String>
+  @builtin def __test_push_stdin(input: String) -> Unit
+  @builtin def __test_begin_it() -> Unit
 
   defp _fail(detail: String) -> Result<()> {
     Err(TestAssertionFailed(detail))
@@ -78,6 +80,7 @@ defmod Test {
   }
 
   def it(name: String, body: (-> Result<()>)) -> Result<()> {
+    __test_begin_it()
     match body() {
       Ok(_) => _finish_it_ok(name),
       Err(err) => _finish_it_err(name, err),
@@ -127,9 +130,8 @@ defmod Test {
   @doc """
   Drain captured stdout lines produced since the previous capture read.
   Current contract:
-  - buffer is per-VM (safe across parallel Rust test processes)
-  - drain cursor is shared in the same test script VM
-  - output left unread by a previous `it` can be observed by a later `it`
+  - buffer is backed by the VM standard stdout test handler
+  - the buffer is isolated for each `it`
   """
   def capture_stdout() -> List<String> {
     __test_capture_stdout()
@@ -137,10 +139,19 @@ defmod Test {
 
   @doc """
   Drain captured stderr lines produced since the previous capture read.
-  Shares the same drain semantics and script-local cursor model as `capture_stdout`.
+  Shares the same per-`it` handler buffer semantics as `capture_stdout`.
   """
   def capture_stderr() -> List<String> {
     __test_capture_stderr()
+  }
+
+  @doc """
+  Append text to the current test stdin buffer.
+  `IO::get` and `IO::get_line` read this buffer before host stdin.
+  """
+  def push_stdin(input: String) -> Result<()> {
+    __test_push_stdin(input)
+    Ok(())
   }
 
   @doc """

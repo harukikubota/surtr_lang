@@ -275,6 +275,16 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "() -> List<String>",
     },
     BuiltinMeta {
+        name: "__test_push_stdin",
+        arity: 1,
+        sig_str: "(String) -> Unit",
+    },
+    BuiltinMeta {
+        name: "__test_begin_it",
+        arity: 0,
+        sig_str: "() -> Unit",
+    },
+    BuiltinMeta {
         name: "compile",
         arity: 1,
         sig_str: "(String) -> Result<Regex, RegexCompileError>",
