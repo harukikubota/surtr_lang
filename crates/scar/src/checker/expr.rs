@@ -359,6 +359,9 @@ impl Checker {
             Resolved::Match(span, scrutinee, arms) => self.check_match(span, scrutinee, arms),
 
             Resolved::FieldAccess(span, expr, field) => self.check_field_access(span, expr, field),
+            Resolved::ProcessContextHandler(span, slot) => {
+                self.check_process_context_handler(span, slot)
+            }
 
             Resolved::Block(span, stmts) => {
                 let mut typed_stmts = Vec::new();
@@ -453,6 +456,9 @@ impl Checker {
             }
             (Resolved::FieldAccess(span, expr, field), expected_ty) => {
                 self.check_field_access_with_expected(span, expr, field, expected_ty)
+            }
+            (Resolved::ProcessContextHandler(span, slot), _) => {
+                self.check_process_context_handler(span, slot)
             }
             (_, Some(expected_ty)) => {
                 let typed = self.check_node(node)?;
@@ -886,6 +892,7 @@ impl Checker {
             | Resolved::RecoverKind(span, _, _, _)
             | Resolved::Match(span, _, _)
             | Resolved::FieldAccess(span, _, _)
+            | Resolved::ProcessContextHandler(span, _)
             | Resolved::StructLit(span, _, _)
             | Resolved::ConstructorCall(span, _, _)
             | Resolved::TypeRefWitness(span, _)
@@ -3917,7 +3924,45 @@ impl Checker {
     fn current_process_name(&self) -> Option<String> {
         let symbol = self.current_function_symbol.as_deref()?;
         let (module, handler) = symbol.rsplit_once("::")?;
-        matches!(handler, "__agent_get" | "__agent_set").then(|| module.to_string())
+        matches!(handler, "__agent_init" | "__agent_get" | "__agent_set")
+            .then(|| module.to_string())
+    }
+
+    fn check_process_context_handler(
+        &mut self,
+        span: &Span,
+        slot: &str,
+    ) -> Result<TypedNode, TypeError> {
+        let Some(process_name) = self.current_process_name() else {
+            return Err(TypeError {
+                message: "ctx.<slot> is only available inside process handlers".into(),
+                span: span.clone(),
+                hint: Some("Use ctx.<slot> inside @init/@get/@set/@call/@cast bodies.".into()),
+            });
+        };
+        let Some(capability) = self
+            .process_handler_dependencies
+            .get(&process_name)
+            .and_then(|slots| slots.get(slot))
+            .cloned()
+        else {
+            return Err(TypeError {
+                message: format!(
+                    "handler slot `{}` is not declared for process `{}`",
+                    slot, process_name
+                ),
+                span: span.clone(),
+                hint: Some("Declare the slot in meta.handlers before using ctx.<slot>.".into()),
+            });
+        };
+        Ok(TypedNode {
+            ty: Ty::Pid(capability),
+            span: span.clone(),
+            node: TypedInner::ProcessContextHandler {
+                process_name,
+                slot: slot.to_string(),
+            },
+        })
     }
 
     pub(super) fn check_closure(

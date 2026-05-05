@@ -1,0 +1,1 @@
+print(inspect(Logger::get("hidden\n")))

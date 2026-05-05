@@ -190,6 +190,12 @@ pub enum TypedInner {
     /// Field access — field name resolved to index by Scar
     FieldAccess(Box<TypedNode>, u32),
 
+    /// Process-local handler dependency access lowered from `ctx.<slot>`.
+    ProcessContextHandler {
+        process_name: String,
+        slot: String,
+    },
+
     /// Compile-time lens constant path value. Stage 1 does not allow
     /// first-class runtime transport of lens values.
     LensPath(TypedLensPath),

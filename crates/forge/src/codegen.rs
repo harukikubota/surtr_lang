@@ -2922,6 +2922,23 @@ impl Codegen {
                     _ => self.emit(Opcode::GetField { field_index: *idx }),
                 }
             }
+            TypedInner::ProcessContextHandler { process_name, slot } => {
+                let process_idx = self.add_constant(Constant::Str(process_name.clone()));
+                self.emit(Opcode::LoadConst(process_idx));
+                let slot_idx = self.add_constant(Constant::Str(slot.clone()));
+                self.emit(Opcode::LoadConst(slot_idx));
+                let builtin_id =
+                    Self::builtin_id("__process_context_handler").ok_or_else(|| CodegenError {
+                        message: "Unknown builtin: __process_context_handler".into(),
+                        span: node.span.clone(),
+                    })?;
+                self.emit(Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: 2,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
+            }
 
             TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => {
                 return Err(CodegenError {

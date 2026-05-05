@@ -65,6 +65,26 @@ fn namespaced_same_name_functions_resolve_by_qualified_path() {
 }
 
 #[test]
+fn process_context_out_handler_uses_default_target() {
+    let fixture = find_module_spec_case("process_context_out_handler_default");
+    let output = compile_case_output(&fixture.case).expect("fixture should run");
+    assert_eq!(
+        normalize_text(&output.join("\n")),
+        normalize_text(fixture.expected),
+    );
+}
+
+#[test]
+fn process_context_out_handler_uses_supervisor_override() {
+    let fixture = find_module_spec_case("process_context_out_handler_override");
+    let output = compile_case_output(&fixture.case).expect("fixture should run");
+    assert_eq!(
+        normalize_text(&output.join("\n")),
+        normalize_text(fixture.expected),
+    );
+}
+
+#[test]
 fn namespaced_duplicate_type_in_same_namespace_is_rejected() {
     let fixture = find_module_compile_error_case("namespaced_duplicate_type_same_namespace");
     let expected = parse_compile_error_expectation(&fixture.error_path);

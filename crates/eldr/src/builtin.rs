@@ -366,6 +366,14 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_process_self,
     },
     BuiltinImpl {
+        name: "__process_context_handler",
+        func: builtin_process_context_handler,
+    },
+    BuiltinImpl {
+        name: "__out_handler_write",
+        func: builtin_out_handler_write,
+    },
+    BuiltinImpl {
         name: "__process_sleep",
         func: builtin_process_sleep,
     },
@@ -603,6 +611,20 @@ fn builtin_process_self(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, Runtim
     Err(RuntimeError::new(
         "Process::self must be lowered to a process-owned PID binding before runtime",
     ))
+}
+
+fn builtin_process_context_handler(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let process_name = decode_string_arg(&args[0], "__process_context_handler", "process_name")?;
+    let slot = decode_string_arg(&args[1], "__process_context_handler", "slot")?;
+    vm.process_context_handler(process_name.to_string(), slot.to_string())
+}
+
+fn builtin_out_handler_write(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Pid(pid) = &args[0] else {
+        return Err(RuntimeError::new("__out_handler_write expects PID"));
+    };
+    let text = decode_string_arg(&args[1], "__out_handler_write", "text")?;
+    vm.out_handler_write(pid, text.to_string())
 }
 
 fn builtin_process_sleep(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

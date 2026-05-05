@@ -1,8 +1,8 @@
 use sindr::builtin::builtin_meta_by_id;
 use sindr::ir::{
     line_column_for_offset, Bytecode, BytecodeChunk, Constant, DocEntry, FunctionEntry, Opcode,
-    RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable,
-    SourceMap,
+    RuntimeHandlerTarget, RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec,
+    RuntimeProcessSpecTable, SourceMap,
 };
 use sindr::primitives::SurtrInt;
 use sindr::runtime::{
@@ -310,6 +310,7 @@ struct ProcessRuntime {
     specs_by_id: Vec<RuntimeProcessSpec>,
     spec_id_by_name: BTreeMap<String, u32>,
     specs_by_name: BTreeMap<String, RuntimeProcessSpec>,
+    handler_contexts: BTreeMap<String, BTreeMap<String, RuntimeHandlerTarget>>,
     singleton_by_name: BTreeMap<String, u64>,
     processes: BTreeMap<u64, ProcessInstance>,
     futures: BTreeMap<FutureId, FutureRecord>,
@@ -378,6 +379,47 @@ struct ProcessExecutionContext {
 enum ExecutionTarget {
     TopLevel,
     FrameDepth(usize),
+}
+
+fn handler_target_identity(target: &RuntimeHandlerTarget) -> String {
+    if target.named_args.is_empty() {
+        return target.name.clone();
+    }
+    let args = target
+        .named_args
+        .iter()
+        .map(|arg| format!("{}={}", arg.name, arg.value))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{}({})", target.name, args)
+}
+
+fn stable_handler_pid(identity: &str) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in identity.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn parse_handler_target_identity(identity: &str) -> (&str, Vec<(String, String)>) {
+    let Some(open) = identity.find('(') else {
+        return (identity, Vec::new());
+    };
+    let name = &identity[..open];
+    let args = identity
+        .strip_suffix(')')
+        .map(|s| &s[open + 1..])
+        .unwrap_or("")
+        .split(',')
+        .filter(|item| !item.is_empty())
+        .filter_map(|item| {
+            let (key, value) = item.split_once('=')?;
+            Some((key.to_string(), value.to_string()))
+        })
+        .collect();
+    (name, args)
 }
 
 #[allow(dead_code)]
@@ -1025,6 +1067,36 @@ impl VM {
         }
     }
 
+    pub(crate) fn emit_stderr_text(&mut self, text: String) -> io::Result<()> {
+        match self.io_policy.stderr {
+            IoMode::Passthrough => {
+                eprint!("{}", text);
+                io::stderr().flush()
+            }
+            IoMode::Capture => {
+                if let Some(buffer) = self.error_output.as_mut() {
+                    if !text.is_empty() {
+                        buffer.push(text);
+                    }
+                    Ok(())
+                } else {
+                    eprint!("{}", text);
+                    io::stderr().flush()
+                }
+            }
+            IoMode::Tee => {
+                eprint!("{}", text);
+                io::stderr().flush()?;
+                if let Some(buffer) = self.error_output.as_mut() {
+                    if !text.is_empty() {
+                        buffer.push(text);
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
     pub(crate) fn has_injected_stdin(&self) -> bool {
         self.stdin_input.is_some()
     }
@@ -1126,6 +1198,7 @@ impl VM {
             return Ok(());
         }
 
+        self.apply_runtime_handler_overrides()?;
         let limits = self.bytecode.runtime_boot_plan.runtime_limits.clone();
         let boot_specs = if self.bytecode.runtime_boot_plan.has_explicit_entries() {
             for entry in &self.bytecode.runtime_boot_plan.singletons {
@@ -1222,6 +1295,32 @@ impl VM {
         }
 
         self.process_runtime.root_supervisor.boot_completed = true;
+        Ok(())
+    }
+
+    fn apply_runtime_handler_overrides(&mut self) -> Result<(), RuntimeError> {
+        for override_entry in &self.bytecode.runtime_boot_plan.handler_overrides {
+            let Some(slots) = self
+                .process_runtime
+                .handler_contexts
+                .get_mut(&override_entry.target_process)
+            else {
+                return Err(self.boot_failure_error(
+                    &override_entry.target_process,
+                    "handler override target process is not defined or not visible",
+                ));
+            };
+            if !slots.contains_key(&override_entry.slot) {
+                return Err(self.boot_failure_error(
+                    &override_entry.target_process,
+                    "handler slot is not declared by the target process",
+                ));
+            }
+            slots.insert(
+                override_entry.slot.clone(),
+                override_entry.handler_target.clone(),
+            );
+        }
         Ok(())
     }
 
@@ -1357,6 +1456,82 @@ impl VM {
             id: pid,
             process_name,
         }))
+    }
+
+    pub(crate) fn process_context_handler(
+        &mut self,
+        process_name: String,
+        slot: String,
+    ) -> Result<Value, RuntimeError> {
+        let Some(target) = self
+            .process_runtime
+            .handler_contexts
+            .get(&process_name)
+            .and_then(|slots| slots.get(&slot))
+        else {
+            return Err(RuntimeError::new(format!(
+                "handler slot `{slot}` is not declared for process `{process_name}`"
+            )));
+        };
+        let identity = handler_target_identity(target);
+        Ok(Value::Pid(PidHandle {
+            id: stable_handler_pid(&identity),
+            process_name: identity,
+        }))
+    }
+
+    pub(crate) fn out_handler_write(
+        &mut self,
+        pid: &PidHandle,
+        text: String,
+    ) -> Result<Value, RuntimeError> {
+        match parse_handler_target_identity(&pid.process_name) {
+            ("StdOut", _) => {
+                self.emit_stdout_text(text).map_err(|err| {
+                    RuntimeError::new(format!("StdOut handler write failed: {err}"))
+                })?;
+                Ok(ok_vm_result(Value::Unit))
+            }
+            ("StdErr", _) => {
+                self.emit_stderr_text(text).map_err(|err| {
+                    RuntimeError::new(format!("StdErr handler write failed: {err}"))
+                })?;
+                Ok(ok_vm_result(Value::Unit))
+            }
+            ("NullOutHandler", _) => Ok(ok_vm_result(Value::Unit)),
+            ("FileOutHandler", args) => {
+                let Some(path) = args
+                    .iter()
+                    .find_map(|(name, value)| (name == "path").then_some(value))
+                else {
+                    return Ok(err_vm_result(self.process_error(
+                        "HandlerInitFailed",
+                        "FileOutHandler requires named argument `path`",
+                    )));
+                };
+                use std::fs::OpenOptions;
+                let mut file = match OpenOptions::new().create(true).append(true).open(path) {
+                    Ok(file) => file,
+                    Err(err) => {
+                        return Ok(err_vm_result(self.process_error(
+                            "HandlerInitFailed",
+                            &format!("FileOutHandler open failed: {err}"),
+                        )));
+                    }
+                };
+                if let Err(err) = file.write_all(text.as_bytes()) {
+                    return Ok(err_vm_result(self.process_error(
+                        "HandlerWriteFailed",
+                        &format!("FileOutHandler write failed: {err}"),
+                    )));
+                }
+                Ok(ok_vm_result(Value::Unit))
+            }
+            (other, _) => Ok(err_vm_result(self.process_error(
+                "UnknownHandlerTarget",
+                &format!("unknown OutHandler target `{other}`"),
+            ))),
+        }
     }
 
     pub(crate) fn process_spawn(
@@ -3659,6 +3834,18 @@ impl ProcessRuntime {
             .iter()
             .cloned()
             .map(|spec| (spec.process_name.clone(), spec))
+            .collect();
+        self.handler_contexts = spec_table
+            .entries
+            .iter()
+            .map(|spec| {
+                let slots = spec
+                    .handlers
+                    .iter()
+                    .map(|handler| (handler.slot.clone(), handler.default_target.clone()))
+                    .collect::<BTreeMap<_, _>>();
+                (spec.process_name.clone(), slots)
+            })
             .collect();
     }
 

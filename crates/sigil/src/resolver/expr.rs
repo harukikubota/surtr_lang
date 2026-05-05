@@ -1620,6 +1620,9 @@ impl Resolver {
             )),
 
             Ast::FieldAccess(span, expr, field) => {
+                if matches!(expr.as_ref(), Ast::Var(_, name) if name == "ctx") {
+                    return Ok(Resolved::ProcessContextHandler(span, field));
+                }
                 let resolved_expr = self.resolve_node(*expr)?;
                 Ok(Resolved::FieldAccess(span, Box::new(resolved_expr), field))
             }

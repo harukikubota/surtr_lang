@@ -583,6 +583,9 @@ impl Checker {
                 )?),
                 index,
             ),
+            TypedInner::ProcessContextHandler { process_name, slot } => {
+                TypedInner::ProcessContextHandler { process_name, slot }
+            }
             TypedInner::LensPath(path) => TypedInner::LensPath(path),
             TypedInner::PendingLensPath(path) => TypedInner::PendingLensPath(path),
             TypedInner::LensView {
@@ -1104,6 +1107,7 @@ impl Checker {
             TypedInner::FieldAccess(expr, _) => {
                 self.collect_bound_tyvars_in_node(expr, ordered, seen);
             }
+            TypedInner::ProcessContextHandler { .. } => {}
             TypedInner::LensPath(path) => {
                 self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
@@ -1372,6 +1376,9 @@ impl Checker {
                 Box::new(self.substitute_typed_node_with_mapping(*expr, mapping)),
                 index,
             ),
+            TypedInner::ProcessContextHandler { process_name, slot } => {
+                TypedInner::ProcessContextHandler { process_name, slot }
+            }
             TypedInner::LensPath(path) => TypedInner::LensPath(TypedLensPath {
                 source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                 focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
@@ -1869,6 +1876,7 @@ impl Checker {
                     })
             }
             TypedInner::FieldAccess(expr, _) => Self::typed_node_has_pending_trait_call(expr),
+            TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => false,
             TypedInner::LensView { source, .. } => Self::typed_node_has_pending_trait_call(source),
             TypedInner::LensSet { source, value, .. } => {

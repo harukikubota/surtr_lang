@@ -2865,6 +2865,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             | TypedInner::SafeBind(_, rhs)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
+            TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => false,
             TypedInner::LensView { source, .. } => has_pending_trait_call(source),
             TypedInner::LensSet { source, value, .. } => {

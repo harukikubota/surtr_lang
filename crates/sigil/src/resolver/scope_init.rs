@@ -36,6 +36,8 @@ fn is_global_runtime_builtin(name: &str) -> bool {
             | "__process_state"
             | "__process_store"
             | "__process_self"
+            | "__process_context_handler"
+            | "__out_handler_write"
             | "__process_sleep"
             | "__task_call"
             | "__task_async"

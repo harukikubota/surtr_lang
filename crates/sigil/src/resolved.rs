@@ -125,6 +125,9 @@ pub enum Resolved {
     /// Field access: `expr.field`
     FieldAccess(Span, Box<Resolved>, Symbol),
 
+    /// Process-local handler dependency access: `ctx.<slot>`.
+    ProcessContextHandler(Span, Symbol),
+
     /// Struct literal: `User { name: "alice", age, active: is_active }`
     StructLit(Span, ResolvedId, Vec<ResolvedStructLitField>),
 

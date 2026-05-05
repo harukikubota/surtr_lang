@@ -451,6 +451,16 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "() -> PID<$Process>",
     },
     BuiltinMeta {
+        name: "__process_context_handler",
+        arity: 2,
+        sig_str: "(String, String) -> PID<$Handler>",
+    },
+    BuiltinMeta {
+        name: "__out_handler_write",
+        arity: 2,
+        sig_str: "(PID<OutHandler>, String) -> Result<Unit>",
+    },
+    BuiltinMeta {
         name: "__process_sleep",
         arity: 1,
         sig_str: "(Duration) -> Result<Unit>",
@@ -713,6 +723,7 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
         Some("IO::get_line") => "io_get_line",
         Some("Process::self") => "__process_self",
         Some("Process::sleep") => "__process_sleep",
+        Some("OutHandler::write") => "__out_handler_write",
         Some("Task::call") => "__task_call",
         Some("Task::async") => "__task_async",
         Some("Task::launch") => "__task_launch",

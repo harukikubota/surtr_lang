@@ -616,6 +616,13 @@ impl Checker {
         }
 
         let current_symbol = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
+        if self.process_handler_return_exposes_context_pid(&current_symbol, &expected_ret) {
+            return Err(TypeError {
+                message: "handler dependency cannot be returned from process handlers".into(),
+                span: span.clone(),
+                hint: Some("Keep ctx.<slot> usage inside the process handler body.".into()),
+            });
+        }
         let is_entrypoint = self
             .runtime_policy
             .normalized_entrypoint

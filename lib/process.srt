@@ -26,6 +26,9 @@ defmod Process {
   @hidden
   @builtin def __process_self() -> PID<$Process>
 
+  @hidden
+  @builtin def __process_context_handler(process_name: String, slot: String) -> PID<$Handler>
+
   @doc """
   Sleep the current execution for the given duration.
 
@@ -37,6 +40,16 @@ defmod Process {
 
   @hidden
   @builtin def __process_sleep(duration: Duration) -> Result<Unit>
+}
+
+defmod OutHandler {
+  @doc """
+  Write text through a process-local output handler dependency.
+  """
+  @builtin def write(pid: PID<OutHandler>, text: String) -> Result<Unit>
+
+  @hidden
+  @builtin def __out_handler_write(pid: PID<OutHandler>, text: String) -> Result<Unit>
 }
 
 defmod Task {

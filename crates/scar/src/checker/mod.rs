@@ -456,10 +456,17 @@ pub fn typecheck_staged_program_with_context(
     program: sigil::ResolvedStagedProgram,
     context: TypecheckContext,
 ) -> Result<TypedProgram, TypeError> {
-    let nodes = typecheck_with_context(program.resolved, context)?;
+    let process_specs = program
+        .process_specs
+        .into_iter()
+        .map(Into::into)
+        .collect::<Vec<TypedProcessSpec>>();
+    let mut checker = Checker::new(context);
+    checker.set_process_handler_dependencies(&process_specs);
+    let nodes = checker.check_program(program.resolved)?;
     Ok(TypedProgram {
         nodes,
-        process_specs: program.process_specs.into_iter().map(Into::into).collect(),
+        process_specs,
         boot_plan: program.boot_plan,
     })
 }
@@ -903,10 +910,57 @@ impl ScarSession {
         program: sigil::ResolvedStagedProgram,
         context: TypecheckContext,
     ) -> Result<TypedProgram, TypeError> {
-        let nodes = self.typecheck_with_context(program.resolved, context)?;
+        let process_specs = program
+            .process_specs
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<TypedProcessSpec>>();
+        let mut checker = Checker::with_env_and_params(
+            self.env.clone(),
+            self.consts.clone(),
+            self.lens_bindings.clone(),
+            self.user_func_params.clone(),
+            self.impl_method_uids.clone(),
+            self.function_ids_by_name.clone(),
+            self.specializable_defs.clone(),
+            self.traits.clone(),
+            self.trait_impls.clone(),
+            self.trait_impl_index_by_base_trait.clone(),
+            self.trait_methods_by_qualified_name.clone(),
+            self.tyvar_bounds.clone(),
+            context,
+        );
+        checker.set_process_handler_dependencies(&process_specs);
+        let nodes = checker.check_program(program.resolved)?;
+        let CheckerParts {
+            env,
+            consts,
+            lens_bindings,
+            user_func_params,
+            impl_method_uids,
+            function_ids_by_name,
+            specializable_defs,
+            traits,
+            trait_impls,
+            trait_impl_index_by_base_trait,
+            trait_methods_by_qualified_name,
+            tyvar_bounds,
+        } = checker.into_parts();
+        self.env = env;
+        self.consts = consts;
+        self.lens_bindings = lens_bindings;
+        self.user_func_params = user_func_params;
+        self.impl_method_uids = impl_method_uids;
+        self.function_ids_by_name = function_ids_by_name;
+        self.specializable_defs = specializable_defs;
+        self.traits = traits;
+        self.trait_impls = trait_impls;
+        self.trait_impl_index_by_base_trait = trait_impl_index_by_base_trait;
+        self.trait_methods_by_qualified_name = trait_methods_by_qualified_name;
+        self.tyvar_bounds = tyvar_bounds;
         Ok(TypedProgram {
             nodes,
-            process_specs: program.process_specs.into_iter().map(Into::into).collect(),
+            process_specs,
             boot_plan: program.boot_plan,
         })
     }
@@ -1270,6 +1324,7 @@ impl ScarSession {
             | TypedInner::Capture(value, _) => {
                 Self::rewrite_fun_indices_in_node(value, rewrites);
             }
+            TypedInner::ProcessContextHandler { .. } => {}
             TypedInner::LensPath(path) => Self::rewrite_fun_indices_in_lens_path(path, rewrites),
             TypedInner::PendingLensPath(path) => {
                 Self::rewrite_fun_indices_in_pending_lens_path(path, rewrites);
@@ -1486,6 +1541,7 @@ struct Checker {
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     profiler: TypecheckProfiler,
+    process_handler_dependencies: HashMap<String, HashMap<String, String>>,
 }
 
 impl Checker {
@@ -1514,6 +1570,7 @@ impl Checker {
             trait_impl_index_by_base_trait: HashMap::new(),
             trait_methods_by_qualified_name: HashMap::new(),
             profiler: TypecheckProfiler::new_from_env(),
+            process_handler_dependencies: HashMap::new(),
         }
     }
 
@@ -1556,6 +1613,7 @@ impl Checker {
             trait_impl_index_by_base_trait,
             trait_methods_by_qualified_name,
             profiler: TypecheckProfiler::new_from_env(),
+            process_handler_dependencies: HashMap::new(),
         }
     }
 
@@ -1588,10 +1646,85 @@ impl Checker {
         checker.lens_bindings = self.lens_bindings.clone();
         checker.substitutions = self.substitutions.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
+        checker.process_handler_dependencies = self.process_handler_dependencies.clone();
         checker.profiler = self.profiler.clone();
         self.profiler
             .finish(ProfileEvent::ChildCheckerSpawn, profile);
         checker
+    }
+
+    fn set_process_handler_dependencies(&mut self, process_specs: &[TypedProcessSpec]) {
+        self.process_handler_dependencies = process_specs
+            .iter()
+            .map(|spec| {
+                let slots = spec
+                    .spec
+                    .handlers
+                    .iter()
+                    .map(|handler| (handler.slot.clone(), handler.capability.clone()))
+                    .collect::<HashMap<_, _>>();
+                (spec.process_name.clone(), slots)
+            })
+            .collect();
+    }
+
+    fn process_handler_return_exposes_context_pid(&self, symbol: &str, ty: &Ty) -> bool {
+        let Some((process_name, handler)) = symbol.rsplit_once("::") else {
+            return false;
+        };
+        if !matches!(handler, "__agent_init" | "__agent_get" | "__agent_set") {
+            return false;
+        }
+        let Some(slots) = self.process_handler_dependencies.get(process_name) else {
+            return false;
+        };
+        self.ty_contains_handler_capability_pid(ty, slots)
+    }
+
+    fn ty_contains_handler_capability_pid(&self, ty: &Ty, slots: &HashMap<String, String>) -> bool {
+        match self.resolve_ty(ty) {
+            Ty::Pid(name) => slots.values().any(|capability| capability == &name),
+            Ty::Result(ok, err) => {
+                self.ty_contains_handler_capability_pid(&ok, slots)
+                    || self.ty_contains_handler_capability_pid(&err, slots)
+            }
+            Ty::List(inner) | Ty::Lazy(inner) | Ty::TypeRef(inner) => {
+                self.ty_contains_handler_capability_pid(&inner, slots)
+            }
+            Ty::Tuple(items) => items
+                .iter()
+                .any(|item| self.ty_contains_handler_capability_pid(item, slots)),
+            Ty::Func(params, ret) => {
+                params
+                    .iter()
+                    .any(|param| self.ty_contains_handler_capability_pid(param, slots))
+                    || self.ty_contains_handler_capability_pid(&ret, slots)
+            }
+            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
+                .iter()
+                .any(|(_, field_ty)| self.ty_contains_handler_capability_pid(field_ty, slots)),
+            Ty::Enum(_, args) => args
+                .iter()
+                .any(|arg| self.ty_contains_handler_capability_pid(arg, slots)),
+            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
+                params
+                    .iter()
+                    .any(|param| self.ty_contains_handler_capability_pid(param, slots))
+                    || self.ty_contains_handler_capability_pid(&ret, slots)
+            }
+            Ty::Var(_)
+            | Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Error
+            | Ty::Hole => false,
+            Ty::Lens(source, focus) => {
+                self.ty_contains_handler_capability_pid(&source, slots)
+                    || self.ty_contains_handler_capability_pid(&focus, slots)
+            }
+        }
     }
 
     fn absorb_child_progress(&mut self, child: &Checker) {

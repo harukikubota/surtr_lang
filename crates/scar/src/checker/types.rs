@@ -2121,6 +2121,9 @@ impl Checker {
             TypedInner::FieldAccess(expr, idx) => {
                 TypedInner::FieldAccess(Box::new(self.resolve_typed_node(*expr)), idx)
             }
+            TypedInner::ProcessContextHandler { process_name, slot } => {
+                TypedInner::ProcessContextHandler { process_name, slot }
+            }
             TypedInner::LensPath(path) => TypedInner::LensPath(self.resolve_typed_lens_path(path)),
             TypedInner::PendingLensPath(path) => TypedInner::PendingLensPath(PendingLensPath {
                 source_ty_hint: path.source_ty_hint.map(|ty| self.resolve_ty(&ty)),
