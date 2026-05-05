@@ -45,7 +45,7 @@ pub enum ProcessInstance {
 }
 
 /// Compiler-managed metadata carried by lowered `defagent` modules.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessSpec {
     pub process_name: Symbol,
     pub kind: ProcessKind,
@@ -53,6 +53,21 @@ pub struct ProcessSpec {
     pub boot: bool,
     pub registry: bool,
     pub lazy: bool,
+    pub handlers: Vec<ProcessHandlerDependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessHandlerDependency {
+    pub slot: Symbol,
+    pub capability: Symbol,
+    pub default_target: ProcessHandlerTarget,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessHandlerTarget {
+    pub name: Symbol,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -4114,6 +4114,43 @@ defagent Counter {
 }
 
 #[test]
+fn test_defagent_meta_handlers_are_preserved_in_process_spec() {
+    let ast = parse_with_context(
+        r#"defagent Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    handlers {
+      out: OutHandler = StdOut
+    }
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("defagent should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, _, _, attrs) => {
+            let process_spec = attrs
+                .process_spec
+                .as_ref()
+                .expect("defagent lowered module should keep process spec");
+            assert_eq!(process_spec.handlers.len(), 1);
+            assert_eq!(process_spec.handlers[0].slot, "out");
+            assert_eq!(process_spec.handlers[0].capability, "OutHandler");
+            assert_eq!(process_spec.handlers[0].default_target.name, "StdOut");
+        }
+        other => panic!("Expected lowered Defmod, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
     let ast = parse_with_context(
         r#"defagent Worker {

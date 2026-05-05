@@ -3878,6 +3878,7 @@ mod tests {
                 init_fun_idx: 0,
                 get_fun_idx: 1,
                 set_fun_idx: None,
+                handlers: Vec::new(),
             }],
         };
         bytecode
@@ -3898,6 +3899,7 @@ mod tests {
                 init_fun_idx: 0,
                 get_fun_idx: 1,
                 set_fun_idx: Some(2),
+                handlers: Vec::new(),
             }],
         };
 
@@ -3936,6 +3938,7 @@ mod tests {
                 init_fun_idx: 0,
                 get_fun_idx: 1,
                 set_fun_idx: Some(2),
+                handlers: Vec::new(),
             }],
         };
 
@@ -3975,6 +3978,7 @@ mod tests {
                     init_fun_idx: 0,
                     get_fun_idx: 1,
                     set_fun_idx: Some(2),
+                    handlers: Vec::new(),
                 },
                 RuntimeProcessSpec {
                     process_name: "Clock".into(),
@@ -3987,6 +3991,7 @@ mod tests {
                     init_fun_idx: 3,
                     get_fun_idx: 4,
                     set_fun_idx: Some(5),
+                    handlers: Vec::new(),
                 },
             ],
         };
@@ -4102,6 +4107,7 @@ mod tests {
                 init_fun_idx: 0,
                 get_fun_idx: 1,
                 set_fun_idx: Some(2),
+                handlers: Vec::new(),
             }],
         };
         let mut vm = VM::new(bytecode);
@@ -4149,6 +4155,7 @@ mod tests {
                 init_fun_idx: 0,
                 get_fun_idx: 1,
                 set_fun_idx: Some(2),
+                handlers: Vec::new(),
             }],
         };
         let mut vm = VM::new(bytecode);
@@ -4491,6 +4498,7 @@ mod tests {
                     init_fun_idx: 0,
                     get_fun_idx: 2,
                     set_fun_idx: None,
+                    handlers: Vec::new(),
                 },
                 RuntimeProcessSpec {
                     process_name: "Broken".into(),
@@ -4503,6 +4511,7 @@ mod tests {
                     init_fun_idx: 1,
                     get_fun_idx: 3,
                     set_fun_idx: None,
+                    handlers: Vec::new(),
                 },
             ],
         };
@@ -5725,6 +5734,7 @@ mod tests {
                 init_fun_idx: 0,
                 get_fun_idx: 0,
                 set_fun_idx: None,
+                handlers: Vec::new(),
             })
             .collect::<Vec<_>>();
         specs.push(RuntimeProcessSpec {
@@ -5738,6 +5748,7 @@ mod tests {
             init_fun_idx: 1,
             get_fun_idx: 1,
             set_fun_idx: None,
+            handlers: Vec::new(),
         });
         bytecode.runtime_process_specs = RuntimeProcessSpecTable { entries: specs };
 

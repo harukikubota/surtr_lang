@@ -6,8 +6,8 @@ use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_id_by_name;
 use sindr::ir::{
     BootEntrySource, CompileInfo, DbgArgTemplate, DbgTemplate, DocEntry, FunctionFlags,
-    RuntimeBootPlan, RuntimeHandlerArg, RuntimeHandlerOverride, RuntimeHandlerTarget,
-    SingletonBootEntry,
+    RuntimeBootPlan, RuntimeHandlerArg, RuntimeHandlerDependency, RuntimeHandlerOverride,
+    RuntimeHandlerTarget, SingletonBootEntry,
 };
 use sindr::primitives::int;
 use spire::ast::{BinOp, Lit, ProcessInstance, Span, SupervisorInitSpec, Visibility};
@@ -240,6 +240,17 @@ fn build_runtime_boot_plan(
             source: BootEntrySource::ExplicitConfig,
         });
         for handler in &singleton.handlers {
+            if !spec
+                .spec
+                .handlers
+                .iter()
+                .any(|dependency| dependency.slot == handler.slot)
+            {
+                return Err(CodegenError {
+                    message: "handler slot is not declared by the target process".into(),
+                    span: handler.span.clone(),
+                });
+            }
             runtime.handler_overrides.push(RuntimeHandlerOverride {
                 target_process: singleton.process_name.clone(),
                 slot: handler.slot.clone(),
@@ -375,6 +386,19 @@ fn build_runtime_process_specs(
             init_fun_idx,
             get_fun_idx,
             set_fun_idx,
+            handlers: spec
+                .spec
+                .handlers
+                .iter()
+                .map(|handler| RuntimeHandlerDependency {
+                    slot: handler.slot.clone(),
+                    capability: handler.capability.clone(),
+                    default_target: RuntimeHandlerTarget {
+                        name: handler.default_target.name.clone(),
+                        named_args: Vec::new(),
+                    },
+                })
+                .collect(),
         });
     }
 

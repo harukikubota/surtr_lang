@@ -19,13 +19,14 @@ enum AgentInstance {
     Worker,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct AgentMeta {
     kind: AgentKind,
     instance: AgentInstance,
     boot: bool,
     registry: bool,
     lazy: bool,
+    handlers: Vec<ProcessHandlerDependency>,
 }
 
 impl AgentKind {
@@ -52,6 +53,7 @@ impl AgentMeta {
             boot: self.boot,
             registry: self.registry,
             lazy: self.lazy,
+            handlers: self.handlers,
         }
     }
 }
@@ -69,10 +71,11 @@ enum InitPolicy {
     Lazy,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct ProcessMeta {
     instance: AgentInstance,
     init_policy: InitPolicy,
+    handlers: Vec<ProcessHandlerDependency>,
 }
 
 #[derive(Debug, Clone)]
@@ -2857,6 +2860,7 @@ impl Parser<'_> {
             boot: false,
             registry: process_meta.instance == AgentInstance::Singleton,
             lazy: false,
+            handlers: process_meta.handlers,
         });
         body.insert(
             0,
@@ -2903,6 +2907,7 @@ impl Parser<'_> {
 
         let mut instance = None;
         let mut init_policy = None;
+        let mut handlers = Vec::new();
 
         while !matches!(self.peek(), Token::RBrace) {
             if matches!(self.peek(), Token::Eof) {
@@ -2942,7 +2947,7 @@ impl Parser<'_> {
                     });
                 }
                 "handlers" => {
-                    self.skip_balanced_brace_block()?;
+                    handlers = self.parse_process_meta_handlers()?;
                 }
                 _ => {
                     return Err(ParseError::syntax(
@@ -2963,30 +2968,53 @@ impl Parser<'_> {
             instance: instance
                 .ok_or_else(|| ParseError::syntax("meta requires instance", self.peek_span()))?,
             init_policy: init_policy.unwrap_or(InitPolicy::Eager),
+            handlers,
         })
     }
 
-    fn skip_balanced_brace_block(&mut self) -> Result<(), ParseError> {
-        self.skip_newlines();
+    fn parse_process_meta_handlers(&mut self) -> Result<Vec<ProcessHandlerDependency>, ParseError> {
         self.expect(&Token::LBrace)?;
-        let mut depth = 1usize;
-        while depth > 0 {
-            match self.peek() {
-                Token::LBrace => {
-                    self.advance();
-                    depth += 1;
-                }
-                Token::RBrace => {
-                    self.advance();
-                    depth -= 1;
-                }
-                Token::Eof => return Err(ParseError::incomplete("}", self.peek_span())),
-                _ => {
-                    self.advance();
-                }
+        self.skip_newlines();
+        let mut handlers = Vec::new();
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let (slot, slot_span) = self.expect_ident()?;
+            self.skip_newlines();
+            self.expect(&Token::Colon)?;
+            self.skip_newlines();
+            let (capability, _) = self.expect_ident()?;
+            self.skip_newlines();
+            self.expect(&Token::Bind)?;
+            self.skip_newlines();
+            let (target_name, target_span) = self.expect_ident()?;
+            if handlers
+                .iter()
+                .any(|entry: &ProcessHandlerDependency| entry.slot == slot)
+            {
+                return Err(ParseError::syntax("handler slot is duplicated", slot_span));
+            }
+            handlers.push(ProcessHandlerDependency {
+                slot,
+                capability,
+                default_target: ProcessHandlerTarget {
+                    name: target_name,
+                    span: target_span.clone(),
+                },
+                span: Span {
+                    start: slot_span.start,
+                    end: target_span.end,
+                },
+            });
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
             }
         }
-        Ok(())
+        self.expect(&Token::RBrace)?;
+        Ok(handlers)
     }
 
     fn parse_defagent(
@@ -3097,6 +3125,7 @@ impl Parser<'_> {
                 boot: false,
                 registry: process_meta.instance == AgentInstance::Singleton,
                 lazy: process_meta.init_policy == InitPolicy::Lazy,
+                handlers: process_meta.handlers,
             }
         });
 
@@ -3271,6 +3300,7 @@ impl Parser<'_> {
             boot: false,
             registry: process_meta.instance == AgentInstance::Singleton,
             lazy: process_meta.init_policy == InitPolicy::Lazy,
+            handlers: process_meta.handlers,
         });
         Ok(Ast::Defmod(span, name, body, attrs))
     }

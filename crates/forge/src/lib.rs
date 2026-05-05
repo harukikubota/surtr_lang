@@ -797,6 +797,9 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
   meta {
     instance: Singleton
     init_policy: Eager
+    handlers {
+      out: OutHandler = StdOut
+    }
   }
 
   @init
@@ -822,6 +825,10 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
         assert!(!spec.boot);
         assert!(spec.registry);
         assert_eq!(spec.set_fun_idx.is_some(), true);
+        assert_eq!(spec.handlers.len(), 1);
+        assert_eq!(spec.handlers[0].slot, "out");
+        assert_eq!(spec.handlers[0].capability, "OutHandler");
+        assert_eq!(spec.handlers[0].default_target.name, "StdOut");
     }
 
     #[test]
@@ -831,6 +838,9 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
   meta {
     instance: Singleton
     init_policy: Eager
+    handlers {
+      out: OutHandler = StdOut
+    }
   }
 
   @init
@@ -862,5 +872,39 @@ supervisor_init {
         assert_eq!(handler.handler_target.name, "FileOutHandler");
         assert_eq!(handler.handler_target.named_args[0].name, "path");
         assert_eq!(handler.handler_target.named_args[0].value, "./logs/app.log");
+    }
+
+    #[test]
+    fn codegen_rejects_boot_plan_handler_override_for_unknown_slot() {
+        let typed = typed_module_program_with_builtin_prelude(
+            r#"defagent Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    handlers {
+      out: OutHandler = StdOut
+    }
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, label: String) -> Result<String> { Ok(label) }
+}
+
+supervisor_init {
+  singleton Logger {
+    handlers {
+      missing: NullOutHandler
+    }
+  }
+}"#,
+        );
+
+        let err = codegen_typed_program(typed).expect_err("unknown handler slot should fail");
+        assert!(err
+            .message
+            .contains("handler slot is not declared by the target process"));
     }
 }
