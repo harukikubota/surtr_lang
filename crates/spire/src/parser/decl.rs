@@ -16,7 +16,7 @@ enum AgentKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentInstance {
     Singleton,
-    Multi,
+    Worker,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,10 +30,7 @@ struct AgentMeta {
 
 impl AgentKind {
     fn into_process_kind(self) -> ProcessKind {
-        match self {
-            AgentKind::ReadOnly => ProcessKind::ReadOnlyAgent,
-            AgentKind::State => ProcessKind::StateAgent,
-        }
+        ProcessKind::Agent
     }
 }
 
@@ -41,7 +38,7 @@ impl AgentInstance {
     fn into_process_instance(self) -> ProcessInstance {
         match self {
             AgentInstance::Singleton => ProcessInstance::Singleton,
-            AgentInstance::Multi => ProcessInstance::Multi,
+            AgentInstance::Worker => ProcessInstance::Worker,
         }
     }
 }
@@ -64,6 +61,18 @@ enum AgentHandlerKind {
     Init,
     Get,
     Set,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitPolicy {
+    Eager,
+    Lazy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProcessMeta {
+    instance: AgentInstance,
+    init_policy: InitPolicy,
 }
 
 #[derive(Debug, Clone)]
@@ -311,6 +320,16 @@ fn def_ret_ty(def: &Ast) -> Result<Option<AstTy>, ParseError> {
     }
 }
 
+fn def_name(def: &Ast) -> Result<String, ParseError> {
+    match def {
+        Ast::Def(_, name, _, _, _, _, _) => Ok(name.clone()),
+        other => Err(ParseError::syntax(
+            "process lowering expected a function definition",
+            other.span().clone(),
+        )),
+    }
+}
+
 fn def_type_params(def: &Ast) -> Result<Vec<TypeParam>, ParseError> {
     match def {
         Ast::Def(_, _, type_params, _, _, _, _) => Ok(type_params.clone()),
@@ -362,6 +381,29 @@ fn result_unit_ty(span: &Span) -> AstTy {
         span.clone(),
         "Result".to_string(),
         vec![AstTy::Named(span.clone(), "Unit".to_string())],
+    )
+}
+
+fn unit_ty(span: &Span) -> AstTy {
+    AstTy::Named(span.clone(), "Unit".to_string())
+}
+
+fn ok_unit_expr(span: &Span) -> Ast {
+    call(span, "Ok", vec![Ast::Lit(span.clone(), Lit::Unit)])
+}
+
+fn dummy_process_handler(span: &Span, name: &str) -> Ast {
+    Ast::Def(
+        span.clone(),
+        name.to_string(),
+        Vec::new(),
+        Vec::new(),
+        Some(result_unit_ty(span)),
+        Box::new(Ast::Block(span.clone(), vec![ok_unit_expr(span)])),
+        DeclAttrs {
+            visibility: Visibility::Private,
+            ..DeclAttrs::default()
+        },
     )
 }
 
@@ -556,6 +598,116 @@ fn build_state_set_wrapper(
         span.clone(),
         "set".to_string(),
         def_type_params(set_def)?,
+        surface_params,
+        Some(result_unit_ty(span)),
+        Box::new(body),
+        DeclAttrs::default(),
+    ))
+}
+
+fn result_reply_ty_from_call_ret(span: &Span, ret_ty: Option<AstTy>) -> Option<AstTy> {
+    match ret_ty {
+        Some(AstTy::Generic(result_span, name, args)) if name == "Result" => {
+            match args.as_slice() {
+                [AstTy::Tuple(_, items)] if !items.is_empty() => Some(AstTy::Generic(
+                    result_span,
+                    "Result".to_string(),
+                    vec![items[0].clone()],
+                )),
+                _ => Some(AstTy::Generic(result_span, name, args)),
+            }
+        }
+        Some(other) => Some(other),
+        None => Some(AstTy::Generic(
+            span.clone(),
+            "Result".to_string(),
+            vec![AstTy::Named(span.clone(), "Unit".to_string())],
+        )),
+    }
+}
+
+fn genserver_pair_field(span: &Span, field: &str) -> Ast {
+    Ast::FieldAccess(
+        span.clone(),
+        Box::new(var(span, "reply_state")),
+        field.to_string(),
+    )
+}
+
+fn build_genserver_call_wrapper(
+    span: &Span,
+    process_name: &str,
+    wrapper_name: &str,
+    call_def: &Ast,
+) -> Result<Ast, ParseError> {
+    let params = def_params(call_def)?;
+    let surface_params = params.iter().skip(2).cloned().collect::<Vec<_>>();
+    let mut call_args = vec![var(span, "pid"), var(span, "state")];
+    call_args.extend(param_vars(span, &surface_params));
+    let body = Ast::Block(
+        span.clone(),
+        vec![
+            pid_bind(span, process_name),
+            process_state_bind(span),
+            Ast::SafeBind(
+                span.clone(),
+                AstPattern::Var(span.clone(), "reply_state".to_string()),
+                Box::new(call(span, "__agent_get", call_args)),
+            ),
+            Ast::SafeBind(
+                span.clone(),
+                AstPattern::Wildcard(span.clone()),
+                Box::new(internal_call(
+                    span,
+                    "__process_store",
+                    vec![var(span, "pid"), genserver_pair_field(span, "_1")],
+                )),
+            ),
+            call(span, "Ok", vec![genserver_pair_field(span, "_0")]),
+        ],
+    );
+    Ok(Ast::Def(
+        span.clone(),
+        wrapper_name.to_string(),
+        def_type_params(call_def)?,
+        surface_params,
+        result_reply_ty_from_call_ret(span, def_ret_ty(call_def)?),
+        Box::new(body),
+        DeclAttrs::default(),
+    ))
+}
+
+fn build_genserver_cast_wrapper(
+    span: &Span,
+    process_name: &str,
+    wrapper_name: &str,
+    cast_def: &Ast,
+) -> Result<Ast, ParseError> {
+    let params = def_params(cast_def)?;
+    let surface_params = params.iter().skip(2).cloned().collect::<Vec<_>>();
+    let mut call_args = vec![var(span, "pid"), var(span, "state")];
+    call_args.extend(param_vars(span, &surface_params));
+    let body = Ast::Block(
+        span.clone(),
+        vec![
+            pid_bind(span, process_name),
+            process_state_bind(span),
+            Ast::SafeBind(
+                span.clone(),
+                AstPattern::Var(span.clone(), "next_state".to_string()),
+                Box::new(call(span, "__agent_set", call_args)),
+            ),
+            internal_call(
+                span,
+                "__process_store",
+                vec![var(span, "pid"), var(span, "next_state")],
+            ),
+        ],
+    );
+    Ok(Ast::Def(
+        span.clone(),
+        wrapper_name.to_string(),
+        def_type_params(cast_def)?,
         surface_params,
         Some(result_unit_ty(span)),
         Box::new(body),
@@ -2170,7 +2322,6 @@ impl Parser<'_> {
         let mut attrs = DeclAttrs::default();
         let mut saw_builtin = false;
         let mut saw_intrinsic = false;
-        let mut agent_meta: Option<AgentMeta> = None;
         let mut start_span: Option<Span> = None;
         let mut intrinsic_start_span: Option<Span> = None;
 
@@ -2208,19 +2359,10 @@ impl Parser<'_> {
                     intrinsic_start_span = Some(annotator_span);
                 }
                 "agent" => {
-                    if agent_meta.is_some() {
-                        return Err(ParseError::syntax(
-                            "@agent may only appear once before a declaration",
-                            annotator_span,
-                        ));
-                    }
-                    if saw_builtin || saw_intrinsic {
-                        return Err(ParseError::syntax(
-                            "@agent cannot be combined with @builtin or @intrinsic",
-                            annotator_span,
-                        ));
-                    }
-                    agent_meta = Some(self.parse_agent_meta()?);
+                    return Err(ParseError::syntax(
+                        "@agent(...) metadata is no longer supported. Use `meta { instance, init_policy }` inside the process definition.",
+                        annotator_span,
+                    ));
                 }
                 "doc" => {
                     if attrs.doc.is_some() {
@@ -2300,21 +2442,7 @@ impl Parser<'_> {
             .map(|span| span.start)
             .unwrap_or_else(|| self.peek_span().start);
 
-        if let Some(meta) = agent_meta {
-            if saw_builtin || saw_intrinsic {
-                return Err(ParseError::syntax(
-                    "@agent cannot be combined with @builtin or @intrinsic",
-                    self.peek_span(),
-                ));
-            }
-            match self.peek() {
-                Token::Defagent => self.parse_defagent(meta, attrs, start),
-                _ => Err(ParseError::syntax(
-                    "Expected `defagent` after @agent(...)",
-                    self.peek_span(),
-                )),
-            }
-        } else if saw_intrinsic {
+        if saw_intrinsic {
             let intrinsic_start = intrinsic_start_span
                 .as_ref()
                 .map(|span| span.start)
@@ -2360,10 +2488,12 @@ impl Parser<'_> {
                 Token::Defmod => self.parse_defmod_with_attrs(attrs, Some(start)),
                 Token::Deftrait => self.parse_trait_def_with_attrs(attrs, Some(start)),
                 Token::Impl => self.parse_impl_def_with_attrs(attrs, Some(start)),
-                Token::Defagent => Err(ParseError::syntax(
-                    "`defagent` declarations must be preceded by @agent(...)",
-                    self.peek_span(),
-                )),
+                Token::Defagent => self.parse_defagent(None, attrs, start),
+                Token::Defgenserver => self.parse_defgenserver_with_attrs(attrs, start),
+                Token::Defsupervisor => self.parse_defsupervisor_with_attrs(false, attrs, start),
+                Token::DefdynamicSupervisor => {
+                    self.parse_defsupervisor_with_attrs(true, attrs, start)
+                }
                 Token::Defstruct => self.parse_struct_def_with_attrs(attrs, Some(start)),
                 Token::Defrecord => self.parse_record_def_with_attrs(attrs, Some(start)),
                 Token::Deferror => self.parse_deferror_def_with_attrs(attrs, Some(start)),
@@ -2378,58 +2508,177 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_agent_meta(&mut self) -> Result<AgentMeta, ParseError> {
-        self.skip_newlines();
-        self.expect(&Token::LParen)?;
-        self.skip_newlines();
+    pub(super) fn parse_defagent_without_legacy_meta(&mut self) -> Result<Ast, ParseError> {
+        let start = self.peek_span().start;
+        self.parse_defagent(None, DeclAttrs::default(), start)
+    }
 
-        let mut kind = None;
-        let mut instance = None;
-        let mut boot = false;
-        let mut registry = false;
-        let mut lazy = false;
+    pub(super) fn parse_defgenserver(&mut self) -> Result<Ast, ParseError> {
+        let start = self.peek_span().start;
+        self.parse_defgenserver_with_attrs(DeclAttrs::default(), start)
+    }
 
-        while !matches!(self.peek(), Token::RParen) {
+    pub(super) fn parse_defsupervisor(&mut self, dynamic: bool) -> Result<Ast, ParseError> {
+        let start = self.peek_span().start;
+        self.parse_defsupervisor_with_attrs(dynamic, DeclAttrs::default(), start)
+    }
+
+    pub(super) fn parse_supervisor_init(&mut self) -> Result<Ast, ParseError> {
+        let start = self.expect(&Token::SupervisorInit)?.start;
+        self.skip_newlines();
+        self.skip_balanced_brace_block()?;
+        let span = Span {
+            start,
+            end: self.peek_span().start,
+        };
+        Ok(Ast::Def(
+            span.clone(),
+            "__supervisor_init".to_string(),
+            Vec::new(),
+            Vec::new(),
+            Some(unit_ty(&span)),
+            Box::new(Ast::Block(
+                span.clone(),
+                vec![Ast::Lit(span.clone(), Lit::Unit)],
+            )),
+            DeclAttrs {
+                visibility: Visibility::Private,
+                ..DeclAttrs::default()
+            },
+        ))
+    }
+
+    fn parse_defsupervisor_with_attrs(
+        &mut self,
+        dynamic: bool,
+        mut attrs: DeclAttrs,
+        start: usize,
+    ) -> Result<Ast, ParseError> {
+        let token = if dynamic {
+            Token::DefdynamicSupervisor
+        } else {
+            Token::Defsupervisor
+        };
+        self.expect(&token)?;
+        let (name, _) = self.expect_ident()?;
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+        let process_meta = self.parse_process_meta_block()?;
+        self.skip_newlines();
+        while !matches!(self.peek(), Token::RBrace) {
             if matches!(self.peek(), Token::Eof) {
-                return Err(ParseError::incomplete(")", self.peek_span()));
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            self.advance();
+        }
+        let end = self.expect(&Token::RBrace)?;
+        let span = Span {
+            start,
+            end: end.end,
+        };
+        if process_meta.init_policy == InitPolicy::Lazy {
+            return Err(ParseError::syntax(
+                "init_policy: Lazy is not allowed for Supervisor",
+                span,
+            ));
+        }
+        attrs.process_spec = Some(ProcessSpec {
+            process_name: name.clone(),
+            kind: if dynamic {
+                ProcessKind::DynamicSupervisor
+            } else {
+                ProcessKind::Supervisor
+            },
+            instance: process_meta.instance.into_process_instance(),
+            boot: false,
+            registry: process_meta.instance == AgentInstance::Singleton,
+            lazy: false,
+        });
+        Ok(Ast::Defmod(
+            Span {
+                start,
+                end: end.end,
+            },
+            name,
+            vec![
+                dummy_process_handler(
+                    &Span {
+                        start,
+                        end: end.end,
+                    },
+                    "__agent_init",
+                ),
+                dummy_process_handler(
+                    &Span {
+                        start,
+                        end: end.end,
+                    },
+                    "__agent_get",
+                ),
+            ],
+            attrs,
+        ))
+    }
+
+    fn parse_process_meta_block(&mut self) -> Result<ProcessMeta, ParseError> {
+        let (head, head_span) = self.expect_ident()?;
+        if head != "meta" {
+            return Err(ParseError::syntax(
+                "process declarations must start with `meta { ... }`",
+                head_span,
+            ));
+        }
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut instance = None;
+        let mut init_policy = None;
+
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
             }
             let (key, key_span) = self.expect_ident()?;
             self.skip_newlines();
-            self.expect(&Token::Colon)?;
-            self.skip_newlines();
             match key.as_str() {
-                "kind" => {
-                    let (value, value_span) = self.expect_ident()?;
-                    kind = Some(match value.as_str() {
-                        "ReadOnly" => AgentKind::ReadOnly,
-                        "State" => AgentKind::State,
-                        _ => {
-                            return Err(ParseError::syntax(
-                                "agent kind must be ReadOnly or State",
-                                value_span,
-                            ))
-                        }
-                    });
-                }
                 "instance" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
                     let (value, value_span) = self.expect_ident()?;
                     instance = Some(match value.as_str() {
                         "Singleton" => AgentInstance::Singleton,
-                        "Multi" => AgentInstance::Multi,
+                        "Worker" => AgentInstance::Worker,
                         _ => {
                             return Err(ParseError::syntax(
-                                "agent instance must be Singleton or Multi",
+                                "process instance must be Singleton or Worker",
                                 value_span,
                             ))
                         }
                     });
                 }
-                "boot" => boot = self.parse_agent_bool_value("boot")?,
-                "registry" => registry = self.parse_agent_bool_value("registry")?,
-                "lazy" => lazy = self.parse_agent_bool_value("lazy")?,
+                "init_policy" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    let (value, value_span) = self.expect_ident()?;
+                    init_policy = Some(match value.as_str() {
+                        "Eager" => InitPolicy::Eager,
+                        "Lazy" => InitPolicy::Lazy,
+                        _ => {
+                            return Err(ParseError::syntax(
+                                "init_policy must be Eager or Lazy",
+                                value_span,
+                            ))
+                        }
+                    });
+                }
+                "handlers" => {
+                    self.skip_balanced_brace_block()?;
+                }
                 _ => {
                     return Err(ParseError::syntax(
-                        format!("Unknown @agent option: {key}"),
+                        format!("Unknown process meta key: {key}"),
                         key_span,
                     ))
                 }
@@ -2438,54 +2687,43 @@ impl Parser<'_> {
             if matches!(self.peek(), Token::Comma) {
                 self.advance();
                 self.skip_newlines();
-            } else {
-                break;
             }
         }
-        self.expect(&Token::RParen)?;
+        self.expect(&Token::RBrace)?;
 
-        let kind =
-            kind.ok_or_else(|| ParseError::syntax("@agent requires kind", self.peek_span()))?;
-        let instance = instance
-            .ok_or_else(|| ParseError::syntax("@agent requires instance", self.peek_span()))?;
-
-        Ok(AgentMeta {
-            kind,
-            instance,
-            boot,
-            registry,
-            lazy,
+        Ok(ProcessMeta {
+            instance: instance
+                .ok_or_else(|| ParseError::syntax("meta requires instance", self.peek_span()))?,
+            init_policy: init_policy.unwrap_or(InitPolicy::Eager),
         })
     }
 
-    fn parse_agent_bool_value(&mut self, key: &str) -> Result<bool, ParseError> {
-        match self.peek().clone() {
-            Token::True => {
-                self.advance();
-                Ok(true)
+    fn skip_balanced_brace_block(&mut self) -> Result<(), ParseError> {
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        let mut depth = 1usize;
+        while depth > 0 {
+            match self.peek() {
+                Token::LBrace => {
+                    self.advance();
+                    depth += 1;
+                }
+                Token::RBrace => {
+                    self.advance();
+                    depth -= 1;
+                }
+                Token::Eof => return Err(ParseError::incomplete("}", self.peek_span())),
+                _ => {
+                    self.advance();
+                }
             }
-            Token::False => {
-                self.advance();
-                Ok(false)
-            }
-            Token::Ident(value) if value == "true" => {
-                self.advance();
-                Ok(true)
-            }
-            Token::Ident(value) if value == "false" => {
-                self.advance();
-                Ok(false)
-            }
-            _ => Err(ParseError::syntax(
-                format!("agent option `{key}` must be true or false"),
-                self.peek_span(),
-            )),
         }
+        Ok(())
     }
 
     fn parse_defagent(
         &mut self,
-        meta: AgentMeta,
+        meta: Option<AgentMeta>,
         attrs: DeclAttrs,
         start: usize,
     ) -> Result<Ast, ParseError> {
@@ -2499,6 +2737,13 @@ impl Parser<'_> {
         let mut get = None;
         let mut set = None;
         let mut helpers = Vec::new();
+        let process_meta = if meta.is_none() {
+            let parsed = self.parse_process_meta_block()?;
+            self.skip_newlines();
+            Some(parsed)
+        } else {
+            None
+        };
 
         while !matches!(self.peek(), Token::RBrace) {
             if matches!(self.peek(), Token::Eof) {
@@ -2572,6 +2817,21 @@ impl Parser<'_> {
             )
         })?;
 
+        let meta = meta.unwrap_or_else(|| {
+            let process_meta = process_meta.expect("new defagent should parse process meta");
+            AgentMeta {
+                kind: if set.is_some() {
+                    AgentKind::State
+                } else {
+                    AgentKind::ReadOnly
+                },
+                instance: process_meta.instance,
+                boot: false,
+                registry: process_meta.instance == AgentInstance::Singleton,
+                lazy: process_meta.init_policy == InitPolicy::Lazy,
+            }
+        });
+
         self.validate_agent_meta(
             &meta,
             set.as_ref(),
@@ -2593,6 +2853,158 @@ impl Parser<'_> {
             set,
             helpers,
         )
+    }
+
+    fn parse_defgenserver_with_attrs(
+        &mut self,
+        mut attrs: DeclAttrs,
+        start: usize,
+    ) -> Result<Ast, ParseError> {
+        self.expect(&Token::Defgenserver)?;
+        let (name, _) = self.expect_ident()?;
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+        let process_meta = self.parse_process_meta_block()?;
+        self.skip_newlines();
+
+        let mut init = None;
+        let mut call_handler: Option<(String, AgentHandler)> = None;
+        let mut cast_handler: Option<(String, AgentHandler)> = None;
+        let mut helpers = Vec::new();
+
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let marker = if let Token::Annotator(marker) = self.peek().clone() {
+                if matches!(marker.as_str(), "init" | "call" | "cast") {
+                    let span = self.peek_span();
+                    self.advance();
+                    self.skip_newlines();
+                    Some((marker, span))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if marker.is_some() && !matches!(self.peek(), Token::Def) {
+                return Err(ParseError::syntax(
+                    "GenServer handler marker must be followed by def inside defgenserver",
+                    self.peek_span(),
+                ));
+            }
+            if matches!(self.peek(), Token::Defp) {
+                return Err(ParseError::syntax(
+                    "GenServer body uses `def`; visibility is controlled by annotations.",
+                    self.peek_span(),
+                ));
+            }
+            let def = self.parse_def_with_attrs(DeclAttrs::default(), None)?;
+            self.ensure_stmt_boundary(&def, true)?;
+            match marker {
+                Some((marker, marker_span)) if marker == "init" => {
+                    if init.is_some() {
+                        return Err(ParseError::syntax("duplicate @init handler", marker_span));
+                    }
+                    init = Some(AgentHandler { def });
+                }
+                Some((marker, marker_span)) if marker == "call" => {
+                    if call_handler.is_some() {
+                        return Err(ParseError::syntax(
+                            "this implementation currently supports one @call handler per GenServer",
+                            marker_span,
+                        ));
+                    }
+                    let wrapper_name = def_name(&def)?;
+                    call_handler = Some((wrapper_name, AgentHandler { def }));
+                }
+                Some((marker, marker_span)) if marker == "cast" => {
+                    if cast_handler.is_some() {
+                        return Err(ParseError::syntax(
+                            "this implementation currently supports one @cast handler per GenServer",
+                            marker_span,
+                        ));
+                    }
+                    let wrapper_name = def_name(&def)?;
+                    cast_handler = Some((wrapper_name, AgentHandler { def }));
+                }
+                Some((_, marker_span)) => {
+                    return Err(ParseError::syntax(
+                        "GenServer handler marker must be @init, @call, or @cast",
+                        marker_span,
+                    ));
+                }
+                None => helpers.push(def),
+            }
+            self.skip_newlines();
+        }
+        let end = self.expect(&Token::RBrace)?;
+        let span = Span {
+            start,
+            end: end.end,
+        };
+        if process_meta.init_policy == InitPolicy::Lazy
+            && process_meta.instance != AgentInstance::Singleton
+        {
+            return Err(ParseError::syntax(
+                "init_policy: Lazy is only allowed for Singleton GenServer",
+                span,
+            ));
+        }
+        let init = init.ok_or_else(|| {
+            ParseError::syntax(
+                "GenServer requires exactly one @init handler",
+                Span {
+                    start,
+                    end: end.end,
+                },
+            )
+        })?;
+        let (call_name, call_handler) = call_handler.ok_or_else(|| {
+            ParseError::syntax(
+                "GenServer requires at least one @call handler",
+                Span {
+                    start,
+                    end: end.end,
+                },
+            )
+        })?;
+
+        let init_def = rename_agent_handler(init.def, "__agent_init", &name, false)?;
+        let call_def = rename_agent_handler(call_handler.def, "__agent_get", &name, true)?;
+        let cast_def = cast_handler
+            .as_ref()
+            .map(|(_, handler)| {
+                rename_agent_handler(handler.def.clone(), "__agent_set", &name, true)
+            })
+            .transpose()?;
+
+        let mut body = vec![init_def.clone(), call_def.clone()];
+        if let Some(cast_def) = &cast_def {
+            body.push(cast_def.clone());
+        }
+        body.extend(helpers);
+        body.push(build_genserver_call_wrapper(
+            &span, &name, &call_name, &call_def,
+        )?);
+        if let (Some((cast_name, _)), Some(cast_def)) = (cast_handler.as_ref(), cast_def.as_ref()) {
+            body.push(build_genserver_cast_wrapper(
+                &span, &name, cast_name, cast_def,
+            )?);
+        }
+
+        attrs.process_spec = Some(ProcessSpec {
+            process_name: name.clone(),
+            kind: ProcessKind::GenServer,
+            instance: process_meta.instance.into_process_instance(),
+            boot: false,
+            registry: process_meta.instance == AgentInstance::Singleton,
+            lazy: process_meta.init_policy == InitPolicy::Lazy,
+        });
+        Ok(Ast::Defmod(span, name, body, attrs))
     }
 
     fn parse_agent_handler_marker(&mut self) -> Result<AgentHandlerKind, ParseError> {
@@ -2624,15 +3036,9 @@ impl Parser<'_> {
     ) -> Result<(), ParseError> {
         match meta.kind {
             AgentKind::ReadOnly => {
-                if meta.instance != AgentInstance::Singleton {
-                    return Err(ParseError::syntax(
-                        "ReadOnly agents must use instance: Singleton",
-                        span,
-                    ));
-                }
                 if set.is_some() {
                     return Err(ParseError::syntax(
-                        "ReadOnly agents must not define @set",
+                        "Agent with no write protocol must not define @set",
                         span,
                     ));
                 }
@@ -2644,25 +3050,13 @@ impl Parser<'_> {
                         span,
                     ));
                 }
-                if meta.lazy {
+                if meta.lazy && meta.instance != AgentInstance::Singleton {
                     return Err(ParseError::syntax(
-                        "State agents must use lazy: false",
+                        "init_policy: Lazy is only allowed for Singleton Agent",
                         span,
                     ));
                 }
             }
-        }
-        if meta.instance == AgentInstance::Multi && meta.registry {
-            return Err(ParseError::syntax(
-                "registry: true is only allowed for Singleton agents",
-                span,
-            ));
-        }
-        if meta.instance == AgentInstance::Multi && meta.boot {
-            return Err(ParseError::syntax(
-                "boot: true is only allowed for Singleton agents",
-                span,
-            ));
         }
         Ok(())
     }
@@ -2721,7 +3115,7 @@ impl Parser<'_> {
                 body.push(build_readonly_get_wrapper(&span, &name, &get_def)?);
             }
             AgentKind::State => {
-                if meta.instance == AgentInstance::Multi {
+                if meta.instance == AgentInstance::Worker {
                     body.push(build_spawn_wrapper(&span, &name, &init_def)?);
                 } else {
                     body.push(build_pid_wrapper(&span, &name));

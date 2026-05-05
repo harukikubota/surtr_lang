@@ -1923,8 +1923,12 @@ deferror NoneError { "None Value." }"#,
     #[test]
     fn lower_module_source_ast_keeps_process_spec_on_lowered_module() {
         let ast = spire::parse_with_context(
-            r#"@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
-defagent Counter {
+            r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
   @init
   def init() -> Result<Int> { Ok(0) }
 
@@ -1945,11 +1949,8 @@ defagent Counter {
             .as_ref()
             .expect("lowered module should keep process spec");
         assert_eq!(process_spec.process_name, "Counter");
-        assert!(process_spec.boot);
-        assert!(matches!(
-            process_spec.kind,
-            spire::ast::ProcessKind::StateAgent
-        ));
+        assert!(!process_spec.boot);
+        assert!(matches!(process_spec.kind, spire::ast::ProcessKind::Agent));
     }
 
     #[test]

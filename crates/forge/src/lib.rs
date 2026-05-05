@@ -788,8 +788,12 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
     #[test]
     fn codegen_typed_program_embeds_runtime_process_specs() {
         let typed = typed_module_program_with_builtin_prelude(
-            r#"@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)
-defagent Counter {
+            r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
   @init
   def init() -> Result<Int> { Ok(41) }
 
@@ -810,7 +814,7 @@ defagent Counter {
         let spec = &bytecode.runtime_process_specs.entries[0];
         assert_eq!(spec.process_name, "Counter");
         assert_eq!(spec.module_path, "Counter");
-        assert!(spec.boot);
+        assert!(!spec.boot);
         assert!(spec.registry);
         assert_eq!(spec.set_fun_idx.is_some(), true);
     }

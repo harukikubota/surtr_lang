@@ -257,7 +257,6 @@ pub struct ProcessSpecView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub enum ProcessSpecKindView {
-    #[serde(alias = "ReadOnlyAgent", alias = "StateAgent")]
     Agent,
     GenServer,
     Supervisor,
@@ -270,7 +269,6 @@ pub enum ProcessSpecKindView {
 #[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub enum ProcessSpecInstanceView {
     Singleton,
-    #[serde(alias = "Multi")]
     Worker,
 }
 

@@ -145,8 +145,12 @@ fn test_resolve_staged_program_keeps_process_specs() {
         ),
     );
     let ast = spire::parse_with_context(
-        r#"@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
-defagent Counter {
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
   @init
   def init() -> Result<Int> { 0 }
 

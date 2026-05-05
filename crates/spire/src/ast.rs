@@ -30,14 +30,18 @@ pub struct DeclAttrs {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProcessKind {
-    ReadOnlyAgent,
-    StateAgent,
+    Agent,
+    GenServer,
+    Supervisor,
+    RuntimeSupervisor,
+    DynamicSupervisor,
+    Task,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProcessInstance {
     Singleton,
-    Multi,
+    Worker,
 }
 
 /// Compiler-managed metadata carried by lowered `defagent` modules.

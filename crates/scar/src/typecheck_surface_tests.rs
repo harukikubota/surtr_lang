@@ -3206,8 +3206,12 @@ fn process_self_is_rejected_outside_process_context() {
 #[test]
 fn process_self_typechecks_inside_process_handler() {
     typecheck_module_source_result(
-        r#"@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)
-defagent Counter {
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
   @init
   def init() -> Result<Int> { Ok(0) }
 
@@ -3226,8 +3230,12 @@ defagent Counter {
 #[test]
 fn typecheck_staged_program_keeps_process_specs() {
     let ast = spire::parse_with_context(
-        r#"@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
-defagent Counter {
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
   @init
   def init() -> Result<Int> { Ok(0) }
 
@@ -3267,5 +3275,5 @@ defagent Counter {
     let spec = &typed.process_specs[0];
     assert_eq!(spec.module_path, "Counter");
     assert_eq!(spec.process_name, "Counter");
-    assert!(spec.spec.boot);
+    assert!(!spec.spec.boot);
 }

@@ -4038,8 +4038,12 @@ fn test_many_top_level_declarations_parse_successfully() {
 fn test_defagent_lowering_preserves_runtime_process_spec() {
     let ast = parse_with_context(
         r#"@doc """Counter agent docs."""
-@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
 defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
   @init
   def init() -> Result<Int> { Ok(0) }
 
@@ -4062,12 +4066,12 @@ defagent Counter {
                 .as_ref()
                 .expect("defagent lowered module should keep process spec");
             assert_eq!(process_spec.process_name, "Counter");
-            assert_eq!(process_spec.kind, crate::ast::ProcessKind::StateAgent);
+            assert_eq!(process_spec.kind, crate::ast::ProcessKind::Agent);
             assert_eq!(
                 process_spec.instance,
                 crate::ast::ProcessInstance::Singleton
             );
-            assert!(process_spec.boot);
+            assert!(!process_spec.boot);
             assert!(!process_spec.lazy);
             assert!(process_spec.registry);
 
@@ -4115,8 +4119,12 @@ defagent Counter {
 #[test]
 fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
     let ast = parse_with_context(
-        r#"@agent(kind: State, instance: Multi, boot: false, lazy: false)
-defagent Worker {
+        r#"defagent Worker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
   @init
   def init(seed: Int) -> Result<Int> { Ok(seed) }
 
@@ -4128,7 +4136,7 @@ defagent Worker {
 }"#,
         ParserContext::module(1, None),
     )
-    .expect("multi defagent should parse");
+    .expect("worker defagent should parse");
 
     match &ast[0] {
         Ast::Defmod(_, name, body, _) => {
@@ -4141,7 +4149,7 @@ defagent Worker {
                 .find(
                     |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "spawn"),
                 )
-                .expect("multi agent should include spawn wrapper");
+                .expect("worker agent should include spawn wrapper");
             match spawn_wrapper {
                 Ast::Def(_, _, _, _, Some(AstTy::Generic(_, ty_name, ty_args)), _, _) => {
                     assert_eq!(ty_name, "Result");
