@@ -1,1 +1,1 @@
-print(inspect(Logger::get("ctx default")))
+print(inspect(Logger::log("ctx default")))

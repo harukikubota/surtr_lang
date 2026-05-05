@@ -482,6 +482,7 @@ fn init_closure(span: &Span, params: &[FunParam]) -> Ast {
 fn build_readonly_get_wrapper(
     span: &Span,
     agent_name: &str,
+    wrapper_name: &str,
     get_def: &Ast,
 ) -> Result<Ast, ParseError> {
     let params = def_params(get_def)?;
@@ -498,7 +499,7 @@ fn build_readonly_get_wrapper(
     );
     Ok(Ast::Def(
         span.clone(),
-        "get".to_string(),
+        wrapper_name.to_string(),
         def_type_params(get_def)?,
         surface_params,
         def_ret_ty(get_def)?,
@@ -554,6 +555,7 @@ fn build_spawn_wrapper(span: &Span, agent_name: &str, init_def: &Ast) -> Result<
 fn build_state_get_wrapper(
     span: &Span,
     agent_name: &str,
+    wrapper_name: &str,
     get_def: &Ast,
     singleton: bool,
 ) -> Result<Ast, ParseError> {
@@ -581,7 +583,7 @@ fn build_state_get_wrapper(
     let body = Ast::Block(span.clone(), stmts);
     Ok(Ast::Def(
         span.clone(),
-        "get".to_string(),
+        wrapper_name.to_string(),
         def_type_params(get_def)?,
         surface_params,
         def_ret_ty(get_def)?,
@@ -593,6 +595,7 @@ fn build_state_get_wrapper(
 fn build_state_set_wrapper(
     span: &Span,
     agent_name: &str,
+    wrapper_name: &str,
     set_def: &Ast,
     singleton: bool,
 ) -> Result<Ast, ParseError> {
@@ -629,7 +632,7 @@ fn build_state_set_wrapper(
     let body = Ast::Block(span.clone(), stmts);
     Ok(Ast::Def(
         span.clone(),
-        "set".to_string(),
+        wrapper_name.to_string(),
         def_type_params(set_def)?,
         surface_params,
         Some(result_unit_ty(span)),
@@ -3404,6 +3407,12 @@ impl Parser<'_> {
         helpers: Vec<Ast>,
     ) -> Result<Ast, ParseError> {
         let mut body = Vec::new();
+        let init_name = def_name(&init.def)?;
+        let get_name = def_name(&get.def)?;
+        let set_name = set
+            .as_ref()
+            .map(|handler| def_name(&handler.def))
+            .transpose()?;
         let init_def = rename_agent_handler(init.def, "__agent_init", &name, false)?;
         let get_def = rename_agent_handler(get.def, "__agent_get", &name, true)?;
         let set_def = set
@@ -3443,7 +3452,9 @@ impl Parser<'_> {
 
         match meta.kind {
             AgentKind::ReadOnly => {
-                body.push(build_readonly_get_wrapper(&span, &name, &get_def)?);
+                body.push(build_readonly_get_wrapper(
+                    &span, &name, &get_name, &get_def,
+                )?);
             }
             AgentKind::State => {
                 if meta.instance == AgentInstance::Worker {
@@ -3452,14 +3463,45 @@ impl Parser<'_> {
                     body.push(build_pid_wrapper(&span, &name));
                 }
                 let singleton = meta.instance == AgentInstance::Singleton;
-                body.push(build_state_get_wrapper(&span, &name, &get_def, singleton)?);
+                body.push(build_state_get_wrapper(
+                    &span, &name, &get_name, &get_def, singleton,
+                )?);
                 if let Some(set_def) = &set_def {
-                    body.push(build_state_set_wrapper(&span, &name, set_def, singleton)?);
+                    body.push(build_state_set_wrapper(
+                        &span,
+                        &name,
+                        set_name.as_deref().expect("@set name should exist"),
+                        set_def,
+                        singleton,
+                    )?);
                 }
             }
         }
 
-        attrs.process_spec = Some(meta.into_process_spec(name.clone()));
+        let mut process_spec = meta.into_process_spec(name.clone());
+        process_spec.handler_specs = {
+            let mut specs = vec![
+                ProcessRuntimeHandlerSpec {
+                    name: init_name,
+                    kind: ProcessRuntimeHandlerKind::Init,
+                    span: init_def.span().clone(),
+                },
+                ProcessRuntimeHandlerSpec {
+                    name: get_name,
+                    kind: ProcessRuntimeHandlerKind::Get,
+                    span: get_def.span().clone(),
+                },
+            ];
+            if let (Some(name), Some(set_def)) = (set_name, set_def.as_ref()) {
+                specs.push(ProcessRuntimeHandlerSpec {
+                    name,
+                    kind: ProcessRuntimeHandlerKind::Set,
+                    span: set_def.span().clone(),
+                });
+            }
+            specs
+        };
+        attrs.process_spec = Some(process_spec);
         Ok(Ast::Defmod(span, name, body, attrs))
     }
 

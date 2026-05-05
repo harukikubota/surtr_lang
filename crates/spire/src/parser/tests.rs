@@ -4048,10 +4048,10 @@ defagent Counter {
   def init() -> Result<Int> { Ok(0) }
 
   @get
-  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+  def fetch(state: Int, _field: String) -> Result<Int> { Ok(state) }
 
   @set
-  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+  def replace(_state: Int, next: Int) -> Result<Int> { Ok(next) }
 }"#,
         ParserContext::module(1, None),
     )
@@ -4096,8 +4096,8 @@ defagent Counter {
 
             let get_wrapper = body
                 .iter()
-                .find(|node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "get"))
-                .expect("lowered module should include get wrapper");
+                .find(|node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "fetch"))
+                .expect("lowered module should include @get wrapper using the user function name");
             match get_wrapper {
                 Ast::Def(_, _, _, params, _, _, _) => {
                     assert!(matches!(
@@ -4108,6 +4108,27 @@ defagent Counter {
                 }
                 other => panic!("expected get wrapper definition, got {other:?}"),
             }
+
+            let set_wrapper = body
+                .iter()
+                .find(|node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "replace"))
+                .expect("lowered module should include @set wrapper using the user function name");
+            match set_wrapper {
+                Ast::Def(_, _, _, params, Some(AstTy::Generic(_, ty_name, _)), _, _) => {
+                    assert_eq!(ty_name, "Result");
+                    assert!(matches!(
+                        params.as_slice(),
+                        [FunParam { name, ty: AstTy::Named(_, ty_name), .. }]
+                            if name == "next" && ty_name == "Int"
+                    ));
+                }
+                other => panic!("expected set wrapper definition, got {other:?}"),
+            }
+
+            assert_eq!(process_spec.handler_specs.len(), 3);
+            assert_eq!(process_spec.handler_specs[0].name, "init");
+            assert_eq!(process_spec.handler_specs[1].name, "fetch");
+            assert_eq!(process_spec.handler_specs[2].name, "replace");
         }
         other => panic!("Expected lowered Defmod, got {other:?}"),
     }
