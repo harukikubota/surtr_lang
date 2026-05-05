@@ -1,0 +1,4 @@
+include "./Logger.srt"
+
+print(inspect(Logger::log("this line is handled by NullOutHandler")))
+print("logger output was suppressed")

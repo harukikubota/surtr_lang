@@ -1,5 +1,9 @@
-@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)
 defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
   @init
   def init() -> Result<Int> {
     Ok(0)
