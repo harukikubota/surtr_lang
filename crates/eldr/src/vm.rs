@@ -1195,7 +1195,7 @@ impl VM {
             )));
         }
 
-        if spec.kind == RuntimeProcessKind::ReadOnlyAgent && spec.lazy {
+        if spec.kind == RuntimeProcessKind::Agent && spec.set_fun_idx.is_none() && spec.lazy {
             let pid = self.allocate_process_state(process_name.to_string(), None)?;
             self.process_runtime
                 .singleton_by_name
@@ -1392,7 +1392,9 @@ impl VM {
         let lazy_state_pending = self
             .process_runtime
             .spec_for_id(spec_id)
-            .is_some_and(|spec| spec.kind == RuntimeProcessKind::ReadOnlyAgent && spec.lazy)
+            .is_some_and(|spec| {
+                spec.kind == RuntimeProcessKind::Agent && spec.set_fun_idx.is_none() && spec.lazy
+            })
             && state.is_none();
         self.process_runtime.processes.insert(
             pid,
@@ -3795,7 +3797,7 @@ mod tests {
             entries: vec![RuntimeProcessSpec {
                 process_name: "Counter".into(),
                 module_path: "Counter".into(),
-                kind: RuntimeProcessKind::StateAgent,
+                kind: RuntimeProcessKind::Agent,
                 instance: RuntimeProcessInstance::Singleton,
                 boot: true,
                 registry: true,
@@ -3833,7 +3835,7 @@ mod tests {
             entries: vec![RuntimeProcessSpec {
                 process_name: "Counter".into(),
                 module_path: "Counter".into(),
-                kind: RuntimeProcessKind::StateAgent,
+                kind: RuntimeProcessKind::Agent,
                 instance: RuntimeProcessInstance::Singleton,
                 boot: true,
                 registry: true,
@@ -3872,7 +3874,7 @@ mod tests {
                 RuntimeProcessSpec {
                     process_name: "Counter".into(),
                     module_path: "Counter".into(),
-                    kind: RuntimeProcessKind::StateAgent,
+                    kind: RuntimeProcessKind::Agent,
                     instance: RuntimeProcessInstance::Singleton,
                     boot: true,
                     registry: true,
@@ -3884,7 +3886,7 @@ mod tests {
                 RuntimeProcessSpec {
                     process_name: "Clock".into(),
                     module_path: "Clock".into(),
-                    kind: RuntimeProcessKind::StateAgent,
+                    kind: RuntimeProcessKind::Agent,
                     instance: RuntimeProcessInstance::Singleton,
                     boot: true,
                     registry: true,
@@ -3999,7 +4001,7 @@ mod tests {
             entries: vec![RuntimeProcessSpec {
                 process_name: "Counter".into(),
                 module_path: "Counter".into(),
-                kind: RuntimeProcessKind::StateAgent,
+                kind: RuntimeProcessKind::Agent,
                 instance: RuntimeProcessInstance::Singleton,
                 boot: true,
                 registry: true,
@@ -4046,7 +4048,7 @@ mod tests {
             entries: vec![RuntimeProcessSpec {
                 process_name: "Counter".into(),
                 module_path: "Counter".into(),
-                kind: RuntimeProcessKind::StateAgent,
+                kind: RuntimeProcessKind::Agent,
                 instance: RuntimeProcessInstance::Singleton,
                 boot: true,
                 registry: true,
@@ -4117,7 +4119,7 @@ mod tests {
     fn root_supervisor_eagerly_boots_singleton_before_run() {
         let bytecode = singleton_boot_bytecode(
             "Counter",
-            RuntimeProcessKind::StateAgent,
+            RuntimeProcessKind::Agent,
             false,
             true,
             vec![
@@ -4152,7 +4154,7 @@ mod tests {
     fn lazy_readonly_singleton_materializes_state_on_first_access() {
         let bytecode = singleton_boot_bytecode(
             "Env",
-            RuntimeProcessKind::ReadOnlyAgent,
+            RuntimeProcessKind::Agent,
             true,
             true,
             vec![
@@ -4202,7 +4204,7 @@ mod tests {
     fn boot_failure_keeps_singleton_unpublished() {
         let bytecode = singleton_boot_bytecode(
             "Broken",
-            RuntimeProcessKind::StateAgent,
+            RuntimeProcessKind::Agent,
             false,
             true,
             vec![
@@ -4242,7 +4244,7 @@ mod tests {
     fn root_supervisor_boot_preserves_execution_context() {
         let bytecode = singleton_boot_bytecode(
             "Counter",
-            RuntimeProcessKind::StateAgent,
+            RuntimeProcessKind::Agent,
             false,
             true,
             vec![
@@ -4297,7 +4299,7 @@ mod tests {
                 RuntimeProcessSpec {
                     process_name: "Good".into(),
                     module_path: "Agents".into(),
-                    kind: RuntimeProcessKind::StateAgent,
+                    kind: RuntimeProcessKind::Agent,
                     instance: RuntimeProcessInstance::Singleton,
                     boot: true,
                     registry: true,
@@ -4309,7 +4311,7 @@ mod tests {
                 RuntimeProcessSpec {
                     process_name: "Broken".into(),
                     module_path: "Agents".into(),
-                    kind: RuntimeProcessKind::StateAgent,
+                    kind: RuntimeProcessKind::Agent,
                     instance: RuntimeProcessInstance::Singleton,
                     boot: true,
                     registry: true,
@@ -5388,7 +5390,7 @@ mod tests {
     fn observation_includes_process_runtime_counters() {
         let bytecode = singleton_boot_bytecode(
             "Counter",
-            RuntimeProcessKind::StateAgent,
+            RuntimeProcessKind::Agent,
             false,
             true,
             vec![
@@ -5433,7 +5435,7 @@ mod tests {
     fn process_runtime_snapshot_includes_runtime_tables() {
         let bytecode = singleton_boot_bytecode(
             "Counter",
-            RuntimeProcessKind::StateAgent,
+            RuntimeProcessKind::Agent,
             false,
             true,
             vec![
@@ -5518,7 +5520,7 @@ mod tests {
             .map(|idx| RuntimeProcessSpec {
                 process_name: format!("Singleton{idx}"),
                 module_path: "Agents".into(),
-                kind: RuntimeProcessKind::StateAgent,
+                kind: RuntimeProcessKind::Agent,
                 instance: RuntimeProcessInstance::Singleton,
                 boot: true,
                 registry: true,
@@ -5531,8 +5533,8 @@ mod tests {
         specs.push(RuntimeProcessSpec {
             process_name: "Worker".into(),
             module_path: "Worker".into(),
-            kind: RuntimeProcessKind::StateAgent,
-            instance: RuntimeProcessInstance::Multi,
+            kind: RuntimeProcessKind::Agent,
+            instance: RuntimeProcessInstance::Worker,
             boot: false,
             registry: true,
             lazy: false,

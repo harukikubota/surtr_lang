@@ -185,7 +185,7 @@ fn dump_outputs_runtime_process_specs_for_agent_modules() {
     assert_eq!(specs.len(), 1);
     assert_eq!(specs[0]["process_name"], "Counter");
     assert_eq!(specs[0]["module_path"], "Counter");
-    assert_eq!(specs[0]["kind"], "StateAgent");
+    assert_eq!(specs[0]["kind"], "Agent");
     assert_eq!(specs[0]["instance"], "Singleton");
     assert_eq!(specs[0]["boot"], true);
     assert_eq!(specs[0]["set_fun_idx"].is_number(), true);

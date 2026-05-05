@@ -257,15 +257,21 @@ pub struct ProcessSpecView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub enum ProcessSpecKindView {
-    ReadOnlyAgent,
-    StateAgent,
+    #[serde(alias = "ReadOnlyAgent", alias = "StateAgent")]
+    Agent,
+    GenServer,
+    Supervisor,
+    RuntimeSupervisor,
+    DynamicSupervisor,
+    Task,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub enum ProcessSpecInstanceView {
     Singleton,
-    Multi,
+    #[serde(alias = "Multi")]
+    Worker,
 }
 
 #[cfg(feature = "viewer-schema")]
@@ -615,12 +621,16 @@ fn process_spec_view(spec: &RuntimeProcessSpec) -> ProcessSpecView {
         process_name: spec.process_name.clone(),
         module_path: spec.module_path.clone(),
         kind: match spec.kind {
-            RuntimeProcessKind::ReadOnlyAgent => ProcessSpecKindView::ReadOnlyAgent,
-            RuntimeProcessKind::StateAgent => ProcessSpecKindView::StateAgent,
+            RuntimeProcessKind::Agent => ProcessSpecKindView::Agent,
+            RuntimeProcessKind::GenServer => ProcessSpecKindView::GenServer,
+            RuntimeProcessKind::Supervisor => ProcessSpecKindView::Supervisor,
+            RuntimeProcessKind::RuntimeSupervisor => ProcessSpecKindView::RuntimeSupervisor,
+            RuntimeProcessKind::DynamicSupervisor => ProcessSpecKindView::DynamicSupervisor,
+            RuntimeProcessKind::Task => ProcessSpecKindView::Task,
         },
         instance: match spec.instance {
             RuntimeProcessInstance::Singleton => ProcessSpecInstanceView::Singleton,
-            RuntimeProcessInstance::Multi => ProcessSpecInstanceView::Multi,
+            RuntimeProcessInstance::Worker => ProcessSpecInstanceView::Worker,
         },
         boot: spec.boot,
         registry: spec.registry,
@@ -693,7 +703,10 @@ mod tests {
 
     #[cfg(feature = "viewer-schema")]
     use super::viewer_schema;
-    use super::{viewer_file_from_inspect, VIEWER_FORMAT, VIEWER_SCHEMA_VERSION};
+    use super::{
+        viewer_file_from_inspect, ProcessSpecInstanceView, ProcessSpecKindView, VIEWER_FORMAT,
+        VIEWER_SCHEMA_VERSION,
+    };
 
     #[test]
     fn viewer_model_contains_core_sections() {
@@ -785,8 +798,8 @@ mod tests {
                 entries: vec![RuntimeProcessSpec {
                     process_name: "Counter".into(),
                     module_path: "Agents::Counter".into(),
-                    kind: RuntimeProcessKind::StateAgent,
-                    instance: RuntimeProcessInstance::Singleton,
+                    kind: RuntimeProcessKind::Agent,
+                    instance: RuntimeProcessInstance::Worker,
                     boot: true,
                     registry: true,
                     lazy: false,
@@ -816,6 +829,11 @@ mod tests {
         assert_eq!(viewer.schema_version, VIEWER_SCHEMA_VERSION);
         assert_eq!(viewer.format, VIEWER_FORMAT);
         assert_eq!(viewer.process_specs.len(), 1);
+        assert_eq!(viewer.process_specs[0].kind, ProcessSpecKindView::Agent);
+        assert_eq!(
+            viewer.process_specs[0].instance,
+            ProcessSpecInstanceView::Worker
+        );
         assert_eq!(viewer.functions.len(), 1);
         assert_eq!(viewer.constants.len(), 1);
         assert_eq!(viewer.opcodes.len(), 4);

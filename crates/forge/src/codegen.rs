@@ -281,12 +281,13 @@ fn build_runtime_process_specs(
             process_name: spec.process_name.clone(),
             module_path: spec.module_path.clone(),
             kind: match spec.spec.kind {
-                spire::ast::ProcessKind::ReadOnlyAgent => RuntimeProcessKind::ReadOnlyAgent,
-                spire::ast::ProcessKind::StateAgent => RuntimeProcessKind::StateAgent,
+                spire::ast::ProcessKind::ReadOnlyAgent | spire::ast::ProcessKind::StateAgent => {
+                    RuntimeProcessKind::Agent
+                }
             },
             instance: match spec.spec.instance {
                 spire::ast::ProcessInstance::Singleton => RuntimeProcessInstance::Singleton,
-                spire::ast::ProcessInstance::Multi => RuntimeProcessInstance::Multi,
+                spire::ast::ProcessInstance::Multi => RuntimeProcessInstance::Worker,
             },
             boot: spec.spec.boot,
             registry: spec.spec.registry,
