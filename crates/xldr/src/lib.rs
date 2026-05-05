@@ -849,7 +849,24 @@ pub fn lower_module_source_ast(
                     declared_span: Some(span),
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
-                    process_spec: attrs.process_spec,
+                    process_spec: None,
+                });
+            }
+            spire::ast::Ast::Defagent(span, module_path, body, process_spec, attrs)
+            | spire::ast::Ast::Defgenserver(span, module_path, body, process_spec, attrs)
+            | spire::ast::Ast::Defsupervisor(span, module_path, body, process_spec, attrs)
+            | spire::ast::Ast::DefdynamicSupervisor(span, module_path, body, process_spec, attrs) =>
+            {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                lowered.push(LoweredModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    declared_span: Some(span),
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: Some(process_spec),
                 });
             }
             spire::ast::Ast::ImplDef(span, target, methods, attrs) => {
@@ -871,7 +888,7 @@ pub fn lower_module_source_ast(
                     declared_span: Some(declared_span),
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
-                    process_spec: attrs.process_spec,
+                    process_spec: None,
                 });
             }
             spire::ast::Ast::TraitImplDef(
@@ -907,7 +924,7 @@ pub fn lower_module_source_ast(
                     declared_span: Some(declared_span),
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
-                    process_spec: attrs.process_spec,
+                    process_spec: None,
                 });
             }
             spire::ast::Ast::Import(_, _, _) => {}
@@ -1004,6 +1021,43 @@ pub fn lower_module_source_ast(
     }
 
     lowered
+}
+
+pub fn extract_process_modules_from_user_ast(
+    user_ast: Vec<spire::ast::Ast>,
+) -> (Vec<sigil::StagedModuleAst>, Vec<spire::ast::Ast>) {
+    let shared_imports = user_ast
+        .iter()
+        .filter_map(|stmt| match stmt {
+            spire::ast::Ast::Import(_, _, _) => Some(stmt.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut process_modules = Vec::new();
+    let mut remaining_user_ast = Vec::new();
+
+    for stmt in user_ast {
+        match stmt {
+            spire::ast::Ast::Defagent(_, module_path, body, process_spec, attrs)
+            | spire::ast::Ast::Defgenserver(_, module_path, body, process_spec, attrs)
+            | spire::ast::Ast::Defsupervisor(_, module_path, body, process_spec, attrs)
+            | spire::ast::Ast::DefdynamicSupervisor(_, module_path, body, process_spec, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                process_modules.push(sigil::StagedModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: Some(process_spec),
+                });
+            }
+            other => remaining_user_ast.push(other),
+        }
+    }
+
+    (process_modules, remaining_user_ast)
 }
 
 pub fn parse_module_stages_from_compile_sources(

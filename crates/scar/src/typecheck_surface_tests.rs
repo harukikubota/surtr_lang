@@ -3251,15 +3251,17 @@ fn typecheck_staged_program_keeps_process_specs() {
     .expect("defagent source should parse");
 
     let staged_module = match ast.into_iter().next().expect("lowered module should exist") {
-        spire::ast::Ast::Defmod(_, module_path, ast, attrs) => sigil::StagedModuleAst {
-            module_path,
-            doc_module_path: None,
-            ast,
-            module_doc: attrs.doc,
-            auto_import: attrs.auto_import,
-            process_spec: attrs.process_spec,
-        },
-        other => panic!("expected lowered defmod, got {other:?}"),
+        spire::ast::Ast::Defagent(_, module_path, ast, process_spec, attrs) => {
+            sigil::StagedModuleAst {
+                module_path,
+                doc_module_path: None,
+                ast,
+                module_doc: attrs.doc,
+                auto_import: attrs.auto_import,
+                process_spec: Some(process_spec),
+            }
+        }
+        other => panic!("expected defagent, got {other:?}"),
     };
 
     let mut stages = std_module_stages();

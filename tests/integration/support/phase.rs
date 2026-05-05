@@ -13,6 +13,18 @@ fn resolve_sources_in_compile_order(
     mode: TestCompileMode,
 ) -> Result<(), String> {
     let cached_modules = cached_module_pipeline(compile_sources, mode)?;
+    let user_ast = parse_user_program(compile_sources, mode)?;
+    let (process_stage, user_ast) = xldr::extract_process_modules_from_user_ast(user_ast);
+    let mut module_asts = cached_modules.module_asts.clone();
+    if !process_stage.is_empty() {
+        module_asts.push(process_stage);
+    }
+    let declaration_index = if module_asts.len() == cached_modules.module_asts.len() {
+        cached_modules.declaration_index.clone()
+    } else {
+        sigil::precollect_declaration_index(&module_asts)
+            .map_err(|e| format!("phase=resolve; message={}", e))?
+    };
     let (start_stage_index, resume_state) = if matches!(mode, TestCompileMode::Script) {
         let std_snapshot = default_stdlib_snapshot()?;
         (std_snapshot.default_stage_count, std_snapshot.resolve_state)
@@ -20,17 +32,16 @@ fn resolve_sources_in_compile_order(
         let std_resolved = sigil::resolve_staged_program_with_state(
             &cached_modules.module_asts,
             Vec::new(),
-            &cached_modules.declaration_index,
+            &declaration_index,
             None,
         )
         .map_err(|e| format!("phase=resolve; message={}", e))?;
         (cached_modules.module_asts.len(), std_resolved.resume_state)
     };
-    let user_ast = parse_user_program(compile_sources, mode)?;
     sigil::resolve_staged_program_from_state(
-        &cached_modules.module_asts,
+        &module_asts,
         user_ast,
-        &cached_modules.declaration_index,
+        &declaration_index,
         Some(compile_sources.user_module_path.clone()),
         start_stage_index,
         resume_state,
@@ -46,10 +57,21 @@ fn typecheck_sources_in_compile_order(
     let compile_prefix = cached_compile_prefix(compile_sources, mode)?;
 
     let user_ast = parse_user_program(compile_sources, mode)?;
+    let (process_stage, user_ast) = xldr::extract_process_modules_from_user_ast(user_ast);
+    let mut module_asts = compile_prefix.module_asts.clone();
+    if !process_stage.is_empty() {
+        module_asts.push(process_stage);
+    }
+    let declaration_index = if module_asts.len() == compile_prefix.module_asts.len() {
+        compile_prefix.declaration_index.clone()
+    } else {
+        sigil::precollect_declaration_index(&module_asts)
+            .map_err(|e| format!("phase=resolve; message={}", e))?
+    };
     let resolved = sigil::resolve_staged_program_from_state(
-        &compile_prefix.module_asts,
+        &module_asts,
         user_ast,
-        &compile_prefix.declaration_index,
+        &declaration_index,
         Some(compile_sources.user_module_path.clone()),
         compile_prefix.module_asts.len(),
         compile_prefix.resolve_state,

@@ -631,8 +631,15 @@ pub(crate) fn compile_source(
     let user_source = sources.source(user_source_id).unwrap_or("");
 
     let std_snapshot = load_default_stdlib_snapshot(env, compile_sources)?;
-    let (module_stages, mut user_ast) =
+    let (mut module_stages, mut user_ast) =
         parse_program_with_module_sources(env, compile_sources, &std_snapshot)?;
+    let (script_process_stage, script_user_ast) =
+        xldr::extract_process_modules_from_user_ast(user_ast);
+    let has_script_process_stage = !script_process_stage.is_empty();
+    user_ast = script_user_ast;
+    if has_script_process_stage {
+        module_stages.to_mut().push(script_process_stage);
+    }
     if let Some(entry_name) = compile_plan.selected_entry_name.as_deref() {
         user_ast = rewrite_script_ast_for_entry(user_ast, entry_name);
     }
@@ -652,7 +659,7 @@ pub(crate) fn compile_source(
     let rebuilt_declaration_index;
     let declaration_index = if module_stages.len() == std_snapshot.default_stage_count {
         &std_snapshot.declaration_index
-    } else if matches!(env, ExecutionEnv::Test) {
+    } else if matches!(env, ExecutionEnv::Test) && !has_script_process_stage {
         cached_prefix = Some(build_cached_script_compile_prefix(
             env,
             compile_sources,
@@ -886,6 +893,7 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
                     | Ast::RecordDef(..)
                     | Ast::DeferrorDef(_, _, _, _, _)
                     | Ast::ImplDef(_, _, _, _)
+                    | Ast::SupervisorInit(_, _)
                     | Ast::Import(_, _, _)
             )
         })

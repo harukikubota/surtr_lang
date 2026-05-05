@@ -1276,7 +1276,6 @@ impl Parser<'_> {
                 doc: attrs.doc,
                 auto_import: attrs.auto_import,
                 hidden: attrs.hidden,
-                process_spec: attrs.process_spec,
             },
         ))
     }
@@ -2813,7 +2812,7 @@ impl Parser<'_> {
     fn parse_defsupervisor_with_attrs(
         &mut self,
         dynamic: bool,
-        mut attrs: DeclAttrs,
+        attrs: DeclAttrs,
         start: usize,
     ) -> Result<Ast, ParseError> {
         let token = if dynamic {
@@ -2861,7 +2860,7 @@ impl Parser<'_> {
                 span,
             ));
         }
-        attrs.process_spec = Some(ProcessSpec {
+        let process_spec = ProcessSpec {
             process_name: name.clone(),
             kind: if dynamic {
                 ProcessKind::DynamicSupervisor
@@ -2874,7 +2873,7 @@ impl Parser<'_> {
             lazy: false,
             handlers: process_meta.handlers,
             handler_specs: Vec::new(),
-        });
+        };
         body.insert(
             0,
             dummy_process_handler(
@@ -2895,15 +2894,21 @@ impl Parser<'_> {
                 "__agent_init",
             ),
         );
-        Ok(Ast::Defmod(
-            Span {
-                start,
-                end: end.end,
-            },
-            name,
-            body,
-            attrs,
-        ))
+        let span = Span {
+            start,
+            end: end.end,
+        };
+        if dynamic {
+            Ok(Ast::DefdynamicSupervisor(
+                span,
+                name,
+                body,
+                process_spec,
+                attrs,
+            ))
+        } else {
+            Ok(Ast::Defsupervisor(span, name, body, process_spec, attrs))
+        }
     }
 
     fn parse_process_meta_block(&mut self) -> Result<ProcessMeta, ParseError> {
@@ -3167,7 +3172,7 @@ impl Parser<'_> {
 
     fn parse_defgenserver_with_attrs(
         &mut self,
-        mut attrs: DeclAttrs,
+        attrs: DeclAttrs,
         start: usize,
     ) -> Result<Ast, ParseError> {
         self.expect(&Token::Defgenserver)?;
@@ -3307,7 +3312,7 @@ impl Parser<'_> {
             )?);
         }
 
-        attrs.process_spec = Some(ProcessSpec {
+        let process_spec = ProcessSpec {
             process_name: name.clone(),
             kind: ProcessKind::GenServer,
             instance: process_meta.instance.into_process_instance(),
@@ -3337,8 +3342,8 @@ impl Parser<'_> {
                 }
                 specs
             },
-        });
-        Ok(Ast::Defmod(span, name, body, attrs))
+        };
+        Ok(Ast::Defgenserver(span, name, body, process_spec, attrs))
     }
 
     fn parse_agent_handler_marker(&mut self) -> Result<AgentHandlerKind, ParseError> {
@@ -3399,7 +3404,7 @@ impl Parser<'_> {
         &self,
         span: Span,
         name: Symbol,
-        mut attrs: DeclAttrs,
+        attrs: DeclAttrs,
         meta: AgentMeta,
         init: AgentHandler,
         get: AgentHandler,
@@ -3501,8 +3506,7 @@ impl Parser<'_> {
             }
             specs
         };
-        attrs.process_spec = Some(process_spec);
-        Ok(Ast::Defmod(span, name, body, attrs))
+        Ok(Ast::Defagent(span, name, body, process_spec, attrs))
     }
 
     pub(super) fn parse_intrinsic_decl(

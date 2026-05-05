@@ -4058,13 +4058,9 @@ defagent Counter {
     .expect("defagent should parse");
 
     match &ast[0] {
-        Ast::Defmod(_, name, body, attrs) => {
+        Ast::Defagent(_, name, body, process_spec, attrs) => {
             assert_eq!(name, "Counter");
             assert_eq!(attrs.doc.as_deref(), Some("Counter agent docs."));
-            let process_spec = attrs
-                .process_spec
-                .as_ref()
-                .expect("defagent lowered module should keep process spec");
             assert_eq!(process_spec.process_name, "Counter");
             assert_eq!(process_spec.kind, crate::ast::ProcessKind::Agent);
             assert_eq!(
@@ -4130,7 +4126,40 @@ defagent Counter {
             assert_eq!(process_spec.handler_specs[1].name, "fetch");
             assert_eq!(process_spec.handler_specs[2].name, "replace");
         }
-        other => panic!("Expected lowered Defmod, got {other:?}"),
+        other => panic!("Expected Defagent, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_defagent_parses_as_dedicated_process_ast_node() {
+    let ast = parse_with_context(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def fetch(state: Int, _field: String) -> Result<Int> { Ok(state) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("defagent should parse");
+
+    match &ast[0] {
+        Ast::Defagent(_, name, body, process_spec, attrs) => {
+            assert_eq!(name, "Counter");
+            assert_eq!(attrs.doc, None);
+            assert_eq!(process_spec.process_name, "Counter");
+            assert_eq!(process_spec.kind, crate::ast::ProcessKind::Agent);
+            assert!(body.iter().any(
+                |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "fetch")
+            ));
+        }
+        other => panic!("Expected Defagent, got {other:?}"),
     }
 }
 
@@ -4157,17 +4186,13 @@ fn test_defagent_meta_handlers_are_preserved_in_process_spec() {
     .expect("defagent should parse");
 
     match &ast[0] {
-        Ast::Defmod(_, _, _, attrs) => {
-            let process_spec = attrs
-                .process_spec
-                .as_ref()
-                .expect("defagent lowered module should keep process spec");
+        Ast::Defagent(_, _, _, process_spec, _) => {
             assert_eq!(process_spec.handlers.len(), 1);
             assert_eq!(process_spec.handlers[0].slot, "out");
             assert_eq!(process_spec.handlers[0].capability, "OutHandler");
             assert_eq!(process_spec.handlers[0].default_target.name, "StdOut");
         }
-        other => panic!("Expected lowered Defmod, got {other:?}"),
+        other => panic!("Expected Defagent, got {other:?}"),
     }
 }
 
@@ -4196,11 +4221,7 @@ fn test_defgenserver_preserves_runtime_handler_specs() {
     .expect("defgenserver should parse");
 
     match &ast[0] {
-        Ast::Defmod(_, _, _, attrs) => {
-            let process_spec = attrs
-                .process_spec
-                .as_ref()
-                .expect("defgenserver lowered module should keep process spec");
+        Ast::Defgenserver(_, _, _, process_spec, _) => {
             assert_eq!(process_spec.kind, crate::ast::ProcessKind::GenServer);
             assert_eq!(process_spec.handler_specs.len(), 3);
             assert_eq!(process_spec.handler_specs[0].name, "init");
@@ -4219,7 +4240,7 @@ fn test_defgenserver_preserves_runtime_handler_specs() {
                 crate::ast::ProcessRuntimeHandlerKind::Cast
             );
         }
-        other => panic!("Expected lowered Defmod, got {other:?}"),
+        other => panic!("Expected Defgenserver, got {other:?}"),
     }
 }
 
@@ -4246,7 +4267,7 @@ fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
     .expect("worker defagent should parse");
 
     match &ast[0] {
-        Ast::Defmod(_, name, body, _) => {
+        Ast::Defagent(_, name, body, _, _) => {
             assert_eq!(name, "Worker");
             assert!(body.iter().all(
                 |node| !matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "pid")
@@ -4272,7 +4293,7 @@ fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
                 }
             }
         }
-        other => panic!("Expected lowered Defmod, got {other:?}"),
+        other => panic!("Expected Defagent, got {other:?}"),
     }
 }
 
@@ -4292,12 +4313,8 @@ fn test_defsupervisor_exposes_user_defs_on_lowered_module() {
     .expect("defsupervisor should parse");
 
     match &ast[0] {
-        Ast::Defmod(_, name, body, attrs) => {
+        Ast::Defsupervisor(_, name, body, process_spec, _) => {
             assert_eq!(name, "AppSup");
-            let process_spec = attrs
-                .process_spec
-                .as_ref()
-                .expect("supervisor should keep process spec");
             assert_eq!(process_spec.kind, crate::ast::ProcessKind::Supervisor);
             assert!(body.iter().any(
                 |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "status")
@@ -4306,7 +4323,7 @@ fn test_defsupervisor_exposes_user_defs_on_lowered_module() {
                 |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "__agent_init")
             ));
         }
-        other => panic!("Expected lowered Defmod, got {other:?}"),
+        other => panic!("Expected Defsupervisor, got {other:?}"),
     }
 }
 

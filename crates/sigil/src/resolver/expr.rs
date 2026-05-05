@@ -374,6 +374,10 @@ impl Resolver {
             | Ast::BuiltinTypeDecl(_, _, _)
             | Ast::ResultCtorDecl(_, _, _, _, _)
             | Ast::Defmod(_, _, _, _)
+            | Ast::Defagent(_, _, _, _, _)
+            | Ast::Defgenserver(_, _, _, _, _)
+            | Ast::Defsupervisor(_, _, _, _, _)
+            | Ast::DefdynamicSupervisor(_, _, _, _, _)
             | Ast::Namespace(_, _, _)
             | Ast::ImplDef(_, _, _, _)
             | Ast::TraitDef(_, _, _, _, _)
@@ -2268,6 +2272,14 @@ impl Resolver {
             }
             Ast::Defmod(span, name, _, _) => Err(ResolveError {
                 message: format!("Module resolution is not implemented yet: {}", name),
+                span,
+                related_labels: Vec::new(),
+            }),
+            Ast::Defagent(span, name, _, _, _)
+            | Ast::Defgenserver(span, name, _, _, _)
+            | Ast::Defsupervisor(span, name, _, _, _)
+            | Ast::DefdynamicSupervisor(span, name, _, _, _) => Err(ResolveError {
+                message: format!("Process module resolution is not implemented yet: {}", name),
                 span,
                 related_labels: Vec::new(),
             }),

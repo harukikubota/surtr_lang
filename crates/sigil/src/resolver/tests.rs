@@ -166,15 +166,15 @@ fn test_resolve_staged_program_keeps_process_specs() {
     .expect("definition source should parse");
 
     let module = match ast.into_iter().next().expect("lowered module should exist") {
-        Ast::Defmod(_, module_path, ast, attrs) => StagedModuleAst {
+        Ast::Defagent(_, module_path, ast, process_spec, attrs) => StagedModuleAst {
             module_path,
             doc_module_path: None,
             ast,
             module_doc: attrs.doc,
             auto_import: attrs.auto_import,
-            process_spec: attrs.process_spec,
+            process_spec: Some(process_spec),
         },
-        other => panic!("expected lowered defmod, got {other:?}"),
+        other => panic!("expected defagent, got {other:?}"),
     };
     let module_stages = vec![vec![kernel, module]];
     let declaration_index =

@@ -25,7 +25,6 @@ pub struct DeclAttrs {
     pub auto_import: bool,
     pub hidden: bool,
     pub visibility: Visibility,
-    pub process_spec: Option<ProcessSpec>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -484,6 +483,12 @@ pub enum Ast {
 
     /// Module declaration: `defmod Kernel { ... }`
     Defmod(Span, Symbol, Vec<Ast>, DeclAttrs),
+
+    /// Process module declarations: `defagent Counter { ... }`, etc.
+    Defagent(Span, Symbol, Vec<Ast>, ProcessSpec, DeclAttrs),
+    Defgenserver(Span, Symbol, Vec<Ast>, ProcessSpec, DeclAttrs),
+    Defsupervisor(Span, Symbol, Vec<Ast>, ProcessSpec, DeclAttrs),
+    DefdynamicSupervisor(Span, Symbol, Vec<Ast>, ProcessSpec, DeclAttrs),
 
     /// Parser-only namespace declaration: `namespace Auth { ... }`
     Namespace(Span, Symbol, Vec<Ast>),

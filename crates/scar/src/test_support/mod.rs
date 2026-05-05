@@ -143,7 +143,22 @@ fn parse_std_module_stage(
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
-                    process_spec: attrs.process_spec,
+                    process_spec: None,
+                });
+            }
+            Ast::Defagent(_, module_path, body, process_spec, attrs)
+            | Ast::Defgenserver(_, module_path, body, process_spec, attrs)
+            | Ast::Defsupervisor(_, module_path, body, process_spec, attrs)
+            | Ast::DefdynamicSupervisor(_, module_path, body, process_spec, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                lowered.push(sigil::StagedModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: Some(process_spec),
                 });
             }
             Ast::ImplDef(span, target, methods, attrs) => {
@@ -157,7 +172,7 @@ fn parse_std_module_stage(
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
-                    process_spec: attrs.process_spec,
+                    process_spec: None,
                 });
             }
             Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
@@ -184,7 +199,7 @@ fn parse_std_module_stage(
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
-                    process_spec: attrs.process_spec,
+                    process_spec: None,
                 });
             }
             Ast::Import(_, _, _) => {}
@@ -311,7 +326,22 @@ fn parse_user_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
-                    process_spec: attrs.process_spec,
+                    process_spec: None,
+                });
+            }
+            Ast::Defagent(_, module_path, body, process_spec, attrs)
+            | Ast::Defgenserver(_, module_path, body, process_spec, attrs)
+            | Ast::Defsupervisor(_, module_path, body, process_spec, attrs)
+            | Ast::DefdynamicSupervisor(_, module_path, body, process_spec, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                lowered.push(sigil::StagedModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: Some(process_spec),
                 });
             }
             Ast::ImplDef(span, target, methods, attrs) => {
@@ -323,7 +353,7 @@ fn parse_user_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
-                    process_spec: attrs.process_spec,
+                    process_spec: None,
                 });
             }
             Ast::Import(_, _, _) => {}
