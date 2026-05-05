@@ -544,19 +544,30 @@ fn build_state_get_wrapper(
     span: &Span,
     agent_name: &str,
     get_def: &Ast,
+    singleton: bool,
 ) -> Result<Ast, ParseError> {
     let params = def_params(get_def)?;
-    let mut surface_params = vec![pid_param(span, agent_name)];
-    surface_params.extend(params.iter().skip(2).cloned());
+    let surface_params = if singleton {
+        params.iter().skip(2).cloned().collect::<Vec<_>>()
+    } else {
+        let mut surface_params = vec![pid_param(span, agent_name)];
+        surface_params.extend(params.iter().skip(2).cloned());
+        surface_params
+    };
+    let forwarded_params = if singleton {
+        surface_params.as_slice()
+    } else {
+        &surface_params[1..]
+    };
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
-    call_args.extend(param_vars(span, &surface_params[1..]));
-    let body = Ast::Block(
-        span.clone(),
-        vec![
-            process_state_bind(span),
-            call(span, "__agent_get", call_args),
-        ],
-    );
+    call_args.extend(param_vars(span, forwarded_params));
+    let mut stmts = Vec::new();
+    if singleton {
+        stmts.push(pid_bind(span, agent_name));
+    }
+    stmts.push(process_state_bind(span));
+    stmts.push(call(span, "__agent_get", call_args));
+    let body = Ast::Block(span.clone(), stmts);
     Ok(Ast::Def(
         span.clone(),
         "get".to_string(),
@@ -572,28 +583,39 @@ fn build_state_set_wrapper(
     span: &Span,
     agent_name: &str,
     set_def: &Ast,
+    singleton: bool,
 ) -> Result<Ast, ParseError> {
     let params = def_params(set_def)?;
-    let mut surface_params = vec![pid_param(span, agent_name)];
-    surface_params.extend(params.iter().skip(2).cloned());
+    let surface_params = if singleton {
+        params.iter().skip(2).cloned().collect::<Vec<_>>()
+    } else {
+        let mut surface_params = vec![pid_param(span, agent_name)];
+        surface_params.extend(params.iter().skip(2).cloned());
+        surface_params
+    };
+    let forwarded_params = if singleton {
+        surface_params.as_slice()
+    } else {
+        &surface_params[1..]
+    };
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
-    call_args.extend(param_vars(span, &surface_params[1..]));
-    let body = Ast::Block(
+    call_args.extend(param_vars(span, forwarded_params));
+    let mut stmts = Vec::new();
+    if singleton {
+        stmts.push(pid_bind(span, agent_name));
+    }
+    stmts.push(process_state_bind(span));
+    stmts.push(Ast::SafeBind(
         span.clone(),
-        vec![
-            process_state_bind(span),
-            Ast::SafeBind(
-                span.clone(),
-                AstPattern::Var(span.clone(), "next_state".to_string()),
-                Box::new(call(span, "__agent_set", call_args)),
-            ),
-            internal_call(
-                span,
-                "__process_store",
-                vec![var(span, "pid"), var(span, "next_state")],
-            ),
-        ],
-    );
+        AstPattern::Var(span.clone(), "next_state".to_string()),
+        Box::new(call(span, "__agent_set", call_args)),
+    ));
+    stmts.push(internal_call(
+        span,
+        "__process_store",
+        vec![var(span, "pid"), var(span, "next_state")],
+    ));
+    let body = Ast::Block(span.clone(), stmts);
     Ok(Ast::Def(
         span.clone(),
         "set".to_string(),
@@ -3120,9 +3142,10 @@ impl Parser<'_> {
                 } else {
                     body.push(build_pid_wrapper(&span, &name));
                 }
-                body.push(build_state_get_wrapper(&span, &name, &get_def)?);
+                let singleton = meta.instance == AgentInstance::Singleton;
+                body.push(build_state_get_wrapper(&span, &name, &get_def, singleton)?);
                 if let Some(set_def) = &set_def {
-                    body.push(build_state_set_wrapper(&span, &name, set_def)?);
+                    body.push(build_state_set_wrapper(&span, &name, set_def, singleton)?);
                 }
             }
         }

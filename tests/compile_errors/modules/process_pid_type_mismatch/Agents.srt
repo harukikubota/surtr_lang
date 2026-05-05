@@ -1,6 +1,6 @@
 defagent Counter {
   meta {
-    instance: Singleton
+    instance: Worker
     init_policy: Eager
   }
 
@@ -22,7 +22,7 @@ defagent Counter {
 
 defagent Clock {
   meta {
-    instance: Singleton
+    instance: Worker
     init_policy: Eager
   }
 

@@ -4102,11 +4102,8 @@ defagent Counter {
                 Ast::Def(_, _, _, params, _, _, _) => {
                     assert!(matches!(
                         params.as_slice(),
-                        [FunParam {
-                            ty: AstTy::Generic(_, ty_name, ty_args),
-                            ..
-                        }, ..] if ty_name == "PID"
-                            && matches!(ty_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Counter")
+                        [FunParam { name, ty: AstTy::Named(_, ty_name), .. }]
+                            if name == "_field" && ty_name == "String"
                     ));
                 }
                 other => panic!("expected get wrapper definition, got {other:?}"),
