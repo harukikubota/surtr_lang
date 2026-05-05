@@ -805,6 +805,7 @@ mod tests {
                     get_fun_idx: 0,
                     set_fun_idx: Some(0),
                     handlers: Vec::new(),
+                    handler_specs: Vec::new(),
                 }],
             },
             runtime_boot_plan: Default::default(),

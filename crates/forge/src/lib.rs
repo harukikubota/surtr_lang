@@ -907,4 +907,54 @@ supervisor_init {
             .message
             .contains("handler slot is not declared by the target process"));
     }
+
+    #[test]
+    fn codegen_typed_program_embeds_genserver_runtime_handler_specs() {
+        let typed = typed_module_program_with_builtin_prelude(
+            r#"defgenserver Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def info(state: Int, message: String) -> Result<(String, Int)> {
+    Ok((message, state))
+  }
+
+  @cast
+  def reset(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        );
+
+        let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
+        assert_eq!(bytecode.runtime_process_specs.entries.len(), 1);
+        let spec = &bytecode.runtime_process_specs.entries[0];
+        assert_eq!(spec.kind, sindr::ir::RuntimeProcessKind::GenServer);
+        assert_eq!(spec.handler_specs.len(), 3);
+        assert_eq!(spec.handler_specs[0].handler_id, 0);
+        assert_eq!(spec.handler_specs[0].name, "init");
+        assert_eq!(
+            spec.handler_specs[0].kind,
+            sindr::ir::RuntimeHandlerKind::Init
+        );
+        assert_eq!(spec.handler_specs[0].fun_idx, spec.init_fun_idx);
+        assert_eq!(spec.handler_specs[1].handler_id, 1);
+        assert_eq!(spec.handler_specs[1].name, "info");
+        assert_eq!(
+            spec.handler_specs[1].kind,
+            sindr::ir::RuntimeHandlerKind::Call
+        );
+        assert_eq!(spec.handler_specs[1].fun_idx, spec.get_fun_idx);
+        assert_eq!(spec.handler_specs[2].handler_id, 2);
+        assert_eq!(spec.handler_specs[2].name, "reset");
+        assert_eq!(
+            spec.handler_specs[2].kind,
+            sindr::ir::RuntimeHandlerKind::Cast
+        );
+        assert_eq!(Some(spec.handler_specs[2].fun_idx), spec.set_fun_idx);
+    }
 }

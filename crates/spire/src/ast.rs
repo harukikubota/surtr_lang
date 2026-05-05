@@ -54,6 +54,7 @@ pub struct ProcessSpec {
     pub registry: bool,
     pub lazy: bool,
     pub handlers: Vec<ProcessHandlerDependency>,
+    pub handler_specs: Vec<ProcessRuntimeHandlerSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -67,6 +68,22 @@ pub struct ProcessHandlerDependency {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessHandlerTarget {
     pub name: Symbol,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProcessRuntimeHandlerKind {
+    Init,
+    Get,
+    Set,
+    Call,
+    Cast,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessRuntimeHandlerSpec {
+    pub name: Symbol,
+    pub kind: ProcessRuntimeHandlerKind,
     pub span: Span,
 }
 

@@ -4151,6 +4151,58 @@ fn test_defagent_meta_handlers_are_preserved_in_process_spec() {
 }
 
 #[test]
+fn test_defgenserver_preserves_runtime_handler_specs() {
+    let ast = parse_with_context(
+        r#"defgenserver Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def info(state: Int, message: String) -> Result<(String, Int)> {
+    Ok((message, state))
+  }
+
+  @cast
+  def reset(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("defgenserver should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, _, _, attrs) => {
+            let process_spec = attrs
+                .process_spec
+                .as_ref()
+                .expect("defgenserver lowered module should keep process spec");
+            assert_eq!(process_spec.kind, crate::ast::ProcessKind::GenServer);
+            assert_eq!(process_spec.handler_specs.len(), 3);
+            assert_eq!(process_spec.handler_specs[0].name, "init");
+            assert_eq!(
+                process_spec.handler_specs[0].kind,
+                crate::ast::ProcessRuntimeHandlerKind::Init
+            );
+            assert_eq!(process_spec.handler_specs[1].name, "info");
+            assert_eq!(
+                process_spec.handler_specs[1].kind,
+                crate::ast::ProcessRuntimeHandlerKind::Call
+            );
+            assert_eq!(process_spec.handler_specs[2].name, "reset");
+            assert_eq!(
+                process_spec.handler_specs[2].kind,
+                crate::ast::ProcessRuntimeHandlerKind::Cast
+            );
+        }
+        other => panic!("Expected lowered Defmod, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
     let ast = parse_with_context(
         r#"defagent Worker {

@@ -403,6 +403,8 @@ pub struct RuntimeProcessSpec {
     pub set_fun_idx: Option<u32>,
     #[serde(default)]
     pub handlers: Vec<RuntimeHandlerDependency>,
+    #[serde(default)]
+    pub handler_specs: Vec<RuntimeHandlerSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -410,6 +412,24 @@ pub struct RuntimeHandlerDependency {
     pub slot: String,
     pub capability: String,
     pub default_target: RuntimeHandlerTarget,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeHandlerKind {
+    Init,
+    Get,
+    Set,
+    Call,
+    Cast,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeHandlerSpec {
+    pub handler_id: u32,
+    pub name: String,
+    pub kind: RuntimeHandlerKind,
+    pub fun_idx: FunctionId,
+    pub arity: u8,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1592,6 +1612,7 @@ mod tests {
                     get_fun_idx: 0,
                     set_fun_idx: Some(0),
                     handlers: Vec::new(),
+                    handler_specs: Vec::new(),
                 }],
             },
             runtime_boot_plan: RuntimeBootPlan::explicit_singleton("Counter"),

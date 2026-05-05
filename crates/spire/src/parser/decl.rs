@@ -54,6 +54,7 @@ impl AgentMeta {
             registry: self.registry,
             lazy: self.lazy,
             handlers: self.handlers,
+            handler_specs: Vec::new(),
         }
     }
 }
@@ -359,6 +360,14 @@ fn call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
     Ast::App(
         span.clone(),
         Box::new(var(span, name)),
+        args.into_iter().map(positional).collect(),
+    )
+}
+
+fn constructor_call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
+    Ast::ConstructorCall(
+        span.clone(),
+        name.to_string(),
         args.into_iter().map(positional).collect(),
     )
 }
@@ -687,7 +696,7 @@ fn build_genserver_call_wrapper(
                     vec![var(span, "pid"), genserver_pair_field(span, "_1")],
                 )),
             ),
-            call(span, "Ok", vec![genserver_pair_field(span, "_0")]),
+            constructor_call(span, "Ok", vec![genserver_pair_field(span, "_0")]),
         ],
     );
     Ok(Ast::Def(
@@ -2861,6 +2870,7 @@ impl Parser<'_> {
             registry: process_meta.instance == AgentInstance::Singleton,
             lazy: false,
             handlers: process_meta.handlers,
+            handler_specs: Vec::new(),
         });
         body.insert(
             0,
@@ -3270,6 +3280,7 @@ impl Parser<'_> {
             )
         })?;
 
+        let init_name = def_name(&init.def)?;
         let init_def = rename_agent_handler(init.def, "__agent_init", &name, false)?;
         let call_def = rename_agent_handler(call_handler.def, "__agent_get", &name, true)?;
         let cast_def = cast_handler
@@ -3301,6 +3312,28 @@ impl Parser<'_> {
             registry: process_meta.instance == AgentInstance::Singleton,
             lazy: process_meta.init_policy == InitPolicy::Lazy,
             handlers: process_meta.handlers,
+            handler_specs: {
+                let mut specs = vec![ProcessRuntimeHandlerSpec {
+                    name: init_name.clone(),
+                    kind: ProcessRuntimeHandlerKind::Init,
+                    span: init_def.span().clone(),
+                }];
+                specs.push(ProcessRuntimeHandlerSpec {
+                    name: call_name.clone(),
+                    kind: ProcessRuntimeHandlerKind::Call,
+                    span: call_def.span().clone(),
+                });
+                if let (Some((cast_name, _)), Some(cast_def)) =
+                    (cast_handler.as_ref(), cast_def.as_ref())
+                {
+                    specs.push(ProcessRuntimeHandlerSpec {
+                        name: cast_name.clone(),
+                        kind: ProcessRuntimeHandlerKind::Cast,
+                        span: cast_def.span().clone(),
+                    });
+                }
+                specs
+            },
         });
         Ok(Ast::Defmod(span, name, body, attrs))
     }

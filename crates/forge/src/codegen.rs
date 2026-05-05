@@ -6,11 +6,13 @@ use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_id_by_name;
 use sindr::ir::{
     BootEntrySource, CompileInfo, DbgArgTemplate, DbgTemplate, DocEntry, FunctionFlags,
-    RuntimeBootPlan, RuntimeHandlerArg, RuntimeHandlerDependency, RuntimeHandlerOverride,
-    RuntimeHandlerTarget, SingletonBootEntry,
+    RuntimeBootPlan, RuntimeHandlerArg, RuntimeHandlerDependency, RuntimeHandlerKind,
+    RuntimeHandlerOverride, RuntimeHandlerSpec, RuntimeHandlerTarget, SingletonBootEntry,
 };
 use sindr::primitives::int;
-use spire::ast::{BinOp, Lit, ProcessInstance, Span, SupervisorInitSpec, Visibility};
+use spire::ast::{
+    BinOp, Lit, ProcessInstance, ProcessRuntimeHandlerKind, Span, SupervisorInitSpec, Visibility,
+};
 
 use crate::bytecode::*;
 use crate::error::CodegenError;
@@ -299,9 +301,26 @@ fn build_runtime_process_specs(
                 .map(|name| (name.clone(), entry.fun_idx))
         })
         .collect::<HashMap<_, _>>();
+    let function_entries = functions
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .qualified_name
+                .as_ref()
+                .map(|name| (name.clone(), entry.clone()))
+        })
+        .collect::<HashMap<_, _>>();
 
     let mut entries = Vec::with_capacity(process_specs.len());
     for spec in process_specs {
+        let process_kind = match spec.spec.kind {
+            spire::ast::ProcessKind::Agent => RuntimeProcessKind::Agent,
+            spire::ast::ProcessKind::GenServer => RuntimeProcessKind::GenServer,
+            spire::ast::ProcessKind::Supervisor => RuntimeProcessKind::Supervisor,
+            spire::ast::ProcessKind::RuntimeSupervisor => RuntimeProcessKind::RuntimeSupervisor,
+            spire::ast::ProcessKind::DynamicSupervisor => RuntimeProcessKind::DynamicSupervisor,
+            spire::ast::ProcessKind::Task => RuntimeProcessKind::Task,
+        };
         let init_name = qualified_names
             .get(&spec.init_uid)
             .ok_or_else(|| CodegenError {
@@ -364,18 +383,120 @@ fn build_runtime_process_specs(
                     })
             })
             .transpose()?;
+        let mut handler_specs = Vec::new();
+        let init_entry = function_entries
+            .get(init_name)
+            .ok_or_else(|| CodegenError {
+                message: format!(
+                    "missing bytecode init handler for process `{}`",
+                    spec.process_name
+                ),
+                span: Span { start: 0, end: 0 },
+            })?;
+        let get_entry = function_entries.get(get_name).ok_or_else(|| CodegenError {
+            message: format!(
+                "missing bytecode get handler for process `{}`",
+                spec.process_name
+            ),
+            span: Span { start: 0, end: 0 },
+        })?;
+        let mut set_entry = None;
+        if let Some(set_uid) = spec.set_uid {
+            let set_name = qualified_names.get(&set_uid).ok_or_else(|| CodegenError {
+                message: format!(
+                    "missing lowered set handler metadata for process `{}`",
+                    spec.process_name
+                ),
+                span: Span { start: 0, end: 0 },
+            })?;
+            set_entry = Some(function_entries.get(set_name).ok_or_else(|| CodegenError {
+                message: format!(
+                    "missing bytecode set handler for process `{}`",
+                    spec.process_name
+                ),
+                span: Span { start: 0, end: 0 },
+            })?);
+        }
+        if spec.spec.handler_specs.is_empty() {
+            handler_specs.push(RuntimeHandlerSpec {
+                handler_id: 0,
+                name: init_name.clone(),
+                kind: RuntimeHandlerKind::Init,
+                fun_idx: init_entry.fun_idx,
+                arity: init_entry.arity,
+            });
+            handler_specs.push(RuntimeHandlerSpec {
+                handler_id: 1,
+                name: get_name.clone(),
+                kind: if process_kind == RuntimeProcessKind::GenServer {
+                    RuntimeHandlerKind::Call
+                } else {
+                    RuntimeHandlerKind::Get
+                },
+                fun_idx: get_entry.fun_idx,
+                arity: get_entry.arity,
+            });
+            if let Some(set_entry) = set_entry {
+                handler_specs.push(RuntimeHandlerSpec {
+                    handler_id: 2,
+                    name: qualified_names
+                        .get(&spec.set_uid.expect("set entry exists"))
+                        .cloned()
+                        .unwrap_or_default(),
+                    kind: if process_kind == RuntimeProcessKind::GenServer {
+                        RuntimeHandlerKind::Cast
+                    } else {
+                        RuntimeHandlerKind::Set
+                    },
+                    fun_idx: set_entry.fun_idx,
+                    arity: set_entry.arity,
+                });
+            }
+        } else {
+            for (handler_id, handler) in spec.spec.handler_specs.iter().enumerate() {
+                let (kind, entry) = match handler.kind {
+                    ProcessRuntimeHandlerKind::Init => (RuntimeHandlerKind::Init, init_entry),
+                    ProcessRuntimeHandlerKind::Get => (RuntimeHandlerKind::Get, get_entry),
+                    ProcessRuntimeHandlerKind::Set => {
+                        let Some(entry) = set_entry else {
+                            return Err(CodegenError {
+                                message: format!(
+                                    "handler metadata references @set for process `{}` but no set handler was lowered",
+                                    spec.process_name
+                                ),
+                                span: handler.span.clone(),
+                            });
+                        };
+                        (RuntimeHandlerKind::Set, entry)
+                    }
+                    ProcessRuntimeHandlerKind::Call => (RuntimeHandlerKind::Call, get_entry),
+                    ProcessRuntimeHandlerKind::Cast => {
+                        let Some(entry) = set_entry else {
+                            return Err(CodegenError {
+                                message: format!(
+                                    "handler metadata references @cast for process `{}` but no cast handler was lowered",
+                                    spec.process_name
+                                ),
+                                span: handler.span.clone(),
+                            });
+                        };
+                        (RuntimeHandlerKind::Cast, entry)
+                    }
+                };
+                handler_specs.push(RuntimeHandlerSpec {
+                    handler_id: handler_id as u32,
+                    name: handler.name.clone(),
+                    kind,
+                    fun_idx: entry.fun_idx,
+                    arity: entry.arity,
+                });
+            }
+        }
 
         entries.push(RuntimeProcessSpec {
             process_name: spec.process_name.clone(),
             module_path: spec.module_path.clone(),
-            kind: match spec.spec.kind {
-                spire::ast::ProcessKind::Agent => RuntimeProcessKind::Agent,
-                spire::ast::ProcessKind::GenServer => RuntimeProcessKind::GenServer,
-                spire::ast::ProcessKind::Supervisor => RuntimeProcessKind::Supervisor,
-                spire::ast::ProcessKind::RuntimeSupervisor => RuntimeProcessKind::RuntimeSupervisor,
-                spire::ast::ProcessKind::DynamicSupervisor => RuntimeProcessKind::DynamicSupervisor,
-                spire::ast::ProcessKind::Task => RuntimeProcessKind::Task,
-            },
+            kind: process_kind,
             instance: match spec.spec.instance {
                 spire::ast::ProcessInstance::Singleton => RuntimeProcessInstance::Singleton,
                 spire::ast::ProcessInstance::Worker => RuntimeProcessInstance::Worker,
@@ -399,6 +520,7 @@ fn build_runtime_process_specs(
                     },
                 })
                 .collect(),
+            handler_specs,
         });
     }
 
