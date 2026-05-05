@@ -409,6 +409,112 @@ pub struct RuntimeProcessSpecTable {
     pub entries: Vec<RuntimeProcessSpec>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeBootPlan {
+    #[serde(default)]
+    pub root: RootSupervisorPlan,
+    #[serde(default)]
+    pub singletons: Vec<SingletonBootEntry>,
+    #[serde(default)]
+    pub standard_overrides: Vec<StandardOverrideEntry>,
+    #[serde(default)]
+    pub handler_overrides: Vec<RuntimeHandlerOverride>,
+    #[serde(default)]
+    pub runtime_limits: RuntimeLimitConfig,
+}
+
+impl RuntimeBootPlan {
+    pub fn explicit_singleton(process_name: impl Into<String>) -> Self {
+        Self {
+            singletons: vec![SingletonBootEntry {
+                process_name: process_name.into(),
+                init_timeout_ms: RuntimeLimitConfig::default().default_init_timeout_ms,
+                source: BootEntrySource::ExplicitConfig,
+            }],
+            ..Self::default()
+        }
+    }
+
+    pub fn has_explicit_entries(&self) -> bool {
+        !self.singletons.is_empty()
+            || !self.standard_overrides.is_empty()
+            || !self.handler_overrides.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RootSupervisorPlan {
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SingletonBootEntry {
+    pub process_name: String,
+    #[serde(default = "default_init_timeout_ms")]
+    pub init_timeout_ms: u64,
+    pub source: BootEntrySource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BootEntrySource {
+    ExplicitConfig,
+    BuiltinStandardIo,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StandardOverrideEntry {
+    pub standard_name: String,
+    pub handler_target: RuntimeHandlerTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeHandlerOverride {
+    pub target_process: String,
+    pub slot: String,
+    pub handler_target: RuntimeHandlerTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeHandlerTarget {
+    pub name: String,
+    #[serde(default)]
+    pub named_args: Vec<RuntimeHandlerArg>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeHandlerArg {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeLimitConfig {
+    pub default_init_timeout_ms: u64,
+    pub min_init_timeout_ms: u64,
+    pub max_init_timeout_ms: u64,
+    pub pending_initial_retry_ms: u64,
+    pub pending_max_retry_ms: u64,
+    pub min_scheduler_tick_ms: u64,
+}
+
+impl Default for RuntimeLimitConfig {
+    fn default() -> Self {
+        Self {
+            default_init_timeout_ms: default_init_timeout_ms(),
+            min_init_timeout_ms: 1,
+            max_init_timeout_ms: 60_000,
+            pending_initial_retry_ms: 10,
+            pending_max_retry_ms: 1_000,
+            min_scheduler_tick_ms: 1,
+        }
+    }
+}
+
+fn default_init_timeout_ms() -> u64 {
+    5_000
+}
+
 /// A compiled Surtr program, ready for Eldr to execute.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Bytecode {
@@ -444,6 +550,8 @@ pub struct Bytecode {
     pub pc_spans: Vec<PcSpanEntry>,
     #[serde(default)]
     pub runtime_process_specs: RuntimeProcessSpecTable,
+    #[serde(default)]
+    pub runtime_boot_plan: RuntimeBootPlan,
 }
 
 impl Default for Bytecode {
@@ -468,6 +576,7 @@ impl Default for Bytecode {
             sources: Vec::new(),
             pc_spans: Vec::new(),
             runtime_process_specs: RuntimeProcessSpecTable::default(),
+            runtime_boot_plan: RuntimeBootPlan::default(),
         }
     }
 }
@@ -491,6 +600,7 @@ pub struct BytecodeChunk {
     pub functions: Vec<FunctionEntry>,
     pub docs: Vec<DocEntry>,
     pub runtime_process_specs: Vec<RuntimeProcessSpec>,
+    pub runtime_boot_plan: RuntimeBootPlan,
 }
 
 /// Function table entry.
@@ -743,6 +853,7 @@ impl Bytecode {
     const CHUNK_PC_SPANS: [u8; 4] = *b"PcSp";
     const CHUNK_DOCS: [u8; 4] = *b"Docs";
     const CHUNK_PROCESS_SPECS: [u8; 4] = *b"Proc";
+    const CHUNK_BOOT_PLAN: [u8; 4] = *b"Boot";
 
     pub fn refresh_viewer_metadata(&mut self) {
         self.compile_info.num_locals = self.num_locals;
@@ -794,6 +905,10 @@ impl Bytecode {
             (
                 Self::CHUNK_PROCESS_SPECS,
                 serialize_chunk(&bytecode.runtime_process_specs)?,
+            ),
+            (
+                Self::CHUNK_BOOT_PLAN,
+                serialize_chunk(&bytecode.runtime_boot_plan)?,
             ),
         ];
 
@@ -865,6 +980,8 @@ fn decode_payloads(
     let docs = deserialize_optional::<Vec<DocEntry>>(payloads, "Docs")?.unwrap_or_default();
     let runtime_process_specs =
         deserialize_optional::<RuntimeProcessSpecTable>(payloads, "Proc")?.unwrap_or_default();
+    let runtime_boot_plan =
+        deserialize_optional::<RuntimeBootPlan>(payloads, "Boot")?.unwrap_or_default();
 
     Ok(Bytecode {
         opcodes,
@@ -886,6 +1003,7 @@ fn decode_payloads(
         sources,
         pc_spans,
         runtime_process_specs,
+        runtime_boot_plan,
     })
 }
 
@@ -1036,6 +1154,7 @@ fn is_known_chunk_tag(tag: &str) -> bool {
             | "SrcP"
             | "PcSp"
             | "Proc"
+            | "Boot"
             | "Docs"
     )
 }
@@ -1368,9 +1487,9 @@ mod tests {
     use super::{
         checked_payload_len, line_column_for_offset, populate_error_template_lines,
         stable_hash_hex, Bytecode, BytecodeFormatError, CompileInfo, Constant, DocEntry, DocKind,
-        ErrTemplate, FunctionEntry, FunctionFlags, Opcode, OpcodeSource, RuntimeProcessInstance,
-        RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable, SourceFileEntry,
-        SourceMap,
+        ErrTemplate, FunctionEntry, FunctionFlags, Opcode, OpcodeSource, RuntimeBootPlan,
+        RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable,
+        SourceFileEntry, SourceMap,
     };
     use crate::primitives::int;
     use crate::runtime::{TypeEntry, TypeKind, TypeRegistry};
@@ -1465,6 +1584,7 @@ mod tests {
                     set_fun_idx: Some(0),
                 }],
             },
+            runtime_boot_plan: RuntimeBootPlan::explicit_singleton("Counter"),
         };
         bytecode.refresh_viewer_metadata();
         bytecode
@@ -1540,6 +1660,7 @@ mod tests {
         assert!(inspected.chunks.len() >= 14);
         assert_eq!(inspected.chunks[0].tag, "Code");
         assert!(inspected.chunks.iter().any(|chunk| chunk.tag == "Proc"));
+        assert!(inspected.chunks.iter().any(|chunk| chunk.tag == "Boot"));
         assert!(inspected.chunks[0].payload_offset >= 16);
         assert!(inspected.chunks[0].padded_size >= inspected.chunks[0].size as usize);
     }

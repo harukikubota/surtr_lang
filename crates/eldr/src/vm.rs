@@ -1126,20 +1126,54 @@ impl VM {
             return Ok(());
         }
 
-        let boot_specs = self
-            .process_runtime
-            .specs_by_id
-            .iter()
-            .filter(|spec| {
-                spec.instance == RuntimeProcessInstance::Singleton
-                    && spec.boot
-                    && !self
-                        .process_runtime
-                        .singleton_by_name
-                        .contains_key(&spec.process_name)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        let boot_specs = if self.bytecode.runtime_boot_plan.has_explicit_entries() {
+            for entry in &self.bytecode.runtime_boot_plan.singletons {
+                let Some(spec) = self.process_runtime.specs_by_name.get(&entry.process_name) else {
+                    return Err(self.boot_failure_error(
+                        &entry.process_name,
+                        "singleton process is not defined or not visible",
+                    ));
+                };
+                if spec.instance != RuntimeProcessInstance::Singleton {
+                    return Err(self.boot_failure_error(
+                        &entry.process_name,
+                        "only Singleton process can appear in singleton boot entry",
+                    ));
+                }
+            }
+            self.bytecode
+                .runtime_boot_plan
+                .singletons
+                .iter()
+                .filter_map(|entry| {
+                    self.process_runtime
+                        .specs_by_name
+                        .get(&entry.process_name)
+                        .cloned()
+                })
+                .filter(|spec| {
+                    spec.instance == RuntimeProcessInstance::Singleton
+                        && !self
+                            .process_runtime
+                            .singleton_by_name
+                            .contains_key(&spec.process_name)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            self.process_runtime
+                .specs_by_id
+                .iter()
+                .filter(|spec| {
+                    spec.instance == RuntimeProcessInstance::Singleton
+                        && spec.boot
+                        && !self
+                            .process_runtime
+                            .singleton_by_name
+                            .contains_key(&spec.process_name)
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
 
         let saved_runtime = self.process_runtime.clone();
         for spec in boot_specs {
@@ -1739,6 +1773,7 @@ impl VM {
             functions,
             docs,
             runtime_process_specs,
+            runtime_boot_plan,
         } = chunk;
         self.ensure_root_supervisor_booted()?;
         let code_base = self.bytecode.opcodes.len();
@@ -1780,6 +1815,18 @@ impl VM {
             .runtime_process_specs
             .entries
             .extend(runtime_process_specs);
+        self.bytecode
+            .runtime_boot_plan
+            .singletons
+            .extend(runtime_boot_plan.singletons);
+        self.bytecode
+            .runtime_boot_plan
+            .standard_overrides
+            .extend(runtime_boot_plan.standard_overrides);
+        self.bytecode
+            .runtime_boot_plan
+            .handler_overrides
+            .extend(runtime_boot_plan.handler_overrides);
         self.process_runtime
             .register_spec_table(&self.bytecode.runtime_process_specs);
         self.bytecode.opcodes.extend(chunk_opcodes);
@@ -3743,8 +3790,8 @@ mod tests {
     use super::{ProcessWaitReason, StepOutcome, TaskMode, VmObservationOptions, VM};
     use sindr::ir::{
         Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode, OpcodeSource,
-        RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable,
-        SourceMap,
+        RuntimeBootPlan, RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec,
+        RuntimeProcessSpecTable, SourceMap,
     };
     use sindr::primitives::int;
     use sindr::runtime::{
@@ -4100,6 +4147,7 @@ mod tests {
             functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
         });
         let future_id = vm.process_runtime.allocate_future(None, Some(9), true);
         let correlation_id = vm.process_runtime.allocate_correlation_id();
@@ -4148,6 +4196,75 @@ mod tests {
             .expect("booted singleton process should exist");
         assert_eq!(instance.state_value, Some(Value::Int(int(41))));
         assert!(!instance.lazy_state_pending);
+    }
+
+    #[test]
+    fn root_supervisor_uses_boot_plan_singletons() {
+        let mut bytecode = singleton_boot_bytecode(
+            "Counter",
+            RuntimeProcessKind::Agent,
+            false,
+            false,
+            vec![
+                Opcode::LoadConst(0),
+                Opcode::LoadConst(1),
+                Opcode::StructNew { field_count: 1 },
+                Opcode::Return,
+            ],
+            vec![Constant::Tag(0), Constant::Int(int(41))],
+        );
+        bytecode.runtime_boot_plan = RuntimeBootPlan::explicit_singleton("Counter");
+        let mut vm = VM::new(bytecode);
+
+        vm.ensure_root_supervisor_booted()
+            .expect("boot should succeed");
+
+        let pid = vm
+            .process_runtime
+            .singleton_by_name
+            .get("Counter")
+            .copied()
+            .expect("singleton slot should be registered");
+        let instance = vm
+            .process_runtime
+            .processes
+            .get(&pid)
+            .expect("booted singleton process should exist");
+        assert_eq!(instance.state_value, Some(Value::Int(int(41))));
+    }
+
+    #[test]
+    fn root_supervisor_rejects_unknown_boot_plan_singleton() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_boot_plan = RuntimeBootPlan::explicit_singleton("Missing");
+        let mut vm = VM::new(bytecode);
+
+        let err = vm
+            .ensure_root_supervisor_booted()
+            .expect_err("unknown singleton boot entry should fail");
+
+        assert!(err.message.contains("not defined or not visible"));
+    }
+
+    #[test]
+    fn root_supervisor_rejects_worker_boot_plan_singleton_entry() {
+        let mut bytecode = singleton_boot_bytecode(
+            "WorkerAgent",
+            RuntimeProcessKind::Agent,
+            false,
+            false,
+            vec![Opcode::LoadConst(0), Opcode::Return],
+            vec![Constant::Int(int(0))],
+        );
+        bytecode.runtime_process_specs.entries[0].instance = RuntimeProcessInstance::Worker;
+        bytecode.runtime_boot_plan = RuntimeBootPlan::explicit_singleton("WorkerAgent");
+        let mut vm = VM::new(bytecode);
+
+        let err = vm
+            .ensure_root_supervisor_booted()
+            .expect_err("worker singleton boot entry should fail");
+
+        assert!(err.message.contains("only Singleton process"));
     }
 
     #[test]
@@ -4674,6 +4791,7 @@ mod tests {
             functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
         };
 
         let result = vm.push_atomic(chunk).expect("push should succeed");
@@ -4700,6 +4818,7 @@ mod tests {
             functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
         };
 
         let result = vm.push_atomic(chunk).expect("push should succeed");
@@ -4748,6 +4867,7 @@ mod tests {
             functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
         };
 
         let result = vm.push_atomic(chunk).expect("push should succeed");
@@ -4796,6 +4916,7 @@ mod tests {
                 functions: Vec::new(),
                 docs: Vec::new(),
                 runtime_process_specs: Vec::new(),
+                runtime_boot_plan: Default::default(),
             })
             .expect("push should succeed");
         match result {
@@ -4861,6 +4982,7 @@ mod tests {
             functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -4887,6 +5009,7 @@ mod tests {
             functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -4917,6 +5040,7 @@ mod tests {
             functions: vec![function_entry(0, 2, 1, 0, Some("new"))],
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -4957,6 +5081,7 @@ mod tests {
             functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -4984,6 +5109,7 @@ mod tests {
             functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -5019,6 +5145,7 @@ mod tests {
             functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
         };
 
         vm.push_atomic(chunk).expect("push should succeed");
@@ -5061,6 +5188,7 @@ mod tests {
             functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -5188,6 +5316,7 @@ mod tests {
             functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");
@@ -5226,6 +5355,7 @@ mod tests {
             functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
         };
 
         let err = vm.push_atomic(chunk).expect_err("must fail");

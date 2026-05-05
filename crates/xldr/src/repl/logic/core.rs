@@ -5843,6 +5843,7 @@ mod tests {
                 functions: Vec::new(),
                 docs: Vec::new(),
                 runtime_process_specs: Vec::new(),
+                runtime_boot_plan: Default::default(),
             })
             .expect("vm bootstrap corruption setup should succeed");
 

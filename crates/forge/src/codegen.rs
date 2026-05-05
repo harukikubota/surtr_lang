@@ -52,6 +52,7 @@ pub fn codegen_typed_program(typed: TypedProgram) -> Result<Bytecode, CodegenErr
         sources: Vec::new(),
         pc_spans: Vec::new(),
         runtime_process_specs,
+        runtime_boot_plan: Default::default(),
     })
 }
 
@@ -681,6 +682,7 @@ impl ForgeSession {
         Ok((
             BytecodeChunk {
                 runtime_process_specs,
+                runtime_boot_plan: Default::default(),
                 ..chunk
             },
             meta,
@@ -749,6 +751,7 @@ impl ForgeSession {
                 functions: functions.clone(),
                 docs: Vec::new(),
                 runtime_process_specs: Vec::new(),
+                runtime_boot_plan: Default::default(),
             },
             meta,
             functions,

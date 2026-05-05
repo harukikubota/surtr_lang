@@ -806,6 +806,7 @@ mod tests {
                     set_fun_idx: Some(0),
                 }],
             },
+            runtime_boot_plan: Default::default(),
         };
         let inspected = EldrInspect {
             header: EldrHeader {
