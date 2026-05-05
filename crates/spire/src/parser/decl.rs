@@ -388,18 +388,17 @@ fn unit_ty(span: &Span) -> AstTy {
     AstTy::Named(span.clone(), "Unit".to_string())
 }
 
-fn ok_unit_expr(span: &Span) -> Ast {
-    call(span, "Ok", vec![Ast::Lit(span.clone(), Lit::Unit)])
-}
-
 fn dummy_process_handler(span: &Span, name: &str) -> Ast {
     Ast::Def(
         span.clone(),
         name.to_string(),
         Vec::new(),
         Vec::new(),
-        Some(result_unit_ty(span)),
-        Box::new(Ast::Block(span.clone(), vec![ok_unit_expr(span)])),
+        Some(unit_ty(span)),
+        Box::new(Ast::Block(
+            span.clone(),
+            vec![Ast::Lit(span.clone(), Lit::Unit)],
+        )),
         DeclAttrs {
             visibility: Visibility::Private,
             ..DeclAttrs::default()
@@ -2588,11 +2587,27 @@ impl Parser<'_> {
         self.skip_newlines();
         let process_meta = self.parse_process_meta_block()?;
         self.skip_newlines();
+        let mut body = Vec::new();
         while !matches!(self.peek(), Token::RBrace) {
             if matches!(self.peek(), Token::Eof) {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
-            self.advance();
+            if matches!(self.peek(), Token::Defp) {
+                return Err(ParseError::syntax(
+                    "Supervisor body uses public `def` declarations for user-visible helpers.",
+                    self.peek_span(),
+                ));
+            }
+            if !matches!(self.peek(), Token::Def) {
+                return Err(ParseError::syntax(
+                    "Supervisor body currently accepts user-visible `def` declarations",
+                    self.peek_span(),
+                ));
+            }
+            let def = self.parse_def_with_attrs(DeclAttrs::default(), None)?;
+            self.ensure_stmt_boundary(&def, true)?;
+            body.push(def);
+            self.skip_newlines();
         }
         let end = self.expect(&Token::RBrace)?;
         let span = Span {
@@ -2617,28 +2632,33 @@ impl Parser<'_> {
             registry: process_meta.instance == AgentInstance::Singleton,
             lazy: false,
         });
+        body.insert(
+            0,
+            dummy_process_handler(
+                &Span {
+                    start,
+                    end: end.end,
+                },
+                "__agent_get",
+            ),
+        );
+        body.insert(
+            0,
+            dummy_process_handler(
+                &Span {
+                    start,
+                    end: end.end,
+                },
+                "__agent_init",
+            ),
+        );
         Ok(Ast::Defmod(
             Span {
                 start,
                 end: end.end,
             },
             name,
-            vec![
-                dummy_process_handler(
-                    &Span {
-                        start,
-                        end: end.end,
-                    },
-                    "__agent_init",
-                ),
-                dummy_process_handler(
-                    &Span {
-                        start,
-                        end: end.end,
-                    },
-                    "__agent_get",
-                ),
-            ],
+            body,
             attrs,
         ))
     }

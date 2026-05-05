@@ -1,0 +1,10 @@
+defsupervisor AppSup {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  def status() -> String {
+    "ready"
+  }
+}

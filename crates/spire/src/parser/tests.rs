@@ -4167,6 +4167,40 @@ fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
 }
 
 #[test]
+fn test_defsupervisor_exposes_user_defs_on_lowered_module() {
+    let ast = parse_with_context(
+        r#"defsupervisor AppSup {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  def status() -> String { "ready" }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("defsupervisor should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, name, body, attrs) => {
+            assert_eq!(name, "AppSup");
+            let process_spec = attrs
+                .process_spec
+                .as_ref()
+                .expect("supervisor should keep process spec");
+            assert_eq!(process_spec.kind, crate::ast::ProcessKind::Supervisor);
+            assert!(body.iter().any(
+                |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "status")
+            ));
+            assert!(body.iter().any(
+                |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "__agent_init")
+            ));
+        }
+        other => panic!("Expected lowered Defmod, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_task_timeout_literal_parses_in_project_context() {
     let ast = parse_with_context(
         r#"value = Task::async({|| Ok(())}) @timeout(100ms)"#,
