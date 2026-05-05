@@ -4,9 +4,13 @@ use scar::typed::*;
 use scar::types::Ty;
 use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_id_by_name;
-use sindr::ir::{CompileInfo, DbgArgTemplate, DbgTemplate, DocEntry, FunctionFlags};
+use sindr::ir::{
+    BootEntrySource, CompileInfo, DbgArgTemplate, DbgTemplate, DocEntry, FunctionFlags,
+    RuntimeBootPlan, RuntimeHandlerArg, RuntimeHandlerOverride, RuntimeHandlerTarget,
+    SingletonBootEntry,
+};
 use sindr::primitives::int;
-use spire::ast::{BinOp, Lit, Span, Visibility};
+use spire::ast::{BinOp, Lit, ProcessInstance, Span, SupervisorInitSpec, Visibility};
 
 use crate::bytecode::*;
 use crate::error::CodegenError;
@@ -18,6 +22,7 @@ pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
     codegen_typed_program(TypedProgram {
         nodes: typed,
         process_specs: Vec::new(),
+        boot_plan: SupervisorInitSpec::default(),
     })
 }
 
@@ -26,12 +31,14 @@ pub fn codegen_typed_program(typed: TypedProgram) -> Result<Bytecode, CodegenErr
     let TypedProgram {
         nodes,
         process_specs,
+        boot_plan,
     } = typed;
     let mut gene = Codegen::new();
     gene.emit_program(nodes.clone())?;
     let (opcodes, state) = gene.finalize()?;
     let runtime_process_specs =
         build_runtime_process_specs(&process_specs, &nodes, &state.functions)?;
+    let runtime_boot_plan = build_runtime_boot_plan(&boot_plan, &process_specs)?;
     Ok(Bytecode {
         opcodes,
         constants: state.constants,
@@ -52,7 +59,7 @@ pub fn codegen_typed_program(typed: TypedProgram) -> Result<Bytecode, CodegenErr
         sources: Vec::new(),
         pc_spans: Vec::new(),
         runtime_process_specs,
-        runtime_boot_plan: Default::default(),
+        runtime_boot_plan,
     })
 }
 
@@ -183,7 +190,76 @@ pub fn compose_bytecode_with_chunk(
     base.runtime_process_specs
         .entries
         .extend(chunk.runtime_process_specs);
+    extend_runtime_boot_plan(&mut base.runtime_boot_plan, chunk.runtime_boot_plan);
     Ok(base)
+}
+
+fn extend_runtime_boot_plan(base: &mut RuntimeBootPlan, chunk: RuntimeBootPlan) {
+    base.singletons.extend(chunk.singletons);
+    base.standard_overrides.extend(chunk.standard_overrides);
+    base.handler_overrides.extend(chunk.handler_overrides);
+}
+
+fn build_runtime_boot_plan(
+    boot_plan: &SupervisorInitSpec,
+    process_specs: &[TypedProcessSpec],
+) -> Result<RuntimeBootPlan, CodegenError> {
+    let mut runtime = RuntimeBootPlan::default();
+    let default_timeout_ms = runtime.runtime_limits.default_init_timeout_ms;
+
+    for singleton in &boot_plan.singletons {
+        let Some(spec) = process_specs
+            .iter()
+            .find(|spec| spec.process_name == singleton.process_name)
+        else {
+            return Err(CodegenError {
+                message: "singleton process is not defined or not visible".into(),
+                span: singleton.span.clone(),
+            });
+        };
+        if spec.spec.instance != ProcessInstance::Singleton {
+            return Err(CodegenError {
+                message: "only Singleton process can appear in singleton boot entry".into(),
+                span: singleton.span.clone(),
+            });
+        }
+        if runtime
+            .singletons
+            .iter()
+            .any(|entry| entry.process_name == singleton.process_name)
+        {
+            return Err(CodegenError {
+                message: "singleton boot entry is duplicated".into(),
+                span: singleton.span.clone(),
+            });
+        }
+
+        runtime.singletons.push(SingletonBootEntry {
+            process_name: singleton.process_name.clone(),
+            init_timeout_ms: singleton.timeout_ms.unwrap_or(default_timeout_ms),
+            source: BootEntrySource::ExplicitConfig,
+        });
+        for handler in &singleton.handlers {
+            runtime.handler_overrides.push(RuntimeHandlerOverride {
+                target_process: singleton.process_name.clone(),
+                slot: handler.slot.clone(),
+                handler_target: RuntimeHandlerTarget {
+                    name: handler.target.name.clone(),
+                    named_args: handler
+                        .target
+                        .named_args
+                        .iter()
+                        .map(|arg| RuntimeHandlerArg {
+                            name: arg.name.clone(),
+                            value: arg.value.clone(),
+                        })
+                        .collect(),
+                },
+            });
+        }
+    }
+
+    Ok(runtime)
 }
 
 fn build_runtime_process_specs(
@@ -642,6 +718,7 @@ impl ForgeSession {
         self.codegen_chunk_typed_program(TypedProgram {
             nodes: typed,
             process_specs: Vec::new(),
+            boot_plan: SupervisorInitSpec::default(),
         })
     }
 
@@ -660,6 +737,7 @@ impl ForgeSession {
             TypedProgram {
                 nodes: typed,
                 process_specs: Vec::new(),
+                boot_plan: SupervisorInitSpec::default(),
             },
             true,
         )
@@ -673,16 +751,18 @@ impl ForgeSession {
         let TypedProgram {
             nodes,
             process_specs,
+            boot_plan,
         } = typed;
         let typed_for_meta = nodes.clone();
         let (chunk, meta, functions) =
             self.codegen_chunk_nodes_with_options(nodes, top_level_returns_result)?;
         let runtime_process_specs =
             build_runtime_process_specs(&process_specs, &typed_for_meta, &functions)?.entries;
+        let runtime_boot_plan = build_runtime_boot_plan(&boot_plan, &process_specs)?;
         Ok((
             BytecodeChunk {
                 runtime_process_specs,
-                runtime_boot_plan: Default::default(),
+                runtime_boot_plan,
                 ..chunk
             },
             meta,

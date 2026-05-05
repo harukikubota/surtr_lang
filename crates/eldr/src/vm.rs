@@ -1126,6 +1126,7 @@ impl VM {
             return Ok(());
         }
 
+        let limits = self.bytecode.runtime_boot_plan.runtime_limits.clone();
         let boot_specs = if self.bytecode.runtime_boot_plan.has_explicit_entries() {
             for entry in &self.bytecode.runtime_boot_plan.singletons {
                 let Some(spec) = self.process_runtime.specs_by_name.get(&entry.process_name) else {
@@ -1138,6 +1139,18 @@ impl VM {
                     return Err(self.boot_failure_error(
                         &entry.process_name,
                         "only Singleton process can appear in singleton boot entry",
+                    ));
+                }
+                if entry.init_timeout_ms < limits.min_init_timeout_ms {
+                    return Err(self.boot_failure_error(
+                        &entry.process_name,
+                        "init timeout must be at least `1ms`",
+                    ));
+                }
+                if entry.init_timeout_ms > limits.max_init_timeout_ms {
+                    return Err(self.boot_failure_error(
+                        &entry.process_name,
+                        "init timeout must not exceed `60s`",
                     ));
                 }
             }
@@ -1158,6 +1171,17 @@ impl VM {
                             .singleton_by_name
                             .contains_key(&spec.process_name)
                 })
+                .map(|spec| {
+                    let timeout_ms = self
+                        .bytecode
+                        .runtime_boot_plan
+                        .singletons
+                        .iter()
+                        .find(|entry| entry.process_name == spec.process_name)
+                        .map(|entry| entry.init_timeout_ms)
+                        .unwrap_or(limits.default_init_timeout_ms);
+                    (spec, timeout_ms)
+                })
                 .collect::<Vec<_>>()
         } else {
             self.process_runtime
@@ -1172,12 +1196,15 @@ impl VM {
                             .contains_key(&spec.process_name)
                 })
                 .cloned()
+                .map(|spec| (spec, limits.default_init_timeout_ms))
                 .collect::<Vec<_>>()
         };
 
         let saved_runtime = self.process_runtime.clone();
-        for spec in boot_specs {
-            if let Err(err) = self.ensure_singleton_available(&spec.process_name) {
+        for (spec, timeout_ms) in boot_specs {
+            if let Err(err) =
+                self.ensure_singleton_available_with_timeout(&spec.process_name, Some(timeout_ms))
+            {
                 let detail = self
                     .process_runtime
                     .root_supervisor
@@ -1199,6 +1226,14 @@ impl VM {
     }
 
     fn ensure_singleton_available(&mut self, process_name: &str) -> Result<u64, RuntimeError> {
+        self.ensure_singleton_available_with_timeout(process_name, None)
+    }
+
+    fn ensure_singleton_available_with_timeout(
+        &mut self,
+        process_name: &str,
+        timeout_ms: Option<u64>,
+    ) -> Result<u64, RuntimeError> {
         if let Some(pid) = self.process_runtime.singleton_by_name.get(process_name) {
             return Ok(*pid);
         }
@@ -1237,10 +1272,21 @@ impl VM {
             return Ok(pid);
         }
 
+        let init_started = Instant::now();
         let init_result = self.invoke_callable_isolated_sync(
             self.callable_for_function(spec.init_fun_idx),
             Vec::new(),
         )?;
+        if let Some(timeout_ms) = timeout_ms {
+            if init_started.elapsed().as_millis() > u128::from(timeout_ms) {
+                let detail = format!("init timed out after {timeout_ms}ms");
+                self.process_runtime
+                    .root_supervisor
+                    .boot_failures
+                    .insert(process_name.to_string(), detail.clone());
+                return Err(self.boot_failure_error(process_name, &detail));
+            }
+        }
         let state = match decode_vm_result(init_result, "__root_boot", "init")? {
             Ok(state) => state,
             Err(err) => {
@@ -4265,6 +4311,27 @@ mod tests {
             .expect_err("worker singleton boot entry should fail");
 
         assert!(err.message.contains("only Singleton process"));
+    }
+
+    #[test]
+    fn root_supervisor_rejects_boot_plan_timeout_outside_runtime_limits() {
+        let mut bytecode = singleton_boot_bytecode(
+            "Counter",
+            RuntimeProcessKind::Agent,
+            false,
+            false,
+            vec![Opcode::LoadConst(0), Opcode::Return],
+            vec![Constant::Int(int(0))],
+        );
+        bytecode.runtime_boot_plan = RuntimeBootPlan::explicit_singleton("Counter");
+        bytecode.runtime_boot_plan.singletons[0].init_timeout_ms = 0;
+        let mut vm = VM::new(bytecode);
+
+        let err = vm
+            .ensure_root_supervisor_booted()
+            .expect_err("invalid boot timeout should fail");
+
+        assert!(err.message.contains("at least `1ms`"));
     }
 
     #[test]

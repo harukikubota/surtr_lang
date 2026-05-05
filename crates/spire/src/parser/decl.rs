@@ -2547,26 +2547,252 @@ impl Parser<'_> {
     pub(super) fn parse_supervisor_init(&mut self) -> Result<Ast, ParseError> {
         let start = self.expect(&Token::SupervisorInit)?.start;
         self.skip_newlines();
-        self.skip_balanced_brace_block()?;
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+        let mut singletons = Vec::new();
+
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let (entry_kind, entry_span) = self.expect_ident()?;
+            if entry_kind != "singleton" {
+                return Err(ParseError::syntax(
+                    "supervisor_init currently accepts `singleton Name { ... }` entries",
+                    entry_span,
+                ));
+            }
+            let singleton = self.parse_supervisor_init_singleton()?;
+            if singletons
+                .iter()
+                .any(|entry: &SupervisorInitSingleton| entry.process_name == singleton.process_name)
+            {
+                return Err(ParseError::syntax(
+                    "singleton boot entry is duplicated",
+                    singleton.span,
+                ));
+            }
+            singletons.push(singleton);
+            self.skip_newlines();
+        }
+        let end = self.expect(&Token::RBrace)?;
         let span = Span {
             start,
-            end: self.peek_span().start,
+            end: end.end,
         };
-        Ok(Ast::Def(
-            span.clone(),
-            "__supervisor_init".to_string(),
-            Vec::new(),
-            Vec::new(),
-            Some(unit_ty(&span)),
-            Box::new(Ast::Block(
-                span.clone(),
-                vec![Ast::Lit(span.clone(), Lit::Unit)],
-            )),
-            DeclAttrs {
-                visibility: Visibility::Private,
-                ..DeclAttrs::default()
+        Ok(Ast::SupervisorInit(span, SupervisorInitSpec { singletons }))
+    }
+
+    fn parse_supervisor_init_singleton(&mut self) -> Result<SupervisorInitSingleton, ParseError> {
+        let (process_name, name_span) = self.expect_ident()?;
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+        let mut timeout_ms = None;
+        let mut handlers = Vec::new();
+
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let (key, key_span) = self.expect_ident()?;
+            self.skip_newlines();
+            match key.as_str() {
+                "timeout" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    let parsed = self.parse_supervisor_init_timeout_ms()?;
+                    if !(1..=60_000).contains(&parsed) {
+                        return Err(ParseError::syntax(
+                            if parsed == 0 {
+                                "init timeout must be at least `1ms`"
+                            } else {
+                                "init timeout must not exceed `60s`"
+                            },
+                            key_span,
+                        ));
+                    }
+                    timeout_ms = Some(parsed);
+                }
+                "handlers" => {
+                    handlers = self.parse_supervisor_init_handlers()?;
+                }
+                "init_policy" => {
+                    return Err(ParseError::syntax(
+                        "init policy belongs to process definition",
+                        key_span,
+                    ));
+                }
+                "boot" => {
+                    return Err(ParseError::syntax(
+                        "boot policy is no longer used",
+                        key_span,
+                    ));
+                }
+                _ => {
+                    return Err(ParseError::syntax(
+                        format!("Unknown supervisor_init singleton key: {key}"),
+                        key_span,
+                    ));
+                }
+            }
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+            }
+        }
+
+        let end = self.expect(&Token::RBrace)?;
+        Ok(SupervisorInitSingleton {
+            process_name,
+            timeout_ms,
+            handlers,
+            span: Span {
+                start: name_span.start,
+                end: end.end,
             },
-        ))
+        })
+    }
+
+    fn parse_supervisor_init_timeout_ms(&mut self) -> Result<u64, ParseError> {
+        let span = self.peek_span();
+        let Token::Int(n) = self.peek().clone() else {
+            return Err(ParseError::syntax(
+                "init timeout must be a duration literal like `5s` or `100ms`",
+                span,
+            ));
+        };
+        self.advance();
+        let (suffix, suffix_span) = self.expect_ident()?;
+        let Some(value) = n.to_string().parse::<u64>().ok() else {
+            return Err(ParseError::syntax(
+                "init timeout literal is too large",
+                span,
+            ));
+        };
+        match suffix.as_str() {
+            "ms" => Ok(value),
+            "s" => value.checked_mul(1_000).ok_or_else(|| {
+                ParseError::syntax("init timeout literal is too large", suffix_span)
+            }),
+            _ => Err(ParseError::syntax(
+                "init timeout must use `ms` or `s`",
+                suffix_span,
+            )),
+        }
+    }
+
+    fn parse_supervisor_init_handlers(
+        &mut self,
+    ) -> Result<Vec<SupervisorInitHandlerOverride>, ParseError> {
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+        let mut handlers = Vec::new();
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let (slot, slot_span) = self.expect_ident()?;
+            self.skip_newlines();
+            self.expect(&Token::Colon)?;
+            self.skip_newlines();
+            let target = self.parse_supervisor_init_handler_target()?;
+            if handlers
+                .iter()
+                .any(|entry: &SupervisorInitHandlerOverride| entry.slot == slot)
+            {
+                return Err(ParseError::syntax(
+                    "handler override is duplicated",
+                    slot_span,
+                ));
+            }
+            handlers.push(SupervisorInitHandlerOverride {
+                slot,
+                span: Span {
+                    start: slot_span.start,
+                    end: target.span.end,
+                },
+                target,
+            });
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(handlers)
+    }
+
+    fn parse_supervisor_init_handler_target(
+        &mut self,
+    ) -> Result<SupervisorInitHandlerTarget, ParseError> {
+        let (name, name_span) = self.expect_ident()?;
+        let mut end = name_span.end;
+        let mut named_args = Vec::new();
+        self.skip_newlines();
+        if matches!(self.peek(), Token::LParen) {
+            self.advance();
+            self.skip_newlines();
+            while !matches!(self.peek(), Token::RParen) {
+                if matches!(self.peek(), Token::Eof) {
+                    return Err(ParseError::incomplete(")", self.peek_span()));
+                }
+                let (arg_name, arg_span) = self.expect_ident()?;
+                self.skip_newlines();
+                self.expect(&Token::Colon)?;
+                self.skip_newlines();
+                let value = self.parse_supervisor_init_handler_arg_value()?;
+                named_args.push(SupervisorInitHandlerArg {
+                    name: arg_name,
+                    value,
+                    span: arg_span,
+                });
+                self.skip_newlines();
+                if matches!(self.peek(), Token::Comma) {
+                    self.advance();
+                    self.skip_newlines();
+                } else if !matches!(self.peek(), Token::RParen) {
+                    return Err(ParseError::syntax(
+                        "Expected `,` or `)` in handler target arguments",
+                        self.peek_span(),
+                    ));
+                }
+            }
+            end = self.expect(&Token::RParen)?.end;
+        }
+        Ok(SupervisorInitHandlerTarget {
+            name,
+            named_args,
+            span: Span {
+                start: name_span.start,
+                end,
+            },
+        })
+    }
+
+    fn parse_supervisor_init_handler_arg_value(&mut self) -> Result<String, ParseError> {
+        let span = self.peek_span();
+        match self.peek().clone() {
+            Token::Str(value) => {
+                self.advance();
+                Ok(value)
+            }
+            Token::Int(value) => {
+                self.advance();
+                Ok(value.to_string())
+            }
+            Token::Ident(value) => {
+                self.advance();
+                Ok(value)
+            }
+            Token::Eof => Err(ParseError::incomplete("handler argument value", span)),
+            _ => Err(ParseError::syntax(
+                "handler argument values currently accept string, integer, or identifier literals",
+                span,
+            )),
+        }
     }
 
     fn parse_defsupervisor_with_attrs(

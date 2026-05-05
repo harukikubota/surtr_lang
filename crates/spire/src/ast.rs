@@ -55,6 +55,40 @@ pub struct ProcessSpec {
     pub lazy: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SupervisorInitSpec {
+    pub singletons: Vec<SupervisorInitSingleton>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SupervisorInitSingleton {
+    pub process_name: Symbol,
+    pub timeout_ms: Option<u64>,
+    pub handlers: Vec<SupervisorInitHandlerOverride>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SupervisorInitHandlerOverride {
+    pub slot: Symbol,
+    pub target: SupervisorInitHandlerTarget,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SupervisorInitHandlerTarget {
+    pub name: Symbol,
+    pub named_args: Vec<SupervisorInitHandlerArg>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SupervisorInitHandlerArg {
+    pub name: Symbol,
+    pub value: String,
+    pub span: Span,
+}
+
 /// Surface builtin type head declaration: `List<$A>`, `Result<$T>`, `Int`, ...
 #[derive(Debug, Clone, PartialEq)]
 pub struct BuiltinTypeHead {
@@ -381,6 +415,9 @@ pub enum Ast {
 
     /// Top-level constant definition: `const APP_NAME = "surtr"`
     ConstDef(Span, Symbol, Option<AstTy>, Box<Ast>, DeclAttrs),
+
+    /// Top-level runtime boot configuration block.
+    SupervisorInit(Span, SupervisorInitSpec),
 
     ExtractorDef(
         Span,

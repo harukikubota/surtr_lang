@@ -96,6 +96,7 @@ fn top_level_decl_kind(ast: &Ast) -> Option<TopLevelDeclKind> {
         Ast::DeferrorDef(_, _, _, _, _) => Some(TopLevelDeclKind::DeferrorDef),
         Ast::EnumDef(_, _, _, _, _) => Some(TopLevelDeclKind::EnumDef),
         Ast::ConstDef(_, _, _, _, _) => Some(TopLevelDeclKind::ConstDef),
+        Ast::SupervisorInit(_, _) => Some(TopLevelDeclKind::SupervisorInit),
         Ast::BuiltinDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
         Ast::IntrinsicDecl(_, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
         Ast::BuiltinExtractorDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinExtractorDecl),

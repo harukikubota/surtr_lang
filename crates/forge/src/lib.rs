@@ -263,6 +263,7 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
+        let mut boot_ast = Vec::new();
         let lowered = ast
             .into_iter()
             .filter_map(|stmt| match stmt {
@@ -278,6 +279,10 @@ mod tests {
                         process_spec: attrs.process_spec,
                     })
                 }
+                other @ Ast::SupervisorInit(_, _) => {
+                    boot_ast.push(other);
+                    None
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -288,7 +293,7 @@ mod tests {
             .expect("module stages should precollect");
         let resolved = sigil::resolve_staged_program_from_state(
             &all_stages,
-            Vec::new(),
+            boot_ast,
             &declaration_index,
             None,
             0,
@@ -817,5 +822,45 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
         assert!(!spec.boot);
         assert!(spec.registry);
         assert_eq!(spec.set_fun_idx.is_some(), true);
+    }
+
+    #[test]
+    fn codegen_typed_program_embeds_runtime_boot_plan() {
+        let typed = typed_module_program_with_builtin_prelude(
+            r#"defagent Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, label: String) -> Result<String> { Ok(label) }
+}
+
+supervisor_init {
+  singleton Logger {
+    timeout: 5s
+    handlers {
+      out: FileOutHandler(path: "./logs/app.log")
+    }
+  }
+}"#,
+        );
+
+        let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
+        assert_eq!(bytecode.runtime_boot_plan.singletons.len(), 1);
+        let entry = &bytecode.runtime_boot_plan.singletons[0];
+        assert_eq!(entry.process_name, "Logger");
+        assert_eq!(entry.init_timeout_ms, 5_000);
+        assert_eq!(bytecode.runtime_boot_plan.handler_overrides.len(), 1);
+        let handler = &bytecode.runtime_boot_plan.handler_overrides[0];
+        assert_eq!(handler.target_process, "Logger");
+        assert_eq!(handler.slot, "out");
+        assert_eq!(handler.handler_target.name, "FileOutHandler");
+        assert_eq!(handler.handler_target.named_args[0].name, "path");
+        assert_eq!(handler.handler_target.named_args[0].value, "./logs/app.log");
     }
 }

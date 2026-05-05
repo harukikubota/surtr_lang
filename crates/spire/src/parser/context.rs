@@ -28,6 +28,7 @@ pub(crate) enum TopLevelDeclKind {
     DeferrorDef,
     EnumDef,
     ConstDef,
+    SupervisorInit,
     BuiltinDecl,
     BuiltinExtractorDecl,
     BuiltinTypeDecl,
@@ -65,6 +66,7 @@ impl ParseRules {
                 TopLevelDeclKind::TraitDef,
                 TopLevelDeclKind::TraitImplDef,
                 TopLevelDeclKind::ConstDef,
+                TopLevelDeclKind::SupervisorInit,
                 TopLevelDeclKind::Import,
                 TopLevelDeclKind::Include,
                 TopLevelDeclKind::StructDef,
@@ -98,6 +100,7 @@ impl ParseRules {
                 TopLevelDeclKind::DeferrorDef,
                 TopLevelDeclKind::EnumDef,
                 TopLevelDeclKind::ConstDef,
+                TopLevelDeclKind::SupervisorInit,
             ]),
         }
     }
@@ -178,6 +181,7 @@ impl ParseRules {
                 TopLevelDeclKind::DeferrorDef,
                 TopLevelDeclKind::EnumDef,
                 TopLevelDeclKind::ConstDef,
+                TopLevelDeclKind::SupervisorInit,
             ]),
         }
     }

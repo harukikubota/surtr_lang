@@ -460,6 +460,7 @@ pub fn typecheck_staged_program_with_context(
     Ok(TypedProgram {
         nodes,
         process_specs: program.process_specs.into_iter().map(Into::into).collect(),
+        boot_plan: program.boot_plan,
     })
 }
 
@@ -906,6 +907,7 @@ impl ScarSession {
         Ok(TypedProgram {
             nodes,
             process_specs: program.process_specs.into_iter().map(Into::into).collect(),
+            boot_plan: program.boot_plan,
         })
     }
 

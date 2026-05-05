@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sindr::builtin::{builtin_uid, BUILTIN_METAS};
 use spire::ast::{
     Ast, AstMatchArm, AstPattern, AstTy, ClosureParam, DeclAttrs, ExtractorParam, FunParam, Lit,
-    RecordLitArg, Span, StructLitField, Visibility,
+    RecordLitArg, Span, StructLitField, SupervisorInitSpec, Visibility,
 };
 
 use crate::error::{ResolveError, ResolveErrorLabel};
@@ -83,6 +83,7 @@ pub struct ResolveResumeState {
 pub struct ResolvedStagedProgram {
     pub resolved: Vec<Resolved>,
     pub process_specs: Vec<ResolvedProcessSpec>,
+    pub boot_plan: SupervisorInitSpec,
     pub resume_state: ResolveResumeState,
 }
 
@@ -125,6 +126,7 @@ pub fn resolve_staged_program_from_state(
     let auto_import_modules = auto_import_module_names(module_stages);
     let mut resolved = Vec::new();
     let mut process_specs = Vec::new();
+    let mut boot_plan = SupervisorInitSpec::default();
     let mut next_local_id = declaration_uids
         .values()
         .copied()
@@ -160,6 +162,7 @@ pub fn resolve_staged_program_from_state(
         next_local_id = stage_local_base.saturating_add(offset);
 
         for module in stage {
+            collect_supervisor_init_specs(&module.ast, &mut boot_plan);
             if let Some(spec) = &module.process_spec {
                 let init_fq = format!("{}::__agent_init", module.module_path);
                 let get_fq = format!("{}::__agent_get", module.module_path);
@@ -188,6 +191,7 @@ pub fn resolve_staged_program_from_state(
     }
 
     if !user_ast.is_empty() {
+        collect_supervisor_init_specs(&user_ast, &mut boot_plan);
         let mut user_scope = build_module_scope(
             &global_scope,
             &auto_import_modules,
@@ -214,8 +218,23 @@ pub fn resolve_staged_program_from_state(
     Ok(ResolvedStagedProgram {
         resolved,
         process_specs,
+        boot_plan,
         resume_state: ResolveResumeState { next_local_id },
     })
+}
+
+fn collect_supervisor_init_specs(stmts: &[Ast], boot_plan: &mut SupervisorInitSpec) {
+    for stmt in stmts {
+        match stmt {
+            Ast::SupervisorInit(_, spec) => {
+                boot_plan.singletons.extend(spec.singletons.clone());
+            }
+            Ast::Namespace(_, _, body) | Ast::Defmod(_, _, body, _) => {
+                collect_supervisor_init_specs(body, boot_plan);
+            }
+            _ => {}
+        }
+    }
 }
 
 struct StageModuleResolveResult {

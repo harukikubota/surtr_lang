@@ -976,6 +976,42 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*value, delta)),
             shift_decl_attrs(attrs),
         ),
+        Ast::SupervisorInit(span, spec) => Ast::SupervisorInit(
+            shift_span(span, delta),
+            SupervisorInitSpec {
+                singletons: spec
+                    .singletons
+                    .into_iter()
+                    .map(|singleton| SupervisorInitSingleton {
+                        process_name: singleton.process_name,
+                        timeout_ms: singleton.timeout_ms,
+                        handlers: singleton
+                            .handlers
+                            .into_iter()
+                            .map(|handler| SupervisorInitHandlerOverride {
+                                slot: handler.slot,
+                                target: SupervisorInitHandlerTarget {
+                                    name: handler.target.name,
+                                    named_args: handler
+                                        .target
+                                        .named_args
+                                        .into_iter()
+                                        .map(|arg| SupervisorInitHandlerArg {
+                                            name: arg.name,
+                                            value: arg.value,
+                                            span: shift_span(arg.span, delta),
+                                        })
+                                        .collect(),
+                                    span: shift_span(handler.target.span, delta),
+                                },
+                                span: shift_span(handler.span, delta),
+                            })
+                            .collect(),
+                        span: shift_span(singleton.span, delta),
+                    })
+                    .collect(),
+            },
+        ),
         Ast::ExtractorDef(span, name, type_params, param, ret_ty, body, attrs) => {
             Ast::ExtractorDef(
                 shift_span(span, delta),
@@ -1180,6 +1216,7 @@ impl Ast {
             | Ast::EnumDef(s, _, _, _, _)
             | Ast::Def(s, _, _, _, _, _, _)
             | Ast::ConstDef(s, _, _, _, _)
+            | Ast::SupervisorInit(s, _)
             | Ast::ExtractorDef(s, _, _, _, _, _, _)
             | Ast::BuiltinDecl(s, _, _, _, _)
             | Ast::IntrinsicDecl(s, _, _, _)

@@ -4201,6 +4201,57 @@ fn test_defsupervisor_exposes_user_defs_on_lowered_module() {
 }
 
 #[test]
+fn test_supervisor_init_parses_boot_entries_and_handler_overrides() {
+    let ast = parse_with_context(
+        r#"supervisor_init {
+  singleton Logger {
+    timeout: 5s
+    handlers {
+      out: FileOutHandler(path: "./logs/app.log")
+      err: NullOutHandler
+    }
+  }
+}"#,
+        ParserContext::project(1),
+    )
+    .expect("supervisor_init should parse");
+
+    match &ast[0] {
+        Ast::SupervisorInit(_, spec) => {
+            assert_eq!(spec.singletons.len(), 1);
+            let entry = &spec.singletons[0];
+            assert_eq!(entry.process_name, "Logger");
+            assert_eq!(entry.timeout_ms, Some(5_000));
+            assert_eq!(entry.handlers.len(), 2);
+            assert_eq!(entry.handlers[0].slot, "out");
+            assert_eq!(entry.handlers[0].target.name, "FileOutHandler");
+            assert_eq!(entry.handlers[0].target.named_args[0].name, "path");
+            assert_eq!(
+                entry.handlers[0].target.named_args[0].value,
+                "./logs/app.log"
+            );
+            assert_eq!(entry.handlers[1].slot, "err");
+            assert_eq!(entry.handlers[1].target.name, "NullOutHandler");
+        }
+        other => panic!("expected SupervisorInit, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_supervisor_init_rejects_duplicate_singleton() {
+    let err = parse_with_context(
+        r#"supervisor_init {
+  singleton Logger {}
+  singleton Logger {}
+}"#,
+        ParserContext::project(1),
+    )
+    .expect_err("duplicate singleton boot entries should fail");
+
+    assert!(err.message().contains("singleton boot entry is duplicated"));
+}
+
+#[test]
 fn test_task_timeout_literal_parses_in_project_context() {
     let ast = parse_with_context(
         r#"value = Task::async({|| Ok(())}) @timeout(100ms)"#,

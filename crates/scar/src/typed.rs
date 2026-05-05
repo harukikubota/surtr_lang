@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sigil::resolved::{ResolvedId, ResolvedProcessSpec};
 use sindr::primitives::SurtrInt;
-use spire::ast::{BinOp, Lit, ProcessSpec, Span, Visibility};
+use spire::ast::{BinOp, Lit, ProcessSpec, Span, SupervisorInitSpec, Visibility};
 
 use crate::types::Ty;
 
@@ -17,6 +17,7 @@ pub struct TypedNode {
 pub struct TypedProgram {
     pub nodes: Vec<TypedNode>,
     pub process_specs: Vec<TypedProcessSpec>,
+    pub boot_plan: SupervisorInitSpec,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

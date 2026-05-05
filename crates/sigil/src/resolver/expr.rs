@@ -366,6 +366,7 @@ impl Resolver {
             | Ast::EnumDef(_, _, _, _, _)
             | Ast::Def(_, _, _, _, _, _, _)
             | Ast::ConstDef(_, _, _, _, _)
+            | Ast::SupervisorInit(_, _)
             | Ast::ExtractorDef(_, _, _, _, _, _, _)
             | Ast::BuiltinDecl(_, _, _, _, _)
             | Ast::IntrinsicDecl(_, _, _, _)
@@ -1336,6 +1337,7 @@ impl Resolver {
         let mut resolved = Vec::new();
         for stmt in stmts {
             if matches!(stmt, Ast::Import(_, _, _))
+                || matches!(stmt, Ast::SupervisorInit(_, _))
                 || matches!(stmt, Ast::IntrinsicDecl(_, _, _, _))
                 || matches!(&stmt, Ast::BuiltinDecl(_, name, _, _, _) if is_doc_only_builtin_decl(name))
             {
@@ -2490,6 +2492,11 @@ impl Resolver {
             }
             Ast::Namespace(span, _, _) => Err(ResolveError {
                 message: "namespace declarations must be lowered before name resolution".into(),
+                span,
+                related_labels: Vec::new(),
+            }),
+            Ast::SupervisorInit(span, _) => Err(ResolveError {
+                message: "supervisor_init must be collected before name resolution".into(),
                 span,
                 related_labels: Vec::new(),
             }),
