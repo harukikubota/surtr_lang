@@ -1,0 +1,2 @@
+phase: typecheck
+contains: handler slot `out` is not declared for process `Logger`

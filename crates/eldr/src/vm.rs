@@ -4224,6 +4224,132 @@ mod tests {
         );
     }
 
+    fn handler_pid(identity: &str) -> PidHandle {
+        PidHandle {
+            id: 0,
+            process_name: identity.to_string(),
+        }
+    }
+
+    fn assert_ok_unit_result(value: Value) {
+        assert_eq!(value, super::ok_vm_result(Value::Unit));
+    }
+
+    fn assert_err_result(value: Value, kind: &str, message_part: &str) {
+        match value {
+            Value::Tagged { tag: 1, fields } => match fields.as_slice() {
+                [Value::Error(error)] => {
+                    assert_eq!(error.kind, kind);
+                    assert!(
+                        error.visible_message().contains(message_part),
+                        "expected `{}` in `{}`",
+                        message_part,
+                        error.visible_message()
+                    );
+                }
+                other => panic!("expected Err(error), got {other:?}"),
+            },
+            other => panic!("expected Result::Err, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn out_handler_write_dispatches_to_stdout_stderr_and_null_targets() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]))
+            .with_output_capture()
+            .with_error_capture();
+
+        let stdout = vm
+            .out_handler_write(&handler_pid("StdOut"), "stdout-handler".into())
+            .expect("stdout handler should run");
+        assert_ok_unit_result(stdout);
+        assert_eq!(vm.take_stdout(), vec!["stdout-handler".to_string()]);
+        assert_eq!(vm.take_stderr(), Vec::<String>::new());
+
+        let stderr = vm
+            .out_handler_write(&handler_pid("StdErr"), "stderr-handler".into())
+            .expect("stderr handler should run");
+        assert_ok_unit_result(stderr);
+        assert_eq!(vm.take_stdout(), Vec::<String>::new());
+        assert_eq!(vm.take_stderr(), vec!["stderr-handler".to_string()]);
+
+        let null = vm
+            .out_handler_write(&handler_pid("NullOutHandler"), "muted".into())
+            .expect("null handler should run");
+        assert_ok_unit_result(null);
+        assert_eq!(vm.take_stdout(), Vec::<String>::new());
+        assert_eq!(vm.take_stderr(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn out_handler_write_appends_to_file_target() {
+        let dir = std::env::temp_dir().join(format!(
+            "surtr-eldr-file-out-handler-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir should be created");
+        let path = dir.join("process.log");
+        let _ = std::fs::remove_file(&path);
+        let identity = format!("FileOutHandler(path={})", path.display());
+
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]))
+            .with_output_capture()
+            .with_error_capture();
+        let first = vm
+            .out_handler_write(&handler_pid(&identity), "one\n".into())
+            .expect("file handler should run");
+        let second = vm
+            .out_handler_write(&handler_pid(&identity), "two\n".into())
+            .expect("file handler should append");
+
+        assert_ok_unit_result(first);
+        assert_ok_unit_result(second);
+        assert_eq!(vm.take_stdout(), Vec::<String>::new());
+        assert_eq!(vm.take_stderr(), Vec::<String>::new());
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("file output should exist"),
+            "one\ntwo\n"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn out_handler_write_reports_invalid_file_and_unknown_targets_as_result_errors() {
+        let missing_path = std::env::temp_dir()
+            .join("surtr-eldr-missing-parent")
+            .join("process.log");
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]))
+            .with_output_capture()
+            .with_error_capture();
+
+        let without_path = vm
+            .out_handler_write(&handler_pid("FileOutHandler"), "ignored".into())
+            .expect("missing path should be a Result error");
+        assert_err_result(
+            without_path,
+            "HandlerInitFailed",
+            "requires named argument `path`",
+        );
+
+        let missing_parent = vm
+            .out_handler_write(
+                &handler_pid(&format!("FileOutHandler(path={})", missing_path.display())),
+                "ignored".into(),
+            )
+            .expect("open failure should be a Result error");
+        assert_err_result(missing_parent, "HandlerInitFailed", "open failed");
+
+        let unknown = vm
+            .out_handler_write(&handler_pid("BogusOutHandler"), "ignored".into())
+            .expect("unknown handler should be a Result error");
+        assert_err_result(
+            unknown,
+            "UnknownHandlerTarget",
+            "unknown OutHandler target `BogusOutHandler`",
+        );
+    }
+
     #[test]
     fn vm_new_initializes_empty_future_runtime_tables() {
         let vm = VM::new(base_bytecode(vec![Opcode::Halt]));

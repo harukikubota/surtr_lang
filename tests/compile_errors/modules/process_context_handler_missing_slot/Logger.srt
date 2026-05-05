@@ -1,0 +1,16 @@
+defagent Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> {
+    Ok(0)
+  }
+
+  @get
+  def log(state: Int, message: String) -> Result<Unit> {
+    OutHandler::write(ctx.out, message)
+  }
+}

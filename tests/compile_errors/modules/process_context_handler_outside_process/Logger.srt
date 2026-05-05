@@ -1,0 +1,23 @@
+defagent Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    handlers {
+      out: OutHandler = StdOut
+    }
+  }
+
+  @init
+  def init() -> Result<Int> {
+    Ok(0)
+  }
+
+  @get
+  def log(state: Int, message: String) -> Result<Unit> {
+    OutHandler::write(ctx.out, message)
+  }
+
+  def leak() -> PID<OutHandler> {
+    ctx.out
+  }
+}
