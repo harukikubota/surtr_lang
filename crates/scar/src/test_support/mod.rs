@@ -206,16 +206,16 @@ fn parse_std_module_stage(
                 .ast
                 .splice(insert_at..insert_at, shared_result_ctor_contracts);
         } else {
-        let mut global_ast = shared_imports.clone();
-        global_ast.extend(shared_result_ctor_contracts);
-        lowered.push(sigil::StagedModuleAst {
-            module_path: String::new(),
-            doc_module_path: None,
-            ast: global_ast,
-            module_doc: None,
-            auto_import: false,
-            process_spec: None,
-        });
+            let mut global_ast = shared_imports.clone();
+            global_ast.extend(shared_result_ctor_contracts);
+            lowered.push(sigil::StagedModuleAst {
+                module_path: String::new(),
+                doc_module_path: None,
+                ast: global_ast,
+                module_doc: None,
+                auto_import: false,
+                process_spec: None,
+            });
         }
     }
 

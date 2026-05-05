@@ -5088,7 +5088,9 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let typed_value = self.check_result_value(value, "recover_kind")?;
         let value_ty = self.resolve_ty(&typed_value.ty);
-        let Ty::Result(ok_ty, _) = &value_ty else { unreachable!() };
+        let Ty::Result(ok_ty, _) = &value_ty else {
+            unreachable!()
+        };
         let ok_ty = ok_ty.as_ref().clone();
         let typed_marker = self.check_node(marker)?;
         let typed_marker = self.maybe_call_zero_arg_function(typed_marker, span.clone());
@@ -5140,8 +5142,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let typed_value = self.check_node(value)?;
         let value_ty = self.resolve_ty(&typed_value.ty);
-        let expected_result_ty =
-            Ty::Result(Box::new(self.env.fresh_tyvar()), Box::new(Ty::Error));
+        let expected_result_ty = Ty::Result(Box::new(self.env.fresh_tyvar()), Box::new(Ty::Error));
         if !self.types_compatible(&expected_result_ty, &value_ty) {
             return Err(TypeError {
                 message: format!(

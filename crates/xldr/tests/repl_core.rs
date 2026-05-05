@@ -203,7 +203,11 @@ def greet() -> String { "hello" }
     assert!(rendered_text(&call).contains("hello"));
 
     let err = engine.handle_line("defstruct User { name: String }");
-    assert!(rendered_text(&err).contains("REPL"), "{}", rendered_text(&err));
+    assert!(
+        rendered_text(&err).contains("REPL"),
+        "{}",
+        rendered_text(&err)
+    );
 }
 
 #[test]

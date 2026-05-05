@@ -119,7 +119,10 @@ impl ReplLoadError {
             } => diagnostics::report_error_by_id(sources, *source_id, spec.clone()),
             Self::Load(error) => eprintln!("repl: {}", error),
             Self::Runtime { file_name, message } => {
-                eprintln!("repl: runtime error while preloading {}: {}", file_name, message);
+                eprintln!(
+                    "repl: runtime error while preloading {}: {}",
+                    file_name, message
+                );
             }
         }
     }
@@ -134,7 +137,11 @@ impl std::fmt::Display for ReplLoadError {
             Self::Diagnostic { .. } => write!(f, "preload diagnostic"),
             Self::Load(error) => write!(f, "{}", error),
             Self::Runtime { file_name, message } => {
-                write!(f, "runtime error while preloading {}: {}", file_name, message)
+                write!(
+                    f,
+                    "runtime error while preloading {}: {}",
+                    file_name, message
+                )
             }
         }
     }
@@ -344,8 +351,12 @@ impl ReplEngine {
         };
 
         Self::from_preload_sources(
-            module_source.as_ref().map(|(path, source)| (*path, source.as_str())),
-            script_source.as_ref().map(|(path, source)| (*path, source.as_str())),
+            module_source
+                .as_ref()
+                .map(|(path, source)| (*path, source.as_str())),
+            script_source
+                .as_ref()
+                .map(|(path, source)| (*path, source.as_str())),
         )
     }
 
@@ -4689,7 +4700,8 @@ fn compile_preloaded_repl_chunk(
     module: Option<(&str, &str)>,
     script: Option<(&str, &str)>,
 ) -> Result<PreloadedChunkState, ReplLoadError> {
-    let std_module_inputs = collect_additional_default_std_module_inputs().map_err(ReplLoadError::Load)?;
+    let std_module_inputs =
+        collect_additional_default_std_module_inputs().map_err(ReplLoadError::Load)?;
     let prepared_script = prepare_script_preload(script)?;
     let mut module_input_stages = vec![std_module_inputs];
     if let Some((file_name, source)) = module {
@@ -4704,8 +4716,8 @@ fn compile_preloaded_repl_chunk(
             module_input_stages.push(vec![module.clone()]);
         }
     }
-    let mut repl_sources =
-        loader::collect_repl_sources_with_module_stages(&module_input_stages).map_err(ReplLoadError::Load)?;
+    let mut repl_sources = loader::collect_repl_sources_with_module_stages(&module_input_stages)
+        .map_err(ReplLoadError::Load)?;
 
     let user_file_name = prepared_script
         .as_ref()
@@ -4834,21 +4846,28 @@ fn compile_preloaded_repl_chunk(
             spec: diagnostics::type_error_spec_by_id(
                 &compile_sources.sources,
                 diagnostic_source_id(&compile_sources, &e.span),
-                &diagnostics::TypeErrorDiagnostic::new(e.message, local_diagnostic_span(&compile_sources, &e.span), e.hint),
+                &diagnostics::TypeErrorDiagnostic::new(
+                    e.message,
+                    local_diagnostic_span(&compile_sources, &e.span),
+                    e.hint,
+                ),
             ),
         })?;
 
     let mut forge_session = forge::ForgeSession::from_bytecode(&snapshot.bytecode);
-    let (mut chunk, meta) = forge_session.codegen_chunk(typed).map_err(|e| ReplLoadError::Diagnostic {
-        sources: compile_sources.sources.clone(),
-        source_id: diagnostic_source_id(&compile_sources, &e.span),
-        spec: diagnostics::simple_error(
-            "CodegenError",
-            &e.message,
-            local_diagnostic_span(&compile_sources, &e.span),
-            None,
-        ),
-    })?;
+    let (mut chunk, meta) =
+        forge_session
+            .codegen_chunk(typed)
+            .map_err(|e| ReplLoadError::Diagnostic {
+                sources: compile_sources.sources.clone(),
+                source_id: diagnostic_source_id(&compile_sources, &e.span),
+                spec: diagnostics::simple_error(
+                    "CodegenError",
+                    &e.message,
+                    local_diagnostic_span(&compile_sources, &e.span),
+                    None,
+                ),
+            })?;
     chunk.docs = docs.clone();
     for stage in &raw_module_stages {
         for module in stage {
@@ -4864,9 +4883,15 @@ fn compile_preloaded_repl_chunk(
     let source_context = compile_sources
         .sources
         .owned_context(user_source_id)
-        .or_else(|| compile_sources.sources.owned_context(compile_sources.builtin_source_id));
+        .or_else(|| {
+            compile_sources
+                .sources
+                .owned_context(compile_sources.builtin_source_id)
+        });
     let mut vm = match source_context {
-        Some((source, file_name)) => eldr::VM::new(snapshot.bytecode.clone()).with_source(source, file_name),
+        Some((source, file_name)) => {
+            eldr::VM::new(snapshot.bytecode.clone()).with_source(source, file_name)
+        }
         None => eldr::VM::new(snapshot.bytecode.clone()),
     };
     vm.push_atomic(chunk).map_err(|e| ReplLoadError::Runtime {
@@ -4975,8 +5000,7 @@ fn parse_preload_sources(
         source_id: compile_sources.user_source_id,
         spec: diagnostics::parse_error_spec(user_source, e.message(), e.span().clone()),
     })?;
-    let (preload_ast, script_runtime_inputs) =
-        split_preload_script_ast(&user_ast, user_source);
+    let (preload_ast, script_runtime_inputs) = split_preload_script_ast(&user_ast, user_source);
 
     Ok((
         module_stage_asts,
@@ -5120,9 +5144,7 @@ fn prepare_script_preload(
     let mut include_modules = Vec::with_capacity(directives.len());
     for directive in directives {
         include_modules.push(resolve_preload_include_module_input(
-            file_name,
-            source,
-            &directive,
+            file_name, source, &directive,
         )?);
     }
 
@@ -5257,7 +5279,11 @@ fn preload_resolve_error(
     ReplLoadError::Diagnostic {
         sources: compile_sources.sources.clone(),
         source_id,
-        spec: diagnostics::resolve_error_spec(source, &error.message, local_diagnostic_span(compile_sources, &error.span)),
+        spec: diagnostics::resolve_error_spec(
+            source,
+            &error.message,
+            local_diagnostic_span(compile_sources, &error.span),
+        ),
     }
 }
 
@@ -5350,66 +5376,65 @@ fn apply_preload_imports(
 
         match spec {
             ImportSpec::All => {
-                for entry in declaration_index
-                    .values()
-                    .filter(|entry| entry.module_path == module_name && entry.stage_index < current_stage_index)
-                {
-                    let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| ReplLoadError::Load(
-                        LoadError::BootstrapFailed {
+                for entry in declaration_index.values().filter(|entry| {
+                    entry.module_path == module_name && entry.stage_index < current_stage_index
+                }) {
+                    let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| {
+                        ReplLoadError::Load(LoadError::BootstrapFailed {
                             phase: "resolve".into(),
                             file_name: "<repl-preload>".into(),
                             message: format!(
                                 "Import target `{}` is not available in the current stage",
                                 entry.fq_name
                             ),
-                        }
-                    ))?;
+                        })
+                    })?;
                     sigil_session.define_with_id(&entry.name, uid);
                     imported_symbols.push(entry.name.clone());
                 }
             }
             ImportSpec::Single(name) => {
                 let fq_name = format!("{}::{}", module_name, name);
-                let entry = declaration_index.get(&fq_name).ok_or_else(|| ReplLoadError::Load(
-                    LoadError::BootstrapFailed {
+                let entry = declaration_index.get(&fq_name).ok_or_else(|| {
+                    ReplLoadError::Load(LoadError::BootstrapFailed {
                         phase: "resolve".into(),
                         file_name: "<repl-preload>".into(),
                         message: format!("Unknown import member: {}", fq_name),
-                    }
-                ))?;
-                let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| ReplLoadError::Load(
-                    LoadError::BootstrapFailed {
+                    })
+                })?;
+                let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| {
+                    ReplLoadError::Load(LoadError::BootstrapFailed {
                         phase: "resolve".into(),
                         file_name: "<repl-preload>".into(),
                         message: format!(
                             "Import target `{}` is not available in the current stage",
                             fq_name
                         ),
-                    }
-                ))?;
+                    })
+                })?;
                 sigil_session.define_with_id(name, uid);
                 imported_symbols.push(name.clone());
             }
             ImportSpec::List(names) => {
                 for name in names {
                     let fq_name = format!("{}::{}", module_name, name);
-                    let entry = declaration_index.get(&fq_name).ok_or_else(|| ReplLoadError::Load(
-                        LoadError::BootstrapFailed {
+                    let entry = declaration_index.get(&fq_name).ok_or_else(|| {
+                        ReplLoadError::Load(LoadError::BootstrapFailed {
                             phase: "resolve".into(),
                             file_name: "<repl-preload>".into(),
                             message: format!("Unknown import member: {}", fq_name),
-                        }
-                    ))?;
-                    let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| ReplLoadError::Load(
-                        LoadError::BootstrapFailed {
+                        })
+                    })?;
+                    let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| {
+                        ReplLoadError::Load(LoadError::BootstrapFailed {
                             phase: "resolve".into(),
                             file_name: "<repl-preload>".into(),
                             message: format!(
                                 "Import target `{}` is not available in the current stage",
                                 fq_name
                             ),
-                        }
-                    ))?;
+                        })
+                    })?;
                     sigil_session.define_with_id(name, uid);
                     imported_symbols.push(name.clone());
                 }

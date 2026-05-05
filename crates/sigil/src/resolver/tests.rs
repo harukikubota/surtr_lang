@@ -3382,8 +3382,11 @@ impl User {
         ),
     ]];
 
-    let ok = resolve_user_with_modules(r#"print(User::normalize(User(name: "x"), " ok "))"#, &module_stages)
-        .expect("impl-local import should resolve inside impl methods");
+    let ok = resolve_user_with_modules(
+        r#"print(User::normalize(User(name: "x"), " ok "))"#,
+        &module_stages,
+    )
+    .expect("impl-local import should resolve inside impl methods");
     assert!(!ok.is_empty());
 
     let leak_err = resolve_user_with_modules(
@@ -3476,9 +3479,8 @@ fn test_nested_import_shadows_auto_import_within_body_only() {
             Resolved::App(_, func, args) => match func.as_ref() {
                 Resolved::Var(_, called_id) if called_id.name == name => Some(called_id.unique_id),
                 _ => args.iter().find_map(|arg| match arg {
-                    ResolvedRecordLitArg::Positional(inner) | ResolvedRecordLitArg::Named(_, inner) => {
-                        find_called_uid(inner, name)
-                    }
+                    ResolvedRecordLitArg::Positional(inner)
+                    | ResolvedRecordLitArg::Named(_, inner) => find_called_uid(inner, name),
                 }),
             },
             Resolved::Block(_, nodes) => nodes.iter().find_map(|node| find_called_uid(node, name)),
@@ -3505,8 +3507,9 @@ def parse() -> Int { add(7, 3) }"#,
         )],
     ];
 
-    let resolved = resolve_user_with_modules(r#"print(to_string(Parser::parse()))"#, &module_stages)
-        .expect("nested explicit import should shadow auto-import inside that body");
+    let resolved =
+        resolve_user_with_modules(r#"print(to_string(Parser::parse()))"#, &module_stages)
+            .expect("nested explicit import should shadow auto-import inside that body");
 
     let helper_add_uid = resolved
         .iter()

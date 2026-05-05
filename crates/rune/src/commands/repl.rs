@@ -84,7 +84,10 @@ mod tests {
         .expect_err("duplicate script flag must fail");
 
         let rendered = format!("{err:?}");
-        assert!(rendered.contains("--script may only be specified once"), "{rendered}");
+        assert!(
+            rendered.contains("--script may only be specified once"),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -93,6 +96,9 @@ mod tests {
             .expect_err("missing module value must fail");
 
         let rendered = format!("{err:?}");
-        assert!(rendered.contains("missing value for --module"), "{rendered}");
+        assert!(
+            rendered.contains("missing value for --module"),
+            "{rendered}"
+        );
     }
 }

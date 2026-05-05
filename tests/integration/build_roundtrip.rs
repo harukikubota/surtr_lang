@@ -1,4 +1,6 @@
-use crate::common::{module_spec_fixtures, repo_root, surtr_command, unique_temp_dir, write_source};
+use crate::common::{
+    module_spec_fixtures, repo_root, surtr_command, unique_temp_dir, write_source,
+};
 use crate::support;
 use serde_json::Value;
 use std::fs;

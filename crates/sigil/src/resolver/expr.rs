@@ -2654,7 +2654,6 @@ impl Resolver {
             ),
         }
     }
-
 }
 
 pub(super) fn validate_trait_impl_pairs_in_nodes(
