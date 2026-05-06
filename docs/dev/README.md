@@ -22,6 +22,3 @@ diagnostics の正本である。`EldrVM spec` は VM が受け取る正規化�
 - [../../doc/要件定義v9.md](../../doc/要件定義v9.md)
 - [../../doc/open-issues.md](../../doc/open-issues.md)
 - [../../AGENTS.md](../../AGENTS.md)
-
-`docs/process_runtime_handoff_2026-05-02.md` は過去実装の引き継ぎメモであり、
-正本仕様ではない。

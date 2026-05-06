@@ -64,7 +64,7 @@
 | `Process::sleep` | host thread blocking 寄り | scheduler timer。呼び出した process のみ suspend |
 | Task | body 実行が同期寄り | 使い捨て process として scheduler 管理 |
 | timeout | owner ごとの hidden helper に寄る | runtime-managed call 後方 modifier `@timeout` として整理 |
-| singleton 利用検査 | 未実装 | compile unit 単位で `required_singletons ⊆ available_singletons` を検査 |
+| singleton 利用検査 | singleton direct call / PID lookup で実施 | compile unit 単位で `required_singletons ⊆ available_singletons` を検査 |
 | 標準 I/O | VM 内部の標準入力・標準出力・標準エラー用リストに直接寄る経路がある | `StdIn` / `StdOut` / `StdErr` builtin handler への message call として扱う |
 | I/O handler 差し替え | 実行モードや VM 内部処理に寄る | process `meta.handlers` で default を宣言し、`supervisor_init` で override する |
 
@@ -250,6 +250,7 @@ owner process 内では struct literal / field access / lens 操作を許可す�
 process runtime の lower surface は [lib/process.srt](/Users/haruca/work/rust/surtr/lib/process.srt) に置く。
 
 - `Process` は通常 user code からそのまま呼べる runtime utility module とし、`Process::self` / `Process::sleep` など public API だけを置く
+- `Process::self()` は process handler / process-owned helper の内部だけで使える public API とし、通常 top-level code や一般関数からは使えない
 - user-facing 正規系は `Process::*`, `Task::*`, `Workers::*`, generated owner helper (`MySupervisor::spawn` など) とする
 - `Agent` / `GenServer` / `Supervisor` は compiler-managed lower module であり、generated owner helper がここへ lower される
 - `Workers` は public API を `Workers::submit` / `Workers::broadcast` / `Workers::reserve` / `Workers::size` に一本化し、`__workers_*` hidden 宣言は `process.srt` には置かない
@@ -508,8 +509,8 @@ pid = DynamicSupervisor::spawn(MyWorker::init(args))
 - `allow_adopt`
 - 必要なら `shutdown_timeout`
 
-`instance` / `init_policy` / user-defined helper `def` は `defsupervisor` では受理しない。
-`spawn` / `adopt` / `status` / `workers` は compiler-managed surface であり、同名 user 定義は compile error とする。
+`instance` / `init_policy` / user-defined helper `def` / public handler (`@call`, `@cast`, `@get`, `@set`) は `defsupervisor` では受理しない。
+`spawn` / `adopt` / `status` / `workers` は compiler-generated wrapper であり、同名 user 定義は compile error とする。
 
 ```surtr
 defsupervisor ImageWorkerSupervisor {
@@ -542,7 +543,7 @@ ImageWorkerSupervisor::workers(MyWorker::init(args), 4)
 
 ### 3.11.1 Workers surface
 
-`Workers<$Worker>` は runtime-managed な worker 集合 handle であり、`List<PID<$Worker>>` ではない。
+`Workers<$Worker>` は runtime-managed な worker 集合 handle であり、`List<PID<$Worker>>` ではない。`WorkerLease<$Worker>` は `Workers::reserve` が返す予約 handle で、裸 PID 抽出 API の代替である。
 
 - membership は closed である
 - user code は worker 集合を直接組み立てない
@@ -550,6 +551,7 @@ ImageWorkerSupervisor::workers(MyWorker::init(args), 4)
 - `reserve` は `WorkerLease<$Worker>` を返し、裸の PID 抽出 API は出さない
 - `Sup::workers(...)` は Singleton GenServer の `@init` で worker pool state を作る経路として使う
 - `Workers<$Worker>` は Singleton GenServer の state として保持する。state そのものを `Workers<$Worker>` にしてよいし、`@process_state` 付き struct の field に含めてもよい
+- public surface は `Workers::submit` / `Workers::reserve` / `Workers::broadcast` / `Workers::size` に限る
 - `Workers::submit` / `Workers::reserve` / `Workers::broadcast` / `Workers::size` は Singleton GenServer の `@call` / `@cast` / 同じ `defgenserver` 内 helper から使う
 
 正規系は WorkerPool 役の Singleton GenServer に閉じる。state がそのまま `Workers<$Worker>` の場合:
@@ -703,7 +705,7 @@ Ready 前に call した場合、call timeout は Ready 待ち時間を含む。
 
 ### 3.16 singleton PID API
 
-singleton は compiler / BootPlan / Exit rule により常に存在する前提とする。explicit PID API は `Result` を返さない。
+singleton は compiler / BootPlan / Exit rule により常に存在する前提とする。explicit PID API は `Result` を返さない。compile unit で available singleton に含まれない参照は codegen 前に reject する。
 
 ```surtr
 Env::pid() -> PID<Env>
@@ -713,7 +715,7 @@ singleton が存在しない場合は business error ではなく、VM / supervi
 
 ### 3.17 `supervisor_init`
 
-`supervisor_init` は top-level 起動構成 block とし、通常式評価とは分ける。
+`supervisor_init` は top-level 起動構成 block とし、通常式評価とは分ける。ここで定義されるのは singleton boot entry と handler override を含む `RuntimeBootPlan` の入力であり、VM は surface DSL を直接読まない。
 
 `boot: Required` / `boot: ExplicitOnly` のような boot policy 指定は、定義側にも Boot 側にも置かない。
 起動対象は、`supervisor_init` / project runner に記載された singleton entry と、runtime が自動提供する builtin standard I/O から決まる。
@@ -810,7 +812,7 @@ handler dependency は process の実行構成に属するが、process が必�
 
 ### 3.19 handler target と override
 
-`supervisor_init` は、process 定義の `meta.handlers` にある default target を override できる。
+`supervisor_init` は、process 定義の `meta.handlers` にある default target を override できる。override は process init 引数ではなく BootPlan 側の実行構成として扱う。
 
 ```surtr
 supervisor_init {
@@ -952,7 +954,7 @@ buffer を使う場合でも、`supervisor_init` に `lines: [...]` のような
 
 ### 3.21 singleton 利用検査
 
-compile unit 単位で次を検査する。
+compile unit 単位で次を検査する。対象は singleton direct call と singleton PID lookup の両方である。
 
 ```text
 required_singletons ⊆ available_singletons
@@ -964,7 +966,7 @@ required_singletons ⊆ available_singletons
 | builtin standard I/O set | `StdIn` / `StdOut` / `StdErr`。runtime が常に提供 |
 | DSL 明示 singleton set | `supervisor_init` / project runner から収集 |
 
-制御フロー到達性までは見ない。
+`available_singletons` は builtin standard I/O set と DSL 明示 singleton set の和集合として扱う。制御フロー到達性までは見ない。
 
 ---
 

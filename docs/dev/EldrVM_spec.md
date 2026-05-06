@@ -102,6 +102,8 @@ Eldr は次を担わない。
 Eldr は `defagent`、`defgenserver`、`defsupervisor`、`supervisor_init` などの
 surface syntax を直接読まない。Compiler はこれらを immutable な
 `RuntimeProcessSpec` table と `RuntimeBootPlan` に正規化してから VM に渡す。
+`Bytecode` はこの正規化結果を `runtime_process_specs` と `runtime_boot_plan`
+として保持し、VM は surface syntax や source-level boot DSL を再解釈しない。
 
 VM 側の責務は次の通り。
 
@@ -112,6 +114,8 @@ VM 側の責務は次の通り。
 - `Process::sleep`、Task、call timeout の scheduler-backed waiting / wakeup
 - process-local handler dependency (`ctx.<slot>`) の runtime context 解決
 - `StdIn` / `StdOut` / `StdErr` builtin handler と handler override の適用
+- observability / snapshot 用に singleton slot、process table、waiting state、
+  deadline queue などの runtime state を正規化済み VM 構造として保持する
 
 `Process::sleep(duration)` は host thread 全体を block せず、呼び出した process だけを
 `Waiting(Timer)` に移す。Ready 前の process への call は Ready 待ちに入り、

@@ -3,7 +3,7 @@
 > 目的: V9 正本でまだ固定していない未解決事項だけを追跡する。
 > 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md`、開発者向け spec は `docs/dev/` 配下を正本とする。`doc/` は draft / input / tmp 置き場として扱う。
 
-最終更新日: 2026-05-05
+最終更新日: 2026-05-06
 
 ---
 
@@ -298,6 +298,86 @@
 - テスト方針:
   - `unit/xldr` / `integration/repl` / `rune` integration で process-aware な表示と失敗形状を固定する。
   - `integration/build_roundtrip` / `run_eldr` / viewer 系テストで runtime metadata の可視化形状を固定する。
+
+### OI-019 `Workers<$Worker>` 拡張 API 境界
+
+- 背景:
+  - `Workers<$Worker>` と `WorkerLease<$Worker>`、および `submit` / `broadcast` / `reserve` / `size` は現行 process runtime v2 の確定 surface である。
+  - 一方で設計メモには `submit_timeout`, `snapshot`, `idle_count`, `busy_count`, `drain`, `set_target` などの候補 API が残っている。
+- 未確定点:
+  - 追加 API を `Workers` の public surface に含めるか、pool wrapper 側 helper に留めるか
+  - `snapshot` / `idle_count` / `busy_count` を観測 API として固定するか
+  - `submit_timeout` / `drain` / `set_target` を runtime primitive として持つか
+- 受け入れ条件:
+  - `Workers<$Worker>` が opaque closed handle である前提を崩さない。
+  - pool 用 helper を増やしても `List<PID<_>>` 的な抽象漏れを起こさない。
+- テスト方針:
+  - surface 追加時は `spec/modules/process_workers_pool_surface` と `lib/process.srt` を同時に固定する。
+  - 不採用 API は `compile_errors` または parser/rewrite テストで誤用を防ぐ。
+
+### OI-020 Worker pool membership / scale / reconcile 意味論
+
+- 背景:
+  - 現行仕様で確定しているのは、`Workers<$Worker>` が runtime-managed closed membership を持つことと、Singleton GenServer pool state に置く使い方までである。
+  - ただし pool の増減、補充、再同期、worker 異常終了後の再構成方針はまだ固定していない。
+- 未確定点:
+  - target worker 数を runtime が維持するか、user code が reconcile loop を持つか
+  - membership 変更を supervisor policy とどう連携させるか
+  - busy / idle / dead worker を pool surface でどこまで観測できるようにするか
+- 受け入れ条件:
+  - pool size 変化と worker 再構成の責務境界が docs と runtime 実装で説明できる。
+  - `Workers<$Worker>` の closed-set 契約と supervisor ownership が矛盾しない。
+- テスト方針:
+  - 方針確定後に worker exit / pool refill / scale up/down の spec fixture を追加する。
+  - observability を増やす場合は `status` / dump / snapshot 出力の形状を固定する。
+
+### OI-021 Supervisor hierarchy の柔軟化
+
+- 背景:
+  - 現行 `supervisor_init` は親構成を固定し、`parent` override を reject する。
+  - custom supervisor / DynamicSupervisor / singleton の基本配置は正本化済みだが、より柔軟な親子指定は将来課題として残っている。
+- 未確定点:
+  - `supervisor_init` に親 override を導入するか
+  - 導入する場合に singleton / worker / supervisor ごとの許可境界をどう切るか
+  - tree 構成変更を compile-time 検査と runtime boot plan にどう反映するか
+- 受け入れ条件:
+  - 親子 DSL を広げても current fixed hierarchy と同じ安全性を保てる。
+  - boot diagnostics と runtime observability が新 hierarchy を矛盾なく表現できる。
+- テスト方針:
+  - 現状の reject ケースは `compile_errors` で維持する。
+  - 将来許可する場合は boot plan 生成、restart 伝播、status 表示の fixture を追加する。
+
+### OI-022 Supervisor policy の公開深度
+
+- 背景:
+  - `defsupervisor` では `strategy`, `max_restarts`, `max_seconds`, `child_restart_default`, `allow_adopt`、必要なら `shutdown_timeout` を policy 値として扱う方針である。
+  - ただし `shutdown_timeout` を含む policy の user-facing surface、status 表示、override 深度はまだ十分固定されていない。
+- 未確定点:
+  - `shutdown_timeout` を初期フェーズから正式 surface に含めるか
+  - supervisor `status()` や observability で policy 値をどこまで露出するか
+  - boot-time override をどの policy まで許可するか
+- 受け入れ条件:
+  - compiler-managed supervisor surface と runtime status 表示が同じ policy 集合を前提にできる。
+  - policy を追加・露出しても restart semantics の未確定部分を先に固定しなくて済む。
+- テスト方針:
+  - surface 化する policy は `spec/modules/process_supervisor_user_surface` と compile error fixture で固定する。
+  - observability へ露出する場合は dump / REPL 表示の形状を integration で固定する。
+
+### OI-023 Task.Supervisor / Task-DynamicSupervisor link / worker lazy init
+
+- 背景:
+  - process runtime v2 では `Task`、`DynamicSupervisor`、worker lifecycle の土台は入ったが、Task supervision と worker lazy init は非対象として残っている。
+  - 既存 spec でも `Task.Supervisor`、`Task` と `DynamicSupervisor` の link、worker async/lazy init は後続課題扱いである。
+- 未確定点:
+  - `Task.Supervisor` を独立 surface として持つか、`DynamicSupervisor` に統合するか
+  - `Task` を supervisor 配下に link したときの ownership / restart / cancellation をどう扱うか
+  - worker の lazy init や async init を `ProcessInit<T>` と別契約で導入するか
+- 受け入れ条件:
+  - Task と worker の lifecycle 契約が既存の singleton / worker / supervisor モデルと衝突しない。
+  - timeout、waiting、completion 観測が scheduler / runtime diagnostics と整合する。
+- テスト方針:
+  - 仕様確定後に Task spawn/link/cancel、worker async init、supervisor 配下 completion の spec fixture を追加する。
+  - compile-time 制約を入れる場合は process runtime 系 compile error fixture を増やす。
 
 ---
 
