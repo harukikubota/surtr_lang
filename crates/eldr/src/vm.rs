@@ -15,7 +15,7 @@ use crate::builtin::call_builtin;
 use crate::dbg_display::{render_dbg_report, DbgRenderArg};
 use crate::error::{RuntimeError, RuntimeErrorContext};
 use std::io::{self, Write};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VmTestEventKind {
@@ -302,10 +302,12 @@ impl VmObserver {
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 struct ProcessRuntime {
+    current_tick_ms: u64,
     next_pid: u64,
     next_workers_id: u64,
     next_future_id: FutureId,
     next_correlation_id: CorrelationId,
+    next_detached_task_id: u64,
     specs_by_id: Vec<RuntimeProcessSpec>,
     spec_id_by_name: BTreeMap<String, u32>,
     specs_by_name: BTreeMap<String, RuntimeProcessSpec>,
@@ -316,6 +318,7 @@ struct ProcessRuntime {
     reply_table: BTreeMap<CorrelationId, FutureId>,
     waiting_table: BTreeMap<u64, ProcessWaitReason>,
     deadline_queue: VecDeque<DeadlineEntry>,
+    detached_tasks: BTreeMap<u64, DetachedTask>,
     root_supervisor: RootSupervisorState,
     worker_sets: BTreeMap<u64, WorkerSetState>,
 }
@@ -498,6 +501,18 @@ struct DeadlineEntry {
     future_id: FutureId,
 }
 
+#[derive(Debug, Clone)]
+struct DetachedTask {
+    awaiting_future: FutureId,
+    continuation: DetachedTaskContinuation,
+}
+
+#[derive(Debug, Clone)]
+enum DetachedTaskContinuation {
+    AwaitValue,
+    Resume(ProcessExecutionContext),
+}
+
 #[derive(Debug, Clone, Default)]
 struct RootSupervisorState {
     boot_completed: bool,
@@ -610,6 +625,11 @@ pub struct VM {
     pub error_output: Option<Vec<String>>,
     /// Runtime I/O policy for stdout/stderr.
     io_policy: VmIoPolicy,
+    /// REPL-owned host stdout buffer. This protects the active input line without
+    /// changing DSL-visible handler targets or test capture policy.
+    repl_host_stdout: Option<Vec<String>>,
+    /// REPL-owned host stderr buffer.
+    repl_host_stderr: Option<Vec<String>>,
     /// Optional stdin fixture used by Rust tests and non-interactive harnesses.
     stdin_input: Option<String>,
     stdin_input_cursor: usize,
@@ -650,6 +670,8 @@ impl VM {
             output: None,
             error_output: None,
             io_policy: VmIoPolicy::default(),
+            repl_host_stdout: None,
+            repl_host_stderr: None,
             stdin_input: None,
             stdin_input_cursor: 0,
             exit_code: 0,
@@ -1006,6 +1028,34 @@ impl VM {
         }
     }
 
+    /// Route host terminal stdout/stderr through REPL-owned buffers.
+    ///
+    /// This is intentionally separate from `VmIoPolicy`: REPL terminal
+    /// protection must not override DSL-visible standard I/O handler targets or
+    /// test capture behavior.
+    pub fn enable_repl_host_io_buffering(&mut self) {
+        if self.repl_host_stdout.is_none() {
+            self.repl_host_stdout = Some(Vec::new());
+        }
+        if self.repl_host_stderr.is_none() {
+            self.repl_host_stderr = Some(Vec::new());
+        }
+    }
+
+    pub fn take_repl_host_stdout(&mut self) -> Vec<String> {
+        match self.repl_host_stdout.as_mut() {
+            Some(buffer) => std::mem::take(buffer),
+            None => Vec::new(),
+        }
+    }
+
+    pub fn take_repl_host_stderr(&mut self) -> Vec<String> {
+        match self.repl_host_stderr.as_mut() {
+            Some(buffer) => std::mem::take(buffer),
+            None => Vec::new(),
+        }
+    }
+
     pub fn reset_captured_io(&mut self) {
         if let Some(stdout) = self.output.as_mut() {
             stdout.clear();
@@ -1023,18 +1073,58 @@ impl VM {
         self.stdin_input_cursor = 0;
     }
 
+    fn emit_host_stdout_line(&mut self, line: String) {
+        if let Some(buffer) = self.repl_host_stdout.as_mut() {
+            buffer.push(line);
+        } else {
+            println!("{}", line);
+        }
+    }
+
+    fn emit_host_stdout_text(&mut self, text: String) -> io::Result<()> {
+        if let Some(buffer) = self.repl_host_stdout.as_mut() {
+            if !text.is_empty() {
+                buffer.push(text);
+            }
+            Ok(())
+        } else {
+            print!("{}", text);
+            io::stdout().flush()
+        }
+    }
+
+    fn emit_host_stderr_line(&mut self, line: String) {
+        if let Some(buffer) = self.repl_host_stderr.as_mut() {
+            buffer.push(line);
+        } else {
+            eprintln!("{}", line);
+        }
+    }
+
+    fn emit_host_stderr_text(&mut self, text: String) -> io::Result<()> {
+        if let Some(buffer) = self.repl_host_stderr.as_mut() {
+            if !text.is_empty() {
+                buffer.push(text);
+            }
+            Ok(())
+        } else {
+            eprint!("{}", text);
+            io::stderr().flush()
+        }
+    }
+
     pub(crate) fn emit_stdout_line(&mut self, line: String) {
         match self.io_policy.stdout {
-            IoMode::Passthrough => println!("{}", line),
+            IoMode::Passthrough => self.emit_host_stdout_line(line),
             IoMode::Capture => {
                 if let Some(buffer) = self.output.as_mut() {
                     buffer.push(line);
                 } else {
-                    println!("{}", line);
+                    self.emit_host_stdout_line(line);
                 }
             }
             IoMode::Tee => {
-                println!("{}", line);
+                self.emit_host_stdout_line(line.clone());
                 if let Some(buffer) = self.output.as_mut() {
                     buffer.push(line);
                 }
@@ -1044,10 +1134,7 @@ impl VM {
 
     pub(crate) fn emit_stdout_text(&mut self, text: String) -> io::Result<()> {
         match self.io_policy.stdout {
-            IoMode::Passthrough => {
-                print!("{}", text);
-                io::stdout().flush()
-            }
+            IoMode::Passthrough => self.emit_host_stdout_text(text),
             IoMode::Capture => {
                 if let Some(buffer) = self.output.as_mut() {
                     if !text.is_empty() {
@@ -1055,13 +1142,11 @@ impl VM {
                     }
                     Ok(())
                 } else {
-                    print!("{}", text);
-                    io::stdout().flush()
+                    self.emit_host_stdout_text(text)
                 }
             }
             IoMode::Tee => {
-                print!("{}", text);
-                io::stdout().flush()?;
+                self.emit_host_stdout_text(text.clone())?;
                 if let Some(buffer) = self.output.as_mut() {
                     if !text.is_empty() {
                         buffer.push(text);
@@ -1074,16 +1159,16 @@ impl VM {
 
     pub(crate) fn emit_stderr_line(&mut self, line: String) {
         match self.io_policy.stderr {
-            IoMode::Passthrough => eprintln!("{}", line),
+            IoMode::Passthrough => self.emit_host_stderr_line(line),
             IoMode::Capture => {
                 if let Some(buffer) = self.error_output.as_mut() {
                     buffer.push(line);
                 } else {
-                    eprintln!("{}", line);
+                    self.emit_host_stderr_line(line);
                 }
             }
             IoMode::Tee => {
-                eprintln!("{}", line);
+                self.emit_host_stderr_line(line.clone());
                 if let Some(buffer) = self.error_output.as_mut() {
                     buffer.push(line);
                 }
@@ -1093,10 +1178,7 @@ impl VM {
 
     pub(crate) fn emit_stderr_text(&mut self, text: String) -> io::Result<()> {
         match self.io_policy.stderr {
-            IoMode::Passthrough => {
-                eprint!("{}", text);
-                io::stderr().flush()
-            }
+            IoMode::Passthrough => self.emit_host_stderr_text(text),
             IoMode::Capture => {
                 if let Some(buffer) = self.error_output.as_mut() {
                     if !text.is_empty() {
@@ -1104,13 +1186,11 @@ impl VM {
                     }
                     Ok(())
                 } else {
-                    eprint!("{}", text);
-                    io::stderr().flush()
+                    self.emit_host_stderr_text(text)
                 }
             }
             IoMode::Tee => {
-                eprint!("{}", text);
-                io::stderr().flush()?;
+                self.emit_host_stderr_text(text.clone())?;
                 if let Some(buffer) = self.error_output.as_mut() {
                     if !text.is_empty() {
                         buffer.push(text);
@@ -2149,7 +2229,7 @@ impl VM {
         }
         let future_id = self
             .process_runtime
-            .allocate_future(None, Some(millis), false);
+            .allocate_future_after(None, millis, false);
         Ok(Value::PendingFuture(future_id))
     }
 
@@ -2779,6 +2859,17 @@ impl VM {
         result
     }
 
+    fn invoke_callable_isolated_step(
+        &mut self,
+        callable: Callable,
+        args: Vec<Value>,
+    ) -> StepOutcome {
+        let saved = self.capture_execution_context(self.pc, ExecutionTarget::TopLevel);
+        let outcome = self.invoke_callable_step(callable, args);
+        self.restore_execution_context(saved);
+        outcome
+    }
+
     fn load_local_or_pending(
         &mut self,
         slot: u32,
@@ -2920,25 +3011,165 @@ impl VM {
         self.run_until_outcome(pc, target)
     }
 
+    fn resume_execution_isolated(&mut self, context: ProcessExecutionContext) -> StepOutcome {
+        let saved = self.capture_execution_context(self.pc, ExecutionTarget::TopLevel);
+        let outcome = self.resume_execution(context);
+        self.restore_execution_context(saved);
+        outcome
+    }
+
+    fn wait_for_any_future(&mut self, future_ids: &[FutureId]) -> Result<(), RuntimeError> {
+        loop {
+            self.drive_ready_detached_tasks()?;
+            if future_ids
+                .iter()
+                .any(|future_id| self.ready_future_value(*future_id).is_some())
+            {
+                return Ok(());
+            }
+
+            let Some(next_deadline) = self.process_runtime.next_running_deadline() else {
+                let blocked = future_ids.first().copied().unwrap_or_default();
+                return Err(RuntimeError::new(format!(
+                    "execution suspended on unresolved future {}",
+                    blocked
+                )));
+            };
+
+            let sleep_ms = next_deadline.saturating_sub(self.process_runtime.current_tick_ms);
+            if sleep_ms > 0 {
+                std::thread::sleep(Duration::from_millis(sleep_ms));
+            }
+            self.process_runtime.current_tick_ms = next_deadline;
+            self.expire_process_deadlines(next_deadline);
+        }
+    }
+
+    fn drive_ready_detached_tasks(&mut self) -> Result<(), RuntimeError> {
+        loop {
+            let ready_task_ids = self
+                .process_runtime
+                .detached_tasks
+                .iter()
+                .filter_map(|(task_id, task)| {
+                    self.ready_future_value(task.awaiting_future)
+                        .map(|_| *task_id)
+                })
+                .collect::<Vec<_>>();
+            if ready_task_ids.is_empty() {
+                return Ok(());
+            }
+
+            for task_id in ready_task_ids {
+                let Some(task) = self.process_runtime.detached_tasks.remove(&task_id) else {
+                    continue;
+                };
+                match task.continuation {
+                    DetachedTaskContinuation::AwaitValue => {}
+                    DetachedTaskContinuation::Resume(resume) => {
+                        let resumed = self.resume_execution_isolated(resume);
+                        if let Ok(Some((awaiting_future, continuation))) =
+                            self.detached_waiting_from_outcome(resumed)
+                        {
+                            self.process_runtime
+                                .register_detached_task(awaiting_future, continuation);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn has_pending_background_work(&self) -> bool {
+        !self.process_runtime.detached_tasks.is_empty()
+    }
+
+    pub fn next_background_deadline_delay(&self) -> Option<Duration> {
+        let next_deadline = self.process_runtime.next_running_deadline()?;
+        Some(Duration::from_millis(
+            next_deadline.saturating_sub(self.process_runtime.current_tick_ms),
+        ))
+    }
+
+    pub fn pump_background_ready(&mut self) -> Result<(), RuntimeError> {
+        self.drive_ready_detached_tasks()
+    }
+
+    pub fn advance_background_time(&mut self, elapsed: Duration) -> Result<(), RuntimeError> {
+        let elapsed_ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
+        if elapsed_ms == 0 {
+            return self.drive_ready_detached_tasks();
+        }
+
+        self.process_runtime.current_tick_ms = self
+            .process_runtime
+            .current_tick_ms
+            .saturating_add(elapsed_ms);
+        self.expire_process_deadlines(self.process_runtime.current_tick_ms);
+        self.drive_ready_detached_tasks()
+    }
+
+    pub fn pump_background_to_next_deadline(&mut self) -> Result<bool, RuntimeError> {
+        let Some(next_deadline) = self.process_runtime.next_running_deadline() else {
+            return Ok(false);
+        };
+        self.process_runtime.current_tick_ms = next_deadline;
+        self.expire_process_deadlines(next_deadline);
+        self.drive_ready_detached_tasks()?;
+        Ok(true)
+    }
+
+    pub fn drain_background_tasks(&mut self) -> Result<(), RuntimeError> {
+        while self.has_pending_background_work() {
+            self.drive_ready_detached_tasks()?;
+            if !self.has_pending_background_work() {
+                break;
+            }
+            let Some(next_deadline) = self.process_runtime.next_running_deadline() else {
+                break;
+            };
+            let sleep_ms = next_deadline.saturating_sub(self.process_runtime.current_tick_ms);
+            if sleep_ms > 0 {
+                std::thread::sleep(Duration::from_millis(sleep_ms));
+            }
+            self.process_runtime.current_tick_ms = next_deadline;
+            self.expire_process_deadlines(next_deadline);
+        }
+        Ok(())
+    }
+
+    fn detached_waiting_from_outcome(
+        &mut self,
+        outcome: StepOutcome,
+    ) -> Result<Option<(FutureId, DetachedTaskContinuation)>, RuntimeError> {
+        match outcome {
+            StepOutcome::Halt(Value::PendingFuture(future_id)) => {
+                Ok(Some((future_id, DetachedTaskContinuation::AwaitValue)))
+            }
+            StepOutcome::Pending { future_id, resume } => {
+                Ok(Some((future_id, DetachedTaskContinuation::Resume(resume))))
+            }
+            StepOutcome::Halt(_) => Ok(None),
+            StepOutcome::RuntimeError(err) => Err(err),
+            StepOutcome::Continue => Err(RuntimeError::new("detached task did not finish")),
+        }
+    }
+
     fn drive_pending_to_halt(
         &mut self,
         mut outcome: StepOutcome,
     ) -> Result<StepOutcome, RuntimeError> {
         loop {
             match outcome {
+                StepOutcome::Halt(Value::PendingFuture(future_id)) => {
+                    self.wait_for_any_future(&[future_id])?;
+                    let value = self.ready_future_value(future_id).ok_or_else(|| {
+                        RuntimeError::new(format!("future {} did not resolve", future_id))
+                    })?;
+                    outcome = StepOutcome::Halt(value);
+                }
                 StepOutcome::Pending { future_id, resume } => {
-                    let Some(deadline_tick) = self
-                        .process_runtime
-                        .futures
-                        .get(&future_id)
-                        .and_then(|future| future.deadline_tick)
-                    else {
-                        return Err(RuntimeError::new(format!(
-                            "execution suspended on unresolved future {}",
-                            future_id
-                        )));
-                    };
-                    self.expire_process_deadlines(deadline_tick);
+                    self.wait_for_any_future(&[future_id])?;
                     outcome = self.resume_execution(resume);
                 }
                 other => return Ok(other),
@@ -3004,6 +3235,12 @@ impl VM {
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
         match self.invoke_callable_step(callable, args) {
+            StepOutcome::Halt(Value::PendingFuture(future_id)) => {
+                self.wait_for_any_future(&[future_id])?;
+                self.ready_future_value(future_id).ok_or_else(|| {
+                    RuntimeError::new(format!("future {} did not resolve", future_id))
+                })
+            }
             StepOutcome::Halt(value) => Ok(value),
             pending @ StepOutcome::Pending { .. } => match self.drive_pending_to_halt(pending)? {
                 StepOutcome::Halt(value) => Ok(value),
@@ -3033,22 +3270,9 @@ impl VM {
         loop {
             match outcome {
                 StepOutcome::Halt(Value::PendingFuture(awaited_future)) => {
-                    if let Some(deadline_tick) = self
-                        .process_runtime
-                        .futures
-                        .get(&future_id)
-                        .and_then(|future| future.deadline_tick)
-                    {
-                        self.expire_process_deadlines(deadline_tick);
-                        if let Some(value) = self.ready_future_value(future_id) {
-                            return Ok(value);
-                        }
-                    }
-                    if self.ready_future_value(awaited_future).is_none() {
-                        return Err(RuntimeError::new(format!(
-                            "task suspended on unresolved future {}",
-                            awaited_future
-                        )));
+                    self.wait_for_any_future(&[future_id, awaited_future])?;
+                    if let Some(value) = self.ready_future_value(future_id) {
+                        return Ok(value);
                     }
                     let value = self.ready_future_value(awaited_future).ok_or_else(|| {
                         RuntimeError::new(format!("future {} did not resolve", awaited_future))
@@ -3069,22 +3293,9 @@ impl VM {
                     future_id: awaited_future,
                     resume,
                 } => {
-                    if let Some(deadline_tick) = self
-                        .process_runtime
-                        .futures
-                        .get(&future_id)
-                        .and_then(|future| future.deadline_tick)
-                    {
-                        self.expire_process_deadlines(deadline_tick);
-                        if let Some(value) = self.ready_future_value(future_id) {
-                            return Ok(value);
-                        }
-                    }
-                    if self.ready_future_value(awaited_future).is_none() {
-                        return Err(RuntimeError::new(format!(
-                            "task suspended on unresolved future {}",
-                            awaited_future
-                        )));
+                    self.wait_for_any_future(&[future_id, awaited_future])?;
+                    if let Some(value) = self.ready_future_value(future_id) {
+                        return Ok(value);
                     }
                     outcome = self.resume_execution(resume);
                 }
@@ -3112,32 +3323,51 @@ impl VM {
     ) -> Result<Value, RuntimeError> {
         match mode {
             TaskMode::Call | TaskMode::Async => {
-                let completion_future =
-                    self.process_runtime
-                        .allocate_future(None, timeout_ms, timeout_ms.is_some());
+                let completion_future = match timeout_ms {
+                    Some(timeout_ms) => self
+                        .process_runtime
+                        .allocate_future_after(None, timeout_ms, true),
+                    None => self.process_runtime.allocate_future(None, None, false),
+                };
                 let outcome = self.invoke_callable_step(callable, Vec::new());
                 self.await_task_completion(completion_future, outcome)
             }
             TaskMode::Launch => {
                 if timeout_ms.is_none() {
-                    let _ = self.invoke_callable_sync(callable, Vec::new())?;
+                    let outcome = self.invoke_callable_isolated_step(callable, Vec::new());
+                    if let Some((awaiting_future, continuation)) =
+                        self.detached_waiting_from_outcome(outcome)?
+                    {
+                        self.process_runtime
+                            .register_detached_task(awaiting_future, continuation);
+                    }
                     return Ok(ok_vm_result(Value::Unit));
                 }
-                let completion_future =
-                    self.process_runtime
-                        .allocate_future(None, timeout_ms, timeout_ms.is_some());
+                let completion_future = self.process_runtime.allocate_future_after(
+                    None,
+                    timeout_ms.expect("checked is_some"),
+                    true,
+                );
                 let outcome = self.invoke_callable_step(callable, Vec::new());
                 let _ = self.await_task_completion(completion_future, outcome)?;
                 Ok(ok_vm_result(Value::Unit))
             }
             TaskMode::Cast => {
                 if timeout_ms.is_none() {
-                    let _ = self.invoke_callable_sync(callable, Vec::new())?;
+                    let outcome = self.invoke_callable_isolated_step(callable, Vec::new());
+                    if let Some((awaiting_future, continuation)) =
+                        self.detached_waiting_from_outcome(outcome)?
+                    {
+                        self.process_runtime
+                            .register_detached_task(awaiting_future, continuation);
+                    }
                     return Ok(ok_vm_result(Value::Unit));
                 }
-                let completion_future =
-                    self.process_runtime
-                        .allocate_future(None, timeout_ms, timeout_ms.is_some());
+                let completion_future = self.process_runtime.allocate_future_after(
+                    None,
+                    timeout_ms.expect("checked is_some"),
+                    true,
+                );
                 let outcome = self.invoke_callable_step(callable, Vec::new());
                 let _ = self.await_task_completion(completion_future, outcome)?;
                 Ok(ok_vm_result(Value::Unit))
@@ -4496,6 +4726,45 @@ impl ProcessRuntime {
         future_id
     }
 
+    fn allocate_future_after(
+        &mut self,
+        owner: Option<u64>,
+        delay_ms: u64,
+        cancel_on_timeout: bool,
+    ) -> FutureId {
+        self.allocate_future(
+            owner,
+            Some(self.current_tick_ms.saturating_add(delay_ms)),
+            cancel_on_timeout,
+        )
+    }
+
+    fn next_running_deadline(&self) -> Option<u64> {
+        self.futures
+            .values()
+            .filter_map(|future| match future.state {
+                FutureState::Running => future.deadline_tick,
+                FutureState::Ready(_) | FutureState::Cancelled(_) => None,
+            })
+            .min()
+    }
+
+    fn register_detached_task(
+        &mut self,
+        awaiting_future: FutureId,
+        continuation: DetachedTaskContinuation,
+    ) {
+        let task_id = self.next_detached_task_id;
+        self.next_detached_task_id += 1;
+        self.detached_tasks.insert(
+            task_id,
+            DetachedTask {
+                awaiting_future,
+                continuation,
+            },
+        );
+    }
+
     fn allocate_correlation_id(&mut self) -> CorrelationId {
         let correlation_id = self.next_correlation_id;
         self.next_correlation_id += 1;
@@ -4679,7 +4948,8 @@ fn split_qualified_name_owned(qualified_name: &str) -> (Option<String>, Option<S
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_vm_result, ProcessWaitReason, StepOutcome, TaskMode, VmObservationOptions, VM,
+        decode_vm_result, ok_vm_result, ProcessWaitReason, StepOutcome, TaskMode,
+        VmObservationOptions, VM,
     };
     use sindr::ir::{
         BootEntrySource, Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode,
@@ -4695,7 +4965,6 @@ mod tests {
         Callable, CallableMetadata, CallableTarget, PidHandle, TypeEntry, TypeKind, TypeRegistry,
         Value,
     };
-
     fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
         Bytecode {
             opcodes,
@@ -5392,6 +5661,57 @@ mod tests {
     }
 
     #[test]
+    fn repl_host_io_buffering_captures_standard_handlers_without_overriding_other_targets() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        vm.enable_repl_host_io_buffering();
+
+        let stdout = vm
+            .out_handler_write(&handler_pid("StdOut"), "stdout-host".into())
+            .expect("stdout handler should run");
+        assert_ok_unit_result(stdout);
+        assert_eq!(vm.take_repl_host_stdout(), vec!["stdout-host".to_string()]);
+        assert_eq!(vm.take_repl_host_stderr(), Vec::<String>::new());
+        assert_eq!(vm.take_stdout(), Vec::<String>::new());
+
+        let stderr = vm
+            .out_handler_write(&handler_pid("StdErr"), "stderr-host".into())
+            .expect("stderr handler should run");
+        assert_ok_unit_result(stderr);
+        assert_eq!(vm.take_repl_host_stdout(), Vec::<String>::new());
+        assert_eq!(vm.take_repl_host_stderr(), vec!["stderr-host".to_string()]);
+        assert_eq!(vm.take_stderr(), Vec::<String>::new());
+
+        let null = vm
+            .out_handler_write(&handler_pid("NullOutHandler"), "muted".into())
+            .expect("null handler should run");
+        assert_ok_unit_result(null);
+        assert_eq!(vm.take_repl_host_stdout(), Vec::<String>::new());
+        assert_eq!(vm.take_repl_host_stderr(), Vec::<String>::new());
+
+        let dir = std::env::temp_dir().join(format!(
+            "surtr-eldr-repl-host-buffer-file-out-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir should be created");
+        let path = dir.join("process.log");
+        let _ = std::fs::remove_file(&path);
+        let file = vm
+            .out_handler_write(
+                &handler_pid(&format!("FileOutHandler(path={})", path.display())),
+                "file-host\n".into(),
+            )
+            .expect("file handler should run");
+        assert_ok_unit_result(file);
+        assert_eq!(vm.take_repl_host_stdout(), Vec::<String>::new());
+        assert_eq!(vm.take_repl_host_stderr(), Vec::<String>::new());
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("file output should exist"),
+            "file-host\n"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn out_handler_write_appends_to_file_target() {
         let dir = std::env::temp_dir().join(format!(
             "surtr-eldr-file-out-handler-{}",
@@ -5520,6 +5840,117 @@ mod tests {
             vm.ready_future_value(future_id),
             Some(super::ok_vm_result(Value::Unit))
         );
+    }
+
+    #[test]
+    fn invoke_callable_sync_waits_for_sleep_future_and_returns_ok() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry.register(TypeEntry {
+            tag: 2,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: vec![true],
+        });
+        let mut vm = VM::new(bytecode);
+        let callable = Callable {
+            target: CallableTarget::Builtin(builtin_id("__process_sleep")),
+            lexical_captures: vec![Value::Tagged {
+                tag: 2,
+                fields: vec![Value::Int(int(20))],
+            }],
+            metadata: CallableMetadata::default(),
+        };
+
+        let value = vm
+            .invoke_callable_sync(callable, Vec::new())
+            .expect("sync call should await sleep");
+
+        assert_eq!(value, ok_vm_result(Value::Unit));
+        assert_eq!(vm.process_runtime.current_tick_ms, 20);
+    }
+
+    #[test]
+    fn task_async_waits_for_sleep_without_timeout_and_returns_ok() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry.register(TypeEntry {
+            tag: 2,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: vec![true],
+        });
+        let mut vm = VM::new(bytecode);
+        let callable = Callable {
+            target: CallableTarget::Builtin(builtin_id("__process_sleep")),
+            lexical_captures: vec![Value::Tagged {
+                tag: 2,
+                fields: vec![Value::Int(int(20))],
+            }],
+            metadata: CallableMetadata::default(),
+        };
+
+        let value = vm
+            .invoke_task(callable, TaskMode::Async)
+            .expect("task async should await sleep");
+
+        assert_eq!(value, ok_vm_result(Value::Unit));
+        assert_eq!(vm.process_runtime.current_tick_ms, 20);
+    }
+
+    #[test]
+    fn task_launch_returns_before_sleep_future_resolves() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Halt,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::StructNew { field_count: 1 },
+            Opcode::CallBuiltin {
+                builtin_id: builtin_id("__process_sleep"),
+                arity: 1,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::Return,
+        ]);
+        bytecode.type_registry.register(TypeEntry {
+            tag: 2,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: vec![true],
+        });
+        bytecode.constants = vec![Constant::Tag(2), Constant::Int(int(20))];
+        bytecode.functions = vec![function_entry(0, 1, 0, 0, Some("Main::sleep_then_return"))];
+        let mut vm = VM::new(bytecode);
+        let callable = Callable {
+            target: CallableTarget::Function(0),
+            lexical_captures: Vec::new(),
+            metadata: CallableMetadata::default(),
+        };
+
+        let value = vm
+            .invoke_task(callable, TaskMode::Launch)
+            .expect("task launch should accept sleep body");
+
+        assert_eq!(value, ok_vm_result(Value::Unit));
+        assert_eq!(vm.process_runtime.futures.len(), 1);
+        assert_eq!(
+            vm.process_runtime
+                .futures
+                .values()
+                .filter(|future| matches!(future.state, super::FutureState::Running))
+                .count(),
+            1
+        );
+        assert_eq!(vm.process_runtime.detached_tasks.len(), 1);
+
+        vm.process_runtime.current_tick_ms = 20;
+        let expired = vm.expire_process_deadlines(20);
+        assert_eq!(expired.len(), 1);
+        vm.drive_ready_detached_tasks()
+            .expect("detached task should resume cleanly");
+        assert!(vm.process_runtime.detached_tasks.is_empty());
     }
 
     #[test]

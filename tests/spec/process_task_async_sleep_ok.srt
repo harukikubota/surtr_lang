@@ -1,0 +1,4 @@
+print(inspect(Task::async({||
+  _ =? Process::sleep(5ms)
+  Ok("done")
+})))

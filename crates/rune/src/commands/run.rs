@@ -315,6 +315,32 @@ fn execute_bytecode(
         return Err(RuneError::silent(1));
     }
 
+    if let Err(e) = vm.drain_background_tasks() {
+        let location = e
+            .context
+            .call_site
+            .clone()
+            .or_else(|| vm.runtime_error_location());
+        match runtime_sources.as_ref() {
+            Some((sources, source_id)) => xldr::error_display::emit_runtime_error_with_registry(
+                &e,
+                sources,
+                *source_id,
+                location.clone(),
+                xldr::ErrorDisplayMode::Full,
+            ),
+            None => xldr::error_display::emit_runtime_error(
+                &e,
+                vm.source(),
+                vm.source_file(),
+                location,
+                xldr::ErrorDisplayMode::Full,
+            ),
+        }
+        write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::RuntimeError { error: &e })?;
+        return Err(RuneError::silent(1));
+    }
+
     if matches!(env, ExecutionEnv::Run) && report_final_result_error_if_any(&vm) {
         write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::ResultErr)?;
         return Err(RuneError::silent(1));
