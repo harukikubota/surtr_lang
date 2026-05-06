@@ -1242,7 +1242,7 @@ impl Resolver {
             | "__task_launch_timeout"
             | "__task_cast_timeout" => "Use the public Task API with `@timeout(...)` instead.",
             "__process_pid" | "__process_spawn" | "__process_state" | "__process_store" => {
-                "This helper is compiler-managed; use `defagent` / the public process surface instead."
+                "This helper is compiler-managed; use `defagent`, `defgenserver`, or the public process surface instead."
             }
             "__supervisor_spawn" => {
                 "Use `DynamicSupervisor::spawn(...)` or a generated Supervisor `spawn` wrapper instead."
@@ -1252,6 +1252,12 @@ impl Resolver {
             }
             "__supervisor_status" => {
                 "Use `DynamicSupervisor::status()` or a generated Supervisor `status` wrapper instead."
+            }
+            "__supervisor_workers" => {
+                "Use a generated Supervisor `workers` wrapper or the public Workers surface instead."
+            }
+            "__workers_submit" | "__workers_broadcast" | "__workers_reserve" | "__workers_size" => {
+                "Use the public Workers API instead."
             }
             _ => "Use the public standard-library surface instead.",
         };

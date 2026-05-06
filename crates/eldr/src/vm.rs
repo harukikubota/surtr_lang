@@ -7,7 +7,7 @@ use sindr::ir::{
 use sindr::primitives::{int, SurtrInt};
 use sindr::runtime::{
     Callable, CallableMetadata, CallableOrigin, CallableTarget, ListHandle, Location, PidHandle,
-    RichError, TypeRegistry, Value,
+    RichError, TypeRegistry, Value, WorkerLeaseHandle, WorkersHandle,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -303,6 +303,7 @@ impl VmObserver {
 #[derive(Debug, Clone, Default)]
 struct ProcessRuntime {
     next_pid: u64,
+    next_workers_id: u64,
     next_future_id: FutureId,
     next_correlation_id: CorrelationId,
     specs_by_id: Vec<RuntimeProcessSpec>,
@@ -316,6 +317,15 @@ struct ProcessRuntime {
     waiting_table: BTreeMap<u64, ProcessWaitReason>,
     deadline_queue: VecDeque<DeadlineEntry>,
     root_supervisor: RootSupervisorState,
+    worker_sets: BTreeMap<u64, WorkerSetState>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct WorkerSetState {
+    _worker_process: String,
+    _supervisor_name: String,
+    members: Vec<u64>,
+    next_index: usize,
 }
 
 #[allow(dead_code)]
@@ -1688,6 +1698,48 @@ impl VM {
         }))
     }
 
+    pub(crate) fn supervisor_workers(
+        &mut self,
+        supervisor_name: String,
+        worker_name: String,
+        init: Callable,
+        size: i64,
+    ) -> Result<Value, RuntimeError> {
+        if size < 0 {
+            return Ok(err_vm_result(
+                self.process_error("InvalidWorkerCount", "worker count must be non-negative"),
+            ));
+        }
+        let mut members = Vec::new();
+        for _ in 0..size {
+            let spawned = self.supervisor_spawn(
+                supervisor_name.clone(),
+                Some(worker_name.clone()),
+                init.clone(),
+            )?;
+            let pid = match self.pid_handle_like_from_result(spawned) {
+                Ok(pid) => pid,
+                Err(value) => return Ok(value),
+            };
+            members.push(pid.id);
+        }
+        let workers_id = self.process_runtime.next_workers_id;
+        self.process_runtime.next_workers_id += 1;
+        self.process_runtime.worker_sets.insert(
+            workers_id,
+            WorkerSetState {
+                _worker_process: worker_name.clone(),
+                _supervisor_name: supervisor_name,
+                members,
+                next_index: 0,
+            },
+        );
+        Ok(ok_vm_result(Value::Workers(WorkersHandle {
+            id: workers_id,
+            process_name: worker_name,
+        })))
+    }
+
     pub(crate) fn process_state(&mut self, pid: &PidHandle) -> Result<Value, RuntimeError> {
         let Some(entry) = self.process_runtime.processes.get(&pid.id) else {
             return Ok(err_vm_result(self.process_error(
@@ -1768,6 +1820,118 @@ impl VM {
         Ok(ok_vm_result(Value::Unit))
     }
 
+    pub(crate) fn workers_size(&self, handle: &WorkersHandle) -> Result<Value, RuntimeError> {
+        let Some(state) = self.process_runtime.worker_sets.get(&handle.id) else {
+            return Err(RuntimeError::new(format!(
+                "unknown workers handle {} for {}",
+                handle.id, handle.process_name
+            )));
+        };
+        Ok(Value::Int(int(state.members.len() as i64)))
+    }
+
+    pub(crate) fn workers_submit(
+        &mut self,
+        handle: &WorkersHandle,
+        message: Callable,
+    ) -> Result<Value, RuntimeError> {
+        let pid = self.next_workers_pid(handle)?;
+        let result = self.invoke_callable_sync(message, vec![Value::Pid(pid)])?;
+        Ok(result)
+    }
+
+    pub(crate) fn workers_broadcast(
+        &mut self,
+        handle: &WorkersHandle,
+        message: Callable,
+    ) -> Result<Value, RuntimeError> {
+        let member_ids = self
+            .process_runtime
+            .worker_sets
+            .get(&handle.id)
+            .ok_or_else(|| {
+                RuntimeError::new(format!(
+                    "unknown workers handle {} for {}",
+                    handle.id, handle.process_name
+                ))
+            })?
+            .members
+            .clone();
+        let mut results = Vec::with_capacity(member_ids.len());
+        for pid_id in member_ids {
+            let Some(process) = self.process_runtime.processes.get(&pid_id) else {
+                continue;
+            };
+            let Some(spec) = self.process_runtime.spec_for_id(process.spec_id) else {
+                continue;
+            };
+            let pid = PidHandle {
+                id: pid_id,
+                process_name: spec.type_name.clone(),
+            };
+            results.push(self.invoke_callable_sync(message.clone(), vec![Value::Pid(pid)])?);
+        }
+        Ok(Value::List(ListHandle::from_items(results)))
+    }
+
+    pub(crate) fn workers_reserve(&mut self, handle: &WorkersHandle) -> Result<Value, RuntimeError> {
+        let pid = self.next_workers_pid(handle)?;
+        Ok(ok_vm_result(Value::WorkerLease(WorkerLeaseHandle {
+            workers_id: handle.id,
+            pid,
+        })))
+    }
+
+    fn next_workers_pid(&mut self, handle: &WorkersHandle) -> Result<PidHandle, RuntimeError> {
+        let Some(state) = self.process_runtime.worker_sets.get_mut(&handle.id) else {
+            return Err(RuntimeError::new(format!(
+                "unknown workers handle {} for {}",
+                handle.id, handle.process_name
+            )));
+        };
+        if state.members.is_empty() {
+            return Err(RuntimeError::new(format!(
+                "workers handle {} for {} has no members",
+                handle.id, handle.process_name
+            )));
+        }
+        let member_id = state.members[state.next_index % state.members.len()];
+        state.next_index = (state.next_index + 1) % state.members.len();
+        let Some(process) = self.process_runtime.processes.get(&member_id) else {
+            return Err(RuntimeError::new(format!(
+                "worker pid {} is not registered",
+                member_id
+            )));
+        };
+        let Some(spec) = self.process_runtime.spec_for_id(process.spec_id) else {
+            return Err(RuntimeError::new(format!(
+                "worker pid {} references unknown spec {}",
+                member_id, process.spec_id
+            )));
+        };
+        Ok(PidHandle {
+            id: member_id,
+            process_name: spec.type_name.clone(),
+        })
+    }
+
+    pub(crate) fn pid_handle_like(&self, value: &Value) -> Option<PidHandle> {
+        match value {
+            Value::Pid(pid) => Some(pid.clone()),
+            Value::WorkerLease(lease) => Some(lease.pid.clone()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn pid_handle_like_from_result(&self, value: Value) -> Result<PidHandle, Value> {
+        match decode_ok_pid_result(value) {
+            Some(pid) => Ok(pid),
+            None => Err(err_vm_result(
+                self.process_error("InvalidPid", "expected Ok(PID(...)) result"),
+            )),
+        }
+    }
+
     fn allocate_process_state(
         &mut self,
         name: String,
@@ -1804,7 +1968,7 @@ impl VM {
         Ok(pid)
     }
 
-    fn infer_worker_process_name_from_callable(&self, callable: &Callable) -> Option<String> {
+    pub(crate) fn infer_worker_process_name_from_callable(&self, callable: &Callable) -> Option<String> {
         match (callable.metadata.module.as_deref(), callable.metadata.name.as_deref()) {
             (Some(module), Some("init" | "__agent_init")) => Some(module.to_string()),
             _ => callable.lexical_captures.iter().find_map(|value| {
@@ -4196,6 +4360,16 @@ fn decode_vm_result(
             "{builtin_name} expects Result as {arg_name}, got {:?}",
             other
         ))),
+    }
+}
+
+fn decode_ok_pid_result(value: Value) -> Option<PidHandle> {
+    match value {
+        Value::Tagged { tag: 0, fields } if fields.len() == 1 => match fields.first() {
+            Some(Value::Pid(pid)) => Some(pid.clone()),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

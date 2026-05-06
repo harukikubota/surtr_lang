@@ -1,0 +1,4 @@
+phase: resolve
+contains: hidden builtin `__supervisor_workers`
+contains: compiler-internal
+contains: public Workers API

@@ -204,6 +204,32 @@ fn collect_missing_singleton_calls(
                     .or_insert_with(|| node.span.clone());
             }
         }
+        TypedInner::SupervisorWorkers {
+            supervisor_process,
+            init,
+            size,
+            ..
+        } => {
+            if !available_supervisors.contains(supervisor_process.as_str()) {
+                first_missing
+                    .entry(format!("{}::workers", supervisor_process))
+                    .or_insert_with(|| node.span.clone());
+            }
+            collect_missing_singleton_calls(
+                init,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+            collect_missing_singleton_calls(
+                size,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+        }
         TypedInner::App(func, args)
         | TypedInner::InjectCall(func, args)
         | TypedInner::Capture(func, args) => {
@@ -3395,6 +3421,31 @@ impl Codegen {
                 self.emit(Opcode::CallBuiltin {
                     builtin_id,
                     arity: 1,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
+            }
+
+            TypedInner::SupervisorWorkers {
+                supervisor_process,
+                worker_process,
+                init,
+                size,
+            } => {
+                let supervisor_idx = self.add_constant(Constant::Str(supervisor_process.clone()));
+                self.emit(Opcode::LoadConst(supervisor_idx));
+                let worker_idx = self.add_constant(Constant::Str(worker_process.clone()));
+                self.emit(Opcode::LoadConst(worker_idx));
+                self.emit_node(init)?;
+                self.emit_node(size)?;
+                let builtin_id =
+                    Self::builtin_id("__supervisor_workers").ok_or_else(|| CodegenError {
+                        message: "Unknown builtin: __supervisor_workers".into(),
+                        span: node.span.clone(),
+                    })?;
+                self.emit(Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: 4,
                     span_start: node.span.start as u32,
                     span_end: node.span.end as u32,
                 });

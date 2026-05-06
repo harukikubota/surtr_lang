@@ -39,6 +39,8 @@ pub enum TypeName {
     Hole,
     Lens,
     Pid,
+    Workers,
+    WorkerLease,
 }
 
 impl TypeName {
@@ -68,6 +70,8 @@ impl TypeName {
             Self::Hole => "Hole",
             Self::Lens => "Lens",
             Self::Pid => "PID",
+            Self::Workers => "Workers",
+            Self::WorkerLease => "WorkerLease",
         }
     }
 
@@ -116,6 +120,8 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "Hole" => Some(TypeName::Hole),
         "Lens" => Some(TypeName::Lens),
         "PID" => Some(TypeName::Pid),
+        "Workers" => Some(TypeName::Workers),
+        "WorkerLease" => Some(TypeName::WorkerLease),
         _ => None,
     }
 }

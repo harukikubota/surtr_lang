@@ -1,0 +1,4 @@
+phase: resolve
+contains: hidden builtin `__process_pid`
+contains: compiler-managed
+contains: defgenserver

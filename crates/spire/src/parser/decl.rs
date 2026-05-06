@@ -676,6 +676,99 @@ fn build_supervisor_status_wrapper(span: &Span, supervisor_name: &str) -> Ast {
     )
 }
 
+fn build_supervisor_workers_wrapper(span: &Span, supervisor_name: &str) -> Ast {
+    Ast::Def(
+        span.clone(),
+        "workers".to_string(),
+        Vec::new(),
+        vec![
+            FunParam {
+                name: "worker_init".to_string(),
+                ty: AstTy::Func(
+                    span.clone(),
+                    Vec::new(),
+                    Box::new(AstTy::Generic(
+                        span.clone(),
+                        "Result".to_string(),
+                        vec![AstTy::Named(span.clone(), "$State".to_string())],
+                    )),
+                ),
+                span: span.clone(),
+            },
+            FunParam {
+                name: "size".to_string(),
+                ty: AstTy::Named(span.clone(), "Int".to_string()),
+                span: span.clone(),
+            },
+        ],
+        Some(AstTy::Generic(
+            span.clone(),
+            "Result".to_string(),
+            vec![AstTy::Generic(
+                span.clone(),
+                "Workers".to_string(),
+                vec![AstTy::Named(span.clone(), "$Process".to_string())],
+            )],
+        )),
+        Box::new(Ast::Block(
+            span.clone(),
+            vec![internal_call(
+                span,
+                "__supervisor_workers",
+                vec![
+                    string_lit(span, supervisor_name),
+                    var(span, "worker_init"),
+                    var(span, "size"),
+                ],
+            )],
+        )),
+        DeclAttrs::default(),
+    )
+}
+
+fn is_compiler_managed_process_surface_name(name: &str) -> bool {
+    matches!(name, "pid" | "spawn" | "adopt" | "status" | "workers")
+}
+
+fn ensure_no_compiler_managed_process_surface_names(
+    defs: &[Ast],
+    process_name: &str,
+) -> Result<(), ParseError> {
+    for def in defs {
+        let def_name = match def {
+            Ast::Def(_, name, ..) => name.as_str(),
+            _ => continue,
+        };
+        if is_compiler_managed_process_surface_name(def_name) {
+            return Err(ParseError::syntax(
+                format!(
+                    "`{}::{}` is compiler-managed and cannot be user-defined",
+                    process_name, def_name
+                ),
+                def.span().clone(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_process_surface_name_not_reserved(
+    name: &str,
+    span: &Span,
+    process_name: &str,
+) -> Result<(), ParseError> {
+    if is_compiler_managed_process_surface_name(name) {
+        return Err(ParseError::syntax(
+            format!(
+                "`{}::{}` is compiler-managed and cannot be user-defined",
+                process_name, name
+            ),
+            span.clone(),
+        ));
+    }
+    Ok(())
+}
+
 fn build_state_get_wrapper(
     span: &Span,
     agent_name: &str,
@@ -3223,6 +3316,7 @@ impl Parser<'_> {
         body.push(build_supervisor_spawn_wrapper(&span, &name));
         body.push(build_supervisor_adopt_wrapper(&span, &name));
         body.push(build_supervisor_status_wrapper(&span, &name));
+        body.push(build_supervisor_workers_wrapper(&span, &name));
         let span = Span { start, end: end.end };
         if dynamic && name != "DynamicSupervisor" {
             Ok(Ast::DefdynamicSupervisor(
@@ -3684,6 +3778,13 @@ impl Parser<'_> {
                 },
             ));
         }
+        ensure_no_compiler_managed_process_surface_names(&helpers, &name)?;
+        for (call_name, call_handler) in &call_handlers {
+            ensure_process_surface_name_not_reserved(call_name, call_handler.def.span(), &name)?;
+        }
+        for (cast_name, cast_handler) in &cast_handlers {
+            ensure_process_surface_name_not_reserved(cast_name, cast_handler.def.span(), &name)?;
+        }
 
         let init_name = def_name(&init.def)?;
         let init_def = rename_agent_handler(init.def, "__agent_init", &name, false)?;
@@ -3842,11 +3943,18 @@ impl Parser<'_> {
             .as_ref()
             .map(|handler| def_name(&handler.def))
             .transpose()?;
+        let get_surface_span = get.def.span().clone();
+        let set_surface_span = set.as_ref().map(|handler| handler.def.span().clone());
         let init_def = rename_agent_handler(init.def, "__agent_init", &name, false)?;
         let get_def = rename_agent_handler(get.def, "__agent_get", &name, true)?;
         let set_def = set
             .map(|handler| rename_agent_handler(handler.def, "__agent_set", &name, true))
             .transpose()?;
+        ensure_no_compiler_managed_process_surface_names(&helpers, &name)?;
+        ensure_process_surface_name_not_reserved(&get_name, &get_surface_span, &name)?;
+        if let (Some(set_name), Some(set_span)) = (&set_name, set_surface_span.as_ref()) {
+            ensure_process_surface_name_not_reserved(set_name, set_span, &name)?;
+        }
 
         let init_params = def_params(&init_def)?;
         let get_params = def_params(&get_def)?;

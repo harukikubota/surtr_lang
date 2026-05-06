@@ -1242,6 +1242,10 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_node(pid, rewrites);
             }
             TypedInner::SupervisorStatus { .. } => {}
+            TypedInner::SupervisorWorkers { init, size, .. } => {
+                Self::rewrite_fun_indices_in_node(init, rewrites);
+                Self::rewrite_fun_indices_in_node(size, rewrites);
+            }
             TypedInner::App(func, args) => {
                 Self::rewrite_fun_indices_in_node(func, rewrites);
                 for arg in args {

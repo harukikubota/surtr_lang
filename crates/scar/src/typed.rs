@@ -214,6 +214,13 @@ pub enum TypedInner {
         supervisor_process: String,
     },
 
+    SupervisorWorkers {
+        supervisor_process: String,
+        worker_process: String,
+        init: Box<TypedNode>,
+        size: Box<TypedNode>,
+    },
+
     /// Compile-time lens constant path value. Stage 1 does not allow
     /// first-class runtime transport of lens values.
     LensPath(TypedLensPath),

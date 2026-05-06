@@ -245,6 +245,25 @@ defstruct CounterState {
 
 owner process 内では struct literal / field access / lens 操作を許可する。private field 指定は冗長 warning とする。
 
+### 3.8.1 compiler-managed lower surface
+
+process runtime の lower surface は [lib/process.srt](/Users/haruca/work/rust/surtr/lib/process.srt) に置く。
+
+- `GenServer` は hidden lowering module であり、`pid`, `spawn`, `state`, `store`, `self`, `context_handler` を持つ
+- `Supervisor` は hidden lowering module であり、`spawn`, `adopt`, `status`, `workers` を持つ
+- `Workers<$Worker>` と `WorkerLease<$Worker>` も `process.srt` の builtin type として定義する
+- これらは REPL / project compile の両方で同じ stdlib ルートから見える
+- user code から `GenServer::...` / `Supervisor::...` を直接呼ぶことはできず、共通の `@hidden` 診断に乗る
+- user-facing process surface には lowering 都合の `name: String` のような中間引数を出さない
+
+process owner ごとの compiler-managed 名は共通予約集合として扱う。
+
+- `pid`
+- `spawn`
+- `adopt`
+- `status`
+- `workers`
+
 ### 3.9 Agent
 
 Agent は 1 state / 1 read path / 1 write path の簡潔 API とする。複数 protocol が必要な場合は GenServer を使う。
@@ -339,6 +358,41 @@ defagent CacheClient {
 }
 ```
 
+Worker Agent:
+
+```surtr
+@process_state(ImageWorker)
+defstruct ImageWorkerState {
+  jobs: Int,
+}
+
+defagent ImageWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
+  @init
+  def init(start: Int) -> Result<ImageWorkerState> {
+    Ok(ImageWorkerState { jobs: start })
+  }
+
+  @get
+  def value(state: ImageWorkerState) -> Result<Int> {
+    Ok(state.jobs)
+  }
+
+  @set
+  def assign(state: ImageWorkerState, delta: Int) -> Result<ImageWorkerState> {
+    Ok(ImageWorkerState { jobs: state.jobs + delta })
+  }
+}
+
+pid =? ImageWorker::spawn(0)
+_ =? ImageWorker::assign(pid, 3)
+jobs =? ImageWorker::value(pid)
+```
+
 ### 3.10 GenServer
 
 GenServer は複数 query / command を持つ stateful process とする。
@@ -409,6 +463,16 @@ pid = CounterServer::pid()
 text = CounterServer::view(pid, "count")
 ```
 
+Worker GenServer も public surface は自然な process owner API を使う。
+
+```surtr
+pid =? QueueServer::spawn("image")
+_ =? QueueServer::push(pid, "a.png")
+size =? QueueServer::size(pid)
+```
+
+compiler はこれらの surface を hidden `GenServer` lowering API に接続する。`GenServer::pid(...)` や `GenServer::store(...)` は stdlib 内に存在するが、user code から直接使うものではない。
+
 ### 3.11 Supervisor / DynamicSupervisor
 
 Supervisor は次の層で整理する。
@@ -429,7 +493,7 @@ Lazy singleton = init 完了保証の話
 DynamicSupervisor は singleton process として扱い、user-facing API に `sup: PID<_>` を出さない。
 
 ```surtr
-pid = DynamicSupervisor::spawn(MyWorker::init_route(args))
+pid = DynamicSupervisor::spawn(MyWorker::init(args))
 ```
 
 `defsupervisor` は policy-only declaration とし、`meta` には supervisor policy だけを置く。
@@ -442,7 +506,7 @@ pid = DynamicSupervisor::spawn(MyWorker::init_route(args))
 - 必要なら `shutdown_timeout`
 
 `instance` / `init_policy` / user-defined helper `def` は `defsupervisor` では受理しない。
-`spawn` / `adopt` / `status` は compiler-managed surface である。
+`spawn` / `adopt` / `status` / `workers` は compiler-managed surface であり、同名 user 定義は compile error とする。
 
 ```surtr
 defsupervisor ImageWorkerSupervisor {
@@ -465,12 +529,71 @@ DynamicSupervisor::spawn(init: (-> Result<State>)) -> Result<PID<Worker>>
 custom supervisor surface も同じ形に揃える。
 
 ```surtr
-ImageWorkerSupervisor::spawn(MyWorker::init_route(args))
+ImageWorkerSupervisor::spawn(MyWorker::init(args))
 ImageWorkerSupervisor::adopt(pid)
 ImageWorkerSupervisor::status()
+ImageWorkerSupervisor::workers(MyWorker::init(args), 4)
 ```
 
 `adopt / handoff` は runtime が原子的に処理する。PID は維持する。
+
+### 3.11.1 Workers surface
+
+`Workers<$Worker>` は runtime-managed な worker 集合 handle であり、`List<PID<$Worker>>` ではない。
+
+- membership は closed である
+- user code は worker 集合を直接組み立てない
+- `Workers` API は worker message template だけを受ける
+- `reserve` は `WorkerLease<$Worker>` を返し、裸の PID 抽出 API は出さない
+
+正規系:
+
+```surtr
+workers =? ImageWorkerSupervisor::workers(ImageWorker::init(0), 2)
+_ =? Workers::submit(workers, ImageWorker::assign(3))
+lease =? Workers::reserve(workers)
+_ =? ImageWorker::assign(lease, 4)
+all = Workers::broadcast(workers, ImageWorker::value())
+count = Workers::size(workers)
+```
+
+pool / manager GenServer は `Workers<$Worker>` を state に保持してよい。
+
+```surtr
+@process_state(ImagePool)
+defstruct ImagePoolState {
+  workers: Workers<ImageWorker>,
+}
+
+defgenserver ImagePool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<ImagePoolState> {
+    workers =? ImageWorkerSupervisor::workers(ImageWorker::init(0), 2)
+    Ok(ImagePoolState { workers: workers })
+  }
+
+  @call
+  def submit(state: ImagePoolState, delta: Int) -> Result<(Unit, ImagePoolState)> {
+    _ =? Workers::submit(state.workers, ImageWorker::assign(delta))
+    Ok(((), state))
+  }
+
+  @call
+  def status(state: ImagePoolState) -> Result<(Int, ImagePoolState)> {
+    Ok((Workers::size(state.workers), state))
+  }
+}
+
+_ =? ImagePool::submit(5)
+size =? ImagePool::status()
+```
+
+`Supervisor` lowering API も `process.srt` に存在するが、これは compiler-internal surface である。user code では常に `MySupervisor::spawn(...)` / `MySupervisor::workers(...)` のような process owner API を使う。
 
 ### 3.12 Worker lifecycle
 

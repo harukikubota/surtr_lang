@@ -3688,6 +3688,12 @@ impl Checker {
         if let Some(typed) = self.try_check_supervisor_status_app(span, func, args)? {
             return Ok(typed);
         }
+        if let Some(typed) = self.try_check_supervisor_workers_app(span, func, args)? {
+            return Ok(typed);
+        }
+        if let Some(typed) = self.try_check_worker_message_template_app(span, func, args)? {
+            return Ok(typed);
+        }
 
         if let Some(typed) = self.try_check_lens_intrinsic_app(span, func, args)? {
             return Ok(typed);
@@ -4121,6 +4127,147 @@ impl Checker {
             ty: Ty::Result(Box::new(status_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::SupervisorStatus { supervisor_process },
+        }))
+    }
+
+    fn try_check_supervisor_workers_app(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<Option<TypedNode>, TypeError> {
+        let Some(supervisor_process) = self.supervisor_intrinsic_target(func, "workers") else {
+            return Ok(None);
+        };
+        if args.iter().any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _))) {
+            return Err(TypeError {
+                message: format!("{supervisor_process}::workers does not accept named arguments"),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if args.len() != 2 {
+            return Err(TypeError {
+                message: format!(
+                    "{}::workers expects 2 argument(s), got {}",
+                    supervisor_process,
+                    args.len()
+                ),
+                span: span.clone(),
+                hint: Some("Pass a worker init route and worker count.".into()),
+            });
+        }
+        let ResolvedRecordLitArg::Positional(worker_init) = &args[0] else {
+            unreachable!("validated named arguments above")
+        };
+        let ResolvedRecordLitArg::Positional(size_expr) = &args[1] else {
+            unreachable!("validated named arguments above")
+        };
+        let worker_process = self.supervisor_spawn_worker_process(worker_init)?;
+        let typed_init = self.check_node(worker_init)?;
+        match self.resolve_ty(&typed_init.ty) {
+            Ty::Func(params, _) if params.is_empty() => {}
+            other => {
+                return Err(TypeError {
+                    message: format!(
+                        "supervisor workers expects a zero-argument worker init route, got {}",
+                        self.ty_name(&other)
+                    ),
+                    span: typed_init.span.clone(),
+                    hint: Some(
+                        "Pass a generated worker init reference like `MyWorker::init(args)`."
+                            .into(),
+                    ),
+                });
+            }
+        }
+        let typed_size = self.check_node_with_expected(size_expr, Some(&Ty::Int))?;
+        if !self.types_compatible(&Ty::Int, &typed_size.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "supervisor workers expects Int as worker count, got {}",
+                    self.ty_name(&typed_size.ty)
+                ),
+                span: typed_size.span.clone(),
+                hint: None,
+            });
+        }
+        Ok(Some(TypedNode {
+            ty: Ty::Result(
+                Box::new(Ty::Enum(
+                    "Workers".into(),
+                    vec![Ty::Pid(worker_process.clone())],
+                )),
+                Box::new(Ty::Error),
+            ),
+            span: span.clone(),
+            node: TypedInner::SupervisorWorkers {
+                supervisor_process,
+                worker_process,
+                init: Box::new(typed_init),
+                size: Box::new(typed_size),
+            },
+        }))
+    }
+
+    fn try_check_worker_message_template_app(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<Option<TypedNode>, TypeError> {
+        if args.iter().any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _))) {
+            return Ok(None);
+        }
+        let Resolved::Var(_, id) = func else {
+            return Ok(None);
+        };
+        let qualified = id.qualified_name.as_deref().unwrap_or(&id.name);
+        let Some((process_name, _method_name)) = qualified.rsplit_once("::") else {
+            return Ok(None);
+        };
+        let Some(process_name) = self.process_specs.iter().find(|spec| {
+            spec.process_name == process_name
+                && spec.spec.instance == spire::ast::ProcessInstance::Worker
+        }).map(|spec| spec.process_name.clone()) else {
+            return Ok(None);
+        };
+        let typed_func = self.check_node(func)?;
+        let func_ty = self.resolve_ty(&typed_func.ty);
+        let (params, ret) = match &func_ty {
+            Ty::UserFunc { params, ret, .. } => (params.as_slice(), ret.clone()),
+            Ty::BuiltinFunc { params, ret, .. } => (params.as_slice(), ret.clone()),
+            _ => return Ok(None),
+        };
+        let Some((first_param, remaining_params)) = params.split_first() else {
+            return Ok(None);
+        };
+        let Ty::Pid(pid_process) = self.resolve_ty(first_param) else {
+            return Ok(None);
+        };
+        if pid_process != process_name {
+            return Ok(None);
+        }
+        if args.len() != remaining_params.len() {
+            return Ok(None);
+        }
+        let typed_args: Vec<TypedNode> = args
+            .iter()
+            .zip(remaining_params.iter())
+            .map(|(arg, expected)| match arg {
+                ResolvedRecordLitArg::Positional(expr) => self.check_node_with_expected(expr, Some(expected)),
+                ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (expected, actual) in remaining_params.iter().zip(typed_args.iter()) {
+            if !self.types_compatible(expected, &actual.ty) {
+                return Ok(None);
+            }
+        }
+        Ok(Some(TypedNode {
+            ty: Ty::Func(vec![Ty::Pid(process_name)], ret),
+            span: span.clone(),
+            node: TypedInner::InjectCall(Box::new(typed_func), typed_args),
         }))
     }
 

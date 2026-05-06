@@ -466,6 +466,11 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(String) -> Result<SupervisorStatus>",
     },
     BuiltinMeta {
+        name: "__supervisor_workers",
+        arity: 3,
+        sig_str: "(String, (-> Result<$State>), Int) -> Result<Workers<$Process>>",
+    },
+    BuiltinMeta {
         name: "__process_state",
         arity: 1,
         sig_str: "(PID<$Process>) -> Result<$State>",
@@ -549,6 +554,26 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         name: "__task_cast_timeout",
         arity: 2,
         sig_str: "(Duration, (-> Unit)) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__workers_submit",
+        arity: 2,
+        sig_str: "(Workers<$Worker>, (PID<$Worker> -> Result<Unit>)) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__workers_broadcast",
+        arity: 2,
+        sig_str: "(Workers<$Worker>, (PID<$Worker> -> Result<$A>)) -> List<Result<$A>>",
+    },
+    BuiltinMeta {
+        name: "__workers_reserve",
+        arity: 1,
+        sig_str: "(Workers<$Worker>) -> Result<WorkerLease<$Worker>>",
+    },
+    BuiltinMeta {
+        name: "__workers_size",
+        arity: 1,
+        sig_str: "(Workers<$Worker>) -> Int",
     },
     BuiltinMeta {
         name: "__operator_int_add",
@@ -760,6 +785,14 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         name: TypeName::Lens.as_str(),
         params: &["$S", "$A"],
     },
+    BuiltinTypeMeta {
+        name: TypeName::Workers.as_str(),
+        params: &["$Worker"],
+    },
+    BuiltinTypeMeta {
+        name: TypeName::WorkerLease.as_str(),
+        params: &["$Worker"],
+    },
 ];
 
 pub fn builtin_meta_by_name(name: &str) -> Option<&'static BuiltinMeta> {
@@ -772,10 +805,24 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
         Some("IO::get_line") => "io_get_line",
         Some("Process::self") => "__process_self",
         Some("Process::sleep") => "__process_sleep",
+        Some("GenServer::pid") => "__process_pid",
+        Some("GenServer::spawn") => "__process_spawn",
+        Some("GenServer::state") => "__process_state",
+        Some("GenServer::store") => "__process_store",
+        Some("GenServer::self") => "__process_self",
+        Some("GenServer::context_handler") => "__process_context_handler",
+        Some("Supervisor::spawn") => "__supervisor_spawn",
+        Some("Supervisor::adopt") => "__supervisor_adopt",
+        Some("Supervisor::status") => "__supervisor_status",
+        Some("Supervisor::workers") => "__supervisor_workers",
         Some("OutHandler::write") => "__out_handler_write",
         Some("DynamicSupervisor::spawn") => "__dynamic_supervisor_spawn",
         Some("DynamicSupervisor::adopt") => "__dynamic_supervisor_adopt",
         Some("DynamicSupervisor::status") => "__dynamic_supervisor_status",
+        Some("Workers::submit") => "__workers_submit",
+        Some("Workers::broadcast") => "__workers_broadcast",
+        Some("Workers::reserve") => "__workers_reserve",
+        Some("Workers::size") => "__workers_size",
         Some("Task::call") => "__task_call",
         Some("Task::async") => "__task_async",
         Some("Task::launch") => "__task_launch",

@@ -30,6 +30,57 @@ impl SupervisorStatus {
   }
 }
 
+@builtin type Workers<$Worker>
+@builtin type WorkerLease<$Worker>
+
+impl Workers {
+  @builtin def submit(workers: Workers<$Worker>, message: (PID<$Worker> -> Result<Unit>)) -> Result<Unit>
+
+  @builtin def broadcast(workers: Workers<$Worker>, message: (PID<$Worker> -> Result<$A>)) -> List<Result<$A>>
+
+  @builtin def reserve(workers: Workers<$Worker>) -> Result<WorkerLease<$Worker>>
+
+  @builtin def size(workers: Workers<$Worker>) -> Int
+}
+
+defmod GenServer {
+  @hidden
+  @builtin def pid(name: String, init: (-> Result<$State>)) -> PID<$Process>
+
+  @hidden
+  @builtin def spawn(name: String, init: (-> Result<$State>)) -> Result<PID<$Process>>
+
+  @hidden
+  @builtin def state(pid: PID<$Process>) -> Result<$State>
+
+  @hidden
+  @builtin def store(pid: PID<$Process>, state: $State) -> Result<Unit>
+
+  @hidden
+  @builtin def self() -> PID<$Process>
+
+  @hidden
+  @builtin def context_handler(process_name: String, slot: String) -> PID<$Handler>
+}
+
+defmod Supervisor {
+  @hidden
+  @builtin def spawn(supervisor: String, worker_init: (-> Result<$State>)) -> Result<PID<$Process>>
+
+  @hidden
+  @builtin def adopt(supervisor: String, pid: PID<$Process>) -> Result<Unit>
+
+  @hidden
+  @builtin def status(supervisor: String) -> Result<SupervisorStatus>
+
+  @hidden
+  @builtin def workers(
+    supervisor: String,
+    worker_init: (-> Result<$State>),
+    size: Int,
+  ) -> Result<Workers<$Process>>
+}
+
 defmod Process {
   @doc """
   Return the current process PID.

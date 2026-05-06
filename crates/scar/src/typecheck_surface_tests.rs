@@ -2869,6 +2869,9 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
             TypedInner::SupervisorAdopt { pid, .. } => has_pending_trait_call(pid),
             TypedInner::SupervisorStatus { .. } => false,
+            TypedInner::SupervisorWorkers { init, size, .. } => {
+                has_pending_trait_call(init) || has_pending_trait_call(size)
+            }
             TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => false,
             TypedInner::LensView { source, .. } => has_pending_trait_call(source),
             TypedInner::LensSet { source, value, .. } => {
@@ -3464,5 +3467,45 @@ _ =? LockedSup::adopt(pid)"#,
 fn supervisor_status_returns_supervisor_status() {
     let typed = typecheck_supervisor_spawn_fixture(r#"status =? MySup::status()"#)
         .expect("status should typecheck");
+    assert!(!typed.nodes.is_empty());
+}
+
+#[test]
+fn supervisor_workers_returns_workers_handle() {
+    let typed = typecheck_supervisor_spawn_fixture(
+        r#"workers =? MySup::workers(MyWorker::init(1), 2)"#,
+    )
+    .expect("workers creation should typecheck");
+    assert!(!typed.nodes.is_empty());
+}
+
+#[test]
+fn workers_submit_accepts_worker_message_template() {
+    let typed = typecheck_supervisor_spawn_fixture(
+        r#"workers =? MySup::workers(MyWorker::init(1), 2)
+_ =? Workers::submit(workers, MyWorker::set(3))"#,
+    )
+    .expect("workers submit should accept worker message template");
+    assert!(!typed.nodes.is_empty());
+}
+
+#[test]
+fn workers_broadcast_accepts_worker_message_template() {
+    let typed = typecheck_supervisor_spawn_fixture(
+        r#"workers =? MySup::workers(MyWorker::init(1), 2)
+values = Workers::broadcast(workers, MyWorker::get("jobs"))"#,
+    )
+    .expect("workers broadcast should accept worker message template");
+    assert!(!typed.nodes.is_empty());
+}
+
+#[test]
+fn workers_reserve_can_flow_into_worker_call() {
+    let typed = typecheck_supervisor_spawn_fixture(
+        r#"workers =? MySup::workers(MyWorker::init(1), 2)
+lease =? Workers::reserve(workers)
+_ =? MyWorker::set(lease, 9)"#,
+    )
+    .expect("workers reserve should typecheck as worker capability");
     assert!(!typed.nodes.is_empty());
 }

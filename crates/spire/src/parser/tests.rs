@@ -4479,6 +4479,7 @@ fn test_defsupervisor_generates_compiler_managed_surface_from_policy_meta() {
             assert!(generated_defs.contains(&"spawn"));
             assert!(generated_defs.contains(&"adopt"));
             assert!(generated_defs.contains(&"status"));
+            assert!(generated_defs.contains(&"workers"));
         }
         other => panic!("Expected Defsupervisor, got {other:?}"),
     }
@@ -4523,6 +4524,56 @@ fn test_defsupervisor_rejects_instance_and_init_policy_meta_keys() {
         err.message().contains("policy"),
         "unexpected error: {err:?}"
     );
+}
+
+#[test]
+fn test_defagent_rejects_compiler_managed_surface_names() {
+    let err = parse_with_context(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int) -> Result<Int> { Ok(state) }
+
+  def spawn() -> Int { 1 }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("compiler-managed process surface name should be reserved");
+
+    assert!(err.message().contains("compiler-managed"));
+    assert!(err.message().contains("spawn"));
+}
+
+#[test]
+fn test_defgenserver_rejects_compiler_managed_surface_names() {
+    let err = parse_with_context(
+        r#"defgenserver CounterServer {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def view(state: Int) -> Result<(Int, Int)> { Ok((state, state)) }
+
+  def workers() -> Int { 1 }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("compiler-managed process surface name should be reserved");
+
+    assert!(err.message().contains("compiler-managed"));
+    assert!(err.message().contains("workers"));
 }
 
 #[test]

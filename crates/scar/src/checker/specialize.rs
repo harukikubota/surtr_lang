@@ -99,6 +99,31 @@ impl Checker {
             TypedInner::SupervisorStatus { supervisor_process } => {
                 TypedInner::SupervisorStatus { supervisor_process }
             }
+            TypedInner::SupervisorWorkers {
+                supervisor_process,
+                worker_process,
+                init,
+                size,
+            } => TypedInner::SupervisorWorkers {
+                supervisor_process,
+                worker_process,
+                init: Box::new(self.rewrite_specializations_in_node(
+                    *init,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                size: Box::new(self.rewrite_specializations_in_node(
+                    *size,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+            },
             TypedInner::App(func, args) => {
                 let func = self.rewrite_specializations_in_node(
                     *func,
@@ -1150,6 +1175,10 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(pid, ordered, seen);
             }
             TypedInner::SupervisorStatus { .. } => {}
+            TypedInner::SupervisorWorkers { init, size, .. } => {
+                self.collect_bound_tyvars_in_node(init, ordered, seen);
+                self.collect_bound_tyvars_in_node(size, ordered, seen);
+            }
             TypedInner::LensPath(path) => {
                 self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
@@ -1298,6 +1327,17 @@ impl Checker {
             TypedInner::SupervisorStatus { supervisor_process } => {
                 TypedInner::SupervisorStatus { supervisor_process }
             }
+            TypedInner::SupervisorWorkers {
+                supervisor_process,
+                worker_process,
+                init,
+                size,
+            } => TypedInner::SupervisorWorkers {
+                supervisor_process,
+                worker_process,
+                init: Box::new(self.substitute_typed_node_with_mapping(*init, mapping)),
+                size: Box::new(self.substitute_typed_node_with_mapping(*size, mapping)),
+            },
             TypedInner::App(func, args) => TypedInner::App(
                 Box::new(self.substitute_typed_node_with_mapping(*func, mapping)),
                 args.into_iter()
@@ -1946,6 +1986,10 @@ impl Checker {
                 Self::typed_node_has_pending_trait_call(pid)
             }
             TypedInner::SupervisorStatus { .. } => false,
+            TypedInner::SupervisorWorkers { init, size, .. } => {
+                Self::typed_node_has_pending_trait_call(init)
+                    || Self::typed_node_has_pending_trait_call(size)
+            }
             TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => false,
             TypedInner::LensView { source, .. } => Self::typed_node_has_pending_trait_call(source),
