@@ -196,6 +196,24 @@ pub enum TypedInner {
         slot: String,
     },
 
+    /// Supervisor-driven worker spawn lowered from `DynSup::spawn(...)` or
+    /// `MySup::spawn(...)`.
+    SupervisorSpawn {
+        supervisor_process: String,
+        worker_process: String,
+        init: Box<TypedNode>,
+    },
+
+    SupervisorAdopt {
+        supervisor_process: String,
+        worker_process: String,
+        pid: Box<TypedNode>,
+    },
+
+    SupervisorStatus {
+        supervisor_process: String,
+    },
+
     /// Compile-time lens constant path value. Stage 1 does not allow
     /// first-class runtime transport of lens values.
     LensPath(TypedLensPath),

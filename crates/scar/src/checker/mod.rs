@@ -463,6 +463,7 @@ pub fn typecheck_staged_program_with_context(
         .collect::<Vec<TypedProcessSpec>>();
     let mut checker = Checker::new(context);
     checker.set_process_handler_dependencies(&process_specs);
+    checker.boot_plan = program.boot_plan.clone();
     let nodes = checker.check_program(program.resolved)?;
     Ok(TypedProgram {
         nodes,
@@ -502,6 +503,11 @@ fn initialize_env() -> TypeEnv {
     // before stdlib declarations are typechecked. Reserve its type head here so
     // builtin signature parsing can treat it as the same struct identity.
     env.predeclare_type_def("Duration".into(), crate::env::TypeKind::Struct, Vec::new());
+    env.predeclare_type_def(
+        "SupervisorStatus".into(),
+        crate::env::TypeKind::Struct,
+        Vec::new(),
+    );
 
     // Ok constructor: ($A) -> Result<$A, $E>
     let ok_a = env.fresh_tyvar();
@@ -1229,6 +1235,13 @@ impl ScarSession {
         Self::rewrite_fun_indices_in_ty(&mut node.ty, rewrites);
         match &mut node.node {
             TypedInner::Lit(_) | TypedInner::Var(_) | TypedInner::ListNil => {}
+            TypedInner::SupervisorSpawn { init, .. } => {
+                Self::rewrite_fun_indices_in_node(init, rewrites);
+            }
+            TypedInner::SupervisorAdopt { pid, .. } => {
+                Self::rewrite_fun_indices_in_node(pid, rewrites);
+            }
+            TypedInner::SupervisorStatus { .. } => {}
             TypedInner::App(func, args) => {
                 Self::rewrite_fun_indices_in_node(func, rewrites);
                 for arg in args {
@@ -1543,6 +1556,7 @@ struct Checker {
     profiler: TypecheckProfiler,
     process_handler_dependencies: HashMap<String, HashMap<String, String>>,
     process_specs: Vec<TypedProcessSpec>,
+    boot_plan: spire::ast::SupervisorInitSpec,
 }
 
 impl Checker {
@@ -1573,6 +1587,7 @@ impl Checker {
             profiler: TypecheckProfiler::new_from_env(),
             process_handler_dependencies: HashMap::new(),
             process_specs: Vec::new(),
+            boot_plan: spire::ast::SupervisorInitSpec::default(),
         }
     }
 
@@ -1617,6 +1632,7 @@ impl Checker {
             profiler: TypecheckProfiler::new_from_env(),
             process_handler_dependencies: HashMap::new(),
             process_specs: Vec::new(),
+            boot_plan: spire::ast::SupervisorInitSpec::default(),
         }
     }
 

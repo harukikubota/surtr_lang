@@ -472,6 +472,19 @@ pub struct RuntimeSupervisionSpec {
     pub parent: Option<String>,
     #[serde(default)]
     pub children: Vec<String>,
+    #[serde(default)]
+    pub policy: Option<RuntimeSupervisorPolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeSupervisorPolicy {
+    pub strategy: String,
+    pub max_restarts: u64,
+    pub max_seconds: u64,
+    pub child_restart_default: String,
+    pub allow_adopt: bool,
+    #[serde(default)]
+    pub shutdown_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -516,6 +529,8 @@ pub struct RuntimeBootPlan {
     #[serde(default)]
     pub handler_overrides: Vec<RuntimeHandlerOverride>,
     #[serde(default)]
+    pub supervisor_overrides: Vec<RuntimeSupervisorOverrideEntry>,
+    #[serde(default)]
     pub runtime_limits: RuntimeLimitConfig,
 }
 
@@ -532,7 +547,9 @@ impl RuntimeBootPlan {
     }
 
     pub fn has_explicit_entries(&self) -> bool {
-        !self.singletons.is_empty() || !self.standard_overrides.is_empty()
+        !self.singletons.is_empty()
+            || !self.standard_overrides.is_empty()
+            || !self.supervisor_overrides.is_empty()
     }
 }
 
@@ -567,6 +584,12 @@ pub struct RuntimeHandlerOverride {
     pub target_process: String,
     pub slot: String,
     pub handler_target: RuntimeHandlerTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeSupervisorOverrideEntry {
+    pub process_name: String,
+    pub policy: RuntimeSupervisorPolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

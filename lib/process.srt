@@ -1,6 +1,35 @@
 @doc """
 Process and Task provide the staged process-oriented surface.
 """
+defstruct SupervisorStatus {
+  supervisor: String,
+  child_count: Int,
+  strategy: String,
+  max_restarts: Int,
+  max_seconds: Int,
+  allow_adopt: Boolean,
+}
+
+impl SupervisorStatus {
+  def new(
+    supervisor: String,
+    child_count: Int,
+    strategy: String,
+    max_restarts: Int,
+    max_seconds: Int,
+    allow_adopt: Boolean,
+  ) -> Self {
+    SupervisorStatus {
+      supervisor: supervisor,
+      child_count: child_count,
+      strategy: strategy,
+      max_restarts: max_restarts,
+      max_seconds: max_seconds,
+      allow_adopt: allow_adopt,
+    }
+  }
+}
+
 defmod Process {
   @doc """
   Return the current process PID.
@@ -60,17 +89,14 @@ test helpers remain a later surface extension.
 """
 defmod InHandler {}
 
-defmod DynamicSupervisor {
-  @doc """
-  Spawn a worker process through the runtime-managed dynamic supervisor.
-
-  This is the staged public façade used by generated worker `spawn` wrappers
-  until init routes become a first-class surface value.
-  """
-  @builtin def spawn(name: String, init: (-> Result<$State>)) -> Result<PID<$Process>>
-
-  @hidden
-  @builtin def __dynamic_supervisor_spawn(name: String, init: (-> Result<$State>)) -> Result<PID<$Process>>
+defsupervisor DynamicSupervisor {
+  meta {
+    strategy: OneForOne
+    max_restarts: 10
+    max_seconds: 5
+    child_restart_default: Transient
+    allow_adopt: True
+  }
 }
 
 defmod Task {

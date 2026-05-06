@@ -1244,8 +1244,14 @@ impl Resolver {
             "__process_pid" | "__process_spawn" | "__process_state" | "__process_store" => {
                 "This helper is compiler-managed; use `defagent` / the public process surface instead."
             }
-            "__dynamic_supervisor_spawn" => {
-                "Use `DynamicSupervisor::spawn(...)` or a generated Worker `spawn` wrapper instead."
+            "__supervisor_spawn" => {
+                "Use `DynamicSupervisor::spawn(...)` or a generated Supervisor `spawn` wrapper instead."
+            }
+            "__supervisor_adopt" => {
+                "Use `DynamicSupervisor::adopt(...)` or a generated Supervisor `adopt` wrapper instead."
+            }
+            "__supervisor_status" => {
+                "Use `DynamicSupervisor::status()` or a generated Supervisor `status` wrapper instead."
             }
             _ => "Use the public standard-library surface instead.",
         };

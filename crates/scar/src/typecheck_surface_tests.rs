@@ -2866,6 +2866,9 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
             TypedInner::ProcessContextHandler { .. } => false,
+            TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
+            TypedInner::SupervisorAdopt { pid, .. } => has_pending_trait_call(pid),
+            TypedInner::SupervisorStatus { .. } => false,
             TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => false,
             TypedInner::LensView { source, .. } => has_pending_trait_call(source),
             TypedInner::LensSet { source, value, .. } => {
@@ -3305,9 +3308,161 @@ fn typecheck_staged_program_keeps_process_specs() {
     let typed: TypedProgram =
         crate::typecheck_staged_program(resolved).expect("typecheck should succeed");
 
-    assert_eq!(typed.process_specs.len(), 1);
-    let spec = &typed.process_specs[0];
+    assert_eq!(typed.process_specs.len(), 2);
+    let spec = typed
+        .process_specs
+        .iter()
+        .find(|spec| spec.process_name == "Counter")
+        .expect("Counter process spec should exist");
     assert_eq!(spec.module_path, "Counter");
     assert_eq!(spec.process_name, "Counter");
     assert!(!spec.spec.boot);
+}
+
+fn staged_process_module(source: &str) -> sigil::StagedModuleAst {
+    let ast = spire::parse_with_context(source, spire::ParserContext::module(0, None))
+        .expect("process source should parse");
+    match ast.into_iter().next().expect("lowered process should exist") {
+        spire::ast::Ast::Defagent(_, module_path, ast, process_spec, attrs)
+        | spire::ast::Ast::Defsupervisor(_, module_path, ast, process_spec, attrs) => {
+            sigil::StagedModuleAst {
+                module_path,
+                doc_module_path: None,
+                ast,
+                module_doc: attrs.doc,
+                auto_import: attrs.auto_import,
+                process_spec: Some(process_spec),
+            }
+        }
+        other => panic!("expected process module, got {other:?}"),
+    }
+}
+
+fn typecheck_supervisor_spawn_fixture(script: &str) -> Result<TypedProgram, scar::error::TypeError> {
+    let mut stages = std_module_stages();
+    stages.push(vec![
+        staged_process_module(
+            r#"defagent MyWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        ),
+        staged_process_module(
+            r#"defsupervisor MySup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}"#,
+        ),
+        staged_process_module(
+            r#"defsupervisor LockedSup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Temporary
+    allow_adopt: False
+  }
+}"#,
+        ),
+    ]);
+    let declaration_index =
+        sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
+    let project_source = format!(
+        r#"supervisor_init {{
+  MySup {{}}
+  LockedSup {{}}
+  DynamicSupervisor {{}}
+}}
+
+{script}"#
+    );
+    let user_ast = spire::parse_with_context(&project_source, spire::ParserContext::project(0))
+        .expect("script should parse");
+    let resolved = sigil::resolve_staged_program_with_state(
+        &stages,
+        user_ast,
+        &declaration_index,
+        Some("__Script::fixture".to_string()),
+    )
+    .expect("resolve should succeed");
+    crate::typecheck_staged_program(resolved)
+}
+
+#[test]
+fn dynsup_spawn_accepts_worker_init_route_reference() {
+    let typed =
+        typecheck_supervisor_spawn_fixture(r#"pid = DynamicSupervisor::spawn(MyWorker::init(1))"#)
+        .expect("DynSup spawn should typecheck");
+    assert!(!typed.nodes.is_empty());
+}
+
+#[test]
+fn custom_supervisor_spawn_accepts_worker_init_route_reference() {
+    let typed = typecheck_supervisor_spawn_fixture(r#"pid = MySup::spawn(MyWorker::init(1))"#)
+        .expect("custom supervisor spawn should typecheck");
+    assert!(!typed.nodes.is_empty());
+}
+
+#[test]
+fn supervisor_spawn_rejects_plain_closure_argument() {
+    let err = typecheck_supervisor_spawn_fixture(r#"pid = MySup::spawn({|| Ok(1)})"#)
+        .expect_err("plain closure should be rejected");
+    assert!(err.message.contains("worker init"));
+}
+
+#[test]
+fn supervisor_spawn_rejects_non_worker_callable() {
+    let err = typecheck_supervisor_spawn_fixture(r#"pid = MySup::spawn(MySup::status())"#)
+        .expect_err("non-worker callable should be rejected");
+    assert!(err.message.contains("worker init"));
+}
+
+#[test]
+fn supervisor_adopt_accepts_worker_pid() {
+    let typed = typecheck_supervisor_spawn_fixture(
+        r#"pid =? MySup::spawn(MyWorker::init(1))
+_ =? MySup::adopt(pid)"#,
+    )
+    .expect("adopt should typecheck");
+    assert!(!typed.nodes.is_empty());
+}
+
+#[test]
+fn supervisor_adopt_rejects_non_pid_argument() {
+    let err = typecheck_supervisor_spawn_fixture(r#"_ =? MySup::adopt(1)"#)
+        .expect_err("adopt should reject non pid");
+    assert!(err.message.contains("PID"));
+}
+
+#[test]
+fn supervisor_adopt_rejects_when_policy_disallows_it() {
+    let err = typecheck_supervisor_spawn_fixture(
+        r#"pid =? MySup::spawn(MyWorker::init(1))
+_ =? LockedSup::adopt(pid)"#,
+    )
+    .expect_err("adopt should respect allow_adopt");
+    assert!(err.message.contains("allow_adopt"));
+}
+
+#[test]
+fn supervisor_status_returns_supervisor_status() {
+    let typed = typecheck_supervisor_spawn_fixture(r#"status =? MySup::status()"#)
+        .expect("status should typecheck");
+    assert!(!typed.nodes.is_empty());
 }

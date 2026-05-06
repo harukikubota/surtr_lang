@@ -432,15 +432,43 @@ DynamicSupervisor は singleton process として扱い、user-facing API に `s
 pid = DynamicSupervisor::spawn(MyWorker::init_route(args))
 ```
 
-現行の staged 実装では、init route が first-class surface value になる前段として、
-generated Worker wrapper が次の public façade を呼ぶ。
+`defsupervisor` は policy-only declaration とし、`meta` には supervisor policy だけを置く。
+
+- `strategy`
+- `max_restarts`
+- `max_seconds`
+- `child_restart_default`
+- `allow_adopt`
+- 必要なら `shutdown_timeout`
+
+`instance` / `init_policy` / user-defined helper `def` は `defsupervisor` では受理しない。
+`spawn` / `adopt` / `status` は compiler-managed surface である。
 
 ```surtr
-DynamicSupervisor::spawn(name: String, init: (-> Result<State>)) -> Result<PID<Worker>>
+defsupervisor ImageWorkerSupervisor {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
 ```
 
-この façade は `Process::spawn` を公開しないための移行 API であり、手書き user code では
-Worker 固有の `Worker::spawn(args)` を優先する。
+init route が first-class surface value になる前段として、generated Worker wrapper は次の public façade を呼ぶ。
+
+```surtr
+DynamicSupervisor::spawn(init: (-> Result<State>)) -> Result<PID<Worker>>
+```
+
+custom supervisor surface も同じ形に揃える。
+
+```surtr
+ImageWorkerSupervisor::spawn(MyWorker::init_route(args))
+ImageWorkerSupervisor::adopt(pid)
+ImageWorkerSupervisor::status()
+```
 
 `adopt / handoff` は runtime が原子的に処理する。PID は維持する。
 
@@ -536,6 +564,7 @@ singleton が存在しない場合は business error ではなく、VM / supervi
 役割:
 
 - 起動対象に含める singleton を明示する
+- 起動対象に含める supervisor を明示し、その policy override を指定する
 - init route を選ぶ
 - init timeout を指定する
 - standard singleton を override する
@@ -551,11 +580,21 @@ supervisor_init {
     timeout: 5s
   }
 
-  singleton CacheClient {
-    timeout: 10s
+  DynamicSupervisor {}
+
+  ImageWorkerSupervisor {
+    max_restarts: 10
+    allow_adopt: True
   }
 }
 ```
+
+初期フェーズでは supervisor 親は固定で、DSL `parent` override は受理しない。
+
+- `RuntimeSupervisor -> RootSupervisor`
+- `DynamicSupervisor -> RootSupervisor`
+- `custom supervisor -> RootSupervisor`
+- `singleton process -> RuntimeSupervisor`
 
 起動ルール:
 
@@ -567,7 +606,7 @@ supervisor_init {
 | 記載なし、かつプロセス呼び出しなし | 起動しない |
 | プロセス呼び出しあり、かつ available singleton に含まれない | compile-time singleton 利用検査で error |
 
-`init_policy` は定義側にあるため、Boot 側は Lazy の採否を決めない。Boot 側は起動対象、init route、timeout、override、supervisor 配置を指定する。
+`init_policy` は定義側にあるため、Boot 側は Lazy の採否を決めない。Boot 側は起動対象、timeout、handler override、supervisor policy override を指定する。
 
 ### 3.18 I/O handler dependency
 

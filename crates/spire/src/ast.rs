@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sindr::primitives::SurtrInt;
 
 /// Source location — attached to every AST node for downstream error reporting.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
@@ -55,6 +55,8 @@ pub struct ProcessSpec {
     pub lazy: bool,
     pub handlers: Vec<ProcessHandlerDependency>,
     pub handler_specs: Vec<ProcessRuntimeHandlerSpec>,
+    #[serde(default)]
+    pub supervisor_policy: Option<SupervisorPolicy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -92,6 +94,8 @@ pub struct ProcessRuntimeHandlerSpec {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SupervisorInitSpec {
     pub singletons: Vec<SupervisorInitSingleton>,
+    #[serde(default)]
+    pub supervisors: Vec<SupervisorInitOverride>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -120,6 +124,52 @@ pub struct SupervisorInitHandlerTarget {
 pub struct SupervisorInitHandlerArg {
     pub name: Symbol,
     pub value: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SupervisorStrategy {
+    OneForOne,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChildRestartPolicy {
+    Permanent,
+    Transient,
+    Temporary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupervisorPolicy {
+    pub strategy: SupervisorStrategy,
+    pub max_restarts: u64,
+    pub max_seconds: u64,
+    pub child_restart_default: ChildRestartPolicy,
+    pub allow_adopt: bool,
+    #[serde(default)]
+    pub shutdown_timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupervisorPolicyOverride {
+    #[serde(default)]
+    pub strategy: Option<SupervisorStrategy>,
+    #[serde(default)]
+    pub max_restarts: Option<u64>,
+    #[serde(default)]
+    pub max_seconds: Option<u64>,
+    #[serde(default)]
+    pub child_restart_default: Option<ChildRestartPolicy>,
+    #[serde(default)]
+    pub allow_adopt: Option<bool>,
+    #[serde(default)]
+    pub shutdown_timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupervisorInitOverride {
+    pub process_name: Symbol,
+    pub overrides: SupervisorPolicyOverride,
     pub span: Span,
 }
 

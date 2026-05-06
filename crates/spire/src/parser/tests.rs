@@ -4385,6 +4385,12 @@ fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
                     |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "spawn"),
                 )
                 .expect("worker agent should include spawn wrapper");
+            let init_wrapper = body
+                .iter()
+                .find(
+                    |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "init"),
+                )
+                .expect("worker agent should include init wrapper");
             match spawn_wrapper {
                 Ast::Def(_, _, _, _, Some(AstTy::Generic(_, ty_name, ty_args)), body, _) => {
                     assert_eq!(ty_name, "Result");
@@ -4412,21 +4418,45 @@ fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
                     panic!("expected spawn wrapper to return Result<PID<Worker>>, got {other:?}")
                 }
             }
+            match init_wrapper {
+                Ast::Def(_, _, _, params, Some(AstTy::Func(_, ret_params, ret_ty)), body, _) => {
+                    assert_eq!(params.len(), 1);
+                    assert!(ret_params.is_empty());
+                    assert!(matches!(ret_ty.as_ref(), AstTy::Generic(_, name, _) if name == "Result"));
+                    assert!(matches!(
+                        body.as_ref(),
+                        Ast::Block(_, stmts)
+                            if matches!(
+                                stmts.as_slice(),
+                                [Ast::Closure(_, params, body)]
+                                    if params.is_empty()
+                                        && matches!(
+                                            body.as_ref(),
+                                            Ast::App(_, callee, args)
+                                                if args.len() == 1
+                                                    && matches!(callee.as_ref(), Ast::Var(_, name) if name == "__agent_init")
+                                        )
+                            )
+                    ));
+                }
+                other => panic!("expected init wrapper to return zero-arg callable, got {other:?}"),
+            }
         }
         other => panic!("Expected Defagent, got {other:?}"),
     }
 }
 
 #[test]
-fn test_defsupervisor_exposes_user_defs_on_lowered_module() {
+fn test_defsupervisor_generates_compiler_managed_surface_from_policy_meta() {
     let ast = parse_with_context(
         r#"defsupervisor AppSup {
   meta {
-    instance: Singleton
-    init_policy: Eager
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
   }
-
-  def status() -> String { "ready" }
 }"#,
         ParserContext::module(1, None),
     )
@@ -4437,18 +4467,66 @@ fn test_defsupervisor_exposes_user_defs_on_lowered_module() {
             assert_eq!(name, "AppSup");
             assert_eq!(process_spec.kind, crate::ast::ProcessKind::Supervisor);
             assert!(body.iter().any(
-                |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "status")
-            ));
-            assert!(body.iter().any(
                 |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "__agent_init")
             ));
+            let generated_defs = body
+                .iter()
+                .filter_map(|node| match node {
+                    Ast::Def(_, def_name, _, _, _, _, _) => Some(def_name.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(generated_defs.contains(&"spawn"));
+            assert!(generated_defs.contains(&"adopt"));
+            assert!(generated_defs.contains(&"status"));
         }
         other => panic!("Expected Defsupervisor, got {other:?}"),
     }
 }
 
 #[test]
-fn test_supervisor_init_parses_boot_entries_and_handler_overrides() {
+fn test_defsupervisor_rejects_process_meta_keys_and_manual_surface_defs() {
+    let err = parse_with_context(
+        r#"defsupervisor AppSup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+
+  def spawn(worker_init: (-> Result<Int>)) -> Result<PID<$Process>> { Ok(Process::self()) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("manual supervisor spawn should be rejected");
+
+    assert!(err.message().contains("spawn"));
+    assert!(err.message().contains("compiler-managed"));
+}
+
+#[test]
+fn test_defsupervisor_rejects_instance_and_init_policy_meta_keys() {
+    let err = parse_with_context(
+        r#"defsupervisor AppSup {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("legacy process meta should be rejected for supervisors");
+
+    assert!(
+        err.message().contains("policy"),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn test_supervisor_init_parses_singletons_and_supervisor_overrides() {
     let ast = parse_with_context(
         r#"supervisor_init {
   singleton Logger {
@@ -4458,6 +4536,11 @@ fn test_supervisor_init_parses_boot_entries_and_handler_overrides() {
       err: NullOutHandler
     }
   }
+
+  ImageWorkerSupervisor {
+    max_restarts: 10
+    allow_adopt: True
+  }
 }"#,
         ParserContext::project(1),
     )
@@ -4466,6 +4549,7 @@ fn test_supervisor_init_parses_boot_entries_and_handler_overrides() {
     match &ast[0] {
         Ast::SupervisorInit(_, spec) => {
             assert_eq!(spec.singletons.len(), 1);
+            assert_eq!(spec.supervisors.len(), 1);
             let entry = &spec.singletons[0];
             assert_eq!(entry.process_name, "Logger");
             assert_eq!(entry.timeout_ms, Some(5_000));
@@ -4479,6 +4563,10 @@ fn test_supervisor_init_parses_boot_entries_and_handler_overrides() {
             );
             assert_eq!(entry.handlers[1].slot, "err");
             assert_eq!(entry.handlers[1].target.name, "NullOutHandler");
+            let supervisor = &spec.supervisors[0];
+            assert_eq!(supervisor.process_name, "ImageWorkerSupervisor");
+            assert_eq!(supervisor.overrides.max_restarts, Some(10));
+            assert_eq!(supervisor.overrides.allow_adopt, Some(true));
         }
         other => panic!("expected SupervisorInit, got {other:?}"),
     }
@@ -4496,6 +4584,21 @@ fn test_supervisor_init_rejects_duplicate_singleton() {
     .expect_err("duplicate singleton boot entries should fail");
 
     assert!(err.message().contains("singleton boot entry is duplicated"));
+}
+
+#[test]
+fn test_supervisor_init_rejects_parent_override() {
+    let err = parse_with_context(
+        r#"supervisor_init {
+  AppSup {
+    parent: RootSupervisor
+  }
+}"#,
+        ParserContext::project(1),
+    )
+    .expect_err("parent override should be rejected");
+
+    assert!(err.message().contains("parent"));
 }
 
 #[test]

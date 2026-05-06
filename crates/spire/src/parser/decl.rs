@@ -55,6 +55,7 @@ impl AgentMeta {
             lazy: self.lazy,
             handlers: self.handlers,
             handler_specs: Vec::new(),
+            supervisor_policy: None,
         }
     }
 }
@@ -77,6 +78,11 @@ struct ProcessMeta {
     instance: AgentInstance,
     init_policy: InitPolicy,
     handlers: Vec<ProcessHandlerDependency>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct SupervisorMeta {
+    policy: SupervisorPolicy,
 }
 
 #[derive(Debug, Clone)]
@@ -443,6 +449,14 @@ fn result_pid_ty(span: &Span, agent_name: &str) -> AstTy {
     )
 }
 
+fn result_named_ty(span: &Span, type_name: &str) -> AstTy {
+    AstTy::Generic(
+        span.clone(),
+        "Result".to_string(),
+        vec![AstTy::Named(span.clone(), type_name.to_string())],
+    )
+}
+
 fn param_vars(span: &Span, params: &[FunParam]) -> Vec<Ast> {
     params
         .iter()
@@ -488,12 +502,32 @@ fn process_state_bind(span: &Span) -> Ast {
     )
 }
 
-fn init_closure(span: &Span, params: &[FunParam]) -> Ast {
-    Ast::Closure(
+fn init_wrapper_ret_ty(span: &Span, init_def: &Ast) -> Result<Option<AstTy>, ParseError> {
+    let ret_ty = def_ret_ty(init_def)?
+        .ok_or_else(|| ParseError::syntax("worker init wrapper requires return type", span.clone()))?;
+    Ok(Some(AstTy::Func(
         span.clone(),
         Vec::new(),
-        Box::new(call(span, "__agent_init", param_vars(span, params))),
-    )
+        Box::new(ret_ty),
+    )))
+}
+
+fn build_init_wrapper(span: &Span, init_def: &Ast) -> Result<Ast, ParseError> {
+    let params = def_params(init_def)?.clone();
+    let body = Ast::Block(span.clone(), vec![Ast::Closure(
+        span.clone(),
+        Vec::new(),
+        Box::new(call(span, "__agent_init", param_vars(span, &params))),
+    )]);
+    Ok(Ast::Def(
+        span.clone(),
+        "init".to_string(),
+        def_type_params(init_def)?,
+        params,
+        init_wrapper_ret_ty(span, init_def)?,
+        Box::new(body),
+        DeclAttrs::default(),
+    ))
 }
 
 fn build_readonly_get_wrapper(
@@ -555,7 +589,7 @@ fn build_spawn_wrapper(span: &Span, agent_name: &str, init_def: &Ast) -> Result<
         vec![path_call(
             span,
             &["DynamicSupervisor", "spawn"],
-            vec![string_lit(span, agent_name), init_closure(span, &params)],
+            vec![call(span, "init", param_vars(span, &params))],
         )],
     );
     Ok(Ast::Def(
@@ -567,6 +601,79 @@ fn build_spawn_wrapper(span: &Span, agent_name: &str, init_def: &Ast) -> Result<
         Box::new(body),
         DeclAttrs::default(),
     ))
+}
+
+fn build_supervisor_spawn_wrapper(span: &Span, supervisor_name: &str) -> Ast {
+    Ast::Def(
+        span.clone(),
+        "spawn".to_string(),
+        Vec::new(),
+        vec![FunParam {
+            name: "worker_init".to_string(),
+            ty: AstTy::Func(
+                span.clone(),
+                Vec::new(),
+                Box::new(AstTy::Generic(
+                    span.clone(),
+                    "Result".to_string(),
+                    vec![AstTy::Named(span.clone(), "$State".to_string())],
+                )),
+            ),
+            span: span.clone(),
+        }],
+        Some(result_pid_ty(span, "$Process")),
+        Box::new(Ast::Block(
+            span.clone(),
+            vec![internal_call(
+                span,
+                "__supervisor_spawn",
+                vec![string_lit(span, supervisor_name), var(span, "worker_init")],
+            )],
+        )),
+        DeclAttrs::default(),
+    )
+}
+
+fn build_supervisor_adopt_wrapper(span: &Span, supervisor_name: &str) -> Ast {
+    Ast::Def(
+        span.clone(),
+        "adopt".to_string(),
+        Vec::new(),
+        vec![FunParam {
+            name: "pid".to_string(),
+            ty: pid_ty(span, "$Process"),
+            span: span.clone(),
+        }],
+        Some(result_unit_ty(span)),
+        Box::new(Ast::Block(
+            span.clone(),
+            vec![internal_call(
+                span,
+                "__supervisor_adopt",
+                vec![string_lit(span, supervisor_name), var(span, "pid")],
+            )],
+        )),
+        DeclAttrs::default(),
+    )
+}
+
+fn build_supervisor_status_wrapper(span: &Span, supervisor_name: &str) -> Ast {
+    Ast::Def(
+        span.clone(),
+        "status".to_string(),
+        Vec::new(),
+        Vec::new(),
+        Some(result_named_ty(span, "SupervisorStatus")),
+        Box::new(Ast::Block(
+            span.clone(),
+            vec![internal_call(
+                span,
+                "__supervisor_status",
+                vec![string_lit(span, supervisor_name)],
+            )],
+        )),
+        DeclAttrs::default(),
+    )
 }
 
 fn build_state_get_wrapper(
@@ -2606,29 +2713,36 @@ impl Parser<'_> {
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
         let mut singletons = Vec::new();
+        let mut supervisors = Vec::new();
 
         while !matches!(self.peek(), Token::RBrace) {
             if matches!(self.peek(), Token::Eof) {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
             let (entry_kind, entry_span) = self.expect_ident()?;
-            if entry_kind != "singleton" {
-                return Err(ParseError::syntax(
-                    "supervisor_init currently accepts `singleton Name { ... }` entries",
-                    entry_span,
-                ));
+            if entry_kind == "singleton" {
+                let singleton = self.parse_supervisor_init_singleton()?;
+                if singletons.iter().any(|entry: &SupervisorInitSingleton| {
+                    entry.process_name == singleton.process_name
+                }) {
+                    return Err(ParseError::syntax(
+                        "singleton boot entry is duplicated",
+                        singleton.span,
+                    ));
+                }
+                singletons.push(singleton);
+            } else {
+                let supervisor = self.parse_supervisor_init_override(entry_kind, entry_span)?;
+                if supervisors.iter().any(|entry: &SupervisorInitOverride| {
+                    entry.process_name == supervisor.process_name
+                }) {
+                    return Err(ParseError::syntax(
+                        "supervisor override entry is duplicated",
+                        supervisor.span,
+                    ));
+                }
+                supervisors.push(supervisor);
             }
-            let singleton = self.parse_supervisor_init_singleton()?;
-            if singletons
-                .iter()
-                .any(|entry: &SupervisorInitSingleton| entry.process_name == singleton.process_name)
-            {
-                return Err(ParseError::syntax(
-                    "singleton boot entry is duplicated",
-                    singleton.span,
-                ));
-            }
-            singletons.push(singleton);
             self.skip_newlines();
         }
         let end = self.expect(&Token::RBrace)?;
@@ -2636,7 +2750,13 @@ impl Parser<'_> {
             start,
             end: end.end,
         };
-        Ok(Ast::SupervisorInit(span, SupervisorInitSpec { singletons }))
+        Ok(Ast::SupervisorInit(
+            span,
+            SupervisorInitSpec {
+                singletons,
+                supervisors,
+            },
+        ))
     }
 
     fn parse_supervisor_init_singleton(&mut self) -> Result<SupervisorInitSingleton, ParseError> {
@@ -2711,6 +2831,109 @@ impl Parser<'_> {
         })
     }
 
+    fn parse_supervisor_init_override(
+        &mut self,
+        process_name: String,
+        name_span: Span,
+    ) -> Result<SupervisorInitOverride, ParseError> {
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+        let mut overrides = SupervisorPolicyOverride::default();
+
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let (key, key_span) = self.expect_ident()?;
+            self.skip_newlines();
+            self.expect(&Token::Colon)?;
+            self.skip_newlines();
+            match key.as_str() {
+                "strategy" => {
+                    if overrides.strategy.is_some() {
+                        return Err(ParseError::syntax("strategy override is duplicated", key_span));
+                    }
+                    overrides.strategy = Some(self.parse_supervisor_strategy()?);
+                }
+                "max_restarts" => {
+                    if overrides.max_restarts.is_some() {
+                        return Err(ParseError::syntax(
+                            "max_restarts override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.max_restarts = Some(self.parse_non_negative_int_literal()?);
+                }
+                "max_seconds" => {
+                    if overrides.max_seconds.is_some() {
+                        return Err(ParseError::syntax(
+                            "max_seconds override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.max_seconds = Some(self.parse_non_negative_int_literal()?);
+                }
+                "child_restart_default" => {
+                    if overrides.child_restart_default.is_some() {
+                        return Err(ParseError::syntax(
+                            "child_restart_default override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.child_restart_default =
+                        Some(self.parse_child_restart_policy()?);
+                }
+                "allow_adopt" => {
+                    if overrides.allow_adopt.is_some() {
+                        return Err(ParseError::syntax(
+                            "allow_adopt override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.allow_adopt = Some(self.parse_bool_literal()?);
+                }
+                "shutdown_timeout" => {
+                    if overrides.shutdown_timeout_ms.is_some() {
+                        return Err(ParseError::syntax(
+                            "shutdown_timeout override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.shutdown_timeout_ms =
+                        Some(self.parse_duration_literal_ms("shutdown_timeout")?);
+                }
+                "parent" => {
+                    return Err(ParseError::syntax(
+                        "supervisor parent override is fixed in the initial phase",
+                        key_span,
+                    ));
+                }
+                _ => {
+                    return Err(ParseError::syntax(
+                        format!("Unknown supervisor override key: {key}"),
+                        key_span,
+                    ));
+                }
+            }
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+            }
+        }
+
+        let end = self.expect(&Token::RBrace)?;
+        Ok(SupervisorInitOverride {
+            process_name,
+            overrides,
+            span: Span {
+                start: name_span.start,
+                end: end.end,
+            },
+        })
+    }
+
     fn parse_supervisor_init_timeout_ms(&mut self) -> Result<u64, ParseError> {
         let span = self.peek_span();
         let Token::Int(n) = self.peek().clone() else {
@@ -2735,6 +2958,82 @@ impl Parser<'_> {
             _ => Err(ParseError::syntax(
                 "init timeout must use `ms` or `s`",
                 suffix_span,
+            )),
+        }
+    }
+
+    fn parse_non_negative_int_literal(&mut self) -> Result<u64, ParseError> {
+        let span = self.peek_span();
+        let Token::Int(n) = self.peek().clone() else {
+            return Err(ParseError::syntax("expected integer literal", span));
+        };
+        self.advance();
+        n.to_string()
+            .parse::<u64>()
+            .map_err(|_| ParseError::syntax("integer literal is too large", span))
+    }
+
+    fn parse_bool_literal(&mut self) -> Result<bool, ParseError> {
+        let span = self.peek_span();
+        match self.peek().clone() {
+            Token::True => {
+                self.advance();
+                Ok(true)
+            }
+            Token::False => {
+                self.advance();
+                Ok(false)
+            }
+            _ => Err(ParseError::syntax("expected `True` or `False`", span)),
+        }
+    }
+
+    fn parse_duration_literal_ms(&mut self, field_name: &str) -> Result<u64, ParseError> {
+        let span = self.peek_span();
+        let Token::Int(n) = self.peek().clone() else {
+            return Err(ParseError::syntax(
+                format!("{field_name} must be a duration literal like `5s` or `100ms`"),
+                span,
+            ));
+        };
+        self.advance();
+        let (suffix, suffix_span) = self.expect_ident()?;
+        let value = n
+            .to_string()
+            .parse::<u64>()
+            .map_err(|_| ParseError::syntax("duration literal is too large", span.clone()))?;
+        match suffix.as_str() {
+            "ms" => Ok(value),
+            "s" => value.checked_mul(1_000).ok_or_else(|| {
+                ParseError::syntax("duration literal is too large", suffix_span)
+            }),
+            _ => Err(ParseError::syntax(
+                format!("{field_name} must use `ms` or `s`"),
+                suffix_span,
+            )),
+        }
+    }
+
+    fn parse_supervisor_strategy(&mut self) -> Result<SupervisorStrategy, ParseError> {
+        let (value, span) = self.expect_ident()?;
+        match value.as_str() {
+            "OneForOne" => Ok(SupervisorStrategy::OneForOne),
+            _ => Err(ParseError::syntax(
+                "supervisor strategy must be OneForOne",
+                span,
+            )),
+        }
+    }
+
+    fn parse_child_restart_policy(&mut self) -> Result<ChildRestartPolicy, ParseError> {
+        let (value, span) = self.expect_ident()?;
+        match value.as_str() {
+            "Permanent" => Ok(ChildRestartPolicy::Permanent),
+            "Transient" => Ok(ChildRestartPolicy::Transient),
+            "Temporary" => Ok(ChildRestartPolicy::Temporary),
+            _ => Err(ParseError::syntax(
+                "child_restart_default must be Permanent, Transient, or Temporary",
+                span,
             )),
         }
     }
@@ -2867,55 +3166,40 @@ impl Parser<'_> {
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
-        let process_meta = self.parse_process_meta_block()?;
+        let supervisor_meta = self.parse_supervisor_meta_block()?;
         self.skip_newlines();
-        let mut body = Vec::new();
         while !matches!(self.peek(), Token::RBrace) {
             if matches!(self.peek(), Token::Eof) {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
-            if matches!(self.peek(), Token::Defp) {
-                return Err(ParseError::syntax(
-                    "Supervisor body uses public `def` declarations for user-visible helpers.",
-                    self.peek_span(),
-                ));
-            }
-            if !matches!(self.peek(), Token::Def) {
-                return Err(ParseError::syntax(
-                    "Supervisor body currently accepts user-visible `def` declarations",
-                    self.peek_span(),
-                ));
-            }
-            let def = self.parse_def_with_attrs(DeclAttrs::default(), None)?;
-            self.ensure_stmt_boundary(&def, true)?;
-            body.push(def);
-            self.skip_newlines();
+            let err_span = self.peek_span();
+            return Err(ParseError::syntax(
+                "defsupervisor is policy-only; spawn, adopt, and status are compiler-managed",
+                err_span,
+            ));
         }
         let end = self.expect(&Token::RBrace)?;
         let span = Span {
             start,
             end: end.end,
         };
-        if process_meta.init_policy == InitPolicy::Lazy {
-            return Err(ParseError::syntax(
-                "init_policy: Lazy is not allowed for Supervisor",
-                span,
-            ));
-        }
+        let runtime_kind = if name == "DynamicSupervisor" || dynamic {
+            ProcessKind::DynamicSupervisor
+        } else {
+            ProcessKind::Supervisor
+        };
         let process_spec = ProcessSpec {
             process_name: name.clone(),
-            kind: if dynamic {
-                ProcessKind::DynamicSupervisor
-            } else {
-                ProcessKind::Supervisor
-            },
-            instance: process_meta.instance.into_process_instance(),
+            kind: runtime_kind,
+            instance: ProcessInstance::Singleton,
             boot: false,
-            registry: process_meta.instance == AgentInstance::Singleton,
+            registry: true,
             lazy: false,
-            handlers: process_meta.handlers,
+            handlers: Vec::new(),
             handler_specs: Vec::new(),
+            supervisor_policy: Some(supervisor_meta.policy),
         };
+        let mut body = Vec::new();
         body.insert(
             0,
             dummy_process_handler(
@@ -2936,11 +3220,11 @@ impl Parser<'_> {
                 "__agent_init",
             ),
         );
-        let span = Span {
-            start,
-            end: end.end,
-        };
-        if dynamic {
+        body.push(build_supervisor_spawn_wrapper(&span, &name));
+        body.push(build_supervisor_adopt_wrapper(&span, &name));
+        body.push(build_supervisor_status_wrapper(&span, &name));
+        let span = Span { start, end: end.end };
+        if dynamic && name != "DynamicSupervisor" {
             Ok(Ast::DefdynamicSupervisor(
                 span,
                 name,
@@ -2951,6 +3235,87 @@ impl Parser<'_> {
         } else {
             Ok(Ast::Defsupervisor(span, name, body, process_spec, attrs))
         }
+    }
+
+    fn parse_supervisor_meta_block(&mut self) -> Result<SupervisorMeta, ParseError> {
+        let (head, head_span) = self.expect_ident()?;
+        if head != "meta" {
+            return Err(ParseError::syntax(
+                "supervisor declarations must start with `meta { ... }`",
+                head_span,
+            ));
+        }
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut strategy = None;
+        let mut max_restarts = None;
+        let mut max_seconds = None;
+        let mut child_restart_default = None;
+        let mut allow_adopt = None;
+        let mut shutdown_timeout_ms = None;
+
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let (key, key_span) = self.expect_ident()?;
+            self.skip_newlines();
+            self.expect(&Token::Colon)?;
+            self.skip_newlines();
+            match key.as_str() {
+                "strategy" => strategy = Some(self.parse_supervisor_strategy()?),
+                "max_restarts" => max_restarts = Some(self.parse_non_negative_int_literal()?),
+                "max_seconds" => max_seconds = Some(self.parse_non_negative_int_literal()?),
+                "child_restart_default" => {
+                    child_restart_default = Some(self.parse_child_restart_policy()?)
+                }
+                "allow_adopt" => allow_adopt = Some(self.parse_bool_literal()?),
+                "shutdown_timeout" => {
+                    shutdown_timeout_ms = Some(self.parse_duration_literal_ms("shutdown_timeout")?)
+                }
+                "instance" | "init_policy" | "handlers" => {
+                    return Err(ParseError::syntax(
+                        "defsupervisor meta only accepts supervisor policy keys",
+                        key_span,
+                    ))
+                }
+                _ => {
+                    return Err(ParseError::syntax(
+                        format!("Unknown supervisor meta key: {key}"),
+                        key_span,
+                    ))
+                }
+            }
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+            }
+        }
+        self.expect(&Token::RBrace)?;
+
+        Ok(SupervisorMeta {
+            policy: SupervisorPolicy {
+                strategy: strategy.ok_or_else(|| {
+                    ParseError::syntax("meta requires strategy", self.peek_span())
+                })?,
+                max_restarts: max_restarts.ok_or_else(|| {
+                    ParseError::syntax("meta requires max_restarts", self.peek_span())
+                })?,
+                max_seconds: max_seconds.ok_or_else(|| {
+                    ParseError::syntax("meta requires max_seconds", self.peek_span())
+                })?,
+                child_restart_default: child_restart_default.ok_or_else(|| {
+                    ParseError::syntax("meta requires child_restart_default", self.peek_span())
+                })?,
+                allow_adopt: allow_adopt.ok_or_else(|| {
+                    ParseError::syntax("meta requires allow_adopt", self.peek_span())
+                })?,
+                shutdown_timeout_ms,
+            },
+        })
     }
 
     fn parse_process_meta_block(&mut self) -> Result<ProcessMeta, ParseError> {
@@ -3400,6 +3765,7 @@ impl Parser<'_> {
                     ));
                     specs
                 },
+                supervisor_policy: None,
             };
         Ok(Ast::Defgenserver(span, name, body, process_spec, attrs))
     }
@@ -3521,6 +3887,7 @@ impl Parser<'_> {
             }
             AgentKind::State => {
                 if meta.instance == AgentInstance::Worker {
+                    body.push(build_init_wrapper(&span, &init_def)?);
                     body.push(build_spawn_wrapper(&span, &name, &init_def)?);
                 } else {
                     body.push(build_pid_wrapper(&span, &name));

@@ -178,17 +178,20 @@ fn dump_outputs_runtime_process_specs_for_agent_modules() {
     );
 
     let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
-    assert_eq!(json["summary"]["process_spec_count"], 1);
+    assert_eq!(json["summary"]["process_spec_count"], 2);
     let specs = json["bytecode"]["runtime_process_specs"]["entries"]
         .as_array()
         .expect("runtime process specs must be an array");
-    assert_eq!(specs.len(), 1);
-    assert_eq!(specs[0]["type_name"], "Counter");
-    assert_eq!(specs[0]["process_id"], 0);
-    assert_eq!(specs[0]["kind"], "Agent");
-    assert_eq!(specs[0]["instance"], "Singleton");
-    assert_eq!(specs[0]["init"]["policy"], "Eager");
-    assert_eq!(specs[0]["handlers"].as_array().unwrap().len(), 3);
+    assert_eq!(specs.len(), 2);
+    let counter = specs
+        .iter()
+        .find(|spec| spec["type_name"] == "Counter")
+        .expect("Counter process spec must be present");
+    assert_eq!(counter["process_id"], 0);
+    assert_eq!(counter["kind"], "Agent");
+    assert_eq!(counter["instance"], "Singleton");
+    assert_eq!(counter["init"]["policy"], "Eager");
+    assert_eq!(counter["handlers"].as_array().unwrap().len(), 3);
 
     let _ = fs::remove_dir_all(temp);
 }

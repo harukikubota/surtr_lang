@@ -437,8 +437,33 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     },
     BuiltinMeta {
         name: "__dynamic_supervisor_spawn",
+        arity: 1,
+        sig_str: "((-> Result<$State>)) -> Result<PID<$Process>>",
+    },
+    BuiltinMeta {
+        name: "__dynamic_supervisor_adopt",
+        arity: 1,
+        sig_str: "(PID<$Process>) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__dynamic_supervisor_status",
+        arity: 0,
+        sig_str: "() -> Result<SupervisorStatus>",
+    },
+    BuiltinMeta {
+        name: "__supervisor_spawn",
         arity: 2,
         sig_str: "(String, (-> Result<$State>)) -> Result<PID<$Process>>",
+    },
+    BuiltinMeta {
+        name: "__supervisor_adopt",
+        arity: 2,
+        sig_str: "(String, PID<$Process>) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__supervisor_status",
+        arity: 1,
+        sig_str: "(String) -> Result<SupervisorStatus>",
     },
     BuiltinMeta {
         name: "__process_state",
@@ -749,6 +774,8 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
         Some("Process::sleep") => "__process_sleep",
         Some("OutHandler::write") => "__out_handler_write",
         Some("DynamicSupervisor::spawn") => "__dynamic_supervisor_spawn",
+        Some("DynamicSupervisor::adopt") => "__dynamic_supervisor_adopt",
+        Some("DynamicSupervisor::status") => "__dynamic_supervisor_status",
         Some("Task::call") => "__task_call",
         Some("Task::async") => "__task_async",
         Some("Task::launch") => "__task_launch",
@@ -809,14 +836,29 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_supervisor_spawn_maps_to_hidden_runtime_builtin() {
-        let runtime_name = super::builtin_runtime_name("spawn", Some("DynamicSupervisor::spawn"));
-        assert_eq!(runtime_name, "__dynamic_supervisor_spawn");
-        let meta = builtin_meta_by_name(runtime_name).expect("dynamic supervisor spawn builtin");
+    fn supervisor_spawn_hidden_builtin_signature_matches_surface() {
+        let meta = builtin_meta_by_name("__supervisor_spawn")
+            .expect("supervisor spawn builtin");
         assert_eq!(meta.arity, 2);
         assert_eq!(
             meta.sig_str,
             "(String, (-> Result<$State>)) -> Result<PID<$Process>>"
         );
+    }
+
+    #[test]
+    fn supervisor_adopt_hidden_builtin_signature_matches_surface() {
+        let meta = builtin_meta_by_name("__supervisor_adopt")
+            .expect("supervisor adopt builtin");
+        assert_eq!(meta.arity, 2);
+        assert_eq!(meta.sig_str, "(String, PID<$Process>) -> Result<Unit>");
+    }
+
+    #[test]
+    fn supervisor_status_hidden_builtin_signature_matches_surface() {
+        let meta = builtin_meta_by_name("__supervisor_status")
+            .expect("supervisor status builtin");
+        assert_eq!(meta.arity, 1);
+        assert_eq!(meta.sig_str, "(String) -> Result<SupervisorStatus>");
     }
 }

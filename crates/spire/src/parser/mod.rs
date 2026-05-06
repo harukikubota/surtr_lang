@@ -746,6 +746,9 @@ fn shift_process_spec(mut spec: ProcessSpec, delta: usize) -> ProcessSpec {
             span: shift_span(handler.span, delta),
         })
         .collect();
+    if let Some(policy) = &mut spec.supervisor_policy {
+        let _ = policy;
+    }
     spec.handler_specs = spec
         .handler_specs
         .into_iter()
@@ -1072,7 +1075,16 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                                 span: shift_span(handler.span, delta),
                             })
                             .collect(),
-                        span: shift_span(singleton.span, delta),
+                            span: shift_span(singleton.span, delta),
+                        })
+                    .collect(),
+                supervisors: spec
+                    .supervisors
+                    .into_iter()
+                    .map(|supervisor| SupervisorInitOverride {
+                        process_name: supervisor.process_name,
+                        overrides: supervisor.overrides,
+                        span: shift_span(supervisor.span, delta),
                     })
                     .collect(),
             },

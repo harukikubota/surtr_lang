@@ -3679,6 +3679,16 @@ impl Checker {
         func: &Resolved,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
+        if let Some(typed) = self.try_check_supervisor_spawn_app(span, func, args)? {
+            return Ok(typed);
+        }
+        if let Some(typed) = self.try_check_supervisor_adopt_app(span, func, args)? {
+            return Ok(typed);
+        }
+        if let Some(typed) = self.try_check_supervisor_status_app(span, func, args)? {
+            return Ok(typed);
+        }
+
         if let Some(typed) = self.try_check_lens_intrinsic_app(span, func, args)? {
             return Ok(typed);
         }
@@ -3925,6 +3935,267 @@ impl Checker {
         let symbol = self.current_function_symbol.as_deref()?;
         let (module, handler) = symbol.rsplit_once("::")?;
         Self::is_process_handler_name(handler).then(|| module.to_string())
+    }
+
+    fn try_check_supervisor_spawn_app(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<Option<TypedNode>, TypeError> {
+        let Some(supervisor_process) = self.supervisor_spawn_target(func) else {
+            return Ok(None);
+        };
+        if args.iter().any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _))) {
+            return Err(TypeError {
+                message: format!("{supervisor_process}::spawn does not accept named arguments"),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if args.len() != 1 {
+            return Err(TypeError {
+                message: format!(
+                    "{}::spawn expects 1 argument(s), got {}",
+                    supervisor_process,
+                    args.len()
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "Pass a worker init route reference like `MyWorker::init(args)`.".into(),
+                ),
+            });
+        }
+        let ResolvedRecordLitArg::Positional(worker_init) = &args[0] else {
+            unreachable!("validated named arguments above")
+        };
+        let worker_process = self.supervisor_spawn_worker_process(worker_init)?;
+        let typed_init = self.check_node(worker_init)?;
+        match self.resolve_ty(&typed_init.ty) {
+            Ty::Func(params, _) if params.is_empty() => {}
+            other => {
+                return Err(TypeError {
+                    message: format!(
+                        "supervisor spawn expects a zero-argument worker init route, got {}",
+                        self.ty_name(&other)
+                    ),
+                    span: typed_init.span.clone(),
+                    hint: Some(
+                        "Pass a generated worker init reference like `MyWorker::init(args)`."
+                            .into(),
+                    ),
+                });
+            }
+        }
+
+        Ok(Some(TypedNode {
+            ty: Ty::Result(
+                Box::new(Ty::Pid(worker_process.clone())),
+                Box::new(Ty::Error),
+            ),
+            span: span.clone(),
+            node: TypedInner::SupervisorSpawn {
+                supervisor_process,
+                worker_process,
+                init: Box::new(typed_init),
+            },
+        }))
+    }
+
+    fn try_check_supervisor_adopt_app(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<Option<TypedNode>, TypeError> {
+        let Some(supervisor_process) = self.supervisor_intrinsic_target(func, "adopt") else {
+            return Ok(None);
+        };
+        if args.iter().any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _))) {
+            return Err(TypeError {
+                message: format!("{supervisor_process}::adopt does not accept named arguments"),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if args.len() != 1 {
+            return Err(TypeError {
+                message: format!(
+                    "{}::adopt expects 1 argument(s), got {}",
+                    supervisor_process,
+                    args.len()
+                ),
+                span: span.clone(),
+                hint: Some("Pass a worker PID.".into()),
+            });
+        }
+        let ResolvedRecordLitArg::Positional(pid_expr) = &args[0] else {
+            unreachable!("validated named arguments above")
+        };
+        let typed_pid = self.check_node(pid_expr)?;
+        let worker_process = match self.resolve_ty(&typed_pid.ty) {
+            Ty::Pid(process_name) => process_name,
+            other => {
+                return Err(TypeError {
+                    message: format!(
+                        "supervisor adopt expects PID<Worker>, got {}",
+                        self.ty_name(&other)
+                    ),
+                    span: typed_pid.span.clone(),
+                    hint: Some("Pass a worker PID returned from a worker init route.".into()),
+                });
+            }
+        };
+        let supervisor_spec = self
+            .supervisor_spec_by_name(&supervisor_process)
+            .ok_or_else(|| TypeError {
+                message: format!("unknown supervisor process `{supervisor_process}`"),
+                span: span.clone(),
+                hint: None,
+            })?;
+        if !supervisor_spec
+            .spec
+            .supervisor_policy
+            .as_ref()
+            .map(|policy| policy.allow_adopt)
+            .unwrap_or(false)
+        {
+            return Err(TypeError {
+                message: format!(
+                    "{}::adopt is not available because allow_adopt is False",
+                    supervisor_process
+                ),
+                span: span.clone(),
+                hint: Some("Enable `allow_adopt: True` in the supervisor definition or override.".into()),
+            });
+        }
+
+        Ok(Some(TypedNode {
+            ty: Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
+            span: span.clone(),
+            node: TypedInner::SupervisorAdopt {
+                supervisor_process,
+                worker_process,
+                pid: Box::new(typed_pid),
+            },
+        }))
+    }
+
+    fn try_check_supervisor_status_app(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<Option<TypedNode>, TypeError> {
+        let Some(supervisor_process) = self.supervisor_intrinsic_target(func, "status") else {
+            return Ok(None);
+        };
+        if args.iter().any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _))) {
+            return Err(TypeError {
+                message: format!("{supervisor_process}::status does not accept named arguments"),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if !args.is_empty() {
+            return Err(TypeError {
+                message: format!(
+                    "{}::status expects 0 argument(s), got {}",
+                    supervisor_process,
+                    args.len()
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let status_ty = self
+            .env
+            .lookup_type_def("SupervisorStatus")
+            .map(|def| Ty::Struct(def.name.clone(), def.fields.clone()))
+            .ok_or_else(|| TypeError {
+                message: "SupervisorStatus type is not available".into(),
+                span: span.clone(),
+                hint: None,
+            })?;
+        Ok(Some(TypedNode {
+            ty: Ty::Result(Box::new(status_ty), Box::new(Ty::Error)),
+            span: span.clone(),
+            node: TypedInner::SupervisorStatus { supervisor_process },
+        }))
+    }
+
+    fn supervisor_spawn_target(&self, func: &Resolved) -> Option<String> {
+        self.supervisor_intrinsic_target(func, "spawn")
+    }
+
+    fn supervisor_intrinsic_target(&self, func: &Resolved, method: &str) -> Option<String> {
+        let Resolved::Var(_, id) = func else {
+            return None;
+        };
+        let qualified = id.qualified_name.as_deref()?;
+        let process_name = qualified.strip_suffix(&format!("::{method}"))?;
+        self.supervisor_spec_by_name(process_name)
+            .map(|spec| spec.process_name.clone())
+    }
+
+    fn supervisor_spec_by_name(&self, process_name: &str) -> Option<&TypedProcessSpec> {
+        self.process_specs.iter().find(|spec| {
+            spec.process_name == process_name
+                && matches!(
+                    spec.spec.kind,
+                    spire::ast::ProcessKind::Supervisor
+                        | spire::ast::ProcessKind::DynamicSupervisor
+                        | spire::ast::ProcessKind::RuntimeSupervisor
+                )
+        })
+    }
+
+    fn supervisor_spawn_worker_process(&self, worker_init: &Resolved) -> Result<String, TypeError> {
+        let span = self.resolved_span(worker_init).clone();
+        let Resolved::App(_, func, _) = worker_init else {
+            return Err(TypeError {
+                message: "supervisor spawn expects a worker init route reference".into(),
+                span,
+                hint: Some("Use `MyWorker::init(args)`.".into()),
+            });
+        };
+        let Resolved::Var(_, id) = func.as_ref() else {
+            return Err(TypeError {
+                message: "supervisor spawn expects a worker init route reference".into(),
+                span,
+                hint: Some("Use `MyWorker::init(args)`.".into()),
+            });
+        };
+        let qualified = id.qualified_name.as_deref().unwrap_or(&id.name);
+        let Some(process_name) = qualified.strip_suffix("::init") else {
+            return Err(TypeError {
+                message: "supervisor spawn expects a worker init route reference".into(),
+                span,
+                hint: Some("Use `MyWorker::init(args)`.".into()),
+            });
+        };
+        let Some(process_spec) = self
+            .process_specs
+            .iter()
+            .find(|spec| spec.process_name == process_name)
+        else {
+            return Err(TypeError {
+                message: format!("unknown worker process `{process_name}`"),
+                span,
+                hint: None,
+            });
+        };
+        if process_spec.spec.instance != spire::ast::ProcessInstance::Worker {
+            return Err(TypeError {
+                message: format!(
+                    "supervisor spawn requires a Worker init route, but `{}` is not a Worker process",
+                    process_spec.process_name
+                ),
+                span,
+                hint: Some("Use a process declared with `instance: Worker`.".into()),
+            });
+        }
+        Ok(process_spec.process_name.clone())
     }
 
     fn check_process_context_handler(

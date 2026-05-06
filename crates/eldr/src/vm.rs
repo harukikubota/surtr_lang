@@ -2,9 +2,9 @@ use sindr::builtin::builtin_meta_by_id;
 use sindr::ir::{
     line_column_for_offset, Bytecode, BytecodeChunk, Constant, DocEntry, FunctionEntry, Opcode,
     RuntimeHandlerTarget, RuntimeInitPolicy, RuntimeProcessInstance, RuntimeProcessSpec,
-    RuntimeProcessSpecTable, SourceMap,
+    RuntimeProcessSpecTable, RuntimeSupervisorPolicy, SourceMap,
 };
-use sindr::primitives::SurtrInt;
+use sindr::primitives::{int, SurtrInt};
 use sindr::runtime::{
     Callable, CallableMetadata, CallableOrigin, CallableTarget, ListHandle, Location, PidHandle,
     RichError, TypeRegistry, Value,
@@ -333,9 +333,9 @@ struct ProcessInstance {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum LifecycleSink {
-    DynamicSupervisor,
+    Supervisor(String),
 }
 
 #[allow(dead_code)]
@@ -489,6 +489,8 @@ struct DeadlineEntry {
 struct RootSupervisorState {
     boot_completed: bool,
     boot_failures: BTreeMap<String, String>,
+    effective_supervisors: BTreeMap<String, RuntimeSupervisorPolicy>,
+    child_table: BTreeMap<String, Vec<u64>>,
 }
 
 impl ProcessRuntime {
@@ -1208,6 +1210,12 @@ impl VM {
         }
 
         self.apply_runtime_handler_overrides()?;
+        for override_entry in &self.bytecode.runtime_boot_plan.supervisor_overrides {
+            self.process_runtime
+                .root_supervisor
+                .effective_supervisors
+                .insert(override_entry.process_name.clone(), override_entry.policy.clone());
+        }
         let limits = self.bytecode.runtime_boot_plan.runtime_limits.clone();
         let boot_specs = if self.bytecode.runtime_boot_plan.has_explicit_entries() {
             for entry in &self.bytecode.runtime_boot_plan.singletons {
@@ -1558,21 +1566,126 @@ impl VM {
 
     pub(crate) fn dynamic_supervisor_spawn(
         &mut self,
-        process_name: String,
         init: Callable,
     ) -> Result<Value, RuntimeError> {
+        self.supervisor_spawn("DynamicSupervisor".to_string(), None, init)
+    }
+
+    pub(crate) fn supervisor_spawn(
+        &mut self,
+        supervisor_name: String,
+        worker_name: Option<String>,
+        init: Callable,
+    ) -> Result<Value, RuntimeError> {
+        let worker_name = match worker_name {
+            Some(worker_name) => worker_name,
+            None => self
+                .infer_worker_process_name_from_callable(&init)
+                .ok_or_else(|| {
+                    RuntimeError::new(
+                        "__supervisor_spawn could not infer worker process from init callable",
+                    )
+                })?,
+        };
         let init_result = self.invoke_callable_sync(init, Vec::new())?;
-        match decode_vm_result(init_result, "__dynamic_supervisor_spawn", "init")? {
+        match decode_vm_result(init_result, "__supervisor_spawn", "init")? {
             Ok(state) => {
-                let pid =
-                    self.allocate_dynamic_supervisor_worker(process_name.clone(), Some(state))?;
+                let pid = self.allocate_supervised_worker(
+                    worker_name.clone(),
+                    Some(state),
+                    supervisor_name.clone(),
+                )?;
                 Ok(ok_vm_result(Value::Pid(PidHandle {
                     id: pid,
-                    process_name,
+                    process_name: worker_name,
                 })))
             }
             Err(err) => Ok(err_vm_result(err)),
         }
+    }
+
+    pub(crate) fn supervisor_adopt(
+        &mut self,
+        supervisor_name: String,
+        pid: PidHandle,
+    ) -> Result<Value, RuntimeError> {
+        self.ensure_root_supervisor_booted()?;
+        let Some(policy) = self
+            .process_runtime
+            .root_supervisor
+            .effective_supervisors
+            .get(&supervisor_name)
+            .cloned()
+        else {
+            return Err(RuntimeError::new(format!(
+                "unknown supervisor `{supervisor_name}`"
+            )));
+        };
+        if !policy.allow_adopt {
+            return Ok(err_vm_result(self.process_error(
+                "SupervisorAdoptForbidden",
+                &format!("{supervisor_name} does not allow adopt"),
+            )));
+        }
+        let Some(entry) = self.process_runtime.processes.get_mut(&pid.id) else {
+            return Ok(err_vm_result(self.process_error(
+                "InvalidPid",
+                &format!("unknown pid {} for {}", pid.id, pid.process_name),
+            )));
+        };
+        entry.lifecycle_sink = Some(LifecycleSink::Supervisor(supervisor_name.clone()));
+        self.process_runtime
+            .root_supervisor
+            .child_table
+            .entry(supervisor_name)
+            .or_default()
+            .push(pid.id);
+        Ok(ok_vm_result(Value::Unit))
+    }
+
+    pub(crate) fn supervisor_status(
+        &mut self,
+        supervisor_name: String,
+    ) -> Result<Value, RuntimeError> {
+        self.ensure_root_supervisor_booted()?;
+        let Some(policy) = self
+            .process_runtime
+            .root_supervisor
+            .effective_supervisors
+            .get(&supervisor_name)
+            .cloned()
+        else {
+            return Err(RuntimeError::new(format!(
+                "unknown supervisor `{supervisor_name}`"
+            )));
+        };
+        let child_count = self
+            .process_runtime
+            .root_supervisor
+            .child_table
+            .get(&supervisor_name)
+            .map(|children| children.len() as i64)
+            .unwrap_or(0);
+        let Some(tag) = self
+            .type_registry()
+            .entries
+            .iter()
+            .find(|entry| entry.name == "SupervisorStatus")
+            .map(|entry| entry.tag)
+        else {
+            return Err(RuntimeError::new("SupervisorStatus type is not registered"));
+        };
+        Ok(ok_vm_result(Value::Tagged {
+            tag,
+            fields: vec![
+                Value::Str(supervisor_name),
+                Value::Int(int(child_count)),
+                Value::Str(policy.strategy),
+                Value::Int(int(policy.max_restarts as i64)),
+                Value::Int(int(policy.max_seconds as i64)),
+                Value::Bool(policy.allow_adopt),
+            ],
+        }))
     }
 
     pub(crate) fn process_state(&mut self, pid: &PidHandle) -> Result<Value, RuntimeError> {
@@ -1663,12 +1776,44 @@ impl VM {
         self.allocate_process_instance(name, state, None, None)
     }
 
-    fn allocate_dynamic_supervisor_worker(
+    fn allocate_supervised_worker(
         &mut self,
         name: String,
         state: Option<Value>,
+        supervisor_name: String,
     ) -> Result<u64, RuntimeError> {
-        self.allocate_process_instance(name, state, None, Some(LifecycleSink::DynamicSupervisor))
+        let pid = self.allocate_process_instance(
+            name,
+            state,
+            None,
+            Some(LifecycleSink::Supervisor(supervisor_name)),
+        )?;
+        if let Some(LifecycleSink::Supervisor(supervisor_name)) = self
+            .process_runtime
+            .processes
+            .get(&pid)
+            .and_then(|entry| entry.lifecycle_sink.clone())
+        {
+            self.process_runtime
+                .root_supervisor
+                .child_table
+                .entry(supervisor_name)
+                .or_default()
+                .push(pid);
+        }
+        Ok(pid)
+    }
+
+    fn infer_worker_process_name_from_callable(&self, callable: &Callable) -> Option<String> {
+        match (callable.metadata.module.as_deref(), callable.metadata.name.as_deref()) {
+            (Some(module), Some("init" | "__agent_init")) => Some(module.to_string()),
+            _ => callable.lexical_captures.iter().find_map(|value| {
+                let Value::Callable(callable) = value else {
+                    return None;
+                };
+                self.infer_worker_process_name_from_callable(callable)
+            }),
+        }
     }
 
     fn allocate_process_instance(
@@ -3873,6 +4018,16 @@ impl ProcessRuntime {
             .cloned()
             .map(|spec| (spec.type_name.clone(), spec))
             .collect();
+        self.root_supervisor.effective_supervisors = spec_table
+            .entries
+            .iter()
+            .filter_map(|spec| {
+                spec.supervision
+                    .policy
+                    .clone()
+                    .map(|policy| (spec.type_name.clone(), policy))
+            })
+            .collect();
         self.handler_contexts = spec_table
             .entries
             .iter()
@@ -4090,13 +4245,14 @@ fn split_qualified_name_owned(qualified_name: &str) -> (Option<String>, Option<S
 
 #[cfg(test)]
 mod tests {
-    use super::{ProcessWaitReason, StepOutcome, TaskMode, VmObservationOptions, VM};
+    use super::{decode_vm_result, ProcessWaitReason, StepOutcome, TaskMode, VmObservationOptions, VM};
     use sindr::ir::{
         BootEntrySource, Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode,
         OpcodeSource, RuntimeBootPlan, RuntimeCallableRef, RuntimeHandlerKind, RuntimeHandlerSpec,
         RuntimeInitPolicy, RuntimeInitResultShape, RuntimeInitSpec, RuntimeLifecycleSpec,
         RuntimeProcessDependencies, RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec,
-        RuntimeProcessSpecTable, RuntimeStateSpec, RuntimeSupervisionSpec, RuntimeTypeRef,
+        RuntimeProcessSpecTable, RuntimeStateSpec, RuntimeSupervisionSpec,
+        RuntimeSupervisorOverrideEntry, RuntimeSupervisorPolicy, RuntimeTypeRef,
         SingletonBootEntry, SourceMap,
     };
     use sindr::primitives::int;
@@ -4323,8 +4479,12 @@ mod tests {
 
         let mut vm = VM::new(bytecode);
         let pid = vm
-            .allocate_dynamic_supervisor_worker("Worker".into(), Some(Value::Int(int(7))))
-            .expect("dynamic supervisor should allocate worker");
+            .allocate_supervised_worker(
+                "Worker".into(),
+                Some(Value::Int(int(7))),
+                "DynamicSupervisor".into(),
+            )
+            .expect("supervisor should allocate worker");
         let instance = vm
             .process_runtime
             .processes
@@ -4334,7 +4494,79 @@ mod tests {
         assert_eq!(instance.owner, None);
         assert_eq!(
             instance.lifecycle_sink,
-            Some(super::LifecycleSink::DynamicSupervisor)
+            Some(super::LifecycleSink::Supervisor("DynamicSupervisor".into()))
+        );
+    }
+
+    #[test]
+    fn supervisor_adopt_reassigns_lifecycle_sink() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![
+                RuntimeProcessSpec {
+                    supervision: RuntimeSupervisionSpec {
+                        policy: Some(RuntimeSupervisorPolicy {
+                            strategy: "OneForOne".into(),
+                            max_restarts: 5,
+                            max_seconds: 10,
+                            child_restart_default: "Transient".into(),
+                            allow_adopt: true,
+                            shutdown_timeout_ms: None,
+                        }),
+                        ..RuntimeSupervisionSpec::default()
+                    },
+                    ..test_runtime_process_spec(
+                        0,
+                        "MySup",
+                        RuntimeProcessKind::Supervisor,
+                        RuntimeProcessInstance::Singleton,
+                        false,
+                        0,
+                        1,
+                        None,
+                    )
+                },
+                test_runtime_process_spec(
+                    1,
+                    "Worker",
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Worker,
+                    false,
+                    0,
+                    1,
+                    None,
+                ),
+            ],
+        };
+        bytecode.runtime_boot_plan.supervisor_overrides.push(RuntimeSupervisorOverrideEntry {
+            process_name: "MySup".into(),
+            policy: RuntimeSupervisorPolicy {
+                strategy: "OneForOne".into(),
+                max_restarts: 5,
+                max_seconds: 10,
+                child_restart_default: "Transient".into(),
+                allow_adopt: true,
+                shutdown_timeout_ms: None,
+            },
+        });
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process_state("Worker".into(), Some(Value::Int(int(7))))
+            .expect("worker should allocate");
+        let value = vm
+            .supervisor_adopt(
+                "MySup".into(),
+                PidHandle {
+                    id: pid,
+                    process_name: "Worker".into(),
+                },
+            )
+            .expect("adopt should succeed");
+        assert!(matches!(decode_vm_result(value, "test", "adopt"), Ok(Ok(Value::Unit))));
+        let instance = vm.process_runtime.processes.get(&pid).expect("worker instance");
+        assert_eq!(
+            instance.lifecycle_sink,
+            Some(super::LifecycleSink::Supervisor("MySup".into()))
         );
     }
 

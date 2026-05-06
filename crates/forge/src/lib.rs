@@ -848,9 +848,13 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
         );
 
         let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
-        assert_eq!(bytecode.runtime_process_specs.entries.len(), 1);
-        let spec = &bytecode.runtime_process_specs.entries[0];
-        assert_eq!(spec.process_id, 0);
+        assert_eq!(bytecode.runtime_process_specs.entries.len(), 2);
+        let spec = bytecode
+            .runtime_process_specs
+            .entries
+            .iter()
+            .find(|entry| entry.type_name == "Counter")
+            .expect("Counter runtime process spec");
         assert_eq!(spec.type_name, "Counter");
         assert_eq!(spec.state.state_type.name, "Int");
         assert_eq!(
@@ -890,6 +894,11 @@ supervisor_init {
       out: FileOutHandler(path: "./logs/app.log")
     }
   }
+
+  DynamicSupervisor {
+    max_restarts: 10
+    allow_adopt: True
+  }
 }"#,
         );
 
@@ -905,6 +914,11 @@ supervisor_init {
         assert_eq!(handler.handler_target.name, "FileOutHandler");
         assert_eq!(handler.handler_target.named_args[0].name, "path");
         assert_eq!(handler.handler_target.named_args[0].value, "./logs/app.log");
+        assert_eq!(bytecode.runtime_boot_plan.supervisor_overrides.len(), 1);
+        let supervisor = &bytecode.runtime_boot_plan.supervisor_overrides[0];
+        assert_eq!(supervisor.process_name, "DynamicSupervisor");
+        assert_eq!(supervisor.policy.max_restarts, 10);
+        assert!(supervisor.policy.allow_adopt);
     }
 
     #[test]
@@ -964,8 +978,13 @@ supervisor_init {
         );
 
         let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
-        assert_eq!(bytecode.runtime_process_specs.entries.len(), 1);
-        let spec = &bytecode.runtime_process_specs.entries[0];
+        assert_eq!(bytecode.runtime_process_specs.entries.len(), 2);
+        let spec = bytecode
+            .runtime_process_specs
+            .entries
+            .iter()
+            .find(|entry| entry.type_name == "Logger")
+            .expect("Logger runtime process spec");
         assert_eq!(spec.kind, sindr::ir::RuntimeProcessKind::GenServer);
         assert_eq!(spec.handlers.len(), 3);
         assert_eq!(spec.handlers[0].handler_id, 0);
@@ -1011,9 +1030,13 @@ supervisor_init {
         );
 
         let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
-        assert_eq!(bytecode.runtime_process_specs.entries.len(), 1);
-        let spec = &bytecode.runtime_process_specs.entries[0];
-        assert_eq!(spec.process_id, 0);
+        assert_eq!(bytecode.runtime_process_specs.entries.len(), 2);
+        let spec = bytecode
+            .runtime_process_specs
+            .entries
+            .iter()
+            .find(|entry| entry.type_name == "LazyCache")
+            .expect("LazyCache runtime process spec");
         assert_eq!(spec.type_name, "LazyCache");
         assert_eq!(spec.state.state_type.name, "Int");
         assert_eq!(
@@ -1026,6 +1049,6 @@ supervisor_init {
         ));
         assert_eq!(spec.dependencies.handlers.len(), 0);
         assert!(spec.lifecycle.owner.is_none());
-        assert!(spec.supervision.parent.is_none());
+        assert_eq!(spec.supervision.parent.as_deref(), Some("RuntimeSupervisor"));
     }
 }

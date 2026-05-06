@@ -1,1 +1,1 @@
-ready
+Ok(SupervisorStatus(supervisor: AppSup, child_count: 0, strategy: OneForOne, max_restarts: 5, max_seconds: 10, allow_adopt: True))

@@ -2045,6 +2045,27 @@ impl Checker {
         let node = match node.node {
             TypedInner::Lit(lit) => TypedInner::Lit(lit),
             TypedInner::Var(id) => TypedInner::Var(id),
+            TypedInner::SupervisorSpawn {
+                supervisor_process,
+                worker_process,
+                init,
+            } => TypedInner::SupervisorSpawn {
+                supervisor_process,
+                worker_process,
+                init: Box::new(self.resolve_typed_node(*init)),
+            },
+            TypedInner::SupervisorAdopt {
+                supervisor_process,
+                worker_process,
+                pid,
+            } => TypedInner::SupervisorAdopt {
+                supervisor_process,
+                worker_process,
+                pid: Box::new(self.resolve_typed_node(*pid)),
+            },
+            TypedInner::SupervisorStatus { supervisor_process } => {
+                TypedInner::SupervisorStatus { supervisor_process }
+            }
             TypedInner::App(func, args) => TypedInner::App(
                 Box::new(self.resolve_typed_node(*func)),
                 args.into_iter()
