@@ -354,6 +354,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_process_spawn,
     },
     BuiltinImpl {
+        name: "__dynamic_supervisor_spawn",
+        func: builtin_dynamic_supervisor_spawn,
+    },
+    BuiltinImpl {
         name: "__process_state",
         func: builtin_process_state,
     },
@@ -603,6 +607,20 @@ fn builtin_process_spawn(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
         ));
     };
     vm.process_spawn(process_name.clone(), init)
+}
+
+fn builtin_dynamic_supervisor_spawn(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(process_name) = &args[0] else {
+        return Err(RuntimeError::new(
+            "__dynamic_supervisor_spawn expects String as name",
+        ));
+    };
+    let Value::Callable(init) = args[1].clone() else {
+        return Err(RuntimeError::new(
+            "__dynamic_supervisor_spawn expects callable init handler",
+        ));
+    };
+    vm.dynamic_supervisor_spawn(process_name.clone(), init)
 }
 
 fn builtin_process_state(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

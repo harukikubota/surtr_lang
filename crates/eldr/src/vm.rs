@@ -328,7 +328,14 @@ struct ProcessInstance {
     execution_context: Option<ProcessExecutionContext>,
     state_value: Option<Value>,
     owner: Option<u64>,
+    lifecycle_sink: Option<LifecycleSink>,
     lazy_state_pending: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LifecycleSink {
+    DynamicSupervisor,
 }
 
 #[allow(dead_code)]
@@ -1538,7 +1545,27 @@ impl VM {
         let init_result = self.invoke_callable_sync(init, Vec::new())?;
         match decode_vm_result(init_result, "__process_spawn", "init")? {
             Ok(state) => {
-                let pid = self.allocate_process_state(process_name.clone(), Some(state))?;
+                let pid =
+                    self.allocate_process_instance(process_name.clone(), Some(state), None, None)?;
+                Ok(ok_vm_result(Value::Pid(PidHandle {
+                    id: pid,
+                    process_name,
+                })))
+            }
+            Err(err) => Ok(err_vm_result(err)),
+        }
+    }
+
+    pub(crate) fn dynamic_supervisor_spawn(
+        &mut self,
+        process_name: String,
+        init: Callable,
+    ) -> Result<Value, RuntimeError> {
+        let init_result = self.invoke_callable_sync(init, Vec::new())?;
+        match decode_vm_result(init_result, "__dynamic_supervisor_spawn", "init")? {
+            Ok(state) => {
+                let pid =
+                    self.allocate_dynamic_supervisor_worker(process_name.clone(), Some(state))?;
                 Ok(ok_vm_result(Value::Pid(PidHandle {
                     id: pid,
                     process_name,
@@ -1633,6 +1660,24 @@ impl VM {
         name: String,
         state: Option<Value>,
     ) -> Result<u64, RuntimeError> {
+        self.allocate_process_instance(name, state, None, None)
+    }
+
+    fn allocate_dynamic_supervisor_worker(
+        &mut self,
+        name: String,
+        state: Option<Value>,
+    ) -> Result<u64, RuntimeError> {
+        self.allocate_process_instance(name, state, None, Some(LifecycleSink::DynamicSupervisor))
+    }
+
+    fn allocate_process_instance(
+        &mut self,
+        name: String,
+        state: Option<Value>,
+        owner: Option<u64>,
+        lifecycle_sink: Option<LifecycleSink>,
+    ) -> Result<u64, RuntimeError> {
         let Some(spec_id) = self.process_runtime.spec_id_by_name.get(&name).copied() else {
             return Err(RuntimeError::new(format!(
                 "unknown process spec `{name}` during allocation"
@@ -1654,7 +1699,8 @@ impl VM {
                 mailbox: VecDeque::new(),
                 execution_context: None,
                 state_value: state,
-                owner: None,
+                owner,
+                lifecycle_sink,
                 lazy_state_pending,
             },
         );
@@ -4046,9 +4092,8 @@ fn split_qualified_name_owned(qualified_name: &str) -> (Option<String>, Option<S
 mod tests {
     use super::{ProcessWaitReason, StepOutcome, TaskMode, VmObservationOptions, VM};
     use sindr::ir::{
-        Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode, OpcodeSource,
-        BootEntrySource,
-        RuntimeBootPlan, RuntimeCallableRef, RuntimeHandlerKind, RuntimeHandlerSpec,
+        BootEntrySource, Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode,
+        OpcodeSource, RuntimeBootPlan, RuntimeCallableRef, RuntimeHandlerKind, RuntimeHandlerSpec,
         RuntimeInitPolicy, RuntimeInitResultShape, RuntimeInitSpec, RuntimeLifecycleSpec,
         RuntimeProcessDependencies, RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec,
         RuntimeProcessSpecTable, RuntimeStateSpec, RuntimeSupervisionSpec, RuntimeTypeRef,
@@ -4192,7 +4237,16 @@ mod tests {
     fn vm_new_registers_runtime_process_specs_from_bytecode() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
-            entries: vec![test_runtime_process_spec(0, "Counter", RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 0, 1, Some(2))],
+            entries: vec![test_runtime_process_spec(
+                0,
+                "Counter",
+                RuntimeProcessKind::Agent,
+                RuntimeProcessInstance::Singleton,
+                false,
+                0,
+                1,
+                Some(2),
+            )],
         };
 
         let vm = VM::new(bytecode);
@@ -4219,7 +4273,16 @@ mod tests {
     fn allocate_process_creates_process_instance_with_runtime_shape() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
-            entries: vec![test_runtime_process_spec(0, "Counter", RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 0, 1, Some(2))],
+            entries: vec![test_runtime_process_spec(
+                0,
+                "Counter",
+                RuntimeProcessKind::Agent,
+                RuntimeProcessInstance::Singleton,
+                false,
+                0,
+                1,
+                Some(2),
+            )],
         };
 
         let mut vm = VM::new(bytecode);
@@ -4243,12 +4306,63 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_supervisor_spawn_records_lifecycle_sink() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![test_runtime_process_spec(
+                0,
+                "Worker",
+                RuntimeProcessKind::Agent,
+                RuntimeProcessInstance::Worker,
+                false,
+                0,
+                1,
+                None,
+            )],
+        };
+
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_dynamic_supervisor_worker("Worker".into(), Some(Value::Int(int(7))))
+            .expect("dynamic supervisor should allocate worker");
+        let instance = vm
+            .process_runtime
+            .processes
+            .get(&pid)
+            .expect("worker instance should be stored");
+
+        assert_eq!(instance.owner, None);
+        assert_eq!(
+            instance.lifecycle_sink,
+            Some(super::LifecycleSink::DynamicSupervisor)
+        );
+    }
+
+    #[test]
     fn process_state_and_store_validate_pid_against_registered_spec() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
             entries: vec![
-                test_runtime_process_spec(0, "Counter", RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 0, 1, Some(2)),
-                test_runtime_process_spec(0, "Clock", RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 3, 4, Some(5)),
+                test_runtime_process_spec(
+                    0,
+                    "Counter",
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Singleton,
+                    false,
+                    0,
+                    1,
+                    Some(2),
+                ),
+                test_runtime_process_spec(
+                    0,
+                    "Clock",
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Singleton,
+                    false,
+                    3,
+                    4,
+                    Some(5),
+                ),
             ],
         };
 
@@ -4478,7 +4592,16 @@ mod tests {
     fn attach_waiter_updates_waiting_table_and_future_record() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
-            entries: vec![test_runtime_process_spec(0, "Counter", RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 0, 1, Some(2))],
+            entries: vec![test_runtime_process_spec(
+                0,
+                "Counter",
+                RuntimeProcessKind::Agent,
+                RuntimeProcessInstance::Singleton,
+                false,
+                0,
+                1,
+                Some(2),
+            )],
         };
         let mut vm = VM::new(bytecode);
         let pid = vm
@@ -4514,7 +4637,16 @@ mod tests {
     fn expire_deadlines_marks_timeout_err_and_clears_reply_mapping() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
-            entries: vec![test_runtime_process_spec(0, "Counter", RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 0, 1, Some(2))],
+            entries: vec![test_runtime_process_spec(
+                0,
+                "Counter",
+                RuntimeProcessKind::Agent,
+                RuntimeProcessInstance::Singleton,
+                false,
+                0,
+                1,
+                Some(2),
+            )],
         };
         let mut vm = VM::new(bytecode);
         let pid = vm
@@ -4836,8 +4968,26 @@ mod tests {
         ];
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
             entries: vec![
-                test_runtime_process_spec(0, "Good", RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 0, 2, None),
-                test_runtime_process_spec(0, "Broken", RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 1, 3, None),
+                test_runtime_process_spec(
+                    0,
+                    "Good",
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Singleton,
+                    false,
+                    0,
+                    2,
+                    None,
+                ),
+                test_runtime_process_spec(
+                    0,
+                    "Broken",
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Singleton,
+                    false,
+                    1,
+                    3,
+                    None,
+                ),
             ],
         };
         bytecode.runtime_boot_plan.singletons = vec![
@@ -6060,9 +6210,29 @@ mod tests {
         ];
 
         let mut specs = (0..singleton_count)
-            .map(|idx| test_runtime_process_spec(0, format!("Singleton{idx}"), RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 0, 0, None))
+            .map(|idx| {
+                test_runtime_process_spec(
+                    0,
+                    format!("Singleton{idx}"),
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Singleton,
+                    false,
+                    0,
+                    0,
+                    None,
+                )
+            })
             .collect::<Vec<_>>();
-        specs.push(test_runtime_process_spec(0, "Worker", RuntimeProcessKind::Agent, RuntimeProcessInstance::Worker, false, 1, 1, None));
+        specs.push(test_runtime_process_spec(
+            0,
+            "Worker",
+            RuntimeProcessKind::Agent,
+            RuntimeProcessInstance::Worker,
+            false,
+            1,
+            1,
+            None,
+        ));
         bytecode.runtime_process_specs = RuntimeProcessSpecTable { entries: specs };
         bytecode.runtime_boot_plan.singletons = (0..singleton_count)
             .map(|idx| SingletonBootEntry {

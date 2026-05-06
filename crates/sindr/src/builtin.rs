@@ -436,6 +436,11 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(String, (-> Result<$State>)) -> Result<PID<$Process>>",
     },
     BuiltinMeta {
+        name: "__dynamic_supervisor_spawn",
+        arity: 2,
+        sig_str: "(String, (-> Result<$State>)) -> Result<PID<$Process>>",
+    },
+    BuiltinMeta {
         name: "__process_state",
         arity: 1,
         sig_str: "(PID<$Process>) -> Result<$State>",
@@ -743,6 +748,7 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
         Some("Process::self") => "__process_self",
         Some("Process::sleep") => "__process_sleep",
         Some("OutHandler::write") => "__out_handler_write",
+        Some("DynamicSupervisor::spawn") => "__dynamic_supervisor_spawn",
         Some("Task::call") => "__task_call",
         Some("Task::async") => "__task_async",
         Some("Task::launch") => "__task_launch",
@@ -800,5 +806,17 @@ mod tests {
     fn builtin_lookup_returns_none_for_unknown_values() {
         assert!(builtin_meta_by_id(u16::MAX).is_none());
         assert!(builtin_meta_by_name("__missing__").is_none());
+    }
+
+    #[test]
+    fn dynamic_supervisor_spawn_maps_to_hidden_runtime_builtin() {
+        let runtime_name = super::builtin_runtime_name("spawn", Some("DynamicSupervisor::spawn"));
+        assert_eq!(runtime_name, "__dynamic_supervisor_spawn");
+        let meta = builtin_meta_by_name(runtime_name).expect("dynamic supervisor spawn builtin");
+        assert_eq!(meta.arity, 2);
+        assert_eq!(
+            meta.sig_str,
+            "(String, (-> Result<$State>)) -> Result<PID<$Process>>"
+        );
     }
 }

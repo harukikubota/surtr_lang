@@ -4386,13 +4386,26 @@ fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
                 )
                 .expect("worker agent should include spawn wrapper");
             match spawn_wrapper {
-                Ast::Def(_, _, _, _, Some(AstTy::Generic(_, ty_name, ty_args)), _, _) => {
+                Ast::Def(_, _, _, _, Some(AstTy::Generic(_, ty_name, ty_args)), body, _) => {
                     assert_eq!(ty_name, "Result");
                     assert!(matches!(
                         ty_args.as_slice(),
                         [AstTy::Generic(_, inner_name, inner_args)]
                             if inner_name == "PID"
                                 && matches!(inner_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Worker")
+                    ));
+                    assert!(matches!(
+                        body.as_ref(),
+                        Ast::Block(_, stmts)
+                            if matches!(
+                                stmts.as_slice(),
+                                [Ast::App(_, callee, _)]
+                                    if matches!(
+                                        callee.as_ref(),
+                                        Ast::Path(_, path)
+                                            if path.segments.as_slice() == ["DynamicSupervisor", "spawn"]
+                                    )
+                            )
                     ));
                 }
                 other => {
