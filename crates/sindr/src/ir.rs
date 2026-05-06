@@ -1793,7 +1793,10 @@ mod tests {
 
         let bytes = bytecode.encode().expect("encode should succeed");
         let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
-        assert_eq!(decoded.runtime_process_specs, bytecode.runtime_process_specs);
+        assert_eq!(
+            decoded.runtime_process_specs,
+            bytecode.runtime_process_specs
+        );
     }
 
     #[test]

@@ -1716,9 +1716,7 @@ impl Checker {
             Ty::List(inner) | Ty::Lazy(inner) | Ty::TypeRef(inner) => {
                 self.ty_contains_process_init(&inner)
             }
-            Ty::Tuple(items) => items
-                .iter()
-                .any(|item| self.ty_contains_process_init(item)),
+            Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_process_init(item)),
             Ty::Func(params, ret) => {
                 params
                     .iter()

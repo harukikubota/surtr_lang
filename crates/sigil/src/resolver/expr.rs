@@ -1229,8 +1229,55 @@ impl Resolver {
     }
 
     fn hidden_builtin_message(name: &str) -> String {
-        let builtin_name = name.rsplit("::").next().unwrap_or(name);
-        let guidance = match builtin_name {
+        let display_name = match name {
+            "Agent::pid"
+            | "Agent::spawn"
+            | "Agent::state"
+            | "Agent::store"
+            | "Agent::self"
+            | "Agent::context_handler"
+            | "GenServer::pid"
+            | "GenServer::spawn"
+            | "GenServer::state"
+            | "GenServer::store"
+            | "GenServer::self"
+            | "GenServer::context_handler"
+            | "Supervisor::spawn"
+            | "Supervisor::adopt"
+            | "Supervisor::status"
+            | "Supervisor::workers" => name,
+            _ => name.rsplit("::").next().unwrap_or(name),
+        };
+        let guidance = match name {
+            "Agent::pid"
+            | "Agent::spawn"
+            | "Agent::state"
+            | "Agent::store"
+            | "Agent::self"
+            | "Agent::context_handler" => {
+                "This Agent module surface is compiler-managed; use `defagent` or generated owner helpers instead."
+            }
+            "GenServer::pid"
+            | "GenServer::spawn"
+            | "GenServer::state"
+            | "GenServer::store"
+            | "GenServer::self"
+            | "GenServer::context_handler" => {
+                "This GenServer module surface is compiler-managed; use `defagent`, `defgenserver`, or generated owner helpers instead."
+            }
+            "Supervisor::spawn" => {
+                "This Supervisor module surface is compiler-managed; use `DynamicSupervisor::spawn(...)` or a generated `SupName::spawn(...)` wrapper instead."
+            }
+            "Supervisor::adopt" => {
+                "This Supervisor module surface is compiler-managed; use `DynamicSupervisor::adopt(...)` or a generated `SupName::adopt(...)` wrapper instead."
+            }
+            "Supervisor::status" => {
+                "This Supervisor module surface is compiler-managed; use `DynamicSupervisor::status()` or a generated `SupName::status()` wrapper instead."
+            }
+            "Supervisor::workers" => {
+                "This Supervisor module surface is compiler-managed; use a generated `SupName::workers(...)` wrapper or the public Workers API instead."
+            }
+            _ => match display_name {
             "__process_self" => "Use `Process::self()` instead.",
             "__process_sleep" => "Use `Process::sleep(...)` instead.",
             "__task_call" => "Use `Task::call(...)` instead.",
@@ -1256,12 +1303,10 @@ impl Resolver {
             "__supervisor_workers" => {
                 "Use a generated Supervisor `workers` wrapper or the public Workers surface instead."
             }
-            "__workers_submit" | "__workers_broadcast" | "__workers_reserve" | "__workers_size" => {
-                "Use the public Workers API instead."
-            }
             _ => "Use the public standard-library surface instead.",
+        },
         };
-        format!("hidden builtin `{builtin_name}` is compiler-internal. {guidance}")
+        format!("hidden builtin `{display_name}` is compiler-internal. {guidance}")
     }
 
     fn hidden_builtin_error(&self, name: &str, span: Span) -> ResolveError {

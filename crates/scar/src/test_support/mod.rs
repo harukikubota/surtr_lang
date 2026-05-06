@@ -599,9 +599,13 @@ pub(crate) fn typecheck_module_source_result(source: &str) -> Result<Vec<TypedNo
     module_stages.push(parse_user_module_stage(source));
     let declaration_index = sigil::precollect_declaration_index(&module_stages)
         .map_err(|err| format!("resolve precollect failed: {}", err.message))?;
-    let resolved =
-        sigil::resolve_staged_program_with_state(&module_stages, Vec::new(), &declaration_index, None)
-            .map_err(|err| format!("resolve failed: {}", err.message))?;
+    let resolved = sigil::resolve_staged_program_with_state(
+        &module_stages,
+        Vec::new(),
+        &declaration_index,
+        None,
+    )
+    .map_err(|err| format!("resolve failed: {}", err.message))?;
     let user_resolved = sigil::ResolvedStagedProgram {
         resolved: resolved
             .resolved

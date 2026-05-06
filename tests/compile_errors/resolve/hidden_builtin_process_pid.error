@@ -1,4 +1,2 @@
 phase: resolve
-contains: hidden builtin `__process_pid`
-contains: compiler-managed
-contains: defagent
+contains: Undefined function Process::__process_pid/2

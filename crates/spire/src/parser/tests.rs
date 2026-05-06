@@ -4418,11 +4418,19 @@ fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
                     panic!("expected spawn wrapper to return Result<PID<Worker>>, got {other:?}")
                 }
             }
+            let set_wrapper = body
+                .iter()
+                .find(
+                    |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "set"),
+                )
+                .expect("worker agent should include set wrapper");
             match init_wrapper {
                 Ast::Def(_, _, _, params, Some(AstTy::Func(_, ret_params, ret_ty)), body, _) => {
                     assert_eq!(params.len(), 1);
                     assert!(ret_params.is_empty());
-                    assert!(matches!(ret_ty.as_ref(), AstTy::Generic(_, name, _) if name == "Result"));
+                    assert!(
+                        matches!(ret_ty.as_ref(), AstTy::Generic(_, name, _) if name == "Result")
+                    );
                     assert!(matches!(
                         body.as_ref(),
                         Ast::Block(_, stmts)
@@ -4440,6 +4448,37 @@ fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
                     ));
                 }
                 other => panic!("expected init wrapper to return zero-arg callable, got {other:?}"),
+            }
+            match set_wrapper {
+                Ast::Def(_, _, _, _, _, body, _) => {
+                    assert!(matches!(
+                        body.as_ref(),
+                        Ast::Block(_, stmts)
+                            if stmts.iter().any(|stmt| matches!(
+                                    stmt,
+                                    Ast::SafeBind(_, _, rhs)
+                                        if matches!(
+                                            rhs.as_ref(),
+                                            Ast::App(_, callee, _)
+                                                if matches!(
+                                                    callee.as_ref(),
+                                                    Ast::InternalVar(_, name)
+                                                        if name == "Agent::state"
+                                                )
+                                        )
+                                ))
+                                && stmts.iter().any(|stmt| matches!(
+                                    stmt,
+                                    Ast::App(_, callee, _)
+                                        if matches!(
+                                            callee.as_ref(),
+                                            Ast::InternalVar(_, name)
+                                                if name == "Agent::store"
+                                        )
+                                ))
+                    ));
+                }
+                other => panic!("expected set wrapper body, got {other:?}"),
             }
         }
         other => panic!("Expected Defagent, got {other:?}"),
@@ -4480,6 +4519,31 @@ fn test_defsupervisor_generates_compiler_managed_surface_from_policy_meta() {
             assert!(generated_defs.contains(&"adopt"));
             assert!(generated_defs.contains(&"status"));
             assert!(generated_defs.contains(&"workers"));
+            let spawn_wrapper = body
+                .iter()
+                .find(
+                    |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "spawn"),
+                )
+                .expect("supervisor should include spawn wrapper");
+            match spawn_wrapper {
+                Ast::Def(_, _, _, _, _, body, _) => {
+                    assert!(matches!(
+                        body.as_ref(),
+                        Ast::Block(_, stmts)
+                            if matches!(
+                                stmts.as_slice(),
+                                [Ast::App(_, callee, args)]
+                                    if args.len() == 2
+                                        && matches!(
+                                            callee.as_ref(),
+                                            Ast::InternalVar(_, name)
+                                                if name == "Supervisor::spawn"
+                                        )
+                            )
+                    ));
+                }
+                other => panic!("expected spawn wrapper body, got {other:?}"),
+            }
         }
         other => panic!("Expected Defsupervisor, got {other:?}"),
     }

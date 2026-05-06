@@ -63,7 +63,7 @@
 | Worker owner | allocation 時 `owner: None` の経路がある | default owner = current process |
 | `Process::sleep` | host thread blocking 寄り | scheduler timer。呼び出した process のみ suspend |
 | Task | body 実行が同期寄り | 使い捨て process として scheduler 管理 |
-| timeout | hidden builtin あり | runtime-managed call 後方 modifier `@timeout` として整理 |
+| timeout | owner ごとの hidden helper に寄る | runtime-managed call 後方 modifier `@timeout` として整理 |
 | singleton 利用検査 | 未実装 | compile unit 単位で `required_singletons ⊆ available_singletons` を検査 |
 | 標準 I/O | VM 内部の標準入力・標準出力・標準エラー用リストに直接寄る経路がある | `StdIn` / `StdOut` / `StdErr` builtin handler への message call として扱う |
 | I/O handler 差し替え | 実行モードや VM 内部処理に寄る | process `meta.handlers` で default を宣言し、`supervisor_init` で override する |
@@ -249,11 +249,14 @@ owner process 内では struct literal / field access / lens 操作を許可す�
 
 process runtime の lower surface は [lib/process.srt](/Users/haruca/work/rust/surtr/lib/process.srt) に置く。
 
-- `GenServer` は hidden lowering module であり、`pid`, `spawn`, `state`, `store`, `self`, `context_handler` を持つ
-- `Supervisor` は hidden lowering module であり、`spawn`, `adopt`, `status`, `workers` を持つ
+- `Process` は通常 user code からそのまま呼べる runtime utility module とし、`Process::self` / `Process::sleep` など public API だけを置く
+- user-facing 正規系は `Process::*`, `Task::*`, `Workers::*`, generated owner helper (`MySupervisor::spawn` など) とする
+- `Agent` / `GenServer` / `Supervisor` は compiler-managed lower module であり、generated owner helper がここへ lower される
+- `Workers` は public API を `Workers::submit` / `Workers::broadcast` / `Workers::reserve` / `Workers::size` に一本化し、`__workers_*` hidden 宣言は `process.srt` には置かない
+- canonical な runtime builtin 名は `__process_*`, `__workers_*`, `__supervisor_*`, `__dynamic_supervisor_*`, `__out_handler_write` とするが、`__*` は VM/runtime 内部名であり user-facing stdlib surface ではない
 - `Workers<$Worker>` と `WorkerLease<$Worker>` も `process.srt` の builtin type として定義する
 - これらは REPL / project compile の両方で同じ stdlib ルートから見える
-- user code から `GenServer::...` / `Supervisor::...` を直接呼ぶことはできず、共通の `@hidden` 診断に乗る
+- hidden lower 名は compiler-managed であり、user code から直接参照・import できない
 - user-facing process surface には lowering 都合の `name: String` のような中間引数を出さない
 
 process owner ごとの compiler-managed 名は共通予約集合として扱う。
@@ -471,7 +474,7 @@ _ =? QueueServer::push(pid, "a.png")
 size =? QueueServer::size(pid)
 ```
 
-compiler はこれらの surface を hidden `GenServer` lowering API に接続する。`GenServer::pid(...)` や `GenServer::store(...)` は stdlib 内に存在するが、user code から直接使うものではない。
+compiler は generated owner helper をまず `GenServer` / `Supervisor` などの common owner module へ lower し、その後 canonical runtime builtin 名 (`__process_*`, `__supervisor_*` など) に接続する。common owner module と hidden lower 名は user code から直接使わない。
 
 ### 3.11 Supervisor / DynamicSupervisor
 
@@ -545,24 +548,58 @@ ImageWorkerSupervisor::workers(MyWorker::init(args), 4)
 - user code は worker 集合を直接組み立てない
 - `Workers` API は worker message template だけを受ける
 - `reserve` は `WorkerLease<$Worker>` を返し、裸の PID 抽出 API は出さない
+- `Sup::workers(...)` は Singleton GenServer の `@init` で worker pool state を作る経路として使う
+- `Workers<$Worker>` は Singleton GenServer の state として保持する。state そのものを `Workers<$Worker>` にしてよいし、`@process_state` 付き struct の field に含めてもよい
+- `Workers::submit` / `Workers::reserve` / `Workers::broadcast` / `Workers::size` は Singleton GenServer の `@call` / `@cast` / 同じ `defgenserver` 内 helper から使う
 
-正規系:
+正規系は WorkerPool 役の Singleton GenServer に閉じる。state がそのまま `Workers<$Worker>` の場合:
 
 ```surtr
-workers =? ImageWorkerSupervisor::workers(ImageWorker::init(0), 2)
-_ =? Workers::submit(workers, ImageWorker::assign(3))
-lease =? Workers::reserve(workers)
-_ =? ImageWorker::assign(lease, 4)
-all = Workers::broadcast(workers, ImageWorker::value())
-count = Workers::size(workers)
+defgenserver ImagePool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Workers<ImageWorker>> {
+    ImageWorkerSupervisor::workers(ImageWorker::init(0), 2)
+  }
+
+  def assign_reserved(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Unit> {
+    lease =? Workers::reserve(workers)
+    ImageWorker::assign(lease, job)
+  }
+
+  @cast
+  def submit(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Workers<ImageWorker>> {
+    _ =? Workers::submit(workers, ImageWorker::assign(job))
+    Ok(workers)
+  }
+
+  @call
+  def values(workers: Workers<ImageWorker>) -> Result<(List<Result<Int>>, Workers<ImageWorker>)> {
+    Ok((Workers::broadcast(workers, ImageWorker::value()), workers))
+  }
+
+  @call
+  def count(workers: Workers<ImageWorker>) -> Result<(Int, Workers<ImageWorker>)> {
+    Ok((Workers::size(workers), workers))
+  }
+}
+
+_ =? ImagePool::submit(job)
+values =? ImagePool::values()
+count =? ImagePool::count()
 ```
 
-pool / manager GenServer は `Workers<$Worker>` を state に保持してよい。
+追加 state と一緒に保持する場合は `@process_state` 付き state 型の field に含める。
 
 ```surtr
 @process_state(ImagePool)
 defstruct ImagePoolState {
   workers: Workers<ImageWorker>,
+  accepted: Int,
 }
 
 defgenserver ImagePool {
@@ -574,26 +611,23 @@ defgenserver ImagePool {
   @init
   def init() -> Result<ImagePoolState> {
     workers =? ImageWorkerSupervisor::workers(ImageWorker::init(0), 2)
-    Ok(ImagePoolState { workers: workers })
+    Ok(ImagePoolState { workers: workers, accepted: 0 })
+  }
+
+  @cast
+  def submit(state: ImagePoolState, job: ImageJob) -> Result<ImagePoolState> {
+    _ =? Workers::submit(state.workers, ImageWorker::assign(job))
+    Ok(ImagePoolState { workers: state.workers, accepted: state.accepted + 1 })
   }
 
   @call
-  def submit(state: ImagePoolState, delta: Int) -> Result<(Unit, ImagePoolState)> {
-    _ =? Workers::submit(state.workers, ImageWorker::assign(delta))
-    Ok(((), state))
-  }
-
-  @call
-  def status(state: ImagePoolState) -> Result<(Int, ImagePoolState)> {
+  def count(state: ImagePoolState) -> Result<(Int, ImagePoolState)> {
     Ok((Workers::size(state.workers), state))
   }
 }
-
-_ =? ImagePool::submit(5)
-size =? ImagePool::status()
 ```
 
-`Supervisor` lowering API も `process.srt` に存在するが、これは compiler-internal surface である。user code では常に `MySupervisor::spawn(...)` / `MySupervisor::workers(...)` のような process owner API を使う。
+generated supervisor owner helper は compiler が compiler-managed `Supervisor::*` owner module を経由して hidden `__supervisor_*` runtime lower へ接続する。user code では常に `MySupervisor::spawn(...)` / `MySupervisor::workers(...)` のような process owner API を使う。
 
 ### 3.12 Worker lifecycle
 

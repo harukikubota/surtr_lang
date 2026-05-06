@@ -79,7 +79,10 @@ fn validate_required_singletons(
         if spec.spec.instance != ProcessInstance::Singleton {
             continue;
         }
-        surface_to_process.insert(format!("{}::pid", spec.process_name), spec.process_name.clone());
+        surface_to_process.insert(
+            format!("{}::pid", spec.process_name),
+            spec.process_name.clone(),
+        );
         for handler in &spec.spec.handler_specs {
             if handler.kind == ProcessRuntimeHandlerKind::Init {
                 continue;
@@ -427,9 +430,7 @@ fn collect_missing_singleton_calls(
             );
         }
         TypedInner::LensOver {
-            source,
-            update_fun,
-            ..
+            source, update_fun, ..
         } => {
             collect_missing_singleton_calls(
                 source,
@@ -708,10 +709,15 @@ fn build_runtime_boot_plan(
                 span: supervisor.span.clone(),
             });
         };
-        runtime.supervisor_overrides.push(RuntimeSupervisorOverrideEntry {
-            process_name: spec.process_name.clone(),
-            policy: runtime_supervisor_policy_from_effective(base_policy, &supervisor.overrides),
-        });
+        runtime
+            .supervisor_overrides
+            .push(RuntimeSupervisorOverrideEntry {
+                process_name: spec.process_name.clone(),
+                policy: runtime_supervisor_policy_from_effective(
+                    base_policy,
+                    &supervisor.overrides,
+                ),
+            });
     }
 
     Ok(runtime)
@@ -825,15 +831,14 @@ fn init_state_ty(ret_ty: &Ty, lazy: bool, process_name: &str) -> Result<Ty, Code
         return Ok(ok_ty.clone());
     }
     match ok_ty {
-        Ty::Enum(name, args) if name == "ProcessInit" || name.ends_with("::ProcessInit") => args
-            .first()
-            .cloned()
-            .ok_or_else(|| CodegenError {
+        Ty::Enum(name, args) if name == "ProcessInit" || name.ends_with("::ProcessInit") => {
+            args.first().cloned().ok_or_else(|| CodegenError {
                 message: format!(
                     "Lazy @init for process `{process_name}` must return Result<ProcessInit<State>>"
                 ),
                 span: Span { start: 0, end: 0 },
-            }),
+            })
+        }
         _ => Err(CodegenError {
             message: format!(
                 "Lazy @init for process `{process_name}` must return Result<ProcessInit<State>>"
@@ -1130,23 +1135,19 @@ fn build_runtime_process_specs(
                 parent: match spec.spec.kind {
                     spire::ast::ProcessKind::Supervisor
                     | spire::ast::ProcessKind::DynamicSupervisor
-                    | spire::ast::ProcessKind::RuntimeSupervisor => {
-                        Some("RootSupervisor".into())
-                    }
+                    | spire::ast::ProcessKind::RuntimeSupervisor => Some("RootSupervisor".into()),
                     _ if spec.spec.instance == ProcessInstance::Singleton => {
                         Some("RuntimeSupervisor".into())
                     }
                     _ => None,
                 },
                 children: Vec::new(),
-                policy: spec
-                    .spec
-                    .supervisor_policy
-                    .as_ref()
-                    .map(|policy| runtime_supervisor_policy_from_effective(
+                policy: spec.spec.supervisor_policy.as_ref().map(|policy| {
+                    runtime_supervisor_policy_from_effective(
                         policy,
                         &spire::ast::SupervisorPolicyOverride::default(),
-                    )),
+                    )
+                }),
             },
         });
     }

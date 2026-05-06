@@ -179,8 +179,7 @@ impl Checker {
             self.env
                 .predeclare_type_def(name.clone(), kind, type_params);
             match stmt {
-                Resolved::StructDef(_, id, _, attrs)
-                | Resolved::EnumDef(_, id, _, _, attrs) => {
+                Resolved::StructDef(_, id, _, attrs) | Resolved::EnumDef(_, id, _, _, attrs) => {
                     self.env
                         .set_process_state_owner(&id.name, attrs.process_state_owner.clone());
                 }
@@ -1642,8 +1641,8 @@ impl Checker {
                         && !self.is_lazy_init_function_symbol(function_symbol)
                     {
                         return Err(TypeError {
-                            message:
-                                "ProcessInit<T> is only allowed as Lazy @init return type".into(),
+                            message: "ProcessInit<T> is only allowed as Lazy @init return type"
+                                .into(),
                             span: ret_ty
                                 .as_ref()
                                 .map(Self::ast_ty_span)

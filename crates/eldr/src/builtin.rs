@@ -686,7 +686,9 @@ fn builtin_supervisor_spawn(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runt
         ));
     };
     match args.as_slice() {
-        [_, Value::Callable(init)] => vm.supervisor_spawn(supervisor_name.clone(), None, init.clone()),
+        [_, Value::Callable(init)] => {
+            vm.supervisor_spawn(supervisor_name.clone(), None, init.clone())
+        }
         [_, Value::Str(worker_name), Value::Callable(init)] => vm.supervisor_spawn(
             supervisor_name.clone(),
             Some(worker_name.clone()),
@@ -905,7 +907,9 @@ fn builtin_workers_broadcast(vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
 
 fn builtin_workers_reserve(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let [Value::Workers(handle)] = args.as_slice() else {
-        return Err(RuntimeError::new("__workers_reserve expects Workers handle"));
+        return Err(RuntimeError::new(
+            "__workers_reserve expects Workers handle",
+        ));
     };
     vm.workers_reserve(handle)
 }

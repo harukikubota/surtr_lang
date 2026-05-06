@@ -797,9 +797,7 @@ mod tests {
                     kind: RuntimeProcessKind::Agent,
                     instance: RuntimeProcessInstance::Worker,
                     state: crate::ir::RuntimeStateSpec {
-                        state_type: crate::ir::RuntimeTypeRef {
-                            name: "Int".into(),
-                        },
+                        state_type: crate::ir::RuntimeTypeRef { name: "Int".into() },
                         owner_process: Some("Counter".into()),
                     },
                     init: crate::ir::RuntimeInitSpec {
@@ -810,9 +808,7 @@ mod tests {
                                 name: "Result<Int>".into(),
                             },
                         },
-                        state_type: crate::ir::RuntimeTypeRef {
-                            name: "Int".into(),
-                        },
+                        state_type: crate::ir::RuntimeTypeRef { name: "Int".into() },
                         init_route: None,
                     },
                     handlers: Vec::new(),

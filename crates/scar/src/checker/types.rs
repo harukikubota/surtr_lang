@@ -556,9 +556,7 @@ impl Checker {
                 }
                 "PID" => self.resolve_pid_surface_ty(span, args),
                 "Workers" => self.resolve_worker_handle_surface_ty(span, args, "Workers"),
-                "WorkerLease" => {
-                    self.resolve_worker_handle_surface_ty(span, args, "WorkerLease")
-                }
+                "WorkerLease" => self.resolve_worker_handle_surface_ty(span, args, "WorkerLease"),
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
@@ -597,11 +595,7 @@ impl Checker {
                         return self.resolve_worker_handle_surface_ty(span, args, "Workers");
                     }
                     if Self::surface_type_name(name) == "WorkerLease" {
-                        return self.resolve_worker_handle_surface_ty(
-                            span,
-                            args,
-                            "WorkerLease",
-                        );
+                        return self.resolve_worker_handle_surface_ty(span, args, "WorkerLease");
                     }
                     let def = self.env.lookup_type_def(name).ok_or_else(|| TypeError {
                         message: format!("Unknown generic type: {}", name),
@@ -845,9 +839,7 @@ impl Checker {
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Workers" => {
                 self.resolve_worker_handle_surface_ty(span, args, "Workers")
             }
-            AstTy::Generic(span, name, args)
-                if Self::surface_type_name(name) == "WorkerLease" =>
-            {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "WorkerLease" => {
                 self.resolve_worker_handle_surface_ty(span, args, "WorkerLease")
             }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "MatchResult" => {
@@ -1180,9 +1172,7 @@ impl Checker {
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Workers" => {
                 self.resolve_worker_handle_surface_ty(span, args, "Workers")
             }
-            AstTy::Generic(span, name, args)
-                if Self::surface_type_name(name) == "WorkerLease" =>
-            {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "WorkerLease" => {
                 self.resolve_worker_handle_surface_ty(span, args, "WorkerLease")
             }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "MatchResult" => {
@@ -1533,9 +1523,7 @@ impl Checker {
                 }
                 "PID" => self.resolve_pid_surface_ty(span, args),
                 "Workers" => self.resolve_worker_handle_surface_ty(span, args, "Workers"),
-                "WorkerLease" => {
-                    self.resolve_worker_handle_surface_ty(span, args, "WorkerLease")
-                }
+                "WorkerLease" => self.resolve_worker_handle_surface_ty(span, args, "WorkerLease"),
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {

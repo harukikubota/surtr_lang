@@ -1982,9 +1982,7 @@ impl Checker {
             TypedInner::SupervisorSpawn { init, .. } => {
                 Self::typed_node_has_pending_trait_call(init)
             }
-            TypedInner::SupervisorAdopt { pid, .. } => {
-                Self::typed_node_has_pending_trait_call(pid)
-            }
+            TypedInner::SupervisorAdopt { pid, .. } => Self::typed_node_has_pending_trait_call(pid),
             TypedInner::SupervisorStatus { .. } => false,
             TypedInner::SupervisorWorkers { init, size, .. } => {
                 Self::typed_node_has_pending_trait_call(init)

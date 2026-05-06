@@ -1075,8 +1075,8 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                                 span: shift_span(handler.span, delta),
                             })
                             .collect(),
-                            span: shift_span(singleton.span, delta),
-                        })
+                        span: shift_span(singleton.span, delta),
+                    })
                     .collect(),
                 supervisors: spec
                     .supervisors

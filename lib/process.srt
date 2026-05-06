@@ -1,5 +1,5 @@
 @doc """
-Process and Task provide the staged process-oriented surface.
+Process runtime public surface and compiler-managed lowering declarations.
 """
 defstruct SupervisorStatus {
   supervisor: String,
@@ -11,6 +11,14 @@ defstruct SupervisorStatus {
 }
 
 impl SupervisorStatus {
+  @doc """
+  Create a supervisor status value.
+
+  Runtime supervisor helpers return this value from generated status APIs.
+
+  ## Examples
+  status =? ImageWorkerSupervisor::status()
+  """
   def new(
     supervisor: String,
     child_count: Int,
@@ -30,55 +38,400 @@ impl SupervisorStatus {
   }
 }
 
+@doc """
+Runtime-managed worker set handle for one worker process type.
+
+`Workers<$Worker>` is only usable as Singleton GenServer state. Initialize it
+from that GenServer's `@init` with the generated supervisor owner helper, then
+keep it in the GenServer state returned by `@init`, `@call`, and `@cast`.
+
+## Examples
+State is just the worker set:
+
+defgenserver ImageWorkerPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Workers<ImageWorker>> {
+    ImageWorkerSupervisor::workers(ImageWorker::init("./input"), 4)
+  }
+}
+
+State contains the worker set:
+
+@process_state(ImageWorkerPool)
+defstruct ImageWorkerPoolState {
+  workers: Workers<ImageWorker>,
+  accepted: Int,
+}
+
+defgenserver ImageWorkerPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<ImageWorkerPoolState> {
+    workers =? ImageWorkerSupervisor::workers(ImageWorker::init("./input"), 4)
+    Ok(ImageWorkerPoolState { workers: workers, accepted: 0 })
+  }
+}
+"""
 @builtin type Workers<$Worker>
+
+@doc """
+Runtime-managed reservation for one worker from a `Workers<$Worker>` handle.
+
+`WorkerLease<$Worker>` is returned by `Workers::reserve(workers)`. Pass the
+lease to the worker message helper that should run on the reserved worker.
+
+## Examples
+defgenserver ImageWorkerPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Workers<ImageWorker>> {
+    ImageWorkerSupervisor::workers(ImageWorker::init("./input"), 4)
+  }
+
+  def assign_reserved(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Unit> {
+    lease =? Workers::reserve(workers)
+    ImageWorker::assign(lease, job)
+  }
+}
+"""
 @builtin type WorkerLease<$Worker>
 
 impl Workers {
+  @doc """
+  Submit one message template to an idle worker managed by `workers`.
+
+  The worker PID is injected by the runtime; ordinary code passes the worker
+  message without a PID. This API is intended for Singleton GenServer pool
+  implementations, usually from `@call`, `@cast`, or helper functions inside
+  the `defgenserver` body.
+
+  ## Examples
+  defgenserver ImageWorkerPool {
+    meta {
+      instance: Singleton
+      init_policy: Eager
+    }
+
+    @cast
+    def submit(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Workers<ImageWorker>> {
+      _ =? Workers::submit(workers, ImageWorker::assign(job))
+      Ok(workers)
+    }
+  }
+  """
   @builtin def submit(workers: Workers<$Worker>, message: (PID<$Worker> -> Result<Unit>)) -> Result<Unit>
 
+  @doc """
+  Send one message template to every worker in `workers`.
+
+  The target set is runtime-managed. Ordinary code passes the worker message
+  without a PID. This API is intended for Singleton GenServer pool
+  implementations, usually from `@call`, `@cast`, or helper functions inside
+  the `defgenserver` body.
+
+  ## Examples
+  defgenserver ImageWorkerPool {
+    meta {
+      instance: Singleton
+      init_policy: Eager
+    }
+
+    @call
+    def current_states(
+      workers: Workers<ImageWorker>
+    ) -> Result<(List<Result<ImageWorkerStateView>>, Workers<ImageWorker>)> {
+      views = Workers::broadcast(workers, ImageWorker::current_state())
+      Ok((views, workers))
+    }
+  }
+  """
   @builtin def broadcast(workers: Workers<$Worker>, message: (PID<$Worker> -> Result<$A>)) -> List<Result<$A>>
 
+  @doc """
+  Reserve one worker from `workers` and return a lease for later messaging.
+
+  Use this when work needs an explicit worker reservation before sending the
+  next message. This API is intended for Singleton GenServer pool
+  implementations, usually from `@call`, `@cast`, or helper functions inside
+  the `defgenserver` body.
+
+  ## Examples
+  defgenserver ImageWorkerPool {
+    meta {
+      instance: Singleton
+      init_policy: Eager
+    }
+
+    def assign_reserved(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Unit> {
+      lease =? Workers::reserve(workers)
+      ImageWorker::assign(lease, job)
+    }
+  }
+  """
   @builtin def reserve(workers: Workers<$Worker>) -> Result<WorkerLease<$Worker>>
 
+  @doc """
+  Return the number of workers managed by `workers`.
+
+  This API is intended for Singleton GenServer pool implementations, usually
+  from `@call`, `@cast`, or helper functions inside the `defgenserver` body.
+
+  ## Examples
+  defgenserver ImageWorkerPool {
+    meta {
+      instance: Singleton
+      init_policy: Eager
+    }
+
+    @call
+    def size(workers: Workers<ImageWorker>) -> Result<(Int, Workers<ImageWorker>)> {
+      Ok((Workers::size(workers), workers))
+    }
+  }
+  """
   @builtin def size(workers: Workers<$Worker>) -> Int
 }
 
-defmod GenServer {
-  @hidden
-  @builtin def pid(name: String, init: (-> Result<$State>)) -> PID<$Process>
-
-  @hidden
-  @builtin def spawn(name: String, init: (-> Result<$State>)) -> Result<PID<$Process>>
-
-  @hidden
-  @builtin def state(pid: PID<$Process>) -> Result<$State>
-
-  @hidden
-  @builtin def store(pid: PID<$Process>, state: $State) -> Result<Unit>
-
-  @hidden
-  @builtin def self() -> PID<$Process>
-
-  @hidden
-  @builtin def context_handler(process_name: String, slot: String) -> PID<$Handler>
-}
-
 defmod Supervisor {
-  @hidden
-  @builtin def spawn(supervisor: String, worker_init: (-> Result<$State>)) -> Result<PID<$Process>>
+  @doc """
+  Compiler-managed lower target for spawning a worker under a supervisor.
 
-  @hidden
-  @builtin def adopt(supervisor: String, pid: PID<$Process>) -> Result<Unit>
+  Ordinary code cannot call this function directly. Use `DynamicSupervisor` or
+  the generated owner helper from `defsupervisor` instead.
 
+  ## Regular Surface
+  xldr(1)> ImageWorkerSupervisor::spawn(ImageWorker::init("./input"))
+  Ok(<pid>)
+  """
   @hidden
-  @builtin def status(supervisor: String) -> Result<SupervisorStatus>
+  @builtin def spawn(supervisor: $Supervisor, worker_init: (-> Result<$State>)) -> Result<PID<$Process>>
 
+  @doc """
+  Compiler-managed lower target for adopting a worker PID under a supervisor.
+
+  Ordinary code cannot call this function directly. Use `DynamicSupervisor` or
+  the generated owner helper from `defsupervisor` instead.
+
+  ## Regular Surface
+  xldr(1)> ImageWorkerSupervisor::adopt(pid)
+  Ok(())
+  """
+  @hidden
+  @builtin def adopt(supervisor: $Supervisor, pid: PID<$Process>) -> Result<Unit>
+
+  @doc """
+  Compiler-managed lower target for reading supervisor status.
+
+  Ordinary code cannot call this function directly. Use `DynamicSupervisor` or
+  the generated owner helper from `defsupervisor` instead.
+
+  ## Regular Surface
+  xldr(1)> ImageWorkerSupervisor::status()
+  Ok(SupervisorStatus { ... })
+  """
+  @hidden
+  @builtin def status(supervisor: $Supervisor) -> Result<SupervisorStatus>
+
+  @doc """
+  Compiler-managed lower target for creating a runtime-managed worker set.
+
+  Ordinary code cannot call this function directly. Use the generated owner
+  helper from `defsupervisor`, then operate on the returned handle through
+  `Workers` inside a Singleton GenServer pool implementation.
+
+  ## Regular Surface
+  defgenserver ImageWorkerPool {
+    meta {
+      instance: Singleton
+      init_policy: Eager
+    }
+
+    @init
+    def init() -> Result<Workers<ImageWorker>> {
+      ImageWorkerSupervisor::workers(ImageWorker::init("./input"), 4)
+    }
+  }
+  """
   @hidden
   @builtin def workers(
-    supervisor: String,
+    supervisor: $Supervisor,
     worker_init: (-> Result<$State>),
     size: Int,
   ) -> Result<Workers<$Process>>
+}
+
+defmod GenServer {
+  @doc """
+  Compiler-managed lower target for GenServer singleton PID lookup.
+
+  Ordinary code cannot call this function directly. Use the generated owner
+  helper from `defgenserver` instead.
+
+  ## Regular Surface
+  xldr(1)> QueueServer::pid()
+  <pid>
+  """
+  @hidden
+  @builtin def pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>
+
+  @doc """
+  Compiler-managed lower target for GenServer worker spawn.
+
+  Ordinary code cannot call this function directly. Use the generated owner
+  helper from `defgenserver` instead.
+
+  ## Regular Surface
+  xldr(1)> QueueServer::spawn(0)
+  Ok(<pid>)
+  """
+  @hidden
+  @builtin def spawn(owner: $Owner, init: (-> Result<$State>)) -> Result<PID<$Process>>
+
+  @doc """
+  Compiler-managed lower target for reading GenServer state.
+
+  Ordinary code cannot call this function directly. Use generated `@call` /
+  `@cast` owner helpers from `defgenserver` instead.
+
+  ## Regular Surface
+  xldr(1)> QueueServer::size()
+  Ok(0)
+  """
+  @hidden
+  @builtin def state(pid: PID<$Process>) -> Result<$State>
+
+  @doc """
+  Compiler-managed lower target for storing GenServer state.
+
+  Ordinary code cannot call this function directly. Return the next state from
+  a generated `@call` or `@cast` handler instead.
+
+  ## Regular Surface
+  _ =? QueueServer::push("job")
+  """
+  @hidden
+  @builtin def store(pid: PID<$Process>, state: $State) -> Result<Unit>
+
+  @doc """
+  Compiler-managed lower target for reading the current GenServer PID.
+
+  Ordinary code cannot call this function directly. Use `Process::self()` from
+  inside process code instead.
+
+  ## Regular Surface
+  xldr(1)> Process::self()
+  <pid>
+  """
+  @hidden
+  @builtin def self() -> PID<$Process>
+
+  @doc """
+  Compiler-managed lower target for resolving a GenServer handler dependency.
+
+  Ordinary code cannot call this function directly. Use the generated process
+  context field from `defgenserver` instead.
+
+  ## Regular Surface
+  _ =? ctx.out.write("hello")
+  """
+  @hidden
+  @builtin def context_handler(owner: $Owner, slot: String) -> PID<$Handler>
+}
+
+@doc """
+Compiler-managed lower surface for Agent family lowering.
+
+Ordinary code should use generated owner helpers from `defagent`.
+"""
+defmod Agent {
+  @doc """
+  Compiler-managed lower target for Agent singleton PID lookup.
+
+  Ordinary code cannot call this function directly. Use the generated owner
+  helper from `defagent` instead.
+
+  ## Regular Surface
+  xldr(1)> Counter::pid()
+  <pid>
+  """
+  @hidden
+  @builtin def pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>
+
+  @doc """
+  Compiler-managed lower target for Agent worker spawn.
+
+  Ordinary code cannot call this function directly. Use the generated owner
+  helper from `defagent` instead.
+
+  ## Regular Surface
+  xldr(1)> Counter::spawn(0)
+  Ok(<pid>)
+  """
+  @hidden
+  @builtin def spawn(owner: $Owner, init: (-> Result<$State>)) -> Result<PID<$Process>>
+
+  @doc """
+  Compiler-managed lower target for reading Agent state.
+
+  Ordinary code cannot call this function directly. Use generated `@get` or
+  `@set` owner helpers from `defagent` instead.
+
+  ## Regular Surface
+  xldr(1)> Counter::get()
+  Ok(0)
+  """
+  @hidden
+  @builtin def state(pid: PID<$Process>) -> Result<$State>
+
+  @doc """
+  Compiler-managed lower target for storing Agent state.
+
+  Ordinary code cannot call this function directly. Return the next state from
+  a generated `@set` handler instead.
+
+  ## Regular Surface
+  _ =? Counter::set(1)
+  """
+  @hidden
+  @builtin def store(pid: PID<$Process>, state: $State) -> Result<Unit>
+
+  @doc """
+  Compiler-managed lower target for reading the current Agent PID.
+
+  Ordinary code cannot call this function directly. Use `Process::self()` from
+  inside process code instead.
+
+  ## Regular Surface
+  xldr(1)> Process::self()
+  <pid>
+  """
+  @hidden
+  @builtin def self() -> PID<$Process>
+
+  @doc """
+  Compiler-managed lower target for resolving an Agent handler dependency.
+
+  Ordinary code cannot call this function directly. Use the generated process
+  context field from `defagent` instead.
+
+  ## Regular Surface
+  _ =? ctx.out.write("hello")
+  """
+  @hidden
+  @builtin def context_handler(owner: $Owner, slot: String) -> PID<$Handler>
 }
 
 defmod Process {
@@ -91,24 +444,6 @@ defmod Process {
   """
   @builtin def self() -> PID<$Process>
 
-  @hidden
-  @builtin def __process_pid(name: String, init: (-> Result<$State>)) -> PID<$Process>
-
-  @hidden
-  @builtin def __process_spawn(name: String, init: (-> Result<$State>)) -> Result<PID<$Process>>
-
-  @hidden
-  @builtin def __process_state(pid: PID<$Process>) -> Result<$State>
-
-  @hidden
-  @builtin def __process_store(pid: PID<$Process>, state: $State) -> Result<Unit>
-
-  @hidden
-  @builtin def __process_self() -> PID<$Process>
-
-  @hidden
-  @builtin def __process_context_handler(process_name: String, slot: String) -> PID<$Handler>
-
   @doc """
   Sleep the current execution for the given duration.
 
@@ -117,9 +452,6 @@ defmod Process {
   Ok(())
   """
   @builtin def sleep(duration: Duration) -> Result<Unit>
-
-  @hidden
-  @builtin def __process_sleep(duration: Duration) -> Result<Unit>
 }
 
 defmod OutHandler {
@@ -128,6 +460,16 @@ defmod OutHandler {
   """
   @builtin def write(pid: PID<OutHandler>, text: String) -> Result<Unit>
 
+  @doc """
+  Compiler-managed lower target for writing through an output handler.
+
+  Ordinary code cannot call this function directly. Use the handler module or
+  generated process context field instead.
+
+  ## Regular Surface
+  _ =? OutHandler::write(pid, "hello")
+  _ =? ctx.out.write("hello")
+  """
   @hidden
   @builtin def __out_handler_write(pid: PID<OutHandler>, text: String) -> Result<Unit>
 }
@@ -186,16 +528,4 @@ defmod Task {
   Ok(())
   """
   @builtin def cast(body: (-> Unit)) -> Result<Unit>
-
-  @hidden
-  @builtin def __task_call_timeout(timeout: Duration, body: (-> Result<$A>)) -> Result<$A>
-
-  @hidden
-  @builtin def __task_async_timeout(timeout: Duration, body: (-> Result<$A>)) -> Result<$A>
-
-  @hidden
-  @builtin def __task_launch_timeout(timeout: Duration, body: (-> Result<Unit>)) -> Result<Unit>
-
-  @hidden
-  @builtin def __task_cast_timeout(timeout: Duration, body: (-> Unit)) -> Result<Unit>
 }

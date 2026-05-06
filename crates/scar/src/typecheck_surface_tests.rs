@@ -6,6 +6,104 @@ use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
 
 use crate::test_support::*;
 
+const PROCESS_MODULE_SOURCE: &str = include_str!("../../../lib/process.srt");
+
+#[test]
+fn process_stdlib_no_longer_declares_task_hidden_lower_helpers() {
+    for hidden_name in [
+        "__task_call",
+        "__task_async",
+        "__task_launch",
+        "__task_cast",
+        "__task_call_timeout",
+        "__task_async_timeout",
+        "__task_launch_timeout",
+        "__task_cast_timeout",
+        "__workers_submit",
+        "__workers_broadcast",
+        "__workers_reserve",
+        "__workers_size",
+    ] {
+        assert!(
+            !PROCESS_MODULE_SOURCE.contains(hidden_name),
+            "process stdlib should not declare {hidden_name}"
+        );
+    }
+}
+
+#[test]
+fn process_stdlib_declares_common_process_family_modules() {
+    for module_name in ["defmod Supervisor", "defmod GenServer", "defmod Agent"] {
+        assert!(
+            PROCESS_MODULE_SOURCE.contains(module_name),
+            "process stdlib should declare {module_name}"
+        );
+    }
+}
+
+#[test]
+fn process_module_only_declares_public_runtime_helpers() {
+    let process_start = PROCESS_MODULE_SOURCE
+        .find("defmod Process")
+        .expect("Process module should exist");
+    let out_handler_start = PROCESS_MODULE_SOURCE
+        .find("defmod OutHandler")
+        .expect("OutHandler module should follow Process");
+    let process_module = &PROCESS_MODULE_SOURCE[process_start..out_handler_start];
+
+    assert!(
+        !process_module.contains("@hidden"),
+        "Process module should contain only directly callable public helpers"
+    );
+    for internal_name in [
+        "__process_pid",
+        "__process_spawn",
+        "__process_state",
+        "__process_store",
+        "__process_self",
+        "__process_context_handler",
+        "__process_sleep",
+    ] {
+        assert!(
+            !process_module.contains(internal_name),
+            "Process module should not declare {internal_name}"
+        );
+    }
+}
+
+#[test]
+fn process_stdlib_declares_agent_lower_surface_with_regular_surface_docs() {
+    let agent_start = PROCESS_MODULE_SOURCE
+        .find("defmod Agent")
+        .expect("Agent module should exist");
+    let process_start = PROCESS_MODULE_SOURCE
+        .find("defmod Process")
+        .expect("Process module should follow Agent");
+    let agent_module = &PROCESS_MODULE_SOURCE[agent_start..process_start];
+
+    for surface in [
+        "def pid(",
+        "def spawn(",
+        "def state(",
+        "def store(",
+        "def self()",
+        "def context_handler(",
+    ] {
+        assert!(
+            agent_module.contains(surface),
+            "Agent module should declare hidden lower surface {surface}"
+        );
+    }
+    assert!(
+        agent_module.contains("Ordinary code cannot call this function directly."),
+        "Agent lower docs should tell users they cannot call hidden functions directly"
+    );
+    assert!(
+        agent_module.contains("## Regular Surface"),
+        "Agent lower docs should show the regular surface"
+    );
+}
+
 #[test]
 fn field_access_is_resolved_to_numeric_index() {
     let resolved = resolve_with_builtin_prelude(
@@ -3212,7 +3310,8 @@ fn process_self_is_rejected_outside_process_context() {
 
 #[test]
 fn process_self_typechecks_inside_process_handler() {
-    typecheck_module_source_result(
+    let mut stages = std_module_stages();
+    stages.push(vec![staged_process_module(
         r#"defagent Counter {
   meta {
     instance: Singleton
@@ -3230,13 +3329,24 @@ fn process_self_typechecks_inside_process_handler() {
   @set
   def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
 }"#,
+    )]);
+    let declaration_index =
+        sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
+    let resolved = sigil::resolve_staged_program_with_state(
+        &stages,
+        Vec::new(),
+        &declaration_index,
+        None,
     )
-    .expect("Process::self should typecheck inside process handler");
+    .expect("resolve should succeed");
+    crate::typecheck_staged_program(resolved)
+        .expect("Process::self should typecheck inside process handler");
 }
 
 #[test]
 fn genserver_additional_call_handler_typechecks_as_process_context() {
-    typecheck_module_source_result(
+    let mut stages = std_module_stages();
+    stages.push(vec![staged_process_module(
         r#"defgenserver Logger {
   meta {
     instance: Singleton
@@ -3261,8 +3371,28 @@ fn genserver_additional_call_handler_typechecks_as_process_context() {
     Ok(((), state))
   }
 }"#,
+    )]);
+    let declaration_index =
+        sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
+    let user_ast = spire::parse_with_context(
+        r#"supervisor_init {
+  Logger {}
+}
+
+info = Logger::info()
+done = Logger::log("hello")"#,
+        spire::ParserContext::project(0),
     )
-    .expect("additional @call handler should have process context access");
+    .expect("script should parse");
+    let resolved = sigil::resolve_staged_program_with_state(
+        &stages,
+        user_ast,
+        &declaration_index,
+        Some("__Script::fixture".to_string()),
+    )
+    .expect("resolve should succeed");
+    crate::typecheck_staged_program(resolved)
+        .expect("additional @call handler should have process context access");
 }
 
 #[test]
@@ -3325,8 +3455,13 @@ fn typecheck_staged_program_keeps_process_specs() {
 fn staged_process_module(source: &str) -> sigil::StagedModuleAst {
     let ast = spire::parse_with_context(source, spire::ParserContext::module(0, None))
         .expect("process source should parse");
-    match ast.into_iter().next().expect("lowered process should exist") {
+    match ast
+        .into_iter()
+        .next()
+        .expect("lowered process should exist")
+    {
         spire::ast::Ast::Defagent(_, module_path, ast, process_spec, attrs)
+        | spire::ast::Ast::Defgenserver(_, module_path, ast, process_spec, attrs)
         | spire::ast::Ast::Defsupervisor(_, module_path, ast, process_spec, attrs) => {
             sigil::StagedModuleAst {
                 module_path,
@@ -3341,7 +3476,9 @@ fn staged_process_module(source: &str) -> sigil::StagedModuleAst {
     }
 }
 
-fn typecheck_supervisor_spawn_fixture(script: &str) -> Result<TypedProgram, scar::error::TypeError> {
+fn typecheck_supervisor_spawn_fixture(
+    script: &str,
+) -> Result<TypedProgram, scar::error::TypeError> {
     let mut stages = std_module_stages();
     stages.push(vec![
         staged_process_module(
@@ -3411,7 +3548,7 @@ fn typecheck_supervisor_spawn_fixture(script: &str) -> Result<TypedProgram, scar
 fn dynsup_spawn_accepts_worker_init_route_reference() {
     let typed =
         typecheck_supervisor_spawn_fixture(r#"pid = DynamicSupervisor::spawn(MyWorker::init(1))"#)
-        .expect("DynSup spawn should typecheck");
+            .expect("DynSup spawn should typecheck");
     assert!(!typed.nodes.is_empty());
 }
 
@@ -3472,10 +3609,9 @@ fn supervisor_status_returns_supervisor_status() {
 
 #[test]
 fn supervisor_workers_returns_workers_handle() {
-    let typed = typecheck_supervisor_spawn_fixture(
-        r#"workers =? MySup::workers(MyWorker::init(1), 2)"#,
-    )
-    .expect("workers creation should typecheck");
+    let typed =
+        typecheck_supervisor_spawn_fixture(r#"workers =? MySup::workers(MyWorker::init(1), 2)"#)
+            .expect("workers creation should typecheck");
     assert!(!typed.nodes.is_empty());
 }
 

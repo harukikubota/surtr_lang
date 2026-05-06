@@ -428,12 +428,12 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "__process_pid",
         arity: 2,
-        sig_str: "(String, (-> Result<$State>)) -> PID<$Process>",
+        sig_str: "($Owner, (-> Result<$State>)) -> PID<$Process>",
     },
     BuiltinMeta {
         name: "__process_spawn",
         arity: 2,
-        sig_str: "(String, (-> Result<$State>)) -> Result<PID<$Process>>",
+        sig_str: "($Owner, (-> Result<$State>)) -> Result<PID<$Process>>",
     },
     BuiltinMeta {
         name: "__dynamic_supervisor_spawn",
@@ -453,22 +453,22 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "__supervisor_spawn",
         arity: 2,
-        sig_str: "(String, (-> Result<$State>)) -> Result<PID<$Process>>",
+        sig_str: "($Supervisor, (-> Result<$State>)) -> Result<PID<$Process>>",
     },
     BuiltinMeta {
         name: "__supervisor_adopt",
         arity: 2,
-        sig_str: "(String, PID<$Process>) -> Result<Unit>",
+        sig_str: "($Supervisor, PID<$Process>) -> Result<Unit>",
     },
     BuiltinMeta {
         name: "__supervisor_status",
         arity: 1,
-        sig_str: "(String) -> Result<SupervisorStatus>",
+        sig_str: "($Supervisor) -> Result<SupervisorStatus>",
     },
     BuiltinMeta {
         name: "__supervisor_workers",
         arity: 3,
-        sig_str: "(String, (-> Result<$State>), Int) -> Result<Workers<$Process>>",
+        sig_str: "($Supervisor, (-> Result<$State>), Int) -> Result<Workers<$Process>>",
     },
     BuiltinMeta {
         name: "__process_state",
@@ -488,7 +488,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "__process_context_handler",
         arity: 2,
-        sig_str: "(String, String) -> PID<$Handler>",
+        sig_str: "($Owner, String) -> PID<$Handler>",
     },
     BuiltinMeta {
         name: "__out_handler_write",
@@ -805,6 +805,12 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
         Some("IO::get_line") => "io_get_line",
         Some("Process::self") => "__process_self",
         Some("Process::sleep") => "__process_sleep",
+        Some("Agent::pid") => "__process_pid",
+        Some("Agent::spawn") => "__process_spawn",
+        Some("Agent::state") => "__process_state",
+        Some("Agent::store") => "__process_store",
+        Some("Agent::self") => "__process_self",
+        Some("Agent::context_handler") => "__process_context_handler",
         Some("GenServer::pid") => "__process_pid",
         Some("GenServer::spawn") => "__process_spawn",
         Some("GenServer::state") => "__process_state",
@@ -884,28 +890,25 @@ mod tests {
 
     #[test]
     fn supervisor_spawn_hidden_builtin_signature_matches_surface() {
-        let meta = builtin_meta_by_name("__supervisor_spawn")
-            .expect("supervisor spawn builtin");
+        let meta = builtin_meta_by_name("__supervisor_spawn").expect("supervisor spawn builtin");
         assert_eq!(meta.arity, 2);
         assert_eq!(
             meta.sig_str,
-            "(String, (-> Result<$State>)) -> Result<PID<$Process>>"
+            "($Supervisor, (-> Result<$State>)) -> Result<PID<$Process>>"
         );
     }
 
     #[test]
     fn supervisor_adopt_hidden_builtin_signature_matches_surface() {
-        let meta = builtin_meta_by_name("__supervisor_adopt")
-            .expect("supervisor adopt builtin");
+        let meta = builtin_meta_by_name("__supervisor_adopt").expect("supervisor adopt builtin");
         assert_eq!(meta.arity, 2);
-        assert_eq!(meta.sig_str, "(String, PID<$Process>) -> Result<Unit>");
+        assert_eq!(meta.sig_str, "($Supervisor, PID<$Process>) -> Result<Unit>");
     }
 
     #[test]
     fn supervisor_status_hidden_builtin_signature_matches_surface() {
-        let meta = builtin_meta_by_name("__supervisor_status")
-            .expect("supervisor status builtin");
+        let meta = builtin_meta_by_name("__supervisor_status").expect("supervisor status builtin");
         assert_eq!(meta.arity, 1);
-        assert_eq!(meta.sig_str, "(String) -> Result<SupervisorStatus>");
+        assert_eq!(meta.sig_str, "($Supervisor) -> Result<SupervisorStatus>");
     }
 }

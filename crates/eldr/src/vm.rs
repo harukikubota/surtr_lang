@@ -1224,7 +1224,10 @@ impl VM {
             self.process_runtime
                 .root_supervisor
                 .effective_supervisors
-                .insert(override_entry.process_name.clone(), override_entry.policy.clone());
+                .insert(
+                    override_entry.process_name.clone(),
+                    override_entry.policy.clone(),
+                );
         }
         let limits = self.bytecode.runtime_boot_plan.runtime_limits.clone();
         let boot_specs = if self.bytecode.runtime_boot_plan.has_explicit_entries() {
@@ -1706,9 +1709,10 @@ impl VM {
         size: i64,
     ) -> Result<Value, RuntimeError> {
         if size < 0 {
-            return Ok(err_vm_result(
-                self.process_error("InvalidWorkerCount", "worker count must be non-negative"),
-            ));
+            return Ok(err_vm_result(self.process_error(
+                "InvalidWorkerCount",
+                "worker count must be non-negative",
+            )));
         }
         let mut members = Vec::new();
         for _ in 0..size {
@@ -1874,7 +1878,10 @@ impl VM {
         Ok(Value::List(ListHandle::from_items(results)))
     }
 
-    pub(crate) fn workers_reserve(&mut self, handle: &WorkersHandle) -> Result<Value, RuntimeError> {
+    pub(crate) fn workers_reserve(
+        &mut self,
+        handle: &WorkersHandle,
+    ) -> Result<Value, RuntimeError> {
         let pid = self.next_workers_pid(handle)?;
         Ok(ok_vm_result(Value::WorkerLease(WorkerLeaseHandle {
             workers_id: handle.id,
@@ -1968,8 +1975,14 @@ impl VM {
         Ok(pid)
     }
 
-    pub(crate) fn infer_worker_process_name_from_callable(&self, callable: &Callable) -> Option<String> {
-        match (callable.metadata.module.as_deref(), callable.metadata.name.as_deref()) {
+    pub(crate) fn infer_worker_process_name_from_callable(
+        &self,
+        callable: &Callable,
+    ) -> Option<String> {
+        match (
+            callable.metadata.module.as_deref(),
+            callable.metadata.name.as_deref(),
+        ) {
             (Some(module), Some("init" | "__agent_init")) => Some(module.to_string()),
             _ => callable.lexical_captures.iter().find_map(|value| {
                 let Value::Callable(callable) = value else {
@@ -4419,7 +4432,9 @@ fn split_qualified_name_owned(qualified_name: &str) -> (Option<String>, Option<S
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_vm_result, ProcessWaitReason, StepOutcome, TaskMode, VmObservationOptions, VM};
+    use super::{
+        decode_vm_result, ProcessWaitReason, StepOutcome, TaskMode, VmObservationOptions, VM,
+    };
     use sindr::ir::{
         BootEntrySource, Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode,
         OpcodeSource, RuntimeBootPlan, RuntimeCallableRef, RuntimeHandlerKind, RuntimeHandlerSpec,
@@ -4712,17 +4727,20 @@ mod tests {
                 ),
             ],
         };
-        bytecode.runtime_boot_plan.supervisor_overrides.push(RuntimeSupervisorOverrideEntry {
-            process_name: "MySup".into(),
-            policy: RuntimeSupervisorPolicy {
-                strategy: "OneForOne".into(),
-                max_restarts: 5,
-                max_seconds: 10,
-                child_restart_default: "Transient".into(),
-                allow_adopt: true,
-                shutdown_timeout_ms: None,
-            },
-        });
+        bytecode
+            .runtime_boot_plan
+            .supervisor_overrides
+            .push(RuntimeSupervisorOverrideEntry {
+                process_name: "MySup".into(),
+                policy: RuntimeSupervisorPolicy {
+                    strategy: "OneForOne".into(),
+                    max_restarts: 5,
+                    max_seconds: 10,
+                    child_restart_default: "Transient".into(),
+                    allow_adopt: true,
+                    shutdown_timeout_ms: None,
+                },
+            });
         let mut vm = VM::new(bytecode);
         let pid = vm
             .allocate_process_state("Worker".into(), Some(Value::Int(int(7))))
@@ -4736,8 +4754,15 @@ mod tests {
                 },
             )
             .expect("adopt should succeed");
-        assert!(matches!(decode_vm_result(value, "test", "adopt"), Ok(Ok(Value::Unit))));
-        let instance = vm.process_runtime.processes.get(&pid).expect("worker instance");
+        assert!(matches!(
+            decode_vm_result(value, "test", "adopt"),
+            Ok(Ok(Value::Unit))
+        ));
+        let instance = vm
+            .process_runtime
+            .processes
+            .get(&pid)
+            .expect("worker instance");
         assert_eq!(
             instance.lifecycle_sink,
             Some(super::LifecycleSink::Supervisor("MySup".into()))

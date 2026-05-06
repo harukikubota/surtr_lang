@@ -857,10 +857,7 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
             .expect("Counter runtime process spec");
         assert_eq!(spec.type_name, "Counter");
         assert_eq!(spec.state.state_type.name, "Int");
-        assert_eq!(
-            spec.init.policy,
-            sindr::ir::RuntimeInitPolicy::Eager
-        );
+        assert_eq!(spec.init.policy, sindr::ir::RuntimeInitPolicy::Eager);
         assert_eq!(spec.handlers.len(), 3);
         assert_eq!(spec.dependencies.handlers.len(), 1);
         assert_eq!(spec.dependencies.handlers[0].slot, "out");
@@ -989,23 +986,14 @@ supervisor_init {
         assert_eq!(spec.handlers.len(), 3);
         assert_eq!(spec.handlers[0].handler_id, 0);
         assert_eq!(spec.handlers[0].name, "init");
-        assert_eq!(
-            spec.handlers[0].kind,
-            sindr::ir::RuntimeHandlerKind::Init
-        );
+        assert_eq!(spec.handlers[0].kind, sindr::ir::RuntimeHandlerKind::Init);
         assert_eq!(spec.handlers[0].fun_idx, spec.init.callable.fun_idx);
         assert_eq!(spec.handlers[1].handler_id, 1);
         assert_eq!(spec.handlers[1].name, "info");
-        assert_eq!(
-            spec.handlers[1].kind,
-            sindr::ir::RuntimeHandlerKind::Call
-        );
+        assert_eq!(spec.handlers[1].kind, sindr::ir::RuntimeHandlerKind::Call);
         assert_eq!(spec.handlers[2].handler_id, 2);
         assert_eq!(spec.handlers[2].name, "reset");
-        assert_eq!(
-            spec.handlers[2].kind,
-            sindr::ir::RuntimeHandlerKind::Cast
-        );
+        assert_eq!(spec.handlers[2].kind, sindr::ir::RuntimeHandlerKind::Cast);
     }
 
     #[test]
@@ -1039,16 +1027,16 @@ supervisor_init {
             .expect("LazyCache runtime process spec");
         assert_eq!(spec.type_name, "LazyCache");
         assert_eq!(spec.state.state_type.name, "Int");
-        assert_eq!(
-            spec.init.policy,
-            sindr::ir::RuntimeInitPolicy::Lazy
-        );
+        assert_eq!(spec.init.policy, sindr::ir::RuntimeInitPolicy::Lazy);
         assert!(matches!(
             spec.init.result_shape,
             sindr::ir::RuntimeInitResultShape::LazyProcessInit { .. }
         ));
         assert_eq!(spec.dependencies.handlers.len(), 0);
         assert!(spec.lifecycle.owner.is_none());
-        assert_eq!(spec.supervision.parent.as_deref(), Some("RuntimeSupervisor"));
+        assert_eq!(
+            spec.supervision.parent.as_deref(),
+            Some("RuntimeSupervisor")
+        );
     }
 }

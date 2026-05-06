@@ -136,12 +136,17 @@ fn test_precollect_builtin_decl_in_module() {
 #[test]
 fn test_resolve_staged_program_keeps_process_specs() {
     let kernel = staged_module(
-        "Kernel",
+        "Agent",
         parse_module_ast(
-            r#"@builtin def __process_pid(name: String, init: (-> Result<$State>)) -> PID<$Process>
-@builtin def __process_state(pid: PID<$Process>) -> Result<$State>
-@builtin def __process_store(pid: PID<$Process>, state: $State) -> Result<Unit>"#,
-            "Kernel",
+            r#"@hidden
+@builtin def pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>
+
+@hidden
+@builtin def state(pid: PID<$Process>) -> Result<$State>
+
+@hidden
+@builtin def store(pid: PID<$Process>, state: $State) -> Result<Unit>"#,
+            "Agent",
         ),
     );
     let ast = spire::parse_with_context(

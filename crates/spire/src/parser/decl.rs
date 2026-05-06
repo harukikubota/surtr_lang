@@ -387,18 +387,18 @@ fn path_call(span: &Span, segments: &[&str], args: Vec<Ast>) -> Ast {
     )
 }
 
-fn constructor_call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
-    Ast::ConstructorCall(
+fn internal_qualified_call(span: &Span, segments: &[&str], args: Vec<Ast>) -> Ast {
+    Ast::App(
         span.clone(),
-        name.to_string(),
+        Box::new(internal_var(span, &segments.join("::"))),
         args.into_iter().map(positional).collect(),
     )
 }
 
-fn internal_call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
-    Ast::App(
+fn constructor_call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
+    Ast::ConstructorCall(
         span.clone(),
-        Box::new(internal_var(span, name)),
+        name.to_string(),
         args.into_iter().map(positional).collect(),
     )
 }
@@ -471,40 +471,41 @@ fn param_vars(span: &Span, params: &[FunParam]) -> Vec<Ast> {
         .collect()
 }
 
-fn pid_bind(span: &Span, agent_name: &str) -> Ast {
+fn pid_bind(span: &Span, lower_module: &str, process_name: &str) -> Ast {
     Ast::Bind(
         span.clone(),
         AstPattern::Var(span.clone(), "pid".to_string()),
-        Box::new(process_pid_call(span, agent_name)),
+        Box::new(process_pid_call(span, lower_module, process_name)),
     )
 }
 
-fn process_pid_call(span: &Span, agent_name: &str) -> Ast {
-    internal_call(
+fn process_pid_call(span: &Span, lower_module: &str, process_name: &str) -> Ast {
+    internal_qualified_call(
         span,
-        "__process_pid",
+        &[lower_module, "pid"],
         vec![
-            string_lit(span, agent_name),
+            string_lit(span, process_name),
             capture_ref(span, "__agent_init"),
         ],
     )
 }
 
-fn process_state_bind(span: &Span) -> Ast {
+fn process_state_bind(span: &Span, lower_module: &str) -> Ast {
     Ast::SafeBind(
         span.clone(),
         AstPattern::Var(span.clone(), "state".to_string()),
-        Box::new(internal_call(
+        Box::new(internal_qualified_call(
             span,
-            "__process_state",
+            &[lower_module, "state"],
             vec![var(span, "pid")],
         )),
     )
 }
 
 fn init_wrapper_ret_ty(span: &Span, init_def: &Ast) -> Result<Option<AstTy>, ParseError> {
-    let ret_ty = def_ret_ty(init_def)?
-        .ok_or_else(|| ParseError::syntax("worker init wrapper requires return type", span.clone()))?;
+    let ret_ty = def_ret_ty(init_def)?.ok_or_else(|| {
+        ParseError::syntax("worker init wrapper requires return type", span.clone())
+    })?;
     Ok(Some(AstTy::Func(
         span.clone(),
         Vec::new(),
@@ -514,11 +515,14 @@ fn init_wrapper_ret_ty(span: &Span, init_def: &Ast) -> Result<Option<AstTy>, Par
 
 fn build_init_wrapper(span: &Span, init_def: &Ast) -> Result<Ast, ParseError> {
     let params = def_params(init_def)?.clone();
-    let body = Ast::Block(span.clone(), vec![Ast::Closure(
+    let body = Ast::Block(
         span.clone(),
-        Vec::new(),
-        Box::new(call(span, "__agent_init", param_vars(span, &params))),
-    )]);
+        vec![Ast::Closure(
+            span.clone(),
+            Vec::new(),
+            Box::new(call(span, "__agent_init", param_vars(span, &params))),
+        )],
+    );
     Ok(Ast::Def(
         span.clone(),
         "init".to_string(),
@@ -543,8 +547,8 @@ fn build_readonly_get_wrapper(
     let body = Ast::Block(
         span.clone(),
         vec![
-            pid_bind(span, agent_name),
-            process_state_bind(span),
+            pid_bind(span, "Agent", agent_name),
+            process_state_bind(span, "Agent"),
             call(span, "__agent_get", call_args),
         ],
     );
@@ -576,7 +580,7 @@ fn build_pid_wrapper(span: &Span, agent_name: &str) -> Ast {
         Some(pid_ty(span, agent_name)),
         Box::new(Ast::Block(
             span.clone(),
-            vec![process_pid_call(span, agent_name)],
+            vec![process_pid_call(span, "Agent", agent_name)],
         )),
         DeclAttrs::default(),
     )
@@ -624,9 +628,9 @@ fn build_supervisor_spawn_wrapper(span: &Span, supervisor_name: &str) -> Ast {
         Some(result_pid_ty(span, "$Process")),
         Box::new(Ast::Block(
             span.clone(),
-            vec![internal_call(
+            vec![internal_qualified_call(
                 span,
-                "__supervisor_spawn",
+                &["Supervisor", "spawn"],
                 vec![string_lit(span, supervisor_name), var(span, "worker_init")],
             )],
         )),
@@ -647,9 +651,9 @@ fn build_supervisor_adopt_wrapper(span: &Span, supervisor_name: &str) -> Ast {
         Some(result_unit_ty(span)),
         Box::new(Ast::Block(
             span.clone(),
-            vec![internal_call(
+            vec![internal_qualified_call(
                 span,
-                "__supervisor_adopt",
+                &["Supervisor", "adopt"],
                 vec![string_lit(span, supervisor_name), var(span, "pid")],
             )],
         )),
@@ -666,9 +670,9 @@ fn build_supervisor_status_wrapper(span: &Span, supervisor_name: &str) -> Ast {
         Some(result_named_ty(span, "SupervisorStatus")),
         Box::new(Ast::Block(
             span.clone(),
-            vec![internal_call(
+            vec![internal_qualified_call(
                 span,
-                "__supervisor_status",
+                &["Supervisor", "status"],
                 vec![string_lit(span, supervisor_name)],
             )],
         )),
@@ -712,9 +716,9 @@ fn build_supervisor_workers_wrapper(span: &Span, supervisor_name: &str) -> Ast {
         )),
         Box::new(Ast::Block(
             span.clone(),
-            vec![internal_call(
+            vec![internal_qualified_call(
                 span,
-                "__supervisor_workers",
+                &["Supervisor", "workers"],
                 vec![
                     string_lit(span, supervisor_name),
                     var(span, "worker_init"),
@@ -793,9 +797,9 @@ fn build_state_get_wrapper(
     call_args.extend(param_vars(span, forwarded_params));
     let mut stmts = Vec::new();
     if singleton {
-        stmts.push(pid_bind(span, agent_name));
+        stmts.push(pid_bind(span, "Agent", agent_name));
     }
-    stmts.push(process_state_bind(span));
+    stmts.push(process_state_bind(span, "Agent"));
     stmts.push(call(span, "__agent_get", call_args));
     let body = Ast::Block(span.clone(), stmts);
     Ok(Ast::Def(
@@ -833,17 +837,17 @@ fn build_state_set_wrapper(
     call_args.extend(param_vars(span, forwarded_params));
     let mut stmts = Vec::new();
     if singleton {
-        stmts.push(pid_bind(span, agent_name));
+        stmts.push(pid_bind(span, "Agent", agent_name));
     }
-    stmts.push(process_state_bind(span));
+    stmts.push(process_state_bind(span, "Agent"));
     stmts.push(Ast::SafeBind(
         span.clone(),
         AstPattern::Var(span.clone(), "next_state".to_string()),
         Box::new(call(span, "__agent_set", call_args)),
     ));
-    stmts.push(internal_call(
+    stmts.push(internal_qualified_call(
         span,
-        "__process_store",
+        &["Agent", "store"],
         vec![var(span, "pid"), var(span, "next_state")],
     ));
     let body = Ast::Block(span.clone(), stmts);
@@ -901,8 +905,8 @@ fn build_genserver_call_wrapper(
     let body = Ast::Block(
         span.clone(),
         vec![
-            pid_bind(span, process_name),
-            process_state_bind(span),
+            pid_bind(span, "GenServer", process_name),
+            process_state_bind(span, "GenServer"),
             Ast::SafeBind(
                 span.clone(),
                 AstPattern::Var(span.clone(), "reply_state".to_string()),
@@ -911,9 +915,9 @@ fn build_genserver_call_wrapper(
             Ast::SafeBind(
                 span.clone(),
                 AstPattern::Wildcard(span.clone()),
-                Box::new(internal_call(
+                Box::new(internal_qualified_call(
                     span,
-                    "__process_store",
+                    &["GenServer", "store"],
                     vec![var(span, "pid"), genserver_pair_field(span, "_1")],
                 )),
             ),
@@ -945,16 +949,16 @@ fn build_genserver_cast_wrapper(
     let body = Ast::Block(
         span.clone(),
         vec![
-            pid_bind(span, process_name),
-            process_state_bind(span),
+            pid_bind(span, "GenServer", process_name),
+            process_state_bind(span, "GenServer"),
             Ast::SafeBind(
                 span.clone(),
                 AstPattern::Var(span.clone(), "next_state".to_string()),
                 Box::new(call(span, internal_handler_name, call_args)),
             ),
-            internal_call(
+            internal_qualified_call(
                 span,
-                "__process_store",
+                &["GenServer", "store"],
                 vec![var(span, "pid"), var(span, "next_state")],
             ),
         ],
@@ -2945,7 +2949,10 @@ impl Parser<'_> {
             match key.as_str() {
                 "strategy" => {
                     if overrides.strategy.is_some() {
-                        return Err(ParseError::syntax("strategy override is duplicated", key_span));
+                        return Err(ParseError::syntax(
+                            "strategy override is duplicated",
+                            key_span,
+                        ));
                     }
                     overrides.strategy = Some(self.parse_supervisor_strategy()?);
                 }
@@ -2974,8 +2981,7 @@ impl Parser<'_> {
                             key_span,
                         ));
                     }
-                    overrides.child_restart_default =
-                        Some(self.parse_child_restart_policy()?);
+                    overrides.child_restart_default = Some(self.parse_child_restart_policy()?);
                 }
                 "allow_adopt" => {
                     if overrides.allow_adopt.is_some() {
@@ -3097,9 +3103,9 @@ impl Parser<'_> {
             .map_err(|_| ParseError::syntax("duration literal is too large", span.clone()))?;
         match suffix.as_str() {
             "ms" => Ok(value),
-            "s" => value.checked_mul(1_000).ok_or_else(|| {
-                ParseError::syntax("duration literal is too large", suffix_span)
-            }),
+            "s" => value
+                .checked_mul(1_000)
+                .ok_or_else(|| ParseError::syntax("duration literal is too large", suffix_span)),
             _ => Err(ParseError::syntax(
                 format!("{field_name} must use `ms` or `s`"),
                 suffix_span,
@@ -3317,7 +3323,10 @@ impl Parser<'_> {
         body.push(build_supervisor_adopt_wrapper(&span, &name));
         body.push(build_supervisor_status_wrapper(&span, &name));
         body.push(build_supervisor_workers_wrapper(&span, &name));
-        let span = Span { start, end: end.end };
+        let span = Span {
+            start,
+            end: end.end,
+        };
         if dynamic && name != "DynamicSupervisor" {
             Ok(Ast::DefdynamicSupervisor(
                 span,

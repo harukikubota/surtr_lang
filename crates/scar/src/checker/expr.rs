@@ -3952,7 +3952,10 @@ impl Checker {
         let Some(supervisor_process) = self.supervisor_spawn_target(func) else {
             return Ok(None);
         };
-        if args.iter().any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _))) {
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
             return Err(TypeError {
                 message: format!("{supervisor_process}::spawn does not accept named arguments"),
                 span: span.clone(),
@@ -4017,7 +4020,10 @@ impl Checker {
         let Some(supervisor_process) = self.supervisor_intrinsic_target(func, "adopt") else {
             return Ok(None);
         };
-        if args.iter().any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _))) {
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
             return Err(TypeError {
                 message: format!("{supervisor_process}::adopt does not accept named arguments"),
                 span: span.clone(),
@@ -4072,7 +4078,9 @@ impl Checker {
                     supervisor_process
                 ),
                 span: span.clone(),
-                hint: Some("Enable `allow_adopt: True` in the supervisor definition or override.".into()),
+                hint: Some(
+                    "Enable `allow_adopt: True` in the supervisor definition or override.".into(),
+                ),
             });
         }
 
@@ -4096,7 +4104,10 @@ impl Checker {
         let Some(supervisor_process) = self.supervisor_intrinsic_target(func, "status") else {
             return Ok(None);
         };
-        if args.iter().any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _))) {
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
             return Err(TypeError {
                 message: format!("{supervisor_process}::status does not accept named arguments"),
                 span: span.clone(),
@@ -4139,7 +4150,10 @@ impl Checker {
         let Some(supervisor_process) = self.supervisor_intrinsic_target(func, "workers") else {
             return Ok(None);
         };
-        if args.iter().any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _))) {
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
             return Err(TypeError {
                 message: format!("{supervisor_process}::workers does not accept named arguments"),
                 span: span.clone(),
@@ -4216,7 +4230,10 @@ impl Checker {
         func: &Resolved,
         args: &[ResolvedRecordLitArg],
     ) -> Result<Option<TypedNode>, TypeError> {
-        if args.iter().any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _))) {
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
             return Ok(None);
         }
         let Resolved::Var(_, id) = func else {
@@ -4226,10 +4243,15 @@ impl Checker {
         let Some((process_name, _method_name)) = qualified.rsplit_once("::") else {
             return Ok(None);
         };
-        let Some(process_name) = self.process_specs.iter().find(|spec| {
-            spec.process_name == process_name
-                && spec.spec.instance == spire::ast::ProcessInstance::Worker
-        }).map(|spec| spec.process_name.clone()) else {
+        let Some(process_name) = self
+            .process_specs
+            .iter()
+            .find(|spec| {
+                spec.process_name == process_name
+                    && spec.spec.instance == spire::ast::ProcessInstance::Worker
+            })
+            .map(|spec| spec.process_name.clone())
+        else {
             return Ok(None);
         };
         let typed_func = self.check_node(func)?;
@@ -4255,7 +4277,9 @@ impl Checker {
             .iter()
             .zip(remaining_params.iter())
             .map(|(arg, expected)| match arg {
-                ResolvedRecordLitArg::Positional(expr) => self.check_node_with_expected(expr, Some(expected)),
+                ResolvedRecordLitArg::Positional(expr) => {
+                    self.check_node_with_expected(expr, Some(expected))
+                }
                 ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
             })
             .collect::<Result<Vec<_>, _>>()?;
