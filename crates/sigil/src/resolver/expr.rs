@@ -1244,6 +1244,9 @@ impl Resolver {
             "__process_pid" | "__process_spawn" | "__process_state" | "__process_store" => {
                 "This helper is compiler-managed; use `defagent` / the public process surface instead."
             }
+            "__dynamic_supervisor_spawn" => {
+                "Use `DynamicSupervisor::spawn(...)` or a generated Worker `spawn` wrapper instead."
+            }
             _ => "Use the public standard-library surface instead.",
         };
         format!("hidden builtin `{builtin_name}` is compiler-internal. {guidance}")

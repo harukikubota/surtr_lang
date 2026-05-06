@@ -364,6 +364,23 @@ fn call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
     )
 }
 
+fn path_call(span: &Span, segments: &[&str], args: Vec<Ast>) -> Ast {
+    Ast::App(
+        span.clone(),
+        Box::new(Ast::Path(
+            span.clone(),
+            AstPath {
+                span: span.clone(),
+                segments: segments
+                    .iter()
+                    .map(|segment| (*segment).to_string())
+                    .collect(),
+            },
+        )),
+        args.into_iter().map(positional).collect(),
+    )
+}
+
 fn constructor_call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
     Ast::ConstructorCall(
         span.clone(),
@@ -535,9 +552,9 @@ fn build_spawn_wrapper(span: &Span, agent_name: &str, init_def: &Ast) -> Result<
     let params = def_params(init_def)?.clone();
     let body = Ast::Block(
         span.clone(),
-        vec![internal_call(
+        vec![path_call(
             span,
-            "__process_spawn",
+            &["DynamicSupervisor", "spawn"],
             vec![string_lit(span, agent_name), init_closure(span, &params)],
         )],
     );
@@ -3349,40 +3366,41 @@ impl Parser<'_> {
             )?);
         }
 
-        let process_spec = ProcessSpec {
-            process_name: name.clone(),
-            kind: ProcessKind::GenServer,
-            instance: process_meta.instance.into_process_instance(),
-            boot: false,
-            registry: process_meta.instance == AgentInstance::Singleton,
-            lazy: process_meta.init_policy == InitPolicy::Lazy,
-            handlers: process_meta.handlers,
-            handler_specs: {
-                let mut specs = vec![ProcessRuntimeHandlerSpec {
-                    name: init_name.clone(),
-                    internal_name: "__agent_init".to_string(),
-                    kind: ProcessRuntimeHandlerKind::Init,
-                    span: init_def.span().clone(),
-                }];
-                specs.extend(lowered_calls.iter().map(|(call_name, internal_name, call_def)| {
-                    ProcessRuntimeHandlerSpec {
-                        name: call_name.clone(),
-                        internal_name: internal_name.clone(),
-                        kind: ProcessRuntimeHandlerKind::Call,
-                        span: call_def.span().clone(),
-                    }
-                }));
-                specs.extend(lowered_casts.iter().map(|(cast_name, internal_name, cast_def)| {
-                    ProcessRuntimeHandlerSpec {
-                        name: cast_name.clone(),
-                        internal_name: internal_name.clone(),
-                        kind: ProcessRuntimeHandlerKind::Cast,
-                        span: cast_def.span().clone(),
-                    }
-                }));
-                specs
-            },
-        };
+        let process_spec =
+            ProcessSpec {
+                process_name: name.clone(),
+                kind: ProcessKind::GenServer,
+                instance: process_meta.instance.into_process_instance(),
+                boot: false,
+                registry: process_meta.instance == AgentInstance::Singleton,
+                lazy: process_meta.init_policy == InitPolicy::Lazy,
+                handlers: process_meta.handlers,
+                handler_specs: {
+                    let mut specs = vec![ProcessRuntimeHandlerSpec {
+                        name: init_name.clone(),
+                        internal_name: "__agent_init".to_string(),
+                        kind: ProcessRuntimeHandlerKind::Init,
+                        span: init_def.span().clone(),
+                    }];
+                    specs.extend(lowered_calls.iter().map(
+                        |(call_name, internal_name, call_def)| ProcessRuntimeHandlerSpec {
+                            name: call_name.clone(),
+                            internal_name: internal_name.clone(),
+                            kind: ProcessRuntimeHandlerKind::Call,
+                            span: call_def.span().clone(),
+                        },
+                    ));
+                    specs.extend(lowered_casts.iter().map(
+                        |(cast_name, internal_name, cast_def)| ProcessRuntimeHandlerSpec {
+                            name: cast_name.clone(),
+                            internal_name: internal_name.clone(),
+                            kind: ProcessRuntimeHandlerKind::Cast,
+                            span: cast_def.span().clone(),
+                        },
+                    ));
+                    specs
+                },
+            };
         Ok(Ast::Defgenserver(span, name, body, process_spec, attrs))
     }
 

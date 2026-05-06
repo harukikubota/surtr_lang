@@ -432,6 +432,16 @@ DynamicSupervisor は singleton process として扱い、user-facing API に `s
 pid = DynamicSupervisor::spawn(MyWorker::init_route(args))
 ```
 
+現行の staged 実装では、init route が first-class surface value になる前段として、
+generated Worker wrapper が次の public façade を呼ぶ。
+
+```surtr
+DynamicSupervisor::spawn(name: String, init: (-> Result<State>)) -> Result<PID<Worker>>
+```
+
+この façade は `Process::spawn` を公開しないための移行 API であり、手書き user code では
+Worker 固有の `Worker::spawn(args)` を優先する。
+
 `adopt / handoff` は runtime が原子的に処理する。PID は維持する。
 
 ### 3.12 Worker lifecycle
@@ -445,6 +455,12 @@ Worker は `spawn` で生成し、`PID<Proc>` を通して扱う。
 | singleton explicit exit | なし |
 | worker exit | lifecycle sink に配送 |
 | generic receive | 導入しない |
+
+`Process::link` / `Process::monitor` / `Process::join` は v2 初期 surface には出さない。
+link は `owner` / `lifecycle_sink` / supervisor tree / restart policy の runtime 内部関係として扱う。
+monitor は generic receive を公開しない方針と相性が悪いため、必要になった場合は
+typed `on_down` など用途別 API として検討する。join は Task では `Task::call` / `Task::async`
+と `@timeout` に寄せ、Worker 終了待ちは後続の Worker 専用 API として検討する。
 
 Exit reason 候補:
 

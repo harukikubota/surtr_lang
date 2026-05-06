@@ -60,6 +60,19 @@ test helpers remain a later surface extension.
 """
 defmod InHandler {}
 
+defmod DynamicSupervisor {
+  @doc """
+  Spawn a worker process through the runtime-managed dynamic supervisor.
+
+  This is the staged public façade used by generated worker `spawn` wrappers
+  until init routes become a first-class surface value.
+  """
+  @builtin def spawn(name: String, init: (-> Result<$State>)) -> Result<PID<$Process>>
+
+  @hidden
+  @builtin def __dynamic_supervisor_spawn(name: String, init: (-> Result<$State>)) -> Result<PID<$Process>>
+}
+
 defmod Task {
   @doc """
   Run a zero-argument task body and return its Result.
