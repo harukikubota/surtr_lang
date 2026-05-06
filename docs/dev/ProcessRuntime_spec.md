@@ -456,6 +456,12 @@ Handler 契約:
 | `@call` | `(State, Input...) -> Result<(Reply, State)>` | `Type::name(...Input) -> Result<Reply>` |
 | `@cast` | `(State, Input...) -> Result<State>` | `Type::name(...Input) -> Result<()>` |
 
+import / 可視性ルール:
+
+- `@call` / `@cast` により公開された concrete 関数名は、通常の module 関数と同じ規則で `import` できる
+- annotation なし `def` は内部 helper であり、`defp` 相当として `import` できない
+- compiler-managed hidden surface (`GenServer::pid`, `GenServer::spawn`, common owner helper, hidden lower 名) は `import` 対象外であり、user code から直接参照できない
+
 Singleton GenServer は PID なし call を推奨する。explicit PID API は残す。
 
 ```surtr

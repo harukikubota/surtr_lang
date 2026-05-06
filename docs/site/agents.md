@@ -8,6 +8,8 @@ Surtr の `defagent` は、状態を runtime 管理下へ押し上げながら�
 - multi agent は `Type::spawn(...)` で `PID<T>` を受け取る
 - `get` / `set` はどちらも `PID<T>` を受け取る型付き API として使う
 
+`import` を使うと、`@get` / `@set` で公開された concrete 関数名は通常の関数と同じように unqualified 参照できます。いっぽうで compiler-managed な `pid` / `spawn` や hidden lower helper は import できず、直接呼び出しもできません。
+
 ## 使い分け
 
 - singleton:

@@ -164,6 +164,8 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - `to_string()`, `to_string(_1)`, `1 + 2`, `pair._1` のような任意式 surface は command query としては受けない
 - 多相関数の `:sig` は定義 signature を保持したまま、specialized 節で concrete type / binding 解決後の置換結果を表示する
 - 具象 process の REPL 公開面は annotation 由来で決まり、annotation 付き関数だけが public surface になる。annotation なし関数は `defp` 相当として `:doc` / `:sig` / 補完対象に含めない
+- process public surface の名前解決は通常関数と同じであり、visible な concrete 関数名は `import` により unqualified 参照できる
+- compiler-managed hidden process surface (`pid`, `spawn`, common owner helper, hidden lower 名) は query / completion / import 対象に含めない
 - `@call` / `@cast` / `@get` / `@set` などの annotation 名そのものは query target にしない。annotation により公開された concrete 関数名だけを query surface とする
 
 ### 5.2 予約済み
