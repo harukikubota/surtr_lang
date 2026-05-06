@@ -153,6 +153,17 @@ fn lookup_trait_entry<'a>(
     }
 }
 
+fn special_non_importable_member(
+    declaration_index: &DeclarationIndex,
+    module_name: &str,
+    member_name: &str,
+) -> bool {
+    matches!(
+        declaration_index.get(module_name),
+        Some(entry) if entry.kind == DeclarationKind::Struct && member_name == "deconstruct"
+    )
+}
+
 fn apply_import_to_scope(
     scope: &mut Scope,
     import_context: &mut ImportContext<'_>,
@@ -169,11 +180,194 @@ fn apply_import_to_scope(
             import_single_into_scope(scope, import_context, &module_name, name, span)
         }
         spire::ast::ImportSpec::List(names) => {
-            for name in names {
-                import_single_into_scope(scope, import_context, &module_name, name, span.clone())?;
-            }
-            Ok(())
+            import_list_into_scope(scope, import_context, &module_name, names, span)
         }
+    }
+}
+
+#[derive(Debug, Default)]
+struct ImportListIssues {
+    not_importable: Vec<String>,
+    private_functions: Vec<String>,
+    unknown_members: Vec<String>,
+    hidden_builtins: Vec<String>,
+    unavailable_members: Vec<String>,
+}
+
+impl ImportListIssues {
+    fn is_empty(&self) -> bool {
+        self.not_importable.is_empty()
+            && self.private_functions.is_empty()
+            && self.unknown_members.is_empty()
+            && self.hidden_builtins.is_empty()
+            && self.unavailable_members.is_empty()
+    }
+
+    fn render_message(&self, module_name: &str) -> String {
+        let mut sections = vec![format!("Invalid import members in `{module_name}`.")];
+        append_import_issue_section(
+            &mut sections,
+            "Error: not importable members.",
+            &self.not_importable,
+        );
+        append_import_issue_section(
+            &mut sections,
+            "Error: private functions.",
+            &self.private_functions,
+        );
+        append_import_issue_section(
+            &mut sections,
+            "Error: unknown import members.",
+            &self.unknown_members,
+        );
+        append_import_issue_section(
+            &mut sections,
+            "Error: hidden builtins.",
+            &self.hidden_builtins,
+        );
+        append_import_issue_section(
+            &mut sections,
+            "Error: unavailable import members.",
+            &self.unavailable_members,
+        );
+        sections.join("\n")
+    }
+}
+
+fn append_import_issue_section(lines: &mut Vec<String>, title: &str, members: &[String]) {
+    if members.is_empty() {
+        return;
+    }
+    lines.push(String::new());
+    lines.push(title.to_string());
+    lines.extend(members.iter().map(|member| format!("  {member}")));
+}
+
+fn import_list_into_scope(
+    scope: &mut Scope,
+    import_context: &mut ImportContext<'_>,
+    module_name: &str,
+    names: &[String],
+    span: Span,
+) -> Result<(), ResolveError> {
+    let module_exists = import_context
+        .declaration_index
+        .values()
+        .any(|entry| entry.module_path == module_name);
+    if !module_exists {
+        return Err(ResolveError {
+            message: format!("Unknown module import: {}", module_name),
+            span,
+            related_labels: Vec::new(),
+        });
+    }
+
+    let mut issues = ImportListIssues::default();
+    for name in names {
+        import_context
+            .import_state
+            .record_member_import(module_name, name, &span)?;
+
+        let fq_name = format!("{}::{}", module_name, name);
+        let Some(entry) = import_context.declaration_index.get(&fq_name) else {
+            if special_non_importable_member(import_context.declaration_index, module_name, name) {
+                issues.not_importable.push(fq_name);
+                continue;
+            }
+            issues.unknown_members.push(fq_name);
+            continue;
+        };
+
+        if special_non_importable_member(import_context.declaration_index, module_name, name) {
+            issues.not_importable.push(fq_name);
+            continue;
+        }
+        if !is_importable_declaration(&entry.kind) {
+            issues.not_importable.push(fq_name);
+            continue;
+        }
+        if entry.hidden {
+            issues.hidden_builtins.push(fq_name);
+            continue;
+        }
+        if entry.visibility != Visibility::Public {
+            issues.private_functions.push(fq_name);
+            continue;
+        }
+        if entry.stage_index > import_context.current_stage_index {
+            issues.unavailable_members.push(fq_name);
+            continue;
+        }
+
+        bind_import_name(
+            scope,
+            import_context,
+            &entry.name,
+            import_context.declaration_uids[&entry.fq_name],
+            module_name,
+            false,
+            span.clone(),
+        )?;
+
+        if entry.kind == DeclarationKind::TraitMethod {
+            bind_import_name(
+                scope,
+                import_context,
+                name,
+                import_context.declaration_uids[&entry.fq_name],
+                module_name,
+                false,
+                span.clone(),
+            )?;
+        }
+
+        if entry.kind == DeclarationKind::Trait {
+            let trait_prefix = format!("{}::", name);
+            for method_entry in import_context.declaration_index.values() {
+                if method_entry.module_path != module_name
+                    || method_entry.kind != DeclarationKind::TraitMethod
+                    || !method_entry.name.starts_with(&trait_prefix)
+                {
+                    continue;
+                }
+                if method_entry.stage_index > import_context.current_stage_index {
+                    issues
+                        .unavailable_members
+                        .push(method_entry.fq_name.clone());
+                    continue;
+                }
+                bind_import_name(
+                    scope,
+                    import_context,
+                    &method_entry.name,
+                    import_context.declaration_uids[&method_entry.fq_name],
+                    module_name,
+                    false,
+                    span.clone(),
+                )?;
+                if let Some(short_method_name) = method_entry.name.rsplit("::").next() {
+                    bind_import_name(
+                        scope,
+                        import_context,
+                        short_method_name,
+                        import_context.declaration_uids[&method_entry.fq_name],
+                        module_name,
+                        false,
+                        span.clone(),
+                    )?;
+                }
+            }
+        }
+    }
+
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(ResolveError {
+            message: issues.render_message(module_name),
+            span,
+            related_labels: Vec::new(),
+        })
     }
 }
 
@@ -371,6 +565,13 @@ fn import_single_into_scope(
 
     let fq_name = format!("{}::{}", module_name, name);
     let Some(entry) = import_context.declaration_index.get(&fq_name) else {
+        if special_non_importable_member(import_context.declaration_index, module_name, name) {
+            return Err(ResolveError {
+                message: format!("Import target `{}` is not importable", fq_name),
+                span,
+                related_labels: Vec::new(),
+            });
+        }
         let module_exists = import_context
             .declaration_index
             .values()
@@ -385,6 +586,14 @@ fn import_single_into_scope(
             related_labels: Vec::new(),
         });
     };
+
+    if special_non_importable_member(import_context.declaration_index, module_name, name) {
+        return Err(ResolveError {
+            message: format!("Import target `{}` is not importable", fq_name),
+            span,
+            related_labels: Vec::new(),
+        });
+    }
 
     if !is_importable_declaration(&entry.kind) {
         return Err(ResolveError {

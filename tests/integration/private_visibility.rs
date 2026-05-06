@@ -118,12 +118,15 @@ fn private_visibility_compile_error_fixtures_pass() {
                 || case_dir
                     == &repo_root()
                         .join("tests/compile_errors/modules/private_def_import_forbidden")
+                || case_dir
+                    == &repo_root()
+                        .join("tests/compile_errors/modules/private_def_import_list_grouped")
         })
         .collect::<Vec<_>>();
 
     assert_eq!(
         cases.len(),
-        5,
+        6,
         "private visibility compile fixtures should exist"
     );
 

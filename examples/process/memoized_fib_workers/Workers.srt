@@ -52,7 +52,7 @@ defgenserver FibManager {
     match FibWorker::lookup(pid, n) {
       Ok(value) => Ok((("hit-" ++ label, value), state)),
       Err(_) => {
-        value = FibWorker::slow_fib(n)
+        value = slow_fib(n)
         remembered =? FibWorker::remember(pid, (n, value))
         Ok((("miss-" ++ label, value), state))
       },
@@ -62,5 +62,9 @@ defgenserver FibManager {
   def select_worker(state: (PID<FibWorker>, PID<FibWorker>), n: Int) -> Result<(String, PID<FibWorker>)> {
     rem =? Int::safe_mod(n, 2)
     if(rem == 0, Ok(("even", state._0)), Ok(("odd", state._1)))
+  }
+
+  def slow_fib(n: Int) -> Int {
+    if(n <= 1, n, slow_fib(n - 1) + slow_fib(n - 2))
   }
 }

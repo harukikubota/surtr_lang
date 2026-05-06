@@ -3157,6 +3157,182 @@ print("ok")"#,
     );
 }
 
+#[test]
+fn test_import_list_groups_private_not_importable_and_unknown_members() {
+    let module_stages = vec![vec![
+        staged_module(
+            "User",
+            parse_module_ast(
+                r#"defstruct User { name: String }
+impl User {
+  def new(name: String) -> Self { User(name: name) }
+  defextractor deconstruct(self: Self) -> User { self }
+}"#,
+                "User",
+            ),
+        ),
+        staged_module(
+            "Secrets",
+            parse_module_ast(
+                r#"defp secret_suffix() -> String { "::private" }
+def public_secret() -> String { "module" ++ secret_suffix() }"#,
+                "Secrets",
+            ),
+        ),
+    ]];
+
+    let err = resolve_user_with_modules(
+        r#"import User::{new, deconstruct}
+import Secrets::{secret_suffix, missing_fun}
+print("ok")"#,
+        &module_stages,
+    )
+    .expect_err("invalid list import should fail");
+
+    assert!(
+        err.message.contains("Invalid import members in `User`."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Error: not importable members."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(err.message.contains("User::new"), "actual error: {}", err.message);
+    assert!(
+        err.message.contains("User::deconstruct"),
+        "actual error: {}",
+        err.message
+    );
+
+    let err = resolve_user_with_modules(
+        r#"import Secrets::{secret_suffix, missing_fun}
+print("ok")"#,
+        &module_stages,
+    )
+    .expect_err("private and unknown list import should fail");
+
+    assert!(
+        err.message.contains("Invalid import members in `Secrets`."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Error: private functions."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Secrets::secret_suffix"),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Error: unknown import members."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Secrets::missing_fun"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_import_list_groups_hidden_builtin_members() {
+    let module_stages = vec![vec![staged_module(
+        "Process",
+        parse_module_ast(
+            r#"@hidden
+@builtin def __process_self() -> PID<$Process>
+
+def visible() -> Int { 1 }"#,
+            "Process",
+        ),
+    )]];
+
+    let err = resolve_user_with_modules(
+        r#"import Process::{visible, __process_self}
+print("ok")"#,
+        &module_stages,
+    )
+    .expect_err("hidden builtin in list import should fail");
+
+    assert!(
+        err.message.contains("Invalid import members in `Process`."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Error: hidden builtins."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Process::__process_self"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_import_list_groups_future_stage_members() {
+    let consumer = staged_module(
+        "Consumer",
+        parse_module_ast(
+            r#"import Provider::{value, missing};
+
+def use_value() -> Int {
+  value()
+}"#,
+            "Consumer",
+        ),
+    );
+    let provider = staged_module(
+        "Provider",
+        parse_module_ast(
+            r#"def value() -> Int {
+  41
+}"#,
+            "Provider",
+        ),
+    );
+
+    let err = resolve_user_with_modules(
+        "print(to_string(Consumer::use_value()))",
+        &[vec![consumer], vec![provider]],
+    )
+    .expect_err("future-stage list import should fail");
+
+    assert!(
+        err.message.contains("Invalid import members in `Provider`."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Error: unavailable import members."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Provider::value"),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Error: unknown import members."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Provider::missing"),
+        "actual error: {}",
+        err.message
+    );
+}
+
 // --- Match arm binding tests ---
 
 #[test]
@@ -3448,6 +3624,46 @@ print(Show::Show::to_string(value))"#,
     )
     .expect("trait-impl-local import should resolve inside trait impl methods");
     assert!(!resolved.is_empty());
+}
+
+#[test]
+fn test_private_function_direct_qualified_call_reports_private() {
+    let module_stages = vec![vec![staged_module(
+        "OuterMod",
+        parse_module_ast(r#"defp priv_fun(x: Int) -> Int { x }"#, "OuterMod"),
+    )]];
+
+    let err = resolve_user_with_modules("print(OuterMod::priv_fun(1))", &module_stages)
+        .expect_err("qualified private function call should fail");
+
+    assert!(err.message.contains("OuterMod::priv_fun/1"));
+    assert!(err.message.contains("is private"), "actual error: {}", err.message);
+}
+
+#[test]
+fn test_private_function_from_imported_module_suggests_private_candidate() {
+    let module_stages = vec![vec![staged_module(
+        "OuterMod",
+        parse_module_ast(
+            r#"def keep(x: Int) -> Int { x }
+defp priv_fun(x: Int) -> Int { x }"#,
+            "OuterMod",
+        ),
+    )]];
+
+    let err = resolve_user_with_modules(
+        r#"import OuterMod
+print(priv_fun(1))"#,
+        &module_stages,
+    )
+    .expect_err("bare private function call should fail with guidance");
+
+    assert!(err.message.contains("Undefined function priv_fun/1"));
+    assert!(
+        err.message.contains("Help: `OuterMod::priv_fun/1` is private"),
+        "actual error: {}",
+        err.message
+    );
 }
 
 #[test]

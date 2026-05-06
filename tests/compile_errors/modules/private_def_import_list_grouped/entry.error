@@ -1,0 +1,6 @@
+phase: resolve
+contains: Invalid import members in `Secrets`.
+contains: Error: private functions.
+contains: Secrets::secret_suffix
+contains: Error: unknown import members.
+contains: Secrets::missing_fun

@@ -228,6 +228,7 @@ pub fn resolve_staged_program_from_state(
         )?;
         user_scope.advance_next_id_to(next_local_id);
         let mut user_resolver = Resolver::with_scope(user_scope);
+        user_resolver.declaration_entries = declaration_index.clone().into_iter().collect();
         user_resolver.declaration_uids = declaration_uids;
         user_resolver.declaration_uid_kinds = declaration_uid_kinds;
         user_resolver.declaration_hidden_by_uid = declaration_hidden_by_uid;
@@ -299,6 +300,7 @@ fn resolve_stage_modules_parallel(
                         module_scope.advance_next_id_to(stage_local_base);
                         let mut resolver = Resolver::with_scope(module_scope);
                         resolver.current_module_path = Some(module.module_path.clone());
+                        resolver.declaration_entries = declaration_index.clone().into_iter().collect();
                         resolver.declaration_uids = declaration_uids.clone();
                         resolver.declaration_uid_kinds = declaration_uid_kinds.clone();
                         resolver.declaration_hidden_by_uid = declaration_hidden_by_uid.clone();
@@ -606,9 +608,11 @@ struct Resolver {
     scope: Scope,
     /// Fresh IDs reserved in predeclaration order for each top-level declaration name.
     predeclared_ids: HashMap<String, VecDeque<u32>>,
+    declaration_entries: HashMap<String, DeclarationEntry>,
     declaration_uids: HashMap<String, u32>,
     declaration_uid_kinds: HashMap<u32, DeclarationKind>,
     declaration_hidden_by_uid: HashMap<u32, bool>,
+    explicit_module_imports: HashSet<String>,
     current_module_path: Option<String>,
     current_stage_impl_targets: Option<HashMap<String, declarations::ImplTargetResolution>>,
     allow_top_level_shadowing: bool,

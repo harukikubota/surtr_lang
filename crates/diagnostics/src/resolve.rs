@@ -99,6 +99,17 @@ pub fn resolve_error_spec(source: &str, message: impl Into<String>, span: Span) 
         }
     }
 
+    if let Some(target) = extract_backticked_target(&message, "Invalid import members in `", "`.") {
+        if let Some(line_span) = trimmed_line_span_containing(source, span.start) {
+            spec.labels.push(DiagnosticLabel {
+                source_id: None,
+                span: line_span,
+                message: format!("invalid import members for `{}`", target),
+                color: Some(Color::Red),
+            });
+        }
+    }
+
     if let Some(target) =
         extract_backticked_target(&message, "Import target `", "` is not importable")
     {

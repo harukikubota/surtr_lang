@@ -1082,12 +1082,71 @@ impl Resolver {
         }
     }
 
-    fn map_undefined_callable_error(err: ResolveError, func: &Ast, arity: usize) -> ResolveError {
+    fn callable_entry_for_name(&self, name: &str) -> Option<&DeclarationEntry> {
+        self.declaration_entries.get(name).filter(|entry| {
+            matches!(
+                entry.kind,
+                DeclarationKind::Def
+                    | DeclarationKind::Extractor
+                    | DeclarationKind::TraitMethod
+                    | DeclarationKind::ImplMethod
+            )
+        })
+    }
+
+    fn private_callable_error_message(&self, fq_name: &str, arity: usize) -> String {
+        format!("Function `{fq_name}/{arity}` is private")
+    }
+
+    fn private_callable_hint_for_bare_name(&self, name: &str, arity: usize) -> Option<String> {
+        let matches = self
+            .explicit_module_imports
+            .iter()
+            .filter_map(|module_name| {
+                let fq_name = format!("{module_name}::{name}");
+                self.callable_entry_for_name(&fq_name).and_then(|entry| {
+                    (entry.visibility == Visibility::Private).then_some(fq_name)
+                })
+            })
+            .collect::<Vec<_>>();
+        if matches.len() == 1 {
+            Some(format!(
+                " Help: `{}/{}` is private.",
+                matches[0], arity
+            ))
+        } else {
+            None
+        }
+    }
+
+    fn map_undefined_callable_error(
+        &self,
+        err: ResolveError,
+        func: &Ast,
+        arity: usize,
+    ) -> ResolveError {
+        if let Ast::Path(_, path) = func {
+            let fq_name = path.segments.join("::");
+            if self
+                .callable_entry_for_name(&fq_name)
+                .is_some_and(|entry| entry.visibility == Visibility::Private)
+            {
+                return ResolveError {
+                    message: self.private_callable_error_message(&fq_name, arity),
+                    span: err.span,
+                    related_labels: Vec::new(),
+                };
+            }
+        }
         match func {
             Ast::Var(_, name) if err.message == format!("Undefined variable: {}", name) => {
+                let message = Self::undefined_callable_arity_message(func, arity)
+                    .unwrap_or_else(|| format!("Undefined variable or function: {}", name));
                 ResolveError {
-                    message: Self::undefined_callable_arity_message(func, arity)
-                        .unwrap_or_else(|| format!("Undefined variable or function: {}", name)),
+                    message: match self.private_callable_hint_for_bare_name(name, arity) {
+                        Some(hint) => format!("{message}{hint}"),
+                        None => message,
+                    },
                     span: err.span,
                     related_labels: Vec::new(),
                 }
@@ -1096,14 +1155,12 @@ impl Resolver {
                 if err.message == format!("Undefined variable: {}", path.segments.join("::")) =>
             {
                 ResolveError {
-                    message: Self::undefined_callable_arity_message(func, arity).unwrap_or_else(
-                        || {
-                            format!(
-                                "Undefined variable or function: {}",
-                                path.segments.join("::")
-                            )
-                        },
-                    ),
+                    message: Self::undefined_callable_arity_message(func, arity).unwrap_or_else(|| {
+                        format!(
+                            "Undefined variable or function: {}",
+                            path.segments.join("::")
+                        )
+                    }),
                     span: err.span,
                     related_labels: Vec::new(),
                 }
@@ -1160,12 +1217,14 @@ impl Resolver {
         Self {
             scope: initialize_scope(),
             predeclared_ids: HashMap::new(),
+            declaration_entries: HashMap::new(),
             declaration_uids: HashMap::new(),
             declaration_uid_kinds: HashMap::from([
                 (0, DeclarationKind::ResultCtor),
                 (1, DeclarationKind::ResultCtor),
             ]),
             declaration_hidden_by_uid: HashMap::new(),
+            explicit_module_imports: HashSet::new(),
             current_module_path: None,
             current_stage_impl_targets: None,
             allow_top_level_shadowing: false,
@@ -1176,12 +1235,14 @@ impl Resolver {
         Self {
             scope,
             predeclared_ids: HashMap::new(),
+            declaration_entries: HashMap::new(),
             declaration_uids: HashMap::new(),
             declaration_uid_kinds: HashMap::from([
                 (0, DeclarationKind::ResultCtor),
                 (1, DeclarationKind::ResultCtor),
             ]),
             declaration_hidden_by_uid: HashMap::new(),
+            explicit_module_imports: HashSet::new(),
             current_module_path: None,
             current_stage_impl_targets: None,
             allow_top_level_shadowing: false,
@@ -1207,6 +1268,8 @@ impl Resolver {
         child.declaration_uids = self.declaration_uids.clone();
         child.declaration_uid_kinds = self.declaration_uid_kinds.clone();
         child.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
+        child.declaration_entries = self.declaration_entries.clone();
+        child.explicit_module_imports = self.explicit_module_imports.clone();
         child.current_module_path = self.current_module_path.clone();
         child.current_stage_impl_targets = self.current_stage_impl_targets.clone();
         child.allow_top_level_shadowing = self.allow_top_level_shadowing;
@@ -1406,6 +1469,7 @@ impl Resolver {
         stmts: Vec<Ast>,
     ) -> Result<Vec<Resolved>, ResolveError> {
         let stmts = self.lower_impl_defs(stmts)?;
+        self.explicit_module_imports = Self::collect_explicit_module_imports(&stmts);
         self.validate_auto_import_conflicts(&stmts)?;
         self.predeclare_functions(&stmts)?;
         let mut resolved = Vec::new();
@@ -1424,6 +1488,17 @@ impl Resolver {
         validate_trait_impl_pairs_in_nodes(&resolved)?;
         self.predeclared_ids.clear();
         Ok(resolved)
+    }
+
+    fn collect_explicit_module_imports(stmts: &[Ast]) -> HashSet<String> {
+        stmts.iter()
+            .filter_map(|stmt| match stmt {
+                Ast::Import(_, path, spire::ast::ImportSpec::All) => {
+                    Some(path.segments.join("::"))
+                }
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -1515,9 +1590,9 @@ impl Resolver {
                 }
 
                 if Self::conversion_call_head(&func).is_some() {
-                    let resolved_func = self.resolve_node(*func.clone()).map_err(|err| {
-                        Self::map_undefined_callable_error(err, &func, args.len())
-                    })?;
+                    let resolved_func = self
+                        .resolve_node(*func.clone())
+                        .map_err(|err| self.map_undefined_callable_error(err, &func, args.len()))?;
                     if args.len() != 2 {
                         return Err(ResolveError {
                             message: "from/try_from expects exactly 2 positional arguments".into(),
@@ -1553,7 +1628,7 @@ impl Resolver {
 
                 let resolved_func = self
                     .resolve_node(*func.clone())
-                    .map_err(|err| Self::map_undefined_callable_error(err, &func, args.len()))?;
+                    .map_err(|err| self.map_undefined_callable_error(err, &func, args.len()))?;
                 let resolved_args = args
                     .into_iter()
                     .map(|arg| match arg {
