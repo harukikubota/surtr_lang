@@ -674,6 +674,7 @@ fn build_genserver_call_wrapper(
     span: &Span,
     process_name: &str,
     wrapper_name: &str,
+    internal_handler_name: &str,
     call_def: &Ast,
 ) -> Result<Ast, ParseError> {
     let params = def_params(call_def)?;
@@ -688,7 +689,7 @@ fn build_genserver_call_wrapper(
             Ast::SafeBind(
                 span.clone(),
                 AstPattern::Var(span.clone(), "reply_state".to_string()),
-                Box::new(call(span, "__agent_get", call_args)),
+                Box::new(call(span, internal_handler_name, call_args)),
             ),
             Ast::SafeBind(
                 span.clone(),
@@ -717,6 +718,7 @@ fn build_genserver_cast_wrapper(
     span: &Span,
     process_name: &str,
     wrapper_name: &str,
+    internal_handler_name: &str,
     cast_def: &Ast,
 ) -> Result<Ast, ParseError> {
     let params = def_params(cast_def)?;
@@ -731,7 +733,7 @@ fn build_genserver_cast_wrapper(
             Ast::SafeBind(
                 span.clone(),
                 AstPattern::Var(span.clone(), "next_state".to_string()),
-                Box::new(call(span, "__agent_set", call_args)),
+                Box::new(call(span, internal_handler_name, call_args)),
             ),
             internal_call(
                 span,
@@ -1607,7 +1609,7 @@ impl Parser<'_> {
         }
         self.expect(&Token::Defmod)?;
         let (name, _) = self.expect_qualified_ident(2, "module")?;
-        if builtin_type_meta_by_name(&name).is_some() {
+        if name != "ProcessInit" && builtin_type_meta_by_name(&name).is_some() {
             return Err(ParseError::syntax(
                 format!(
                     "Module name `{}` is reserved by a canonical builtin type declaration",
@@ -3207,8 +3209,8 @@ impl Parser<'_> {
         self.skip_newlines();
 
         let mut init = None;
-        let mut call_handler: Option<(String, AgentHandler)> = None;
-        let mut cast_handler: Option<(String, AgentHandler)> = None;
+        let mut call_handlers: Vec<(String, AgentHandler)> = Vec::new();
+        let mut cast_handlers: Vec<(String, AgentHandler)> = Vec::new();
         let mut helpers = Vec::new();
 
         while !matches!(self.peek(), Token::RBrace) {
@@ -3250,24 +3252,14 @@ impl Parser<'_> {
                     init = Some(AgentHandler { def });
                 }
                 Some((marker, marker_span)) if marker == "call" => {
-                    if call_handler.is_some() {
-                        return Err(ParseError::syntax(
-                            "this implementation currently supports one @call handler per GenServer",
-                            marker_span,
-                        ));
-                    }
+                    let _ = marker_span;
                     let wrapper_name = def_name(&def)?;
-                    call_handler = Some((wrapper_name, AgentHandler { def }));
+                    call_handlers.push((wrapper_name, AgentHandler { def }));
                 }
                 Some((marker, marker_span)) if marker == "cast" => {
-                    if cast_handler.is_some() {
-                        return Err(ParseError::syntax(
-                            "this implementation currently supports one @cast handler per GenServer",
-                            marker_span,
-                        ));
-                    }
+                    let _ = marker_span;
                     let wrapper_name = def_name(&def)?;
-                    cast_handler = Some((wrapper_name, AgentHandler { def }));
+                    cast_handlers.push((wrapper_name, AgentHandler { def }));
                 }
                 Some((_, marker_span)) => {
                     return Err(ParseError::syntax(
@@ -3301,37 +3293,59 @@ impl Parser<'_> {
                 },
             )
         })?;
-        let (call_name, call_handler) = call_handler.ok_or_else(|| {
-            ParseError::syntax(
+        if call_handlers.is_empty() {
+            return Err(ParseError::syntax(
                 "GenServer requires at least one @call handler",
                 Span {
                     start,
                     end: end.end,
                 },
-            )
-        })?;
+            ));
+        }
 
         let init_name = def_name(&init.def)?;
         let init_def = rename_agent_handler(init.def, "__agent_init", &name, false)?;
-        let call_def = rename_agent_handler(call_handler.def, "__agent_get", &name, true)?;
-        let cast_def = cast_handler
-            .as_ref()
-            .map(|(_, handler)| {
-                rename_agent_handler(handler.def.clone(), "__agent_set", &name, true)
-            })
-            .transpose()?;
-
-        let mut body = vec![init_def.clone(), call_def.clone()];
-        if let Some(cast_def) = &cast_def {
-            body.push(cast_def.clone());
+        let mut lowered_calls = Vec::new();
+        for (idx, (call_name, call_handler)) in call_handlers.into_iter().enumerate() {
+            let internal_name = if idx == 0 {
+                "__agent_get".to_string()
+            } else {
+                format!("__agent_call_{call_name}")
+            };
+            let call_def = rename_agent_handler(call_handler.def, &internal_name, &name, true)?;
+            lowered_calls.push((call_name, internal_name, call_def));
         }
+        let mut lowered_casts = Vec::new();
+        for (idx, (cast_name, cast_handler)) in cast_handlers.into_iter().enumerate() {
+            let internal_name = if idx == 0 {
+                "__agent_set".to_string()
+            } else {
+                format!("__agent_cast_{cast_name}")
+            };
+            let cast_def = rename_agent_handler(cast_handler.def, &internal_name, &name, true)?;
+            lowered_casts.push((cast_name, internal_name, cast_def));
+        }
+
+        let mut body = vec![init_def.clone()];
+        body.extend(lowered_calls.iter().map(|(_, _, def)| def.clone()));
+        body.extend(lowered_casts.iter().map(|(_, _, def)| def.clone()));
         body.extend(helpers);
-        body.push(build_genserver_call_wrapper(
-            &span, &name, &call_name, &call_def,
-        )?);
-        if let (Some((cast_name, _)), Some(cast_def)) = (cast_handler.as_ref(), cast_def.as_ref()) {
+        for (call_name, internal_name, call_def) in &lowered_calls {
+            body.push(build_genserver_call_wrapper(
+                &span,
+                &name,
+                call_name,
+                internal_name,
+                call_def,
+            )?);
+        }
+        for (cast_name, internal_name, cast_def) in &lowered_casts {
             body.push(build_genserver_cast_wrapper(
-                &span, &name, cast_name, cast_def,
+                &span,
+                &name,
+                cast_name,
+                internal_name,
+                cast_def,
             )?);
         }
 
@@ -3346,23 +3360,26 @@ impl Parser<'_> {
             handler_specs: {
                 let mut specs = vec![ProcessRuntimeHandlerSpec {
                     name: init_name.clone(),
+                    internal_name: "__agent_init".to_string(),
                     kind: ProcessRuntimeHandlerKind::Init,
                     span: init_def.span().clone(),
                 }];
-                specs.push(ProcessRuntimeHandlerSpec {
-                    name: call_name.clone(),
-                    kind: ProcessRuntimeHandlerKind::Call,
-                    span: call_def.span().clone(),
-                });
-                if let (Some((cast_name, _)), Some(cast_def)) =
-                    (cast_handler.as_ref(), cast_def.as_ref())
-                {
-                    specs.push(ProcessRuntimeHandlerSpec {
+                specs.extend(lowered_calls.iter().map(|(call_name, internal_name, call_def)| {
+                    ProcessRuntimeHandlerSpec {
+                        name: call_name.clone(),
+                        internal_name: internal_name.clone(),
+                        kind: ProcessRuntimeHandlerKind::Call,
+                        span: call_def.span().clone(),
+                    }
+                }));
+                specs.extend(lowered_casts.iter().map(|(cast_name, internal_name, cast_def)| {
+                    ProcessRuntimeHandlerSpec {
                         name: cast_name.clone(),
+                        internal_name: internal_name.clone(),
                         kind: ProcessRuntimeHandlerKind::Cast,
                         span: cast_def.span().clone(),
-                    });
-                }
+                    }
+                }));
                 specs
             },
         };
@@ -3511,11 +3528,13 @@ impl Parser<'_> {
             let mut specs = vec![
                 ProcessRuntimeHandlerSpec {
                     name: init_name,
+                    internal_name: "__agent_init".to_string(),
                     kind: ProcessRuntimeHandlerKind::Init,
                     span: init_def.span().clone(),
                 },
                 ProcessRuntimeHandlerSpec {
                     name: get_name,
+                    internal_name: "__agent_get".to_string(),
                     kind: ProcessRuntimeHandlerKind::Get,
                     span: get_def.span().clone(),
                 },
@@ -3523,6 +3542,7 @@ impl Parser<'_> {
             if let (Some(name), Some(set_def)) = (set_name, set_def.as_ref()) {
                 specs.push(ProcessRuntimeHandlerSpec {
                     name,
+                    internal_name: "__agent_set".to_string(),
                     kind: ProcessRuntimeHandlerKind::Set,
                     span: set_def.span().clone(),
                 });

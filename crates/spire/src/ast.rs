@@ -83,6 +83,8 @@ pub enum ProcessRuntimeHandlerKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessRuntimeHandlerSpec {
     pub name: Symbol,
+    #[serde(default)]
+    pub internal_name: Symbol,
     pub kind: ProcessRuntimeHandlerKind,
     pub span: Span,
 }

@@ -67,6 +67,15 @@ It is not an ordinary public API or data transport type.
 """
 @builtin type ProcessInit<$T>
 
+@hidden
+@builtin def Pending() -> ProcessInit<$T>
+
+@hidden
+@builtin def PendingAfter(duration: Duration) -> ProcessInit<$T>
+
+@hidden
+@builtin def Ready(value: $T) -> ProcessInit<$T>
+
 impl Show for Unit {
   @doc """
   Return the standard string rendering for `Unit`.

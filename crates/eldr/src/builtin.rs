@@ -378,6 +378,18 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_process_sleep,
     },
     BuiltinImpl {
+        name: "Pending",
+        func: builtin_process_init_pending,
+    },
+    BuiltinImpl {
+        name: "PendingAfter",
+        func: builtin_process_init_pending_after,
+    },
+    BuiltinImpl {
+        name: "Ready",
+        func: builtin_process_init_ready,
+    },
+    BuiltinImpl {
         name: "__task_call",
         func: builtin_task_call,
     },
@@ -631,6 +643,31 @@ fn builtin_process_sleep(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtim
     let millis = duration_to_u64(_vm, &args[0], "__process_sleep", "duration")?;
     thread::sleep(StdDuration::from_millis(millis));
     Ok(ok_result(Value::Unit))
+}
+
+fn builtin_process_init_pending(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Ok(Value::Tagged {
+        tag: 0,
+        fields: Vec::new(),
+    })
+}
+
+fn builtin_process_init_pending_after(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let _ = duration_to_u64(vm, &args[0], "PendingAfter", "duration")?;
+    Ok(Value::Tagged {
+        tag: 1,
+        fields: vec![args[0].clone()],
+    })
+}
+
+fn builtin_process_init_ready(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Ok(Value::Tagged {
+        tag: 2,
+        fields: vec![args[0].clone()],
+    })
 }
 
 fn builtin_task_call(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

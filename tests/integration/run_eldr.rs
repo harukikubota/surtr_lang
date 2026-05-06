@@ -429,8 +429,12 @@ fn run_vm_dump_includes_process_runtime_tables_for_agents() {
     );
     assert_eq!(dump["process_runtime"]["counters"]["process_count"], 1);
     assert_eq!(
-        dump["process_runtime"]["specs"][0]["process_name"],
+        dump["process_runtime"]["specs"][0]["type_name"],
         "Counter"
+    );
+    assert_eq!(
+        dump["process_runtime"]["specs"][0]["init_policy"],
+        "Eager"
     );
     assert_eq!(
         dump["process_runtime"]["singleton_slots"]["Counter"].as_u64(),

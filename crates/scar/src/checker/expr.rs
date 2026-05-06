@@ -3924,8 +3924,7 @@ impl Checker {
     pub(super) fn current_process_name(&self) -> Option<String> {
         let symbol = self.current_function_symbol.as_deref()?;
         let (module, handler) = symbol.rsplit_once("::")?;
-        matches!(handler, "__agent_init" | "__agent_get" | "__agent_set")
-            .then(|| module.to_string())
+        Self::is_process_handler_name(handler).then(|| module.to_string())
     }
 
     fn check_process_context_handler(

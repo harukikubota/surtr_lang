@@ -1856,13 +1856,19 @@ impl Checker {
         let Some((process_name, handler)) = symbol.rsplit_once("::") else {
             return false;
         };
-        if !matches!(handler, "__agent_init" | "__agent_get" | "__agent_set") {
+        if !Self::is_process_handler_name(handler) {
             return false;
         }
         let Some(slots) = self.process_handler_dependencies.get(process_name) else {
             return false;
         };
         self.ty_contains_handler_capability_pid(ty, slots)
+    }
+
+    pub(super) fn is_process_handler_name(handler: &str) -> bool {
+        matches!(handler, "__agent_init" | "__agent_get" | "__agent_set")
+            || handler.starts_with("__agent_call_")
+            || handler.starts_with("__agent_cast_")
     }
 
     fn ty_contains_handler_capability_pid(&self, ty: &Ty, slots: &HashMap<String, String>) -> bool {

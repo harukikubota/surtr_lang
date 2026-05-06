@@ -3229,6 +3229,37 @@ fn process_self_typechecks_inside_process_handler() {
 }
 
 #[test]
+fn genserver_additional_call_handler_typechecks_as_process_context() {
+    typecheck_module_source_result(
+        r#"defgenserver Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    handlers {
+      out: OutHandler = StdOut
+    }
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def info(state: Int) -> Result<(Int, Int)> {
+    Ok((state, state))
+  }
+
+  @call
+  def log(state: Int, message: String) -> Result<(Unit, Int)> {
+    _handler = ctx.out
+    _message = message
+    Ok(((), state))
+  }
+}"#,
+    )
+    .expect("additional @call handler should have process context access");
+}
+
+#[test]
 fn typecheck_staged_program_keeps_process_specs() {
     let ast = spire::parse_with_context(
         r#"defagent Counter {

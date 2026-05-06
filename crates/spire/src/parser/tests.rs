@@ -4278,6 +4278,80 @@ fn test_defgenserver_preserves_runtime_handler_specs() {
 }
 
 #[test]
+fn test_defgenserver_preserves_multiple_call_and_cast_handler_specs() {
+    let ast = parse_with_context(
+        r#"defgenserver Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def info(state: Int, message: String) -> Result<(String, Int)> {
+    Ok((message, state))
+  }
+
+  @call
+  def count(state: Int) -> Result<(Int, Int)> {
+    Ok((state, state))
+  }
+
+  @cast
+  def reset(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+
+  @cast
+  def increment(state: Int) -> Result<Int> { Ok(state + 1) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("defgenserver should parse multiple call and cast handlers");
+
+    match &ast[0] {
+        Ast::Defgenserver(_, _, body, process_spec, _) => {
+            assert_eq!(process_spec.kind, crate::ast::ProcessKind::GenServer);
+            assert_eq!(process_spec.handler_specs.len(), 5);
+            assert_eq!(process_spec.handler_specs[0].name, "init");
+            assert_eq!(process_spec.handler_specs[1].name, "info");
+            assert_eq!(process_spec.handler_specs[2].name, "count");
+            assert_eq!(process_spec.handler_specs[3].name, "reset");
+            assert_eq!(process_spec.handler_specs[4].name, "increment");
+            assert_eq!(
+                process_spec.handler_specs[1].kind,
+                crate::ast::ProcessRuntimeHandlerKind::Call
+            );
+            assert_eq!(
+                process_spec.handler_specs[2].kind,
+                crate::ast::ProcessRuntimeHandlerKind::Call
+            );
+            assert_eq!(
+                process_spec.handler_specs[3].kind,
+                crate::ast::ProcessRuntimeHandlerKind::Cast
+            );
+            assert_eq!(
+                process_spec.handler_specs[4].kind,
+                crate::ast::ProcessRuntimeHandlerKind::Cast
+            );
+            assert!(body.iter().any(
+                |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "info")
+            ));
+            assert!(body.iter().any(
+                |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "count")
+            ));
+            assert!(body.iter().any(
+                |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "reset")
+            ));
+            assert!(body.iter().any(
+                |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "increment")
+            ));
+        }
+        other => panic!("Expected Defgenserver, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
     let ast = parse_with_context(
         r#"defagent Worker {

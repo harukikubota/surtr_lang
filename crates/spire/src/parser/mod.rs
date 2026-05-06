@@ -751,6 +751,7 @@ fn shift_process_spec(mut spec: ProcessSpec, delta: usize) -> ProcessSpec {
         .into_iter()
         .map(|handler| ProcessRuntimeHandlerSpec {
             name: handler.name,
+            internal_name: handler.internal_name,
             kind: handler.kind,
             span: shift_span(handler.span, delta),
         })

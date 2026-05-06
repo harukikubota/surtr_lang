@@ -5,6 +5,10 @@ use sindr::builtin::{builtin_type_meta_by_name, builtin_type_supports_inherent_i
 
 use serde::{Deserialize, Serialize};
 
+fn is_reserved_builtin_type_redefinition(name: &str) -> bool {
+    builtin_type_meta_by_name(name).is_some() && name != "ProcessInit"
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StagedModuleAst {
     pub module_path: String,
@@ -834,7 +838,7 @@ pub fn precollect_declaration_index(
                 }
 
                 if let Ast::EnumDef(span, name, _, variants, _) = stmt {
-                    if builtin_type_meta_by_name(name).is_some() {
+                    if is_reserved_builtin_type_redefinition(name) {
                         return Err(ResolveError {
                             message: format!(
                                 "Type name `{}` is reserved by a canonical builtin type declaration",
@@ -987,7 +991,7 @@ pub fn precollect_declaration_index(
                     Ast::StructDef(_, name, _, _)
                         | Ast::RecordDef(_, name, _, _)
                         | Ast::DeferrorDef(_, name, _, _, _)
-                        if builtin_type_meta_by_name(name).is_some()
+                        if is_reserved_builtin_type_redefinition(name)
                 ) {
                     return Err(ResolveError {
                         message: format!(
@@ -1619,7 +1623,7 @@ impl Resolver {
                 Ast::StructDef(span, name, _, _)
                 | Ast::RecordDef(span, name, _, _)
                 | Ast::DeferrorDef(span, name, _, _, _) => {
-                    if builtin_type_meta_by_name(name).is_some() {
+                    if is_reserved_builtin_type_redefinition(name) {
                         return Err(ResolveError {
                             message: format!(
                                 "Type name `{}` is reserved by a canonical builtin type declaration",
@@ -1667,7 +1671,7 @@ impl Resolver {
                     self.scope.define_with_id(name, uid);
                 }
                 Ast::EnumDef(span, name, _, variants, _) => {
-                    if builtin_type_meta_by_name(name).is_some() {
+                    if is_reserved_builtin_type_redefinition(name) {
                         return Err(ResolveError {
                             message: format!(
                                 "Type name `{}` is reserved by a canonical builtin type declaration",

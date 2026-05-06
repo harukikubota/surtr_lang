@@ -625,9 +625,7 @@ impl Checker {
         let current_symbol = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
         let is_process_handler = current_symbol
             .rsplit_once("::")
-            .is_some_and(|(_, handler)| {
-                matches!(handler, "__agent_init" | "__agent_get" | "__agent_set")
-            });
+            .is_some_and(|(_, handler)| Self::is_process_handler_name(handler));
         if attrs.visibility == spire::ast::Visibility::Public && !is_process_handler {
             if let Some((state_name, owner)) = typed_params
                 .iter()

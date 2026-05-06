@@ -390,21 +390,88 @@ pub enum RuntimeProcessInstance {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeProcessSpec {
-    pub process_name: String,
-    pub module_path: String,
+    pub process_id: u32,
+    pub type_name: String,
     pub kind: RuntimeProcessKind,
     pub instance: RuntimeProcessInstance,
-    pub boot: bool,
-    pub registry: bool,
-    pub lazy: bool,
-    pub init_fun_idx: u32,
-    pub get_fun_idx: u32,
+    pub state: RuntimeStateSpec,
+    pub init: RuntimeInitSpec,
     #[serde(default)]
-    pub set_fun_idx: Option<u32>,
+    pub handlers: Vec<RuntimeHandlerSpec>,
+    #[serde(default)]
+    pub dependencies: RuntimeProcessDependencies,
+    #[serde(default)]
+    pub lifecycle: RuntimeLifecycleSpec,
+    #[serde(default)]
+    pub supervision: RuntimeSupervisionSpec,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeTypeRef {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeStateSpec {
+    pub state_type: RuntimeTypeRef,
+    #[serde(default)]
+    pub owner_process: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeInitSpec {
+    pub callable: RuntimeCallableRef,
+    pub policy: RuntimeInitPolicy,
+    pub result_shape: RuntimeInitResultShape,
+    pub state_type: RuntimeTypeRef,
+    #[serde(default)]
+    pub init_route: Option<RuntimeInitRouteRef>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeCallableRef {
+    pub fun_idx: FunctionId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeInitRouteRef {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeInitPolicy {
+    Eager,
+    Lazy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeInitResultShape {
+    EagerState { result_type: RuntimeTypeRef },
+    LazyProcessInit { result_type: RuntimeTypeRef },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeProcessDependencies {
     #[serde(default)]
     pub handlers: Vec<RuntimeHandlerDependency>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeLifecycleSpec {
     #[serde(default)]
-    pub handler_specs: Vec<RuntimeHandlerSpec>,
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub exit_sink: Option<String>,
+    #[serde(default)]
+    pub restart_target: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeSupervisionSpec {
+    #[serde(default)]
+    pub parent: Option<String>,
+    #[serde(default)]
+    pub children: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1515,8 +1582,10 @@ mod tests {
         checked_payload_len, line_column_for_offset, populate_error_template_lines,
         stable_hash_hex, Bytecode, BytecodeFormatError, CompileInfo, Constant, DocEntry, DocKind,
         ErrTemplate, FunctionEntry, FunctionFlags, Opcode, OpcodeSource, RuntimeBootPlan,
-        RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable,
-        SourceFileEntry, SourceMap,
+        RuntimeCallableRef, RuntimeInitPolicy, RuntimeInitResultShape, RuntimeInitSpec,
+        RuntimeLifecycleSpec, RuntimeProcessDependencies, RuntimeProcessInstance,
+        RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable, RuntimeStateSpec,
+        RuntimeSupervisionSpec, RuntimeTypeRef, SourceFileEntry, SourceMap,
     };
     use crate::primitives::int;
     use crate::runtime::{TypeEntry, TypeKind, TypeRegistry};
@@ -1531,6 +1600,38 @@ mod tests {
             private_flags: vec![false, false],
         });
         registry
+    }
+
+    fn sample_process_spec() -> RuntimeProcessSpec {
+        RuntimeProcessSpec {
+            process_id: 0,
+            type_name: "Counter".to_string(),
+            kind: RuntimeProcessKind::Agent,
+            instance: RuntimeProcessInstance::Singleton,
+            state: RuntimeStateSpec {
+                state_type: RuntimeTypeRef {
+                    name: "Int".to_string(),
+                },
+                owner_process: Some("Counter".to_string()),
+            },
+            init: RuntimeInitSpec {
+                callable: RuntimeCallableRef { fun_idx: 0 },
+                policy: RuntimeInitPolicy::Eager,
+                result_shape: RuntimeInitResultShape::EagerState {
+                    result_type: RuntimeTypeRef {
+                        name: "Result<Int, Error>".to_string(),
+                    },
+                },
+                state_type: RuntimeTypeRef {
+                    name: "Int".to_string(),
+                },
+                init_route: None,
+            },
+            handlers: Vec::new(),
+            dependencies: RuntimeProcessDependencies::default(),
+            lifecycle: RuntimeLifecycleSpec::default(),
+            supervision: RuntimeSupervisionSpec::default(),
+        }
     }
 
     fn sample_bytecode(source_map: Option<SourceMap>) -> Bytecode {
@@ -1598,20 +1699,7 @@ mod tests {
             }],
             pc_spans: Vec::new(),
             runtime_process_specs: RuntimeProcessSpecTable {
-                entries: vec![RuntimeProcessSpec {
-                    process_name: "Counter".to_string(),
-                    module_path: "Agents::Counter".to_string(),
-                    kind: RuntimeProcessKind::Agent,
-                    instance: RuntimeProcessInstance::Singleton,
-                    boot: true,
-                    registry: true,
-                    lazy: false,
-                    init_fun_idx: 0,
-                    get_fun_idx: 0,
-                    set_fun_idx: Some(0),
-                    handlers: Vec::new(),
-                    handler_specs: Vec::new(),
-                }],
+                entries: vec![sample_process_spec()],
             },
             runtime_boot_plan: RuntimeBootPlan::explicit_singleton("Counter"),
         };
@@ -1642,6 +1730,47 @@ mod tests {
         let bytes = bytecode.encode().expect("encode should succeed");
         let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
         assert_eq!(decoded, bytecode);
+    }
+
+    #[test]
+    fn process_spec_roundtrip_uses_v2_shape_without_legacy_boot_registry_lazy_fields() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![RuntimeProcessSpec {
+                process_id: 7,
+                type_name: "LazyCache".to_string(),
+                kind: RuntimeProcessKind::GenServer,
+                instance: RuntimeProcessInstance::Singleton,
+                state: RuntimeStateSpec {
+                    state_type: RuntimeTypeRef {
+                        name: "Int".to_string(),
+                    },
+                    owner_process: Some("LazyCache".to_string()),
+                },
+                init: RuntimeInitSpec {
+                    callable: RuntimeCallableRef { fun_idx: 0 },
+                    policy: RuntimeInitPolicy::Lazy,
+                    result_shape: RuntimeInitResultShape::LazyProcessInit {
+                        result_type: RuntimeTypeRef {
+                            name: "Result<ProcessInit<Int>>".to_string(),
+                        },
+                    },
+                    state_type: RuntimeTypeRef {
+                        name: "Int".to_string(),
+                    },
+                    init_route: None,
+                },
+                handlers: Vec::new(),
+                dependencies: RuntimeProcessDependencies::default(),
+                lifecycle: RuntimeLifecycleSpec::default(),
+                supervision: RuntimeSupervisionSpec::default(),
+            }],
+        };
+        bytecode.refresh_viewer_metadata();
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+        assert_eq!(decoded.runtime_process_specs, bytecode.runtime_process_specs);
     }
 
     #[test]

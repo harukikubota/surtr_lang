@@ -466,6 +466,21 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Duration) -> Result<Unit>",
     },
     BuiltinMeta {
+        name: "Pending",
+        arity: 0,
+        sig_str: "() -> ProcessInit<$T>",
+    },
+    BuiltinMeta {
+        name: "PendingAfter",
+        arity: 1,
+        sig_str: "(Duration) -> ProcessInit<$T>",
+    },
+    BuiltinMeta {
+        name: "Ready",
+        arity: 1,
+        sig_str: "($T) -> ProcessInit<$T>",
+    },
+    BuiltinMeta {
         name: "__task_call",
         arity: 1,
         sig_str: "((-> Result<$A>)) -> Result<$A>",
