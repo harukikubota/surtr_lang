@@ -1119,6 +1119,45 @@ impl ScarSession {
         self.env.next_fun_idx = self.env.next_fun_idx.max(next_fun_idx);
     }
 
+    pub fn reconcile_visible_function_indices<I>(&mut self, functions: I)
+    where
+        I: IntoIterator<Item = (u32, u32)>,
+    {
+        let mut next_fun_idx = self.env.next_fun_idx;
+        let mut specializable_rekeys = Vec::new();
+        let mut fun_idx_rewrites = HashMap::new();
+
+        for (uid, fun_idx) in functions {
+            let old_fun_idx = match self.env.vars.get(&uid) {
+                Some(Ty::UserFunc { fun_idx, .. }) => Some(*fun_idx),
+                _ => None,
+            };
+            if let Some(Ty::UserFunc {
+                fun_idx: stored_fun_idx,
+                ..
+            }) = self.env.vars.get_mut(&uid)
+            {
+                if let Some(old_fun_idx) = old_fun_idx {
+                    fun_idx_rewrites.insert(old_fun_idx, fun_idx);
+                    specializable_rekeys.push((old_fun_idx, fun_idx));
+                }
+                *stored_fun_idx = fun_idx;
+                next_fun_idx = next_fun_idx.max(fun_idx + 1);
+            }
+        }
+
+        for (old_fun_idx, new_fun_idx) in specializable_rekeys {
+            if let Some(mut def) = self.specializable_defs.remove(&old_fun_idx) {
+                Self::set_def_fun_idx(&mut def, new_fun_idx);
+                self.specializable_defs.insert(new_fun_idx, def);
+            }
+        }
+        for def in self.specializable_defs.values_mut() {
+            Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
+        }
+        self.env.next_fun_idx = self.env.next_fun_idx.max(next_fun_idx);
+    }
+
     fn specializable_fun_idx_for_name(&self, qualified_name: &str) -> Option<u32> {
         self.specializable_defs.iter().find_map(|(fun_idx, def)| {
             (Self::def_qualified_name(def).as_deref() == Some(qualified_name)).then_some(*fun_idx)

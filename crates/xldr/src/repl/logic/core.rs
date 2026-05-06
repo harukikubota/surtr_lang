@@ -4552,6 +4552,7 @@ impl ReplEngine {
                 });
             }
         };
+        let chunk_functions = chunk.functions.clone();
         meta.docs = docs.clone();
         chunk.docs = docs.clone();
 
@@ -4565,6 +4566,7 @@ impl ReplEngine {
         match self.vm.push_atomic(chunk) {
             Ok(value) => {
                 self.sync_scar_fun_index_with_vm();
+                self.sync_repl_chunk_function_indices(&meta.function_defs, &chunk_functions);
                 if let Some(rendered) = self.report_main_result_error_if_any(&value) {
                     self.bump_line(None, None);
                     self.pending.clear();
@@ -5475,13 +5477,20 @@ fn apply_preload_visible_names(user_ast: &[Ast], mut visible: Vec<String>) -> Ve
 
 impl ReplEngine {
     fn sync_scar_fun_index_with_vm(&mut self) {
+        let mut function_indices = HashMap::new();
+        for entry in &self.vm.bytecode().functions {
+            let Some(qualified_name) = entry.qualified_name.as_deref() else {
+                continue;
+            };
+            function_indices.insert(qualified_name.to_string(), entry.fun_idx);
+            if let Some(short_name) = qualified_name.strip_prefix("__Repl::Session::") {
+                function_indices.insert(short_name.to_string(), entry.fun_idx);
+            }
+        }
         self.scar_session.reconcile_function_indices(
-            self.vm.bytecode().functions.iter().filter_map(|entry| {
-                entry
-                    .qualified_name
-                    .as_deref()
-                    .map(|qualified_name| (qualified_name, entry.fun_idx))
-            }),
+            function_indices
+                .iter()
+                .map(|(qualified_name, fun_idx)| (qualified_name.as_str(), *fun_idx)),
         );
         let next_fun_idx = self
             .vm
@@ -5492,6 +5501,37 @@ impl ReplEngine {
             .max()
             .unwrap_or(0);
         self.scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
+    }
+
+    fn sync_repl_chunk_function_indices(
+        &mut self,
+        function_names: &[String],
+        functions: &[sindr::ir::FunctionEntry],
+    ) {
+        let visible_function_indices = function_names
+            .iter()
+            .filter_map(|name| {
+                let uid = self.sigil_session.lookup_uid(name)?;
+                let fun_idx = functions
+                    .iter()
+                    .rev()
+                    .find(|entry| {
+                        entry
+                            .qualified_name
+                            .as_deref()
+                            .and_then(|qualified_name| qualified_name.rsplit("::").next())
+                            == Some(name.as_str())
+                            || entry
+                                .signature
+                                .as_deref()
+                                .is_some_and(|signature| signature.starts_with(&format!("{name}(")))
+                    })
+                    .map(|entry| entry.fun_idx)?;
+                Some((uid, fun_idx))
+            })
+            .collect::<Vec<_>>();
+        self.scar_session
+            .reconcile_visible_function_indices(visible_function_indices);
     }
 }
 
@@ -5740,6 +5780,7 @@ fn signature_return_type(signature: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eldr::value::CallableTarget;
 
     fn bootstrap_engine_with_module(source: &str, module_path: &str) -> ReplEngine {
         let repl_sources =
@@ -5872,5 +5913,101 @@ mod tests {
             }
             other => panic!("expected runtime bootstrap failure, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn partial_capture_chain_keeps_outer_capture_arity_in_vm() {
+        let mut engine = ReplEngine::new().expect("engine should initialize");
+
+        let def = engine.handle_line("def f(a: Int, b: Int, c: Int) -> Int { a + b + c }");
+        assert!(!def.should_exit);
+        let f3 = engine.handle_line("f3 = &f");
+        assert!(!f3.should_exit);
+        let f2 = engine.handle_line("f2 = &f3(&1, &2, 3)");
+        assert!(!f2.should_exit);
+        let f1 = engine.handle_line("f1 = &f2(&1, 2)");
+        assert!(!f1.should_exit);
+
+        let bytecode = engine.vm.snapshot_bytecode();
+        let f_entry = bytecode
+            .functions
+            .iter()
+            .find(|entry| entry.signature.as_deref() == Some("f(a: Int, b: Int, c: Int) -> Int"))
+            .expect("repl def f should be present in bytecode");
+        assert_eq!(f_entry.arity, 3, "{f_entry:?}");
+
+        let binding = engine.binding_info("f2").expect("f2 binding should exist");
+        let value = engine
+            .vm
+            .get_local(binding.slot_id)
+            .expect("f2 value should be stored");
+        let Value::Callable(callable) = value else {
+            panic!("expected callable binding, got {value:?}");
+        };
+        assert_eq!(callable.lexical_captures.len(), 1, "{callable:?}");
+
+        let CallableTarget::Function(fun_idx) = callable.target else {
+            panic!("expected function callable target, got {:?}", callable.target);
+        };
+        let entry = bytecode
+            .functions
+            .get(fun_idx as usize)
+            .expect("callable target function should exist");
+        assert_eq!(entry.fun_idx, fun_idx, "{entry:?}");
+        assert_eq!(entry.arity, 3, "{entry:?}");
+        let Some(Value::Callable(inner)) = callable.lexical_captures.first() else {
+            panic!("expected f2 to capture f3 callable, got {:?}", callable.lexical_captures);
+        };
+        let CallableTarget::Function(fun_idx) = inner.target.clone() else {
+            panic!("expected captured f3 function target, got {:?}", inner.target);
+        };
+        let entry = bytecode
+            .functions
+            .get(fun_idx as usize)
+            .expect("captured f3 function should exist");
+        assert_eq!(
+            fun_idx, f_entry.fun_idx,
+            "captured f3 should target repl f: {f_entry:?}"
+        );
+        assert_eq!(entry.fun_idx, fun_idx, "{entry:?}");
+        assert_eq!(entry.arity, 3, "{entry:?}");
+
+        let binding = engine.binding_info("f1").expect("f1 binding should exist");
+        let value = engine
+            .vm
+            .get_local(binding.slot_id)
+            .expect("f1 value should be stored");
+        let Value::Callable(callable) = value else {
+            panic!("expected callable binding, got {value:?}");
+        };
+        assert_eq!(callable.lexical_captures.len(), 1, "{callable:?}");
+        let Some(Value::Callable(inner)) = callable.lexical_captures.first() else {
+            panic!("expected f1 to capture f2 callable, got {:?}", callable.lexical_captures);
+        };
+        let CallableTarget::Function(fun_idx) = inner.target.clone() else {
+            panic!("expected captured f2 function target, got {:?}", inner.target);
+        };
+        let entry = bytecode
+            .functions
+            .get(fun_idx as usize)
+            .expect("captured f2 function should exist");
+        assert_eq!(entry.fun_idx, fun_idx, "{entry:?}");
+        assert_eq!(entry.arity, 3, "{entry:?}");
+        let Some(Value::Callable(inner_f3)) = inner.lexical_captures.first() else {
+            panic!("expected captured f2 to retain f3 callable, got {:?}", inner.lexical_captures);
+        };
+        let CallableTarget::Function(fun_idx) = inner_f3.target.clone() else {
+            panic!("expected retained f3 function target, got {:?}", inner_f3.target);
+        };
+        let entry = bytecode
+            .functions
+            .get(fun_idx as usize)
+            .expect("retained f3 function should exist");
+        assert_eq!(entry.fun_idx, fun_idx, "{entry:?}");
+        assert_eq!(entry.arity, 3, "{entry:?}");
+
+        let applied = engine.handle_line("f1(10)");
+        let applied_text = ReplEngine::repl_result_text(&applied);
+        assert!(applied_text.contains("15"), "{applied_text}");
     }
 }
