@@ -28,6 +28,13 @@ pub struct ResolvedProcessSpec {
     pub init_uid: u32,
     pub get_uid: u32,
     pub set_uid: Option<u32>,
+    pub handler_uids: Vec<ResolvedProcessHandlerUid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedProcessHandlerUid {
+    pub internal_name: Symbol,
+    pub uid: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

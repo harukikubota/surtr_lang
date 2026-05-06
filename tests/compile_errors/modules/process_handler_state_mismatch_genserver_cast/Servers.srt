@@ -1,0 +1,26 @@
+@process_state(CounterServer)
+defstruct CounterState {
+  value: Int,
+}
+
+defgenserver CounterServer {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<CounterState> {
+    Ok(CounterState { value: 0 })
+  }
+
+  @call
+  def get(state: CounterState) -> Result<(Int, CounterState)> {
+    Ok((state.value, state))
+  }
+
+  @cast
+  def set(wrong_state: Int, _next: Int) -> Result<CounterState> {
+    Ok(CounterState { value: wrong_state })
+  }
+}

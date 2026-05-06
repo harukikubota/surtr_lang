@@ -457,7 +457,10 @@ enum StepOutcome {
 enum OpcodeControl {
     Continue,
     Halt,
-    Pending(FutureId),
+    Pending {
+        future_id: FutureId,
+        resume_pc: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1566,8 +1569,24 @@ impl VM {
         let init_result = self.invoke_callable_sync(init, Vec::new())?;
         match decode_vm_result(init_result, "__process_spawn", "init")? {
             Ok(state) => {
-                let pid =
-                    self.allocate_process_instance(process_name.clone(), Some(state), None, None)?;
+                let pid = match self
+                    .process_runtime
+                    .specs_by_name
+                    .get(&process_name)
+                    .map(|spec| spec.instance)
+                {
+                    Some(RuntimeProcessInstance::Worker) => self.allocate_supervised_worker(
+                        process_name.clone(),
+                        Some(state),
+                        "DynamicSupervisor".into(),
+                    )?,
+                    _ => self.allocate_process_instance(
+                        process_name.clone(),
+                        Some(state),
+                        None,
+                        None,
+                    )?,
+                };
                 Ok(ok_vm_result(Value::Pid(PidHandle {
                     id: pid,
                     process_name,
@@ -1640,19 +1659,39 @@ impl VM {
                 &format!("{supervisor_name} does not allow adopt"),
             )));
         }
-        let Some(entry) = self.process_runtime.processes.get_mut(&pid.id) else {
+        let Some(entry) = self.process_runtime.processes.get(&pid.id) else {
             return Ok(err_vm_result(self.process_error(
                 "InvalidPid",
                 &format!("unknown pid {} for {}", pid.id, pid.process_name),
             )));
         };
+        if !self.is_adoptable_worker(entry) {
+            return Ok(err_vm_result(self.process_error(
+                "SupervisorAdoptInvalidPid",
+                &format!(
+                    "supervisor adopt accepts only Worker PID with live state, got {}",
+                    pid.process_name
+                ),
+            )));
+        }
+
+        let old_supervisor = match &entry.lifecycle_sink {
+            Some(LifecycleSink::Supervisor(old_supervisor)) => Some(old_supervisor.clone()),
+            None => None,
+        };
+        if old_supervisor.as_deref() != Some(supervisor_name.as_str()) {
+            if let Some(old_supervisor) = old_supervisor {
+                self.remove_supervisor_child(&old_supervisor, pid.id);
+            }
+        }
+        let Some(entry) = self.process_runtime.processes.get_mut(&pid.id) else {
+            return Err(RuntimeError::new(format!(
+                "process {} disappeared during supervisor adopt",
+                pid.id
+            )));
+        };
         entry.lifecycle_sink = Some(LifecycleSink::Supervisor(supervisor_name.clone()));
-        self.process_runtime
-            .root_supervisor
-            .child_table
-            .entry(supervisor_name)
-            .or_default()
-            .push(pid.id);
+        self.add_supervisor_child(&supervisor_name, pid.id);
         Ok(ok_vm_result(Value::Unit))
     }
 
@@ -1672,13 +1711,7 @@ impl VM {
                 "unknown supervisor `{supervisor_name}`"
             )));
         };
-        let child_count = self
-            .process_runtime
-            .root_supervisor
-            .child_table
-            .get(&supervisor_name)
-            .map(|children| children.len() as i64)
-            .unwrap_or(0);
+        let child_count = self.unique_live_supervisor_child_count(&supervisor_name);
         let Some(tag) = self
             .type_registry()
             .entries
@@ -1965,14 +1998,69 @@ impl VM {
             .get(&pid)
             .and_then(|entry| entry.lifecycle_sink.clone())
         {
-            self.process_runtime
-                .root_supervisor
-                .child_table
-                .entry(supervisor_name)
-                .or_default()
-                .push(pid);
+            self.add_supervisor_child(&supervisor_name, pid);
         }
         Ok(pid)
+    }
+
+    fn add_supervisor_child(&mut self, supervisor_name: &str, pid: u64) {
+        let children = self
+            .process_runtime
+            .root_supervisor
+            .child_table
+            .entry(supervisor_name.to_string())
+            .or_default();
+        if !children.contains(&pid) {
+            children.push(pid);
+        }
+    }
+
+    fn remove_supervisor_child(&mut self, supervisor_name: &str, pid: u64) {
+        if let Some(children) = self
+            .process_runtime
+            .root_supervisor
+            .child_table
+            .get_mut(supervisor_name)
+        {
+            children.retain(|child_pid| *child_pid != pid);
+        }
+    }
+
+    fn is_adoptable_worker(&self, entry: &ProcessInstance) -> bool {
+        let Some(spec) = self.process_runtime.spec_for_id(entry.spec_id) else {
+            return false;
+        };
+        matches!(
+            entry.status,
+            ProcessStatus::Runnable | ProcessStatus::Waiting(_)
+        ) && spec.instance == RuntimeProcessInstance::Worker
+    }
+
+    fn unique_live_supervisor_child_count(&self, supervisor_name: &str) -> i64 {
+        let Some(children) = self
+            .process_runtime
+            .root_supervisor
+            .child_table
+            .get(supervisor_name)
+        else {
+            return 0;
+        };
+        children
+            .iter()
+            .filter(|pid| {
+                self.process_runtime
+                    .processes
+                    .get(pid)
+                    .is_some_and(|entry| {
+                        matches!(
+                            entry.status,
+                            ProcessStatus::Runnable | ProcessStatus::Waiting(_)
+                        )
+                    })
+            })
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len() as i64
     }
 
     pub(crate) fn infer_worker_process_name_from_callable(
@@ -2055,6 +2143,23 @@ impl VM {
             .resolve_future(future_id, timeout_value);
     }
 
+    pub(crate) fn process_sleep(&mut self, millis: u64) -> Result<Value, RuntimeError> {
+        if millis == 0 {
+            return Ok(ok_vm_result(Value::Unit));
+        }
+        let future_id = self
+            .process_runtime
+            .allocate_future(None, Some(millis), false);
+        Ok(Value::PendingFuture(future_id))
+    }
+
+    #[allow(dead_code)]
+    fn resolve_sleep_future(&mut self, future_id: FutureId) -> Result<(), RuntimeError> {
+        let value = ok_vm_result(Value::Unit);
+        let _ = self.process_runtime.resolve_future(future_id, value);
+        Ok(())
+    }
+
     #[allow(dead_code)]
     fn resolve_future_process_down(&mut self, future_id: FutureId, pid: u64) {
         let process_down = self.process_err_value(
@@ -2068,7 +2173,16 @@ impl VM {
     fn expire_process_deadlines(&mut self, now_tick: u64) -> Vec<FutureId> {
         let expired = self.process_runtime.collect_expired_futures(now_tick);
         for future_id in &expired {
-            self.resolve_future_timeout(*future_id);
+            let cancel_on_timeout = self
+                .process_runtime
+                .futures
+                .get(future_id)
+                .is_some_and(|future| future.cancel_on_timeout);
+            if cancel_on_timeout {
+                self.resolve_future_timeout(*future_id);
+            } else {
+                let _ = self.resolve_sleep_future(*future_id);
+            }
         }
         expired
     }
@@ -2323,9 +2437,14 @@ impl VM {
                 self.last_result = Some(self.stack.last().cloned().unwrap_or(Value::Unit));
                 Ok(())
             }
-            StepOutcome::Pending { .. } => Err(RuntimeError::new(
-                "top-level execution suspended without scheduler support",
-            )),
+            pending @ StepOutcome::Pending { .. } => match self.drive_pending_to_halt(pending)? {
+                StepOutcome::Halt(_) => {
+                    self.last_result = Some(self.stack.last().cloned().unwrap_or(Value::Unit));
+                    Ok(())
+                }
+                StepOutcome::RuntimeError(err) => Err(err),
+                _ => Err(RuntimeError::new("top-level execution did not finish")),
+            },
             StepOutcome::RuntimeError(err) => Err(err),
             StepOutcome::Continue => Err(RuntimeError::new("top-level execution did not finish")),
         }
@@ -2451,9 +2570,16 @@ impl VM {
                 self.stack.clear();
                 Ok(result)
             }
-            StepOutcome::Pending { .. } => Err(RuntimeError::new(
-                "chunk execution suspended without scheduler support",
-            )),
+            pending @ StepOutcome::Pending { .. } => match self.drive_pending_to_halt(pending)? {
+                StepOutcome::Halt(_) => {
+                    let result = self.stack.pop().unwrap_or(Value::Unit);
+                    self.last_result = Some(result.clone());
+                    self.stack.clear();
+                    Ok(result)
+                }
+                StepOutcome::RuntimeError(err) => Err(err),
+                _ => Err(RuntimeError::new("chunk execution did not finish")),
+            },
             StepOutcome::RuntimeError(err) => Err(err),
             StepOutcome::Continue => Err(RuntimeError::new("chunk execution did not finish")),
         }
@@ -2653,7 +2779,11 @@ impl VM {
         result
     }
 
-    fn load_local_or_pending(&mut self, slot: u32) -> Result<OpcodeControl, RuntimeError> {
+    fn load_local_or_pending(
+        &mut self,
+        slot: u32,
+        resume_pc: usize,
+    ) -> Result<OpcodeControl, RuntimeError> {
         let slot_index = slot as usize;
         let value = self
             .current_frame()?
@@ -2680,7 +2810,10 @@ impl VM {
                     self.stack.push(value);
                     Ok(OpcodeControl::Continue)
                 } else {
-                    Ok(OpcodeControl::Pending(future_id))
+                    Ok(OpcodeControl::Pending {
+                        future_id,
+                        resume_pc,
+                    })
                 }
             }
             value => {
@@ -2706,11 +2839,33 @@ impl VM {
         }
     }
 
+    fn resolve_ready_pending_stack_values(&mut self) {
+        let futures = &self.process_runtime.futures;
+        for value in &mut self.stack {
+            let Value::PendingFuture(future_id) = value else {
+                continue;
+            };
+            let Some(resolved) = futures
+                .get(future_id)
+                .and_then(|future| match &future.state {
+                    FutureState::Ready(value) | FutureState::Cancelled(value) => {
+                        Some(value.clone())
+                    }
+                    FutureState::Running => None,
+                })
+            else {
+                continue;
+            };
+            *value = resolved;
+        }
+    }
+
     fn run_until_outcome(&mut self, mut pc: usize, target: ExecutionTarget) -> StepOutcome {
         loop {
             if pc >= self.bytecode.opcodes.len() {
                 return StepOutcome::RuntimeError(RuntimeError::new("PC out of bounds"));
             }
+            self.resolve_ready_pending_stack_values();
             self.pc = pc;
             let current_pc = pc;
             let op = self.bytecode.opcodes[current_pc].clone();
@@ -2744,10 +2899,13 @@ impl VM {
                     self.pc = next_pc;
                     return StepOutcome::Halt(self.stack.last().cloned().unwrap_or(Value::Unit));
                 }
-                OpcodeControl::Pending(future_id) => {
+                OpcodeControl::Pending {
+                    future_id,
+                    resume_pc,
+                } => {
                     return StepOutcome::Pending {
                         future_id,
-                        resume: self.capture_execution_context(current_pc, target),
+                        resume: self.capture_execution_context(resume_pc, target),
                     };
                 }
             }
@@ -2760,6 +2918,32 @@ impl VM {
         let target = context.target.clone();
         self.restore_execution_context(context);
         self.run_until_outcome(pc, target)
+    }
+
+    fn drive_pending_to_halt(
+        &mut self,
+        mut outcome: StepOutcome,
+    ) -> Result<StepOutcome, RuntimeError> {
+        loop {
+            match outcome {
+                StepOutcome::Pending { future_id, resume } => {
+                    let Some(deadline_tick) = self
+                        .process_runtime
+                        .futures
+                        .get(&future_id)
+                        .and_then(|future| future.deadline_tick)
+                    else {
+                        return Err(RuntimeError::new(format!(
+                            "execution suspended on unresolved future {}",
+                            future_id
+                        )));
+                    };
+                    self.expire_process_deadlines(deadline_tick);
+                    outcome = self.resume_execution(resume);
+                }
+                other => return Ok(other),
+            }
+        }
     }
 
     fn invoke_callable_step(&mut self, callable: Callable, args: Vec<Value>) -> StepOutcome {
@@ -2821,9 +3005,11 @@ impl VM {
     ) -> Result<Value, RuntimeError> {
         match self.invoke_callable_step(callable, args) {
             StepOutcome::Halt(value) => Ok(value),
-            StepOutcome::Pending { .. } => Err(RuntimeError::new(
-                "callable suspended without scheduler support",
-            )),
+            pending @ StepOutcome::Pending { .. } => match self.drive_pending_to_halt(pending)? {
+                StepOutcome::Halt(value) => Ok(value),
+                StepOutcome::RuntimeError(err) => Err(err),
+                _ => Err(RuntimeError::new("callable execution did not finish")),
+            },
             StepOutcome::RuntimeError(err) => Err(err),
             StepOutcome::Continue => Err(RuntimeError::new("callable execution did not finish")),
         }
@@ -2846,6 +3032,29 @@ impl VM {
     ) -> Result<Value, RuntimeError> {
         loop {
             match outcome {
+                StepOutcome::Halt(Value::PendingFuture(awaited_future)) => {
+                    if let Some(deadline_tick) = self
+                        .process_runtime
+                        .futures
+                        .get(&future_id)
+                        .and_then(|future| future.deadline_tick)
+                    {
+                        self.expire_process_deadlines(deadline_tick);
+                        if let Some(value) = self.ready_future_value(future_id) {
+                            return Ok(value);
+                        }
+                    }
+                    if self.ready_future_value(awaited_future).is_none() {
+                        return Err(RuntimeError::new(format!(
+                            "task suspended on unresolved future {}",
+                            awaited_future
+                        )));
+                    }
+                    let value = self.ready_future_value(awaited_future).ok_or_else(|| {
+                        RuntimeError::new(format!("future {} did not resolve", awaited_future))
+                    })?;
+                    outcome = StepOutcome::Halt(value);
+                }
                 StepOutcome::Halt(value) => {
                     self.process_runtime
                         .resolve_future(future_id, value.clone());
@@ -2860,6 +3069,17 @@ impl VM {
                     future_id: awaited_future,
                     resume,
                 } => {
+                    if let Some(deadline_tick) = self
+                        .process_runtime
+                        .futures
+                        .get(&future_id)
+                        .and_then(|future| future.deadline_tick)
+                    {
+                        self.expire_process_deadlines(deadline_tick);
+                        if let Some(value) = self.ready_future_value(future_id) {
+                            return Ok(value);
+                        }
+                    }
                     if self.ready_future_value(awaited_future).is_none() {
                         return Err(RuntimeError::new(format!(
                             "task suspended on unresolved future {}",
@@ -2890,35 +3110,38 @@ impl VM {
         mode: TaskMode,
         timeout_ms: Option<u64>,
     ) -> Result<Value, RuntimeError> {
-        let started = Instant::now();
         match mode {
             TaskMode::Call | TaskMode::Async => {
-                let completion_future = self.process_runtime.allocate_future(None, None, false);
+                let completion_future =
+                    self.process_runtime
+                        .allocate_future(None, timeout_ms, timeout_ms.is_some());
                 let outcome = self.invoke_callable_step(callable, Vec::new());
-                let result = self.await_task_completion(completion_future, outcome)?;
-                Ok(self.apply_task_timeout(timeout_ms, started, result))
+                self.await_task_completion(completion_future, outcome)
             }
             TaskMode::Launch => {
-                let _ = self.invoke_callable_sync(callable, Vec::new())?;
-                Ok(self.apply_task_timeout(timeout_ms, started, ok_vm_result(Value::Unit)))
+                if timeout_ms.is_none() {
+                    let _ = self.invoke_callable_sync(callable, Vec::new())?;
+                    return Ok(ok_vm_result(Value::Unit));
+                }
+                let completion_future =
+                    self.process_runtime
+                        .allocate_future(None, timeout_ms, timeout_ms.is_some());
+                let outcome = self.invoke_callable_step(callable, Vec::new());
+                let _ = self.await_task_completion(completion_future, outcome)?;
+                Ok(ok_vm_result(Value::Unit))
             }
             TaskMode::Cast => {
-                let _ = self.invoke_callable_sync(callable, Vec::new())?;
-                Ok(self.apply_task_timeout(timeout_ms, started, ok_vm_result(Value::Unit)))
+                if timeout_ms.is_none() {
+                    let _ = self.invoke_callable_sync(callable, Vec::new())?;
+                    return Ok(ok_vm_result(Value::Unit));
+                }
+                let completion_future =
+                    self.process_runtime
+                        .allocate_future(None, timeout_ms, timeout_ms.is_some());
+                let outcome = self.invoke_callable_step(callable, Vec::new());
+                let _ = self.await_task_completion(completion_future, outcome)?;
+                Ok(ok_vm_result(Value::Unit))
             }
-        }
-    }
-
-    fn apply_task_timeout(&self, timeout_ms: Option<u64>, started: Instant, value: Value) -> Value {
-        let Some(timeout_ms) = timeout_ms else {
-            return value;
-        };
-        if started.elapsed().as_millis() > u128::from(timeout_ms) {
-            err_vm_result(
-                self.process_error("Timeout", &format!("task timed out after {}ms", timeout_ms)),
-            )
-        } else {
-            value
         }
     }
 
@@ -3357,7 +3580,7 @@ impl VM {
             }
 
             Opcode::LoadLocal(slot) => {
-                return self.load_local_or_pending(slot);
+                return self.load_local_or_pending(slot, (*pc).saturating_sub(1));
             }
 
             Opcode::StoreLocal(slot) => {
@@ -3679,7 +3902,17 @@ impl VM {
                 let result = self.with_call_site(Some((span_start, span_end)), |vm| {
                     call_builtin(vm, builtin_id, args)
                 })?;
+                let pending_future = match result {
+                    Value::PendingFuture(future_id) => Some(future_id),
+                    _ => None,
+                };
                 self.stack.push(result);
+                if let Some(future_id) = pending_future {
+                    return Ok(OpcodeControl::Pending {
+                        future_id,
+                        resume_pc: *pc,
+                    });
+                }
             }
 
             Opcode::Call {
@@ -3907,7 +4140,17 @@ impl VM {
                         let result = self.with_call_site(Some((span_start, span_end)), |vm| {
                             call_builtin(vm, builtin_id, full_args)
                         })?;
+                        let pending_future = match result {
+                            Value::PendingFuture(future_id) => Some(future_id),
+                            _ => None,
+                        };
                         self.stack.push(result);
+                        if let Some(future_id) = pending_future {
+                            return Ok(OpcodeControl::Pending {
+                                future_id,
+                                resume_pc: *pc,
+                            });
+                        }
                     }
                     CallableTarget::Function(fun_idx) => {
                         let entry = self.function_entry(fun_idx)?.clone();
@@ -4284,6 +4527,9 @@ impl ProcessRuntime {
         let Some(future) = self.futures.get_mut(&future_id) else {
             return Vec::new();
         };
+        if !matches!(future.state, FutureState::Running) {
+            return Vec::new();
+        }
         future.state = FutureState::Ready(value);
         if let Some(correlation_id) = future.correlation_id.take() {
             self.reply_table.remove(&correlation_id);
@@ -4458,6 +4704,13 @@ mod tests {
         }
     }
 
+    fn builtin_id(name: &str) -> u16 {
+        sindr::builtin::BUILTIN_METAS
+            .iter()
+            .position(|meta| meta.name == name)
+            .unwrap_or_else(|| panic!("missing builtin `{name}`")) as u16
+    }
+
     fn test_runtime_process_spec(
         process_id: u32,
         process_name: impl Into<String>,
@@ -4578,6 +4831,55 @@ mod tests {
         bytecode
     }
 
+    fn allow_adopt_policy() -> RuntimeSupervisorPolicy {
+        RuntimeSupervisorPolicy {
+            strategy: "OneForOne".into(),
+            max_restarts: 5,
+            max_seconds: 10,
+            child_restart_default: "Transient".into(),
+            allow_adopt: true,
+            shutdown_timeout_ms: None,
+        }
+    }
+
+    fn supervisor_spec(process_id: u32, process_name: &str) -> RuntimeProcessSpec {
+        RuntimeProcessSpec {
+            supervision: RuntimeSupervisionSpec {
+                policy: Some(allow_adopt_policy()),
+                ..RuntimeSupervisionSpec::default()
+            },
+            ..test_runtime_process_spec(
+                process_id,
+                process_name,
+                RuntimeProcessKind::Supervisor,
+                RuntimeProcessInstance::Singleton,
+                false,
+                0,
+                1,
+                None,
+            )
+        }
+    }
+
+    fn supervisor_status_type_registry() -> TypeRegistry {
+        let mut registry = TypeRegistry::new();
+        registry.register(TypeEntry {
+            tag: 10,
+            name: "SupervisorStatus".into(),
+            kind: TypeKind::Struct,
+            field_names: vec![
+                "name".into(),
+                "child_count".into(),
+                "strategy".into(),
+                "max_restarts".into(),
+                "max_seconds".into(),
+                "allow_adopt".into(),
+            ],
+            private_flags: vec![false; 6],
+        });
+        registry
+    }
+
     #[test]
     fn vm_new_registers_runtime_process_specs_from_bytecode() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
@@ -4688,33 +4990,70 @@ mod tests {
     }
 
     #[test]
+    fn process_spawn_registers_top_level_worker_under_dynamic_supervisor() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Halt,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::StructNew { field_count: 1 },
+            Opcode::Return,
+        ]);
+        bytecode.constants = vec![Constant::Tag(0), Constant::Int(int(7))];
+        bytecode.functions = vec![function_entry(0, 1, 0, 0, Some("Worker::init"))];
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![test_runtime_process_spec(
+                0,
+                "Worker",
+                RuntimeProcessKind::Agent,
+                RuntimeProcessInstance::Worker,
+                false,
+                0,
+                1,
+                None,
+            )],
+        };
+
+        let mut vm = VM::new(bytecode);
+        let value = vm
+            .process_spawn(
+                "Worker".into(),
+                Callable {
+                    target: CallableTarget::Function(0),
+                    lexical_captures: Vec::new(),
+                    metadata: CallableMetadata::default(),
+                },
+            )
+            .expect("spawn should return a Result value");
+        let pid = match decode_vm_result(value, "test", "spawn") {
+            Ok(Ok(Value::Pid(pid))) => pid,
+            other => panic!("expected Ok(pid), got {other:?}"),
+        };
+        let instance = vm
+            .process_runtime
+            .processes
+            .get(&pid.id)
+            .expect("spawned worker should be stored");
+
+        assert_eq!(instance.owner, None);
+        assert_eq!(
+            instance.lifecycle_sink,
+            Some(super::LifecycleSink::Supervisor("DynamicSupervisor".into()))
+        );
+        assert_eq!(
+            vm.process_runtime
+                .root_supervisor
+                .child_table
+                .get("DynamicSupervisor"),
+            Some(&vec![pid.id])
+        );
+    }
+
+    #[test]
     fn supervisor_adopt_reassigns_lifecycle_sink() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
             entries: vec![
-                RuntimeProcessSpec {
-                    supervision: RuntimeSupervisionSpec {
-                        policy: Some(RuntimeSupervisorPolicy {
-                            strategy: "OneForOne".into(),
-                            max_restarts: 5,
-                            max_seconds: 10,
-                            child_restart_default: "Transient".into(),
-                            allow_adopt: true,
-                            shutdown_timeout_ms: None,
-                        }),
-                        ..RuntimeSupervisionSpec::default()
-                    },
-                    ..test_runtime_process_spec(
-                        0,
-                        "MySup",
-                        RuntimeProcessKind::Supervisor,
-                        RuntimeProcessInstance::Singleton,
-                        false,
-                        0,
-                        1,
-                        None,
-                    )
-                },
+                supervisor_spec(0, "MySup"),
                 test_runtime_process_spec(
                     1,
                     "Worker",
@@ -4732,14 +5071,7 @@ mod tests {
             .supervisor_overrides
             .push(RuntimeSupervisorOverrideEntry {
                 process_name: "MySup".into(),
-                policy: RuntimeSupervisorPolicy {
-                    strategy: "OneForOne".into(),
-                    max_restarts: 5,
-                    max_seconds: 10,
-                    child_restart_default: "Transient".into(),
-                    allow_adopt: true,
-                    shutdown_timeout_ms: None,
-                },
+                policy: allow_adopt_policy(),
             });
         let mut vm = VM::new(bytecode);
         let pid = vm
@@ -4767,6 +5099,175 @@ mod tests {
             instance.lifecycle_sink,
             Some(super::LifecycleSink::Supervisor("MySup".into()))
         );
+    }
+
+    #[test]
+    fn supervisor_adopt_is_idempotent_for_same_supervisor() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![
+                supervisor_spec(0, "MySup"),
+                test_runtime_process_spec(
+                    1,
+                    "Worker",
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Worker,
+                    false,
+                    0,
+                    1,
+                    None,
+                ),
+            ],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process_state("Worker".into(), Some(Value::Int(int(7))))
+            .expect("worker should allocate");
+        let handle = PidHandle {
+            id: pid,
+            process_name: "Worker".into(),
+        };
+
+        for _ in 0..2 {
+            assert!(matches!(
+                decode_vm_result(
+                    vm.supervisor_adopt("MySup".into(), handle.clone())
+                        .expect("adopt should return Result"),
+                    "test",
+                    "adopt",
+                ),
+                Ok(Ok(Value::Unit))
+            ));
+        }
+
+        assert_eq!(
+            vm.process_runtime.root_supervisor.child_table.get("MySup"),
+            Some(&vec![pid])
+        );
+    }
+
+    #[test]
+    fn supervisor_adopt_handoff_removes_worker_from_old_supervisor() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![
+                supervisor_spec(0, "SupA"),
+                supervisor_spec(1, "SupB"),
+                test_runtime_process_spec(
+                    2,
+                    "Worker",
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Worker,
+                    false,
+                    0,
+                    1,
+                    None,
+                ),
+            ],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_supervised_worker("Worker".into(), Some(Value::Int(int(7))), "SupA".into())
+            .expect("worker should allocate under SupA");
+
+        let value = vm
+            .supervisor_adopt(
+                "SupB".into(),
+                PidHandle {
+                    id: pid,
+                    process_name: "Worker".into(),
+                },
+            )
+            .expect("handoff adopt should return Result");
+
+        assert!(matches!(
+            decode_vm_result(value, "test", "adopt"),
+            Ok(Ok(Value::Unit))
+        ));
+        assert_eq!(
+            vm.process_runtime.root_supervisor.child_table.get("SupA"),
+            Some(&Vec::<u64>::new())
+        );
+        assert_eq!(
+            vm.process_runtime.root_supervisor.child_table.get("SupB"),
+            Some(&vec![pid])
+        );
+    }
+
+    #[test]
+    fn supervisor_adopt_rejects_singleton_pid_with_process_error_result() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![
+                supervisor_spec(0, "MySup"),
+                test_runtime_process_spec(
+                    1,
+                    "Counter",
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Singleton,
+                    false,
+                    0,
+                    1,
+                    None,
+                ),
+            ],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process_state("Counter".into(), Some(Value::Int(int(7))))
+            .expect("singleton process should allocate");
+
+        let value = vm
+            .supervisor_adopt(
+                "MySup".into(),
+                PidHandle {
+                    id: pid,
+                    process_name: "Counter".into(),
+                },
+            )
+            .expect("adopt rejection should be encoded as Result::Err");
+
+        assert_err_result(value, "SupervisorAdoptInvalidPid", "only Worker");
+    }
+
+    #[test]
+    fn supervisor_status_counts_unique_live_children() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry = supervisor_status_type_registry();
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![
+                supervisor_spec(0, "MySup"),
+                test_runtime_process_spec(
+                    1,
+                    "Worker",
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Worker,
+                    false,
+                    0,
+                    1,
+                    None,
+                ),
+            ],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process_state("Worker".into(), Some(Value::Int(int(7))))
+            .expect("worker process should allocate");
+        vm.process_runtime
+            .root_supervisor
+            .child_table
+            .insert("MySup".into(), vec![pid, pid, pid + 999]);
+
+        let value = vm
+            .supervisor_status("MySup".into())
+            .expect("status should return Result");
+
+        match decode_vm_result(value, "test", "status") {
+            Ok(Ok(Value::Tagged { fields, .. })) => {
+                assert_eq!(fields.get(1), Some(&Value::Int(int(1))));
+            }
+            other => panic!("expected Ok(SupervisorStatus), got {other:?}"),
+        }
     }
 
     #[test]
@@ -4988,6 +5489,76 @@ mod tests {
                 deadline_tick: 42,
                 future_id,
             })
+        );
+    }
+
+    #[test]
+    fn process_sleep_suspends_with_deadline_future_and_resumes_ok() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let value = vm.process_sleep(10).expect("sleep should schedule");
+        let Value::PendingFuture(future_id) = value else {
+            panic!("expected pending sleep future, got {value:?}");
+        };
+        let future = vm
+            .process_runtime
+            .futures
+            .get(&future_id)
+            .expect("sleep future should be tracked");
+        assert_eq!(future.deadline_tick, Some(10));
+        assert_eq!(future.state, super::FutureState::Running);
+        assert_eq!(
+            vm.process_runtime.deadline_queue.front(),
+            Some(&super::DeadlineEntry {
+                deadline_tick: 10,
+                future_id,
+            })
+        );
+
+        vm.resolve_sleep_future(future_id)
+            .expect("sleep future should resolve");
+        assert_eq!(
+            vm.ready_future_value(future_id),
+            Some(super::ok_vm_result(Value::Unit))
+        );
+    }
+
+    #[test]
+    fn task_timeout_deadline_wins_before_unresolved_sleep_completion() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry.register(TypeEntry {
+            tag: 2,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: vec![true],
+        });
+        let mut vm = VM::new(bytecode);
+        let callable = Callable {
+            target: CallableTarget::Builtin(builtin_id("__process_sleep")),
+            lexical_captures: vec![Value::Tagged {
+                tag: 2,
+                fields: vec![Value::Int(int(100))],
+            }],
+            metadata: CallableMetadata::default(),
+        };
+
+        let value = vm
+            .invoke_task_with_timeout(callable, TaskMode::Async, Some(1))
+            .expect("task timeout should return a Result value");
+        assert!(matches!(
+            value,
+            Value::Tagged { tag: 1, fields } if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Timeout")
+        ));
+        assert!(
+            vm.process_runtime.reply_table.is_empty(),
+            "timeout should not leave reply waiters"
+        );
+        assert!(
+            vm.process_runtime
+                .deadline_queue
+                .iter()
+                .all(|entry| entry.deadline_tick > 1),
+            "completion timeout deadline should be consumed"
         );
     }
 

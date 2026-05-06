@@ -1793,6 +1793,115 @@ impl Checker {
         }
     }
 
+    fn process_handler_function_ty(&self, uid: u32) -> Option<(Vec<Ty>, Ty)> {
+        match self.env.lookup_var(uid)? {
+            Ty::UserFunc { params, ret, .. } | Ty::BuiltinFunc { params, ret, .. } => {
+                Some((params.clone(), ret.as_ref().clone()))
+            }
+            _ => None,
+        }
+    }
+
+    fn process_result_ok_ty(&self, ty: &Ty) -> Option<Ty> {
+        match self.resolve_ty(ty) {
+            Ty::Result(ok, _) => Some(ok.as_ref().clone()),
+            _ => None,
+        }
+    }
+
+    fn process_handler_public_name(process: &TypedProcessSpec, handler_name: &str) -> String {
+        format!("{}::{}", process.process_name, handler_name)
+    }
+
+    fn validate_handler_first_param_state(
+        &self,
+        process: &TypedProcessSpec,
+        handler_kind: &str,
+        handler_name: &str,
+        params: &[Ty],
+        state_ty: &Ty,
+        state_name: &str,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        let state_param = match params.first() {
+            Some(first) if matches!(self.resolve_ty(first), Ty::Pid(name) if name == process.process_name) => {
+                params.get(1)
+            }
+            _ => params.first(),
+        };
+        if state_param.is_some_and(|param| self.resolve_ty(param) == *state_ty) {
+            return Ok(());
+        }
+
+        Err(TypeError {
+            message: format!(
+                "@{} handler `{}` first parameter must match process state type `{}`",
+                handler_kind,
+                Self::process_handler_public_name(process, handler_name),
+                state_name
+            ),
+            span,
+            hint: None,
+        })
+    }
+
+    fn validate_handler_result_ok_state(
+        &self,
+        process: &TypedProcessSpec,
+        handler_kind: &str,
+        handler_name: &str,
+        ret: &Ty,
+        state_ty: &Ty,
+        state_name: &str,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        if self
+            .process_result_ok_ty(ret)
+            .is_some_and(|ok| self.resolve_ty(&ok) == *state_ty)
+        {
+            return Ok(());
+        }
+
+        Err(TypeError {
+            message: format!(
+                "@{} handler `{}` Result ok type must match process state type `{}`",
+                handler_kind,
+                Self::process_handler_public_name(process, handler_name),
+                state_name
+            ),
+            span,
+            hint: None,
+        })
+    }
+
+    fn validate_call_handler_result_state(
+        &self,
+        process: &TypedProcessSpec,
+        handler_name: &str,
+        ret: &Ty,
+        state_ty: &Ty,
+        state_name: &str,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        let has_state = self.process_result_ok_ty(ret).is_some_and(|ok| {
+            matches!(self.resolve_ty(&ok), Ty::Tuple(items) if items.len() == 2
+                && self.resolve_ty(&items[1]) == *state_ty)
+        });
+        if has_state {
+            return Ok(());
+        }
+
+        Err(TypeError {
+            message: format!(
+                "@call handler `{}` Result reply tuple state item must match process state type `{}`",
+                Self::process_handler_public_name(process, handler_name),
+                state_name
+            ),
+            span,
+            hint: None,
+        })
+    }
+
     pub(super) fn ty_contains_process_state_type(&self, ty: &Ty) -> Option<(String, String)> {
         match self.resolve_ty(ty) {
             Ty::Struct(name, fields) | Ty::Record(name, fields) => {
@@ -1904,6 +2013,94 @@ impl Checker {
                     span: Span { start: 0, end: 0 },
                     hint: None,
                 });
+            }
+
+            let state_ty = self.resolve_ty(&state_ty);
+            let handler_uids = process
+                .handler_uids
+                .iter()
+                .map(|handler| (handler.internal_name.as_str(), handler.uid))
+                .collect::<HashMap<_, _>>();
+            for handler in &process.spec.handler_specs {
+                let Some(uid) = handler_uids.get(handler.internal_name.as_str()).copied() else {
+                    continue;
+                };
+                let Some((params, ret)) = self.process_handler_function_ty(uid) else {
+                    continue;
+                };
+                match handler.kind {
+                    spire::ast::ProcessRuntimeHandlerKind::Init => {}
+                    spire::ast::ProcessRuntimeHandlerKind::Get => {
+                        self.validate_handler_first_param_state(
+                            process,
+                            "get",
+                            &handler.name,
+                            &params,
+                            &state_ty,
+                            &state_name,
+                            handler.span.clone(),
+                        )?;
+                    }
+                    spire::ast::ProcessRuntimeHandlerKind::Set => {
+                        self.validate_handler_first_param_state(
+                            process,
+                            "set",
+                            &handler.name,
+                            &params,
+                            &state_ty,
+                            &state_name,
+                            handler.span.clone(),
+                        )?;
+                        self.validate_handler_result_ok_state(
+                            process,
+                            "set",
+                            &handler.name,
+                            &ret,
+                            &state_ty,
+                            &state_name,
+                            handler.span.clone(),
+                        )?;
+                    }
+                    spire::ast::ProcessRuntimeHandlerKind::Call => {
+                        self.validate_handler_first_param_state(
+                            process,
+                            "call",
+                            &handler.name,
+                            &params,
+                            &state_ty,
+                            &state_name,
+                            handler.span.clone(),
+                        )?;
+                        self.validate_call_handler_result_state(
+                            process,
+                            &handler.name,
+                            &ret,
+                            &state_ty,
+                            &state_name,
+                            handler.span.clone(),
+                        )?;
+                    }
+                    spire::ast::ProcessRuntimeHandlerKind::Cast => {
+                        self.validate_handler_first_param_state(
+                            process,
+                            "cast",
+                            &handler.name,
+                            &params,
+                            &state_ty,
+                            &state_name,
+                            handler.span.clone(),
+                        )?;
+                        self.validate_handler_result_ok_state(
+                            process,
+                            "cast",
+                            &handler.name,
+                            &ret,
+                            &state_ty,
+                            &state_name,
+                            handler.span.clone(),
+                        )?;
+                    }
+                }
             }
         }
         Ok(())

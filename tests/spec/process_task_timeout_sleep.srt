@@ -1,0 +1,1 @@
+print(inspect(Task::async({|| Process::sleep(100ms) }) @timeout(1ms)))

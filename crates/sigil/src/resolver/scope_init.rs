@@ -18,39 +18,19 @@ pub(super) fn initialize_scope() -> Scope {
             scope.define_with_id(meta.name, builtin_uid(idx as u16));
         }
     }
+    if let Some(hidden_boundary_idx) = BUILTIN_METAS
+        .iter()
+        .position(|meta| meta.name == "__task_cast_timeout")
+    {
+        scope.advance_next_id_to(builtin_uid((hidden_boundary_idx + 1) as u16));
+    }
     scope
 }
 
 fn is_global_runtime_builtin(name: &str) -> bool {
     matches!(
         name,
-        "print"
-            | "to_string"
-            | "inspect"
-            | "safe_div"
-            | "safe_mod"
-            | "eprint"
-            | "set_exit_code"
-            | "__process_pid"
-            | "__process_spawn"
-            | "__supervisor_spawn"
-            | "__supervisor_adopt"
-            | "__supervisor_status"
-            | "__supervisor_workers"
-            | "__process_state"
-            | "__process_store"
-            | "__process_self"
-            | "__process_context_handler"
-            | "__out_handler_write"
-            | "__process_sleep"
-            | "__task_call"
-            | "__task_async"
-            | "__task_launch"
-            | "__task_cast"
-            | "__task_call_timeout"
-            | "__task_async_timeout"
-            | "__task_launch_timeout"
-            | "__task_cast_timeout"
+        "print" | "to_string" | "inspect" | "safe_div" | "safe_mod" | "eprint" | "set_exit_code"
     )
 }
 

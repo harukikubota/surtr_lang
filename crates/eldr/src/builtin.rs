@@ -12,8 +12,7 @@ use sindr::runtime::{
 use std::collections::HashMap;
 use std::io::{self, IsTerminal, Read};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
-use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Function pointer type for built-in implementations.
 pub type BuiltinFn = fn(&mut VM, Vec<Value>) -> Result<Value, RuntimeError>;
@@ -800,10 +799,9 @@ fn builtin_out_handler_write(vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
     vm.out_handler_write(pid, text.to_string())
 }
 
-fn builtin_process_sleep(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let millis = duration_to_u64(_vm, &args[0], "__process_sleep", "duration")?;
-    thread::sleep(StdDuration::from_millis(millis));
-    Ok(ok_result(Value::Unit))
+fn builtin_process_sleep(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let millis = duration_to_u64(vm, &args[0], "__process_sleep", "duration")?;
+    vm.process_sleep(millis)
 }
 
 fn builtin_process_init_pending(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {

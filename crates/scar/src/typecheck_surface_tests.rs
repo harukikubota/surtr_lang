@@ -3332,13 +3332,9 @@ fn process_self_typechecks_inside_process_handler() {
     )]);
     let declaration_index =
         sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
-    let resolved = sigil::resolve_staged_program_with_state(
-        &stages,
-        Vec::new(),
-        &declaration_index,
-        None,
-    )
-    .expect("resolve should succeed");
+    let resolved =
+        sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
+            .expect("resolve should succeed");
     crate::typecheck_staged_program(resolved)
         .expect("Process::self should typecheck inside process handler");
 }

@@ -1,0 +1,1 @@
+__out_handler_write(1, "msg")

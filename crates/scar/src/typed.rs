@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sigil::resolved::{ResolvedId, ResolvedProcessSpec};
+use sigil::resolved::{ResolvedId, ResolvedProcessHandlerUid, ResolvedProcessSpec};
 use sindr::primitives::SurtrInt;
 use spire::ast::{BinOp, Lit, ProcessSpec, Span, SupervisorInitSpec, Visibility};
 
@@ -28,6 +28,22 @@ pub struct TypedProcessSpec {
     pub init_uid: u32,
     pub get_uid: u32,
     pub set_uid: Option<u32>,
+    pub handler_uids: Vec<TypedProcessHandlerUid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypedProcessHandlerUid {
+    pub internal_name: String,
+    pub uid: u32,
+}
+
+impl From<ResolvedProcessHandlerUid> for TypedProcessHandlerUid {
+    fn from(value: ResolvedProcessHandlerUid) -> Self {
+        Self {
+            internal_name: value.internal_name,
+            uid: value.uid,
+        }
+    }
 }
 
 impl From<ResolvedProcessSpec> for TypedProcessSpec {
@@ -39,6 +55,7 @@ impl From<ResolvedProcessSpec> for TypedProcessSpec {
             init_uid: value.init_uid,
             get_uid: value.get_uid,
             set_uid: value.set_uid,
+            handler_uids: value.handler_uids.into_iter().map(Into::into).collect(),
         }
     }
 }

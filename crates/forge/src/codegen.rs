@@ -6666,6 +6666,7 @@ mod process_runtime_v2_tests {
             init_uid: 1,
             get_uid: 2,
             set_uid: None,
+            handler_uids: Vec::new(),
         }
     }
 

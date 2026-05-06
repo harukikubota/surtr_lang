@@ -643,6 +643,10 @@ Worker は `spawn` で生成し、`PID<Proc>` を通して扱う。
 | worker exit | lifecycle sink に配送 |
 | generic receive | 導入しない |
 
+top-level の plain Worker `spawn` には current process が存在しないため、
+初期実装では `DynamicSupervisor` を default lifecycle sink として登録する。
+process handler 内など current process context が確立している経路では current process owner を優先する。
+
 `Process::link` / `Process::monitor` / `Process::join` は v2 初期 surface には出さない。
 link は `owner` / `lifecycle_sink` / supervisor tree / restart policy の runtime 内部関係として扱う。
 monitor は generic receive を公開しない方針と相性が悪いため、必要になった場合は

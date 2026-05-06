@@ -178,6 +178,29 @@ pub fn resolve_staged_program_from_state(
                     related_labels: Vec::new(),
                 })?;
                 let set_uid = declaration_uids.get(&set_fq).copied();
+                let handler_uids = spec
+                    .handler_specs
+                    .iter()
+                    .map(|handler| {
+                        let fq_name = if handler.internal_name.is_empty() {
+                            format!("{}::{}", module.module_path, handler.name)
+                        } else {
+                            format!("{}::{}", module.module_path, handler.internal_name)
+                        };
+                        declaration_uids
+                            .get(&fq_name)
+                            .copied()
+                            .map(|uid| ResolvedProcessHandlerUid {
+                                internal_name: handler.internal_name.clone(),
+                                uid,
+                            })
+                            .ok_or_else(|| ResolveError {
+                                message: format!("missing lowered process handler `{fq_name}`"),
+                                span: handler.span.clone(),
+                                related_labels: Vec::new(),
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 process_specs.push(ResolvedProcessSpec {
                     module_path: module.module_path.clone(),
                     process_name: spec.process_name.clone(),
@@ -185,6 +208,7 @@ pub fn resolve_staged_program_from_state(
                     init_uid,
                     get_uid,
                     set_uid,
+                    handler_uids,
                 });
             }
         }

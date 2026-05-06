@@ -5947,7 +5947,10 @@ mod tests {
         assert_eq!(callable.lexical_captures.len(), 1, "{callable:?}");
 
         let CallableTarget::Function(fun_idx) = callable.target else {
-            panic!("expected function callable target, got {:?}", callable.target);
+            panic!(
+                "expected function callable target, got {:?}",
+                callable.target
+            );
         };
         let entry = bytecode
             .functions
@@ -5956,10 +5959,16 @@ mod tests {
         assert_eq!(entry.fun_idx, fun_idx, "{entry:?}");
         assert_eq!(entry.arity, 3, "{entry:?}");
         let Some(Value::Callable(inner)) = callable.lexical_captures.first() else {
-            panic!("expected f2 to capture f3 callable, got {:?}", callable.lexical_captures);
+            panic!(
+                "expected f2 to capture f3 callable, got {:?}",
+                callable.lexical_captures
+            );
         };
         let CallableTarget::Function(fun_idx) = inner.target.clone() else {
-            panic!("expected captured f3 function target, got {:?}", inner.target);
+            panic!(
+                "expected captured f3 function target, got {:?}",
+                inner.target
+            );
         };
         let entry = bytecode
             .functions
@@ -5982,10 +5991,16 @@ mod tests {
         };
         assert_eq!(callable.lexical_captures.len(), 1, "{callable:?}");
         let Some(Value::Callable(inner)) = callable.lexical_captures.first() else {
-            panic!("expected f1 to capture f2 callable, got {:?}", callable.lexical_captures);
+            panic!(
+                "expected f1 to capture f2 callable, got {:?}",
+                callable.lexical_captures
+            );
         };
         let CallableTarget::Function(fun_idx) = inner.target.clone() else {
-            panic!("expected captured f2 function target, got {:?}", inner.target);
+            panic!(
+                "expected captured f2 function target, got {:?}",
+                inner.target
+            );
         };
         let entry = bytecode
             .functions
@@ -5994,10 +6009,16 @@ mod tests {
         assert_eq!(entry.fun_idx, fun_idx, "{entry:?}");
         assert_eq!(entry.arity, 3, "{entry:?}");
         let Some(Value::Callable(inner_f3)) = inner.lexical_captures.first() else {
-            panic!("expected captured f2 to retain f3 callable, got {:?}", inner.lexical_captures);
+            panic!(
+                "expected captured f2 to retain f3 callable, got {:?}",
+                inner.lexical_captures
+            );
         };
         let CallableTarget::Function(fun_idx) = inner_f3.target.clone() else {
-            panic!("expected retained f3 function target, got {:?}", inner_f3.target);
+            panic!(
+                "expected retained f3 function target, got {:?}",
+                inner_f3.target
+            );
         };
         let entry = bytecode
             .functions

@@ -1,0 +1,2 @@
+phase: typecheck
+contains: @set handler `Counter::set` Result ok type must match process state type `CounterState`

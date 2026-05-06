@@ -1327,6 +1327,16 @@ impl Resolver {
             .scope
             .lookup(&name)
             .or_else(|| {
+                if compiler_generated && is_runtime_builtin_decl(&name) {
+                    BUILTIN_METAS
+                        .iter()
+                        .position(|meta| meta.name == name)
+                        .map(|idx| builtin_uid(idx as u16))
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
                 if name == "Tuple" {
                     Some(TUPLE_TYPE_ROOT_UID)
                 } else {
