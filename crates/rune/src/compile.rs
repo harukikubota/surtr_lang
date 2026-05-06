@@ -911,10 +911,11 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
 #[cfg(test)]
 mod tests {
     use super::{
-        diagnostic_location_for_span, load_error_span,
-        module_source_collection_error_as_rune_error, parse_script_ast_for_compile,
-        prepare_script_compile_plan, source_id_for_span,
+        collect_default_script_compile_sources, compile_source, diagnostic_location_for_span,
+        load_error_span, module_source_collection_error_as_rune_error,
+        parse_script_ast_for_compile, prepare_script_compile_plan, source_id_for_span,
     };
+    use crate::error::ExecutionEnv;
     use crate::error::RuneError;
     use spire::ast::Span;
     use xldr::{SourceKind, StagedModule};
@@ -1070,6 +1071,67 @@ print(to_string(1))
         assert_eq!(
             compile_sources.sources.file_name(source_id),
             Some("examples/mahjong/run.srt")
+        );
+    }
+
+    #[test]
+    fn compile_source_accepts_concrete_pid_annotation_in_script_worker_spawn() {
+        let source = r#"defagent MyWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @get
+  def value(state: Int) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}
+
+defsupervisor MySup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+
+supervisor_init {
+  MySup {}
+}
+
+pid: PID<MyWorker> =? MySup::spawn(MyWorker::init(1))
+"#;
+
+        let parsed = parse_script_ast_for_compile(source, 0, SourceKind::Script).unwrap();
+        let (process_stage, _) = xldr::extract_process_modules_from_user_ast(parsed);
+        let declaration_index = sigil::precollect_declaration_index(&[process_stage.clone()])
+            .expect("process declarations should precollect");
+        assert!(
+            declaration_index.contains_key("MyWorker::init"),
+            "expected process declaration index to expose MyWorker::init, got keys: {:?}",
+            declaration_index.keys().collect::<Vec<_>>()
+        );
+
+        let plan = prepare_script_compile_plan("process_pid_annotation.srt", source, None).unwrap();
+        let compile_sources = collect_default_script_compile_sources(
+            ExecutionEnv::Check,
+            "process_pid_annotation.srt",
+            source,
+            &plan.include_directives,
+        )
+        .unwrap();
+
+        let compiled = compile_source(ExecutionEnv::Check, &compile_sources, &plan);
+        assert!(
+            compiled.is_ok(),
+            "expected concrete PID annotation script to compile, got {compiled:?}"
         );
     }
 }

@@ -6,7 +6,7 @@ description = "Interactive and eXtensible surtr and eLDR runtime tools"
 
 [features]
 default = ["line-editor"]
-line-editor = ["dep:rustyline"]
+line-editor = ["dep:rustyline", "dep:crossterm"]
 tui = ["dep:ratatui", "dep:crossterm"]
 bench = ["dep:criterion"]
 

@@ -2,6 +2,13 @@ use eldr::builtin::inspect_value;
 use eldr::value::Value;
 use forge::{ChunkMeta, ReplCallableDisplay};
 
+fn rendered_binding_type(binding_ty: &str, value: &Value) -> String {
+    match value {
+        Value::Pid(pid) => format!("PID<{}>", pid.process_name),
+        _ => binding_ty.to_string(),
+    }
+}
+
 /// Render display lines for one evaluated result.
 ///
 /// Returns binding lines (`name: Type = value`), type-def names, or the
@@ -25,24 +32,26 @@ pub fn format_result_lines(
                 .bindings
                 .iter()
                 .filter_map(|b| {
-                    let displayed = if let Some(lens_info) = &b.lens_info {
-                        lens_info.full_path.clone()
-                    } else {
-                        let val = vm.get_local(b.slot_id)?;
-                        b.callable_display.as_ref().map_or_else(
-                            || inspect_value(vm, &val),
-                            |display| match display {
-                                ReplCallableDisplay::FnCapture { module, name, sig } => format!(
-                                    "FnCapture(module: {}, name: {}, sig: {})",
-                                    module, name, sig
-                                ),
-                                ReplCallableDisplay::Closure { sig } => {
-                                    format!("Closure{}", sig)
-                                }
-                            },
-                        )
-                    };
-                    Some(format!("{}: {} = {}", b.name, b.ty, displayed))
+                    if let Some(lens_info) = &b.lens_info {
+                        return Some(format!("{}: {} = {}", b.name, b.ty, lens_info.full_path));
+                    }
+
+                    let val = vm.get_local(b.slot_id)?;
+                    let rendered_ty = rendered_binding_type(&b.ty, &val);
+                    let displayed = b.callable_display.as_ref().map_or_else(
+                        || inspect_value(vm, &val),
+                        |display| match display {
+                            ReplCallableDisplay::FnCapture { module, name, sig } => format!(
+                                "FnCapture(module: {}, name: {}, sig: {})",
+                                module, name, sig
+                            ),
+                            ReplCallableDisplay::Closure { sig } => {
+                                format!("Closure{}", sig)
+                            }
+                        },
+                    );
+
+                    Some(format!("{}: {} = {}", b.name, rendered_ty, displayed))
                 })
                 .collect();
         }

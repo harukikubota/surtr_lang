@@ -60,6 +60,16 @@ impl AgentMeta {
     }
 }
 
+fn make_process_helper_private(def: Ast) -> Ast {
+    match def {
+        Ast::Def(span, name, type_params, params, ret_ty, body, mut attrs) => {
+            attrs.visibility = Visibility::Private;
+            Ast::Def(span, name, type_params, params, ret_ty, body, attrs)
+        }
+        other => other,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentHandlerKind {
     Init,
@@ -3616,7 +3626,7 @@ impl Parser<'_> {
                     }
                     set = Some(AgentHandler { def });
                 }
-                None => helpers.push(def),
+                None => helpers.push(make_process_helper_private(def)),
             }
             self.skip_newlines();
         }
@@ -3752,7 +3762,7 @@ impl Parser<'_> {
                         marker_span,
                     ));
                 }
-                None => helpers.push(def),
+                None => helpers.push(make_process_helper_private(def)),
             }
             self.skip_newlines();
         }

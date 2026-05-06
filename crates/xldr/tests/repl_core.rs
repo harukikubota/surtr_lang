@@ -1,10 +1,69 @@
 use std::fs;
+use std::time::Duration;
 
 use xldr::repl::logic::{ReplOutput, ReplResult};
 use xldr::ReplEngine;
 
 fn engine() -> ReplEngine {
     ReplEngine::new().expect("REPL engine should bootstrap")
+}
+
+fn process_engine() -> ReplEngine {
+    ReplEngine::from_script_source(
+        "process_preload.srt",
+        r#"
+defagent MyWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @get
+  def read(state: Int) -> Result<Int> { Ok(state) }
+
+  @set
+  def write(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+
+  def hidden_value(_state: Int) -> Result<Int> { Ok(99) }
+}
+
+defgenserver MyServer {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(1) }
+
+  @call
+  def size(state: Int) -> Result<(Int, Int)> {
+    Ok((state, state))
+  }
+
+  def hidden_size(_state: Int) -> Result<Int> { Ok(0) }
+}
+
+defsupervisor MySup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+
+supervisor_init {
+  MyServer {}
+  MySup {}
+}
+"#,
+    )
+    .expect("process preload should bootstrap")
 }
 
 fn rendered(result: &ReplResult) -> &[String] {
@@ -180,6 +239,51 @@ fn core_rejects_repl_forbidden_top_level_declarations() {
     assert!(!err.should_exit);
     assert!(matches!(err.output, ReplOutput::EvalError { .. }));
     assert!(rendered_text(&err).contains("This top-level declaration is not allowed in REPL"));
+}
+
+#[test]
+fn core_routes_print_side_effects_into_repl_result_lines() {
+    let mut engine = engine();
+
+    let result = engine.handle_line(r#"print("hello from repl")"#);
+
+    assert!(!result.should_exit);
+    assert_eq!(rendered_text(&result), "hello from repl");
+    assert!(result.stderr.is_empty());
+}
+
+#[test]
+fn core_routes_eprint_side_effects_into_repl_stderr_lines() {
+    let mut engine = engine();
+
+    let result = engine.handle_line("eprint(NoneError)");
+
+    assert!(!result.should_exit);
+    assert_eq!(rendered_text(&result), "");
+    assert!(
+        result.stderr.iter().any(|line| line.contains("REPL:")),
+        "{:?}",
+        result.stderr
+    );
+}
+
+#[test]
+fn core_routes_background_prints_into_pump_result_lines() {
+    let mut engine = engine();
+
+    let launched = engine.handle_line(
+        r#"_ =? Task::launch({||
+  _ =? Process::sleep(5ms)
+  print("hello from background")
+  Ok(())
+})"#,
+    );
+    assert!(!launched.should_exit, "{}", rendered_text(&launched));
+
+    let background = engine.advance_background_time(Duration::from_millis(5));
+
+    assert!(!background.should_exit);
+    assert_eq!(rendered_text(&background), "hello from background");
 }
 
 #[test]
@@ -986,6 +1090,118 @@ fn core_doc_command_resolves_closure_type_and_callable_bindings() {
         capture_binding_doc.contains("derived from: Kernel::print"),
         "{capture_binding_doc}"
     );
+}
+
+#[test]
+fn core_process_doc_and_sig_support_hidden_and_concrete_surfaces() {
+    let mut engine = process_engine();
+
+    let hidden_doc = doc_text(&engine.handle_line(":doc GenServer::spawn"));
+    assert!(hidden_doc.contains("GenServer::spawn"), "{hidden_doc}");
+    assert!(
+        hidden_doc.contains("Compiler-managed lower target for GenServer worker spawn."),
+        "{hidden_doc}"
+    );
+
+    let concrete_doc = doc_text(&engine.handle_line(":doc MySup::status"));
+    assert!(concrete_doc.contains("MySup::status"), "{concrete_doc}");
+    assert!(
+        concrete_doc.contains("Compiler-managed lower target for reading supervisor status."),
+        "{concrete_doc}"
+    );
+    assert!(
+        !concrete_doc.contains("Supervisor::status(supervisor:"),
+        "{concrete_doc}"
+    );
+
+    let hidden_sig = signature_text(&engine.handle_line(":sig Supervisor::status"));
+    assert!(
+        hidden_sig
+            .contains("Supervisor::status(supervisor: $Supervisor) -> Result<SupervisorStatus>"),
+        "{hidden_sig}"
+    );
+
+    let concrete_sig = signature_text(&engine.handle_line(":sig MySup::status"));
+    assert!(
+        concrete_sig.contains("MySup::status() -> Result<SupervisorStatus, Error>"),
+        "{concrete_sig}"
+    );
+}
+
+#[test]
+fn core_process_public_surface_respects_annotations() {
+    let mut engine = process_engine();
+
+    let public_sig = signature_text(&engine.handle_line(":sig MyServer::size"));
+    assert!(
+        public_sig.contains("MyServer::size() -> Result<Int, Error>"),
+        "{public_sig}"
+    );
+
+    let public_doc = doc_text(&engine.handle_line(":doc MyWorker::read"));
+    assert!(public_doc.contains("MyWorker::read"), "{public_doc}");
+
+    let private_sig = rendered_text(&engine.handle_line(":sig MyServer::hidden_size"));
+    assert!(private_sig.contains("No signature found"), "{private_sig}");
+
+    let private_doc = rendered_text(&engine.handle_line(":doc MyWorker::hidden_value"));
+    assert!(
+        private_doc.contains("No docs found") || private_doc.contains("No docs found for"),
+        "{private_doc}"
+    );
+
+    let annotation_query = rendered_text(&engine.handle_line(":sig @call"));
+    assert!(
+        annotation_query.contains("No signature found"),
+        "{annotation_query}"
+    );
+}
+
+#[test]
+fn core_process_type_and_info_support_singletons_and_worker_pids() {
+    let mut engine = process_engine();
+
+    let singleton_type = rendered_text(&engine.handle_line(":type MyServer"));
+    assert!(
+        singleton_type.contains("type: PID<MyServer>"),
+        "{singleton_type}"
+    );
+    assert!(
+        !singleton_type.contains("<pid>") && !singleton_type.contains("pid:"),
+        "{singleton_type}"
+    );
+
+    let singleton_info = rendered_text(&engine.handle_line(":info MyServer"));
+    assert!(
+        singleton_info.contains("defined: PID<MyServer>"),
+        "{singleton_info}"
+    );
+    assert!(
+        singleton_info.contains("instance: Singleton"),
+        "{singleton_info}"
+    );
+
+    let spawn = engine.handle_line("pid =? MySup::spawn(MyWorker::init(1))");
+    let spawn_text = rendered_text(&spawn);
+    assert!(spawn_text.contains("pid: PID<MyWorker>"), "{spawn_text}");
+    assert!(!spawn_text.contains("PID<$Process>"), "{spawn_text}");
+
+    let worker_type = rendered_text(&engine.handle_line(":type pid"));
+    assert!(worker_type.contains("type: PID<MyWorker>"), "{worker_type}");
+    assert!(
+        !worker_type.contains("<pid>") && !worker_type.contains("pid: <"),
+        "{worker_type}"
+    );
+
+    let worker_info = rendered_text(&engine.handle_line(":info pid"));
+    assert!(
+        worker_info.contains("defined: PID<MyWorker>"),
+        "{worker_info}"
+    );
+    assert!(worker_info.contains("instance: Worker"), "{worker_info}");
+    assert!(worker_info.contains("runtime kind:"), "{worker_info}");
+    assert!(!worker_info.contains("process:"), "{worker_info}");
+    assert!(!worker_info.contains("<pid>"), "{worker_info}");
 }
 
 #[test]

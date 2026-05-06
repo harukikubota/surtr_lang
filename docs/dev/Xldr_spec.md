@@ -76,6 +76,7 @@ REPL セッションの BootPlan はセッション開始時に固定する。�
 - `include` や `Project::add_path(...)` で追加される file は definition source として扱い、script と definition の判定を再度行わない
 - preload 後の対話入力自体は引き続き `SourceKind::ReplChunk` として扱い、REPL 増分ポリシーは広げない
 - preload script が導入した binding / function / doc metadata は、そのまま後続の REPL 対話入力から参照できる
+- preload script に `defagent` / `defgenserver` / `defsupervisor` などの process 宣言が含まれる場合、REPL は declaration area から process module stage を抽出し、後続の対話入力でも concrete process surface と runtime metadata を継続参照できる
 - REPL user chunk の top-level 宣言は `def` / `import` のみ許可し、`const`、型定義、`impl`、`defmod` は parse error とする
 - REPL user chunk の top-level `def` は、セッション内の暗黙擬似モジュールに属する関数として扱う
 - したがって REPL は「module 外に関数がある」例外ではなく、明示 `defmod` を省略した module-like namespace 実行として扱う
@@ -125,6 +126,7 @@ REPL 実装は次の 3 層に分ける。
 
 - `print(...)` の副作用出力はプレフィクスなしで表示する
 - 標準 I/O は VM 内部 buffer 直書きではなく、標準 I/O handler 経由の出力として presenter が扱う
+- REPL はアプリケーション側の DSL-visible 標準 I/O handler 設定を上書きしない。TTY 入力行の保護が必要な場合、`StdOut` / `StdErr` の host terminal backend だけを REPL UI adapter 管理の一時 buffer に流し、出力行を描画してから prompt と入力 buffer を復元する
 - 評価結果は `> ` プレフィクス付きで表示する
 - バインド結果は `> name: Type = value` 形式で表示する
 - 型定義評価は `> TypeName` 形式で表示する
@@ -143,10 +145,10 @@ REPL 実装は次の 3 層に分ける。
 | `:help`, `:h [command]` | REPL コマンド一覧、または指定コマンドのヘルプを表示する |
 | `:quit`, `:exit` | REPL を終了する |
 | `:v <N>` | 行 `N` の結果を再表示する。binding value の再表示は別 surface として扱い、query command には混ぜない。 |
-| `:doc <target>` | `@doc` を引く。定義 doc、型 doc、constructor / extractor doc、impl doc、binding 起点 doc を表示する。binding lookup を明示する時は `$name` を使う。typed query は `gt(Int, Int)`, `gt($left, $right)`, `ret |>= up`, `Result<Int> |>= &parse_int`, `xs |> map(&to_string)` のような command query 専用 surface に限定する。`literal` / 任意式 / generic type variable は query 引数に受けない。callable binding が closure のときは `Closure` type doc を返し、続けて binding 付属の `@doc` 本文と最小限の補足情報（signature / captures / provenance）を表示する。 |
-| `:sig <target>` | 関数、operator、constructor、extractor、enum 定義 surface、callable binding、impl specialization の signature を表示する。bare `:sig Ty` は constructor signature、`Ty(args...)` は constructor 照合、`Ty!()` は extractor signature、`StringEncoding` のような enum は variant constructor surface 一覧を返す。enum variant 単体は query target にしない。typed query は concrete type、visible binding、`$binding`、`CaptureQuery` のみを引数に受ける。 |
-| `:info <target>` | 定義、binding、dispatch、operator application query の解決情報を表示する。`$name` による binding 強制、typed call / typed operator の正規化結果、選択 impl、関連 command を出せることを契約に含める。 |
-| `:type <binding>` | REPL binding の型と `TypeIdentity` を表示する。対象は binding のみで、定義名、typed query、任意式は受けない。`$name` による binding 強制を許可する。 |
+| `:doc <target>` | `@doc` を引く。定義 doc、型 doc、constructor / extractor doc、impl doc、binding 起点 doc、process surface doc を表示する。binding lookup を明示する時は `$name` を使う。typed query は `gt(Int, Int)`, `gt($left, $right)`, `ret |>= up`, `Result<Int> |>= &parse_int`, `xs |> map(&to_string)` のような command query 専用 surface に限定する。`literal` / 任意式 / generic type variable は query 引数に受けない。callable binding が closure のときは `Closure` type doc を返し、続けて binding 付属の `@doc` 本文と最小限の補足情報（signature / captures / provenance）を表示する。process surface では hidden stdlib surface (`GenServer::spawn` など) と concrete public surface (`MyServer::spawn` など) の両方を引け、concrete query は hidden stdlib doc 本文を流用しつつ表示 symbol / signature だけ concrete 名に差し替える。 |
+| `:sig <target>` | 関数、operator、constructor、extractor、enum 定義 surface、callable binding、impl specialization、process surface の signature を表示する。bare `:sig Ty` は constructor signature、`Ty(args...)` は constructor 照合、`Ty!()` は extractor signature、`StringEncoding` のような enum は variant constructor surface 一覧を返す。enum variant 単体は query target にしない。typed query は concrete type、visible binding、`$binding`、`CaptureQuery` のみを引数に受ける。process surface では hidden stdlib 名と concrete public 名の両方を受け、表示名は query 側に揃える。 |
+| `:info <target>` | 定義、binding、dispatch、operator application query、singleton process owner、PID binding の解決情報を表示する。`$name` による binding 強制、typed call / typed operator の正規化結果、選択 impl、関連 command を出せることを契約に含める。process runtime lookup は singleton を owner 名、worker を PID binding で引く。PID binding の `:info` は raw inspect 表示や数値 PID を出さず、型と process metadata を返す。 |
+| `:type <binding>` | REPL binding の型と `TypeIdentity` を表示する。`$name` による binding 強制を許可する。通常の値は binding のみを対象とし、定義名、typed query、任意式は受けない。process runtime lookup では singleton process owner 名を追加で受け、worker process は PID binding 経由のみを受ける。 |
 | `:lens <lens-target>` | LensPath 定義または `$lens_binding` の canonical path、segment 一覧、停止点を表示する。値 access 式や一般の callable / plain value は受けず、Lens query surface は command query 専用の制限された対象に限る。 |
 | `:error [full|summary]` | エラー表示モードを切り替える（省略時は現在値表示） |
 | `:save <path>` | 現在の REPL session を `.eldr` に保存する |
@@ -161,6 +163,8 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - `_1` は pipe RHS の注入位置を示す query token であり closure 生成記法ではない
 - `to_string()`, `to_string(_1)`, `1 + 2`, `pair._1` のような任意式 surface は command query としては受けない
 - 多相関数の `:sig` は定義 signature を保持したまま、specialized 節で concrete type / binding 解決後の置換結果を表示する
+- 具象 process の REPL 公開面は annotation 由来で決まり、annotation 付き関数だけが public surface になる。annotation なし関数は `defp` 相当として `:doc` / `:sig` / 補完対象に含めない
+- `@call` / `@cast` / `@get` / `@set` などの annotation 名そのものは query target にしない。annotation により公開された concrete 関数名だけを query surface とする
 
 ### 5.2 予約済み
 

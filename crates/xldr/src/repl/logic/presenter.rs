@@ -100,21 +100,23 @@ pub fn present_for_cli(result: &ReplResult, color: bool) -> Vec<String> {
 }
 
 pub fn present_for_interaction(result: ReplResult) -> PresentedInteraction {
+    let should_exit = result.should_exit;
+    let stderr = result.stderr;
     let event = match result.output {
         ReplOutput::EvalSuccess { rendered, .. } => PresentedEvent::Result(PresentedResult {
-            lines: rendered,
+            lines: rendered.into_iter().chain(stderr).collect(),
             kind: PresentedResultKind::EvalSuccess,
         }),
         ReplOutput::EvalError { rendered, .. } => PresentedEvent::Result(PresentedResult {
-            lines: rendered,
+            lines: rendered.into_iter().chain(stderr).collect(),
             kind: PresentedResultKind::EvalError,
         }),
         ReplOutput::PlainText { lines } => PresentedEvent::Result(PresentedResult {
-            lines,
+            lines: lines.into_iter().chain(stderr).collect(),
             kind: PresentedResultKind::PlainText,
         }),
         ReplOutput::StyledDoc { lines } => PresentedEvent::Result(PresentedResult {
-            lines,
+            lines: lines.into_iter().chain(stderr).collect(),
             kind: PresentedResultKind::Info,
         }),
         ReplOutput::Diagnostic {
@@ -122,6 +124,7 @@ pub fn present_for_interaction(result: ReplResult) -> PresentedInteraction {
             summary_tail,
         } => {
             rendered.extend(summary_tail);
+            rendered.extend(stderr);
             PresentedEvent::Result(PresentedResult {
                 lines: rendered,
                 kind: PresentedResultKind::Diagnostic,
@@ -149,11 +152,11 @@ pub fn present_for_interaction(result: ReplResult) -> PresentedInteraction {
             .filter(|body| !body.is_empty()),
         }),
         ReplOutput::StatusMessage(message) => {
-            if result.should_exit {
+            if should_exit {
                 PresentedEvent::None
             } else {
                 PresentedEvent::Result(PresentedResult {
-                    lines: vec![message],
+                    lines: std::iter::once(message).chain(stderr).collect(),
                     kind: PresentedResultKind::Info,
                 })
             }
@@ -161,8 +164,5 @@ pub fn present_for_interaction(result: ReplResult) -> PresentedInteraction {
         ReplOutput::EvalStarted { .. } => PresentedEvent::None,
     };
 
-    PresentedInteraction {
-        event,
-        should_exit: result.should_exit,
-    }
+    PresentedInteraction { event, should_exit }
 }

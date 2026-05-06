@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::panic;
 use std::path::{Path, PathBuf};
@@ -172,10 +172,17 @@ struct PreloadedChunkState {
     scar_checkpoint: scar::ScarCheckpoint,
     vm: eldr::VM,
     docs: Vec<DocEntry>,
+    process_metadata: BTreeMap<String, ReplProcessMetadata>,
     symbols: BTreeSet<String>,
     auto_import_modules: BTreeSet<String>,
     script_runtime_inputs: Vec<String>,
     script_preload_docs: Vec<DocEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReplProcessMetadata {
+    kind: spire::ast::ProcessKind,
+    instance: spire::ast::ProcessInstance,
 }
 
 #[derive(Debug, Default)]
@@ -201,6 +208,7 @@ pub struct ReplEngine {
     result_metas: Vec<Option<forge::ChunkMeta>>,
     symbols: BTreeSet<String>,
     docs: Vec<DocEntry>,
+    process_metadata: BTreeMap<String, ReplProcessMetadata>,
     auto_import_modules: BTreeSet<String>,
     error_display_mode: ErrorDisplayMode,
 }
@@ -210,7 +218,8 @@ impl ReplEngine {
         let std_module_inputs = collect_additional_default_std_module_inputs()?;
         let repl_sources = loader::collect_repl_sources_with_module_stages(&[std_module_inputs])?;
         let forge_session = forge::ForgeSession::new();
-        let vm = eldr::VM::new_interactive(forge_session.type_registry());
+        let mut vm = eldr::VM::new_interactive(forge_session.type_registry());
+        vm.enable_repl_host_io_buffering();
         let mut engine = Self {
             sources: repl_sources.sources,
             builtin_source_id: repl_sources.builtin_source_id,
@@ -234,6 +243,7 @@ impl ReplEngine {
                 .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
                 .collect(),
             docs: Vec::new(),
+            process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
             error_display_mode: ErrorDisplayMode::Full,
         };
@@ -263,7 +273,8 @@ impl ReplEngine {
 
         let docs = bytecode.docs.clone();
         let forge_session = forge::ForgeSession::from_bytecode(&bytecode);
-        let vm = eldr::VM::new(bytecode);
+        let mut vm = eldr::VM::new(bytecode);
+        vm.enable_repl_host_io_buffering();
 
         // Populate completion symbols from the pre-loaded function table.
         let mut symbols: BTreeSet<String> = ["Ok", "Err"]
@@ -299,6 +310,7 @@ impl ReplEngine {
             result_metas: Vec::new(),
             symbols,
             docs,
+            process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
             error_display_mode: ErrorDisplayMode::Full,
         };
@@ -388,6 +400,7 @@ impl ReplEngine {
             result_metas: Vec::new(),
             symbols: state.symbols,
             docs: state.docs,
+            process_metadata: state.process_metadata,
             auto_import_modules: state.auto_import_modules,
             error_display_mode: ErrorDisplayMode::Full,
         })
@@ -433,6 +446,7 @@ impl ReplEngine {
                     ReplOutput::DocResolved { .. } | ReplOutput::EvalStarted { .. } => {}
                 }
             }
+            engine.vm.enable_repl_host_io_buffering();
             Ok(engine)
         })
     }
@@ -518,6 +532,7 @@ impl ReplEngine {
         };
 
         let docs = crate::collect_doc_entries(&module_stages, &[], None);
+        self.process_metadata = collect_process_metadata(&module_stages);
         let (mut chunk, mut meta) = match self.forge_session.codegen_chunk(typed) {
             Ok(c) => c,
             Err(e) => {
@@ -596,6 +611,7 @@ impl ReplEngine {
                 self.scar_session.rollback(snapshot.scar_checkpoint.clone());
                 self.sync_scar_fun_index_with_vm();
                 self.append_docs(snapshot.docs.clone());
+                self.process_metadata = collect_process_metadata(&snapshot.module_stages);
 
                 let scope = match sigil::build_scope_for_module(
                     &snapshot.module_stages,
@@ -697,6 +713,7 @@ impl ReplEngine {
             ));
         }
         self.sync_scar_fun_index_with_vm();
+        self.process_metadata = collect_process_metadata(&module_stages);
         self.append_docs(crate::collect_doc_entries(&module_stages, &[], None));
 
         let scope = match sigil::build_scope_for_module(
@@ -973,11 +990,11 @@ impl ReplEngine {
             "REPL commands:".to_string(),
             ":help, :h [command]  Show REPL help".to_string(),
             ":quit, :exit         Exit the REPL".to_string(),
-            ":doc <symbol|query>  Show documentation for a visible symbol or query".to_string(),
-            ":sig <function|query> Show the signature for a visible function or query".to_string(),
-            ":info <query>        Show derived information for a visible symbol or query"
+            ":doc <symbol|query>  Show documentation for visible symbols, including process surfaces".to_string(),
+            ":sig <function|query> Show the signature for visible functions, including process surfaces".to_string(),
+            ":info <query>        Show derived information for visible symbols, queries, or process handles"
                 .to_string(),
-            ":type <binding>      Show the type and identity for a visible binding".to_string(),
+            ":type <binding>      Show the type for a visible binding or singleton process owner".to_string(),
             ":lens <binding|expr> Inspect a LensPath and its stop points".to_string(),
             ":error [full|summary]  Show or change error display mode".to_string(),
             ":save <path.eldr>    Save the current session as .eldr".to_string(),
@@ -989,7 +1006,7 @@ impl ReplEngine {
         vec![
             "Usage: :doc <symbol|query>".to_string(),
             "Also: :doc $<binding>".to_string(),
-            "Examples: :doc print, :doc Closure, :doc Kernel::if, :doc Add, :doc +, :doc User(), :doc User!(), :doc gt(Int, Int), :doc $formatter"
+            "Examples: :doc print, :doc Closure, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::spawn, :doc User(), :doc gt(Int, Int), :doc $formatter"
                 .to_string(),
         ]
     }
@@ -998,7 +1015,7 @@ impl ReplEngine {
         vec![
             "Usage: :sig <function|query>".to_string(),
             "Also: :sig $<binding>".to_string(),
-            "Examples: :sig print, :sig User, :sig User!(), :sig gt(Int, Int), :sig ret |>= up, :sig $formatter"
+            "Examples: :sig print, :sig User, :sig GenServer::spawn, :sig MyServer::spawn, :sig gt(Int, Int), :sig ret |>= up, :sig $formatter"
                 .to_string(),
         ]
     }
@@ -1006,17 +1023,17 @@ impl ReplEngine {
     fn info_help_lines() -> Vec<String> {
         vec![
             "Usage: :info <query>".to_string(),
-            "Accepts: symbol | $binding | typed-call | typed-operator".to_string(),
-            "Examples: :info print, :info $value, :info gt(Int, Int), :info ret |>= up".to_string(),
+            "Accepts: symbol | singleton-owner | $binding | typed-call | typed-operator".to_string(),
+            "Examples: :info print, :info Counter, :info pid, :info $value, :info gt(Int, Int), :info ret |>= up".to_string(),
         ]
     }
 
     fn type_help_lines() -> Vec<String> {
         vec![
-            "Usage: :type <binding>".to_string(),
+            "Usage: :type <binding|singleton-owner>".to_string(),
             "Also: :type $<binding>".to_string(),
-            "Examples: :type list, :type $my_closure".to_string(),
-            "Looks up the latest visible binding only; symbols and expressions are not supported."
+            "Examples: :type list, :type Counter, :type pid, :type $my_closure".to_string(),
+            "Worker processes are queried through PID bindings; singleton processes are queried by owner name."
                 .to_string(),
         ]
     }
@@ -1053,6 +1070,22 @@ impl ReplEngine {
 
     fn styled(lines: Vec<String>) -> ReplResult {
         ReplResult::styled(lines)
+    }
+
+    fn take_repl_host_io_lines(&mut self) -> (Vec<String>, Vec<String>) {
+        (
+            self.vm.take_repl_host_stdout(),
+            self.vm.take_repl_host_stderr(),
+        )
+    }
+
+    fn prepend_repl_host_stdout_lines(
+        &mut self,
+        mut rendered: Vec<String>,
+    ) -> (Vec<String>, Vec<String>) {
+        let (mut stdout, stderr) = self.take_repl_host_io_lines();
+        stdout.append(&mut rendered);
+        (stdout, stderr)
     }
 
     fn repl_command_diagnostic(
@@ -1170,7 +1203,8 @@ impl ReplEngine {
 
         match matches.as_slice() {
             [] => self
-                .undocumented_doc_output(&canonical)
+                .concrete_process_alias_doc_output(&canonical)
+                .or_else(|| self.undocumented_doc_output(&canonical))
                 .map(|output| ReplResult::ok(output))
                 .unwrap_or_else(|| {
                     if let Some(binding) = self.binding_info(source_symbol) {
@@ -1368,7 +1402,11 @@ impl ReplEngine {
             return false;
         }
         if Self::is_qualified_symbol(symbol) {
-            return entry.qualified_name == symbol;
+            return entry.qualified_name == symbol
+                && self
+                    .declaration_index
+                    .get(symbol)
+                    .is_none_or(Self::declaration_is_queryable);
         }
         self.visible_uid_matches(symbol, &entry.qualified_name)
             || (entry.module_path.starts_with("__Script::")
@@ -1421,6 +1459,140 @@ impl ReplEngine {
         })
     }
 
+    fn declaration_is_queryable(entry: &sigil::DeclarationEntry) -> bool {
+        entry.visibility == spire::ast::Visibility::Public || entry.hidden
+    }
+
+    fn parse_pid_type_name(ty: &str) -> Option<&str> {
+        ty.strip_prefix("PID<")?.strip_suffix('>')
+    }
+
+    fn process_metadata_for_pid_type<'a>(
+        &self,
+        ty: &'a str,
+    ) -> Option<(&'a str, &ReplProcessMetadata)> {
+        let process_name = Self::parse_pid_type_name(ty)?;
+        Some((process_name, self.process_metadata.get(process_name)?))
+    }
+
+    fn process_metadata_for_singleton_owner<'a>(
+        &self,
+        symbol: &'a str,
+    ) -> Option<(&'a str, &ReplProcessMetadata)> {
+        if Self::is_qualified_symbol(symbol) {
+            return None;
+        }
+        let metadata = self.process_metadata.get(symbol)?;
+        (metadata.instance == spire::ast::ProcessInstance::Singleton).then_some((symbol, metadata))
+    }
+
+    fn pid_type_from_value(value: &Value) -> Option<String> {
+        match value {
+            Value::Pid(pid) => Some(format!("PID<{}>", pid.process_name)),
+            _ => None,
+        }
+    }
+
+    fn process_metadata_for_pid_value<'a>(
+        &self,
+        value: &'a Value,
+    ) -> Option<(&'a str, &ReplProcessMetadata)> {
+        let Value::Pid(pid) = value else {
+            return None;
+        };
+        Some((
+            pid.process_name.as_str(),
+            self.process_metadata.get(&pid.process_name)?,
+        ))
+    }
+
+    fn process_hidden_doc_alias(&self, symbol: &str) -> Option<String> {
+        let (owner, method) = symbol.rsplit_once("::")?;
+        let metadata = self.process_metadata.get(owner)?;
+        let hidden_owner = match (metadata.kind, method) {
+            (spire::ast::ProcessKind::Agent, "pid") => "Agent",
+            (spire::ast::ProcessKind::Agent, "spawn")
+                if metadata.instance == spire::ast::ProcessInstance::Worker =>
+            {
+                "Agent"
+            }
+            (spire::ast::ProcessKind::GenServer, "pid") => "GenServer",
+            (spire::ast::ProcessKind::GenServer, "spawn")
+                if metadata.instance == spire::ast::ProcessInstance::Worker =>
+            {
+                "GenServer"
+            }
+            (
+                spire::ast::ProcessKind::Supervisor
+                | spire::ast::ProcessKind::RuntimeSupervisor
+                | spire::ast::ProcessKind::DynamicSupervisor,
+                "spawn" | "adopt" | "status" | "workers",
+            ) => "Supervisor",
+            _ => return None,
+        };
+        Some(format!("{hidden_owner}::{method}"))
+    }
+
+    fn doc_output_with_symbol_and_signature(
+        entry: &DocEntry,
+        symbol: String,
+        signature: Option<String>,
+        details: Vec<String>,
+    ) -> ReplOutput {
+        let summary = entry
+            .doc
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(ToString::to_string);
+        ReplOutput::DocResolved {
+            symbol,
+            signature,
+            summary,
+            source_snippet: Some(entry.doc.clone()),
+            details,
+        }
+    }
+
+    fn concrete_process_alias_doc_output(&self, symbol: &str) -> Option<ReplOutput> {
+        let hidden_symbol = self.process_hidden_doc_alias(symbol)?;
+        let entry = self.docs.iter().find(|entry| {
+            entry.kind == DocKind::Function && entry.qualified_name == hidden_symbol
+        })?;
+        let signature = self.find_signature(symbol).map(|(_, signature)| signature);
+        Some(Self::doc_output_with_symbol_and_signature(
+            entry,
+            symbol.to_string(),
+            signature,
+            Vec::new(),
+        ))
+    }
+
+    fn process_owner_type_lines(
+        &self,
+        owner: &str,
+        _metadata: &ReplProcessMetadata,
+    ) -> Vec<String> {
+        vec![
+            owner.to_string(),
+            format!("type: PID<{owner}>"),
+            "identity: TypeIdentity::Type".to_string(),
+        ]
+    }
+
+    fn process_owner_info_lines(&self, owner: &str, metadata: &ReplProcessMetadata) -> Vec<String> {
+        vec![
+            owner.to_string(),
+            "kind: process singleton".to_string(),
+            format!("origin: {}", Self::origin_for_name(owner)),
+            format!("defined: PID<{owner}>"),
+            format!("type: PID<{owner}>"),
+            "identity: TypeIdentity::Type".to_string(),
+            format!("instance: {:?}", metadata.instance),
+            format!("runtime kind: {:?}", metadata.kind),
+        ]
+    }
+
     fn method_trait_alias(symbol: &str) -> Option<&'static str> {
         METHOD_DOC_TRAIT_ALIASES
             .iter()
@@ -1443,16 +1615,18 @@ impl ReplEngine {
 
     fn visible_declaration<'a>(&'a self, symbol: &str) -> Option<&'a sigil::DeclarationEntry> {
         if Self::is_qualified_symbol(symbol) {
-            return self.declaration_index.get(symbol);
+            let entry = self.declaration_index.get(symbol)?;
+            return Self::declaration_is_queryable(entry).then_some(entry);
         }
         let visible_uid = self.sigil_session.lookup_uid(symbol)?;
         self.declaration_index.values().find(|entry| {
-            (entry.name == symbol
-                || entry
-                    .name
-                    .rsplit("::")
-                    .next()
-                    .is_some_and(|tail| tail == symbol))
+            Self::declaration_is_queryable(entry)
+                && (entry.name == symbol
+                    || entry
+                        .name
+                        .rsplit("::")
+                        .next()
+                        .is_some_and(|tail| tail == symbol))
                 && self.sigil_session.lookup_uid(&entry.fq_name) == Some(visible_uid)
         })
     }
@@ -1850,6 +2024,14 @@ impl ReplEngine {
             .visible_helper_trait_alias(symbol)
             .unwrap_or_else(|| Self::canonical_symbol(symbol).to_string());
         let qualified_lookup = Self::is_qualified_symbol(&canonical);
+        if qualified_lookup
+            && self
+                .declaration_index
+                .get(&canonical)
+                .is_some_and(|entry| !Self::declaration_is_queryable(entry))
+        {
+            return None;
+        }
         let visible_uid = (!qualified_lookup)
             .then(|| self.sigil_session.lookup_uid(&canonical))
             .flatten();
@@ -2017,6 +2199,10 @@ impl ReplEngine {
         let binding_name = trimmed.strip_prefix('$').unwrap_or(trimmed);
 
         let Some(binding) = self.binding_info(binding_name) else {
+            if let Some((owner, metadata)) = self.process_metadata_for_singleton_owner(binding_name)
+            {
+                return Self::styled(self.process_owner_type_lines(owner, metadata));
+            }
             return Self::plain(vec![format!("No binding found for {}", trimmed)]);
         };
 
@@ -2032,9 +2218,12 @@ impl ReplEngine {
             return Self::plain(vec![format!("Binding `{}` has no current value.", trimmed)]);
         };
 
+        let rendered_ty =
+            Self::pid_type_from_value(&value).unwrap_or_else(|| binding.ty.as_str().to_string());
+
         Self::styled(vec![
             binding_name.to_string(),
-            format!("type: {}", binding.ty.as_str()),
+            format!("type: {rendered_ty}"),
             format!(
                 "identity: {}",
                 self.render_type_identity(binding, Some(&value))
@@ -2260,6 +2449,10 @@ impl ReplEngine {
             }
         }
 
+        if let Some((owner, metadata)) = self.process_metadata_for_singleton_owner(symbol) {
+            return Self::styled(self.process_owner_info_lines(owner, metadata));
+        }
+
         if let Some((qualified_name, signature)) = self.find_signature(symbol) {
             let kind = self
                 .visible_declaration(symbol)
@@ -2287,6 +2480,36 @@ impl ReplEngine {
     }
 
     fn render_info_binding(&self, symbol: &str, binding: &forge::BindingInfo) -> ReplResult {
+        if let Some(value) = self.vm.get_local(binding.slot_id) {
+            if let Some((process_name, metadata)) = self.process_metadata_for_pid_value(&value) {
+                let rendered_ty =
+                    Self::pid_type_from_value(&value).unwrap_or_else(|| binding.ty.clone());
+                return Self::styled(vec![
+                    symbol.to_string(),
+                    "kind: process pid".to_string(),
+                    "origin: repl".to_string(),
+                    format!("type: {rendered_ty}"),
+                    "identity: TypeIdentity::Type".to_string(),
+                    format!("defined: PID<{process_name}>"),
+                    format!("instance: {:?}", metadata.instance),
+                    format!("runtime kind: {:?}", metadata.kind),
+                ]);
+            }
+        }
+
+        if let Some((_, metadata)) = self.process_metadata_for_pid_type(binding.ty.as_str()) {
+            return Self::styled(vec![
+                symbol.to_string(),
+                "kind: process pid".to_string(),
+                "origin: repl".to_string(),
+                format!("type: {}", binding.ty),
+                "identity: TypeIdentity::Type".to_string(),
+                format!("defined: {}", binding.ty),
+                format!("instance: {:?}", metadata.instance),
+                format!("runtime kind: {:?}", metadata.kind),
+            ]);
+        }
+
         let mut lines = vec![symbol.to_string()];
         let kind = match self.binding_callable_kind(binding) {
             Some(forge::ReplCallableKind::Closure) => "closure",
@@ -4568,18 +4791,20 @@ impl ReplEngine {
                 self.sync_scar_fun_index_with_vm();
                 self.sync_repl_chunk_function_indices(&meta.function_defs, &chunk_functions);
                 if let Some(rendered) = self.report_main_result_error_if_any(&value) {
+                    let (rendered, stderr) = self.prepend_repl_host_stdout_lines(rendered);
                     self.bump_line(None, None);
                     self.pending.clear();
                     return ReplResult::ok(ReplOutput::EvalError {
                         idx,
                         source,
                         rendered,
-                    });
+                    })
+                    .with_stderr(stderr);
                 }
 
                 let rendered = render::format_result_lines(&self.vm, Some(&value), Some(&meta));
 
-                let mut all_rendered = rendered;
+                let (mut all_rendered, stderr) = self.prepend_repl_host_stdout_lines(rendered);
                 if import_only {
                     for label in &import_result.success_labels {
                         all_rendered.push(format!("Imported {}", label));
@@ -4602,6 +4827,7 @@ impl ReplEngine {
                     source,
                     rendered: all_rendered,
                 })
+                .with_stderr(stderr)
             }
             Err(e) => {
                 let location = e
@@ -4616,6 +4842,7 @@ impl ReplEngine {
                     location.clone(),
                     self.error_display_mode,
                 );
+                let (rendered, stderr) = self.prepend_repl_host_stdout_lines(rendered);
                 error_display::emit_runtime_error_with_registry(
                     &e,
                     &self.sources,
@@ -4630,6 +4857,102 @@ impl ReplEngine {
                     source,
                     rendered,
                 })
+                .with_stderr(stderr)
+            }
+        }
+    }
+
+    pub fn has_pending_background_work(&self) -> bool {
+        self.vm.has_pending_background_work()
+    }
+
+    pub fn next_background_deadline_delay(&self) -> Option<std::time::Duration> {
+        self.vm.next_background_deadline_delay()
+    }
+
+    pub fn pump_background_ready(&mut self) -> ReplResult {
+        match self.vm.pump_background_ready() {
+            Ok(()) => {
+                let (stdout, stderr) = self.take_repl_host_io_lines();
+                Self::plain(stdout).with_stderr(stderr)
+            }
+            Err(err) => {
+                let location = err
+                    .context
+                    .call_site
+                    .clone()
+                    .or_else(|| self.vm.runtime_error_location());
+                let rendered = error_display::runtime_error_lines(
+                    &err,
+                    self.vm.source(),
+                    self.vm.source_file(),
+                    location,
+                    self.error_display_mode,
+                );
+                let (rendered, stderr) = self.prepend_repl_host_stdout_lines(rendered);
+                ReplResult::ok(ReplOutput::EvalError {
+                    idx: self.results.len(),
+                    source: "<background>".to_string(),
+                    rendered,
+                })
+                .with_stderr(stderr)
+            }
+        }
+    }
+
+    pub fn advance_background_time(&mut self, elapsed: std::time::Duration) -> ReplResult {
+        match self.vm.advance_background_time(elapsed) {
+            Ok(()) => {
+                let (stdout, stderr) = self.take_repl_host_io_lines();
+                Self::plain(stdout).with_stderr(stderr)
+            }
+            Err(err) => {
+                let location = err
+                    .context
+                    .call_site
+                    .clone()
+                    .or_else(|| self.vm.runtime_error_location());
+                let rendered = error_display::runtime_error_lines(
+                    &err,
+                    self.vm.source(),
+                    self.vm.source_file(),
+                    location,
+                    self.error_display_mode,
+                );
+                let (rendered, stderr) = self.prepend_repl_host_stdout_lines(rendered);
+                ReplResult::ok(ReplOutput::EvalError {
+                    idx: self.results.len(),
+                    source: "<background>".to_string(),
+                    rendered,
+                })
+                .with_stderr(stderr)
+            }
+        }
+    }
+
+    pub fn pump_background_to_next_deadline(&mut self) -> ReplResult {
+        match self.vm.pump_background_to_next_deadline() {
+            Ok(_) => self.pump_background_ready(),
+            Err(err) => {
+                let location = err
+                    .context
+                    .call_site
+                    .clone()
+                    .or_else(|| self.vm.runtime_error_location());
+                let rendered = error_display::runtime_error_lines(
+                    &err,
+                    self.vm.source(),
+                    self.vm.source_file(),
+                    location,
+                    self.error_display_mode,
+                );
+                let (rendered, stderr) = self.prepend_repl_host_stdout_lines(rendered);
+                ReplResult::ok(ReplOutput::EvalError {
+                    idx: self.results.len(),
+                    source: "<background>".to_string(),
+                    rendered,
+                })
+                .with_stderr(stderr)
             }
         }
     }
@@ -4752,6 +5075,7 @@ fn compile_preloaded_repl_chunk(
         &user_ast,
         Some(compile_sources.user_module_path.as_str()),
     );
+    let process_metadata = collect_process_metadata(&module_stage_asts);
     let docs = crate::collect_doc_entries_with_base(
         &snapshot.docs,
         if module_stage_asts.len() > snapshot.default_stage_count {
@@ -4776,7 +5100,7 @@ fn compile_preloaded_repl_chunk(
         })?
     };
 
-    let module_resolved = sigil::resolve_staged_program_from_state(
+    let mut staged_program = sigil::resolve_staged_program_from_state(
         &module_stage_asts,
         Vec::new(),
         &declaration_index,
@@ -4794,10 +5118,9 @@ fn compile_preloaded_repl_chunk(
         module_stage_asts.len(),
     )
     .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
-    scope.advance_next_id_to(module_resolved.resume_state.next_local_id);
+    scope.advance_next_id_to(staged_program.resume_state.next_local_id);
     sigil_session.replace_scope_with_declarations(scope, &declaration_index);
 
-    let mut resolved = module_resolved.resolved;
     let mut preload_imported = Vec::new();
     if !user_ast.is_empty() {
         preload_imported = apply_preload_imports(
@@ -4816,7 +5139,7 @@ fn compile_preloaded_repl_chunk(
             &user_ast,
             &compile_sources.user_module_path,
         );
-        resolved.extend(user_resolved);
+        staged_program.resolved.extend(user_resolved);
     }
 
     let mut scar_session = scar::ScarSession::new();
@@ -4830,8 +5153,8 @@ fn compile_preloaded_repl_chunk(
         .unwrap_or(0);
     scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
     let typed = scar_session
-        .typecheck_with_context(
-            resolved,
+        .typecheck_staged_program_with_context(
+            staged_program,
             scar::TypecheckContext {
                 runtime_policy: derive_runtime_policy(
                     CompileUnitKind::Script,
@@ -4857,19 +5180,18 @@ fn compile_preloaded_repl_chunk(
         })?;
 
     let mut forge_session = forge::ForgeSession::from_bytecode(&snapshot.bytecode);
-    let (mut chunk, meta) =
-        forge_session
-            .codegen_chunk(typed)
-            .map_err(|e| ReplLoadError::Diagnostic {
-                sources: compile_sources.sources.clone(),
-                source_id: diagnostic_source_id(&compile_sources, &e.span),
-                spec: diagnostics::simple_error(
-                    "CodegenError",
-                    &e.message,
-                    local_diagnostic_span(&compile_sources, &e.span),
-                    None,
-                ),
-            })?;
+    let (mut chunk, meta) = forge_session
+        .codegen_chunk_typed_program(typed)
+        .map_err(|e| ReplLoadError::Diagnostic {
+            sources: compile_sources.sources.clone(),
+            source_id: diagnostic_source_id(&compile_sources, &e.span),
+            spec: diagnostics::simple_error(
+                "CodegenError",
+                &e.message,
+                local_diagnostic_span(&compile_sources, &e.span),
+                None,
+            ),
+        })?;
     chunk.docs = docs.clone();
     for stage in &raw_module_stages {
         for module in stage {
@@ -4949,6 +5271,7 @@ fn compile_preloaded_repl_chunk(
         scar_checkpoint: scar_session.checkpoint(),
         vm,
         docs,
+        process_metadata,
         symbols,
         auto_import_modules,
         script_runtime_inputs,
@@ -5003,6 +5326,10 @@ fn parse_preload_sources(
         spec: diagnostics::parse_error_spec(user_source, e.message(), e.span().clone()),
     })?;
     let (preload_ast, script_runtime_inputs) = split_preload_script_ast(&user_ast, user_source);
+    let (process_stage, preload_ast) = crate::extract_process_modules_from_user_ast(preload_ast);
+    if !process_stage.is_empty() {
+        module_stage_asts.push(process_stage);
+    }
 
     Ok((
         module_stage_asts,
@@ -5031,6 +5358,26 @@ fn preload_module_path(file_name: &str, source: &str) -> String {
                 segments.join("::")
             }
         })
+}
+
+fn collect_process_metadata(
+    module_stages: &[Vec<sigil::StagedModuleAst>],
+) -> BTreeMap<String, ReplProcessMetadata> {
+    let mut out = BTreeMap::new();
+    for stage in module_stages {
+        for module in stage {
+            if let Some(spec) = &module.process_spec {
+                out.insert(
+                    spec.process_name.clone(),
+                    ReplProcessMetadata {
+                        kind: spec.kind,
+                        instance: spec.instance,
+                    },
+                );
+            }
+        }
+    }
+    out
 }
 
 fn split_preload_script_ast(ast: &[Ast], source: &str) -> (Vec<Ast>, Vec<String>) {
@@ -5816,6 +6163,7 @@ mod tests {
                 .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
                 .collect(),
             docs: Vec::new(),
+            process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
             error_display_mode: ErrorDisplayMode::Full,
         }
