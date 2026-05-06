@@ -242,30 +242,33 @@ pub struct ErrorTemplateView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub struct ProcessSpecView {
-    pub process_name: String,
-    pub module_path: String,
+    pub process_id: u32,
+    pub type_name: String,
     pub kind: ProcessSpecKindView,
     pub instance: ProcessSpecInstanceView,
-    pub boot: bool,
-    pub registry: bool,
-    pub lazy: bool,
     pub init_fun_idx: u32,
-    pub get_fun_idx: u32,
-    pub set_fun_idx: Option<u32>,
+    pub init_policy: String,
+    pub state_type: String,
+    pub handler_count: usize,
+    pub dependency_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub enum ProcessSpecKindView {
-    ReadOnlyAgent,
-    StateAgent,
+    Agent,
+    GenServer,
+    Supervisor,
+    RuntimeSupervisor,
+    DynamicSupervisor,
+    Task,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "viewer-schema", derive(JsonSchema))]
 pub enum ProcessSpecInstanceView {
     Singleton,
-    Multi,
+    Worker,
 }
 
 #[cfg(feature = "viewer-schema")]
@@ -612,22 +615,25 @@ fn error_template_view(
 
 fn process_spec_view(spec: &RuntimeProcessSpec) -> ProcessSpecView {
     ProcessSpecView {
-        process_name: spec.process_name.clone(),
-        module_path: spec.module_path.clone(),
+        process_id: spec.process_id,
+        type_name: spec.type_name.clone(),
         kind: match spec.kind {
-            RuntimeProcessKind::ReadOnlyAgent => ProcessSpecKindView::ReadOnlyAgent,
-            RuntimeProcessKind::StateAgent => ProcessSpecKindView::StateAgent,
+            RuntimeProcessKind::Agent => ProcessSpecKindView::Agent,
+            RuntimeProcessKind::GenServer => ProcessSpecKindView::GenServer,
+            RuntimeProcessKind::Supervisor => ProcessSpecKindView::Supervisor,
+            RuntimeProcessKind::RuntimeSupervisor => ProcessSpecKindView::RuntimeSupervisor,
+            RuntimeProcessKind::DynamicSupervisor => ProcessSpecKindView::DynamicSupervisor,
+            RuntimeProcessKind::Task => ProcessSpecKindView::Task,
         },
         instance: match spec.instance {
             RuntimeProcessInstance::Singleton => ProcessSpecInstanceView::Singleton,
-            RuntimeProcessInstance::Multi => ProcessSpecInstanceView::Multi,
+            RuntimeProcessInstance::Worker => ProcessSpecInstanceView::Worker,
         },
-        boot: spec.boot,
-        registry: spec.registry,
-        lazy: spec.lazy,
-        init_fun_idx: spec.init_fun_idx,
-        get_fun_idx: spec.get_fun_idx,
-        set_fun_idx: spec.set_fun_idx,
+        init_fun_idx: spec.init.callable.fun_idx,
+        init_policy: format!("{:?}", spec.init.policy),
+        state_type: spec.state.state_type.name.clone(),
+        handler_count: spec.handlers.len(),
+        dependency_count: spec.dependencies.handlers.len(),
     }
 }
 
@@ -693,7 +699,10 @@ mod tests {
 
     #[cfg(feature = "viewer-schema")]
     use super::viewer_schema;
-    use super::{viewer_file_from_inspect, VIEWER_FORMAT, VIEWER_SCHEMA_VERSION};
+    use super::{
+        viewer_file_from_inspect, ProcessSpecInstanceView, ProcessSpecKindView, VIEWER_FORMAT,
+        VIEWER_SCHEMA_VERSION,
+    };
 
     #[test]
     fn viewer_model_contains_core_sections() {
@@ -783,18 +792,32 @@ mod tests {
             pc_spans: Vec::new(),
             runtime_process_specs: RuntimeProcessSpecTable {
                 entries: vec![RuntimeProcessSpec {
-                    process_name: "Counter".into(),
-                    module_path: "Agents::Counter".into(),
-                    kind: RuntimeProcessKind::StateAgent,
-                    instance: RuntimeProcessInstance::Singleton,
-                    boot: true,
-                    registry: true,
-                    lazy: false,
-                    init_fun_idx: 0,
-                    get_fun_idx: 0,
-                    set_fun_idx: Some(0),
+                    process_id: 0,
+                    type_name: "Counter".into(),
+                    kind: RuntimeProcessKind::Agent,
+                    instance: RuntimeProcessInstance::Worker,
+                    state: crate::ir::RuntimeStateSpec {
+                        state_type: crate::ir::RuntimeTypeRef { name: "Int".into() },
+                        owner_process: Some("Counter".into()),
+                    },
+                    init: crate::ir::RuntimeInitSpec {
+                        callable: crate::ir::RuntimeCallableRef { fun_idx: 0 },
+                        policy: crate::ir::RuntimeInitPolicy::Eager,
+                        result_shape: crate::ir::RuntimeInitResultShape::EagerState {
+                            result_type: crate::ir::RuntimeTypeRef {
+                                name: "Result<Int>".into(),
+                            },
+                        },
+                        state_type: crate::ir::RuntimeTypeRef { name: "Int".into() },
+                        init_route: None,
+                    },
+                    handlers: Vec::new(),
+                    dependencies: Default::default(),
+                    lifecycle: Default::default(),
+                    supervision: Default::default(),
                 }],
             },
+            runtime_boot_plan: Default::default(),
         };
         let inspected = EldrInspect {
             header: EldrHeader {
@@ -816,6 +839,11 @@ mod tests {
         assert_eq!(viewer.schema_version, VIEWER_SCHEMA_VERSION);
         assert_eq!(viewer.format, VIEWER_FORMAT);
         assert_eq!(viewer.process_specs.len(), 1);
+        assert_eq!(viewer.process_specs[0].kind, ProcessSpecKindView::Agent);
+        assert_eq!(
+            viewer.process_specs[0].instance,
+            ProcessSpecInstanceView::Worker
+        );
         assert_eq!(viewer.functions.len(), 1);
         assert_eq!(viewer.constants.len(), 1);
         assert_eq!(viewer.opcodes.len(), 4);

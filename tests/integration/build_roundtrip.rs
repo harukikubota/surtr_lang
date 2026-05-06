@@ -1,4 +1,6 @@
-use crate::common::{module_spec_fixtures, repo_root, surtr_command, unique_temp_dir, write_source};
+use crate::common::{
+    module_spec_fixtures, repo_root, surtr_command, unique_temp_dir, write_source,
+};
 use crate::support;
 use serde_json::Value;
 use std::fs;
@@ -176,17 +178,20 @@ fn dump_outputs_runtime_process_specs_for_agent_modules() {
     );
 
     let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
-    assert_eq!(json["summary"]["process_spec_count"], 1);
+    assert_eq!(json["summary"]["process_spec_count"], 2);
     let specs = json["bytecode"]["runtime_process_specs"]["entries"]
         .as_array()
         .expect("runtime process specs must be an array");
-    assert_eq!(specs.len(), 1);
-    assert_eq!(specs[0]["process_name"], "Counter");
-    assert_eq!(specs[0]["module_path"], "Counter");
-    assert_eq!(specs[0]["kind"], "StateAgent");
-    assert_eq!(specs[0]["instance"], "Singleton");
-    assert_eq!(specs[0]["boot"], true);
-    assert_eq!(specs[0]["set_fun_idx"].is_number(), true);
+    assert_eq!(specs.len(), 2);
+    let counter = specs
+        .iter()
+        .find(|spec| spec["type_name"] == "Counter")
+        .expect("Counter process spec must be present");
+    assert_eq!(counter["process_id"], 0);
+    assert_eq!(counter["kind"], "Agent");
+    assert_eq!(counter["instance"], "Singleton");
+    assert_eq!(counter["init"]["policy"], "Eager");
+    assert_eq!(counter["handlers"].as_array().unwrap().len(), 3);
 
     let _ = fs::remove_dir_all(temp);
 }

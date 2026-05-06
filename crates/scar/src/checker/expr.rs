@@ -359,6 +359,9 @@ impl Checker {
             Resolved::Match(span, scrutinee, arms) => self.check_match(span, scrutinee, arms),
 
             Resolved::FieldAccess(span, expr, field) => self.check_field_access(span, expr, field),
+            Resolved::ProcessContextHandler(span, slot) => {
+                self.check_process_context_handler(span, slot)
+            }
 
             Resolved::Block(span, stmts) => {
                 let mut typed_stmts = Vec::new();
@@ -384,9 +387,9 @@ impl Checker {
                 })
             }
 
-            Resolved::StructDef(span, id, fields) => self.check_struct_def(span, id, fields),
+            Resolved::StructDef(span, id, fields, _) => self.check_struct_def(span, id, fields),
             Resolved::RecordDef(span, id, fields) => self.check_record_def(span, id, fields),
-            Resolved::EnumDef(span, id, type_params, variants) => {
+            Resolved::EnumDef(span, id, type_params, variants, _) => {
                 self.check_enum_def(span, id, type_params, variants)
             }
             Resolved::StructLit(span, id, field_vals) => {
@@ -453,6 +456,9 @@ impl Checker {
             }
             (Resolved::FieldAccess(span, expr, field), expected_ty) => {
                 self.check_field_access_with_expected(span, expr, field, expected_ty)
+            }
+            (Resolved::ProcessContextHandler(span, slot), _) => {
+                self.check_process_context_handler(span, slot)
             }
             (_, Some(expected_ty)) => {
                 let typed = self.check_node(node)?;
@@ -886,13 +892,14 @@ impl Checker {
             | Resolved::RecoverKind(span, _, _, _)
             | Resolved::Match(span, _, _)
             | Resolved::FieldAccess(span, _, _)
+            | Resolved::ProcessContextHandler(span, _)
             | Resolved::StructLit(span, _, _)
             | Resolved::ConstructorCall(span, _, _)
             | Resolved::TypeRefWitness(span, _)
-            | Resolved::StructDef(span, _, _)
+            | Resolved::StructDef(span, _, _, _)
             | Resolved::RecordDef(span, _, _)
             | Resolved::DeferrorDef(span, _, _, _)
-            | Resolved::EnumDef(span, _, _, _)
+            | Resolved::EnumDef(span, _, _, _, _)
             | Resolved::Def(span, _, _, _, _, _, _)
             | Resolved::ConstDef(span, _, _, _, _)
             | Resolved::ExtractorDef(span, _, _, _, _, _, _)
@@ -3672,6 +3679,22 @@ impl Checker {
         func: &Resolved,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
+        if let Some(typed) = self.try_check_supervisor_spawn_app(span, func, args)? {
+            return Ok(typed);
+        }
+        if let Some(typed) = self.try_check_supervisor_adopt_app(span, func, args)? {
+            return Ok(typed);
+        }
+        if let Some(typed) = self.try_check_supervisor_status_app(span, func, args)? {
+            return Ok(typed);
+        }
+        if let Some(typed) = self.try_check_supervisor_workers_app(span, func, args)? {
+            return Ok(typed);
+        }
+        if let Some(typed) = self.try_check_worker_message_template_app(span, func, args)? {
+            return Ok(typed);
+        }
+
         if let Some(typed) = self.try_check_lens_intrinsic_app(span, func, args)? {
             return Ok(typed);
         }
@@ -3914,10 +3937,473 @@ impl Checker {
         }
     }
 
-    fn current_process_name(&self) -> Option<String> {
+    pub(super) fn current_process_name(&self) -> Option<String> {
         let symbol = self.current_function_symbol.as_deref()?;
         let (module, handler) = symbol.rsplit_once("::")?;
-        matches!(handler, "__agent_get" | "__agent_set").then(|| module.to_string())
+        Self::is_process_handler_name(handler).then(|| module.to_string())
+    }
+
+    fn try_check_supervisor_spawn_app(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<Option<TypedNode>, TypeError> {
+        let Some(supervisor_process) = self.supervisor_spawn_target(func) else {
+            return Ok(None);
+        };
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: format!("{supervisor_process}::spawn does not accept named arguments"),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if args.len() != 1 {
+            return Err(TypeError {
+                message: format!(
+                    "{}::spawn expects 1 argument(s), got {}",
+                    supervisor_process,
+                    args.len()
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "Pass a worker init route reference like `MyWorker::init(args)`.".into(),
+                ),
+            });
+        }
+        let ResolvedRecordLitArg::Positional(worker_init) = &args[0] else {
+            unreachable!("validated named arguments above")
+        };
+        let worker_process = self.supervisor_spawn_worker_process(worker_init)?;
+        let typed_init = self.check_node(worker_init)?;
+        match self.resolve_ty(&typed_init.ty) {
+            Ty::Func(params, _) if params.is_empty() => {}
+            other => {
+                return Err(TypeError {
+                    message: format!(
+                        "supervisor spawn expects a zero-argument worker init route, got {}",
+                        self.ty_name(&other)
+                    ),
+                    span: typed_init.span.clone(),
+                    hint: Some(
+                        "Pass a generated worker init reference like `MyWorker::init(args)`."
+                            .into(),
+                    ),
+                });
+            }
+        }
+
+        Ok(Some(TypedNode {
+            ty: Ty::Result(
+                Box::new(Ty::Pid(worker_process.clone())),
+                Box::new(Ty::Error),
+            ),
+            span: span.clone(),
+            node: TypedInner::SupervisorSpawn {
+                supervisor_process,
+                worker_process,
+                init: Box::new(typed_init),
+            },
+        }))
+    }
+
+    fn try_check_supervisor_adopt_app(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<Option<TypedNode>, TypeError> {
+        let Some(supervisor_process) = self.supervisor_intrinsic_target(func, "adopt") else {
+            return Ok(None);
+        };
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: format!("{supervisor_process}::adopt does not accept named arguments"),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if args.len() != 1 {
+            return Err(TypeError {
+                message: format!(
+                    "{}::adopt expects 1 argument(s), got {}",
+                    supervisor_process,
+                    args.len()
+                ),
+                span: span.clone(),
+                hint: Some("Pass a worker PID.".into()),
+            });
+        }
+        let ResolvedRecordLitArg::Positional(pid_expr) = &args[0] else {
+            unreachable!("validated named arguments above")
+        };
+        let typed_pid = self.check_node(pid_expr)?;
+        let worker_process = match self.resolve_ty(&typed_pid.ty) {
+            Ty::Pid(process_name) => process_name,
+            other => {
+                return Err(TypeError {
+                    message: format!(
+                        "supervisor adopt expects PID<Worker>, got {}",
+                        self.ty_name(&other)
+                    ),
+                    span: typed_pid.span.clone(),
+                    hint: Some("Pass a worker PID returned from a worker init route.".into()),
+                });
+            }
+        };
+        let supervisor_spec = self
+            .supervisor_spec_by_name(&supervisor_process)
+            .ok_or_else(|| TypeError {
+                message: format!("unknown supervisor process `{supervisor_process}`"),
+                span: span.clone(),
+                hint: None,
+            })?;
+        if !supervisor_spec
+            .spec
+            .supervisor_policy
+            .as_ref()
+            .map(|policy| policy.allow_adopt)
+            .unwrap_or(false)
+        {
+            return Err(TypeError {
+                message: format!(
+                    "{}::adopt is not available because allow_adopt is False",
+                    supervisor_process
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "Enable `allow_adopt: True` in the supervisor definition or override.".into(),
+                ),
+            });
+        }
+
+        Ok(Some(TypedNode {
+            ty: Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
+            span: span.clone(),
+            node: TypedInner::SupervisorAdopt {
+                supervisor_process,
+                worker_process,
+                pid: Box::new(typed_pid),
+            },
+        }))
+    }
+
+    fn try_check_supervisor_status_app(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<Option<TypedNode>, TypeError> {
+        let Some(supervisor_process) = self.supervisor_intrinsic_target(func, "status") else {
+            return Ok(None);
+        };
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: format!("{supervisor_process}::status does not accept named arguments"),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if !args.is_empty() {
+            return Err(TypeError {
+                message: format!(
+                    "{}::status expects 0 argument(s), got {}",
+                    supervisor_process,
+                    args.len()
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let status_ty = self
+            .env
+            .lookup_type_def("SupervisorStatus")
+            .map(|def| Ty::Struct(def.name.clone(), def.fields.clone()))
+            .ok_or_else(|| TypeError {
+                message: "SupervisorStatus type is not available".into(),
+                span: span.clone(),
+                hint: None,
+            })?;
+        Ok(Some(TypedNode {
+            ty: Ty::Result(Box::new(status_ty), Box::new(Ty::Error)),
+            span: span.clone(),
+            node: TypedInner::SupervisorStatus { supervisor_process },
+        }))
+    }
+
+    fn try_check_supervisor_workers_app(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<Option<TypedNode>, TypeError> {
+        let Some(supervisor_process) = self.supervisor_intrinsic_target(func, "workers") else {
+            return Ok(None);
+        };
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: format!("{supervisor_process}::workers does not accept named arguments"),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if args.len() != 2 {
+            return Err(TypeError {
+                message: format!(
+                    "{}::workers expects 2 argument(s), got {}",
+                    supervisor_process,
+                    args.len()
+                ),
+                span: span.clone(),
+                hint: Some("Pass a worker init route and worker count.".into()),
+            });
+        }
+        let ResolvedRecordLitArg::Positional(worker_init) = &args[0] else {
+            unreachable!("validated named arguments above")
+        };
+        let ResolvedRecordLitArg::Positional(size_expr) = &args[1] else {
+            unreachable!("validated named arguments above")
+        };
+        let worker_process = self.supervisor_spawn_worker_process(worker_init)?;
+        let typed_init = self.check_node(worker_init)?;
+        match self.resolve_ty(&typed_init.ty) {
+            Ty::Func(params, _) if params.is_empty() => {}
+            other => {
+                return Err(TypeError {
+                    message: format!(
+                        "supervisor workers expects a zero-argument worker init route, got {}",
+                        self.ty_name(&other)
+                    ),
+                    span: typed_init.span.clone(),
+                    hint: Some(
+                        "Pass a generated worker init reference like `MyWorker::init(args)`."
+                            .into(),
+                    ),
+                });
+            }
+        }
+        let typed_size = self.check_node_with_expected(size_expr, Some(&Ty::Int))?;
+        if !self.types_compatible(&Ty::Int, &typed_size.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "supervisor workers expects Int as worker count, got {}",
+                    self.ty_name(&typed_size.ty)
+                ),
+                span: typed_size.span.clone(),
+                hint: None,
+            });
+        }
+        Ok(Some(TypedNode {
+            ty: Ty::Result(
+                Box::new(Ty::Enum(
+                    "Workers".into(),
+                    vec![Ty::Pid(worker_process.clone())],
+                )),
+                Box::new(Ty::Error),
+            ),
+            span: span.clone(),
+            node: TypedInner::SupervisorWorkers {
+                supervisor_process,
+                worker_process,
+                init: Box::new(typed_init),
+                size: Box::new(typed_size),
+            },
+        }))
+    }
+
+    fn try_check_worker_message_template_app(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<Option<TypedNode>, TypeError> {
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Ok(None);
+        }
+        let Resolved::Var(_, id) = func else {
+            return Ok(None);
+        };
+        let qualified = id.qualified_name.as_deref().unwrap_or(&id.name);
+        let Some((process_name, _method_name)) = qualified.rsplit_once("::") else {
+            return Ok(None);
+        };
+        let Some(process_name) = self
+            .process_specs
+            .iter()
+            .find(|spec| {
+                spec.process_name == process_name
+                    && spec.spec.instance == spire::ast::ProcessInstance::Worker
+            })
+            .map(|spec| spec.process_name.clone())
+        else {
+            return Ok(None);
+        };
+        let typed_func = self.check_node(func)?;
+        let func_ty = self.resolve_ty(&typed_func.ty);
+        let (params, ret) = match &func_ty {
+            Ty::UserFunc { params, ret, .. } => (params.as_slice(), ret.clone()),
+            Ty::BuiltinFunc { params, ret, .. } => (params.as_slice(), ret.clone()),
+            _ => return Ok(None),
+        };
+        let Some((first_param, remaining_params)) = params.split_first() else {
+            return Ok(None);
+        };
+        let Ty::Pid(pid_process) = self.resolve_ty(first_param) else {
+            return Ok(None);
+        };
+        if pid_process != process_name {
+            return Ok(None);
+        }
+        if args.len() != remaining_params.len() {
+            return Ok(None);
+        }
+        let typed_args: Vec<TypedNode> = args
+            .iter()
+            .zip(remaining_params.iter())
+            .map(|(arg, expected)| match arg {
+                ResolvedRecordLitArg::Positional(expr) => {
+                    self.check_node_with_expected(expr, Some(expected))
+                }
+                ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (expected, actual) in remaining_params.iter().zip(typed_args.iter()) {
+            if !self.types_compatible(expected, &actual.ty) {
+                return Ok(None);
+            }
+        }
+        Ok(Some(TypedNode {
+            ty: Ty::Func(vec![Ty::Pid(process_name)], ret),
+            span: span.clone(),
+            node: TypedInner::InjectCall(Box::new(typed_func), typed_args),
+        }))
+    }
+
+    fn supervisor_spawn_target(&self, func: &Resolved) -> Option<String> {
+        self.supervisor_intrinsic_target(func, "spawn")
+    }
+
+    fn supervisor_intrinsic_target(&self, func: &Resolved, method: &str) -> Option<String> {
+        let Resolved::Var(_, id) = func else {
+            return None;
+        };
+        let qualified = id.qualified_name.as_deref()?;
+        let process_name = qualified.strip_suffix(&format!("::{method}"))?;
+        self.supervisor_spec_by_name(process_name)
+            .map(|spec| spec.process_name.clone())
+    }
+
+    fn supervisor_spec_by_name(&self, process_name: &str) -> Option<&TypedProcessSpec> {
+        self.process_specs.iter().find(|spec| {
+            spec.process_name == process_name
+                && matches!(
+                    spec.spec.kind,
+                    spire::ast::ProcessKind::Supervisor
+                        | spire::ast::ProcessKind::DynamicSupervisor
+                        | spire::ast::ProcessKind::RuntimeSupervisor
+                )
+        })
+    }
+
+    fn supervisor_spawn_worker_process(&self, worker_init: &Resolved) -> Result<String, TypeError> {
+        let span = self.resolved_span(worker_init).clone();
+        let Resolved::App(_, func, _) = worker_init else {
+            return Err(TypeError {
+                message: "supervisor spawn expects a worker init route reference".into(),
+                span,
+                hint: Some("Use `MyWorker::init(args)`.".into()),
+            });
+        };
+        let Resolved::Var(_, id) = func.as_ref() else {
+            return Err(TypeError {
+                message: "supervisor spawn expects a worker init route reference".into(),
+                span,
+                hint: Some("Use `MyWorker::init(args)`.".into()),
+            });
+        };
+        let qualified = id.qualified_name.as_deref().unwrap_or(&id.name);
+        let Some(process_name) = qualified.strip_suffix("::init") else {
+            return Err(TypeError {
+                message: "supervisor spawn expects a worker init route reference".into(),
+                span,
+                hint: Some("Use `MyWorker::init(args)`.".into()),
+            });
+        };
+        let Some(process_spec) = self
+            .process_specs
+            .iter()
+            .find(|spec| spec.process_name == process_name)
+        else {
+            return Err(TypeError {
+                message: format!("unknown worker process `{process_name}`"),
+                span,
+                hint: None,
+            });
+        };
+        if process_spec.spec.instance != spire::ast::ProcessInstance::Worker {
+            return Err(TypeError {
+                message: format!(
+                    "supervisor spawn requires a Worker init route, but `{}` is not a Worker process",
+                    process_spec.process_name
+                ),
+                span,
+                hint: Some("Use a process declared with `instance: Worker`.".into()),
+            });
+        }
+        Ok(process_spec.process_name.clone())
+    }
+
+    fn check_process_context_handler(
+        &mut self,
+        span: &Span,
+        slot: &str,
+    ) -> Result<TypedNode, TypeError> {
+        let Some(process_name) = self.current_process_name() else {
+            return Err(TypeError {
+                message: "ctx.<slot> is only available inside process handlers".into(),
+                span: span.clone(),
+                hint: Some("Use ctx.<slot> inside @init/@get/@set/@call/@cast bodies.".into()),
+            });
+        };
+        let Some(capability) = self
+            .process_handler_dependencies
+            .get(&process_name)
+            .and_then(|slots| slots.get(slot))
+            .cloned()
+        else {
+            return Err(TypeError {
+                message: format!(
+                    "handler slot `{}` is not declared for process `{}`",
+                    slot, process_name
+                ),
+                span: span.clone(),
+                hint: Some("Declare the slot in meta.handlers before using ctx.<slot>.".into()),
+            });
+        };
+        Ok(TypedNode {
+            ty: Ty::Pid(capability),
+            span: span.clone(),
+            node: TypedInner::ProcessContextHandler {
+                process_name,
+                slot: slot.to_string(),
+            },
+        })
     }
 
     pub(super) fn check_closure(
@@ -5088,7 +5574,9 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let typed_value = self.check_result_value(value, "recover_kind")?;
         let value_ty = self.resolve_ty(&typed_value.ty);
-        let Ty::Result(ok_ty, _) = &value_ty else { unreachable!() };
+        let Ty::Result(ok_ty, _) = &value_ty else {
+            unreachable!()
+        };
         let ok_ty = ok_ty.as_ref().clone();
         let typed_marker = self.check_node(marker)?;
         let typed_marker = self.maybe_call_zero_arg_function(typed_marker, span.clone());
@@ -5140,8 +5628,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let typed_value = self.check_node(value)?;
         let value_ty = self.resolve_ty(&typed_value.ty);
-        let expected_result_ty =
-            Ty::Result(Box::new(self.env.fresh_tyvar()), Box::new(Ty::Error));
+        let expected_result_ty = Ty::Result(Box::new(self.env.fresh_tyvar()), Box::new(Ty::Error));
         if !self.types_compatible(&expected_result_ty, &value_ty) {
             return Err(TypeError {
                 message: format!(
@@ -5436,6 +5923,19 @@ impl Checker {
             return Ok(tuple_root_path);
         }
         let typed_expr = self.check_node(expr)?;
+
+        if let Some((state_name, owner)) = self.ty_contains_process_state_type(&typed_expr.ty) {
+            if self.current_process_name().as_deref() != Some(owner.as_str()) {
+                return Err(TypeError {
+                    message: format!(
+                        "process state type `{}` can only be accessed inside process `{}`",
+                        state_name, owner
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+        }
 
         if matches!(typed_expr.ty, Ty::Lens(_, _)) {
             let path = self.resolve_lens_path_from_node(typed_expr, span, None)?;

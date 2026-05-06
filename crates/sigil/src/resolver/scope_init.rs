@@ -33,9 +33,15 @@ fn is_global_runtime_builtin(name: &str) -> bool {
             | "set_exit_code"
             | "__process_pid"
             | "__process_spawn"
+            | "__supervisor_spawn"
+            | "__supervisor_adopt"
+            | "__supervisor_status"
+            | "__supervisor_workers"
             | "__process_state"
             | "__process_store"
             | "__process_self"
+            | "__process_context_handler"
+            | "__out_handler_write"
             | "__process_sleep"
             | "__task_call"
             | "__task_async"
@@ -53,6 +59,7 @@ pub(super) fn resolve_decl_attrs(attrs: &DeclAttrs) -> ResolvedDeclAttrs {
         doc: attrs.doc.clone(),
         hidden: attrs.hidden,
         visibility: attrs.visibility,
+        process_state_owner: attrs.process_state_owner.clone(),
     }
 }
 

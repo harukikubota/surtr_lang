@@ -128,6 +128,25 @@ impl Checker {
         Ok(Ty::Pid(self.pid_marker_from_ast(&args[0])?))
     }
 
+    fn resolve_worker_handle_surface_ty(
+        &self,
+        span: &Span,
+        args: &[AstTy],
+        handle_name: &str,
+    ) -> Result<Ty, TypeError> {
+        if args.len() != 1 {
+            return Err(TypeError {
+                message: format!("{handle_name}<Worker> requires exactly 1 type argument"),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        Ok(Ty::Enum(
+            handle_name.to_string(),
+            vec![Ty::Pid(self.pid_marker_from_ast(&args[0])?)],
+        ))
+    }
+
     fn ast_ty_is_none_error_marker(ast_ty: &AstTy) -> bool {
         match ast_ty {
             AstTy::Named(_, name) | AstTy::Generic(_, name, _) => {
@@ -380,6 +399,7 @@ impl Checker {
                             | TypeName::Generator
                             | TypeName::Result
                             | TypeName::Duration
+                            | TypeName::ProcessInit
                             | TypeName::Lazy
                             | TypeName::TypeRef
                             | TypeName::Hole
@@ -387,7 +407,9 @@ impl Checker {
                             | TypeName::MatchArms
                             | TypeName::CondClauses
                             | TypeName::Lens
-                            | TypeName::Pid,
+                            | TypeName::Pid
+                            | TypeName::Workers
+                            | TypeName::WorkerLease,
                         )
                         | None => {
                             if let Some(def) = self.env.lookup_type_def(name) {
@@ -506,6 +528,18 @@ impl Checker {
                         self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::General)?;
                     Ok(Ty::Enum("Generator".into(), vec![state_ty, item_ty]))
                 }
+                "ProcessInit" => {
+                    if args.len() != 1 {
+                        return Err(TypeError {
+                            message: "ProcessInit<T> requires exactly 1 type argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let inner_ty =
+                        self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
+                    Ok(Ty::Enum("ProcessInit".into(), vec![inner_ty]))
+                }
                 "Lens" => {
                     if args.len() != 2 {
                         return Err(TypeError {
@@ -521,6 +555,8 @@ impl Checker {
                     Ok(Ty::Lens(Box::new(source), Box::new(focus)))
                 }
                 "PID" => self.resolve_pid_surface_ty(span, args),
+                "Workers" => self.resolve_worker_handle_surface_ty(span, args, "Workers"),
+                "WorkerLease" => self.resolve_worker_handle_surface_ty(span, args, "WorkerLease"),
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
@@ -555,6 +591,12 @@ impl Checker {
                     Ok(Ty::Result(Box::new(ok), Box::new(err)))
                 }
                 _ => {
+                    if Self::surface_type_name(name) == "Workers" {
+                        return self.resolve_worker_handle_surface_ty(span, args, "Workers");
+                    }
+                    if Self::surface_type_name(name) == "WorkerLease" {
+                        return self.resolve_worker_handle_surface_ty(span, args, "WorkerLease");
+                    }
                     let def = self.env.lookup_type_def(name).ok_or_else(|| TypeError {
                         message: format!("Unknown generic type: {}", name),
                         span: span.clone(),
@@ -756,6 +798,21 @@ impl Checker {
                 )?;
                 Ok(Ty::Enum("Generator".into(), vec![state, item]))
             }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "ProcessInit" => {
+                if args.len() != 1 {
+                    return Err(TypeError {
+                        message: "ProcessInit<T> requires exactly 1 type argument".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let inner = self.resolve_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
+                Ok(Ty::Enum("ProcessInit".into(), vec![inner]))
+            }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Lens" => {
                 if args.len() != 2 {
                     return Err(TypeError {
@@ -778,6 +835,12 @@ impl Checker {
             }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "PID" => {
                 self.resolve_pid_surface_ty(span, args)
+            }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Workers" => {
+                self.resolve_worker_handle_surface_ty(span, args, "Workers")
+            }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "WorkerLease" => {
+                self.resolve_worker_handle_surface_ty(span, args, "WorkerLease")
             }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "MatchResult" => {
                 if !self.match_result_type_allowed(context) {
@@ -866,6 +929,12 @@ impl Checker {
                 Ok(Ty::Tuple(items))
             }
             AstTy::Generic(span, name, args) => {
+                if Self::surface_type_name(name) == "Workers" {
+                    return self.resolve_worker_handle_surface_ty(span, args, "Workers");
+                }
+                if Self::surface_type_name(name) == "WorkerLease" {
+                    return self.resolve_worker_handle_surface_ty(span, args, "WorkerLease");
+                }
                 let def = self
                     .env
                     .lookup_type_def(name)
@@ -1059,6 +1128,22 @@ impl Checker {
                 )?;
                 Ok(Ty::Enum("Generator".into(), vec![state, item]))
             }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "ProcessInit" => {
+                if args.len() != 1 {
+                    return Err(TypeError {
+                        message: "ProcessInit<T> requires exactly 1 type argument".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let inner = self.resolve_trait_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    self_ty,
+                    tyvars,
+                )?;
+                Ok(Ty::Enum("ProcessInit".into(), vec![inner]))
+            }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Lens" => {
                 if args.len() != 2 {
                     return Err(TypeError {
@@ -1083,6 +1168,12 @@ impl Checker {
             }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "PID" => {
                 self.resolve_pid_surface_ty(span, args)
+            }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Workers" => {
+                self.resolve_worker_handle_surface_ty(span, args, "Workers")
+            }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "WorkerLease" => {
+                self.resolve_worker_handle_surface_ty(span, args, "WorkerLease")
             }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "MatchResult" => {
                 if !self.match_result_type_allowed(context) {
@@ -1176,6 +1267,12 @@ impl Checker {
                 Ok(Ty::Tuple(items))
             }
             AstTy::Generic(span, name, args) => {
+                if Self::surface_type_name(name) == "Workers" {
+                    return self.resolve_worker_handle_surface_ty(span, args, "Workers");
+                }
+                if Self::surface_type_name(name) == "WorkerLease" {
+                    return self.resolve_worker_handle_surface_ty(span, args, "WorkerLease");
+                }
                 let def = self
                     .env
                     .lookup_type_def(name)
@@ -1389,6 +1486,21 @@ impl Checker {
                     )?;
                     Ok(Ty::Enum("Generator".into(), vec![state_ty, item_ty]))
                 }
+                "ProcessInit" => {
+                    if args.len() != 1 {
+                        return Err(TypeError {
+                            message: "ProcessInit<T> requires exactly 1 type argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let inner_ty = self.resolve_builtin_ast_ty_in_context(
+                        &args[0],
+                        TypeSyntaxContext::General,
+                        tyvars,
+                    )?;
+                    Ok(Ty::Enum("ProcessInit".into(), vec![inner_ty]))
+                }
                 "Lens" => {
                     if args.len() != 2 {
                         return Err(TypeError {
@@ -1410,6 +1522,8 @@ impl Checker {
                     Ok(Ty::Lens(Box::new(source), Box::new(focus)))
                 }
                 "PID" => self.resolve_pid_surface_ty(span, args),
+                "Workers" => self.resolve_worker_handle_surface_ty(span, args, "Workers"),
+                "WorkerLease" => self.resolve_worker_handle_surface_ty(span, args, "WorkerLease"),
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
@@ -1554,6 +1668,18 @@ impl Checker {
                 self.types_compatible(a, b)
             }
             (Ty::Pid(a), Ty::Pid(b)) => a == b || a.starts_with('$') || b.starts_with('$'),
+            (Ty::Pid(expected_process), Ty::Enum(name, args))
+                if name == "WorkerLease" && args.len() == 1 =>
+            {
+                match args.first() {
+                    Some(Ty::Pid(actual_process)) => {
+                        expected_process == actual_process
+                            || expected_process.starts_with('$')
+                            || actual_process.starts_with('$')
+                    }
+                    _ => false,
+                }
+            }
             (Ty::Lens(src_a, focus_a), Ty::Lens(src_b, focus_b)) => {
                 self.types_compatible(src_a, src_b) && self.types_compatible(focus_a, focus_b)
             }
@@ -1986,6 +2112,38 @@ impl Checker {
         let node = match node.node {
             TypedInner::Lit(lit) => TypedInner::Lit(lit),
             TypedInner::Var(id) => TypedInner::Var(id),
+            TypedInner::SupervisorSpawn {
+                supervisor_process,
+                worker_process,
+                init,
+            } => TypedInner::SupervisorSpawn {
+                supervisor_process,
+                worker_process,
+                init: Box::new(self.resolve_typed_node(*init)),
+            },
+            TypedInner::SupervisorAdopt {
+                supervisor_process,
+                worker_process,
+                pid,
+            } => TypedInner::SupervisorAdopt {
+                supervisor_process,
+                worker_process,
+                pid: Box::new(self.resolve_typed_node(*pid)),
+            },
+            TypedInner::SupervisorStatus { supervisor_process } => {
+                TypedInner::SupervisorStatus { supervisor_process }
+            }
+            TypedInner::SupervisorWorkers {
+                supervisor_process,
+                worker_process,
+                init,
+                size,
+            } => TypedInner::SupervisorWorkers {
+                supervisor_process,
+                worker_process,
+                init: Box::new(self.resolve_typed_node(*init)),
+                size: Box::new(self.resolve_typed_node(*size)),
+            },
             TypedInner::App(func, args) => TypedInner::App(
                 Box::new(self.resolve_typed_node(*func)),
                 args.into_iter()
@@ -2120,6 +2278,9 @@ impl Checker {
             ),
             TypedInner::FieldAccess(expr, idx) => {
                 TypedInner::FieldAccess(Box::new(self.resolve_typed_node(*expr)), idx)
+            }
+            TypedInner::ProcessContextHandler { process_name, slot } => {
+                TypedInner::ProcessContextHandler { process_name, slot }
             }
             TypedInner::LensPath(path) => TypedInner::LensPath(self.resolve_typed_lens_path(path)),
             TypedInner::PendingLensPath(path) => TypedInner::PendingLensPath(PendingLensPath {

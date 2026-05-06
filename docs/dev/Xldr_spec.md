@@ -50,8 +50,12 @@ Xldr は対話セッション中に次を保持する。
 - Scar セッション
 - Forge セッション
 - Eldr VM
+- Eldr VM 内の process runtime 状態
 - 行番号付きの結果履歴
 - 補完候補シンボル集合
+
+REPL セッションの BootPlan はセッション開始時に固定する。対話入力の chunk は
+既存 VM / process runtime 状態へ増分適用されるが、session 中に boot 構成を変更しない。
 
 ### 3.2 初期化
 
@@ -66,6 +70,7 @@ Xldr は対話セッション中に次を保持する。
 - REPL user chunk は標準定義ソース読み込み後に `SourceKind::ReplChunk` として追加される
 - `surtr repl --module <file>` は追加の definition source を 1 件だけ preload し、`Std + 単品 definition` として成立する場合に限って受理する
 - `surtr repl --script <file>` は追加の script source を 1 件だけ preload し、`include` を解決したうえで declaration area を compile し、top-level expr があれば REPL 開始前に一度だけ実行する
+- `surtr repl --script <file>` が将来 `supervisor_init` を含む場合、preload compile unit の BootPlan として取り込み、REPL 開始後の user chunk では boot 構成を変更しない
 - `--module` と `--script` を併用した場合は `module -> script` の順で同一 compile unit として読む
 - preload mode は CLI 入口の `--module` / `--script` 引数で確定し、Xldr 側で source token を読んで mode 推定しない
 - `include` や `Project::add_path(...)` で追加される file は definition source として扱い、script と definition の判定を再度行わない
@@ -87,6 +92,7 @@ Xldr は対話セッション中に次を保持する。
 - 入力ごとに名前解決、型検査、コード生成の checkpoint を取る
 - 途中で失敗した場合は、その入力ぶんの変更をロールバックする
 - 失敗した入力は後続セッションへ持ち越さない
+- 実行失敗時の VM checkpoint / rollback には process runtime 状態、singleton slot、waiting table、deadline queue、標準 I/O handler buffer cursor を含める
 
 ---
 
@@ -118,6 +124,7 @@ REPL 実装は次の 3 層に分ける。
 ### 4.4 出力規約
 
 - `print(...)` の副作用出力はプレフィクスなしで表示する
+- 標準 I/O は VM 内部 buffer 直書きではなく、標準 I/O handler 経由の出力として presenter が扱う
 - 評価結果は `> ` プレフィクス付きで表示する
 - バインド結果は `> name: Type = value` 形式で表示する
 - 型定義評価は `> TypeName` 形式で表示する

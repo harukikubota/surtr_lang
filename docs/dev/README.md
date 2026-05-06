@@ -8,9 +8,14 @@
 ## 仕様書
 
 - [EldrVM spec](./EldrVM_spec.md)
+- [Process runtime spec](./ProcessRuntime_spec.md)
 - [Rune observability](./Rune_observability.md)
 - [Xldr spec](./Xldr_spec.md)
 - [テスト方針](./テスト方針.md)
+
+`Process runtime spec` は process surface、BootPlan、Supervisor、handler dependency、
+diagnostics の正本である。`EldrVM spec` は VM が受け取る正規化済み runtime 契約と
+実行意味論のみを扱う。
 
 ## 併読するとよいもの
 

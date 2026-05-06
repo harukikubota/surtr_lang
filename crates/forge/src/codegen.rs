@@ -1,12 +1,21 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use scar::typed::*;
 use scar::types::Ty;
 use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_id_by_name;
-use sindr::ir::{CompileInfo, DbgArgTemplate, DbgTemplate, DocEntry, FunctionFlags};
+use sindr::ir::{
+    BootEntrySource, CompileInfo, DbgArgTemplate, DbgTemplate, DocEntry, FunctionFlags,
+    RuntimeBootPlan, RuntimeCallableRef, RuntimeHandlerArg, RuntimeHandlerDependency,
+    RuntimeHandlerKind, RuntimeHandlerOverride, RuntimeHandlerSpec, RuntimeHandlerTarget,
+    RuntimeInitPolicy, RuntimeInitResultShape, RuntimeInitSpec, RuntimeLifecycleSpec,
+    RuntimeProcessDependencies, RuntimeStateSpec, RuntimeSupervisionSpec,
+    RuntimeSupervisorOverrideEntry, RuntimeSupervisorPolicy, RuntimeTypeRef, SingletonBootEntry,
+};
 use sindr::primitives::int;
-use spire::ast::{BinOp, Lit, Span, Visibility};
+use spire::ast::{
+    BinOp, Lit, ProcessInstance, ProcessRuntimeHandlerKind, Span, SupervisorInitSpec, Visibility,
+};
 
 use crate::bytecode::*;
 use crate::error::CodegenError;
@@ -18,6 +27,7 @@ pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
     codegen_typed_program(TypedProgram {
         nodes: typed,
         process_specs: Vec::new(),
+        boot_plan: SupervisorInitSpec::default(),
     })
 }
 
@@ -26,12 +36,15 @@ pub fn codegen_typed_program(typed: TypedProgram) -> Result<Bytecode, CodegenErr
     let TypedProgram {
         nodes,
         process_specs,
+        boot_plan,
     } = typed;
     let mut gene = Codegen::new();
     gene.emit_program(nodes.clone())?;
     let (opcodes, state) = gene.finalize()?;
     let runtime_process_specs =
         build_runtime_process_specs(&process_specs, &nodes, &state.functions)?;
+    let runtime_boot_plan = build_runtime_boot_plan(&boot_plan, &process_specs)?;
+    validate_required_singletons(&nodes, &process_specs, &runtime_boot_plan)?;
     Ok(Bytecode {
         opcodes,
         constants: state.constants,
@@ -52,7 +65,419 @@ pub fn codegen_typed_program(typed: TypedProgram) -> Result<Bytecode, CodegenErr
         sources: Vec::new(),
         pc_spans: Vec::new(),
         runtime_process_specs,
+        runtime_boot_plan,
     })
+}
+
+fn validate_required_singletons(
+    nodes: &[TypedNode],
+    process_specs: &[TypedProcessSpec],
+    runtime_boot_plan: &RuntimeBootPlan,
+) -> Result<(), CodegenError> {
+    let mut surface_to_process = HashMap::new();
+    for spec in process_specs {
+        if spec.spec.instance != ProcessInstance::Singleton {
+            continue;
+        }
+        surface_to_process.insert(
+            format!("{}::pid", spec.process_name),
+            spec.process_name.clone(),
+        );
+        for handler in &spec.spec.handler_specs {
+            if handler.kind == ProcessRuntimeHandlerKind::Init {
+                continue;
+            }
+            surface_to_process.insert(
+                format!("{}::{}", spec.process_name, handler.name),
+                spec.process_name.clone(),
+            );
+        }
+    }
+
+    if surface_to_process.is_empty() {
+        return Ok(());
+    }
+
+    let available_singletons = runtime_boot_plan
+        .singletons
+        .iter()
+        .map(|entry| entry.process_name.as_str())
+        .collect::<HashSet<_>>();
+    let available_supervisors = runtime_boot_plan
+        .supervisor_overrides
+        .iter()
+        .map(|entry| entry.process_name.as_str())
+        .collect::<HashSet<_>>();
+    let mut first_missing: HashMap<String, Span> = HashMap::new();
+    for node in nodes {
+        collect_missing_singleton_calls(
+            node,
+            &surface_to_process,
+            &available_singletons,
+            &available_supervisors,
+            &mut first_missing,
+        );
+    }
+
+    if let Some((process_name, span)) = first_missing.into_iter().min_by(|left, right| {
+        left.1
+            .start
+            .cmp(&right.1.start)
+            .then_with(|| left.0.cmp(&right.0))
+    }) {
+        return Err(CodegenError {
+            message: format!(
+                "singleton `{process_name}` is not available in this compile unit; add it to supervisor_init"
+            ),
+            span,
+        });
+    }
+
+    Ok(())
+}
+
+fn collect_missing_singleton_calls(
+    node: &TypedNode,
+    surface_to_process: &HashMap<String, String>,
+    available_singletons: &HashSet<&str>,
+    available_supervisors: &HashSet<&str>,
+    first_missing: &mut HashMap<String, Span>,
+) {
+    if let Some(process_name) = singleton_required_by_call(node, surface_to_process) {
+        if !available_singletons.contains(process_name.as_str()) {
+            first_missing
+                .entry(process_name)
+                .or_insert_with(|| node.span.clone());
+        }
+    }
+
+    match &node.node {
+        TypedInner::Lit(_)
+        | TypedInner::Var(_)
+        | TypedInner::ListNil
+        | TypedInner::ProcessContextHandler { .. }
+        | TypedInner::LensPath(_)
+        | TypedInner::PendingLensPath(_)
+        | TypedInner::EnumDef(_, _)
+        | TypedInner::TraitDef(_, _)
+        | TypedInner::TraitImplDef(_, _)
+        | TypedInner::BuiltinExtractorDecl(_, _, _)
+        | TypedInner::StructDef(_, _, _, _)
+        | TypedInner::RecordDef(_, _, _, _) => {}
+        TypedInner::SupervisorSpawn {
+            supervisor_process,
+            init,
+            ..
+        } => {
+            if !available_supervisors.contains(supervisor_process.as_str()) {
+                first_missing
+                    .entry(format!("{}::spawn", supervisor_process))
+                    .or_insert_with(|| node.span.clone());
+            }
+            collect_missing_singleton_calls(
+                init,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+        }
+        TypedInner::SupervisorAdopt {
+            supervisor_process,
+            pid,
+            ..
+        } => {
+            if !available_supervisors.contains(supervisor_process.as_str()) {
+                first_missing
+                    .entry(format!("{}::adopt", supervisor_process))
+                    .or_insert_with(|| node.span.clone());
+            }
+            collect_missing_singleton_calls(
+                pid,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+        }
+        TypedInner::SupervisorStatus { supervisor_process } => {
+            if !available_supervisors.contains(supervisor_process.as_str()) {
+                first_missing
+                    .entry(format!("{}::status", supervisor_process))
+                    .or_insert_with(|| node.span.clone());
+            }
+        }
+        TypedInner::SupervisorWorkers {
+            supervisor_process,
+            init,
+            size,
+            ..
+        } => {
+            if !available_supervisors.contains(supervisor_process.as_str()) {
+                first_missing
+                    .entry(format!("{}::workers", supervisor_process))
+                    .or_insert_with(|| node.span.clone());
+            }
+            collect_missing_singleton_calls(
+                init,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+            collect_missing_singleton_calls(
+                size,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+        }
+        TypedInner::App(func, args)
+        | TypedInner::InjectCall(func, args)
+        | TypedInner::Capture(func, args) => {
+            collect_missing_singleton_calls(
+                func,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+            for arg in args {
+                collect_missing_singleton_calls(
+                    arg,
+                    surface_to_process,
+                    available_singletons,
+                    available_supervisors,
+                    first_missing,
+                );
+            }
+        }
+        TypedInner::TraitCall { args, .. }
+        | TypedInner::ListLiteral(args)
+        | TypedInner::TupleLiteral(args)
+        | TypedInner::StructLit(_, args)
+        | TypedInner::ConstructorCall(_, args)
+        | TypedInner::Block(args) => {
+            for arg in args {
+                collect_missing_singleton_calls(
+                    arg,
+                    surface_to_process,
+                    available_singletons,
+                    available_supervisors,
+                    first_missing,
+                );
+            }
+        }
+        TypedInner::Bind(_, rhs)
+        | TypedInner::SafeBind(_, rhs)
+        | TypedInner::FieldAccess(rhs, _)
+        | TypedInner::Semi(rhs) => collect_missing_singleton_calls(
+            rhs,
+            surface_to_process,
+            available_singletons,
+            available_supervisors,
+            first_missing,
+        ),
+        TypedInner::BinOp(_, left, right)
+        | TypedInner::Pipe(left, right)
+        | TypedInner::Compose(_, left, right)
+        | TypedInner::ListCons(left, right)
+        | TypedInner::MapErr(left, right)
+        | TypedInner::Cause(left, right) => {
+            collect_missing_singleton_calls(
+                left,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+            collect_missing_singleton_calls(
+                right,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+        }
+        TypedInner::InterpolatedStr(parts) => {
+            for part in parts {
+                if let scar::typed::TypedInterpolatedPart::Expr(expr) = part {
+                    collect_missing_singleton_calls(
+                        expr,
+                        surface_to_process,
+                        available_singletons,
+                        available_supervisors,
+                        first_missing,
+                    );
+                }
+            }
+        }
+        TypedInner::Dbg(args) => {
+            for arg in args {
+                collect_missing_singleton_calls(
+                    &arg.expr,
+                    surface_to_process,
+                    available_singletons,
+                    available_supervisors,
+                    first_missing,
+                );
+            }
+        }
+        TypedInner::If(cond, then_node, else_node) => {
+            collect_missing_singleton_calls(
+                cond,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+            collect_missing_singleton_calls(
+                then_node,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+            if let Some(else_node) = else_node {
+                collect_missing_singleton_calls(
+                    else_node,
+                    surface_to_process,
+                    available_singletons,
+                    available_supervisors,
+                    first_missing,
+                );
+            }
+        }
+        TypedInner::Assert(left, right)
+        | TypedInner::Ensure(left, right, _)
+        | TypedInner::RecoverKind(left, right, _) => {
+            collect_missing_singleton_calls(
+                left,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+            collect_missing_singleton_calls(
+                right,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+            match &node.node {
+                TypedInner::Ensure(_, _, third) | TypedInner::RecoverKind(_, _, third) => {
+                    collect_missing_singleton_calls(
+                        third,
+                        surface_to_process,
+                        available_singletons,
+                        available_supervisors,
+                        first_missing,
+                    );
+                }
+                _ => {}
+            }
+        }
+        TypedInner::Match(scrutinee, arms) => {
+            collect_missing_singleton_calls(
+                scrutinee,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    collect_missing_singleton_calls(
+                        guard,
+                        surface_to_process,
+                        available_singletons,
+                        available_supervisors,
+                        first_missing,
+                    );
+                }
+                collect_missing_singleton_calls(
+                    &arm.body,
+                    surface_to_process,
+                    available_singletons,
+                    available_supervisors,
+                    first_missing,
+                );
+            }
+        }
+        TypedInner::LensView { source, .. } => collect_missing_singleton_calls(
+            source,
+            surface_to_process,
+            available_singletons,
+            available_supervisors,
+            first_missing,
+        ),
+        TypedInner::LensSet { source, value, .. } => {
+            collect_missing_singleton_calls(
+                source,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+            collect_missing_singleton_calls(
+                value,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+        }
+        TypedInner::LensOver {
+            source, update_fun, ..
+        } => {
+            collect_missing_singleton_calls(
+                source,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+            collect_missing_singleton_calls(
+                update_fun,
+                surface_to_process,
+                available_singletons,
+                available_supervisors,
+                first_missing,
+            );
+        }
+        TypedInner::DeferrorDef(_, _, _, _, body)
+        | TypedInner::Closure(_, _, body)
+        | TypedInner::Def(_, _, _, _, _, body, _)
+        | TypedInner::ExtractorDef(_, _, _, _, _, body, _) => collect_missing_singleton_calls(
+            body,
+            surface_to_process,
+            available_singletons,
+            available_supervisors,
+            first_missing,
+        ),
+    }
+}
+
+fn singleton_required_by_call(
+    node: &TypedNode,
+    surface_to_process: &HashMap<String, String>,
+) -> Option<String> {
+    let func = match &node.node {
+        TypedInner::App(func, _)
+        | TypedInner::InjectCall(func, _)
+        | TypedInner::Capture(func, _) => func,
+        _ => return None,
+    };
+    let TypedInner::Var(id) = &func.node else {
+        return None;
+    };
+    id.qualified_name
+        .as_ref()
+        .and_then(|name| surface_to_process.get(name))
+        .or_else(|| surface_to_process.get(&id.name))
+        .cloned()
 }
 
 /// Compose a complete executable bytecode artifact from a precompiled prefix
@@ -182,7 +607,251 @@ pub fn compose_bytecode_with_chunk(
     base.runtime_process_specs
         .entries
         .extend(chunk.runtime_process_specs);
+    extend_runtime_boot_plan(&mut base.runtime_boot_plan, chunk.runtime_boot_plan);
     Ok(base)
+}
+
+fn extend_runtime_boot_plan(base: &mut RuntimeBootPlan, chunk: RuntimeBootPlan) {
+    base.singletons.extend(chunk.singletons);
+    base.standard_overrides.extend(chunk.standard_overrides);
+    base.handler_overrides.extend(chunk.handler_overrides);
+}
+
+fn build_runtime_boot_plan(
+    boot_plan: &SupervisorInitSpec,
+    process_specs: &[TypedProcessSpec],
+) -> Result<RuntimeBootPlan, CodegenError> {
+    let mut runtime = RuntimeBootPlan::default();
+    let default_timeout_ms = runtime.runtime_limits.default_init_timeout_ms;
+
+    for singleton in &boot_plan.singletons {
+        let Some(spec) = resolve_boot_process_spec(process_specs, &singleton.process_name) else {
+            return Err(CodegenError {
+                message: "singleton process is not defined or not visible".into(),
+                span: singleton.span.clone(),
+            });
+        };
+        if spec.spec.instance != ProcessInstance::Singleton {
+            return Err(CodegenError {
+                message: "only Singleton process can appear in singleton boot entry".into(),
+                span: singleton.span.clone(),
+            });
+        }
+        if runtime
+            .singletons
+            .iter()
+            .any(|entry| entry.process_name == spec.process_name)
+        {
+            return Err(CodegenError {
+                message: "singleton boot entry is duplicated".into(),
+                span: singleton.span.clone(),
+            });
+        }
+
+        runtime.singletons.push(SingletonBootEntry {
+            process_name: spec.process_name.clone(),
+            init_timeout_ms: singleton.timeout_ms.unwrap_or(default_timeout_ms),
+            source: BootEntrySource::ExplicitConfig,
+        });
+        for handler in &singleton.handlers {
+            let Some(dependency) = spec
+                .spec
+                .handlers
+                .iter()
+                .find(|dependency| dependency.slot == handler.slot)
+            else {
+                return Err(CodegenError {
+                    message: "handler slot is not declared by the target process".into(),
+                    span: handler.span.clone(),
+                });
+            };
+            validate_runtime_handler_target(dependency, &handler.target)?;
+            runtime.handler_overrides.push(RuntimeHandlerOverride {
+                target_process: spec.process_name.clone(),
+                slot: handler.slot.clone(),
+                handler_target: RuntimeHandlerTarget {
+                    name: handler.target.name.clone(),
+                    named_args: handler
+                        .target
+                        .named_args
+                        .iter()
+                        .map(|arg| RuntimeHandlerArg {
+                            name: arg.name.clone(),
+                            value: arg.value.clone(),
+                        })
+                        .collect(),
+                },
+            });
+        }
+    }
+
+    for supervisor in &boot_plan.supervisors {
+        let Some(spec) = resolve_boot_process_spec(process_specs, &supervisor.process_name) else {
+            return Err(CodegenError {
+                message: "supervisor process is not defined or not visible".into(),
+                span: supervisor.span.clone(),
+            });
+        };
+        if !matches!(
+            spec.spec.kind,
+            spire::ast::ProcessKind::Supervisor
+                | spire::ast::ProcessKind::DynamicSupervisor
+                | spire::ast::ProcessKind::RuntimeSupervisor
+        ) {
+            return Err(CodegenError {
+                message: "supervisor override target must be a supervisor process".into(),
+                span: supervisor.span.clone(),
+            });
+        }
+        let Some(base_policy) = &spec.spec.supervisor_policy else {
+            return Err(CodegenError {
+                message: "supervisor process is missing a policy definition".into(),
+                span: supervisor.span.clone(),
+            });
+        };
+        runtime
+            .supervisor_overrides
+            .push(RuntimeSupervisorOverrideEntry {
+                process_name: spec.process_name.clone(),
+                policy: runtime_supervisor_policy_from_effective(
+                    base_policy,
+                    &supervisor.overrides,
+                ),
+            });
+    }
+
+    Ok(runtime)
+}
+
+fn resolve_boot_process_spec<'a>(
+    process_specs: &'a [TypedProcessSpec],
+    requested_name: &str,
+) -> Option<&'a TypedProcessSpec> {
+    process_specs
+        .iter()
+        .find(|spec| spec.process_name == requested_name)
+        .or_else(|| {
+            process_specs.iter().find(|spec| {
+                spec.process_name
+                    .rsplit("::")
+                    .next()
+                    .is_some_and(|short| short == requested_name)
+            })
+        })
+}
+
+fn runtime_supervisor_policy_from_effective(
+    base: &spire::ast::SupervisorPolicy,
+    overrides: &spire::ast::SupervisorPolicyOverride,
+) -> RuntimeSupervisorPolicy {
+    let effective_strategy = overrides.strategy.unwrap_or(base.strategy);
+    let effective_restart_default = overrides
+        .child_restart_default
+        .unwrap_or(base.child_restart_default);
+    RuntimeSupervisorPolicy {
+        strategy: match effective_strategy {
+            spire::ast::SupervisorStrategy::OneForOne => "OneForOne".into(),
+        },
+        max_restarts: overrides.max_restarts.unwrap_or(base.max_restarts),
+        max_seconds: overrides.max_seconds.unwrap_or(base.max_seconds),
+        child_restart_default: match effective_restart_default {
+            spire::ast::ChildRestartPolicy::Permanent => "Permanent".into(),
+            spire::ast::ChildRestartPolicy::Transient => "Transient".into(),
+            spire::ast::ChildRestartPolicy::Temporary => "Temporary".into(),
+        },
+        allow_adopt: overrides.allow_adopt.unwrap_or(base.allow_adopt),
+        shutdown_timeout_ms: overrides.shutdown_timeout_ms.or(base.shutdown_timeout_ms),
+    }
+}
+
+fn validate_runtime_handler_target(
+    dependency: &spire::ast::ProcessHandlerDependency,
+    target: &spire::ast::SupervisorInitHandlerTarget,
+) -> Result<(), CodegenError> {
+    match dependency.capability.as_str() {
+        "OutHandler" => match target.name.as_str() {
+            "StdOut" | "StdErr" | "NullOutHandler" => {
+                if !target.named_args.is_empty() {
+                    return Err(CodegenError {
+                        message: format!("{} does not accept handler arguments", target.name),
+                        span: target.span.clone(),
+                    });
+                }
+            }
+            "FileOutHandler" => {
+                let has_path = target.named_args.iter().any(|arg| arg.name == "path");
+                if !has_path {
+                    return Err(CodegenError {
+                        message: "FileOutHandler requires named argument `path`".into(),
+                        span: target.span.clone(),
+                    });
+                }
+                if target.named_args.iter().any(|arg| arg.name != "path") {
+                    return Err(CodegenError {
+                        message: "FileOutHandler only accepts named argument `path`".into(),
+                        span: target.span.clone(),
+                    });
+                }
+            }
+            _ => {
+                return Err(CodegenError {
+                    message: format!(
+                        "handler target `{}` does not satisfy capability OutHandler",
+                        target.name
+                    ),
+                    span: target.span.clone(),
+                });
+            }
+        },
+        capability => {
+            return Err(CodegenError {
+                message: format!(
+                    "handler capability `{capability}` is not supported by supervisor_init override validation"
+                ),
+                span: dependency.span.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn typed_def_return_ty(nodes: &[TypedNode], uid: u32) -> Option<&Ty> {
+    nodes.iter().find_map(|node| match &node.node {
+        TypedInner::Def(_, id, _, _, ret_ty, _, _) if id.unique_id == uid => Some(ret_ty),
+        _ => None,
+    })
+}
+
+fn init_state_ty(ret_ty: &Ty, lazy: bool, process_name: &str) -> Result<Ty, CodegenError> {
+    let ok_ty = match ret_ty {
+        Ty::Result(ok, _) => ok.as_ref(),
+        other => other,
+    };
+    if !lazy {
+        return Ok(ok_ty.clone());
+    }
+    match ok_ty {
+        Ty::Enum(name, args) if name == "ProcessInit" || name.ends_with("::ProcessInit") => {
+            args.first().cloned().ok_or_else(|| CodegenError {
+                message: format!(
+                    "Lazy @init for process `{process_name}` must return Result<ProcessInit<State>>"
+                ),
+                span: Span { start: 0, end: 0 },
+            })
+        }
+        _ => Err(CodegenError {
+            message: format!(
+                "Lazy @init for process `{process_name}` must return Result<ProcessInit<State>>"
+            ),
+            span: Span { start: 0, end: 0 },
+        }),
+    }
+}
+
+fn runtime_type_ref(ty: &Ty) -> RuntimeTypeRef {
+    RuntimeTypeRef {
+        name: ty_to_string(ty),
+    }
 }
 
 fn build_runtime_process_specs(
@@ -211,9 +880,26 @@ fn build_runtime_process_specs(
                 .map(|name| (name.clone(), entry.fun_idx))
         })
         .collect::<HashMap<_, _>>();
+    let function_entries = functions
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .qualified_name
+                .as_ref()
+                .map(|name| (name.clone(), entry.clone()))
+        })
+        .collect::<HashMap<_, _>>();
 
     let mut entries = Vec::with_capacity(process_specs.len());
-    for spec in process_specs {
+    for (process_id, spec) in process_specs.iter().enumerate() {
+        let process_kind = match spec.spec.kind {
+            spire::ast::ProcessKind::Agent => RuntimeProcessKind::Agent,
+            spire::ast::ProcessKind::GenServer => RuntimeProcessKind::GenServer,
+            spire::ast::ProcessKind::Supervisor => RuntimeProcessKind::Supervisor,
+            spire::ast::ProcessKind::RuntimeSupervisor => RuntimeProcessKind::RuntimeSupervisor,
+            spire::ast::ProcessKind::DynamicSupervisor => RuntimeProcessKind::DynamicSupervisor,
+            spire::ast::ProcessKind::Task => RuntimeProcessKind::Task,
+        };
         let init_name = qualified_names
             .get(&spec.init_uid)
             .ok_or_else(|| CodegenError {
@@ -223,17 +909,6 @@ fn build_runtime_process_specs(
                 ),
                 span: Span { start: 0, end: 0 },
             })?;
-        let init_fun_idx = function_ids
-            .get(init_name)
-            .copied()
-            .ok_or_else(|| CodegenError {
-                message: format!(
-                    "missing bytecode init handler for process `{}`",
-                    spec.process_name
-                ),
-                span: Span { start: 0, end: 0 },
-            })?;
-
         let get_name = qualified_names
             .get(&spec.get_uid)
             .ok_or_else(|| CodegenError {
@@ -243,18 +918,7 @@ fn build_runtime_process_specs(
                 ),
                 span: Span { start: 0, end: 0 },
             })?;
-        let get_fun_idx = function_ids
-            .get(get_name)
-            .copied()
-            .ok_or_else(|| CodegenError {
-                message: format!(
-                    "missing bytecode get handler for process `{}`",
-                    spec.process_name
-                ),
-                span: Span { start: 0, end: 0 },
-            })?;
-
-        let set_fun_idx = spec
+        let _set_fun_idx = spec
             .set_uid
             .map(|uid| {
                 let set_name = qualified_names.get(&uid).ok_or_else(|| CodegenError {
@@ -276,24 +940,215 @@ fn build_runtime_process_specs(
                     })
             })
             .transpose()?;
+        let mut handler_specs = Vec::new();
+        let init_entry = function_entries
+            .get(init_name)
+            .ok_or_else(|| CodegenError {
+                message: format!(
+                    "missing bytecode init handler for process `{}`",
+                    spec.process_name
+                ),
+                span: Span { start: 0, end: 0 },
+            })?;
+        let get_entry = function_entries.get(get_name).ok_or_else(|| CodegenError {
+            message: format!(
+                "missing bytecode get handler for process `{}`",
+                spec.process_name
+            ),
+            span: Span { start: 0, end: 0 },
+        })?;
+        let mut set_entry = None;
+        if let Some(set_uid) = spec.set_uid {
+            let set_name = qualified_names.get(&set_uid).ok_or_else(|| CodegenError {
+                message: format!(
+                    "missing lowered set handler metadata for process `{}`",
+                    spec.process_name
+                ),
+                span: Span { start: 0, end: 0 },
+            })?;
+            set_entry = Some(function_entries.get(set_name).ok_or_else(|| CodegenError {
+                message: format!(
+                    "missing bytecode set handler for process `{}`",
+                    spec.process_name
+                ),
+                span: Span { start: 0, end: 0 },
+            })?);
+        }
+        if spec.spec.handler_specs.is_empty() {
+            handler_specs.push(RuntimeHandlerSpec {
+                handler_id: 0,
+                name: init_name.clone(),
+                kind: RuntimeHandlerKind::Init,
+                fun_idx: init_entry.fun_idx,
+                arity: init_entry.arity,
+            });
+            handler_specs.push(RuntimeHandlerSpec {
+                handler_id: 1,
+                name: get_name.clone(),
+                kind: if process_kind == RuntimeProcessKind::GenServer {
+                    RuntimeHandlerKind::Call
+                } else {
+                    RuntimeHandlerKind::Get
+                },
+                fun_idx: get_entry.fun_idx,
+                arity: get_entry.arity,
+            });
+            if let Some(set_entry) = set_entry {
+                handler_specs.push(RuntimeHandlerSpec {
+                    handler_id: 2,
+                    name: qualified_names
+                        .get(&spec.set_uid.expect("set entry exists"))
+                        .cloned()
+                        .unwrap_or_default(),
+                    kind: if process_kind == RuntimeProcessKind::GenServer {
+                        RuntimeHandlerKind::Cast
+                    } else {
+                        RuntimeHandlerKind::Set
+                    },
+                    fun_idx: set_entry.fun_idx,
+                    arity: set_entry.arity,
+                });
+            }
+        } else {
+            for (handler_id, handler) in spec.spec.handler_specs.iter().enumerate() {
+                let internal_name = if handler.internal_name.is_empty() {
+                    None
+                } else {
+                    Some(format!("{}::{}", spec.module_path, handler.internal_name))
+                };
+                let entry_for_internal = internal_name
+                    .as_ref()
+                    .and_then(|name| function_entries.get(name));
+                let (kind, entry) = match handler.kind {
+                    ProcessRuntimeHandlerKind::Init => (
+                        RuntimeHandlerKind::Init,
+                        entry_for_internal.unwrap_or(init_entry),
+                    ),
+                    ProcessRuntimeHandlerKind::Get => (
+                        RuntimeHandlerKind::Get,
+                        entry_for_internal.unwrap_or(get_entry),
+                    ),
+                    ProcessRuntimeHandlerKind::Set => {
+                        let Some(entry) = entry_for_internal.or(set_entry) else {
+                            return Err(CodegenError {
+                                message: format!(
+                                    "handler metadata references @set for process `{}` but no set handler was lowered",
+                                    spec.process_name
+                                ),
+                                span: handler.span.clone(),
+                            });
+                        };
+                        (RuntimeHandlerKind::Set, entry)
+                    }
+                    ProcessRuntimeHandlerKind::Call => (
+                        RuntimeHandlerKind::Call,
+                        entry_for_internal.unwrap_or(get_entry),
+                    ),
+                    ProcessRuntimeHandlerKind::Cast => {
+                        let Some(entry) = entry_for_internal.or(set_entry) else {
+                            return Err(CodegenError {
+                                message: format!(
+                                    "handler metadata references @cast for process `{}` but no cast handler was lowered",
+                                    spec.process_name
+                                ),
+                                span: handler.span.clone(),
+                            });
+                        };
+                        (RuntimeHandlerKind::Cast, entry)
+                    }
+                };
+                handler_specs.push(RuntimeHandlerSpec {
+                    handler_id: handler_id as u32,
+                    name: handler.name.clone(),
+                    kind,
+                    fun_idx: entry.fun_idx,
+                    arity: entry.arity,
+                });
+            }
+        }
+
+        let init_ret_ty =
+            typed_def_return_ty(nodes, spec.init_uid).ok_or_else(|| CodegenError {
+                message: format!(
+                    "missing typed init handler return type for process `{}`",
+                    spec.process_name
+                ),
+                span: Span { start: 0, end: 0 },
+            })?;
+        let state_ty = init_state_ty(init_ret_ty, spec.spec.lazy, &spec.process_name)?;
+        let state_type = runtime_type_ref(&state_ty);
+        let result_type = runtime_type_ref(init_ret_ty);
+        let init_policy = if spec.spec.lazy {
+            RuntimeInitPolicy::Lazy
+        } else {
+            RuntimeInitPolicy::Eager
+        };
+        let result_shape = if spec.spec.lazy {
+            RuntimeInitResultShape::LazyProcessInit {
+                result_type: result_type.clone(),
+            }
+        } else {
+            RuntimeInitResultShape::EagerState {
+                result_type: result_type.clone(),
+            }
+        };
 
         entries.push(RuntimeProcessSpec {
-            process_name: spec.process_name.clone(),
-            module_path: spec.module_path.clone(),
-            kind: match spec.spec.kind {
-                spire::ast::ProcessKind::ReadOnlyAgent => RuntimeProcessKind::ReadOnlyAgent,
-                spire::ast::ProcessKind::StateAgent => RuntimeProcessKind::StateAgent,
-            },
+            process_id: process_id as u32,
+            type_name: spec.process_name.clone(),
+            kind: process_kind,
             instance: match spec.spec.instance {
                 spire::ast::ProcessInstance::Singleton => RuntimeProcessInstance::Singleton,
-                spire::ast::ProcessInstance::Multi => RuntimeProcessInstance::Multi,
+                spire::ast::ProcessInstance::Worker => RuntimeProcessInstance::Worker,
             },
-            boot: spec.spec.boot,
-            registry: spec.spec.registry,
-            lazy: spec.spec.lazy,
-            init_fun_idx,
-            get_fun_idx,
-            set_fun_idx,
+            state: RuntimeStateSpec {
+                state_type: state_type.clone(),
+                owner_process: Some(spec.process_name.clone()),
+            },
+            init: RuntimeInitSpec {
+                callable: RuntimeCallableRef {
+                    fun_idx: init_entry.fun_idx,
+                },
+                policy: init_policy,
+                result_shape,
+                state_type,
+                init_route: None,
+            },
+            handlers: handler_specs,
+            dependencies: RuntimeProcessDependencies {
+                handlers: spec
+                    .spec
+                    .handlers
+                    .iter()
+                    .map(|handler| RuntimeHandlerDependency {
+                        slot: handler.slot.clone(),
+                        capability: handler.capability.clone(),
+                        default_target: RuntimeHandlerTarget {
+                            name: handler.default_target.name.clone(),
+                            named_args: Vec::new(),
+                        },
+                    })
+                    .collect(),
+            },
+            lifecycle: RuntimeLifecycleSpec::default(),
+            supervision: RuntimeSupervisionSpec {
+                parent: match spec.spec.kind {
+                    spire::ast::ProcessKind::Supervisor
+                    | spire::ast::ProcessKind::DynamicSupervisor
+                    | spire::ast::ProcessKind::RuntimeSupervisor => Some("RootSupervisor".into()),
+                    _ if spec.spec.instance == ProcessInstance::Singleton => {
+                        Some("RuntimeSupervisor".into())
+                    }
+                    _ => None,
+                },
+                children: Vec::new(),
+                policy: spec.spec.supervisor_policy.as_ref().map(|policy| {
+                    runtime_supervisor_policy_from_effective(
+                        policy,
+                        &spire::ast::SupervisorPolicyOverride::default(),
+                    )
+                }),
+            },
         });
     }
 
@@ -637,6 +1492,7 @@ impl ForgeSession {
         self.codegen_chunk_typed_program(TypedProgram {
             nodes: typed,
             process_specs: Vec::new(),
+            boot_plan: SupervisorInitSpec::default(),
         })
     }
 
@@ -655,6 +1511,7 @@ impl ForgeSession {
             TypedProgram {
                 nodes: typed,
                 process_specs: Vec::new(),
+                boot_plan: SupervisorInitSpec::default(),
             },
             true,
         )
@@ -668,15 +1525,18 @@ impl ForgeSession {
         let TypedProgram {
             nodes,
             process_specs,
+            boot_plan,
         } = typed;
         let typed_for_meta = nodes.clone();
         let (chunk, meta, functions) =
             self.codegen_chunk_nodes_with_options(nodes, top_level_returns_result)?;
         let runtime_process_specs =
             build_runtime_process_specs(&process_specs, &typed_for_meta, &functions)?.entries;
+        let runtime_boot_plan = build_runtime_boot_plan(&boot_plan, &process_specs)?;
         Ok((
             BytecodeChunk {
                 runtime_process_specs,
+                runtime_boot_plan,
                 ..chunk
             },
             meta,
@@ -745,6 +1605,7 @@ impl ForgeSession {
                 functions: functions.clone(),
                 docs: Vec::new(),
                 runtime_process_specs: Vec::new(),
+                runtime_boot_plan: Default::default(),
             },
             meta,
             functions,
@@ -2506,6 +3367,91 @@ impl Codegen {
                 self.emit_safebind(pat, rhs)?;
             }
 
+            TypedInner::SupervisorSpawn {
+                supervisor_process,
+                worker_process,
+                init,
+            } => {
+                let supervisor_idx = self.add_constant(Constant::Str(supervisor_process.clone()));
+                self.emit(Opcode::LoadConst(supervisor_idx));
+                let worker_idx = self.add_constant(Constant::Str(worker_process.clone()));
+                self.emit(Opcode::LoadConst(worker_idx));
+                self.emit_node(init)?;
+                let builtin_id =
+                    Self::builtin_id("__supervisor_spawn").ok_or_else(|| CodegenError {
+                        message: "Unknown builtin: __supervisor_spawn".into(),
+                        span: node.span.clone(),
+                    })?;
+                self.emit(Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: 3,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
+            }
+
+            TypedInner::SupervisorAdopt {
+                supervisor_process,
+                pid,
+                ..
+            } => {
+                let supervisor_idx = self.add_constant(Constant::Str(supervisor_process.clone()));
+                self.emit(Opcode::LoadConst(supervisor_idx));
+                self.emit_node(pid)?;
+                let builtin_id =
+                    Self::builtin_id("__supervisor_adopt").ok_or_else(|| CodegenError {
+                        message: "Unknown builtin: __supervisor_adopt".into(),
+                        span: node.span.clone(),
+                    })?;
+                self.emit(Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: 2,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
+            }
+
+            TypedInner::SupervisorStatus { supervisor_process } => {
+                let supervisor_idx = self.add_constant(Constant::Str(supervisor_process.clone()));
+                self.emit(Opcode::LoadConst(supervisor_idx));
+                let builtin_id =
+                    Self::builtin_id("__supervisor_status").ok_or_else(|| CodegenError {
+                        message: "Unknown builtin: __supervisor_status".into(),
+                        span: node.span.clone(),
+                    })?;
+                self.emit(Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: 1,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
+            }
+
+            TypedInner::SupervisorWorkers {
+                supervisor_process,
+                worker_process,
+                init,
+                size,
+            } => {
+                let supervisor_idx = self.add_constant(Constant::Str(supervisor_process.clone()));
+                self.emit(Opcode::LoadConst(supervisor_idx));
+                let worker_idx = self.add_constant(Constant::Str(worker_process.clone()));
+                self.emit(Opcode::LoadConst(worker_idx));
+                self.emit_node(init)?;
+                self.emit_node(size)?;
+                let builtin_id =
+                    Self::builtin_id("__supervisor_workers").ok_or_else(|| CodegenError {
+                        message: "Unknown builtin: __supervisor_workers".into(),
+                        span: node.span.clone(),
+                    })?;
+                self.emit(Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: 4,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
+            }
+
             TypedInner::App(func, args) => {
                 self.emit_app(node.span.clone(), func, args)?;
             }
@@ -2688,6 +3634,23 @@ impl Codegen {
                     Ty::Tuple(_) => self.emit(Opcode::GetTupleField { field_index: *idx }),
                     _ => self.emit(Opcode::GetField { field_index: *idx }),
                 }
+            }
+            TypedInner::ProcessContextHandler { process_name, slot } => {
+                let process_idx = self.add_constant(Constant::Str(process_name.clone()));
+                self.emit(Opcode::LoadConst(process_idx));
+                let slot_idx = self.add_constant(Constant::Str(slot.clone()));
+                self.emit(Opcode::LoadConst(slot_idx));
+                let builtin_id =
+                    Self::builtin_id("__process_context_handler").ok_or_else(|| CodegenError {
+                        message: "Unknown builtin: __process_context_handler".into(),
+                        span: node.span.clone(),
+                    })?;
+                self.emit(Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: 2,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
             }
 
             TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => {
@@ -5660,4 +6623,110 @@ fn quote_surtr_string_literal(input: &str) -> String {
     }
     out.push('"');
     out
+}
+
+#[cfg(test)]
+mod process_runtime_v2_tests {
+    use super::*;
+    use sigil::resolved::ResolvedId;
+    use spire::ast::{ProcessKind, ProcessRuntimeHandlerSpec, ProcessSpec};
+
+    fn span(start: usize, end: usize) -> Span {
+        Span { start, end }
+    }
+
+    fn singleton_process_spec(name: &str) -> TypedProcessSpec {
+        TypedProcessSpec {
+            module_path: name.to_string(),
+            process_name: name.to_string(),
+            spec: ProcessSpec {
+                process_name: name.to_string(),
+                kind: ProcessKind::Agent,
+                instance: ProcessInstance::Singleton,
+                boot: false,
+                registry: false,
+                lazy: false,
+                handlers: Vec::new(),
+                handler_specs: vec![
+                    ProcessRuntimeHandlerSpec {
+                        name: "init".into(),
+                        internal_name: "__agent_init".into(),
+                        kind: ProcessRuntimeHandlerKind::Init,
+                        span: span(0, 0),
+                    },
+                    ProcessRuntimeHandlerSpec {
+                        name: "log".into(),
+                        internal_name: "__agent_get".into(),
+                        kind: ProcessRuntimeHandlerKind::Get,
+                        span: span(0, 0),
+                    },
+                ],
+                supervisor_policy: None,
+            },
+            init_uid: 1,
+            get_uid: 2,
+            set_uid: None,
+        }
+    }
+
+    fn singleton_surface_call(qualified_name: &str) -> TypedNode {
+        TypedNode {
+            ty: Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
+            span: span(10, 21),
+            node: TypedInner::App(
+                Box::new(TypedNode {
+                    ty: Ty::UserFunc {
+                        fun_idx: 2,
+                        type_params: Vec::new(),
+                        params: vec![Ty::Str],
+                        ret: Box::new(Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error))),
+                    },
+                    span: span(10, 21),
+                    node: TypedInner::Var(ResolvedId {
+                        name: qualified_name.to_string(),
+                        qualified_name: Some(qualified_name.to_string()),
+                        unique_id: 2,
+                        compiler_generated: true,
+                        span: span(10, 21),
+                    }),
+                }),
+                vec![TypedNode {
+                    ty: Ty::Str,
+                    span: span(22, 27),
+                    node: TypedInner::Lit(Lit::Str("hello".into())),
+                }],
+            ),
+        }
+    }
+
+    #[test]
+    fn validate_required_singletons_rejects_direct_call_when_absent_from_boot_plan() {
+        let err = validate_required_singletons(
+            &[singleton_surface_call("Logger::log")],
+            &[singleton_process_spec("Logger")],
+            &RuntimeBootPlan::default(),
+        )
+        .expect_err("direct singleton surface call should require supervisor_init");
+
+        assert!(err.message.contains("singleton `Logger` is not available"));
+        assert!(err.message.contains("supervisor_init"));
+        assert_eq!(err.span, span(10, 21));
+    }
+
+    #[test]
+    fn validate_required_singletons_accepts_direct_call_when_booted() {
+        let mut boot_plan = RuntimeBootPlan::default();
+        boot_plan.singletons.push(SingletonBootEntry {
+            process_name: "Logger".into(),
+            init_timeout_ms: boot_plan.runtime_limits.default_init_timeout_ms,
+            source: BootEntrySource::ExplicitConfig,
+        });
+
+        validate_required_singletons(
+            &[singleton_surface_call("Logger::log")],
+            &[singleton_process_spec("Logger")],
+            &boot_plan,
+        )
+        .expect("supervisor_init singleton should satisfy direct singleton call");
+    }
 }

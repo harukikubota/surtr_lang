@@ -226,6 +226,14 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_test_capture_stderr,
     },
     BuiltinImpl {
+        name: "__test_push_stdin",
+        func: builtin_test_push_stdin,
+    },
+    BuiltinImpl {
+        name: "__test_begin_it",
+        func: builtin_test_begin_it,
+    },
+    BuiltinImpl {
         name: "compile",
         func: builtin_regex_compile,
     },
@@ -346,6 +354,34 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_process_spawn,
     },
     BuiltinImpl {
+        name: "__dynamic_supervisor_spawn",
+        func: builtin_dynamic_supervisor_spawn,
+    },
+    BuiltinImpl {
+        name: "__dynamic_supervisor_adopt",
+        func: builtin_dynamic_supervisor_adopt,
+    },
+    BuiltinImpl {
+        name: "__dynamic_supervisor_status",
+        func: builtin_dynamic_supervisor_status,
+    },
+    BuiltinImpl {
+        name: "__supervisor_spawn",
+        func: builtin_supervisor_spawn,
+    },
+    BuiltinImpl {
+        name: "__supervisor_adopt",
+        func: builtin_supervisor_adopt,
+    },
+    BuiltinImpl {
+        name: "__supervisor_status",
+        func: builtin_supervisor_status,
+    },
+    BuiltinImpl {
+        name: "__supervisor_workers",
+        func: builtin_supervisor_workers,
+    },
+    BuiltinImpl {
         name: "__process_state",
         func: builtin_process_state,
     },
@@ -358,8 +394,28 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_process_self,
     },
     BuiltinImpl {
+        name: "__process_context_handler",
+        func: builtin_process_context_handler,
+    },
+    BuiltinImpl {
+        name: "__out_handler_write",
+        func: builtin_out_handler_write,
+    },
+    BuiltinImpl {
         name: "__process_sleep",
         func: builtin_process_sleep,
+    },
+    BuiltinImpl {
+        name: "Pending",
+        func: builtin_process_init_pending,
+    },
+    BuiltinImpl {
+        name: "PendingAfter",
+        func: builtin_process_init_pending_after,
+    },
+    BuiltinImpl {
+        name: "Ready",
+        func: builtin_process_init_ready,
     },
     BuiltinImpl {
         name: "__task_call",
@@ -392,6 +448,22 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "__task_cast_timeout",
         func: builtin_task_cast_timeout,
+    },
+    BuiltinImpl {
+        name: "__workers_submit",
+        func: builtin_workers_submit,
+    },
+    BuiltinImpl {
+        name: "__workers_broadcast",
+        func: builtin_workers_broadcast,
+    },
+    BuiltinImpl {
+        name: "__workers_reserve",
+        func: builtin_workers_reserve,
+    },
+    BuiltinImpl {
+        name: "__workers_size",
+        func: builtin_workers_size,
     },
     BuiltinImpl {
         name: "__operator_int_add",
@@ -498,7 +570,14 @@ pub(crate) fn call_builtin(
 ) -> Result<Value, RuntimeError> {
     let meta = builtin_meta_by_id(builtin_id)
         .ok_or_else(|| RuntimeError::new(format!("Unknown builtin id: {}", builtin_id)))?;
-    if args.len() != usize::from(meta.arity) {
+    let arity_matches = if meta.name == "__supervisor_spawn" {
+        matches!(args.len(), 2 | 3)
+    } else if meta.name == "__supervisor_workers" {
+        matches!(args.len(), 3 | 4)
+    } else {
+        args.len() == usize::from(meta.arity)
+    };
+    if !arity_matches {
         return Err(RuntimeError::new(format!(
             "builtin {} arity mismatch: expected {}, got {}",
             meta.name,
@@ -577,18 +656,128 @@ fn builtin_process_spawn(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
     vm.process_spawn(process_name.clone(), init)
 }
 
-fn builtin_process_state(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_dynamic_supervisor_spawn(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Callable(init) = args[0].clone() else {
+        return Err(RuntimeError::new(
+            "__dynamic_supervisor_spawn expects callable init handler",
+        ));
+    };
+    vm.dynamic_supervisor_spawn(init)
+}
+
+fn builtin_dynamic_supervisor_adopt(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let Value::Pid(pid) = &args[0] else {
+        return Err(RuntimeError::new("__dynamic_supervisor_adopt expects PID"));
+    };
+    vm.supervisor_adopt("DynamicSupervisor".into(), pid.clone())
+}
+
+fn builtin_dynamic_supervisor_status(
+    vm: &mut VM,
+    _args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    vm.supervisor_status("DynamicSupervisor".into())
+}
+
+fn builtin_supervisor_spawn(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(supervisor_name) = &args[0] else {
+        return Err(RuntimeError::new(
+            "__supervisor_spawn expects String as supervisor name",
+        ));
+    };
+    match args.as_slice() {
+        [_, Value::Callable(init)] => {
+            vm.supervisor_spawn(supervisor_name.clone(), None, init.clone())
+        }
+        [_, Value::Str(worker_name), Value::Callable(init)] => vm.supervisor_spawn(
+            supervisor_name.clone(),
+            Some(worker_name.clone()),
+            init.clone(),
+        ),
+        [_, _, Value::Callable(_)] => Err(RuntimeError::new(
+            "__supervisor_spawn expects String as worker name when provided",
+        )),
+        [_, Value::Callable(_), ..] => Err(RuntimeError::new(
+            "__supervisor_spawn accepts at most 3 arguments",
+        )),
+        _ => Err(RuntimeError::new(
+            "__supervisor_spawn expects callable init handler",
+        )),
+    }
+}
+
+fn builtin_supervisor_adopt(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(supervisor_name) = &args[0] else {
+        return Err(RuntimeError::new(
+            "__supervisor_adopt expects String as supervisor name",
+        ));
+    };
+    let Value::Pid(pid) = &args[1] else {
+        return Err(RuntimeError::new("__supervisor_adopt expects PID"));
+    };
+    vm.supervisor_adopt(supervisor_name.clone(), pid.clone())
+}
+
+fn builtin_supervisor_status(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(supervisor_name) = &args[0] else {
+        return Err(RuntimeError::new(
+            "__supervisor_status expects String as supervisor name",
+        ));
+    };
+    vm.supervisor_status(supervisor_name.clone())
+}
+
+fn builtin_supervisor_workers(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(supervisor_name) = &args[0] else {
+        return Err(RuntimeError::new(
+            "__supervisor_workers expects String as supervisor name",
+        ));
+    };
+    match args.as_slice() {
+        [_, Value::Callable(init), Value::Int(size)] => {
+            let Some(worker_name) = vm.infer_worker_process_name_from_callable(init) else {
+                return Err(RuntimeError::new(
+                    "__supervisor_workers could not infer worker process from init callable",
+                ));
+            };
+            let Some(size) = size.to_i64() else {
+                return Err(RuntimeError::new(
+                    "__supervisor_workers expects size representable as i64",
+                ));
+            };
+            vm.supervisor_workers(supervisor_name.clone(), worker_name, init.clone(), size)
+        }
+        [_, Value::Str(worker_name), Value::Callable(init), Value::Int(size)] => {
+            let Some(size) = size.to_i64() else {
+                return Err(RuntimeError::new(
+                    "__supervisor_workers expects size representable as i64",
+                ));
+            };
+            vm.supervisor_workers(
+                supervisor_name.clone(),
+                worker_name.clone(),
+                init.clone(),
+                size,
+            )
+        }
+        _ => Err(RuntimeError::new(
+            "__supervisor_workers expects supervisor name, worker init callable, and Int size",
+        )),
+    }
+}
+
+fn builtin_process_state(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Some(pid) = vm.pid_handle_like(&args[0]) else {
         return Err(RuntimeError::new("__process_state expects PID"));
     };
-    vm.process_state(pid)
+    vm.process_state(&pid)
 }
 
 fn builtin_process_store(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let Value::Pid(pid) = &args[0] else {
+    let Some(pid) = vm.pid_handle_like(&args[0]) else {
         return Err(RuntimeError::new("__process_store expects PID"));
     };
-    vm.process_store(pid, args[1].clone())
+    vm.process_store(&pid, args[1].clone())
 }
 
 fn builtin_process_self(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -597,10 +786,49 @@ fn builtin_process_self(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, Runtim
     ))
 }
 
+fn builtin_process_context_handler(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let process_name = decode_string_arg(&args[0], "__process_context_handler", "process_name")?;
+    let slot = decode_string_arg(&args[1], "__process_context_handler", "slot")?;
+    vm.process_context_handler(process_name.to_string(), slot.to_string())
+}
+
+fn builtin_out_handler_write(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Pid(pid) = &args[0] else {
+        return Err(RuntimeError::new("__out_handler_write expects PID"));
+    };
+    let text = decode_string_arg(&args[1], "__out_handler_write", "text")?;
+    vm.out_handler_write(pid, text.to_string())
+}
+
 fn builtin_process_sleep(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let millis = duration_to_u64(_vm, &args[0], "__process_sleep", "duration")?;
     thread::sleep(StdDuration::from_millis(millis));
     Ok(ok_result(Value::Unit))
+}
+
+fn builtin_process_init_pending(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Ok(Value::Tagged {
+        tag: 0,
+        fields: Vec::new(),
+    })
+}
+
+fn builtin_process_init_pending_after(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let _ = duration_to_u64(vm, &args[0], "PendingAfter", "duration")?;
+    Ok(Value::Tagged {
+        tag: 1,
+        fields: vec![args[0].clone()],
+    })
+}
+
+fn builtin_process_init_ready(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Ok(Value::Tagged {
+        tag: 2,
+        fields: vec![args[0].clone()],
+    })
 }
 
 fn builtin_task_call(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -657,6 +885,40 @@ fn builtin_task_cast_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
         "__task_cast_timeout",
         TaskMode::Cast,
     )
+}
+
+fn builtin_workers_submit(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let [Value::Workers(handle), Value::Callable(message)] = args.as_slice() else {
+        return Err(RuntimeError::new(
+            "__workers_submit expects Workers handle and callable template",
+        ));
+    };
+    vm.workers_submit(handle, message.clone())
+}
+
+fn builtin_workers_broadcast(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let [Value::Workers(handle), Value::Callable(message)] = args.as_slice() else {
+        return Err(RuntimeError::new(
+            "__workers_broadcast expects Workers handle and callable template",
+        ));
+    };
+    vm.workers_broadcast(handle, message.clone())
+}
+
+fn builtin_workers_reserve(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let [Value::Workers(handle)] = args.as_slice() else {
+        return Err(RuntimeError::new(
+            "__workers_reserve expects Workers handle",
+        ));
+    };
+    vm.workers_reserve(handle)
+}
+
+fn builtin_workers_size(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let [Value::Workers(handle)] = args.as_slice() else {
+        return Err(RuntimeError::new("__workers_size expects Workers handle"));
+    };
+    vm.workers_size(handle)
 }
 
 fn invoke_task_body(
@@ -1272,6 +1534,17 @@ fn builtin_test_capture_stderr(vm: &mut VM, _args: Vec<Value>) -> Result<Value, 
         .map(Value::Str)
         .collect::<Vec<_>>();
     Ok(Value::List(ListHandle::from_items(items)))
+}
+
+fn builtin_test_push_stdin(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let input = decode_string_arg(&args[0], "__test_push_stdin", "input")?;
+    vm.push_stdin_input(input);
+    Ok(Value::Unit)
+}
+
+fn builtin_test_begin_it(vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    vm.begin_test_case_io();
+    Ok(Value::Unit)
 }
 
 fn builtin_list_group_count(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -2635,6 +2908,26 @@ mod tests {
             let meta = builtin_meta_by_id(id as u16).expect("builtin metadata by id");
             assert_eq!(builtin.name, meta.name, "builtin impl mismatch at id {id}");
         }
+    }
+
+    #[test]
+    fn supervisor_spawn_accepts_three_argument_lowering_shape() {
+        let mut vm = test_vm();
+        let err = call_builtin(
+            &mut vm,
+            builtin_id("__supervisor_spawn"),
+            vec![
+                Value::Str("DynSup".into()),
+                Value::Str("Worker".into()),
+                Value::Int(int(1)),
+            ],
+        )
+        .expect_err("non-callable third argument should fail after arity validation");
+        assert!(
+            err.message
+                .contains("__supervisor_spawn expects callable init handler"),
+            "unexpected error: {err}"
+        );
     }
 
     /// Parse the `name(params) -> ret_ty` portion of a `def` declaration.

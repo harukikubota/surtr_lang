@@ -5,43 +5,23 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use forge::bytecode::Bytecode;
-use xldr::{CompileSources, SourceKind};
+use xldr::{CachedTestSemanticPrefixPayload, CompileSources, SourceKind};
 
 use super::sources::{
     compile_chunk_typecheck_context_for_mode, compile_unit_kind_for_mode, default_stdlib_snapshot,
     parse_module_stage_suffix, parse_module_stages, std_typecheck_context_for_mode,
 };
-use super::types::{CachedCompilePrefix, CachedModulePipeline, SharedCompilePrefix, TestCompileMode};
-
-fn stable_hash_bytes(bytes: &[u8]) -> String {
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
-
-    let mut hash = FNV_OFFSET;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    format!("{hash:016x}")
-}
+use super::types::{
+    CachedCompilePrefix, CachedModulePipeline, SharedCompilePrefix, TestCompileMode,
+};
 
 fn test_binary_fingerprint() -> Result<String, String> {
-    static TEST_BINARY_FINGERPRINT: OnceLock<Result<String, String>> = OnceLock::new();
-
-    TEST_BINARY_FINGERPRINT
-        .get_or_init(|| {
-            let exe = env::current_exe()
-                .map_err(|e| format!("phase=cache; message=failed to locate current exe: {}", e))?;
-            let bytes = fs::read(&exe).map_err(|e| {
-                format!(
-                    "phase=cache; message=failed to read test binary {}: {}",
-                    exe.display(),
-                    e
-                )
-            })?;
-            Ok(stable_hash_bytes(&bytes))
-        })
-        .clone()
+    xldr::current_exe_fingerprint().map_err(|e| {
+        format!(
+            "phase=cache; message=failed to fingerprint current exe: {}",
+            e
+        )
+    })
 }
 
 fn fixture_cache_enabled() -> bool {
@@ -53,6 +33,10 @@ fn fixture_cache_enabled() -> bool {
 
 fn fixture_cache_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-fixture-cache/eldr")
+}
+
+fn semantic_prefix_cache_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-fixture-cache/prefix")
 }
 
 fn module_pipeline_cache_key(compile_sources: &CompileSources, mode: TestCompileMode) -> String {
@@ -128,6 +112,21 @@ fn cached_eldr_path(
 ) -> Result<PathBuf, String> {
     let key = compile_sources_cache_key(compile_sources, mode)?;
     Ok(fixture_cache_root().join(format!("{key}.eldr")))
+}
+
+fn cached_semantic_prefix_path(
+    compile_sources: &CompileSources,
+    mode: TestCompileMode,
+) -> Result<PathBuf, String> {
+    let key =
+        xldr::test_semantic_prefix_cache_key(compile_unit_kind_for_mode(mode), compile_sources)
+            .map_err(|e| {
+                format!(
+                    "phase=cache; message=failed to build semantic prefix key: {}",
+                    e
+                )
+            })?;
+    Ok(semantic_prefix_cache_root().join(format!("{key}.semantic")))
 }
 
 pub(super) fn load_cached_bytecode(
@@ -277,6 +276,28 @@ fn cached_script_compile_prefix(
         }));
     }
 
+    let cache_key = xldr::test_semantic_prefix_cache_key(
+        compile_unit_kind_for_mode(TestCompileMode::Script),
+        compile_sources,
+    )
+    .map_err(|e| {
+        format!(
+            "phase=cache; message=failed to build semantic prefix key: {}",
+            e
+        )
+    })?;
+    let cache_path = cached_semantic_prefix_path(compile_sources, TestCompileMode::Script)?;
+
+    if let Some(payload) = xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key) {
+        return Ok(Arc::new(CachedCompilePrefix {
+            module_asts: cached_modules.module_asts,
+            declaration_index: cached_modules.declaration_index,
+            resolve_state: payload.resolve_state,
+            scar_checkpoint: payload.scar_checkpoint,
+            bytecode: payload.bytecode,
+        }));
+    }
+
     let resolved = sigil::resolve_staged_program_from_state(
         &cached_modules.module_asts,
         Vec::new(),
@@ -304,8 +325,14 @@ fn cached_script_compile_prefix(
         .map_err(|e| format!("phase=codegen; message={}", e))?;
     let bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode.clone(), chunk)
         .map_err(|e| format!("phase=codegen; message={}", e))?;
+    scar_session.reconcile_function_indices(bytecode.functions.iter().filter_map(|entry| {
+        entry
+            .qualified_name
+            .as_deref()
+            .map(|qualified_name| (qualified_name, entry.fun_idx))
+    }));
 
-    Ok(Arc::new(CachedCompilePrefix {
+    let prefix = Arc::new(CachedCompilePrefix {
         module_asts: cached_modules.module_asts,
         declaration_index: cached_modules.declaration_index,
         resolve_state: sigil::ResolveResumeState {
@@ -313,7 +340,18 @@ fn cached_script_compile_prefix(
         },
         scar_checkpoint: scar_session.checkpoint(),
         bytecode,
-    }))
+    });
+    xldr::store_cached_test_semantic_prefix(
+        &cache_path,
+        &cache_key,
+        CachedTestSemanticPrefixPayload {
+            declaration_index: prefix.declaration_index.clone(),
+            resolve_state: prefix.resolve_state,
+            scar_checkpoint: prefix.scar_checkpoint.clone(),
+            bytecode: prefix.bytecode.clone(),
+        },
+    );
+    Ok(prefix)
 }
 
 pub(super) fn cached_compile_prefix(
@@ -339,35 +377,71 @@ pub(super) fn cached_compile_prefix(
         cached_script_compile_prefix(compile_sources)?
     } else {
         let cached_modules = cached_module_pipeline(compile_sources, mode)?;
-        let resolved = sigil::resolve_staged_program_with_state(
-            &cached_modules.module_asts,
-            Vec::new(),
-            &cached_modules.declaration_index,
-            None,
-        )
-        .map_err(|e| format!("phase=resolve; message={}", e))?;
-        let resume_state = resolved.resume_state;
-        let mut scar_session = scar::ScarSession::new();
-        let typed = scar_session
-            .typecheck_staged_program_with_context(resolved, std_typecheck_context_for_mode(mode))
-            .map_err(|e| format!("phase=typecheck; message={}", e))?;
-        let bytecode = forge::codegen_typed_program(typed)
-            .map_err(|e| format!("phase=codegen; message={}", e))?;
-        scar_session.reconcile_function_indices(bytecode.functions.iter().filter_map(|entry| {
-            entry
-                .qualified_name
-                .as_deref()
-                .map(|qualified_name| (qualified_name, entry.fun_idx))
-        }));
-        Arc::new(CachedCompilePrefix {
-            module_asts: cached_modules.module_asts,
-            declaration_index: cached_modules.declaration_index,
-            resolve_state: sigil::ResolveResumeState {
-                next_local_id: resume_state.next_local_id.max(next_fun_idx(&bytecode)),
-            },
-            scar_checkpoint: scar_session.checkpoint(),
-            bytecode,
-        })
+        let cache_key =
+            xldr::test_semantic_prefix_cache_key(compile_unit_kind_for_mode(mode), compile_sources)
+                .map_err(|e| {
+                    format!(
+                        "phase=cache; message=failed to build semantic prefix key: {}",
+                        e
+                    )
+                })?;
+        let cache_path = cached_semantic_prefix_path(compile_sources, mode)?;
+
+        if let Some(payload) = xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key) {
+            Arc::new(CachedCompilePrefix {
+                module_asts: cached_modules.module_asts,
+                declaration_index: cached_modules.declaration_index,
+                resolve_state: payload.resolve_state,
+                scar_checkpoint: payload.scar_checkpoint,
+                bytecode: payload.bytecode,
+            })
+        } else {
+            let resolved = sigil::resolve_staged_program_with_state(
+                &cached_modules.module_asts,
+                Vec::new(),
+                &cached_modules.declaration_index,
+                None,
+            )
+            .map_err(|e| format!("phase=resolve; message={}", e))?;
+            let resume_state = resolved.resume_state;
+            let mut scar_session = scar::ScarSession::new();
+            let typed = scar_session
+                .typecheck_staged_program_with_context(
+                    resolved,
+                    std_typecheck_context_for_mode(mode),
+                )
+                .map_err(|e| format!("phase=typecheck; message={}", e))?;
+            let bytecode = forge::codegen_typed_program(typed)
+                .map_err(|e| format!("phase=codegen; message={}", e))?;
+            scar_session.reconcile_function_indices(bytecode.functions.iter().filter_map(
+                |entry| {
+                    entry
+                        .qualified_name
+                        .as_deref()
+                        .map(|qualified_name| (qualified_name, entry.fun_idx))
+                },
+            ));
+            let prefix = Arc::new(CachedCompilePrefix {
+                module_asts: cached_modules.module_asts,
+                declaration_index: cached_modules.declaration_index,
+                resolve_state: sigil::ResolveResumeState {
+                    next_local_id: resume_state.next_local_id.max(next_fun_idx(&bytecode)),
+                },
+                scar_checkpoint: scar_session.checkpoint(),
+                bytecode,
+            });
+            xldr::store_cached_test_semantic_prefix(
+                &cache_path,
+                &cache_key,
+                CachedTestSemanticPrefixPayload {
+                    declaration_index: prefix.declaration_index.clone(),
+                    resolve_state: prefix.resolve_state,
+                    scar_checkpoint: prefix.scar_checkpoint.clone(),
+                    bytecode: prefix.bytecode.clone(),
+                },
+            );
+            prefix
+        }
     };
 
     cache

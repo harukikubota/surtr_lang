@@ -409,6 +409,44 @@ fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, Pa
             body,
             attrs,
         )),
+        Ast::Defagent(span, name, body, mut process_spec, attrs) => {
+            let qualified = qualify_namespace_head(namespace, &name, 2, &span, "process")?;
+            process_spec.process_name = qualified.clone();
+            Ok(Ast::Defagent(span, qualified, body, process_spec, attrs))
+        }
+        Ast::Defgenserver(span, name, body, mut process_spec, attrs) => {
+            let qualified = qualify_namespace_head(namespace, &name, 2, &span, "process")?;
+            process_spec.process_name = qualified.clone();
+            Ok(Ast::Defgenserver(
+                span,
+                qualified,
+                body,
+                process_spec,
+                attrs,
+            ))
+        }
+        Ast::Defsupervisor(span, name, body, mut process_spec, attrs) => {
+            let qualified = qualify_namespace_head(namespace, &name, 2, &span, "process")?;
+            process_spec.process_name = qualified.clone();
+            Ok(Ast::Defsupervisor(
+                span,
+                qualified,
+                body,
+                process_spec,
+                attrs,
+            ))
+        }
+        Ast::DefdynamicSupervisor(span, name, body, mut process_spec, attrs) => {
+            let qualified = qualify_namespace_head(namespace, &name, 2, &span, "process")?;
+            process_spec.process_name = qualified.clone();
+            Ok(Ast::DefdynamicSupervisor(
+                span,
+                qualified,
+                body,
+                process_spec,
+                attrs,
+            ))
+        }
         Ast::ImplDef(span, target, methods, attrs) => Ok(Ast::ImplDef(
             span.clone(),
             qualify_namespace_head(namespace, &target, 2, &span, "impl target")?,
@@ -694,6 +732,36 @@ fn shift_decl_attrs(attrs: DeclAttrs) -> DeclAttrs {
     attrs
 }
 
+fn shift_process_spec(mut spec: ProcessSpec, delta: usize) -> ProcessSpec {
+    spec.handlers = spec
+        .handlers
+        .into_iter()
+        .map(|handler| ProcessHandlerDependency {
+            slot: handler.slot,
+            capability: handler.capability,
+            default_target: ProcessHandlerTarget {
+                name: handler.default_target.name,
+                span: shift_span(handler.default_target.span, delta),
+            },
+            span: shift_span(handler.span, delta),
+        })
+        .collect();
+    if let Some(policy) = &mut spec.supervisor_policy {
+        let _ = policy;
+    }
+    spec.handler_specs = spec
+        .handler_specs
+        .into_iter()
+        .map(|handler| ProcessRuntimeHandlerSpec {
+            name: handler.name,
+            internal_name: handler.internal_name,
+            kind: handler.kind,
+            span: shift_span(handler.span, delta),
+        })
+        .collect();
+    spec
+}
+
 fn shift_builtin_type_head(head: BuiltinTypeHead, delta: usize) -> BuiltinTypeHead {
     BuiltinTypeHead {
         span: shift_span(head.span, delta),
@@ -976,6 +1044,51 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*value, delta)),
             shift_decl_attrs(attrs),
         ),
+        Ast::SupervisorInit(span, spec) => Ast::SupervisorInit(
+            shift_span(span, delta),
+            SupervisorInitSpec {
+                singletons: spec
+                    .singletons
+                    .into_iter()
+                    .map(|singleton| SupervisorInitSingleton {
+                        process_name: singleton.process_name,
+                        timeout_ms: singleton.timeout_ms,
+                        handlers: singleton
+                            .handlers
+                            .into_iter()
+                            .map(|handler| SupervisorInitHandlerOverride {
+                                slot: handler.slot,
+                                target: SupervisorInitHandlerTarget {
+                                    name: handler.target.name,
+                                    named_args: handler
+                                        .target
+                                        .named_args
+                                        .into_iter()
+                                        .map(|arg| SupervisorInitHandlerArg {
+                                            name: arg.name,
+                                            value: arg.value,
+                                            span: shift_span(arg.span, delta),
+                                        })
+                                        .collect(),
+                                    span: shift_span(handler.target.span, delta),
+                                },
+                                span: shift_span(handler.span, delta),
+                            })
+                            .collect(),
+                        span: shift_span(singleton.span, delta),
+                    })
+                    .collect(),
+                supervisors: spec
+                    .supervisors
+                    .into_iter()
+                    .map(|supervisor| SupervisorInitOverride {
+                        process_name: supervisor.process_name,
+                        overrides: supervisor.overrides,
+                        span: shift_span(supervisor.span, delta),
+                    })
+                    .collect(),
+            },
+        ),
         Ast::ExtractorDef(span, name, type_params, param, ret_ty, body, attrs) => {
             Ast::ExtractorDef(
                 shift_span(span, delta),
@@ -1042,6 +1155,36 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
             shift_decl_attrs(attrs),
         ),
+        Ast::Defagent(span, name, body, process_spec, attrs) => Ast::Defagent(
+            shift_span(span, delta),
+            name,
+            body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
+            shift_process_spec(process_spec, delta),
+            shift_decl_attrs(attrs),
+        ),
+        Ast::Defgenserver(span, name, body, process_spec, attrs) => Ast::Defgenserver(
+            shift_span(span, delta),
+            name,
+            body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
+            shift_process_spec(process_spec, delta),
+            shift_decl_attrs(attrs),
+        ),
+        Ast::Defsupervisor(span, name, body, process_spec, attrs) => Ast::Defsupervisor(
+            shift_span(span, delta),
+            name,
+            body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
+            shift_process_spec(process_spec, delta),
+            shift_decl_attrs(attrs),
+        ),
+        Ast::DefdynamicSupervisor(span, name, body, process_spec, attrs) => {
+            Ast::DefdynamicSupervisor(
+                shift_span(span, delta),
+                name,
+                body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
+                shift_process_spec(process_spec, delta),
+                shift_decl_attrs(attrs),
+            )
+        }
         Ast::ImplDef(span, target, methods, attrs) => Ast::ImplDef(
             shift_span(span, delta),
             target,
@@ -1180,6 +1323,7 @@ impl Ast {
             | Ast::EnumDef(s, _, _, _, _)
             | Ast::Def(s, _, _, _, _, _, _)
             | Ast::ConstDef(s, _, _, _, _)
+            | Ast::SupervisorInit(s, _)
             | Ast::ExtractorDef(s, _, _, _, _, _, _)
             | Ast::BuiltinDecl(s, _, _, _, _)
             | Ast::IntrinsicDecl(s, _, _, _)
@@ -1188,6 +1332,10 @@ impl Ast {
             | Ast::Namespace(s, _, _)
             | Ast::ResultCtorDecl(s, _, _, _, _)
             | Ast::Defmod(s, _, _, _)
+            | Ast::Defagent(s, _, _, _, _)
+            | Ast::Defgenserver(s, _, _, _, _)
+            | Ast::Defsupervisor(s, _, _, _, _)
+            | Ast::DefdynamicSupervisor(s, _, _, _, _)
             | Ast::ImplDef(s, _, _, _)
             | Ast::TraitDef(s, _, _, _, _)
             | Ast::TraitImplDef(s, _, _, _, _, _)

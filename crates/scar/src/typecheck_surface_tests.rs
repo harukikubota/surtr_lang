@@ -6,6 +6,104 @@ use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
 
 use crate::test_support::*;
 
+const PROCESS_MODULE_SOURCE: &str = include_str!("../../../lib/process.srt");
+
+#[test]
+fn process_stdlib_no_longer_declares_task_hidden_lower_helpers() {
+    for hidden_name in [
+        "__task_call",
+        "__task_async",
+        "__task_launch",
+        "__task_cast",
+        "__task_call_timeout",
+        "__task_async_timeout",
+        "__task_launch_timeout",
+        "__task_cast_timeout",
+        "__workers_submit",
+        "__workers_broadcast",
+        "__workers_reserve",
+        "__workers_size",
+    ] {
+        assert!(
+            !PROCESS_MODULE_SOURCE.contains(hidden_name),
+            "process stdlib should not declare {hidden_name}"
+        );
+    }
+}
+
+#[test]
+fn process_stdlib_declares_common_process_family_modules() {
+    for module_name in ["defmod Supervisor", "defmod GenServer", "defmod Agent"] {
+        assert!(
+            PROCESS_MODULE_SOURCE.contains(module_name),
+            "process stdlib should declare {module_name}"
+        );
+    }
+}
+
+#[test]
+fn process_module_only_declares_public_runtime_helpers() {
+    let process_start = PROCESS_MODULE_SOURCE
+        .find("defmod Process")
+        .expect("Process module should exist");
+    let out_handler_start = PROCESS_MODULE_SOURCE
+        .find("defmod OutHandler")
+        .expect("OutHandler module should follow Process");
+    let process_module = &PROCESS_MODULE_SOURCE[process_start..out_handler_start];
+
+    assert!(
+        !process_module.contains("@hidden"),
+        "Process module should contain only directly callable public helpers"
+    );
+    for internal_name in [
+        "__process_pid",
+        "__process_spawn",
+        "__process_state",
+        "__process_store",
+        "__process_self",
+        "__process_context_handler",
+        "__process_sleep",
+    ] {
+        assert!(
+            !process_module.contains(internal_name),
+            "Process module should not declare {internal_name}"
+        );
+    }
+}
+
+#[test]
+fn process_stdlib_declares_agent_lower_surface_with_regular_surface_docs() {
+    let agent_start = PROCESS_MODULE_SOURCE
+        .find("defmod Agent")
+        .expect("Agent module should exist");
+    let process_start = PROCESS_MODULE_SOURCE
+        .find("defmod Process")
+        .expect("Process module should follow Agent");
+    let agent_module = &PROCESS_MODULE_SOURCE[agent_start..process_start];
+
+    for surface in [
+        "def pid(",
+        "def spawn(",
+        "def state(",
+        "def store(",
+        "def self()",
+        "def context_handler(",
+    ] {
+        assert!(
+            agent_module.contains(surface),
+            "Agent module should declare hidden lower surface {surface}"
+        );
+    }
+    assert!(
+        agent_module.contains("Ordinary code cannot call this function directly."),
+        "Agent lower docs should tell users they cannot call hidden functions directly"
+    );
+    assert!(
+        agent_module.contains("## Regular Surface"),
+        "Agent lower docs should show the regular surface"
+    );
+}
+
 #[test]
 fn field_access_is_resolved_to_numeric_index() {
     let resolved = resolve_with_builtin_prelude(
@@ -1411,7 +1509,7 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
     let variant_uid = resolved
         .iter()
         .find_map(|node| match node {
-            sigil::resolved::Resolved::EnumDef(_, id, _, variants) if id.name == "BitWidth" => {
+            sigil::resolved::Resolved::EnumDef(_, id, _, variants, _) if id.name == "BitWidth" => {
                 variants
                     .iter()
                     .find(|variant| variant.id.name == "BitWidth::W8")
@@ -1437,7 +1535,7 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
             {
                 Some(format!("extractor {}", id.name))
             }
-            sigil::resolved::Resolved::StructDef(_, id, _) if id.unique_id == use_uid => {
+            sigil::resolved::Resolved::StructDef(_, id, _, _) if id.unique_id == use_uid => {
                 Some(format!("struct {}", id.name))
             }
             sigil::resolved::Resolved::RecordDef(_, id, _) if id.unique_id == use_uid => {
@@ -1446,7 +1544,7 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
             sigil::resolved::Resolved::DeferrorDef(_, id, _, _) if id.unique_id == use_uid => {
                 Some(format!("deferror {}", id.name))
             }
-            sigil::resolved::Resolved::EnumDef(_, _, _, variants) => variants
+            sigil::resolved::Resolved::EnumDef(_, _, _, variants, _) => variants
                 .iter()
                 .find(|variant| variant.id.unique_id == use_uid)
                 .map(|variant| format!("enum variant {}", variant.id.name)),
@@ -2865,6 +2963,13 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             | TypedInner::SafeBind(_, rhs)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
+            TypedInner::ProcessContextHandler { .. } => false,
+            TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
+            TypedInner::SupervisorAdopt { pid, .. } => has_pending_trait_call(pid),
+            TypedInner::SupervisorStatus { .. } => false,
+            TypedInner::SupervisorWorkers { init, size, .. } => {
+                has_pending_trait_call(init) || has_pending_trait_call(size)
+            }
             TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => false,
             TypedInner::LensView { source, .. } => has_pending_trait_call(source),
             TypedInner::LensSet { source, value, .. } => {
@@ -3205,9 +3310,14 @@ fn process_self_is_rejected_outside_process_context() {
 
 #[test]
 fn process_self_typechecks_inside_process_handler() {
-    typecheck_module_source_result(
-        r#"@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)
-defagent Counter {
+    let mut stages = std_module_stages();
+    stages.push(vec![staged_process_module(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
   @init
   def init() -> Result<Int> { Ok(0) }
 
@@ -3219,15 +3329,81 @@ defagent Counter {
   @set
   def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
 }"#,
+    )]);
+    let declaration_index =
+        sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
+    let resolved = sigil::resolve_staged_program_with_state(
+        &stages,
+        Vec::new(),
+        &declaration_index,
+        None,
     )
-    .expect("Process::self should typecheck inside process handler");
+    .expect("resolve should succeed");
+    crate::typecheck_staged_program(resolved)
+        .expect("Process::self should typecheck inside process handler");
+}
+
+#[test]
+fn genserver_additional_call_handler_typechecks_as_process_context() {
+    let mut stages = std_module_stages();
+    stages.push(vec![staged_process_module(
+        r#"defgenserver Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    handlers {
+      out: OutHandler = StdOut
+    }
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def info(state: Int) -> Result<(Int, Int)> {
+    Ok((state, state))
+  }
+
+  @call
+  def log(state: Int, message: String) -> Result<(Unit, Int)> {
+    _handler = ctx.out
+    _message = message
+    Ok(((), state))
+  }
+}"#,
+    )]);
+    let declaration_index =
+        sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
+    let user_ast = spire::parse_with_context(
+        r#"supervisor_init {
+  Logger {}
+}
+
+info = Logger::info()
+done = Logger::log("hello")"#,
+        spire::ParserContext::project(0),
+    )
+    .expect("script should parse");
+    let resolved = sigil::resolve_staged_program_with_state(
+        &stages,
+        user_ast,
+        &declaration_index,
+        Some("__Script::fixture".to_string()),
+    )
+    .expect("resolve should succeed");
+    crate::typecheck_staged_program(resolved)
+        .expect("additional @call handler should have process context access");
 }
 
 #[test]
 fn typecheck_staged_program_keeps_process_specs() {
     let ast = spire::parse_with_context(
-        r#"@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
-defagent Counter {
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
   @init
   def init() -> Result<Int> { Ok(0) }
 
@@ -3242,15 +3418,17 @@ defagent Counter {
     .expect("defagent source should parse");
 
     let staged_module = match ast.into_iter().next().expect("lowered module should exist") {
-        spire::ast::Ast::Defmod(_, module_path, ast, attrs) => sigil::StagedModuleAst {
-            module_path,
-            doc_module_path: None,
-            ast,
-            module_doc: attrs.doc,
-            auto_import: attrs.auto_import,
-            process_spec: attrs.process_spec,
-        },
-        other => panic!("expected lowered defmod, got {other:?}"),
+        spire::ast::Ast::Defagent(_, module_path, ast, process_spec, attrs) => {
+            sigil::StagedModuleAst {
+                module_path,
+                doc_module_path: None,
+                ast,
+                module_doc: attrs.doc,
+                auto_import: attrs.auto_import,
+                process_spec: Some(process_spec),
+            }
+        }
+        other => panic!("expected defagent, got {other:?}"),
     };
 
     let mut stages = std_module_stages();
@@ -3263,9 +3441,207 @@ defagent Counter {
     let typed: TypedProgram =
         crate::typecheck_staged_program(resolved).expect("typecheck should succeed");
 
-    assert_eq!(typed.process_specs.len(), 1);
-    let spec = &typed.process_specs[0];
+    assert_eq!(typed.process_specs.len(), 2);
+    let spec = typed
+        .process_specs
+        .iter()
+        .find(|spec| spec.process_name == "Counter")
+        .expect("Counter process spec should exist");
     assert_eq!(spec.module_path, "Counter");
     assert_eq!(spec.process_name, "Counter");
-    assert!(spec.spec.boot);
+    assert!(!spec.spec.boot);
+}
+
+fn staged_process_module(source: &str) -> sigil::StagedModuleAst {
+    let ast = spire::parse_with_context(source, spire::ParserContext::module(0, None))
+        .expect("process source should parse");
+    match ast
+        .into_iter()
+        .next()
+        .expect("lowered process should exist")
+    {
+        spire::ast::Ast::Defagent(_, module_path, ast, process_spec, attrs)
+        | spire::ast::Ast::Defgenserver(_, module_path, ast, process_spec, attrs)
+        | spire::ast::Ast::Defsupervisor(_, module_path, ast, process_spec, attrs) => {
+            sigil::StagedModuleAst {
+                module_path,
+                doc_module_path: None,
+                ast,
+                module_doc: attrs.doc,
+                auto_import: attrs.auto_import,
+                process_spec: Some(process_spec),
+            }
+        }
+        other => panic!("expected process module, got {other:?}"),
+    }
+}
+
+fn typecheck_supervisor_spawn_fixture(
+    script: &str,
+) -> Result<TypedProgram, scar::error::TypeError> {
+    let mut stages = std_module_stages();
+    stages.push(vec![
+        staged_process_module(
+            r#"defagent MyWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        ),
+        staged_process_module(
+            r#"defsupervisor MySup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}"#,
+        ),
+        staged_process_module(
+            r#"defsupervisor LockedSup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Temporary
+    allow_adopt: False
+  }
+}"#,
+        ),
+    ]);
+    let declaration_index =
+        sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
+    let project_source = format!(
+        r#"supervisor_init {{
+  MySup {{}}
+  LockedSup {{}}
+  DynamicSupervisor {{}}
+}}
+
+{script}"#
+    );
+    let user_ast = spire::parse_with_context(&project_source, spire::ParserContext::project(0))
+        .expect("script should parse");
+    let resolved = sigil::resolve_staged_program_with_state(
+        &stages,
+        user_ast,
+        &declaration_index,
+        Some("__Script::fixture".to_string()),
+    )
+    .expect("resolve should succeed");
+    crate::typecheck_staged_program(resolved)
+}
+
+#[test]
+fn dynsup_spawn_accepts_worker_init_route_reference() {
+    let typed =
+        typecheck_supervisor_spawn_fixture(r#"pid = DynamicSupervisor::spawn(MyWorker::init(1))"#)
+            .expect("DynSup spawn should typecheck");
+    assert!(!typed.nodes.is_empty());
+}
+
+#[test]
+fn custom_supervisor_spawn_accepts_worker_init_route_reference() {
+    let typed = typecheck_supervisor_spawn_fixture(r#"pid = MySup::spawn(MyWorker::init(1))"#)
+        .expect("custom supervisor spawn should typecheck");
+    assert!(!typed.nodes.is_empty());
+}
+
+#[test]
+fn supervisor_spawn_rejects_plain_closure_argument() {
+    let err = typecheck_supervisor_spawn_fixture(r#"pid = MySup::spawn({|| Ok(1)})"#)
+        .expect_err("plain closure should be rejected");
+    assert!(err.message.contains("worker init"));
+}
+
+#[test]
+fn supervisor_spawn_rejects_non_worker_callable() {
+    let err = typecheck_supervisor_spawn_fixture(r#"pid = MySup::spawn(MySup::status())"#)
+        .expect_err("non-worker callable should be rejected");
+    assert!(err.message.contains("worker init"));
+}
+
+#[test]
+fn supervisor_adopt_accepts_worker_pid() {
+    let typed = typecheck_supervisor_spawn_fixture(
+        r#"pid =? MySup::spawn(MyWorker::init(1))
+_ =? MySup::adopt(pid)"#,
+    )
+    .expect("adopt should typecheck");
+    assert!(!typed.nodes.is_empty());
+}
+
+#[test]
+fn supervisor_adopt_rejects_non_pid_argument() {
+    let err = typecheck_supervisor_spawn_fixture(r#"_ =? MySup::adopt(1)"#)
+        .expect_err("adopt should reject non pid");
+    assert!(err.message.contains("PID"));
+}
+
+#[test]
+fn supervisor_adopt_rejects_when_policy_disallows_it() {
+    let err = typecheck_supervisor_spawn_fixture(
+        r#"pid =? MySup::spawn(MyWorker::init(1))
+_ =? LockedSup::adopt(pid)"#,
+    )
+    .expect_err("adopt should respect allow_adopt");
+    assert!(err.message.contains("allow_adopt"));
+}
+
+#[test]
+fn supervisor_status_returns_supervisor_status() {
+    let typed = typecheck_supervisor_spawn_fixture(r#"status =? MySup::status()"#)
+        .expect("status should typecheck");
+    assert!(!typed.nodes.is_empty());
+}
+
+#[test]
+fn supervisor_workers_returns_workers_handle() {
+    let typed =
+        typecheck_supervisor_spawn_fixture(r#"workers =? MySup::workers(MyWorker::init(1), 2)"#)
+            .expect("workers creation should typecheck");
+    assert!(!typed.nodes.is_empty());
+}
+
+#[test]
+fn workers_submit_accepts_worker_message_template() {
+    let typed = typecheck_supervisor_spawn_fixture(
+        r#"workers =? MySup::workers(MyWorker::init(1), 2)
+_ =? Workers::submit(workers, MyWorker::set(3))"#,
+    )
+    .expect("workers submit should accept worker message template");
+    assert!(!typed.nodes.is_empty());
+}
+
+#[test]
+fn workers_broadcast_accepts_worker_message_template() {
+    let typed = typecheck_supervisor_spawn_fixture(
+        r#"workers =? MySup::workers(MyWorker::init(1), 2)
+values = Workers::broadcast(workers, MyWorker::get("jobs"))"#,
+    )
+    .expect("workers broadcast should accept worker message template");
+    assert!(!typed.nodes.is_empty());
+}
+
+#[test]
+fn workers_reserve_can_flow_into_worker_call() {
+    let typed = typecheck_supervisor_spawn_fixture(
+        r#"workers =? MySup::workers(MyWorker::init(1), 2)
+lease =? Workers::reserve(workers)
+_ =? MyWorker::set(lease, 9)"#,
+    )
+    .expect("workers reserve should typecheck as worker capability");
+    assert!(!typed.nodes.is_empty());
 }

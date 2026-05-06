@@ -65,6 +65,8 @@ pub enum Value {
     RegexMatch(RegexMatchHandle),
     RandomGenerator(RandomGeneratorHandle),
     Pid(PidHandle),
+    Workers(WorkersHandle),
+    WorkerLease(WorkerLeaseHandle),
     PendingFuture(u64),
 }
 
@@ -96,6 +98,18 @@ pub struct RandomGeneratorHandle {
 pub struct PidHandle {
     pub id: u64,
     pub process_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkersHandle {
+    pub id: u64,
+    pub process_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerLeaseHandle {
+    pub workers_id: u64,
+    pub pid: PidHandle,
 }
 
 /// Shared runtime handle for immutable string-keyed maps.
@@ -319,6 +333,10 @@ impl Value {
             Value::RegexMatch(handle) => format!("RegexMatch({}..{})", handle.start, handle.end),
             Value::RandomGenerator(_) => "RandomGenerator(<opaque>)".to_string(),
             Value::Pid(handle) => format!("PID({}#{})", handle.process_name, handle.id),
+            Value::Workers(handle) => format!("Workers<{}>#{}", handle.process_name, handle.id),
+            Value::WorkerLease(handle) => {
+                format!("WorkerLease<{}>#{}", handle.pid.process_name, handle.pid.id)
+            }
             Value::PendingFuture(future_id) => format!("<pending:future#{future_id}>"),
         }
     }

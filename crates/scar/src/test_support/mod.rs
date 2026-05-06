@@ -143,7 +143,22 @@ fn parse_std_module_stage(
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
-                    process_spec: attrs.process_spec,
+                    process_spec: None,
+                });
+            }
+            Ast::Defagent(_, module_path, body, process_spec, attrs)
+            | Ast::Defgenserver(_, module_path, body, process_spec, attrs)
+            | Ast::Defsupervisor(_, module_path, body, process_spec, attrs)
+            | Ast::DefdynamicSupervisor(_, module_path, body, process_spec, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                lowered.push(sigil::StagedModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: Some(process_spec),
                 });
             }
             Ast::ImplDef(span, target, methods, attrs) => {
@@ -157,7 +172,7 @@ fn parse_std_module_stage(
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
-                    process_spec: attrs.process_spec,
+                    process_spec: None,
                 });
             }
             Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
@@ -184,7 +199,7 @@ fn parse_std_module_stage(
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
-                    process_spec: attrs.process_spec,
+                    process_spec: None,
                 });
             }
             Ast::Import(_, _, _) => {}
@@ -206,16 +221,16 @@ fn parse_std_module_stage(
                 .ast
                 .splice(insert_at..insert_at, shared_result_ctor_contracts);
         } else {
-        let mut global_ast = shared_imports.clone();
-        global_ast.extend(shared_result_ctor_contracts);
-        lowered.push(sigil::StagedModuleAst {
-            module_path: String::new(),
-            doc_module_path: None,
-            ast: global_ast,
-            module_doc: None,
-            auto_import: false,
-            process_spec: None,
-        });
+            let mut global_ast = shared_imports.clone();
+            global_ast.extend(shared_result_ctor_contracts);
+            lowered.push(sigil::StagedModuleAst {
+                module_path: String::new(),
+                doc_module_path: None,
+                ast: global_ast,
+                module_doc: None,
+                auto_import: false,
+                process_spec: None,
+            });
         }
     }
 
@@ -311,7 +326,22 @@ fn parse_user_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
-                    process_spec: attrs.process_spec,
+                    process_spec: None,
+                });
+            }
+            Ast::Defagent(_, module_path, body, process_spec, attrs)
+            | Ast::Defgenserver(_, module_path, body, process_spec, attrs)
+            | Ast::Defsupervisor(_, module_path, body, process_spec, attrs)
+            | Ast::DefdynamicSupervisor(_, module_path, body, process_spec, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                lowered.push(sigil::StagedModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: Some(process_spec),
                 });
             }
             Ast::ImplDef(span, target, methods, attrs) => {
@@ -323,7 +353,7 @@ fn parse_user_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
                     ast: module_ast,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
-                    process_spec: attrs.process_spec,
+                    process_spec: None,
                 });
             }
             Ast::Import(_, _, _) => {}
@@ -569,11 +599,26 @@ pub(crate) fn typecheck_module_source_result(source: &str) -> Result<Vec<TypedNo
     module_stages.push(parse_user_module_stage(source));
     let declaration_index = sigil::precollect_declaration_index(&module_stages)
         .map_err(|err| format!("resolve precollect failed: {}", err.message))?;
-    let resolved =
-        sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
-            .map_err(|err| format!("resolve failed: {}", err.message))?;
-    let user_resolved = resolved.into_iter().skip(prelude.resolved_len).collect();
-    typecheck(user_resolved).map_err(|err| err.message)
+    let resolved = sigil::resolve_staged_program_with_state(
+        &module_stages,
+        Vec::new(),
+        &declaration_index,
+        None,
+    )
+    .map_err(|err| format!("resolve failed: {}", err.message))?;
+    let user_resolved = sigil::ResolvedStagedProgram {
+        resolved: resolved
+            .resolved
+            .into_iter()
+            .skip(prelude.resolved_len)
+            .collect(),
+        process_specs: resolved.process_specs,
+        boot_plan: resolved.boot_plan,
+        resume_state: resolved.resume_state,
+    };
+    scar::typecheck_staged_program(user_resolved)
+        .map(|program| program.nodes)
+        .map_err(|err| err.message)
 }
 
 pub(crate) fn typecheck_std_modules_with_overrides(

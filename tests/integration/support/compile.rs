@@ -39,15 +39,26 @@ pub(super) fn compile_sources_with_mode(
 
     let compile_prefix = cached_compile_prefix(compile_sources, mode)?;
     let user_ast = parse_user_program(compile_sources, mode)?;
+    let (process_stage, user_ast) = xldr::extract_process_modules_from_user_ast(user_ast);
+    let mut module_asts = compile_prefix.module_asts.clone();
+    if !process_stage.is_empty() {
+        module_asts.push(process_stage);
+    }
+    let declaration_index = if module_asts.len() == compile_prefix.module_asts.len() {
+        compile_prefix.declaration_index.clone()
+    } else {
+        sigil::precollect_declaration_index(&module_asts)
+            .map_err(|e| format!("phase=resolve; message={}", e))?
+    };
     let docs = xldr::collect_doc_entries(
-        &compile_prefix.module_asts,
+        &module_asts,
         &user_ast,
         Some(compile_sources.user_module_path.as_str()),
     );
     let resolved = sigil::resolve_staged_program_from_state(
-        &compile_prefix.module_asts,
+        &module_asts,
         user_ast,
-        &compile_prefix.declaration_index,
+        &declaration_index,
         Some(compile_sources.user_module_path.clone()),
         compile_prefix.module_asts.len(),
         compile_prefix.resolve_state,

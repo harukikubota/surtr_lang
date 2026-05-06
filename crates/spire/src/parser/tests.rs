@@ -113,6 +113,39 @@ defrecord Point(x: Float, y: Float)"#,
 }
 
 #[test]
+fn test_process_state_annotation_parses_for_struct_and_enum_decls() {
+    let ast = parse_with_context(
+        r#"@process_state(Counter)
+defstruct CounterState {
+  value: Int,
+}
+
+@process_state(Counter)
+defenum CounterEvent {
+  Changed(Int)
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("@process_state should parse on process-owned state types");
+
+    match &ast[0] {
+        Ast::StructDef(_, name, _, attrs) => {
+            assert_eq!(name, "CounterState");
+            assert_eq!(attrs.process_state_owner.as_deref(), Some("Counter"));
+        }
+        other => panic!("Expected StructDef, got {other:?}"),
+    }
+
+    match &ast[1] {
+        Ast::EnumDef(_, name, _, _, attrs) => {
+            assert_eq!(name, "CounterEvent");
+            assert_eq!(attrs.process_state_owner.as_deref(), Some("Counter"));
+        }
+        other => panic!("Expected EnumDef, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_duplicate_doc_annotation_reports_later_span_for_struct_decl() {
     let src = r#"@doc """first"""
 @doc """second"""
@@ -4038,36 +4071,36 @@ fn test_many_top_level_declarations_parse_successfully() {
 fn test_defagent_lowering_preserves_runtime_process_spec() {
     let ast = parse_with_context(
         r#"@doc """Counter agent docs."""
-@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
 defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
   @init
   def init() -> Result<Int> { Ok(0) }
 
   @get
-  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+  def fetch(state: Int, _field: String) -> Result<Int> { Ok(state) }
 
   @set
-  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+  def replace(_state: Int, next: Int) -> Result<Int> { Ok(next) }
 }"#,
         ParserContext::module(1, None),
     )
     .expect("defagent should parse");
 
     match &ast[0] {
-        Ast::Defmod(_, name, body, attrs) => {
+        Ast::Defagent(_, name, body, process_spec, attrs) => {
             assert_eq!(name, "Counter");
             assert_eq!(attrs.doc.as_deref(), Some("Counter agent docs."));
-            let process_spec = attrs
-                .process_spec
-                .as_ref()
-                .expect("defagent lowered module should keep process spec");
             assert_eq!(process_spec.process_name, "Counter");
-            assert_eq!(process_spec.kind, crate::ast::ProcessKind::StateAgent);
+            assert_eq!(process_spec.kind, crate::ast::ProcessKind::Agent);
             assert_eq!(
                 process_spec.instance,
                 crate::ast::ProcessInstance::Singleton
             );
-            assert!(process_spec.boot);
+            assert!(!process_spec.boot);
             assert!(!process_spec.lazy);
             assert!(process_spec.registry);
 
@@ -4092,31 +4125,241 @@ defagent Counter {
 
             let get_wrapper = body
                 .iter()
-                .find(|node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "get"))
-                .expect("lowered module should include get wrapper");
+                .find(|node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "fetch"))
+                .expect("lowered module should include @get wrapper using the user function name");
             match get_wrapper {
                 Ast::Def(_, _, _, params, _, _, _) => {
                     assert!(matches!(
                         params.as_slice(),
-                        [FunParam {
-                            ty: AstTy::Generic(_, ty_name, ty_args),
-                            ..
-                        }, ..] if ty_name == "PID"
-                            && matches!(ty_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Counter")
+                        [FunParam { name, ty: AstTy::Named(_, ty_name), .. }]
+                            if name == "_field" && ty_name == "String"
                     ));
                 }
                 other => panic!("expected get wrapper definition, got {other:?}"),
             }
+
+            let set_wrapper = body
+                .iter()
+                .find(|node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "replace"))
+                .expect("lowered module should include @set wrapper using the user function name");
+            match set_wrapper {
+                Ast::Def(_, _, _, params, Some(AstTy::Generic(_, ty_name, _)), _, _) => {
+                    assert_eq!(ty_name, "Result");
+                    assert!(matches!(
+                        params.as_slice(),
+                        [FunParam { name, ty: AstTy::Named(_, ty_name), .. }]
+                            if name == "next" && ty_name == "Int"
+                    ));
+                }
+                other => panic!("expected set wrapper definition, got {other:?}"),
+            }
+
+            assert_eq!(process_spec.handler_specs.len(), 3);
+            assert_eq!(process_spec.handler_specs[0].name, "init");
+            assert_eq!(process_spec.handler_specs[1].name, "fetch");
+            assert_eq!(process_spec.handler_specs[2].name, "replace");
         }
-        other => panic!("Expected lowered Defmod, got {other:?}"),
+        other => panic!("Expected Defagent, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_defagent_parses_as_dedicated_process_ast_node() {
+    let ast = parse_with_context(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def fetch(state: Int, _field: String) -> Result<Int> { Ok(state) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("defagent should parse");
+
+    match &ast[0] {
+        Ast::Defagent(_, name, body, process_spec, attrs) => {
+            assert_eq!(name, "Counter");
+            assert_eq!(attrs.doc, None);
+            assert_eq!(process_spec.process_name, "Counter");
+            assert_eq!(process_spec.kind, crate::ast::ProcessKind::Agent);
+            assert!(body.iter().any(
+                |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "fetch")
+            ));
+        }
+        other => panic!("Expected Defagent, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_defagent_meta_handlers_are_preserved_in_process_spec() {
+    let ast = parse_with_context(
+        r#"defagent Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    handlers {
+      out: OutHandler = StdOut
+    }
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("defagent should parse");
+
+    match &ast[0] {
+        Ast::Defagent(_, _, _, process_spec, _) => {
+            assert_eq!(process_spec.handlers.len(), 1);
+            assert_eq!(process_spec.handlers[0].slot, "out");
+            assert_eq!(process_spec.handlers[0].capability, "OutHandler");
+            assert_eq!(process_spec.handlers[0].default_target.name, "StdOut");
+        }
+        other => panic!("Expected Defagent, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_defgenserver_preserves_runtime_handler_specs() {
+    let ast = parse_with_context(
+        r#"defgenserver Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def info(state: Int, message: String) -> Result<(String, Int)> {
+    Ok((message, state))
+  }
+
+  @cast
+  def reset(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("defgenserver should parse");
+
+    match &ast[0] {
+        Ast::Defgenserver(_, _, _, process_spec, _) => {
+            assert_eq!(process_spec.kind, crate::ast::ProcessKind::GenServer);
+            assert_eq!(process_spec.handler_specs.len(), 3);
+            assert_eq!(process_spec.handler_specs[0].name, "init");
+            assert_eq!(
+                process_spec.handler_specs[0].kind,
+                crate::ast::ProcessRuntimeHandlerKind::Init
+            );
+            assert_eq!(process_spec.handler_specs[1].name, "info");
+            assert_eq!(
+                process_spec.handler_specs[1].kind,
+                crate::ast::ProcessRuntimeHandlerKind::Call
+            );
+            assert_eq!(process_spec.handler_specs[2].name, "reset");
+            assert_eq!(
+                process_spec.handler_specs[2].kind,
+                crate::ast::ProcessRuntimeHandlerKind::Cast
+            );
+        }
+        other => panic!("Expected Defgenserver, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_defgenserver_preserves_multiple_call_and_cast_handler_specs() {
+    let ast = parse_with_context(
+        r#"defgenserver Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def info(state: Int, message: String) -> Result<(String, Int)> {
+    Ok((message, state))
+  }
+
+  @call
+  def count(state: Int) -> Result<(Int, Int)> {
+    Ok((state, state))
+  }
+
+  @cast
+  def reset(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+
+  @cast
+  def increment(state: Int) -> Result<Int> { Ok(state + 1) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("defgenserver should parse multiple call and cast handlers");
+
+    match &ast[0] {
+        Ast::Defgenserver(_, _, body, process_spec, _) => {
+            assert_eq!(process_spec.kind, crate::ast::ProcessKind::GenServer);
+            assert_eq!(process_spec.handler_specs.len(), 5);
+            assert_eq!(process_spec.handler_specs[0].name, "init");
+            assert_eq!(process_spec.handler_specs[1].name, "info");
+            assert_eq!(process_spec.handler_specs[2].name, "count");
+            assert_eq!(process_spec.handler_specs[3].name, "reset");
+            assert_eq!(process_spec.handler_specs[4].name, "increment");
+            assert_eq!(
+                process_spec.handler_specs[1].kind,
+                crate::ast::ProcessRuntimeHandlerKind::Call
+            );
+            assert_eq!(
+                process_spec.handler_specs[2].kind,
+                crate::ast::ProcessRuntimeHandlerKind::Call
+            );
+            assert_eq!(
+                process_spec.handler_specs[3].kind,
+                crate::ast::ProcessRuntimeHandlerKind::Cast
+            );
+            assert_eq!(
+                process_spec.handler_specs[4].kind,
+                crate::ast::ProcessRuntimeHandlerKind::Cast
+            );
+            assert!(body.iter().any(
+                |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "info")
+            ));
+            assert!(body.iter().any(
+                |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "count")
+            ));
+            assert!(body.iter().any(
+                |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "reset")
+            ));
+            assert!(body.iter().any(
+                |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "increment")
+            ));
+        }
+        other => panic!("Expected Defgenserver, got {other:?}"),
     }
 }
 
 #[test]
 fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
     let ast = parse_with_context(
-        r#"@agent(kind: State, instance: Multi, boot: false, lazy: false)
-defagent Worker {
+        r#"defagent Worker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
   @init
   def init(seed: Int) -> Result<Int> { Ok(seed) }
 
@@ -4128,10 +4371,10 @@ defagent Worker {
 }"#,
         ParserContext::module(1, None),
     )
-    .expect("multi defagent should parse");
+    .expect("worker defagent should parse");
 
     match &ast[0] {
-        Ast::Defmod(_, name, body, _) => {
+        Ast::Defagent(_, name, body, _, _) => {
             assert_eq!(name, "Worker");
             assert!(body.iter().all(
                 |node| !matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "pid")
@@ -4141,9 +4384,15 @@ defagent Worker {
                 .find(
                     |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "spawn"),
                 )
-                .expect("multi agent should include spawn wrapper");
+                .expect("worker agent should include spawn wrapper");
+            let init_wrapper = body
+                .iter()
+                .find(
+                    |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "init"),
+                )
+                .expect("worker agent should include init wrapper");
             match spawn_wrapper {
-                Ast::Def(_, _, _, _, Some(AstTy::Generic(_, ty_name, ty_args)), _, _) => {
+                Ast::Def(_, _, _, _, Some(AstTy::Generic(_, ty_name, ty_args)), body, _) => {
                     assert_eq!(ty_name, "Result");
                     assert!(matches!(
                         ty_args.as_slice(),
@@ -4151,14 +4400,320 @@ defagent Worker {
                             if inner_name == "PID"
                                 && matches!(inner_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Worker")
                     ));
+                    assert!(matches!(
+                        body.as_ref(),
+                        Ast::Block(_, stmts)
+                            if matches!(
+                                stmts.as_slice(),
+                                [Ast::App(_, callee, _)]
+                                    if matches!(
+                                        callee.as_ref(),
+                                        Ast::Path(_, path)
+                                            if path.segments.as_slice() == ["DynamicSupervisor", "spawn"]
+                                    )
+                            )
+                    ));
                 }
                 other => {
                     panic!("expected spawn wrapper to return Result<PID<Worker>>, got {other:?}")
                 }
             }
+            let set_wrapper = body
+                .iter()
+                .find(
+                    |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "set"),
+                )
+                .expect("worker agent should include set wrapper");
+            match init_wrapper {
+                Ast::Def(_, _, _, params, Some(AstTy::Func(_, ret_params, ret_ty)), body, _) => {
+                    assert_eq!(params.len(), 1);
+                    assert!(ret_params.is_empty());
+                    assert!(
+                        matches!(ret_ty.as_ref(), AstTy::Generic(_, name, _) if name == "Result")
+                    );
+                    assert!(matches!(
+                        body.as_ref(),
+                        Ast::Block(_, stmts)
+                            if matches!(
+                                stmts.as_slice(),
+                                [Ast::Closure(_, params, body)]
+                                    if params.is_empty()
+                                        && matches!(
+                                            body.as_ref(),
+                                            Ast::App(_, callee, args)
+                                                if args.len() == 1
+                                                    && matches!(callee.as_ref(), Ast::Var(_, name) if name == "__agent_init")
+                                        )
+                            )
+                    ));
+                }
+                other => panic!("expected init wrapper to return zero-arg callable, got {other:?}"),
+            }
+            match set_wrapper {
+                Ast::Def(_, _, _, _, _, body, _) => {
+                    assert!(matches!(
+                        body.as_ref(),
+                        Ast::Block(_, stmts)
+                            if stmts.iter().any(|stmt| matches!(
+                                    stmt,
+                                    Ast::SafeBind(_, _, rhs)
+                                        if matches!(
+                                            rhs.as_ref(),
+                                            Ast::App(_, callee, _)
+                                                if matches!(
+                                                    callee.as_ref(),
+                                                    Ast::InternalVar(_, name)
+                                                        if name == "Agent::state"
+                                                )
+                                        )
+                                ))
+                                && stmts.iter().any(|stmt| matches!(
+                                    stmt,
+                                    Ast::App(_, callee, _)
+                                        if matches!(
+                                            callee.as_ref(),
+                                            Ast::InternalVar(_, name)
+                                                if name == "Agent::store"
+                                        )
+                                ))
+                    ));
+                }
+                other => panic!("expected set wrapper body, got {other:?}"),
+            }
         }
-        other => panic!("Expected lowered Defmod, got {other:?}"),
+        other => panic!("Expected Defagent, got {other:?}"),
     }
+}
+
+#[test]
+fn test_defsupervisor_generates_compiler_managed_surface_from_policy_meta() {
+    let ast = parse_with_context(
+        r#"defsupervisor AppSup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("defsupervisor should parse");
+
+    match &ast[0] {
+        Ast::Defsupervisor(_, name, body, process_spec, _) => {
+            assert_eq!(name, "AppSup");
+            assert_eq!(process_spec.kind, crate::ast::ProcessKind::Supervisor);
+            assert!(body.iter().any(
+                |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "__agent_init")
+            ));
+            let generated_defs = body
+                .iter()
+                .filter_map(|node| match node {
+                    Ast::Def(_, def_name, _, _, _, _, _) => Some(def_name.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(generated_defs.contains(&"spawn"));
+            assert!(generated_defs.contains(&"adopt"));
+            assert!(generated_defs.contains(&"status"));
+            assert!(generated_defs.contains(&"workers"));
+            let spawn_wrapper = body
+                .iter()
+                .find(
+                    |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "spawn"),
+                )
+                .expect("supervisor should include spawn wrapper");
+            match spawn_wrapper {
+                Ast::Def(_, _, _, _, _, body, _) => {
+                    assert!(matches!(
+                        body.as_ref(),
+                        Ast::Block(_, stmts)
+                            if matches!(
+                                stmts.as_slice(),
+                                [Ast::App(_, callee, args)]
+                                    if args.len() == 2
+                                        && matches!(
+                                            callee.as_ref(),
+                                            Ast::InternalVar(_, name)
+                                                if name == "Supervisor::spawn"
+                                        )
+                            )
+                    ));
+                }
+                other => panic!("expected spawn wrapper body, got {other:?}"),
+            }
+        }
+        other => panic!("Expected Defsupervisor, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_defsupervisor_rejects_process_meta_keys_and_manual_surface_defs() {
+    let err = parse_with_context(
+        r#"defsupervisor AppSup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+
+  def spawn(worker_init: (-> Result<Int>)) -> Result<PID<$Process>> { Ok(Process::self()) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("manual supervisor spawn should be rejected");
+
+    assert!(err.message().contains("spawn"));
+    assert!(err.message().contains("compiler-managed"));
+}
+
+#[test]
+fn test_defsupervisor_rejects_instance_and_init_policy_meta_keys() {
+    let err = parse_with_context(
+        r#"defsupervisor AppSup {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("legacy process meta should be rejected for supervisors");
+
+    assert!(
+        err.message().contains("policy"),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn test_defagent_rejects_compiler_managed_surface_names() {
+    let err = parse_with_context(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int) -> Result<Int> { Ok(state) }
+
+  def spawn() -> Int { 1 }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("compiler-managed process surface name should be reserved");
+
+    assert!(err.message().contains("compiler-managed"));
+    assert!(err.message().contains("spawn"));
+}
+
+#[test]
+fn test_defgenserver_rejects_compiler_managed_surface_names() {
+    let err = parse_with_context(
+        r#"defgenserver CounterServer {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def view(state: Int) -> Result<(Int, Int)> { Ok((state, state)) }
+
+  def workers() -> Int { 1 }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("compiler-managed process surface name should be reserved");
+
+    assert!(err.message().contains("compiler-managed"));
+    assert!(err.message().contains("workers"));
+}
+
+#[test]
+fn test_supervisor_init_parses_singletons_and_supervisor_overrides() {
+    let ast = parse_with_context(
+        r#"supervisor_init {
+  singleton Logger {
+    timeout: 5s
+    handlers {
+      out: FileOutHandler(path: "./logs/app.log")
+      err: NullOutHandler
+    }
+  }
+
+  ImageWorkerSupervisor {
+    max_restarts: 10
+    allow_adopt: True
+  }
+}"#,
+        ParserContext::project(1),
+    )
+    .expect("supervisor_init should parse");
+
+    match &ast[0] {
+        Ast::SupervisorInit(_, spec) => {
+            assert_eq!(spec.singletons.len(), 1);
+            assert_eq!(spec.supervisors.len(), 1);
+            let entry = &spec.singletons[0];
+            assert_eq!(entry.process_name, "Logger");
+            assert_eq!(entry.timeout_ms, Some(5_000));
+            assert_eq!(entry.handlers.len(), 2);
+            assert_eq!(entry.handlers[0].slot, "out");
+            assert_eq!(entry.handlers[0].target.name, "FileOutHandler");
+            assert_eq!(entry.handlers[0].target.named_args[0].name, "path");
+            assert_eq!(
+                entry.handlers[0].target.named_args[0].value,
+                "./logs/app.log"
+            );
+            assert_eq!(entry.handlers[1].slot, "err");
+            assert_eq!(entry.handlers[1].target.name, "NullOutHandler");
+            let supervisor = &spec.supervisors[0];
+            assert_eq!(supervisor.process_name, "ImageWorkerSupervisor");
+            assert_eq!(supervisor.overrides.max_restarts, Some(10));
+            assert_eq!(supervisor.overrides.allow_adopt, Some(true));
+        }
+        other => panic!("expected SupervisorInit, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_supervisor_init_rejects_duplicate_singleton() {
+    let err = parse_with_context(
+        r#"supervisor_init {
+  singleton Logger {}
+  singleton Logger {}
+}"#,
+        ParserContext::project(1),
+    )
+    .expect_err("duplicate singleton boot entries should fail");
+
+    assert!(err.message().contains("singleton boot entry is duplicated"));
+}
+
+#[test]
+fn test_supervisor_init_rejects_parent_override() {
+    let err = parse_with_context(
+        r#"supervisor_init {
+  AppSup {
+    parent: RootSupervisor
+  }
+}"#,
+        ParserContext::project(1),
+    )
+    .expect_err("parent override should be rejected");
+
+    assert!(err.message().contains("parent"));
 }
 
 #[test]

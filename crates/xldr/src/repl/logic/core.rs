@@ -119,7 +119,10 @@ impl ReplLoadError {
             } => diagnostics::report_error_by_id(sources, *source_id, spec.clone()),
             Self::Load(error) => eprintln!("repl: {}", error),
             Self::Runtime { file_name, message } => {
-                eprintln!("repl: runtime error while preloading {}: {}", file_name, message);
+                eprintln!(
+                    "repl: runtime error while preloading {}: {}",
+                    file_name, message
+                );
             }
         }
     }
@@ -134,7 +137,11 @@ impl std::fmt::Display for ReplLoadError {
             Self::Diagnostic { .. } => write!(f, "preload diagnostic"),
             Self::Load(error) => write!(f, "{}", error),
             Self::Runtime { file_name, message } => {
-                write!(f, "runtime error while preloading {}: {}", file_name, message)
+                write!(
+                    f,
+                    "runtime error while preloading {}: {}",
+                    file_name, message
+                )
             }
         }
     }
@@ -344,8 +351,12 @@ impl ReplEngine {
         };
 
         Self::from_preload_sources(
-            module_source.as_ref().map(|(path, source)| (*path, source.as_str())),
-            script_source.as_ref().map(|(path, source)| (*path, source.as_str())),
+            module_source
+                .as_ref()
+                .map(|(path, source)| (*path, source.as_str())),
+            script_source
+                .as_ref()
+                .map(|(path, source)| (*path, source.as_str())),
         )
     }
 
@@ -4541,6 +4552,7 @@ impl ReplEngine {
                 });
             }
         };
+        let chunk_functions = chunk.functions.clone();
         meta.docs = docs.clone();
         chunk.docs = docs.clone();
 
@@ -4554,6 +4566,7 @@ impl ReplEngine {
         match self.vm.push_atomic(chunk) {
             Ok(value) => {
                 self.sync_scar_fun_index_with_vm();
+                self.sync_repl_chunk_function_indices(&meta.function_defs, &chunk_functions);
                 if let Some(rendered) = self.report_main_result_error_if_any(&value) {
                     self.bump_line(None, None);
                     self.pending.clear();
@@ -4689,7 +4702,8 @@ fn compile_preloaded_repl_chunk(
     module: Option<(&str, &str)>,
     script: Option<(&str, &str)>,
 ) -> Result<PreloadedChunkState, ReplLoadError> {
-    let std_module_inputs = collect_additional_default_std_module_inputs().map_err(ReplLoadError::Load)?;
+    let std_module_inputs =
+        collect_additional_default_std_module_inputs().map_err(ReplLoadError::Load)?;
     let prepared_script = prepare_script_preload(script)?;
     let mut module_input_stages = vec![std_module_inputs];
     if let Some((file_name, source)) = module {
@@ -4704,8 +4718,8 @@ fn compile_preloaded_repl_chunk(
             module_input_stages.push(vec![module.clone()]);
         }
     }
-    let mut repl_sources =
-        loader::collect_repl_sources_with_module_stages(&module_input_stages).map_err(ReplLoadError::Load)?;
+    let mut repl_sources = loader::collect_repl_sources_with_module_stages(&module_input_stages)
+        .map_err(ReplLoadError::Load)?;
 
     let user_file_name = prepared_script
         .as_ref()
@@ -4834,21 +4848,28 @@ fn compile_preloaded_repl_chunk(
             spec: diagnostics::type_error_spec_by_id(
                 &compile_sources.sources,
                 diagnostic_source_id(&compile_sources, &e.span),
-                &diagnostics::TypeErrorDiagnostic::new(e.message, local_diagnostic_span(&compile_sources, &e.span), e.hint),
+                &diagnostics::TypeErrorDiagnostic::new(
+                    e.message,
+                    local_diagnostic_span(&compile_sources, &e.span),
+                    e.hint,
+                ),
             ),
         })?;
 
     let mut forge_session = forge::ForgeSession::from_bytecode(&snapshot.bytecode);
-    let (mut chunk, meta) = forge_session.codegen_chunk(typed).map_err(|e| ReplLoadError::Diagnostic {
-        sources: compile_sources.sources.clone(),
-        source_id: diagnostic_source_id(&compile_sources, &e.span),
-        spec: diagnostics::simple_error(
-            "CodegenError",
-            &e.message,
-            local_diagnostic_span(&compile_sources, &e.span),
-            None,
-        ),
-    })?;
+    let (mut chunk, meta) =
+        forge_session
+            .codegen_chunk(typed)
+            .map_err(|e| ReplLoadError::Diagnostic {
+                sources: compile_sources.sources.clone(),
+                source_id: diagnostic_source_id(&compile_sources, &e.span),
+                spec: diagnostics::simple_error(
+                    "CodegenError",
+                    &e.message,
+                    local_diagnostic_span(&compile_sources, &e.span),
+                    None,
+                ),
+            })?;
     chunk.docs = docs.clone();
     for stage in &raw_module_stages {
         for module in stage {
@@ -4864,9 +4885,15 @@ fn compile_preloaded_repl_chunk(
     let source_context = compile_sources
         .sources
         .owned_context(user_source_id)
-        .or_else(|| compile_sources.sources.owned_context(compile_sources.builtin_source_id));
+        .or_else(|| {
+            compile_sources
+                .sources
+                .owned_context(compile_sources.builtin_source_id)
+        });
     let mut vm = match source_context {
-        Some((source, file_name)) => eldr::VM::new(snapshot.bytecode.clone()).with_source(source, file_name),
+        Some((source, file_name)) => {
+            eldr::VM::new(snapshot.bytecode.clone()).with_source(source, file_name)
+        }
         None => eldr::VM::new(snapshot.bytecode.clone()),
     };
     vm.push_atomic(chunk).map_err(|e| ReplLoadError::Runtime {
@@ -4975,8 +5002,7 @@ fn parse_preload_sources(
         source_id: compile_sources.user_source_id,
         spec: diagnostics::parse_error_spec(user_source, e.message(), e.span().clone()),
     })?;
-    let (preload_ast, script_runtime_inputs) =
-        split_preload_script_ast(&user_ast, user_source);
+    let (preload_ast, script_runtime_inputs) = split_preload_script_ast(&user_ast, user_source);
 
     Ok((
         module_stage_asts,
@@ -5036,6 +5062,7 @@ fn is_preload_declaration(stmt: &Ast) -> bool {
             | Ast::Def(..)
             | Ast::ExtractorDef(..)
             | Ast::ConstDef(..)
+            | Ast::SupervisorInit(..)
             | Ast::StructDef(..)
             | Ast::RecordDef(..)
             | Ast::DeferrorDef(..)
@@ -5044,6 +5071,10 @@ fn is_preload_declaration(stmt: &Ast) -> bool {
             | Ast::TraitImplDef(..)
             | Ast::ImplDef(..)
             | Ast::Namespace(..)
+            | Ast::Defagent(..)
+            | Ast::Defgenserver(..)
+            | Ast::Defsupervisor(..)
+            | Ast::DefdynamicSupervisor(..)
             | Ast::BuiltinDecl(..)
             | Ast::IntrinsicDecl(..)
             | Ast::BuiltinExtractorDecl(..)
@@ -5089,6 +5120,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::EnumDef(span, _, _, _, _)
         | Ast::Def(span, _, _, _, _, _, _)
         | Ast::ConstDef(span, _, _, _, _)
+        | Ast::SupervisorInit(span, _)
         | Ast::ExtractorDef(span, _, _, _, _, _, _)
         | Ast::BuiltinDecl(span, _, _, _, _)
         | Ast::IntrinsicDecl(span, _, _, _)
@@ -5096,6 +5128,10 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::BuiltinTypeDecl(span, _, _)
         | Ast::ResultCtorDecl(span, _, _, _, _)
         | Ast::Defmod(span, _, _, _)
+        | Ast::Defagent(span, _, _, _, _)
+        | Ast::Defgenserver(span, _, _, _, _)
+        | Ast::Defsupervisor(span, _, _, _, _)
+        | Ast::DefdynamicSupervisor(span, _, _, _, _)
         | Ast::Namespace(span, _, _)
         | Ast::ImplDef(span, _, _, _)
         | Ast::TraitDef(span, _, _, _, _)
@@ -5120,9 +5156,7 @@ fn prepare_script_preload(
     let mut include_modules = Vec::with_capacity(directives.len());
     for directive in directives {
         include_modules.push(resolve_preload_include_module_input(
-            file_name,
-            source,
-            &directive,
+            file_name, source, &directive,
         )?);
     }
 
@@ -5257,7 +5291,11 @@ fn preload_resolve_error(
     ReplLoadError::Diagnostic {
         sources: compile_sources.sources.clone(),
         source_id,
-        spec: diagnostics::resolve_error_spec(source, &error.message, local_diagnostic_span(compile_sources, &error.span)),
+        spec: diagnostics::resolve_error_spec(
+            source,
+            &error.message,
+            local_diagnostic_span(compile_sources, &error.span),
+        ),
     }
 }
 
@@ -5350,66 +5388,65 @@ fn apply_preload_imports(
 
         match spec {
             ImportSpec::All => {
-                for entry in declaration_index
-                    .values()
-                    .filter(|entry| entry.module_path == module_name && entry.stage_index < current_stage_index)
-                {
-                    let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| ReplLoadError::Load(
-                        LoadError::BootstrapFailed {
+                for entry in declaration_index.values().filter(|entry| {
+                    entry.module_path == module_name && entry.stage_index < current_stage_index
+                }) {
+                    let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| {
+                        ReplLoadError::Load(LoadError::BootstrapFailed {
                             phase: "resolve".into(),
                             file_name: "<repl-preload>".into(),
                             message: format!(
                                 "Import target `{}` is not available in the current stage",
                                 entry.fq_name
                             ),
-                        }
-                    ))?;
+                        })
+                    })?;
                     sigil_session.define_with_id(&entry.name, uid);
                     imported_symbols.push(entry.name.clone());
                 }
             }
             ImportSpec::Single(name) => {
                 let fq_name = format!("{}::{}", module_name, name);
-                let entry = declaration_index.get(&fq_name).ok_or_else(|| ReplLoadError::Load(
-                    LoadError::BootstrapFailed {
+                let entry = declaration_index.get(&fq_name).ok_or_else(|| {
+                    ReplLoadError::Load(LoadError::BootstrapFailed {
                         phase: "resolve".into(),
                         file_name: "<repl-preload>".into(),
                         message: format!("Unknown import member: {}", fq_name),
-                    }
-                ))?;
-                let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| ReplLoadError::Load(
-                    LoadError::BootstrapFailed {
+                    })
+                })?;
+                let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| {
+                    ReplLoadError::Load(LoadError::BootstrapFailed {
                         phase: "resolve".into(),
                         file_name: "<repl-preload>".into(),
                         message: format!(
                             "Import target `{}` is not available in the current stage",
                             fq_name
                         ),
-                    }
-                ))?;
+                    })
+                })?;
                 sigil_session.define_with_id(name, uid);
                 imported_symbols.push(name.clone());
             }
             ImportSpec::List(names) => {
                 for name in names {
                     let fq_name = format!("{}::{}", module_name, name);
-                    let entry = declaration_index.get(&fq_name).ok_or_else(|| ReplLoadError::Load(
-                        LoadError::BootstrapFailed {
+                    let entry = declaration_index.get(&fq_name).ok_or_else(|| {
+                        ReplLoadError::Load(LoadError::BootstrapFailed {
                             phase: "resolve".into(),
                             file_name: "<repl-preload>".into(),
                             message: format!("Unknown import member: {}", fq_name),
-                        }
-                    ))?;
-                    let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| ReplLoadError::Load(
-                        LoadError::BootstrapFailed {
+                        })
+                    })?;
+                    let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| {
+                        ReplLoadError::Load(LoadError::BootstrapFailed {
                             phase: "resolve".into(),
                             file_name: "<repl-preload>".into(),
                             message: format!(
                                 "Import target `{}` is not available in the current stage",
                                 fq_name
                             ),
-                        }
-                    ))?;
+                        })
+                    })?;
                     sigil_session.define_with_id(name, uid);
                     imported_symbols.push(name.clone());
                 }
@@ -5440,13 +5477,20 @@ fn apply_preload_visible_names(user_ast: &[Ast], mut visible: Vec<String>) -> Ve
 
 impl ReplEngine {
     fn sync_scar_fun_index_with_vm(&mut self) {
+        let mut function_indices = HashMap::new();
+        for entry in &self.vm.bytecode().functions {
+            let Some(qualified_name) = entry.qualified_name.as_deref() else {
+                continue;
+            };
+            function_indices.insert(qualified_name.to_string(), entry.fun_idx);
+            if let Some(short_name) = qualified_name.strip_prefix("__Repl::Session::") {
+                function_indices.insert(short_name.to_string(), entry.fun_idx);
+            }
+        }
         self.scar_session.reconcile_function_indices(
-            self.vm.bytecode().functions.iter().filter_map(|entry| {
-                entry
-                    .qualified_name
-                    .as_deref()
-                    .map(|qualified_name| (qualified_name, entry.fun_idx))
-            }),
+            function_indices
+                .iter()
+                .map(|(qualified_name, fun_idx)| (qualified_name.as_str(), *fun_idx)),
         );
         let next_fun_idx = self
             .vm
@@ -5457,6 +5501,37 @@ impl ReplEngine {
             .max()
             .unwrap_or(0);
         self.scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
+    }
+
+    fn sync_repl_chunk_function_indices(
+        &mut self,
+        function_names: &[String],
+        functions: &[sindr::ir::FunctionEntry],
+    ) {
+        let visible_function_indices = function_names
+            .iter()
+            .filter_map(|name| {
+                let uid = self.sigil_session.lookup_uid(name)?;
+                let fun_idx = functions
+                    .iter()
+                    .rev()
+                    .find(|entry| {
+                        entry
+                            .qualified_name
+                            .as_deref()
+                            .and_then(|qualified_name| qualified_name.rsplit("::").next())
+                            == Some(name.as_str())
+                            || entry
+                                .signature
+                                .as_deref()
+                                .is_some_and(|signature| signature.starts_with(&format!("{name}(")))
+                    })
+                    .map(|entry| entry.fun_idx)?;
+                Some((uid, fun_idx))
+            })
+            .collect::<Vec<_>>();
+        self.scar_session
+            .reconcile_visible_function_indices(visible_function_indices);
     }
 }
 
@@ -5705,6 +5780,7 @@ fn signature_return_type(signature: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eldr::value::CallableTarget;
 
     fn bootstrap_engine_with_module(source: &str, module_path: &str) -> ReplEngine {
         let repl_sources =
@@ -5818,6 +5894,7 @@ mod tests {
                 functions: Vec::new(),
                 docs: Vec::new(),
                 runtime_process_specs: Vec::new(),
+                runtime_boot_plan: Default::default(),
             })
             .expect("vm bootstrap corruption setup should succeed");
 
@@ -5836,5 +5913,101 @@ mod tests {
             }
             other => panic!("expected runtime bootstrap failure, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn partial_capture_chain_keeps_outer_capture_arity_in_vm() {
+        let mut engine = ReplEngine::new().expect("engine should initialize");
+
+        let def = engine.handle_line("def f(a: Int, b: Int, c: Int) -> Int { a + b + c }");
+        assert!(!def.should_exit);
+        let f3 = engine.handle_line("f3 = &f");
+        assert!(!f3.should_exit);
+        let f2 = engine.handle_line("f2 = &f3(&1, &2, 3)");
+        assert!(!f2.should_exit);
+        let f1 = engine.handle_line("f1 = &f2(&1, 2)");
+        assert!(!f1.should_exit);
+
+        let bytecode = engine.vm.snapshot_bytecode();
+        let f_entry = bytecode
+            .functions
+            .iter()
+            .find(|entry| entry.signature.as_deref() == Some("f(a: Int, b: Int, c: Int) -> Int"))
+            .expect("repl def f should be present in bytecode");
+        assert_eq!(f_entry.arity, 3, "{f_entry:?}");
+
+        let binding = engine.binding_info("f2").expect("f2 binding should exist");
+        let value = engine
+            .vm
+            .get_local(binding.slot_id)
+            .expect("f2 value should be stored");
+        let Value::Callable(callable) = value else {
+            panic!("expected callable binding, got {value:?}");
+        };
+        assert_eq!(callable.lexical_captures.len(), 1, "{callable:?}");
+
+        let CallableTarget::Function(fun_idx) = callable.target else {
+            panic!("expected function callable target, got {:?}", callable.target);
+        };
+        let entry = bytecode
+            .functions
+            .get(fun_idx as usize)
+            .expect("callable target function should exist");
+        assert_eq!(entry.fun_idx, fun_idx, "{entry:?}");
+        assert_eq!(entry.arity, 3, "{entry:?}");
+        let Some(Value::Callable(inner)) = callable.lexical_captures.first() else {
+            panic!("expected f2 to capture f3 callable, got {:?}", callable.lexical_captures);
+        };
+        let CallableTarget::Function(fun_idx) = inner.target.clone() else {
+            panic!("expected captured f3 function target, got {:?}", inner.target);
+        };
+        let entry = bytecode
+            .functions
+            .get(fun_idx as usize)
+            .expect("captured f3 function should exist");
+        assert_eq!(
+            fun_idx, f_entry.fun_idx,
+            "captured f3 should target repl f: {f_entry:?}"
+        );
+        assert_eq!(entry.fun_idx, fun_idx, "{entry:?}");
+        assert_eq!(entry.arity, 3, "{entry:?}");
+
+        let binding = engine.binding_info("f1").expect("f1 binding should exist");
+        let value = engine
+            .vm
+            .get_local(binding.slot_id)
+            .expect("f1 value should be stored");
+        let Value::Callable(callable) = value else {
+            panic!("expected callable binding, got {value:?}");
+        };
+        assert_eq!(callable.lexical_captures.len(), 1, "{callable:?}");
+        let Some(Value::Callable(inner)) = callable.lexical_captures.first() else {
+            panic!("expected f1 to capture f2 callable, got {:?}", callable.lexical_captures);
+        };
+        let CallableTarget::Function(fun_idx) = inner.target.clone() else {
+            panic!("expected captured f2 function target, got {:?}", inner.target);
+        };
+        let entry = bytecode
+            .functions
+            .get(fun_idx as usize)
+            .expect("captured f2 function should exist");
+        assert_eq!(entry.fun_idx, fun_idx, "{entry:?}");
+        assert_eq!(entry.arity, 3, "{entry:?}");
+        let Some(Value::Callable(inner_f3)) = inner.lexical_captures.first() else {
+            panic!("expected captured f2 to retain f3 callable, got {:?}", inner.lexical_captures);
+        };
+        let CallableTarget::Function(fun_idx) = inner_f3.target.clone() else {
+            panic!("expected retained f3 function target, got {:?}", inner_f3.target);
+        };
+        let entry = bytecode
+            .functions
+            .get(fun_idx as usize)
+            .expect("retained f3 function should exist");
+        assert_eq!(entry.fun_idx, fun_idx, "{entry:?}");
+        assert_eq!(entry.arity, 3, "{entry:?}");
+
+        let applied = engine.handle_line("f1(10)");
+        let applied_text = ReplEngine::repl_result_text(&applied);
+        assert!(applied_text.contains("15"), "{applied_text}");
     }
 }

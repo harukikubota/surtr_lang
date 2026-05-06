@@ -156,18 +156,16 @@ pub fn cli_command(options: ReplOptions) -> Result<(), i32> {
                 1
             })?
         }
-        (Some(module_path), None) => {
-            ReplEngine::from_preload_files(Some(module_path), None).map_err(|e| {
+        (Some(module_path), None) => ReplEngine::from_preload_files(Some(module_path), None)
+            .map_err(|e| {
                 e.emit();
                 1
-            })?
-        }
-        (None, Some(script_path)) => {
-            ReplEngine::from_preload_files(None, Some(script_path)).map_err(|e| {
+            })?,
+        (None, Some(script_path)) => ReplEngine::from_preload_files(None, Some(script_path))
+            .map_err(|e| {
                 e.emit();
                 1
-            })?
-        }
+            })?,
         (None, None) => ReplEngine::new().map_err(|e| {
             eprintln!("Error initializing source loader: {}", e);
             1

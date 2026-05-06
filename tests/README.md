@@ -36,8 +36,14 @@ Useful env vars:
 
 - `SURTR_TEST_TIMING=1`
   - Print phase / slow-fixture breakdown for `tests/integration/run_srt.rs`
+- Test-related compilation caches are layered:
+  - Shared semantic prefix cache on top of the stdlib snapshot
+  - Final `.eldr` fixture cache as the top-layer artifact cache
+  - Integration support stores prefix entries under `target/test-fixture-cache/prefix`
+  - `rune test` stores prefix entries under `target/surtr-test-cache/prefix`
 - `SURTR_TEST_CACHE=1`
-  - Opt in to `.eldr` fixture cache under `target/test-fixture-cache/eldr`
+  - Opt in only to the integration final `.eldr` fixture cache under `target/test-fixture-cache/eldr`
+  - Does not gate the shared semantic prefix cache
 
 `.error` format:
 

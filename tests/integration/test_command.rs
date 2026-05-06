@@ -320,19 +320,34 @@ test("Math") {
     );
 
     let cache_dir = temp.join("target/surtr-test-cache/eldr");
+    let prefix_dir = temp.join("target/surtr-test-cache/prefix");
     assert!(
         cache_dir.is_dir(),
         "cache dir should exist: {}",
         cache_dir.display()
     );
+    assert!(
+        prefix_dir.is_dir(),
+        "prefix cache dir should exist: {}",
+        prefix_dir.display()
+    );
     let first_files = fs::read_dir(&cache_dir)
         .expect("cache dir should be readable")
         .map(|entry| entry.expect("cache entry should load").path())
+        .collect::<Vec<_>>();
+    let first_prefix_files = fs::read_dir(&prefix_dir)
+        .expect("prefix cache dir should be readable")
+        .map(|entry| entry.expect("prefix cache entry should load").path())
         .collect::<Vec<_>>();
     assert_eq!(
         first_files.len(),
         1,
         "expected exactly one cached test artifact"
+    );
+    assert_eq!(
+        first_prefix_files.len(),
+        1,
+        "expected exactly one cached semantic prefix"
     );
 
     let second = run_surtr(&temp, &["test", "math"]);
@@ -347,14 +362,27 @@ test("Math") {
         .expect("cache dir should be readable")
         .map(|entry| entry.expect("cache entry should load").path())
         .collect::<Vec<_>>();
+    let second_prefix_files = fs::read_dir(&prefix_dir)
+        .expect("prefix cache dir should be readable")
+        .map(|entry| entry.expect("prefix cache entry should load").path())
+        .collect::<Vec<_>>();
     assert_eq!(
         second_files.len(),
         1,
         "cache should reuse the same artifact count"
     );
     assert_eq!(
+        second_prefix_files.len(),
+        1,
+        "prefix cache should reuse the same artifact count"
+    );
+    assert_eq!(
         first_files, second_files,
         "cache key should stay stable across identical runs"
+    );
+    assert_eq!(
+        first_prefix_files, second_prefix_files,
+        "prefix cache key should stay stable across identical runs"
     );
 
     let _ = fs::remove_dir_all(temp);
@@ -474,6 +502,126 @@ test("Capture") {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("[PASS] Capture > asserts captured print lines"));
     assert!(stdout.contains("test result: passed=1, failed=0, total=1"));
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_allows_pushing_stdin_from_surtr_test_code() {
+    let temp = unique_temp_dir("surtr_test_command_push_stdin");
+    write_source(
+        &temp.join("lib/tests/stdin.srt"),
+        r#"import IO;
+import Test;
+
+test("Stdin") {
+  it("reads pushed stdin lines through IO") {
+    push_stdin("alpha\nbeta\n")
+    assert_ok_eq("alpha", IO::get_line(""))
+    assert_ok_eq("beta", IO::get_line(""))
+  }
+
+  it("reads pushed stdin chars through IO") {
+    push_stdin("xy")
+    assert_ok_eq("x", IO::get(""))
+    assert_ok_eq("y", IO::get(""))
+  }
+}
+"#,
+    );
+
+    let output = run_surtr(&temp, &["test", "stdin"]);
+    assert!(
+        output.status.success(),
+        "test command should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[PASS] Stdin > reads pushed stdin lines through IO"));
+    assert!(stdout.contains("[PASS] Stdin > reads pushed stdin chars through IO"));
+    assert!(stdout.contains("test result: passed=2, failed=0, total=2"));
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_allows_asserting_captured_stderr_in_surtr_test_code() {
+    let temp = unique_temp_dir("surtr_test_command_capture_stderr_assert");
+    write_source(
+        &temp.join("lib/tests/capture_stderr.srt"),
+        r#"import Test;
+
+test("Capture") {
+  it("asserts captured eprint fallback lines") {
+    value: Result<Int> = Err(NoneError)
+    match value {
+      Ok(_) => (),
+      Err(err) => eprint(err),
+    }
+    assert_stderr_eq(["Error: NoneError: None Value."])
+  }
+}
+"#,
+    );
+
+    let output = run_surtr(&temp, &["test", "capture_stderr"]);
+    assert!(
+        output.status.success(),
+        "test command should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[PASS] Capture > asserts captured eprint fallback lines"));
+    assert!(stdout.contains("test result: passed=1, failed=0, total=1"));
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_isolates_test_io_between_it_blocks() {
+    let temp = unique_temp_dir("surtr_test_command_io_isolation");
+    write_source(
+        &temp.join("lib/tests/io_isolation.srt"),
+        r#"import IO;
+import Test;
+
+test("IO isolation") {
+  it("leaves unread io behind") {
+    print("stdout-leak")
+    value: Result<Int> = Err(NoneError)
+    match value {
+      Ok(_) => (),
+      Err(err) => eprint(err),
+    }
+    push_stdin("stale")
+  }
+
+  it("starts with fresh io buffers") {
+    assert_stdout_eq([])
+    assert_stderr_eq([])
+    push_stdin("fresh\n")
+    assert_ok_eq("fresh", IO::get_line(""))
+  }
+}
+"#,
+    );
+
+    let output = run_surtr(&temp, &["test", "io_isolation"]);
+    assert!(
+        output.status.success(),
+        "test command should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[PASS] IO isolation > leaves unread io behind"));
+    assert!(stdout.contains("[PASS] IO isolation > starts with fresh io buffers"));
+    assert!(stdout.contains("test result: passed=2, failed=0, total=2"));
 
     let _ = fs::remove_dir_all(temp);
 }

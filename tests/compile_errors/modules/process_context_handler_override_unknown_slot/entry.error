@@ -1,0 +1,2 @@
+phase: codegen
+contains: handler slot is not declared by the target process

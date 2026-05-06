@@ -1,5 +1,9 @@
-@agent(kind: ReadOnly, instance: Singleton, boot: true, lazy: false)
 defagent Env {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
   @init
   def init() -> Result<String> {
     Ok("demo-home")

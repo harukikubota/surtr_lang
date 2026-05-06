@@ -1,2 +1,2 @@
 phase: parse
-contains: ReadOnly agents must not define @set
+contains: @agent(...) metadata is no longer supported

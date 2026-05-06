@@ -1,0 +1,4 @@
+phase: resolve
+contains: hidden builtin `GenServer::pid`
+contains: GenServer module surface is compiler-managed
+contains: defgenserver

@@ -165,6 +165,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             }
         }
         Resolved::FieldAccess(_, expr, _) => collect_captures_inner(expr, bound, free),
+        Resolved::ProcessContextHandler(_, _) => {}
         Resolved::TypeRefWitness(_, _) => {}
         Resolved::StructLit(_, _, fields) => {
             for field in fields {
@@ -188,10 +189,10 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 }
             }
         }
-        Resolved::StructDef(_, _, _)
+        Resolved::StructDef(_, _, _, _)
         | Resolved::RecordDef(_, _, _)
         | Resolved::DeferrorDef(_, _, _, _)
-        | Resolved::EnumDef(_, _, _, _)
+        | Resolved::EnumDef(_, _, _, _, _)
         | Resolved::ConstDef(_, _, _, _, _)
         | Resolved::TraitDef(_, _, _, _, _)
         | Resolved::TraitImplDef(_, _, _, _, _)

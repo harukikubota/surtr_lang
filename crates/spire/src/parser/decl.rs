@@ -16,24 +16,22 @@ enum AgentKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentInstance {
     Singleton,
-    Multi,
+    Worker,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct AgentMeta {
     kind: AgentKind,
     instance: AgentInstance,
     boot: bool,
     registry: bool,
     lazy: bool,
+    handlers: Vec<ProcessHandlerDependency>,
 }
 
 impl AgentKind {
     fn into_process_kind(self) -> ProcessKind {
-        match self {
-            AgentKind::ReadOnly => ProcessKind::ReadOnlyAgent,
-            AgentKind::State => ProcessKind::StateAgent,
-        }
+        ProcessKind::Agent
     }
 }
 
@@ -41,7 +39,7 @@ impl AgentInstance {
     fn into_process_instance(self) -> ProcessInstance {
         match self {
             AgentInstance::Singleton => ProcessInstance::Singleton,
-            AgentInstance::Multi => ProcessInstance::Multi,
+            AgentInstance::Worker => ProcessInstance::Worker,
         }
     }
 }
@@ -55,6 +53,9 @@ impl AgentMeta {
             boot: self.boot,
             registry: self.registry,
             lazy: self.lazy,
+            handlers: self.handlers,
+            handler_specs: Vec::new(),
+            supervisor_policy: None,
         }
     }
 }
@@ -64,6 +65,24 @@ enum AgentHandlerKind {
     Init,
     Get,
     Set,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitPolicy {
+    Eager,
+    Lazy,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ProcessMeta {
+    instance: AgentInstance,
+    init_policy: InitPolicy,
+    handlers: Vec<ProcessHandlerDependency>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct SupervisorMeta {
+    policy: SupervisorPolicy,
 }
 
 #[derive(Debug, Clone)]
@@ -311,6 +330,16 @@ fn def_ret_ty(def: &Ast) -> Result<Option<AstTy>, ParseError> {
     }
 }
 
+fn def_name(def: &Ast) -> Result<String, ParseError> {
+    match def {
+        Ast::Def(_, name, _, _, _, _, _) => Ok(name.clone()),
+        other => Err(ParseError::syntax(
+            "process lowering expected a function definition",
+            other.span().clone(),
+        )),
+    }
+}
+
 fn def_type_params(def: &Ast) -> Result<Vec<TypeParam>, ParseError> {
     match def {
         Ast::Def(_, _, type_params, _, _, _, _) => Ok(type_params.clone()),
@@ -341,10 +370,35 @@ fn call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
     )
 }
 
-fn internal_call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
+fn path_call(span: &Span, segments: &[&str], args: Vec<Ast>) -> Ast {
     Ast::App(
         span.clone(),
-        Box::new(internal_var(span, name)),
+        Box::new(Ast::Path(
+            span.clone(),
+            AstPath {
+                span: span.clone(),
+                segments: segments
+                    .iter()
+                    .map(|segment| (*segment).to_string())
+                    .collect(),
+            },
+        )),
+        args.into_iter().map(positional).collect(),
+    )
+}
+
+fn internal_qualified_call(span: &Span, segments: &[&str], args: Vec<Ast>) -> Ast {
+    Ast::App(
+        span.clone(),
+        Box::new(internal_var(span, &segments.join("::"))),
+        args.into_iter().map(positional).collect(),
+    )
+}
+
+fn constructor_call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
+    Ast::ConstructorCall(
+        span.clone(),
+        name.to_string(),
         args.into_iter().map(positional).collect(),
     )
 }
@@ -365,11 +419,41 @@ fn result_unit_ty(span: &Span) -> AstTy {
     )
 }
 
+fn unit_ty(span: &Span) -> AstTy {
+    AstTy::Named(span.clone(), "Unit".to_string())
+}
+
+fn dummy_process_handler(span: &Span, name: &str) -> Ast {
+    Ast::Def(
+        span.clone(),
+        name.to_string(),
+        Vec::new(),
+        Vec::new(),
+        Some(unit_ty(span)),
+        Box::new(Ast::Block(
+            span.clone(),
+            vec![Ast::Lit(span.clone(), Lit::Unit)],
+        )),
+        DeclAttrs {
+            visibility: Visibility::Private,
+            ..DeclAttrs::default()
+        },
+    )
+}
+
 fn result_pid_ty(span: &Span, agent_name: &str) -> AstTy {
     AstTy::Generic(
         span.clone(),
         "Result".to_string(),
         vec![pid_ty(span, agent_name)],
+    )
+}
+
+fn result_named_ty(span: &Span, type_name: &str) -> AstTy {
+    AstTy::Generic(
+        span.clone(),
+        "Result".to_string(),
+        vec![AstTy::Named(span.clone(), type_name.to_string())],
     )
 }
 
@@ -387,48 +471,73 @@ fn param_vars(span: &Span, params: &[FunParam]) -> Vec<Ast> {
         .collect()
 }
 
-fn pid_bind(span: &Span, agent_name: &str) -> Ast {
+fn pid_bind(span: &Span, lower_module: &str, process_name: &str) -> Ast {
     Ast::Bind(
         span.clone(),
         AstPattern::Var(span.clone(), "pid".to_string()),
-        Box::new(process_pid_call(span, agent_name)),
+        Box::new(process_pid_call(span, lower_module, process_name)),
     )
 }
 
-fn process_pid_call(span: &Span, agent_name: &str) -> Ast {
-    internal_call(
+fn process_pid_call(span: &Span, lower_module: &str, process_name: &str) -> Ast {
+    internal_qualified_call(
         span,
-        "__process_pid",
+        &[lower_module, "pid"],
         vec![
-            string_lit(span, agent_name),
+            string_lit(span, process_name),
             capture_ref(span, "__agent_init"),
         ],
     )
 }
 
-fn process_state_bind(span: &Span) -> Ast {
+fn process_state_bind(span: &Span, lower_module: &str) -> Ast {
     Ast::SafeBind(
         span.clone(),
         AstPattern::Var(span.clone(), "state".to_string()),
-        Box::new(internal_call(
+        Box::new(internal_qualified_call(
             span,
-            "__process_state",
+            &[lower_module, "state"],
             vec![var(span, "pid")],
         )),
     )
 }
 
-fn init_closure(span: &Span, params: &[FunParam]) -> Ast {
-    Ast::Closure(
+fn init_wrapper_ret_ty(span: &Span, init_def: &Ast) -> Result<Option<AstTy>, ParseError> {
+    let ret_ty = def_ret_ty(init_def)?.ok_or_else(|| {
+        ParseError::syntax("worker init wrapper requires return type", span.clone())
+    })?;
+    Ok(Some(AstTy::Func(
         span.clone(),
         Vec::new(),
-        Box::new(call(span, "__agent_init", param_vars(span, params))),
-    )
+        Box::new(ret_ty),
+    )))
+}
+
+fn build_init_wrapper(span: &Span, init_def: &Ast) -> Result<Ast, ParseError> {
+    let params = def_params(init_def)?.clone();
+    let body = Ast::Block(
+        span.clone(),
+        vec![Ast::Closure(
+            span.clone(),
+            Vec::new(),
+            Box::new(call(span, "__agent_init", param_vars(span, &params))),
+        )],
+    );
+    Ok(Ast::Def(
+        span.clone(),
+        "init".to_string(),
+        def_type_params(init_def)?,
+        params,
+        init_wrapper_ret_ty(span, init_def)?,
+        Box::new(body),
+        DeclAttrs::default(),
+    ))
 }
 
 fn build_readonly_get_wrapper(
     span: &Span,
     agent_name: &str,
+    wrapper_name: &str,
     get_def: &Ast,
 ) -> Result<Ast, ParseError> {
     let params = def_params(get_def)?;
@@ -438,14 +547,14 @@ fn build_readonly_get_wrapper(
     let body = Ast::Block(
         span.clone(),
         vec![
-            pid_bind(span, agent_name),
-            process_state_bind(span),
+            pid_bind(span, "Agent", agent_name),
+            process_state_bind(span, "Agent"),
             call(span, "__agent_get", call_args),
         ],
     );
     Ok(Ast::Def(
         span.clone(),
-        "get".to_string(),
+        wrapper_name.to_string(),
         def_type_params(get_def)?,
         surface_params,
         def_ret_ty(get_def)?,
@@ -471,7 +580,7 @@ fn build_pid_wrapper(span: &Span, agent_name: &str) -> Ast {
         Some(pid_ty(span, agent_name)),
         Box::new(Ast::Block(
             span.clone(),
-            vec![process_pid_call(span, agent_name)],
+            vec![process_pid_call(span, "Agent", agent_name)],
         )),
         DeclAttrs::default(),
     )
@@ -481,10 +590,10 @@ fn build_spawn_wrapper(span: &Span, agent_name: &str, init_def: &Ast) -> Result<
     let params = def_params(init_def)?.clone();
     let body = Ast::Block(
         span.clone(),
-        vec![internal_call(
+        vec![path_call(
             span,
-            "__process_spawn",
-            vec![string_lit(span, agent_name), init_closure(span, &params)],
+            &["DynamicSupervisor", "spawn"],
+            vec![call(span, "init", param_vars(span, &params))],
         )],
     );
     Ok(Ast::Def(
@@ -498,26 +607,204 @@ fn build_spawn_wrapper(span: &Span, agent_name: &str, init_def: &Ast) -> Result<
     ))
 }
 
+fn build_supervisor_spawn_wrapper(span: &Span, supervisor_name: &str) -> Ast {
+    Ast::Def(
+        span.clone(),
+        "spawn".to_string(),
+        Vec::new(),
+        vec![FunParam {
+            name: "worker_init".to_string(),
+            ty: AstTy::Func(
+                span.clone(),
+                Vec::new(),
+                Box::new(AstTy::Generic(
+                    span.clone(),
+                    "Result".to_string(),
+                    vec![AstTy::Named(span.clone(), "$State".to_string())],
+                )),
+            ),
+            span: span.clone(),
+        }],
+        Some(result_pid_ty(span, "$Process")),
+        Box::new(Ast::Block(
+            span.clone(),
+            vec![internal_qualified_call(
+                span,
+                &["Supervisor", "spawn"],
+                vec![string_lit(span, supervisor_name), var(span, "worker_init")],
+            )],
+        )),
+        DeclAttrs::default(),
+    )
+}
+
+fn build_supervisor_adopt_wrapper(span: &Span, supervisor_name: &str) -> Ast {
+    Ast::Def(
+        span.clone(),
+        "adopt".to_string(),
+        Vec::new(),
+        vec![FunParam {
+            name: "pid".to_string(),
+            ty: pid_ty(span, "$Process"),
+            span: span.clone(),
+        }],
+        Some(result_unit_ty(span)),
+        Box::new(Ast::Block(
+            span.clone(),
+            vec![internal_qualified_call(
+                span,
+                &["Supervisor", "adopt"],
+                vec![string_lit(span, supervisor_name), var(span, "pid")],
+            )],
+        )),
+        DeclAttrs::default(),
+    )
+}
+
+fn build_supervisor_status_wrapper(span: &Span, supervisor_name: &str) -> Ast {
+    Ast::Def(
+        span.clone(),
+        "status".to_string(),
+        Vec::new(),
+        Vec::new(),
+        Some(result_named_ty(span, "SupervisorStatus")),
+        Box::new(Ast::Block(
+            span.clone(),
+            vec![internal_qualified_call(
+                span,
+                &["Supervisor", "status"],
+                vec![string_lit(span, supervisor_name)],
+            )],
+        )),
+        DeclAttrs::default(),
+    )
+}
+
+fn build_supervisor_workers_wrapper(span: &Span, supervisor_name: &str) -> Ast {
+    Ast::Def(
+        span.clone(),
+        "workers".to_string(),
+        Vec::new(),
+        vec![
+            FunParam {
+                name: "worker_init".to_string(),
+                ty: AstTy::Func(
+                    span.clone(),
+                    Vec::new(),
+                    Box::new(AstTy::Generic(
+                        span.clone(),
+                        "Result".to_string(),
+                        vec![AstTy::Named(span.clone(), "$State".to_string())],
+                    )),
+                ),
+                span: span.clone(),
+            },
+            FunParam {
+                name: "size".to_string(),
+                ty: AstTy::Named(span.clone(), "Int".to_string()),
+                span: span.clone(),
+            },
+        ],
+        Some(AstTy::Generic(
+            span.clone(),
+            "Result".to_string(),
+            vec![AstTy::Generic(
+                span.clone(),
+                "Workers".to_string(),
+                vec![AstTy::Named(span.clone(), "$Process".to_string())],
+            )],
+        )),
+        Box::new(Ast::Block(
+            span.clone(),
+            vec![internal_qualified_call(
+                span,
+                &["Supervisor", "workers"],
+                vec![
+                    string_lit(span, supervisor_name),
+                    var(span, "worker_init"),
+                    var(span, "size"),
+                ],
+            )],
+        )),
+        DeclAttrs::default(),
+    )
+}
+
+fn is_compiler_managed_process_surface_name(name: &str) -> bool {
+    matches!(name, "pid" | "spawn" | "adopt" | "status" | "workers")
+}
+
+fn ensure_no_compiler_managed_process_surface_names(
+    defs: &[Ast],
+    process_name: &str,
+) -> Result<(), ParseError> {
+    for def in defs {
+        let def_name = match def {
+            Ast::Def(_, name, ..) => name.as_str(),
+            _ => continue,
+        };
+        if is_compiler_managed_process_surface_name(def_name) {
+            return Err(ParseError::syntax(
+                format!(
+                    "`{}::{}` is compiler-managed and cannot be user-defined",
+                    process_name, def_name
+                ),
+                def.span().clone(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_process_surface_name_not_reserved(
+    name: &str,
+    span: &Span,
+    process_name: &str,
+) -> Result<(), ParseError> {
+    if is_compiler_managed_process_surface_name(name) {
+        return Err(ParseError::syntax(
+            format!(
+                "`{}::{}` is compiler-managed and cannot be user-defined",
+                process_name, name
+            ),
+            span.clone(),
+        ));
+    }
+    Ok(())
+}
+
 fn build_state_get_wrapper(
     span: &Span,
     agent_name: &str,
+    wrapper_name: &str,
     get_def: &Ast,
+    singleton: bool,
 ) -> Result<Ast, ParseError> {
     let params = def_params(get_def)?;
-    let mut surface_params = vec![pid_param(span, agent_name)];
-    surface_params.extend(params.iter().skip(2).cloned());
+    let surface_params = if singleton {
+        params.iter().skip(2).cloned().collect::<Vec<_>>()
+    } else {
+        let mut surface_params = vec![pid_param(span, agent_name)];
+        surface_params.extend(params.iter().skip(2).cloned());
+        surface_params
+    };
+    let forwarded_params = if singleton {
+        surface_params.as_slice()
+    } else {
+        &surface_params[1..]
+    };
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
-    call_args.extend(param_vars(span, &surface_params[1..]));
-    let body = Ast::Block(
-        span.clone(),
-        vec![
-            process_state_bind(span),
-            call(span, "__agent_get", call_args),
-        ],
-    );
+    call_args.extend(param_vars(span, forwarded_params));
+    let mut stmts = Vec::new();
+    if singleton {
+        stmts.push(pid_bind(span, "Agent", agent_name));
+    }
+    stmts.push(process_state_bind(span, "Agent"));
+    stmts.push(call(span, "__agent_get", call_args));
+    let body = Ast::Block(span.clone(), stmts);
     Ok(Ast::Def(
         span.clone(),
-        "get".to_string(),
+        wrapper_name.to_string(),
         def_type_params(get_def)?,
         surface_params,
         def_ret_ty(get_def)?,
@@ -529,33 +816,157 @@ fn build_state_get_wrapper(
 fn build_state_set_wrapper(
     span: &Span,
     agent_name: &str,
+    wrapper_name: &str,
     set_def: &Ast,
+    singleton: bool,
 ) -> Result<Ast, ParseError> {
     let params = def_params(set_def)?;
-    let mut surface_params = vec![pid_param(span, agent_name)];
-    surface_params.extend(params.iter().skip(2).cloned());
+    let surface_params = if singleton {
+        params.iter().skip(2).cloned().collect::<Vec<_>>()
+    } else {
+        let mut surface_params = vec![pid_param(span, agent_name)];
+        surface_params.extend(params.iter().skip(2).cloned());
+        surface_params
+    };
+    let forwarded_params = if singleton {
+        surface_params.as_slice()
+    } else {
+        &surface_params[1..]
+    };
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
-    call_args.extend(param_vars(span, &surface_params[1..]));
+    call_args.extend(param_vars(span, forwarded_params));
+    let mut stmts = Vec::new();
+    if singleton {
+        stmts.push(pid_bind(span, "Agent", agent_name));
+    }
+    stmts.push(process_state_bind(span, "Agent"));
+    stmts.push(Ast::SafeBind(
+        span.clone(),
+        AstPattern::Var(span.clone(), "next_state".to_string()),
+        Box::new(call(span, "__agent_set", call_args)),
+    ));
+    stmts.push(internal_qualified_call(
+        span,
+        &["Agent", "store"],
+        vec![var(span, "pid"), var(span, "next_state")],
+    ));
+    let body = Ast::Block(span.clone(), stmts);
+    Ok(Ast::Def(
+        span.clone(),
+        wrapper_name.to_string(),
+        def_type_params(set_def)?,
+        surface_params,
+        Some(result_unit_ty(span)),
+        Box::new(body),
+        DeclAttrs::default(),
+    ))
+}
+
+fn result_reply_ty_from_call_ret(span: &Span, ret_ty: Option<AstTy>) -> Option<AstTy> {
+    match ret_ty {
+        Some(AstTy::Generic(result_span, name, args)) if name == "Result" => {
+            match args.as_slice() {
+                [AstTy::Tuple(_, items)] if !items.is_empty() => Some(AstTy::Generic(
+                    result_span,
+                    "Result".to_string(),
+                    vec![items[0].clone()],
+                )),
+                _ => Some(AstTy::Generic(result_span, name, args)),
+            }
+        }
+        Some(other) => Some(other),
+        None => Some(AstTy::Generic(
+            span.clone(),
+            "Result".to_string(),
+            vec![AstTy::Named(span.clone(), "Unit".to_string())],
+        )),
+    }
+}
+
+fn genserver_pair_field(span: &Span, field: &str) -> Ast {
+    Ast::FieldAccess(
+        span.clone(),
+        Box::new(var(span, "reply_state")),
+        field.to_string(),
+    )
+}
+
+fn build_genserver_call_wrapper(
+    span: &Span,
+    process_name: &str,
+    wrapper_name: &str,
+    internal_handler_name: &str,
+    call_def: &Ast,
+) -> Result<Ast, ParseError> {
+    let params = def_params(call_def)?;
+    let surface_params = params.iter().skip(2).cloned().collect::<Vec<_>>();
+    let mut call_args = vec![var(span, "pid"), var(span, "state")];
+    call_args.extend(param_vars(span, &surface_params));
     let body = Ast::Block(
         span.clone(),
         vec![
-            process_state_bind(span),
+            pid_bind(span, "GenServer", process_name),
+            process_state_bind(span, "GenServer"),
+            Ast::SafeBind(
+                span.clone(),
+                AstPattern::Var(span.clone(), "reply_state".to_string()),
+                Box::new(call(span, internal_handler_name, call_args)),
+            ),
+            Ast::SafeBind(
+                span.clone(),
+                AstPattern::Wildcard(span.clone()),
+                Box::new(internal_qualified_call(
+                    span,
+                    &["GenServer", "store"],
+                    vec![var(span, "pid"), genserver_pair_field(span, "_1")],
+                )),
+            ),
+            constructor_call(span, "Ok", vec![genserver_pair_field(span, "_0")]),
+        ],
+    );
+    Ok(Ast::Def(
+        span.clone(),
+        wrapper_name.to_string(),
+        def_type_params(call_def)?,
+        surface_params,
+        result_reply_ty_from_call_ret(span, def_ret_ty(call_def)?),
+        Box::new(body),
+        DeclAttrs::default(),
+    ))
+}
+
+fn build_genserver_cast_wrapper(
+    span: &Span,
+    process_name: &str,
+    wrapper_name: &str,
+    internal_handler_name: &str,
+    cast_def: &Ast,
+) -> Result<Ast, ParseError> {
+    let params = def_params(cast_def)?;
+    let surface_params = params.iter().skip(2).cloned().collect::<Vec<_>>();
+    let mut call_args = vec![var(span, "pid"), var(span, "state")];
+    call_args.extend(param_vars(span, &surface_params));
+    let body = Ast::Block(
+        span.clone(),
+        vec![
+            pid_bind(span, "GenServer", process_name),
+            process_state_bind(span, "GenServer"),
             Ast::SafeBind(
                 span.clone(),
                 AstPattern::Var(span.clone(), "next_state".to_string()),
-                Box::new(call(span, "__agent_set", call_args)),
+                Box::new(call(span, internal_handler_name, call_args)),
             ),
-            internal_call(
+            internal_qualified_call(
                 span,
-                "__process_store",
+                &["GenServer", "store"],
                 vec![var(span, "pid"), var(span, "next_state")],
             ),
         ],
     );
     Ok(Ast::Def(
         span.clone(),
-        "set".to_string(),
-        def_type_params(set_def)?,
+        wrapper_name.to_string(),
+        def_type_params(cast_def)?,
         surface_params,
         Some(result_unit_ty(span)),
         Box::new(body),
@@ -1088,7 +1499,7 @@ impl Parser<'_> {
                 doc: attrs.doc,
                 auto_import: attrs.auto_import,
                 hidden: attrs.hidden,
-                process_spec: attrs.process_spec,
+                process_state_owner: attrs.process_state_owner,
             },
         ))
     }
@@ -1419,7 +1830,7 @@ impl Parser<'_> {
         }
         self.expect(&Token::Defmod)?;
         let (name, _) = self.expect_qualified_ident(2, "module")?;
-        if builtin_type_meta_by_name(&name).is_some() {
+        if name != "ProcessInit" && builtin_type_meta_by_name(&name).is_some() {
             return Err(ParseError::syntax(
                 format!(
                     "Module name `{}` is reserved by a canonical builtin type declaration",
@@ -2170,7 +2581,6 @@ impl Parser<'_> {
         let mut attrs = DeclAttrs::default();
         let mut saw_builtin = false;
         let mut saw_intrinsic = false;
-        let mut agent_meta: Option<AgentMeta> = None;
         let mut start_span: Option<Span> = None;
         let mut intrinsic_start_span: Option<Span> = None;
 
@@ -2208,19 +2618,24 @@ impl Parser<'_> {
                     intrinsic_start_span = Some(annotator_span);
                 }
                 "agent" => {
-                    if agent_meta.is_some() {
+                    return Err(ParseError::syntax(
+                        "@agent(...) metadata is no longer supported. Use `meta { instance, init_policy }` inside the process definition.",
+                        annotator_span,
+                    ));
+                }
+                "process_state" => {
+                    if attrs.process_state_owner.is_some() {
                         return Err(ParseError::syntax(
-                            "@agent may only appear once before a declaration",
+                            "@process_state may only appear once before a declaration",
                             annotator_span,
                         ));
                     }
-                    if saw_builtin || saw_intrinsic {
-                        return Err(ParseError::syntax(
-                            "@agent cannot be combined with @builtin or @intrinsic",
-                            annotator_span,
-                        ));
-                    }
-                    agent_meta = Some(self.parse_agent_meta()?);
+                    self.expect(&Token::LParen)?;
+                    self.skip_newlines();
+                    let (owner, _) = self.expect_ident()?;
+                    self.skip_newlines();
+                    self.expect(&Token::RParen)?;
+                    attrs.process_state_owner = Some(owner);
                 }
                 "doc" => {
                     if attrs.doc.is_some() {
@@ -2300,21 +2715,7 @@ impl Parser<'_> {
             .map(|span| span.start)
             .unwrap_or_else(|| self.peek_span().start);
 
-        if let Some(meta) = agent_meta {
-            if saw_builtin || saw_intrinsic {
-                return Err(ParseError::syntax(
-                    "@agent cannot be combined with @builtin or @intrinsic",
-                    self.peek_span(),
-                ));
-            }
-            match self.peek() {
-                Token::Defagent => self.parse_defagent(meta, attrs, start),
-                _ => Err(ParseError::syntax(
-                    "Expected `defagent` after @agent(...)",
-                    self.peek_span(),
-                )),
-            }
-        } else if saw_intrinsic {
+        if saw_intrinsic {
             let intrinsic_start = intrinsic_start_span
                 .as_ref()
                 .map(|span| span.start)
@@ -2355,15 +2756,25 @@ impl Parser<'_> {
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
             }
+            if attrs.process_state_owner.is_some()
+                && !matches!(self.peek(), Token::Defstruct | Token::Defenum)
+            {
+                return Err(ParseError::syntax(
+                    "@process_state may only annotate `defstruct` or `defenum` declarations",
+                    start_span.unwrap_or_else(|| self.peek_span()),
+                ));
+            }
             match self.peek() {
                 Token::Def => self.parse_def_with_attrs(attrs, Some(start)),
                 Token::Defmod => self.parse_defmod_with_attrs(attrs, Some(start)),
                 Token::Deftrait => self.parse_trait_def_with_attrs(attrs, Some(start)),
                 Token::Impl => self.parse_impl_def_with_attrs(attrs, Some(start)),
-                Token::Defagent => Err(ParseError::syntax(
-                    "`defagent` declarations must be preceded by @agent(...)",
-                    self.peek_span(),
-                )),
+                Token::Defagent => self.parse_defagent(None, attrs, start),
+                Token::Defgenserver => self.parse_defgenserver_with_attrs(attrs, start),
+                Token::Defsupervisor => self.parse_defsupervisor_with_attrs(false, attrs, start),
+                Token::DefdynamicSupervisor => {
+                    self.parse_defsupervisor_with_attrs(true, attrs, start)
+                }
                 Token::Defstruct => self.parse_struct_def_with_attrs(attrs, Some(start)),
                 Token::Defrecord => self.parse_record_def_with_attrs(attrs, Some(start)),
                 Token::Deferror => self.parse_deferror_def_with_attrs(attrs, Some(start)),
@@ -2378,87 +2789,291 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_agent_meta(&mut self) -> Result<AgentMeta, ParseError> {
-        self.skip_newlines();
-        self.expect(&Token::LParen)?;
-        self.skip_newlines();
+    pub(super) fn parse_defagent_without_legacy_meta(&mut self) -> Result<Ast, ParseError> {
+        let start = self.peek_span().start;
+        self.parse_defagent(None, DeclAttrs::default(), start)
+    }
 
-        let mut kind = None;
-        let mut instance = None;
-        let mut boot = false;
-        let mut registry = false;
-        let mut lazy = false;
+    pub(super) fn parse_defgenserver(&mut self) -> Result<Ast, ParseError> {
+        let start = self.peek_span().start;
+        self.parse_defgenserver_with_attrs(DeclAttrs::default(), start)
+    }
 
-        while !matches!(self.peek(), Token::RParen) {
+    pub(super) fn parse_defsupervisor(&mut self, dynamic: bool) -> Result<Ast, ParseError> {
+        let start = self.peek_span().start;
+        self.parse_defsupervisor_with_attrs(dynamic, DeclAttrs::default(), start)
+    }
+
+    pub(super) fn parse_supervisor_init(&mut self) -> Result<Ast, ParseError> {
+        let start = self.expect(&Token::SupervisorInit)?.start;
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+        let mut singletons = Vec::new();
+        let mut supervisors = Vec::new();
+
+        while !matches!(self.peek(), Token::RBrace) {
             if matches!(self.peek(), Token::Eof) {
-                return Err(ParseError::incomplete(")", self.peek_span()));
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let (entry_kind, entry_span) = self.expect_ident()?;
+            if entry_kind == "singleton" {
+                let singleton = self.parse_supervisor_init_singleton()?;
+                if singletons.iter().any(|entry: &SupervisorInitSingleton| {
+                    entry.process_name == singleton.process_name
+                }) {
+                    return Err(ParseError::syntax(
+                        "singleton boot entry is duplicated",
+                        singleton.span,
+                    ));
+                }
+                singletons.push(singleton);
+            } else {
+                let supervisor = self.parse_supervisor_init_override(entry_kind, entry_span)?;
+                if supervisors.iter().any(|entry: &SupervisorInitOverride| {
+                    entry.process_name == supervisor.process_name
+                }) {
+                    return Err(ParseError::syntax(
+                        "supervisor override entry is duplicated",
+                        supervisor.span,
+                    ));
+                }
+                supervisors.push(supervisor);
+            }
+            self.skip_newlines();
+        }
+        let end = self.expect(&Token::RBrace)?;
+        let span = Span {
+            start,
+            end: end.end,
+        };
+        Ok(Ast::SupervisorInit(
+            span,
+            SupervisorInitSpec {
+                singletons,
+                supervisors,
+            },
+        ))
+    }
+
+    fn parse_supervisor_init_singleton(&mut self) -> Result<SupervisorInitSingleton, ParseError> {
+        let (process_name, name_span) = self.expect_ident()?;
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+        let mut timeout_ms = None;
+        let mut handlers = Vec::new();
+
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
             }
             let (key, key_span) = self.expect_ident()?;
             self.skip_newlines();
-            self.expect(&Token::Colon)?;
-            self.skip_newlines();
             match key.as_str() {
-                "kind" => {
-                    let (value, value_span) = self.expect_ident()?;
-                    kind = Some(match value.as_str() {
-                        "ReadOnly" => AgentKind::ReadOnly,
-                        "State" => AgentKind::State,
-                        _ => {
-                            return Err(ParseError::syntax(
-                                "agent kind must be ReadOnly or State",
-                                value_span,
-                            ))
-                        }
-                    });
+                "timeout" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    let parsed = self.parse_supervisor_init_timeout_ms()?;
+                    if !(1..=60_000).contains(&parsed) {
+                        return Err(ParseError::syntax(
+                            if parsed == 0 {
+                                "init timeout must be at least `1ms`"
+                            } else {
+                                "init timeout must not exceed `60s`"
+                            },
+                            key_span,
+                        ));
+                    }
+                    timeout_ms = Some(parsed);
                 }
-                "instance" => {
-                    let (value, value_span) = self.expect_ident()?;
-                    instance = Some(match value.as_str() {
-                        "Singleton" => AgentInstance::Singleton,
-                        "Multi" => AgentInstance::Multi,
-                        _ => {
-                            return Err(ParseError::syntax(
-                                "agent instance must be Singleton or Multi",
-                                value_span,
-                            ))
-                        }
-                    });
+                "handlers" => {
+                    handlers = self.parse_supervisor_init_handlers()?;
                 }
-                "boot" => boot = self.parse_agent_bool_value("boot")?,
-                "registry" => registry = self.parse_agent_bool_value("registry")?,
-                "lazy" => lazy = self.parse_agent_bool_value("lazy")?,
+                "init_policy" => {
+                    return Err(ParseError::syntax(
+                        "init policy belongs to process definition",
+                        key_span,
+                    ));
+                }
+                "boot" => {
+                    return Err(ParseError::syntax(
+                        "boot policy is no longer used",
+                        key_span,
+                    ));
+                }
                 _ => {
                     return Err(ParseError::syntax(
-                        format!("Unknown @agent option: {key}"),
+                        format!("Unknown supervisor_init singleton key: {key}"),
                         key_span,
-                    ))
+                    ));
                 }
             }
             self.skip_newlines();
             if matches!(self.peek(), Token::Comma) {
                 self.advance();
                 self.skip_newlines();
-            } else {
-                break;
             }
         }
-        self.expect(&Token::RParen)?;
 
-        let kind =
-            kind.ok_or_else(|| ParseError::syntax("@agent requires kind", self.peek_span()))?;
-        let instance = instance
-            .ok_or_else(|| ParseError::syntax("@agent requires instance", self.peek_span()))?;
-
-        Ok(AgentMeta {
-            kind,
-            instance,
-            boot,
-            registry,
-            lazy,
+        let end = self.expect(&Token::RBrace)?;
+        Ok(SupervisorInitSingleton {
+            process_name,
+            timeout_ms,
+            handlers,
+            span: Span {
+                start: name_span.start,
+                end: end.end,
+            },
         })
     }
 
-    fn parse_agent_bool_value(&mut self, key: &str) -> Result<bool, ParseError> {
+    fn parse_supervisor_init_override(
+        &mut self,
+        process_name: String,
+        name_span: Span,
+    ) -> Result<SupervisorInitOverride, ParseError> {
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+        let mut overrides = SupervisorPolicyOverride::default();
+
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let (key, key_span) = self.expect_ident()?;
+            self.skip_newlines();
+            self.expect(&Token::Colon)?;
+            self.skip_newlines();
+            match key.as_str() {
+                "strategy" => {
+                    if overrides.strategy.is_some() {
+                        return Err(ParseError::syntax(
+                            "strategy override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.strategy = Some(self.parse_supervisor_strategy()?);
+                }
+                "max_restarts" => {
+                    if overrides.max_restarts.is_some() {
+                        return Err(ParseError::syntax(
+                            "max_restarts override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.max_restarts = Some(self.parse_non_negative_int_literal()?);
+                }
+                "max_seconds" => {
+                    if overrides.max_seconds.is_some() {
+                        return Err(ParseError::syntax(
+                            "max_seconds override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.max_seconds = Some(self.parse_non_negative_int_literal()?);
+                }
+                "child_restart_default" => {
+                    if overrides.child_restart_default.is_some() {
+                        return Err(ParseError::syntax(
+                            "child_restart_default override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.child_restart_default = Some(self.parse_child_restart_policy()?);
+                }
+                "allow_adopt" => {
+                    if overrides.allow_adopt.is_some() {
+                        return Err(ParseError::syntax(
+                            "allow_adopt override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.allow_adopt = Some(self.parse_bool_literal()?);
+                }
+                "shutdown_timeout" => {
+                    if overrides.shutdown_timeout_ms.is_some() {
+                        return Err(ParseError::syntax(
+                            "shutdown_timeout override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.shutdown_timeout_ms =
+                        Some(self.parse_duration_literal_ms("shutdown_timeout")?);
+                }
+                "parent" => {
+                    return Err(ParseError::syntax(
+                        "supervisor parent override is fixed in the initial phase",
+                        key_span,
+                    ));
+                }
+                _ => {
+                    return Err(ParseError::syntax(
+                        format!("Unknown supervisor override key: {key}"),
+                        key_span,
+                    ));
+                }
+            }
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+            }
+        }
+
+        let end = self.expect(&Token::RBrace)?;
+        Ok(SupervisorInitOverride {
+            process_name,
+            overrides,
+            span: Span {
+                start: name_span.start,
+                end: end.end,
+            },
+        })
+    }
+
+    fn parse_supervisor_init_timeout_ms(&mut self) -> Result<u64, ParseError> {
+        let span = self.peek_span();
+        let Token::Int(n) = self.peek().clone() else {
+            return Err(ParseError::syntax(
+                "init timeout must be a duration literal like `5s` or `100ms`",
+                span,
+            ));
+        };
+        self.advance();
+        let (suffix, suffix_span) = self.expect_ident()?;
+        let Some(value) = n.to_string().parse::<u64>().ok() else {
+            return Err(ParseError::syntax(
+                "init timeout literal is too large",
+                span,
+            ));
+        };
+        match suffix.as_str() {
+            "ms" => Ok(value),
+            "s" => value.checked_mul(1_000).ok_or_else(|| {
+                ParseError::syntax("init timeout literal is too large", suffix_span)
+            }),
+            _ => Err(ParseError::syntax(
+                "init timeout must use `ms` or `s`",
+                suffix_span,
+            )),
+        }
+    }
+
+    fn parse_non_negative_int_literal(&mut self) -> Result<u64, ParseError> {
+        let span = self.peek_span();
+        let Token::Int(n) = self.peek().clone() else {
+            return Err(ParseError::syntax("expected integer literal", span));
+        };
+        self.advance();
+        n.to_string()
+            .parse::<u64>()
+            .map_err(|_| ParseError::syntax("integer literal is too large", span))
+    }
+
+    fn parse_bool_literal(&mut self) -> Result<bool, ParseError> {
+        let span = self.peek_span();
         match self.peek().clone() {
             Token::True => {
                 self.advance();
@@ -2468,24 +3083,471 @@ impl Parser<'_> {
                 self.advance();
                 Ok(false)
             }
-            Token::Ident(value) if value == "true" => {
-                self.advance();
-                Ok(true)
-            }
-            Token::Ident(value) if value == "false" => {
-                self.advance();
-                Ok(false)
-            }
+            _ => Err(ParseError::syntax("expected `True` or `False`", span)),
+        }
+    }
+
+    fn parse_duration_literal_ms(&mut self, field_name: &str) -> Result<u64, ParseError> {
+        let span = self.peek_span();
+        let Token::Int(n) = self.peek().clone() else {
+            return Err(ParseError::syntax(
+                format!("{field_name} must be a duration literal like `5s` or `100ms`"),
+                span,
+            ));
+        };
+        self.advance();
+        let (suffix, suffix_span) = self.expect_ident()?;
+        let value = n
+            .to_string()
+            .parse::<u64>()
+            .map_err(|_| ParseError::syntax("duration literal is too large", span.clone()))?;
+        match suffix.as_str() {
+            "ms" => Ok(value),
+            "s" => value
+                .checked_mul(1_000)
+                .ok_or_else(|| ParseError::syntax("duration literal is too large", suffix_span)),
             _ => Err(ParseError::syntax(
-                format!("agent option `{key}` must be true or false"),
-                self.peek_span(),
+                format!("{field_name} must use `ms` or `s`"),
+                suffix_span,
             )),
         }
     }
 
+    fn parse_supervisor_strategy(&mut self) -> Result<SupervisorStrategy, ParseError> {
+        let (value, span) = self.expect_ident()?;
+        match value.as_str() {
+            "OneForOne" => Ok(SupervisorStrategy::OneForOne),
+            _ => Err(ParseError::syntax(
+                "supervisor strategy must be OneForOne",
+                span,
+            )),
+        }
+    }
+
+    fn parse_child_restart_policy(&mut self) -> Result<ChildRestartPolicy, ParseError> {
+        let (value, span) = self.expect_ident()?;
+        match value.as_str() {
+            "Permanent" => Ok(ChildRestartPolicy::Permanent),
+            "Transient" => Ok(ChildRestartPolicy::Transient),
+            "Temporary" => Ok(ChildRestartPolicy::Temporary),
+            _ => Err(ParseError::syntax(
+                "child_restart_default must be Permanent, Transient, or Temporary",
+                span,
+            )),
+        }
+    }
+
+    fn parse_supervisor_init_handlers(
+        &mut self,
+    ) -> Result<Vec<SupervisorInitHandlerOverride>, ParseError> {
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+        let mut handlers = Vec::new();
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let (slot, slot_span) = self.expect_ident()?;
+            self.skip_newlines();
+            self.expect(&Token::Colon)?;
+            self.skip_newlines();
+            let target = self.parse_supervisor_init_handler_target()?;
+            if handlers
+                .iter()
+                .any(|entry: &SupervisorInitHandlerOverride| entry.slot == slot)
+            {
+                return Err(ParseError::syntax(
+                    "handler override is duplicated",
+                    slot_span,
+                ));
+            }
+            handlers.push(SupervisorInitHandlerOverride {
+                slot,
+                span: Span {
+                    start: slot_span.start,
+                    end: target.span.end,
+                },
+                target,
+            });
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(handlers)
+    }
+
+    fn parse_supervisor_init_handler_target(
+        &mut self,
+    ) -> Result<SupervisorInitHandlerTarget, ParseError> {
+        let (name, name_span) = self.expect_ident()?;
+        let mut end = name_span.end;
+        let mut named_args = Vec::new();
+        self.skip_newlines();
+        if matches!(self.peek(), Token::LParen) {
+            self.advance();
+            self.skip_newlines();
+            while !matches!(self.peek(), Token::RParen) {
+                if matches!(self.peek(), Token::Eof) {
+                    return Err(ParseError::incomplete(")", self.peek_span()));
+                }
+                let (arg_name, arg_span) = self.expect_ident()?;
+                self.skip_newlines();
+                self.expect(&Token::Colon)?;
+                self.skip_newlines();
+                let value = self.parse_supervisor_init_handler_arg_value()?;
+                named_args.push(SupervisorInitHandlerArg {
+                    name: arg_name,
+                    value,
+                    span: arg_span,
+                });
+                self.skip_newlines();
+                if matches!(self.peek(), Token::Comma) {
+                    self.advance();
+                    self.skip_newlines();
+                } else if !matches!(self.peek(), Token::RParen) {
+                    return Err(ParseError::syntax(
+                        "Expected `,` or `)` in handler target arguments",
+                        self.peek_span(),
+                    ));
+                }
+            }
+            end = self.expect(&Token::RParen)?.end;
+        }
+        Ok(SupervisorInitHandlerTarget {
+            name,
+            named_args,
+            span: Span {
+                start: name_span.start,
+                end,
+            },
+        })
+    }
+
+    fn parse_supervisor_init_handler_arg_value(&mut self) -> Result<String, ParseError> {
+        let span = self.peek_span();
+        match self.peek().clone() {
+            Token::Str(value) => {
+                self.advance();
+                Ok(value)
+            }
+            Token::Int(value) => {
+                self.advance();
+                Ok(value.to_string())
+            }
+            Token::Ident(value) => {
+                self.advance();
+                Ok(value)
+            }
+            Token::Eof => Err(ParseError::incomplete("handler argument value", span)),
+            _ => Err(ParseError::syntax(
+                "handler argument values currently accept string, integer, or identifier literals",
+                span,
+            )),
+        }
+    }
+
+    fn parse_defsupervisor_with_attrs(
+        &mut self,
+        dynamic: bool,
+        attrs: DeclAttrs,
+        start: usize,
+    ) -> Result<Ast, ParseError> {
+        let token = if dynamic {
+            Token::DefdynamicSupervisor
+        } else {
+            Token::Defsupervisor
+        };
+        self.expect(&token)?;
+        let (name, _) = self.expect_ident()?;
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+        let supervisor_meta = self.parse_supervisor_meta_block()?;
+        self.skip_newlines();
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let err_span = self.peek_span();
+            return Err(ParseError::syntax(
+                "defsupervisor is policy-only; spawn, adopt, and status are compiler-managed",
+                err_span,
+            ));
+        }
+        let end = self.expect(&Token::RBrace)?;
+        let span = Span {
+            start,
+            end: end.end,
+        };
+        let runtime_kind = if name == "DynamicSupervisor" || dynamic {
+            ProcessKind::DynamicSupervisor
+        } else {
+            ProcessKind::Supervisor
+        };
+        let process_spec = ProcessSpec {
+            process_name: name.clone(),
+            kind: runtime_kind,
+            instance: ProcessInstance::Singleton,
+            boot: false,
+            registry: true,
+            lazy: false,
+            handlers: Vec::new(),
+            handler_specs: Vec::new(),
+            supervisor_policy: Some(supervisor_meta.policy),
+        };
+        let mut body = Vec::new();
+        body.insert(
+            0,
+            dummy_process_handler(
+                &Span {
+                    start,
+                    end: end.end,
+                },
+                "__agent_get",
+            ),
+        );
+        body.insert(
+            0,
+            dummy_process_handler(
+                &Span {
+                    start,
+                    end: end.end,
+                },
+                "__agent_init",
+            ),
+        );
+        body.push(build_supervisor_spawn_wrapper(&span, &name));
+        body.push(build_supervisor_adopt_wrapper(&span, &name));
+        body.push(build_supervisor_status_wrapper(&span, &name));
+        body.push(build_supervisor_workers_wrapper(&span, &name));
+        let span = Span {
+            start,
+            end: end.end,
+        };
+        if dynamic && name != "DynamicSupervisor" {
+            Ok(Ast::DefdynamicSupervisor(
+                span,
+                name,
+                body,
+                process_spec,
+                attrs,
+            ))
+        } else {
+            Ok(Ast::Defsupervisor(span, name, body, process_spec, attrs))
+        }
+    }
+
+    fn parse_supervisor_meta_block(&mut self) -> Result<SupervisorMeta, ParseError> {
+        let (head, head_span) = self.expect_ident()?;
+        if head != "meta" {
+            return Err(ParseError::syntax(
+                "supervisor declarations must start with `meta { ... }`",
+                head_span,
+            ));
+        }
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut strategy = None;
+        let mut max_restarts = None;
+        let mut max_seconds = None;
+        let mut child_restart_default = None;
+        let mut allow_adopt = None;
+        let mut shutdown_timeout_ms = None;
+
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let (key, key_span) = self.expect_ident()?;
+            self.skip_newlines();
+            self.expect(&Token::Colon)?;
+            self.skip_newlines();
+            match key.as_str() {
+                "strategy" => strategy = Some(self.parse_supervisor_strategy()?),
+                "max_restarts" => max_restarts = Some(self.parse_non_negative_int_literal()?),
+                "max_seconds" => max_seconds = Some(self.parse_non_negative_int_literal()?),
+                "child_restart_default" => {
+                    child_restart_default = Some(self.parse_child_restart_policy()?)
+                }
+                "allow_adopt" => allow_adopt = Some(self.parse_bool_literal()?),
+                "shutdown_timeout" => {
+                    shutdown_timeout_ms = Some(self.parse_duration_literal_ms("shutdown_timeout")?)
+                }
+                "instance" | "init_policy" | "handlers" => {
+                    return Err(ParseError::syntax(
+                        "defsupervisor meta only accepts supervisor policy keys",
+                        key_span,
+                    ))
+                }
+                _ => {
+                    return Err(ParseError::syntax(
+                        format!("Unknown supervisor meta key: {key}"),
+                        key_span,
+                    ))
+                }
+            }
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+            }
+        }
+        self.expect(&Token::RBrace)?;
+
+        Ok(SupervisorMeta {
+            policy: SupervisorPolicy {
+                strategy: strategy.ok_or_else(|| {
+                    ParseError::syntax("meta requires strategy", self.peek_span())
+                })?,
+                max_restarts: max_restarts.ok_or_else(|| {
+                    ParseError::syntax("meta requires max_restarts", self.peek_span())
+                })?,
+                max_seconds: max_seconds.ok_or_else(|| {
+                    ParseError::syntax("meta requires max_seconds", self.peek_span())
+                })?,
+                child_restart_default: child_restart_default.ok_or_else(|| {
+                    ParseError::syntax("meta requires child_restart_default", self.peek_span())
+                })?,
+                allow_adopt: allow_adopt.ok_or_else(|| {
+                    ParseError::syntax("meta requires allow_adopt", self.peek_span())
+                })?,
+                shutdown_timeout_ms,
+            },
+        })
+    }
+
+    fn parse_process_meta_block(&mut self) -> Result<ProcessMeta, ParseError> {
+        let (head, head_span) = self.expect_ident()?;
+        if head != "meta" {
+            return Err(ParseError::syntax(
+                "process declarations must start with `meta { ... }`",
+                head_span,
+            ));
+        }
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        let mut instance = None;
+        let mut init_policy = None;
+        let mut handlers = Vec::new();
+
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let (key, key_span) = self.expect_ident()?;
+            self.skip_newlines();
+            match key.as_str() {
+                "instance" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    let (value, value_span) = self.expect_ident()?;
+                    instance = Some(match value.as_str() {
+                        "Singleton" => AgentInstance::Singleton,
+                        "Worker" => AgentInstance::Worker,
+                        _ => {
+                            return Err(ParseError::syntax(
+                                "process instance must be Singleton or Worker",
+                                value_span,
+                            ))
+                        }
+                    });
+                }
+                "init_policy" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    let (value, value_span) = self.expect_ident()?;
+                    init_policy = Some(match value.as_str() {
+                        "Eager" => InitPolicy::Eager,
+                        "Lazy" => InitPolicy::Lazy,
+                        _ => {
+                            return Err(ParseError::syntax(
+                                "init_policy must be Eager or Lazy",
+                                value_span,
+                            ))
+                        }
+                    });
+                }
+                "handlers" => {
+                    handlers = self.parse_process_meta_handlers()?;
+                }
+                _ => {
+                    return Err(ParseError::syntax(
+                        format!("Unknown process meta key: {key}"),
+                        key_span,
+                    ))
+                }
+            }
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+            }
+        }
+        self.expect(&Token::RBrace)?;
+
+        Ok(ProcessMeta {
+            instance: instance
+                .ok_or_else(|| ParseError::syntax("meta requires instance", self.peek_span()))?,
+            init_policy: init_policy.unwrap_or(InitPolicy::Eager),
+            handlers,
+        })
+    }
+
+    fn parse_process_meta_handlers(&mut self) -> Result<Vec<ProcessHandlerDependency>, ParseError> {
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+        let mut handlers = Vec::new();
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let (slot, slot_span) = self.expect_ident()?;
+            self.skip_newlines();
+            self.expect(&Token::Colon)?;
+            self.skip_newlines();
+            let (capability, _) = self.expect_ident()?;
+            self.skip_newlines();
+            self.expect(&Token::Bind)?;
+            self.skip_newlines();
+            let (target_name, target_span) = self.expect_ident()?;
+            if handlers
+                .iter()
+                .any(|entry: &ProcessHandlerDependency| entry.slot == slot)
+            {
+                return Err(ParseError::syntax("handler slot is duplicated", slot_span));
+            }
+            handlers.push(ProcessHandlerDependency {
+                slot,
+                capability,
+                default_target: ProcessHandlerTarget {
+                    name: target_name,
+                    span: target_span.clone(),
+                },
+                span: Span {
+                    start: slot_span.start,
+                    end: target_span.end,
+                },
+            });
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(handlers)
+    }
+
     fn parse_defagent(
         &mut self,
-        meta: AgentMeta,
+        meta: Option<AgentMeta>,
         attrs: DeclAttrs,
         start: usize,
     ) -> Result<Ast, ParseError> {
@@ -2499,6 +3561,13 @@ impl Parser<'_> {
         let mut get = None;
         let mut set = None;
         let mut helpers = Vec::new();
+        let process_meta = if meta.is_none() {
+            let parsed = self.parse_process_meta_block()?;
+            self.skip_newlines();
+            Some(parsed)
+        } else {
+            None
+        };
 
         while !matches!(self.peek(), Token::RBrace) {
             if matches!(self.peek(), Token::Eof) {
@@ -2572,6 +3641,22 @@ impl Parser<'_> {
             )
         })?;
 
+        let meta = meta.unwrap_or_else(|| {
+            let process_meta = process_meta.expect("new defagent should parse process meta");
+            AgentMeta {
+                kind: if set.is_some() {
+                    AgentKind::State
+                } else {
+                    AgentKind::ReadOnly
+                },
+                instance: process_meta.instance,
+                boot: false,
+                registry: process_meta.instance == AgentInstance::Singleton,
+                lazy: process_meta.init_policy == InitPolicy::Lazy,
+                handlers: process_meta.handlers,
+            }
+        });
+
         self.validate_agent_meta(
             &meta,
             set.as_ref(),
@@ -2593,6 +3678,206 @@ impl Parser<'_> {
             set,
             helpers,
         )
+    }
+
+    fn parse_defgenserver_with_attrs(
+        &mut self,
+        attrs: DeclAttrs,
+        start: usize,
+    ) -> Result<Ast, ParseError> {
+        self.expect(&Token::Defgenserver)?;
+        let (name, _) = self.expect_ident()?;
+        self.skip_newlines();
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+        let process_meta = self.parse_process_meta_block()?;
+        self.skip_newlines();
+
+        let mut init = None;
+        let mut call_handlers: Vec<(String, AgentHandler)> = Vec::new();
+        let mut cast_handlers: Vec<(String, AgentHandler)> = Vec::new();
+        let mut helpers = Vec::new();
+
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            let marker = if let Token::Annotator(marker) = self.peek().clone() {
+                if matches!(marker.as_str(), "init" | "call" | "cast") {
+                    let span = self.peek_span();
+                    self.advance();
+                    self.skip_newlines();
+                    Some((marker, span))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if marker.is_some() && !matches!(self.peek(), Token::Def) {
+                return Err(ParseError::syntax(
+                    "GenServer handler marker must be followed by def inside defgenserver",
+                    self.peek_span(),
+                ));
+            }
+            if matches!(self.peek(), Token::Defp) {
+                return Err(ParseError::syntax(
+                    "GenServer body uses `def`; visibility is controlled by annotations.",
+                    self.peek_span(),
+                ));
+            }
+            let def = self.parse_def_with_attrs(DeclAttrs::default(), None)?;
+            self.ensure_stmt_boundary(&def, true)?;
+            match marker {
+                Some((marker, marker_span)) if marker == "init" => {
+                    if init.is_some() {
+                        return Err(ParseError::syntax("duplicate @init handler", marker_span));
+                    }
+                    init = Some(AgentHandler { def });
+                }
+                Some((marker, marker_span)) if marker == "call" => {
+                    let _ = marker_span;
+                    let wrapper_name = def_name(&def)?;
+                    call_handlers.push((wrapper_name, AgentHandler { def }));
+                }
+                Some((marker, marker_span)) if marker == "cast" => {
+                    let _ = marker_span;
+                    let wrapper_name = def_name(&def)?;
+                    cast_handlers.push((wrapper_name, AgentHandler { def }));
+                }
+                Some((_, marker_span)) => {
+                    return Err(ParseError::syntax(
+                        "GenServer handler marker must be @init, @call, or @cast",
+                        marker_span,
+                    ));
+                }
+                None => helpers.push(def),
+            }
+            self.skip_newlines();
+        }
+        let end = self.expect(&Token::RBrace)?;
+        let span = Span {
+            start,
+            end: end.end,
+        };
+        if process_meta.init_policy == InitPolicy::Lazy
+            && process_meta.instance != AgentInstance::Singleton
+        {
+            return Err(ParseError::syntax(
+                "init_policy: Lazy is only allowed for Singleton GenServer",
+                span,
+            ));
+        }
+        let init = init.ok_or_else(|| {
+            ParseError::syntax(
+                "GenServer requires exactly one @init handler",
+                Span {
+                    start,
+                    end: end.end,
+                },
+            )
+        })?;
+        if call_handlers.is_empty() {
+            return Err(ParseError::syntax(
+                "GenServer requires at least one @call handler",
+                Span {
+                    start,
+                    end: end.end,
+                },
+            ));
+        }
+        ensure_no_compiler_managed_process_surface_names(&helpers, &name)?;
+        for (call_name, call_handler) in &call_handlers {
+            ensure_process_surface_name_not_reserved(call_name, call_handler.def.span(), &name)?;
+        }
+        for (cast_name, cast_handler) in &cast_handlers {
+            ensure_process_surface_name_not_reserved(cast_name, cast_handler.def.span(), &name)?;
+        }
+
+        let init_name = def_name(&init.def)?;
+        let init_def = rename_agent_handler(init.def, "__agent_init", &name, false)?;
+        let mut lowered_calls = Vec::new();
+        for (idx, (call_name, call_handler)) in call_handlers.into_iter().enumerate() {
+            let internal_name = if idx == 0 {
+                "__agent_get".to_string()
+            } else {
+                format!("__agent_call_{call_name}")
+            };
+            let call_def = rename_agent_handler(call_handler.def, &internal_name, &name, true)?;
+            lowered_calls.push((call_name, internal_name, call_def));
+        }
+        let mut lowered_casts = Vec::new();
+        for (idx, (cast_name, cast_handler)) in cast_handlers.into_iter().enumerate() {
+            let internal_name = if idx == 0 {
+                "__agent_set".to_string()
+            } else {
+                format!("__agent_cast_{cast_name}")
+            };
+            let cast_def = rename_agent_handler(cast_handler.def, &internal_name, &name, true)?;
+            lowered_casts.push((cast_name, internal_name, cast_def));
+        }
+
+        let mut body = vec![init_def.clone()];
+        body.extend(lowered_calls.iter().map(|(_, _, def)| def.clone()));
+        body.extend(lowered_casts.iter().map(|(_, _, def)| def.clone()));
+        body.extend(helpers);
+        for (call_name, internal_name, call_def) in &lowered_calls {
+            body.push(build_genserver_call_wrapper(
+                &span,
+                &name,
+                call_name,
+                internal_name,
+                call_def,
+            )?);
+        }
+        for (cast_name, internal_name, cast_def) in &lowered_casts {
+            body.push(build_genserver_cast_wrapper(
+                &span,
+                &name,
+                cast_name,
+                internal_name,
+                cast_def,
+            )?);
+        }
+
+        let process_spec =
+            ProcessSpec {
+                process_name: name.clone(),
+                kind: ProcessKind::GenServer,
+                instance: process_meta.instance.into_process_instance(),
+                boot: false,
+                registry: process_meta.instance == AgentInstance::Singleton,
+                lazy: process_meta.init_policy == InitPolicy::Lazy,
+                handlers: process_meta.handlers,
+                handler_specs: {
+                    let mut specs = vec![ProcessRuntimeHandlerSpec {
+                        name: init_name.clone(),
+                        internal_name: "__agent_init".to_string(),
+                        kind: ProcessRuntimeHandlerKind::Init,
+                        span: init_def.span().clone(),
+                    }];
+                    specs.extend(lowered_calls.iter().map(
+                        |(call_name, internal_name, call_def)| ProcessRuntimeHandlerSpec {
+                            name: call_name.clone(),
+                            internal_name: internal_name.clone(),
+                            kind: ProcessRuntimeHandlerKind::Call,
+                            span: call_def.span().clone(),
+                        },
+                    ));
+                    specs.extend(lowered_casts.iter().map(
+                        |(cast_name, internal_name, cast_def)| ProcessRuntimeHandlerSpec {
+                            name: cast_name.clone(),
+                            internal_name: internal_name.clone(),
+                            kind: ProcessRuntimeHandlerKind::Cast,
+                            span: cast_def.span().clone(),
+                        },
+                    ));
+                    specs
+                },
+                supervisor_policy: None,
+            };
+        Ok(Ast::Defgenserver(span, name, body, process_spec, attrs))
     }
 
     fn parse_agent_handler_marker(&mut self) -> Result<AgentHandlerKind, ParseError> {
@@ -2624,15 +3909,9 @@ impl Parser<'_> {
     ) -> Result<(), ParseError> {
         match meta.kind {
             AgentKind::ReadOnly => {
-                if meta.instance != AgentInstance::Singleton {
-                    return Err(ParseError::syntax(
-                        "ReadOnly agents must use instance: Singleton",
-                        span,
-                    ));
-                }
                 if set.is_some() {
                     return Err(ParseError::syntax(
-                        "ReadOnly agents must not define @set",
+                        "Agent with no write protocol must not define @set",
                         span,
                     ));
                 }
@@ -2644,25 +3923,13 @@ impl Parser<'_> {
                         span,
                     ));
                 }
-                if meta.lazy {
+                if meta.lazy && meta.instance != AgentInstance::Singleton {
                     return Err(ParseError::syntax(
-                        "State agents must use lazy: false",
+                        "init_policy: Lazy is only allowed for Singleton Agent",
                         span,
                     ));
                 }
             }
-        }
-        if meta.instance == AgentInstance::Multi && meta.registry {
-            return Err(ParseError::syntax(
-                "registry: true is only allowed for Singleton agents",
-                span,
-            ));
-        }
-        if meta.instance == AgentInstance::Multi && meta.boot {
-            return Err(ParseError::syntax(
-                "boot: true is only allowed for Singleton agents",
-                span,
-            ));
         }
         Ok(())
     }
@@ -2671,7 +3938,7 @@ impl Parser<'_> {
         &self,
         span: Span,
         name: Symbol,
-        mut attrs: DeclAttrs,
+        attrs: DeclAttrs,
         meta: AgentMeta,
         init: AgentHandler,
         get: AgentHandler,
@@ -2679,11 +3946,24 @@ impl Parser<'_> {
         helpers: Vec<Ast>,
     ) -> Result<Ast, ParseError> {
         let mut body = Vec::new();
+        let init_name = def_name(&init.def)?;
+        let get_name = def_name(&get.def)?;
+        let set_name = set
+            .as_ref()
+            .map(|handler| def_name(&handler.def))
+            .transpose()?;
+        let get_surface_span = get.def.span().clone();
+        let set_surface_span = set.as_ref().map(|handler| handler.def.span().clone());
         let init_def = rename_agent_handler(init.def, "__agent_init", &name, false)?;
         let get_def = rename_agent_handler(get.def, "__agent_get", &name, true)?;
         let set_def = set
             .map(|handler| rename_agent_handler(handler.def, "__agent_set", &name, true))
             .transpose()?;
+        ensure_no_compiler_managed_process_surface_names(&helpers, &name)?;
+        ensure_process_surface_name_not_reserved(&get_name, &get_surface_span, &name)?;
+        if let (Some(set_name), Some(set_span)) = (&set_name, set_surface_span.as_ref()) {
+            ensure_process_surface_name_not_reserved(set_name, set_span, &name)?;
+        }
 
         let init_params = def_params(&init_def)?;
         let get_params = def_params(&get_def)?;
@@ -2718,23 +3998,60 @@ impl Parser<'_> {
 
         match meta.kind {
             AgentKind::ReadOnly => {
-                body.push(build_readonly_get_wrapper(&span, &name, &get_def)?);
+                body.push(build_readonly_get_wrapper(
+                    &span, &name, &get_name, &get_def,
+                )?);
             }
             AgentKind::State => {
-                if meta.instance == AgentInstance::Multi {
+                if meta.instance == AgentInstance::Worker {
+                    body.push(build_init_wrapper(&span, &init_def)?);
                     body.push(build_spawn_wrapper(&span, &name, &init_def)?);
                 } else {
                     body.push(build_pid_wrapper(&span, &name));
                 }
-                body.push(build_state_get_wrapper(&span, &name, &get_def)?);
+                let singleton = meta.instance == AgentInstance::Singleton;
+                body.push(build_state_get_wrapper(
+                    &span, &name, &get_name, &get_def, singleton,
+                )?);
                 if let Some(set_def) = &set_def {
-                    body.push(build_state_set_wrapper(&span, &name, set_def)?);
+                    body.push(build_state_set_wrapper(
+                        &span,
+                        &name,
+                        set_name.as_deref().expect("@set name should exist"),
+                        set_def,
+                        singleton,
+                    )?);
                 }
             }
         }
 
-        attrs.process_spec = Some(meta.into_process_spec(name.clone()));
-        Ok(Ast::Defmod(span, name, body, attrs))
+        let mut process_spec = meta.into_process_spec(name.clone());
+        process_spec.handler_specs = {
+            let mut specs = vec![
+                ProcessRuntimeHandlerSpec {
+                    name: init_name,
+                    internal_name: "__agent_init".to_string(),
+                    kind: ProcessRuntimeHandlerKind::Init,
+                    span: init_def.span().clone(),
+                },
+                ProcessRuntimeHandlerSpec {
+                    name: get_name,
+                    internal_name: "__agent_get".to_string(),
+                    kind: ProcessRuntimeHandlerKind::Get,
+                    span: get_def.span().clone(),
+                },
+            ];
+            if let (Some(name), Some(set_def)) = (set_name, set_def.as_ref()) {
+                specs.push(ProcessRuntimeHandlerSpec {
+                    name,
+                    internal_name: "__agent_set".to_string(),
+                    kind: ProcessRuntimeHandlerKind::Set,
+                    span: set_def.span().clone(),
+                });
+            }
+            specs
+        };
+        Ok(Ast::Defagent(span, name, body, process_spec, attrs))
     }
 
     pub(super) fn parse_intrinsic_decl(

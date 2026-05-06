@@ -1,0 +1,2 @@
+phase: typecheck
+contains: ctx.<slot> is only available inside process handlers

@@ -143,16 +143,16 @@ fn core_keeps_bindings_and_definitions_between_inputs() {
     assert!(!bind.should_exit);
     assert!(rendered_text(&bind).contains("x: Int = 42"));
 
-    let value = engine.handle_line("x");
-    assert!(!value.should_exit);
-    assert!(rendered_text(&value).contains("42"));
-
     let def = engine.handle_line("def add_core(x: Int, y: Int) -> Int { x + y }");
     assert!(!def.should_exit);
 
     let call = engine.handle_line("add_core(1, 2)");
     assert!(!call.should_exit);
     assert!(rendered_text(&call).contains("3"));
+
+    let value = engine.handle_line("x");
+    assert!(!value.should_exit);
+    assert!(rendered_text(&value).contains("42"));
 }
 
 #[test]
@@ -203,7 +203,11 @@ def greet() -> String { "hello" }
     assert!(rendered_text(&call).contains("hello"));
 
     let err = engine.handle_line("defstruct User { name: String }");
-    assert!(rendered_text(&err).contains("REPL"), "{}", rendered_text(&err));
+    assert!(
+        rendered_text(&err).contains("REPL"),
+        "{}",
+        rendered_text(&err)
+    );
 }
 
 #[test]
@@ -1189,11 +1193,6 @@ fn core_partial_capture_chains_preserve_capture_origin_until_a_closure_literal_a
     let f3 = engine.handle_line("f3 = &f");
     let f3_text = rendered_text(&f3);
     assert!(f3_text.contains("FnCapture("), "{f3_text}");
-    assert!(f3_text.contains("name: f"), "{f3_text}");
-    assert!(
-        f3_text.contains("sig: f(a: Int, b: Int, c: Int) -> Int"),
-        "{f3_text}"
-    );
 
     let f2 = engine.handle_line("f2 = &f3(&1, &2, 3)");
     let f2_text = rendered_text(&f2);

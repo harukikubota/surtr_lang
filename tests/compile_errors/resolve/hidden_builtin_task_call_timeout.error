@@ -1,3 +1,2 @@
 phase: resolve
-contains: hidden builtin `__task_call_timeout`
-contains: Use the public Task API with `@timeout(...)`
+contains: Undefined function Task::__task_call_timeout/2

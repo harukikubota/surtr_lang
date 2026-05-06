@@ -62,6 +62,7 @@ pub struct TypeDefInfo {
     pub type_params: Vec<Symbol>,
     pub fields: Vec<(Symbol, Ty)>,
     pub private_fields: HashSet<Symbol>,
+    pub process_state_owner: Option<Symbol>,
     pub state: TypeDefState,
 }
 
@@ -221,10 +222,17 @@ impl TypeEnv {
                 type_params,
                 fields: Vec::new(),
                 private_fields: HashSet::new(),
+                process_state_owner: None,
                 state: TypeDefState::Declared,
             },
         );
         tag
+    }
+
+    pub fn set_process_state_owner(&mut self, name: &str, owner: Option<Symbol>) {
+        if let Some(def) = self.type_defs.get_mut(&canonical_type_key(name)) {
+            def.process_state_owner = owner;
+        }
     }
 
     /// Finalize a predeclared type definition with its field signature.

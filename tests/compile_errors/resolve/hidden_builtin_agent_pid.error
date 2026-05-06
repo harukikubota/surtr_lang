@@ -1,0 +1,4 @@
+phase: resolve
+contains: hidden builtin `Agent::pid`
+contains: Agent module surface is compiler-managed
+contains: defagent

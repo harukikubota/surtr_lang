@@ -109,7 +109,22 @@ mod tests {
                         ast: module_ast,
                         module_doc: attrs.doc,
                         auto_import: attrs.auto_import,
-                        process_spec: attrs.process_spec,
+                        process_spec: None,
+                    });
+                }
+                Ast::Defagent(_, module_path, body, process_spec, attrs)
+                | Ast::Defgenserver(_, module_path, body, process_spec, attrs)
+                | Ast::Defsupervisor(_, module_path, body, process_spec, attrs)
+                | Ast::DefdynamicSupervisor(_, module_path, body, process_spec, attrs) => {
+                    let mut module_ast = shared_imports.clone();
+                    module_ast.extend(body);
+                    lowered.push(sigil::StagedModuleAst {
+                        module_path,
+                        doc_module_path: None,
+                        ast: module_ast,
+                        module_doc: attrs.doc,
+                        auto_import: attrs.auto_import,
+                        process_spec: Some(process_spec),
                     });
                 }
                 Ast::ImplDef(span, target, methods, attrs) => {
@@ -121,7 +136,7 @@ mod tests {
                         ast: module_ast,
                         module_doc: attrs.doc,
                         auto_import: attrs.auto_import,
-                        process_spec: attrs.process_spec,
+                        process_spec: None,
                     });
                 }
                 Ast::Import(_, _, _) => {}
@@ -263,6 +278,7 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
+        let mut boot_ast = Vec::new();
         let lowered = ast
             .into_iter()
             .filter_map(|stmt| match stmt {
@@ -275,8 +291,27 @@ mod tests {
                         ast: module_ast,
                         module_doc: attrs.doc,
                         auto_import: attrs.auto_import,
-                        process_spec: attrs.process_spec,
+                        process_spec: None,
                     })
+                }
+                Ast::Defagent(_, module_path, body, process_spec, attrs)
+                | Ast::Defgenserver(_, module_path, body, process_spec, attrs)
+                | Ast::Defsupervisor(_, module_path, body, process_spec, attrs)
+                | Ast::DefdynamicSupervisor(_, module_path, body, process_spec, attrs) => {
+                    let mut module_ast = shared_imports.clone();
+                    module_ast.extend(body);
+                    Some(sigil::StagedModuleAst {
+                        module_path,
+                        doc_module_path: None,
+                        ast: module_ast,
+                        module_doc: attrs.doc,
+                        auto_import: attrs.auto_import,
+                        process_spec: Some(process_spec),
+                    })
+                }
+                other @ Ast::SupervisorInit(_, _) => {
+                    boot_ast.push(other);
+                    None
                 }
                 _ => None,
             })
@@ -288,7 +323,7 @@ mod tests {
             .expect("module stages should precollect");
         let resolved = sigil::resolve_staged_program_from_state(
             &all_stages,
-            Vec::new(),
+            boot_ast,
             &declaration_index,
             None,
             0,
@@ -788,8 +823,15 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
     #[test]
     fn codegen_typed_program_embeds_runtime_process_specs() {
         let typed = typed_module_program_with_builtin_prelude(
-            r#"@agent(kind: State, instance: Singleton, boot: true, registry: true, lazy: false)
-defagent Counter {
+            r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    handlers {
+      out: OutHandler = StdOut
+    }
+  }
+
   @init
   def init() -> Result<Int> { Ok(41) }
 
@@ -806,12 +848,195 @@ defagent Counter {
         );
 
         let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
-        assert_eq!(bytecode.runtime_process_specs.entries.len(), 1);
-        let spec = &bytecode.runtime_process_specs.entries[0];
-        assert_eq!(spec.process_name, "Counter");
-        assert_eq!(spec.module_path, "Counter");
-        assert!(spec.boot);
-        assert!(spec.registry);
-        assert_eq!(spec.set_fun_idx.is_some(), true);
+        assert_eq!(bytecode.runtime_process_specs.entries.len(), 2);
+        let spec = bytecode
+            .runtime_process_specs
+            .entries
+            .iter()
+            .find(|entry| entry.type_name == "Counter")
+            .expect("Counter runtime process spec");
+        assert_eq!(spec.type_name, "Counter");
+        assert_eq!(spec.state.state_type.name, "Int");
+        assert_eq!(spec.init.policy, sindr::ir::RuntimeInitPolicy::Eager);
+        assert_eq!(spec.handlers.len(), 3);
+        assert_eq!(spec.dependencies.handlers.len(), 1);
+        assert_eq!(spec.dependencies.handlers[0].slot, "out");
+        assert_eq!(spec.dependencies.handlers[0].capability, "OutHandler");
+        assert_eq!(spec.dependencies.handlers[0].default_target.name, "StdOut");
+    }
+
+    #[test]
+    fn codegen_typed_program_embeds_runtime_boot_plan() {
+        let typed = typed_module_program_with_builtin_prelude(
+            r#"defagent Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    handlers {
+      out: OutHandler = StdOut
+    }
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, label: String) -> Result<String> { Ok(label) }
+}
+
+supervisor_init {
+  singleton Logger {
+    timeout: 5s
+    handlers {
+      out: FileOutHandler(path: "./logs/app.log")
+    }
+  }
+
+  DynamicSupervisor {
+    max_restarts: 10
+    allow_adopt: True
+  }
+}"#,
+        );
+
+        let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
+        assert_eq!(bytecode.runtime_boot_plan.singletons.len(), 1);
+        let entry = &bytecode.runtime_boot_plan.singletons[0];
+        assert_eq!(entry.process_name, "Logger");
+        assert_eq!(entry.init_timeout_ms, 5_000);
+        assert_eq!(bytecode.runtime_boot_plan.handler_overrides.len(), 1);
+        let handler = &bytecode.runtime_boot_plan.handler_overrides[0];
+        assert_eq!(handler.target_process, "Logger");
+        assert_eq!(handler.slot, "out");
+        assert_eq!(handler.handler_target.name, "FileOutHandler");
+        assert_eq!(handler.handler_target.named_args[0].name, "path");
+        assert_eq!(handler.handler_target.named_args[0].value, "./logs/app.log");
+        assert_eq!(bytecode.runtime_boot_plan.supervisor_overrides.len(), 1);
+        let supervisor = &bytecode.runtime_boot_plan.supervisor_overrides[0];
+        assert_eq!(supervisor.process_name, "DynamicSupervisor");
+        assert_eq!(supervisor.policy.max_restarts, 10);
+        assert!(supervisor.policy.allow_adopt);
+    }
+
+    #[test]
+    fn codegen_rejects_boot_plan_handler_override_for_unknown_slot() {
+        let typed = typed_module_program_with_builtin_prelude(
+            r#"defagent Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    handlers {
+      out: OutHandler = StdOut
+    }
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, label: String) -> Result<String> { Ok(label) }
+}
+
+supervisor_init {
+  singleton Logger {
+    handlers {
+      missing: NullOutHandler
+    }
+  }
+}"#,
+        );
+
+        let err = codegen_typed_program(typed).expect_err("unknown handler slot should fail");
+        assert!(err
+            .message
+            .contains("handler slot is not declared by the target process"));
+    }
+
+    #[test]
+    fn codegen_typed_program_embeds_genserver_runtime_handler_specs() {
+        let typed = typed_module_program_with_builtin_prelude(
+            r#"defgenserver Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def info(state: Int, message: String) -> Result<(String, Int)> {
+    Ok((message, state))
+  }
+
+  @cast
+  def reset(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        );
+
+        let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
+        assert_eq!(bytecode.runtime_process_specs.entries.len(), 2);
+        let spec = bytecode
+            .runtime_process_specs
+            .entries
+            .iter()
+            .find(|entry| entry.type_name == "Logger")
+            .expect("Logger runtime process spec");
+        assert_eq!(spec.kind, sindr::ir::RuntimeProcessKind::GenServer);
+        assert_eq!(spec.handlers.len(), 3);
+        assert_eq!(spec.handlers[0].handler_id, 0);
+        assert_eq!(spec.handlers[0].name, "init");
+        assert_eq!(spec.handlers[0].kind, sindr::ir::RuntimeHandlerKind::Init);
+        assert_eq!(spec.handlers[0].fun_idx, spec.init.callable.fun_idx);
+        assert_eq!(spec.handlers[1].handler_id, 1);
+        assert_eq!(spec.handlers[1].name, "info");
+        assert_eq!(spec.handlers[1].kind, sindr::ir::RuntimeHandlerKind::Call);
+        assert_eq!(spec.handlers[2].handler_id, 2);
+        assert_eq!(spec.handlers[2].name, "reset");
+        assert_eq!(spec.handlers[2].kind, sindr::ir::RuntimeHandlerKind::Cast);
+    }
+
+    #[test]
+    fn codegen_typed_program_emits_v2_process_spec_for_lazy_process_init() {
+        let typed = typed_module_program_with_builtin_prelude(
+            r#"defgenserver LazyCache {
+  meta {
+    instance: Singleton
+    init_policy: Lazy
+  }
+
+  @init
+  def init() -> Result<ProcessInit<Int>> {
+    Ok(Ready(0))
+  }
+
+  @call
+  def value(state: Int) -> Result<(Int, Int)> {
+    Ok((state, state))
+  }
+}"#,
+        );
+
+        let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
+        assert_eq!(bytecode.runtime_process_specs.entries.len(), 2);
+        let spec = bytecode
+            .runtime_process_specs
+            .entries
+            .iter()
+            .find(|entry| entry.type_name == "LazyCache")
+            .expect("LazyCache runtime process spec");
+        assert_eq!(spec.type_name, "LazyCache");
+        assert_eq!(spec.state.state_type.name, "Int");
+        assert_eq!(spec.init.policy, sindr::ir::RuntimeInitPolicy::Lazy);
+        assert!(matches!(
+            spec.init.result_shape,
+            sindr::ir::RuntimeInitResultShape::LazyProcessInit { .. }
+        ));
+        assert_eq!(spec.dependencies.handlers.len(), 0);
+        assert!(spec.lifecycle.owner.is_none());
+        assert_eq!(
+            spec.supervision.parent.as_deref(),
+            Some("RuntimeSupervisor")
+        );
     }
 }

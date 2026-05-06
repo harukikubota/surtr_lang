@@ -64,6 +64,66 @@ impl Checker {
         let node = match node.node {
             TypedInner::Lit(lit) => TypedInner::Lit(lit),
             TypedInner::Var(id) => TypedInner::Var(id),
+            TypedInner::SupervisorSpawn {
+                supervisor_process,
+                worker_process,
+                init,
+            } => TypedInner::SupervisorSpawn {
+                supervisor_process,
+                worker_process,
+                init: Box::new(self.rewrite_specializations_in_node(
+                    *init,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+            },
+            TypedInner::SupervisorAdopt {
+                supervisor_process,
+                worker_process,
+                pid,
+            } => TypedInner::SupervisorAdopt {
+                supervisor_process,
+                worker_process,
+                pid: Box::new(self.rewrite_specializations_in_node(
+                    *pid,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+            },
+            TypedInner::SupervisorStatus { supervisor_process } => {
+                TypedInner::SupervisorStatus { supervisor_process }
+            }
+            TypedInner::SupervisorWorkers {
+                supervisor_process,
+                worker_process,
+                init,
+                size,
+            } => TypedInner::SupervisorWorkers {
+                supervisor_process,
+                worker_process,
+                init: Box::new(self.rewrite_specializations_in_node(
+                    *init,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                size: Box::new(self.rewrite_specializations_in_node(
+                    *size,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+            },
             TypedInner::App(func, args) => {
                 let func = self.rewrite_specializations_in_node(
                     *func,
@@ -583,6 +643,9 @@ impl Checker {
                 )?),
                 index,
             ),
+            TypedInner::ProcessContextHandler { process_name, slot } => {
+                TypedInner::ProcessContextHandler { process_name, slot }
+            }
             TypedInner::LensPath(path) => TypedInner::LensPath(path),
             TypedInner::PendingLensPath(path) => TypedInner::PendingLensPath(path),
             TypedInner::LensView {
@@ -1104,6 +1167,18 @@ impl Checker {
             TypedInner::FieldAccess(expr, _) => {
                 self.collect_bound_tyvars_in_node(expr, ordered, seen);
             }
+            TypedInner::ProcessContextHandler { .. } => {}
+            TypedInner::SupervisorSpawn { init, .. } => {
+                self.collect_bound_tyvars_in_node(init, ordered, seen);
+            }
+            TypedInner::SupervisorAdopt { pid, .. } => {
+                self.collect_bound_tyvars_in_node(pid, ordered, seen);
+            }
+            TypedInner::SupervisorStatus { .. } => {}
+            TypedInner::SupervisorWorkers { init, size, .. } => {
+                self.collect_bound_tyvars_in_node(init, ordered, seen);
+                self.collect_bound_tyvars_in_node(size, ordered, seen);
+            }
             TypedInner::LensPath(path) => {
                 self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
@@ -1231,6 +1306,38 @@ impl Checker {
         let node = match node.node {
             TypedInner::Lit(lit) => TypedInner::Lit(lit),
             TypedInner::Var(id) => TypedInner::Var(id),
+            TypedInner::SupervisorSpawn {
+                supervisor_process,
+                worker_process,
+                init,
+            } => TypedInner::SupervisorSpawn {
+                supervisor_process,
+                worker_process,
+                init: Box::new(self.substitute_typed_node_with_mapping(*init, mapping)),
+            },
+            TypedInner::SupervisorAdopt {
+                supervisor_process,
+                worker_process,
+                pid,
+            } => TypedInner::SupervisorAdopt {
+                supervisor_process,
+                worker_process,
+                pid: Box::new(self.substitute_typed_node_with_mapping(*pid, mapping)),
+            },
+            TypedInner::SupervisorStatus { supervisor_process } => {
+                TypedInner::SupervisorStatus { supervisor_process }
+            }
+            TypedInner::SupervisorWorkers {
+                supervisor_process,
+                worker_process,
+                init,
+                size,
+            } => TypedInner::SupervisorWorkers {
+                supervisor_process,
+                worker_process,
+                init: Box::new(self.substitute_typed_node_with_mapping(*init, mapping)),
+                size: Box::new(self.substitute_typed_node_with_mapping(*size, mapping)),
+            },
             TypedInner::App(func, args) => TypedInner::App(
                 Box::new(self.substitute_typed_node_with_mapping(*func, mapping)),
                 args.into_iter()
@@ -1372,6 +1479,9 @@ impl Checker {
                 Box::new(self.substitute_typed_node_with_mapping(*expr, mapping)),
                 index,
             ),
+            TypedInner::ProcessContextHandler { process_name, slot } => {
+                TypedInner::ProcessContextHandler { process_name, slot }
+            }
             TypedInner::LensPath(path) => TypedInner::LensPath(TypedLensPath {
                 source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                 focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
@@ -1869,6 +1979,16 @@ impl Checker {
                     })
             }
             TypedInner::FieldAccess(expr, _) => Self::typed_node_has_pending_trait_call(expr),
+            TypedInner::SupervisorSpawn { init, .. } => {
+                Self::typed_node_has_pending_trait_call(init)
+            }
+            TypedInner::SupervisorAdopt { pid, .. } => Self::typed_node_has_pending_trait_call(pid),
+            TypedInner::SupervisorStatus { .. } => false,
+            TypedInner::SupervisorWorkers { init, size, .. } => {
+                Self::typed_node_has_pending_trait_call(init)
+                    || Self::typed_node_has_pending_trait_call(size)
+            }
+            TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => false,
             TypedInner::LensView { source, .. } => Self::typed_node_has_pending_trait_call(source),
             TypedInner::LensSet { source, value, .. } => {

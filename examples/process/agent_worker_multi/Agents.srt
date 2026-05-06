@@ -1,5 +1,9 @@
-@agent(kind: State, instance: Multi, boot: false, registry: false, lazy: false)
 defagent Worker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
   @init
   def init(initial_jobs: Int) -> Result<Int> {
     if(initial_jobs >= 0, Ok(initial_jobs), Err(NoneError))

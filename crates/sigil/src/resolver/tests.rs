@@ -136,17 +136,26 @@ fn test_precollect_builtin_decl_in_module() {
 #[test]
 fn test_resolve_staged_program_keeps_process_specs() {
     let kernel = staged_module(
-        "Kernel",
+        "Agent",
         parse_module_ast(
-            r#"@builtin def __process_pid(name: String, init: (-> Result<$State>)) -> PID<$Process>
-@builtin def __process_state(pid: PID<$Process>) -> Result<$State>
-@builtin def __process_store(pid: PID<$Process>, state: $State) -> Result<Unit>"#,
-            "Kernel",
+            r#"@hidden
+@builtin def pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>
+
+@hidden
+@builtin def state(pid: PID<$Process>) -> Result<$State>
+
+@hidden
+@builtin def store(pid: PID<$Process>, state: $State) -> Result<Unit>"#,
+            "Agent",
         ),
     );
     let ast = spire::parse_with_context(
-        r#"@agent(kind: State, instance: Singleton, boot: true, lazy: false, registry: true)
-defagent Counter {
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
   @init
   def init() -> Result<Int> { 0 }
 
@@ -162,15 +171,15 @@ defagent Counter {
     .expect("definition source should parse");
 
     let module = match ast.into_iter().next().expect("lowered module should exist") {
-        Ast::Defmod(_, module_path, ast, attrs) => StagedModuleAst {
+        Ast::Defagent(_, module_path, ast, process_spec, attrs) => StagedModuleAst {
             module_path,
             doc_module_path: None,
             ast,
             module_doc: attrs.doc,
             auto_import: attrs.auto_import,
-            process_spec: attrs.process_spec,
+            process_spec: Some(process_spec),
         },
-        other => panic!("expected lowered defmod, got {other:?}"),
+        other => panic!("expected defagent, got {other:?}"),
     };
     let module_stages = vec![vec![kernel, module]];
     let declaration_index =
@@ -1910,7 +1919,7 @@ defstruct User {
     };
 
     let def_id = match &resolved[1] {
-        Resolved::StructDef(_, id, _) => id.unique_id,
+        Resolved::StructDef(_, id, _, _) => id.unique_id,
         _ => panic!("Expected StructDef"),
     };
 
@@ -1998,7 +2007,7 @@ deferror NotFound(code: String) {
                 },
                 Resolved::Def(_, id, _, _, _, _, _)
                 | Resolved::RecordDef(_, id, _)
-                | Resolved::StructDef(_, id, _)
+                | Resolved::StructDef(_, id, _, _)
                 | Resolved::DeferrorDef(_, id, _, _) => vec![id.unique_id],
                 _ => Vec::new(),
             })
@@ -3382,8 +3391,11 @@ impl User {
         ),
     ]];
 
-    let ok = resolve_user_with_modules(r#"print(User::normalize(User(name: "x"), " ok "))"#, &module_stages)
-        .expect("impl-local import should resolve inside impl methods");
+    let ok = resolve_user_with_modules(
+        r#"print(User::normalize(User(name: "x"), " ok "))"#,
+        &module_stages,
+    )
+    .expect("impl-local import should resolve inside impl methods");
     assert!(!ok.is_empty());
 
     let leak_err = resolve_user_with_modules(
@@ -3476,9 +3488,8 @@ fn test_nested_import_shadows_auto_import_within_body_only() {
             Resolved::App(_, func, args) => match func.as_ref() {
                 Resolved::Var(_, called_id) if called_id.name == name => Some(called_id.unique_id),
                 _ => args.iter().find_map(|arg| match arg {
-                    ResolvedRecordLitArg::Positional(inner) | ResolvedRecordLitArg::Named(_, inner) => {
-                        find_called_uid(inner, name)
-                    }
+                    ResolvedRecordLitArg::Positional(inner)
+                    | ResolvedRecordLitArg::Named(_, inner) => find_called_uid(inner, name),
                 }),
             },
             Resolved::Block(_, nodes) => nodes.iter().find_map(|node| find_called_uid(node, name)),
@@ -3505,8 +3516,9 @@ def parse() -> Int { add(7, 3) }"#,
         )],
     ];
 
-    let resolved = resolve_user_with_modules(r#"print(to_string(Parser::parse()))"#, &module_stages)
-        .expect("nested explicit import should shadow auto-import inside that body");
+    let resolved =
+        resolve_user_with_modules(r#"print(to_string(Parser::parse()))"#, &module_stages)
+            .expect("nested explicit import should shadow auto-import inside that body");
 
     let helper_add_uid = resolved
         .iter()

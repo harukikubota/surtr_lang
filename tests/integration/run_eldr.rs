@@ -422,16 +422,20 @@ fn run_vm_dump_includes_process_runtime_tables_for_agents() {
     let dump: Value =
         serde_json::from_slice(&fs::read(&dump_path).expect("vm dump file should be readable"))
             .expect("vm dump should be valid json");
-    assert_eq!(dump["process_runtime"]["counters"]["process_spec_count"], 1);
+    assert_eq!(dump["process_runtime"]["counters"]["process_spec_count"], 2);
     assert_eq!(
         dump["process_runtime"]["counters"]["singleton_slot_count"],
         1
     );
     assert_eq!(dump["process_runtime"]["counters"]["process_count"], 1);
-    assert_eq!(
-        dump["process_runtime"]["specs"][0]["process_name"],
-        "Counter"
-    );
+    let specs = dump["process_runtime"]["specs"]
+        .as_array()
+        .expect("process specs should be an array");
+    let counter_spec = specs
+        .iter()
+        .find(|spec| spec["type_name"] == "Counter")
+        .expect("Counter process spec should exist");
+    assert_eq!(counter_spec["init_policy"], "Eager");
     assert_eq!(
         dump["process_runtime"]["singleton_slots"]["Counter"].as_u64(),
         Some(0)
@@ -442,7 +446,7 @@ fn run_vm_dump_includes_process_runtime_tables_for_agents() {
     );
     assert_eq!(
         dump["stats"]["process"]["process_spec_count"].as_u64(),
-        Some(1)
+        Some(2)
     );
 
     let _ = fs::remove_dir_all(temp);

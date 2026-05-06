@@ -7,6 +7,7 @@ pub struct ResolvedDeclAttrs {
     pub doc: Option<String>,
     pub hidden: bool,
     pub visibility: Visibility,
+    pub process_state_owner: Option<Symbol>,
 }
 
 /// A resolved identifier — name + unique id + source location.
@@ -125,6 +126,9 @@ pub enum Resolved {
     /// Field access: `expr.field`
     FieldAccess(Span, Box<Resolved>, Symbol),
 
+    /// Process-local handler dependency access: `ctx.<slot>`.
+    ProcessContextHandler(Span, Symbol),
+
     /// Struct literal: `User { name: "alice", age, active: is_active }`
     StructLit(Span, ResolvedId, Vec<ResolvedStructLitField>),
 
@@ -136,7 +140,7 @@ pub enum Resolved {
     TypeRefWitness(Span, AstTy),
 
     /// Struct definition (passed through for Scar)
-    StructDef(Span, ResolvedId, Vec<ResolvedField>),
+    StructDef(Span, ResolvedId, Vec<ResolvedField>, ResolvedDeclAttrs),
 
     /// Record definition (passed through for Scar)
     RecordDef(Span, ResolvedId, Vec<ResolvedField>),
@@ -150,6 +154,7 @@ pub enum Resolved {
         ResolvedId,
         Vec<ResolvedTypeParam>,
         Vec<ResolvedEnumVariant>,
+        ResolvedDeclAttrs,
     ),
 
     /// Function definition

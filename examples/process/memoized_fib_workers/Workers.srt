@@ -1,0 +1,66 @@
+defagent FibWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
+  @init
+  def init(seed: (Int, Int)) -> Result<List<(Int, Int)>> {
+    Ok([seed, (0, 0), (1, 1)])
+  }
+
+  @get
+  def lookup(cache: List<(Int, Int)>, n: Int) -> Result<Int> {
+    find_cached(cache, n)
+  }
+
+  @set
+  def remember(cache: List<(Int, Int)>, item: (Int, Int)) -> Result<List<(Int, Int)>> {
+    Ok([item, ..cache])
+  }
+
+  def find_cached(cache: List<(Int, Int)>, n: Int) -> Result<Int> {
+    match cache {
+      [] => Err(NoneError),
+      [entry, ..tail] => if(entry._0 == n, Ok(entry._1), find_cached(tail, n)),
+    }
+  }
+
+  def slow_fib(n: Int) -> Int {
+    if(n <= 1, n, slow_fib(n - 1) + slow_fib(n - 2))
+  }
+}
+
+defgenserver FibManager {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<(PID<FibWorker>, PID<FibWorker>)> {
+    even =? FibWorker::spawn((0, 0))
+    odd =? FibWorker::spawn((1, 1))
+    Ok((even, odd))
+  }
+
+  @call
+  def value(state: (PID<FibWorker>, PID<FibWorker>), n: Int) -> Result<((String, Int), (PID<FibWorker>, PID<FibWorker>))> {
+    selected =? select_worker(state, n)
+    label = selected._0
+    pid = selected._1
+    match FibWorker::lookup(pid, n) {
+      Ok(value) => Ok((("hit-" ++ label, value), state)),
+      Err(_) => {
+        value = FibWorker::slow_fib(n)
+        remembered =? FibWorker::remember(pid, (n, value))
+        Ok((("miss-" ++ label, value), state))
+      },
+    }
+  }
+
+  def select_worker(state: (PID<FibWorker>, PID<FibWorker>), n: Int) -> Result<(String, PID<FibWorker>)> {
+    rem =? Int::safe_mod(n, 2)
+    if(rem == 0, Ok(("even", state._0)), Ok(("odd", state._1)))
+  }
+}

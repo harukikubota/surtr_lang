@@ -1,0 +1,2 @@
+phase: typecheck
+contains: handler dependency cannot be returned from process handlers

@@ -1,0 +1,4 @@
+phase: resolve
+contains: hidden builtin `Supervisor::workers`
+contains: compiler-internal
+contains: generated `SupName::workers(...)` wrapper

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sigil::resolved::{ResolvedId, ResolvedProcessSpec};
 use sindr::primitives::SurtrInt;
-use spire::ast::{BinOp, Lit, ProcessSpec, Span, Visibility};
+use spire::ast::{BinOp, Lit, ProcessSpec, Span, SupervisorInitSpec, Visibility};
 
 use crate::types::Ty;
 
@@ -17,6 +17,7 @@ pub struct TypedNode {
 pub struct TypedProgram {
     pub nodes: Vec<TypedNode>,
     pub process_specs: Vec<TypedProcessSpec>,
+    pub boot_plan: SupervisorInitSpec,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -188,6 +189,37 @@ pub enum TypedInner {
 
     /// Field access — field name resolved to index by Scar
     FieldAccess(Box<TypedNode>, u32),
+
+    /// Process-local handler dependency access lowered from `ctx.<slot>`.
+    ProcessContextHandler {
+        process_name: String,
+        slot: String,
+    },
+
+    /// Supervisor-driven worker spawn lowered from `DynSup::spawn(...)` or
+    /// `MySup::spawn(...)`.
+    SupervisorSpawn {
+        supervisor_process: String,
+        worker_process: String,
+        init: Box<TypedNode>,
+    },
+
+    SupervisorAdopt {
+        supervisor_process: String,
+        worker_process: String,
+        pid: Box<TypedNode>,
+    },
+
+    SupervisorStatus {
+        supervisor_process: String,
+    },
+
+    SupervisorWorkers {
+        supervisor_process: String,
+        worker_process: String,
+        init: Box<TypedNode>,
+        size: Box<TypedNode>,
+    },
 
     /// Compile-time lens constant path value. Stage 1 does not allow
     /// first-class runtime transport of lens values.

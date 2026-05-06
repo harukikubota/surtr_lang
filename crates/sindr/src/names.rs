@@ -33,11 +33,14 @@ pub enum TypeName {
     Generator,
     Result,
     Duration,
+    ProcessInit,
     Lazy,
     TypeRef,
     Hole,
     Lens,
     Pid,
+    Workers,
+    WorkerLease,
 }
 
 impl TypeName {
@@ -61,11 +64,14 @@ impl TypeName {
             Self::Generator => "Generator",
             Self::Result => "Result",
             Self::Duration => "Duration",
+            Self::ProcessInit => "ProcessInit",
             Self::Lazy => "Lazy",
             Self::TypeRef => "TypeRef",
             Self::Hole => "Hole",
             Self::Lens => "Lens",
             Self::Pid => "PID",
+            Self::Workers => "Workers",
+            Self::WorkerLease => "WorkerLease",
         }
     }
 
@@ -81,6 +87,7 @@ impl TypeName {
                 | Self::Closure
                 | Self::MatchArms
                 | Self::CondClauses
+                | Self::ProcessInit
                 | Self::Lazy
                 | Self::Pid
         )
@@ -107,11 +114,14 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "Generator" => Some(TypeName::Generator),
         "Result" => Some(TypeName::Result),
         "Duration" => Some(TypeName::Duration),
+        "ProcessInit" => Some(TypeName::ProcessInit),
         "Lazy" => Some(TypeName::Lazy),
         "TypeRef" => Some(TypeName::TypeRef),
         "Hole" => Some(TypeName::Hole),
         "Lens" => Some(TypeName::Lens),
         "PID" => Some(TypeName::Pid),
+        "Workers" => Some(TypeName::Workers),
+        "WorkerLease" => Some(TypeName::WorkerLease),
         _ => None,
     }
 }

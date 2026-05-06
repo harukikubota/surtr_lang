@@ -366,6 +366,7 @@ impl Resolver {
             | Ast::EnumDef(_, _, _, _, _)
             | Ast::Def(_, _, _, _, _, _, _)
             | Ast::ConstDef(_, _, _, _, _)
+            | Ast::SupervisorInit(_, _)
             | Ast::ExtractorDef(_, _, _, _, _, _, _)
             | Ast::BuiltinDecl(_, _, _, _, _)
             | Ast::IntrinsicDecl(_, _, _, _)
@@ -373,6 +374,10 @@ impl Resolver {
             | Ast::BuiltinTypeDecl(_, _, _)
             | Ast::ResultCtorDecl(_, _, _, _, _)
             | Ast::Defmod(_, _, _, _)
+            | Ast::Defagent(_, _, _, _, _)
+            | Ast::Defgenserver(_, _, _, _, _)
+            | Ast::Defsupervisor(_, _, _, _, _)
+            | Ast::DefdynamicSupervisor(_, _, _, _, _)
             | Ast::Namespace(_, _, _)
             | Ast::ImplDef(_, _, _, _)
             | Ast::TraitDef(_, _, _, _, _)
@@ -1224,8 +1229,55 @@ impl Resolver {
     }
 
     fn hidden_builtin_message(name: &str) -> String {
-        let builtin_name = name.rsplit("::").next().unwrap_or(name);
-        let guidance = match builtin_name {
+        let display_name = match name {
+            "Agent::pid"
+            | "Agent::spawn"
+            | "Agent::state"
+            | "Agent::store"
+            | "Agent::self"
+            | "Agent::context_handler"
+            | "GenServer::pid"
+            | "GenServer::spawn"
+            | "GenServer::state"
+            | "GenServer::store"
+            | "GenServer::self"
+            | "GenServer::context_handler"
+            | "Supervisor::spawn"
+            | "Supervisor::adopt"
+            | "Supervisor::status"
+            | "Supervisor::workers" => name,
+            _ => name.rsplit("::").next().unwrap_or(name),
+        };
+        let guidance = match name {
+            "Agent::pid"
+            | "Agent::spawn"
+            | "Agent::state"
+            | "Agent::store"
+            | "Agent::self"
+            | "Agent::context_handler" => {
+                "This Agent module surface is compiler-managed; use `defagent` or generated owner helpers instead."
+            }
+            "GenServer::pid"
+            | "GenServer::spawn"
+            | "GenServer::state"
+            | "GenServer::store"
+            | "GenServer::self"
+            | "GenServer::context_handler" => {
+                "This GenServer module surface is compiler-managed; use `defagent`, `defgenserver`, or generated owner helpers instead."
+            }
+            "Supervisor::spawn" => {
+                "This Supervisor module surface is compiler-managed; use `DynamicSupervisor::spawn(...)` or a generated `SupName::spawn(...)` wrapper instead."
+            }
+            "Supervisor::adopt" => {
+                "This Supervisor module surface is compiler-managed; use `DynamicSupervisor::adopt(...)` or a generated `SupName::adopt(...)` wrapper instead."
+            }
+            "Supervisor::status" => {
+                "This Supervisor module surface is compiler-managed; use `DynamicSupervisor::status()` or a generated `SupName::status()` wrapper instead."
+            }
+            "Supervisor::workers" => {
+                "This Supervisor module surface is compiler-managed; use a generated `SupName::workers(...)` wrapper or the public Workers API instead."
+            }
+            _ => match display_name {
             "__process_self" => "Use `Process::self()` instead.",
             "__process_sleep" => "Use `Process::sleep(...)` instead.",
             "__task_call" => "Use `Task::call(...)` instead.",
@@ -1237,11 +1289,24 @@ impl Resolver {
             | "__task_launch_timeout"
             | "__task_cast_timeout" => "Use the public Task API with `@timeout(...)` instead.",
             "__process_pid" | "__process_spawn" | "__process_state" | "__process_store" => {
-                "This helper is compiler-managed; use `defagent` / the public process surface instead."
+                "This helper is compiler-managed; use `defagent`, `defgenserver`, or the public process surface instead."
+            }
+            "__supervisor_spawn" => {
+                "Use `DynamicSupervisor::spawn(...)` or a generated Supervisor `spawn` wrapper instead."
+            }
+            "__supervisor_adopt" => {
+                "Use `DynamicSupervisor::adopt(...)` or a generated Supervisor `adopt` wrapper instead."
+            }
+            "__supervisor_status" => {
+                "Use `DynamicSupervisor::status()` or a generated Supervisor `status` wrapper instead."
+            }
+            "__supervisor_workers" => {
+                "Use a generated Supervisor `workers` wrapper or the public Workers surface instead."
             }
             _ => "Use the public standard-library surface instead.",
+        },
         };
-        format!("hidden builtin `{builtin_name}` is compiler-internal. {guidance}")
+        format!("hidden builtin `{display_name}` is compiler-internal. {guidance}")
     }
 
     fn hidden_builtin_error(&self, name: &str, span: Span) -> ResolveError {
@@ -1336,6 +1401,7 @@ impl Resolver {
         let mut resolved = Vec::new();
         for stmt in stmts {
             if matches!(stmt, Ast::Import(_, _, _))
+                || matches!(stmt, Ast::SupervisorInit(_, _))
                 || matches!(stmt, Ast::IntrinsicDecl(_, _, _, _))
                 || matches!(&stmt, Ast::BuiltinDecl(_, name, _, _, _) if is_doc_only_builtin_decl(name))
             {
@@ -1618,6 +1684,9 @@ impl Resolver {
             )),
 
             Ast::FieldAccess(span, expr, field) => {
+                if matches!(expr.as_ref(), Ast::Var(_, name) if name == "ctx") {
+                    return Ok(Resolved::ProcessContextHandler(span, field));
+                }
                 let resolved_expr = self.resolve_node(*expr)?;
                 Ok(Resolved::FieldAccess(span, Box::new(resolved_expr), field))
             }
@@ -1638,7 +1707,7 @@ impl Resolver {
             }
 
             // Struct/Record/Deferror definitions — reuse predeclared IDs
-            Ast::StructDef(span, name, fields, _) => {
+            Ast::StructDef(span, name, fields, attrs) => {
                 let uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -1664,7 +1733,12 @@ impl Resolver {
                         })
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?;
-                Ok(Resolved::StructDef(span, rid, rfields))
+                Ok(Resolved::StructDef(
+                    span,
+                    rid,
+                    rfields,
+                    resolve_decl_attrs(&attrs),
+                ))
             }
 
             Ast::RecordDef(span, name, fields, _) => {
@@ -1744,7 +1818,7 @@ impl Resolver {
                 ))
             }
 
-            Ast::EnumDef(span, name, type_params, variants, _) => {
+            Ast::EnumDef(span, name, type_params, variants, attrs) => {
                 let uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -1795,6 +1869,7 @@ impl Resolver {
                     rid,
                     resolved_type_params,
                     resolved_variants,
+                    resolve_decl_attrs(&attrs),
                 ))
             }
 
@@ -2266,6 +2341,14 @@ impl Resolver {
                 span,
                 related_labels: Vec::new(),
             }),
+            Ast::Defagent(span, name, _, _, _)
+            | Ast::Defgenserver(span, name, _, _, _)
+            | Ast::Defsupervisor(span, name, _, _, _)
+            | Ast::DefdynamicSupervisor(span, name, _, _, _) => Err(ResolveError {
+                message: format!("Process module resolution is not implemented yet: {}", name),
+                span,
+                related_labels: Vec::new(),
+            }),
             Ast::Import(span, _, _) => Err(ResolveError {
                 message: "Import resolution is not implemented yet".to_string(),
                 span,
@@ -2493,6 +2576,11 @@ impl Resolver {
                 span,
                 related_labels: Vec::new(),
             }),
+            Ast::SupervisorInit(span, _) => Err(ResolveError {
+                message: "supervisor_init must be collected before name resolution".into(),
+                span,
+                related_labels: Vec::new(),
+            }),
         }
     }
 
@@ -2654,7 +2742,6 @@ impl Resolver {
             ),
         }
     }
-
 }
 
 pub(super) fn validate_trait_impl_pairs_in_nodes(
