@@ -1,0 +1,3 @@
+print(inspect(Counter::get("count")))
+print(inspect(Counter::set(99)))
+print(inspect(Counter::get("count")))

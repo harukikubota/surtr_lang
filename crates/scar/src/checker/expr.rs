@@ -387,9 +387,9 @@ impl Checker {
                 })
             }
 
-            Resolved::StructDef(span, id, fields) => self.check_struct_def(span, id, fields),
+            Resolved::StructDef(span, id, fields, _) => self.check_struct_def(span, id, fields),
             Resolved::RecordDef(span, id, fields) => self.check_record_def(span, id, fields),
-            Resolved::EnumDef(span, id, type_params, variants) => {
+            Resolved::EnumDef(span, id, type_params, variants, _) => {
                 self.check_enum_def(span, id, type_params, variants)
             }
             Resolved::StructLit(span, id, field_vals) => {
@@ -896,10 +896,10 @@ impl Checker {
             | Resolved::StructLit(span, _, _)
             | Resolved::ConstructorCall(span, _, _)
             | Resolved::TypeRefWitness(span, _)
-            | Resolved::StructDef(span, _, _)
+            | Resolved::StructDef(span, _, _, _)
             | Resolved::RecordDef(span, _, _)
             | Resolved::DeferrorDef(span, _, _, _)
-            | Resolved::EnumDef(span, _, _, _)
+            | Resolved::EnumDef(span, _, _, _, _)
             | Resolved::Def(span, _, _, _, _, _, _)
             | Resolved::ConstDef(span, _, _, _, _)
             | Resolved::ExtractorDef(span, _, _, _, _, _, _)
@@ -3921,7 +3921,7 @@ impl Checker {
         }
     }
 
-    fn current_process_name(&self) -> Option<String> {
+    pub(super) fn current_process_name(&self) -> Option<String> {
         let symbol = self.current_function_symbol.as_deref()?;
         let (module, handler) = symbol.rsplit_once("::")?;
         matches!(handler, "__agent_init" | "__agent_get" | "__agent_set")
@@ -5482,6 +5482,19 @@ impl Checker {
             return Ok(tuple_root_path);
         }
         let typed_expr = self.check_node(expr)?;
+
+        if let Some((state_name, owner)) = self.ty_contains_process_state_type(&typed_expr.ty) {
+            if self.current_process_name().as_deref() != Some(owner.as_str()) {
+                return Err(TypeError {
+                    message: format!(
+                        "process state type `{}` can only be accessed inside process `{}`",
+                        state_name, owner
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+        }
 
         if matches!(typed_expr.ty, Ty::Lens(_, _)) {
             let path = self.resolve_lens_path_from_node(typed_expr, span, None)?;

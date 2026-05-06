@@ -113,6 +113,39 @@ defrecord Point(x: Float, y: Float)"#,
 }
 
 #[test]
+fn test_process_state_annotation_parses_for_struct_and_enum_decls() {
+    let ast = parse_with_context(
+        r#"@process_state(Counter)
+defstruct CounterState {
+  value: Int,
+}
+
+@process_state(Counter)
+defenum CounterEvent {
+  Changed(Int)
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("@process_state should parse on process-owned state types");
+
+    match &ast[0] {
+        Ast::StructDef(_, name, _, attrs) => {
+            assert_eq!(name, "CounterState");
+            assert_eq!(attrs.process_state_owner.as_deref(), Some("Counter"));
+        }
+        other => panic!("Expected StructDef, got {other:?}"),
+    }
+
+    match &ast[1] {
+        Ast::EnumDef(_, name, _, _, attrs) => {
+            assert_eq!(name, "CounterEvent");
+            assert_eq!(attrs.process_state_owner.as_deref(), Some("Counter"));
+        }
+        other => panic!("Expected EnumDef, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_duplicate_doc_annotation_reports_later_span_for_struct_decl() {
     let src = r#"@doc """first"""
 @doc """second"""

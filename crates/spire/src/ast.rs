@@ -25,6 +25,7 @@ pub struct DeclAttrs {
     pub auto_import: bool,
     pub hidden: bool,
     pub visibility: Visibility,
+    pub process_state_owner: Option<Symbol>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

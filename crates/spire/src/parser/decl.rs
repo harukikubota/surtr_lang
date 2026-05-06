@@ -1276,6 +1276,7 @@ impl Parser<'_> {
                 doc: attrs.doc,
                 auto_import: attrs.auto_import,
                 hidden: attrs.hidden,
+                process_state_owner: attrs.process_state_owner,
             },
         ))
     }
@@ -2399,6 +2400,20 @@ impl Parser<'_> {
                         annotator_span,
                     ));
                 }
+                "process_state" => {
+                    if attrs.process_state_owner.is_some() {
+                        return Err(ParseError::syntax(
+                            "@process_state may only appear once before a declaration",
+                            annotator_span,
+                        ));
+                    }
+                    self.expect(&Token::LParen)?;
+                    self.skip_newlines();
+                    let (owner, _) = self.expect_ident()?;
+                    self.skip_newlines();
+                    self.expect(&Token::RParen)?;
+                    attrs.process_state_owner = Some(owner);
+                }
                 "doc" => {
                     if attrs.doc.is_some() {
                         return Err(ParseError::syntax(
@@ -2515,6 +2530,14 @@ impl Parser<'_> {
             if attrs.hidden {
                 return Err(ParseError::syntax(
                     "@hidden is only allowed together with @builtin in standard/internal source",
+                    start_span.unwrap_or_else(|| self.peek_span()),
+                ));
+            }
+            if attrs.process_state_owner.is_some()
+                && !matches!(self.peek(), Token::Defstruct | Token::Defenum)
+            {
+                return Err(ParseError::syntax(
+                    "@process_state may only annotate `defstruct` or `defenum` declarations",
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
             }

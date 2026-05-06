@@ -242,17 +242,18 @@ fn build_runtime_boot_plan(
             source: BootEntrySource::ExplicitConfig,
         });
         for handler in &singleton.handlers {
-            if !spec
+            let Some(dependency) = spec
                 .spec
                 .handlers
                 .iter()
-                .any(|dependency| dependency.slot == handler.slot)
-            {
+                .find(|dependency| dependency.slot == handler.slot)
+            else {
                 return Err(CodegenError {
                     message: "handler slot is not declared by the target process".into(),
                     span: handler.span.clone(),
                 });
-            }
+            };
+            validate_runtime_handler_target(dependency, &handler.target)?;
             runtime.handler_overrides.push(RuntimeHandlerOverride {
                 target_process: singleton.process_name.clone(),
                 slot: handler.slot.clone(),
@@ -273,6 +274,57 @@ fn build_runtime_boot_plan(
     }
 
     Ok(runtime)
+}
+
+fn validate_runtime_handler_target(
+    dependency: &spire::ast::ProcessHandlerDependency,
+    target: &spire::ast::SupervisorInitHandlerTarget,
+) -> Result<(), CodegenError> {
+    match dependency.capability.as_str() {
+        "OutHandler" => match target.name.as_str() {
+            "StdOut" | "StdErr" | "NullOutHandler" => {
+                if !target.named_args.is_empty() {
+                    return Err(CodegenError {
+                        message: format!("{} does not accept handler arguments", target.name),
+                        span: target.span.clone(),
+                    });
+                }
+            }
+            "FileOutHandler" => {
+                let has_path = target.named_args.iter().any(|arg| arg.name == "path");
+                if !has_path {
+                    return Err(CodegenError {
+                        message: "FileOutHandler requires named argument `path`".into(),
+                        span: target.span.clone(),
+                    });
+                }
+                if target.named_args.iter().any(|arg| arg.name != "path") {
+                    return Err(CodegenError {
+                        message: "FileOutHandler only accepts named argument `path`".into(),
+                        span: target.span.clone(),
+                    });
+                }
+            }
+            _ => {
+                return Err(CodegenError {
+                    message: format!(
+                        "handler target `{}` does not satisfy capability OutHandler",
+                        target.name
+                    ),
+                    span: target.span.clone(),
+                });
+            }
+        },
+        capability => {
+            return Err(CodegenError {
+                message: format!(
+                    "handler capability `{capability}` is not supported by supervisor_init override validation"
+                ),
+                span: dependency.span.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn build_runtime_process_specs(

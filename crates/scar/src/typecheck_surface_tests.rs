@@ -1411,7 +1411,7 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
     let variant_uid = resolved
         .iter()
         .find_map(|node| match node {
-            sigil::resolved::Resolved::EnumDef(_, id, _, variants) if id.name == "BitWidth" => {
+            sigil::resolved::Resolved::EnumDef(_, id, _, variants, _) if id.name == "BitWidth" => {
                 variants
                     .iter()
                     .find(|variant| variant.id.name == "BitWidth::W8")
@@ -1437,7 +1437,7 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
             {
                 Some(format!("extractor {}", id.name))
             }
-            sigil::resolved::Resolved::StructDef(_, id, _) if id.unique_id == use_uid => {
+            sigil::resolved::Resolved::StructDef(_, id, _, _) if id.unique_id == use_uid => {
                 Some(format!("struct {}", id.name))
             }
             sigil::resolved::Resolved::RecordDef(_, id, _) if id.unique_id == use_uid => {
@@ -1446,7 +1446,7 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
             sigil::resolved::Resolved::DeferrorDef(_, id, _, _) if id.unique_id == use_uid => {
                 Some(format!("deferror {}", id.name))
             }
-            sigil::resolved::Resolved::EnumDef(_, _, _, variants) => variants
+            sigil::resolved::Resolved::EnumDef(_, _, _, variants, _) => variants
                 .iter()
                 .find(|variant| variant.id.unique_id == use_uid)
                 .map(|variant| format!("enum variant {}", variant.id.name)),

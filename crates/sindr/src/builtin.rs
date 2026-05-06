@@ -696,6 +696,10 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         params: &["$T"],
     },
     BuiltinTypeMeta {
+        name: TypeName::ProcessInit.as_str(),
+        params: &["$T"],
+    },
+    BuiltinTypeMeta {
         name: TypeName::Lazy.as_str(),
         params: &["$T"],
     },

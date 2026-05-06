@@ -380,6 +380,7 @@ impl Checker {
                             | TypeName::Generator
                             | TypeName::Result
                             | TypeName::Duration
+                            | TypeName::ProcessInit
                             | TypeName::Lazy
                             | TypeName::TypeRef
                             | TypeName::Hole
@@ -505,6 +506,18 @@ impl Checker {
                     let item_ty =
                         self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::General)?;
                     Ok(Ty::Enum("Generator".into(), vec![state_ty, item_ty]))
+                }
+                "ProcessInit" => {
+                    if args.len() != 1 {
+                        return Err(TypeError {
+                            message: "ProcessInit<T> requires exactly 1 type argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let inner_ty =
+                        self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
+                    Ok(Ty::Enum("ProcessInit".into(), vec![inner_ty]))
                 }
                 "Lens" => {
                     if args.len() != 2 {
@@ -755,6 +768,21 @@ impl Checker {
                     tyvars,
                 )?;
                 Ok(Ty::Enum("Generator".into(), vec![state, item]))
+            }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "ProcessInit" => {
+                if args.len() != 1 {
+                    return Err(TypeError {
+                        message: "ProcessInit<T> requires exactly 1 type argument".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let inner = self.resolve_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
+                Ok(Ty::Enum("ProcessInit".into(), vec![inner]))
             }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Lens" => {
                 if args.len() != 2 {
@@ -1058,6 +1086,22 @@ impl Checker {
                     tyvars,
                 )?;
                 Ok(Ty::Enum("Generator".into(), vec![state, item]))
+            }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "ProcessInit" => {
+                if args.len() != 1 {
+                    return Err(TypeError {
+                        message: "ProcessInit<T> requires exactly 1 type argument".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let inner = self.resolve_trait_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    self_ty,
+                    tyvars,
+                )?;
+                Ok(Ty::Enum("ProcessInit".into(), vec![inner]))
             }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Lens" => {
                 if args.len() != 2 {
@@ -1388,6 +1432,21 @@ impl Checker {
                         tyvars,
                     )?;
                     Ok(Ty::Enum("Generator".into(), vec![state_ty, item_ty]))
+                }
+                "ProcessInit" => {
+                    if args.len() != 1 {
+                        return Err(TypeError {
+                            message: "ProcessInit<T> requires exactly 1 type argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let inner_ty = self.resolve_builtin_ast_ty_in_context(
+                        &args[0],
+                        TypeSyntaxContext::General,
+                        tyvars,
+                    )?;
+                    Ok(Ty::Enum("ProcessInit".into(), vec![inner_ty]))
                 }
                 "Lens" => {
                     if args.len() != 2 {

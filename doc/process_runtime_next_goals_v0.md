@@ -32,6 +32,23 @@
   - 判断基準:
     - process example や integration test が増え、失敗時に waiting / deadline / owner が追えない場合は、先に観測系を足す。
 
+### 2026-05-06 完了分
+
+- `@process_state(Owner)` を parser / resolver / typechecker の metadata として保持し、Agent / GenServer の state 型に marker を要求する検査を追加した。
+- process-owned state 型について、owner process 外の public API 露出、構築、field / lens access を拒否する最小契約を入れた。
+- `ProcessInit<T>` を標準 surface / builtin type metadata に追加し、Lazy `@init` の `Result<ProcessInit<State>>` 以外の戻り値・引数・data field / enum payload で拒否する検査を追加した。
+- Eager `@init` は `Result<State>`、Lazy `@init` は `Result<ProcessInit<State>>` という戻り値契約を typecheck 側で固定した。
+- `@process_state` 付き struct は通常の `impl new` 必須契約から除外し、owner handler 内の struct literal 構築を許可した。
+- handler override validation を強化し、`OutHandler` capability、`FileOutHandler(path: ...)` 必須引数、未知 target / 余分な named arg を codegen で拒否するようにした。
+- handler override だけでは legacy `spec.boot` の boot selection を抑制しないよう `RuntimeBootPlan::has_explicit_entries` を修正した。
+- `InHandler` の最小 surface marker を `lib/process.srt` に追加した。
+
+### 2026-05-06 未完了として残す項目
+
+- VM boot 時 Lazy init の scheduler 管理化、`Pending` / `PendingAfter` retry、`init_waiters`、Ready 前 call FIFO、`ProcessInitTimeout` / `ProcessInitFailed` の完全実装。
+- `Process::sleep` の `thread::sleep` 依存解消、`Task::async` の disposable scheduled process / future 化、task timeout の deadline queue 完全統合。
+- runtime process status を `Allocated` / `Initializing` / `Ready` / `Waiting` / `Failed` として仕様どおり表現する整理。
+
 ## 2. WorkerAPI 追加
 
 ### ゴール

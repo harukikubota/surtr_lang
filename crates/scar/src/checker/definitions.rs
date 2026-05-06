@@ -573,6 +573,13 @@ impl Checker {
                 TypeSyntaxContext::General,
                 &mut tyvars,
             )?;
+            if self.ty_contains_process_init(&param_ty) {
+                return Err(TypeError {
+                    message: "ProcessInit<T> is only allowed as Lazy @init return type".into(),
+                    span: param.id.span.clone(),
+                    hint: None,
+                });
+            }
             if !self.allow_error_function_params
                 && !Self::allows_std_error_function_param_exception(id)
                 && Self::ty_exposes_error_value(&param_ty)
@@ -616,6 +623,30 @@ impl Checker {
         }
 
         let current_symbol = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
+        let is_process_handler = current_symbol
+            .rsplit_once("::")
+            .is_some_and(|(_, handler)| {
+                matches!(handler, "__agent_init" | "__agent_get" | "__agent_set")
+            });
+        if attrs.visibility == spire::ast::Visibility::Public && !is_process_handler {
+            if let Some((state_name, owner)) = typed_params
+                .iter()
+                .find_map(|param| self.ty_contains_process_state_type(&param.ty))
+                .or_else(|| self.ty_contains_process_state_type(&expected_ret))
+            {
+                return Err(TypeError {
+                    message: format!(
+                        "process state type `{}` cannot appear in public function signatures",
+                        state_name
+                    ),
+                    span: span.clone(),
+                    hint: Some(format!(
+                        "Keep `{}` values inside process `{}` handlers.",
+                        state_name, owner
+                    )),
+                });
+            }
+        }
         if self.process_handler_return_exposes_context_pid(&current_symbol, &expected_ret) {
             return Err(TypeError {
                 message: "handler dependency cannot be returned from process handlers".into(),
@@ -1203,20 +1234,31 @@ impl Checker {
             })?
             .clone();
 
-        if !id.compiler_generated
-            && self.current_impl_struct_target.as_deref() != Some(id.name.as_str())
-        {
-            return Err(TypeError {
-                message: format!(
-                    "Struct literal `{}` is only allowed inside `impl {} {{ ... }}` method bodies",
-                    id.name, id.name
-                ),
-                span: span.clone(),
-                hint: Some(format!(
-                    "Construct `{}` values via `{}(...)` / `{}::new(...)` outside the impl body.",
-                    id.name, id.name, id.name
-                )),
-            });
+        if !id.compiler_generated {
+            if let Some(owner) = def.process_state_owner.as_deref() {
+                if self.current_process_name().as_deref() != Some(owner) {
+                    return Err(TypeError {
+                        message: format!(
+                            "process state type `{}` can only be constructed inside process `{}`",
+                            id.name, owner
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+            } else if self.current_impl_struct_target.as_deref() != Some(id.name.as_str()) {
+                return Err(TypeError {
+                    message: format!(
+                        "Struct literal `{}` is only allowed inside `impl {} {{ ... }}` method bodies",
+                        id.name, id.name
+                    ),
+                    span: span.clone(),
+                    hint: Some(format!(
+                        "Construct `{}` values via `{}(...)` / `{}::new(...)` outside the impl body.",
+                        id.name, id.name, id.name
+                    )),
+                });
+            }
         }
 
         let tag = def.tag;

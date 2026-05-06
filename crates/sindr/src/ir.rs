@@ -465,9 +465,7 @@ impl RuntimeBootPlan {
     }
 
     pub fn has_explicit_entries(&self) -> bool {
-        !self.singletons.is_empty()
-            || !self.standard_overrides.is_empty()
-            || !self.handler_overrides.is_empty()
+        !self.singletons.is_empty() || !self.standard_overrides.is_empty()
     }
 }
 

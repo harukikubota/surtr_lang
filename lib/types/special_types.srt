@@ -59,6 +59,14 @@ types.
 """
 @builtin type Lazy<$T>
 
+@doc """
+Compiler-reserved process initialization protocol marker.
+`ProcessInit<$T>` may only appear as the successful value inside a Lazy process
+`@init` return type: `Result<ProcessInit<State>>`.
+It is not an ordinary public API or data transport type.
+"""
+@builtin type ProcessInit<$T>
+
 impl Show for Unit {
   @doc """
   Return the standard string rendering for `Unit`.

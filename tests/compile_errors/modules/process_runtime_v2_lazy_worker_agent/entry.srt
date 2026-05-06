@@ -1,0 +1,2 @@
+pid =? Counter::spawn()
+print(inspect(Counter::get(pid)))

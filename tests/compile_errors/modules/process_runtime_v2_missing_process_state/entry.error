@@ -1,0 +1,2 @@
+phase: typecheck
+contains: process state type `CounterState` must be annotated with @process_state(Counter)

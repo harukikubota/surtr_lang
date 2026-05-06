@@ -1647,7 +1647,7 @@ impl Resolver {
             }
 
             // Struct/Record/Deferror definitions — reuse predeclared IDs
-            Ast::StructDef(span, name, fields, _) => {
+            Ast::StructDef(span, name, fields, attrs) => {
                 let uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -1673,7 +1673,12 @@ impl Resolver {
                         })
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?;
-                Ok(Resolved::StructDef(span, rid, rfields))
+                Ok(Resolved::StructDef(
+                    span,
+                    rid,
+                    rfields,
+                    resolve_decl_attrs(&attrs),
+                ))
             }
 
             Ast::RecordDef(span, name, fields, _) => {
@@ -1753,7 +1758,7 @@ impl Resolver {
                 ))
             }
 
-            Ast::EnumDef(span, name, type_params, variants, _) => {
+            Ast::EnumDef(span, name, type_params, variants, attrs) => {
                 let uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -1804,6 +1809,7 @@ impl Resolver {
                     rid,
                     resolved_type_params,
                     resolved_variants,
+                    resolve_decl_attrs(&attrs),
                 ))
             }
 
