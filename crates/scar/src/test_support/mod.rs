@@ -600,10 +600,21 @@ pub(crate) fn typecheck_module_source_result(source: &str) -> Result<Vec<TypedNo
     let declaration_index = sigil::precollect_declaration_index(&module_stages)
         .map_err(|err| format!("resolve precollect failed: {}", err.message))?;
     let resolved =
-        sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
+        sigil::resolve_staged_program_with_state(&module_stages, Vec::new(), &declaration_index, None)
             .map_err(|err| format!("resolve failed: {}", err.message))?;
-    let user_resolved = resolved.into_iter().skip(prelude.resolved_len).collect();
-    typecheck(user_resolved).map_err(|err| err.message)
+    let user_resolved = sigil::ResolvedStagedProgram {
+        resolved: resolved
+            .resolved
+            .into_iter()
+            .skip(prelude.resolved_len)
+            .collect(),
+        process_specs: resolved.process_specs,
+        boot_plan: resolved.boot_plan,
+        resume_state: resolved.resume_state,
+    };
+    scar::typecheck_staged_program(user_resolved)
+        .map(|program| program.nodes)
+        .map_err(|err| err.message)
 }
 
 pub(crate) fn typecheck_std_modules_with_overrides(

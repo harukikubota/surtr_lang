@@ -55,6 +55,7 @@ pub(super) fn resolve_decl_attrs(attrs: &DeclAttrs) -> ResolvedDeclAttrs {
         doc: attrs.doc.clone(),
         hidden: attrs.hidden,
         visibility: attrs.visibility,
+        process_state_owner: attrs.process_state_owner.clone(),
     }
 }
 

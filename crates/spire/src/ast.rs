@@ -25,6 +25,7 @@ pub struct DeclAttrs {
     pub auto_import: bool,
     pub hidden: bool,
     pub visibility: Visibility,
+    pub process_state_owner: Option<Symbol>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +83,8 @@ pub enum ProcessRuntimeHandlerKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessRuntimeHandlerSpec {
     pub name: Symbol,
+    #[serde(default)]
+    pub internal_name: Symbol,
     pub kind: ProcessRuntimeHandlerKind,
     pub span: Span,
 }

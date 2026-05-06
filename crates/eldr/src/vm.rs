@@ -1,7 +1,7 @@
 use sindr::builtin::builtin_meta_by_id;
 use sindr::ir::{
     line_column_for_offset, Bytecode, BytecodeChunk, Constant, DocEntry, FunctionEntry, Opcode,
-    RuntimeHandlerTarget, RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec,
+    RuntimeHandlerTarget, RuntimeInitPolicy, RuntimeProcessInstance, RuntimeProcessSpec,
     RuntimeProcessSpecTable, SourceMap,
 };
 use sindr::primitives::SurtrInt;
@@ -162,16 +162,14 @@ pub struct VmProcessCounters {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VmProcessSpecSnapshot {
     pub spec_id: u32,
-    pub process_name: String,
-    pub module_path: String,
+    pub type_name: String,
     pub kind: String,
     pub instance: String,
-    pub boot: bool,
-    pub registry: bool,
-    pub lazy: bool,
     pub init_fun_idx: u32,
-    pub get_fun_idx: u32,
-    pub set_fun_idx: Option<u32>,
+    pub init_policy: String,
+    pub state_type: String,
+    pub handler_count: usize,
+    pub dependency_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -420,6 +418,10 @@ fn parse_handler_target_identity(identity: &str) -> (&str, Vec<(String, String)>
         })
         .collect();
     (name, args)
+}
+
+fn runtime_spec_is_lazy(spec: &RuntimeProcessSpec) -> bool {
+    matches!(spec.init.policy, RuntimeInitPolicy::Lazy)
 }
 
 #[allow(dead_code)]
@@ -1242,7 +1244,7 @@ impl VM {
                         && !self
                             .process_runtime
                             .singleton_by_name
-                            .contains_key(&spec.process_name)
+                            .contains_key(&spec.type_name)
                 })
                 .map(|spec| {
                     let timeout_ms = self
@@ -1250,47 +1252,34 @@ impl VM {
                         .runtime_boot_plan
                         .singletons
                         .iter()
-                        .find(|entry| entry.process_name == spec.process_name)
+                        .find(|entry| entry.process_name == spec.type_name)
                         .map(|entry| entry.init_timeout_ms)
                         .unwrap_or(limits.default_init_timeout_ms);
                     (spec, timeout_ms)
                 })
                 .collect::<Vec<_>>()
         } else {
-            self.process_runtime
-                .specs_by_id
-                .iter()
-                .filter(|spec| {
-                    spec.instance == RuntimeProcessInstance::Singleton
-                        && spec.boot
-                        && !self
-                            .process_runtime
-                            .singleton_by_name
-                            .contains_key(&spec.process_name)
-                })
-                .cloned()
-                .map(|spec| (spec, limits.default_init_timeout_ms))
-                .collect::<Vec<_>>()
+            Vec::new()
         };
 
         let saved_runtime = self.process_runtime.clone();
         for (spec, timeout_ms) in boot_specs {
             if let Err(err) =
-                self.ensure_singleton_available_with_timeout(&spec.process_name, Some(timeout_ms))
+                self.ensure_singleton_available_with_timeout(&spec.type_name, Some(timeout_ms))
             {
                 let detail = self
                     .process_runtime
                     .root_supervisor
                     .boot_failures
-                    .get(&spec.process_name)
+                    .get(&spec.type_name)
                     .cloned()
                     .unwrap_or_else(|| err.message.clone());
                 self.process_runtime = saved_runtime;
                 self.process_runtime
                     .root_supervisor
                     .boot_failures
-                    .insert(spec.process_name.clone(), detail.clone());
-                return Err(self.boot_failure_error(&spec.process_name, &detail));
+                    .insert(spec.type_name.clone(), detail.clone());
+                return Err(self.boot_failure_error(&spec.type_name, &detail));
             }
         }
 
@@ -1363,17 +1352,9 @@ impl VM {
             )));
         }
 
-        if spec.kind == RuntimeProcessKind::Agent && spec.set_fun_idx.is_none() && spec.lazy {
-            let pid = self.allocate_process_state(process_name.to_string(), None)?;
-            self.process_runtime
-                .singleton_by_name
-                .insert(process_name.to_string(), pid);
-            return Ok(pid);
-        }
-
         let init_started = Instant::now();
         let init_result = self.invoke_callable_isolated_sync(
-            self.callable_for_function(spec.init_fun_idx),
+            self.callable_for_function(spec.init.callable.fun_idx),
             Vec::new(),
         )?;
         if let Some(timeout_ms) = timeout_ms {
@@ -1387,6 +1368,19 @@ impl VM {
             }
         }
         let state = match decode_vm_result(init_result, "__root_boot", "init")? {
+            Ok(value) if runtime_spec_is_lazy(&spec) => match decode_process_init(value)? {
+                ProcessInitOutcome::Ready(state) => state,
+                ProcessInitOutcome::Pending | ProcessInitOutcome::PendingAfter(_) => {
+                    let detail = "lazy init remained pending during boot".to_string();
+                    self.process_runtime
+                        .root_supervisor
+                        .boot_failures
+                        .insert(process_name.to_string(), detail.clone());
+                    return Err(RuntimeError::process_init_timeout(format!(
+                        "process `{process_name}` failed to boot: {detail}"
+                    )));
+                }
+            },
             Ok(state) => state,
             Err(err) => {
                 let detail = err.visible_message().to_string();
@@ -1394,7 +1388,9 @@ impl VM {
                     .root_supervisor
                     .boot_failures
                     .insert(process_name.to_string(), detail.clone());
-                return Err(self.boot_failure_error(process_name, &detail));
+                return Err(RuntimeError::process_init_failed(format!(
+                    "process `{process_name}` failed to boot: {detail}"
+                )));
             }
         };
 
@@ -1425,7 +1421,7 @@ impl VM {
         };
 
         let init_result = self.invoke_callable_isolated_sync(
-            self.callable_for_function(spec.init_fun_idx),
+            self.callable_for_function(spec.init.callable.fun_idx),
             Vec::new(),
         )?;
         let state = match decode_vm_result(init_result, "__process_state", "init")? {
@@ -1565,8 +1561,8 @@ impl VM {
                 entry.pid, entry.spec_id
             )));
         };
-        if spec.process_name != pid.process_name {
-            let actual_name = spec.process_name.clone();
+        if spec.type_name != pid.process_name {
+            let actual_name = spec.type_name.clone();
             return Ok(err_vm_result(self.process_error(
                 "InvalidPid",
                 &format!(
@@ -1611,8 +1607,8 @@ impl VM {
                 pid.id, spec_id
             )));
         };
-        if spec.process_name != pid.process_name {
-            let actual_name = spec.process_name.clone();
+        if spec.type_name != pid.process_name {
+            let actual_name = spec.type_name.clone();
             return Ok(err_vm_result(self.process_error(
                 "InvalidPid",
                 &format!(
@@ -1647,9 +1643,7 @@ impl VM {
         let lazy_state_pending = self
             .process_runtime
             .spec_for_id(spec_id)
-            .is_some_and(|spec| {
-                spec.kind == RuntimeProcessKind::Agent && spec.set_fun_idx.is_none() && spec.lazy
-            })
+            .is_some_and(runtime_spec_is_lazy)
             && state.is_none();
         self.process_runtime.processes.insert(
             pid,
@@ -1842,16 +1836,14 @@ impl VM {
             .enumerate()
             .map(|(idx, spec)| VmProcessSpecSnapshot {
                 spec_id: idx as u32,
-                process_name: spec.process_name.clone(),
-                module_path: spec.module_path.clone(),
+                type_name: spec.type_name.clone(),
                 kind: format!("{:?}", spec.kind),
                 instance: format!("{:?}", spec.instance),
-                boot: spec.boot,
-                registry: spec.registry,
-                lazy: spec.lazy,
-                init_fun_idx: spec.init_fun_idx,
-                get_fun_idx: spec.get_fun_idx,
-                set_fun_idx: spec.set_fun_idx,
+                init_fun_idx: spec.init.callable.fun_idx,
+                init_policy: format!("{:?}", spec.init.policy),
+                state_type: spec.state.state_type.name.clone(),
+                handler_count: spec.handlers.len(),
+                dependency_count: spec.dependencies.handlers.len(),
             })
             .collect();
         let processes =
@@ -1862,7 +1854,7 @@ impl VM {
                     let process_name = self
                         .process_runtime
                         .spec_for_id(process.spec_id)
-                        .map(|spec| spec.process_name.clone())
+                        .map(|spec| spec.type_name.clone())
                         .unwrap_or_else(|| format!("<unknown:{}>", process.spec_id));
                     let execution_context = process.execution_context.as_ref().map(|context| {
                         VmExecutionContextSnapshot {
@@ -2080,7 +2072,7 @@ impl VM {
             self.process_runtime
                 .root_supervisor
                 .boot_failures
-                .remove(&spec.process_name);
+                .remove(&spec.type_name);
         }
         self.ensure_root_supervisor_booted()?;
 
@@ -3827,24 +3819,25 @@ impl ProcessRuntime {
             .entries
             .iter()
             .enumerate()
-            .map(|(idx, spec)| (spec.process_name.clone(), idx as u32))
+            .map(|(idx, spec)| (spec.type_name.clone(), idx as u32))
             .collect();
         self.specs_by_name = spec_table
             .entries
             .iter()
             .cloned()
-            .map(|spec| (spec.process_name.clone(), spec))
+            .map(|spec| (spec.type_name.clone(), spec))
             .collect();
         self.handler_contexts = spec_table
             .entries
             .iter()
             .map(|spec| {
                 let slots = spec
+                    .dependencies
                     .handlers
                     .iter()
                     .map(|handler| (handler.slot.clone(), handler.default_target.clone()))
                     .collect::<BTreeMap<_, _>>();
-                (spec.process_name.clone(), slots)
+                (spec.type_name.clone(), slots)
             })
             .collect();
     }
@@ -4005,6 +3998,37 @@ fn decode_vm_result(
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum ProcessInitOutcome {
+    Pending,
+    PendingAfter(Value),
+    Ready(Value),
+}
+
+fn decode_process_init(value: Value) -> Result<ProcessInitOutcome, RuntimeError> {
+    match value {
+        Value::Tagged { tag: 0, fields } if fields.is_empty() => Ok(ProcessInitOutcome::Pending),
+        Value::Tagged { tag: 1, fields } => match fields.as_slice() {
+            [duration] => Ok(ProcessInitOutcome::PendingAfter(duration.clone())),
+            other => Err(RuntimeError::process_init_failed(format!(
+                "ProcessInit::PendingAfter expects one Duration field, got {}",
+                other.len()
+            ))),
+        },
+        Value::Tagged { tag: 2, fields } => match fields.as_slice() {
+            [state] => Ok(ProcessInitOutcome::Ready(state.clone())),
+            other => Err(RuntimeError::process_init_failed(format!(
+                "ProcessInit::Ready expects one state field, got {}",
+                other.len()
+            ))),
+        },
+        other => Err(RuntimeError::process_init_failed(format!(
+            "lazy init expects ProcessInit value, got {:?}",
+            other
+        ))),
+    }
+}
+
 fn split_qualified_name_owned(qualified_name: &str) -> (Option<String>, Option<String>) {
     match qualified_name.rsplit_once("::") {
         Some((module, name)) if !module.is_empty() => {
@@ -4023,8 +4047,12 @@ mod tests {
     use super::{ProcessWaitReason, StepOutcome, TaskMode, VmObservationOptions, VM};
     use sindr::ir::{
         Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode, OpcodeSource,
-        RuntimeBootPlan, RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec,
-        RuntimeProcessSpecTable, SourceMap,
+        BootEntrySource,
+        RuntimeBootPlan, RuntimeCallableRef, RuntimeHandlerKind, RuntimeHandlerSpec,
+        RuntimeInitPolicy, RuntimeInitResultShape, RuntimeInitSpec, RuntimeLifecycleSpec,
+        RuntimeProcessDependencies, RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec,
+        RuntimeProcessSpecTable, RuntimeStateSpec, RuntimeSupervisionSpec, RuntimeTypeRef,
+        SingletonBootEntry, SourceMap,
     };
     use sindr::primitives::int;
     use sindr::runtime::{
@@ -4037,6 +4065,95 @@ mod tests {
             opcodes,
             type_registry: TypeRegistry::new(),
             ..Bytecode::default()
+        }
+    }
+
+    fn test_runtime_process_spec(
+        process_id: u32,
+        process_name: impl Into<String>,
+        kind: RuntimeProcessKind,
+        instance: RuntimeProcessInstance,
+        lazy: bool,
+        init_fun_idx: u32,
+        get_fun_idx: u32,
+        set_fun_idx: Option<u32>,
+    ) -> RuntimeProcessSpec {
+        let process_name = process_name.into();
+        let state_type = RuntimeTypeRef { name: "Int".into() };
+        let result_type = RuntimeTypeRef {
+            name: if lazy {
+                "Result<ProcessInit<Int>, Error>".into()
+            } else {
+                "Result<Int, Error>".into()
+            },
+        };
+        let mut handlers = vec![
+            RuntimeHandlerSpec {
+                handler_id: 0,
+                name: "init".into(),
+                kind: RuntimeHandlerKind::Init,
+                fun_idx: init_fun_idx,
+                arity: 0,
+            },
+            RuntimeHandlerSpec {
+                handler_id: 1,
+                name: "get".into(),
+                kind: if kind == RuntimeProcessKind::GenServer {
+                    RuntimeHandlerKind::Call
+                } else {
+                    RuntimeHandlerKind::Get
+                },
+                fun_idx: get_fun_idx,
+                arity: 1,
+            },
+        ];
+        if let Some(fun_idx) = set_fun_idx {
+            handlers.push(RuntimeHandlerSpec {
+                handler_id: 2,
+                name: "set".into(),
+                kind: if kind == RuntimeProcessKind::GenServer {
+                    RuntimeHandlerKind::Cast
+                } else {
+                    RuntimeHandlerKind::Set
+                },
+                fun_idx,
+                arity: 2,
+            });
+        }
+        RuntimeProcessSpec {
+            process_id,
+            type_name: process_name.clone(),
+            kind,
+            instance,
+            state: RuntimeStateSpec {
+                state_type: state_type.clone(),
+                owner_process: Some(process_name.into()),
+            },
+            init: RuntimeInitSpec {
+                callable: RuntimeCallableRef {
+                    fun_idx: init_fun_idx,
+                },
+                policy: if lazy {
+                    RuntimeInitPolicy::Lazy
+                } else {
+                    RuntimeInitPolicy::Eager
+                },
+                result_shape: if lazy {
+                    RuntimeInitResultShape::LazyProcessInit {
+                        result_type: result_type.clone(),
+                    }
+                } else {
+                    RuntimeInitResultShape::EagerState {
+                        result_type: result_type.clone(),
+                    }
+                },
+                state_type,
+                init_route: None,
+            },
+            handlers,
+            dependencies: RuntimeProcessDependencies::default(),
+            lifecycle: RuntimeLifecycleSpec::default(),
+            supervision: RuntimeSupervisionSpec::default(),
         }
     }
 
@@ -4054,21 +4171,20 @@ mod tests {
         bytecode.constants = constants;
         bytecode.functions = vec![function_entry(0, 1, 0, 0, Some("Agents::__agent_init"))];
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
-            entries: vec![RuntimeProcessSpec {
-                process_name: process_name.into(),
-                module_path: "Agents".into(),
+            entries: vec![test_runtime_process_spec(
+                0,
+                process_name,
                 kind,
-                instance: RuntimeProcessInstance::Singleton,
-                boot,
-                registry: true,
+                RuntimeProcessInstance::Singleton,
                 lazy,
-                init_fun_idx: 0,
-                get_fun_idx: 1,
-                set_fun_idx: None,
-                handlers: Vec::new(),
-                handler_specs: Vec::new(),
-            }],
+                0,
+                1,
+                None,
+            )],
         };
+        if boot {
+            bytecode.runtime_boot_plan = RuntimeBootPlan::explicit_singleton(process_name);
+        }
         bytecode
     }
 
@@ -4076,20 +4192,7 @@ mod tests {
     fn vm_new_registers_runtime_process_specs_from_bytecode() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
-            entries: vec![RuntimeProcessSpec {
-                process_name: "Counter".into(),
-                module_path: "Counter".into(),
-                kind: RuntimeProcessKind::Agent,
-                instance: RuntimeProcessInstance::Singleton,
-                boot: true,
-                registry: true,
-                lazy: false,
-                init_fun_idx: 0,
-                get_fun_idx: 1,
-                set_fun_idx: Some(2),
-                handlers: Vec::new(),
-                handler_specs: Vec::new(),
-            }],
+            entries: vec![test_runtime_process_spec(0, "Counter", RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 0, 1, Some(2))],
         };
 
         let vm = VM::new(bytecode);
@@ -4098,16 +4201,16 @@ mod tests {
             .specs_by_name
             .get("Counter")
             .expect("process spec should be registered");
-        assert_eq!(spec.module_path, "Counter");
-        assert_eq!(spec.init_fun_idx, 0);
-        assert_eq!(spec.get_fun_idx, 1);
-        assert_eq!(spec.set_fun_idx, Some(2));
+        assert_eq!(spec.type_name, "Counter");
+        assert_eq!(spec.init.callable.fun_idx, 0);
+        assert_eq!(spec.handlers[1].fun_idx, 1);
+        assert_eq!(spec.handlers[2].fun_idx, 2);
         assert_eq!(vm.process_runtime.spec_id_by_name.get("Counter"), Some(&0));
         assert_eq!(
             vm.process_runtime
                 .spec_for_id(0)
                 .expect("spec id 0 should resolve")
-                .process_name,
+                .type_name,
             "Counter"
         );
     }
@@ -4116,20 +4219,7 @@ mod tests {
     fn allocate_process_creates_process_instance_with_runtime_shape() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
-            entries: vec![RuntimeProcessSpec {
-                process_name: "Counter".into(),
-                module_path: "Counter".into(),
-                kind: RuntimeProcessKind::Agent,
-                instance: RuntimeProcessInstance::Singleton,
-                boot: true,
-                registry: true,
-                lazy: false,
-                init_fun_idx: 0,
-                get_fun_idx: 1,
-                set_fun_idx: Some(2),
-                handlers: Vec::new(),
-                handler_specs: Vec::new(),
-            }],
+            entries: vec![test_runtime_process_spec(0, "Counter", RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 0, 1, Some(2))],
         };
 
         let mut vm = VM::new(bytecode);
@@ -4157,34 +4247,8 @@ mod tests {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
             entries: vec![
-                RuntimeProcessSpec {
-                    process_name: "Counter".into(),
-                    module_path: "Counter".into(),
-                    kind: RuntimeProcessKind::Agent,
-                    instance: RuntimeProcessInstance::Singleton,
-                    boot: true,
-                    registry: true,
-                    lazy: false,
-                    init_fun_idx: 0,
-                    get_fun_idx: 1,
-                    set_fun_idx: Some(2),
-                    handlers: Vec::new(),
-                    handler_specs: Vec::new(),
-                },
-                RuntimeProcessSpec {
-                    process_name: "Clock".into(),
-                    module_path: "Clock".into(),
-                    kind: RuntimeProcessKind::Agent,
-                    instance: RuntimeProcessInstance::Singleton,
-                    boot: true,
-                    registry: true,
-                    lazy: false,
-                    init_fun_idx: 3,
-                    get_fun_idx: 4,
-                    set_fun_idx: Some(5),
-                    handlers: Vec::new(),
-                    handler_specs: Vec::new(),
-                },
+                test_runtime_process_spec(0, "Counter", RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 0, 1, Some(2)),
+                test_runtime_process_spec(0, "Clock", RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 3, 4, Some(5)),
             ],
         };
 
@@ -4414,20 +4478,7 @@ mod tests {
     fn attach_waiter_updates_waiting_table_and_future_record() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
-            entries: vec![RuntimeProcessSpec {
-                process_name: "Counter".into(),
-                module_path: "Counter".into(),
-                kind: RuntimeProcessKind::Agent,
-                instance: RuntimeProcessInstance::Singleton,
-                boot: true,
-                registry: true,
-                lazy: false,
-                init_fun_idx: 0,
-                get_fun_idx: 1,
-                set_fun_idx: Some(2),
-                handlers: Vec::new(),
-                handler_specs: Vec::new(),
-            }],
+            entries: vec![test_runtime_process_spec(0, "Counter", RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 0, 1, Some(2))],
         };
         let mut vm = VM::new(bytecode);
         let pid = vm
@@ -4463,20 +4514,7 @@ mod tests {
     fn expire_deadlines_marks_timeout_err_and_clears_reply_mapping() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
-            entries: vec![RuntimeProcessSpec {
-                process_name: "Counter".into(),
-                module_path: "Counter".into(),
-                kind: RuntimeProcessKind::Agent,
-                instance: RuntimeProcessInstance::Singleton,
-                boot: true,
-                registry: true,
-                lazy: false,
-                init_fun_idx: 0,
-                get_fun_idx: 1,
-                set_fun_idx: Some(2),
-                handlers: Vec::new(),
-                handler_specs: Vec::new(),
-            }],
+            entries: vec![test_runtime_process_spec(0, "Counter", RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 0, 1, Some(2))],
         };
         let mut vm = VM::new(bytecode);
         let pid = vm
@@ -4662,7 +4700,7 @@ mod tests {
     }
 
     #[test]
-    fn lazy_readonly_singleton_materializes_state_on_first_access() {
+    fn lazy_singleton_decodes_ready_state_during_boot() {
         let bytecode = singleton_boot_bytecode(
             "Env",
             RuntimeProcessKind::Agent,
@@ -4671,15 +4709,21 @@ mod tests {
             vec![
                 Opcode::LoadConst(0),
                 Opcode::LoadConst(1),
+                Opcode::LoadConst(2),
+                Opcode::StructNew { field_count: 1 },
                 Opcode::StructNew { field_count: 1 },
                 Opcode::Return,
             ],
-            vec![Constant::Tag(0), Constant::Str("ready".into())],
+            vec![
+                Constant::Tag(0),
+                Constant::Tag(2),
+                Constant::Str("ready".into()),
+            ],
         );
         let mut vm = VM::new(bytecode);
 
         vm.ensure_root_supervisor_booted()
-            .expect("boot should register lazy singleton");
+            .expect("boot should initialize lazy singleton");
 
         let pid = vm
             .process_runtime
@@ -4691,22 +4735,7 @@ mod tests {
             .process_runtime
             .processes
             .get(&pid)
-            .expect("lazy singleton process should exist");
-        assert_eq!(instance.state_value, None);
-        assert!(instance.lazy_state_pending);
-
-        let value = vm
-            .process_state(&PidHandle {
-                id: pid,
-                process_name: "Env".into(),
-            })
-            .expect("lazy state access should succeed");
-        assert_eq!(value, super::ok_vm_result(Value::Str("ready".into())));
-        let instance = vm
-            .process_runtime
-            .processes
-            .get(&pid)
-            .expect("lazy singleton process should remain registered");
+            .expect("lazy singleton process should exist after boot");
         assert_eq!(instance.state_value, Some(Value::Str("ready".into())));
         assert!(!instance.lazy_state_pending);
     }
@@ -4807,36 +4836,22 @@ mod tests {
         ];
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
             entries: vec![
-                RuntimeProcessSpec {
-                    process_name: "Good".into(),
-                    module_path: "Agents".into(),
-                    kind: RuntimeProcessKind::Agent,
-                    instance: RuntimeProcessInstance::Singleton,
-                    boot: true,
-                    registry: true,
-                    lazy: false,
-                    init_fun_idx: 0,
-                    get_fun_idx: 2,
-                    set_fun_idx: None,
-                    handlers: Vec::new(),
-                    handler_specs: Vec::new(),
-                },
-                RuntimeProcessSpec {
-                    process_name: "Broken".into(),
-                    module_path: "Agents".into(),
-                    kind: RuntimeProcessKind::Agent,
-                    instance: RuntimeProcessInstance::Singleton,
-                    boot: true,
-                    registry: true,
-                    lazy: false,
-                    init_fun_idx: 1,
-                    get_fun_idx: 3,
-                    set_fun_idx: None,
-                    handlers: Vec::new(),
-                    handler_specs: Vec::new(),
-                },
+                test_runtime_process_spec(0, "Good", RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 0, 2, None),
+                test_runtime_process_spec(0, "Broken", RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 1, 3, None),
             ],
         };
+        bytecode.runtime_boot_plan.singletons = vec![
+            SingletonBootEntry {
+                process_name: "Good".into(),
+                init_timeout_ms: 5_000,
+                source: BootEntrySource::ExplicitConfig,
+            },
+            SingletonBootEntry {
+                process_name: "Broken".into(),
+                init_timeout_ms: 5_000,
+                source: BootEntrySource::ExplicitConfig,
+            },
+        ];
         let mut vm = VM::new(bytecode);
 
         let err = vm
@@ -5993,7 +6008,7 @@ mod tests {
 
         let snapshot = vm.process_runtime_snapshot();
         assert_eq!(snapshot.specs.len(), 1);
-        assert_eq!(snapshot.specs[0].process_name, "Counter");
+        assert_eq!(snapshot.specs[0].type_name, "Counter");
         assert_eq!(snapshot.singleton_slots.get("Counter"), Some(&pid));
         assert_eq!(snapshot.processes.len(), 1);
         assert_eq!(snapshot.processes[0].process_name, "Counter");
@@ -6045,36 +6060,17 @@ mod tests {
         ];
 
         let mut specs = (0..singleton_count)
-            .map(|idx| RuntimeProcessSpec {
-                process_name: format!("Singleton{idx}"),
-                module_path: "Agents".into(),
-                kind: RuntimeProcessKind::Agent,
-                instance: RuntimeProcessInstance::Singleton,
-                boot: true,
-                registry: true,
-                lazy: false,
-                init_fun_idx: 0,
-                get_fun_idx: 0,
-                set_fun_idx: None,
-                handlers: Vec::new(),
-                handler_specs: Vec::new(),
-            })
+            .map(|idx| test_runtime_process_spec(0, format!("Singleton{idx}"), RuntimeProcessKind::Agent, RuntimeProcessInstance::Singleton, false, 0, 0, None))
             .collect::<Vec<_>>();
-        specs.push(RuntimeProcessSpec {
-            process_name: "Worker".into(),
-            module_path: "Worker".into(),
-            kind: RuntimeProcessKind::Agent,
-            instance: RuntimeProcessInstance::Worker,
-            boot: false,
-            registry: true,
-            lazy: false,
-            init_fun_idx: 1,
-            get_fun_idx: 1,
-            set_fun_idx: None,
-            handlers: Vec::new(),
-            handler_specs: Vec::new(),
-        });
+        specs.push(test_runtime_process_spec(0, "Worker", RuntimeProcessKind::Agent, RuntimeProcessInstance::Worker, false, 1, 1, None));
         bytecode.runtime_process_specs = RuntimeProcessSpecTable { entries: specs };
+        bytecode.runtime_boot_plan.singletons = (0..singleton_count)
+            .map(|idx| SingletonBootEntry {
+                process_name: format!("Singleton{idx}"),
+                init_timeout_ms: 5_000,
+                source: BootEntrySource::ExplicitConfig,
+            })
+            .collect();
 
         let mut vm = VM::new(bytecode);
         vm.enable_observation(VmObservationOptions::default());

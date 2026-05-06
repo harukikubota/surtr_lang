@@ -1914,7 +1914,7 @@ defstruct User {
     };
 
     let def_id = match &resolved[1] {
-        Resolved::StructDef(_, id, _) => id.unique_id,
+        Resolved::StructDef(_, id, _, _) => id.unique_id,
         _ => panic!("Expected StructDef"),
     };
 
@@ -2002,7 +2002,7 @@ deferror NotFound(code: String) {
                 },
                 Resolved::Def(_, id, _, _, _, _, _)
                 | Resolved::RecordDef(_, id, _)
-                | Resolved::StructDef(_, id, _)
+                | Resolved::StructDef(_, id, _, _)
                 | Resolved::DeferrorDef(_, id, _, _) => vec![id.unique_id],
                 _ => Vec::new(),
             })

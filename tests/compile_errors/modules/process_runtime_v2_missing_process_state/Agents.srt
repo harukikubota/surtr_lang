@@ -1,0 +1,25 @@
+defstruct CounterState {
+  value: Int,
+}
+
+defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<CounterState> {
+    Ok(CounterState { value: 0 })
+  }
+
+  @get
+  def get(state: CounterState) -> Result<Int> {
+    Ok(state.value)
+  }
+
+  @set
+  def set(_state: CounterState, next: Int) -> Result<CounterState> {
+    Ok(CounterState { value: next })
+  }
+}

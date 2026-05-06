@@ -1411,7 +1411,7 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
     let variant_uid = resolved
         .iter()
         .find_map(|node| match node {
-            sigil::resolved::Resolved::EnumDef(_, id, _, variants) if id.name == "BitWidth" => {
+            sigil::resolved::Resolved::EnumDef(_, id, _, variants, _) if id.name == "BitWidth" => {
                 variants
                     .iter()
                     .find(|variant| variant.id.name == "BitWidth::W8")
@@ -1437,7 +1437,7 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
             {
                 Some(format!("extractor {}", id.name))
             }
-            sigil::resolved::Resolved::StructDef(_, id, _) if id.unique_id == use_uid => {
+            sigil::resolved::Resolved::StructDef(_, id, _, _) if id.unique_id == use_uid => {
                 Some(format!("struct {}", id.name))
             }
             sigil::resolved::Resolved::RecordDef(_, id, _) if id.unique_id == use_uid => {
@@ -1446,7 +1446,7 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
             sigil::resolved::Resolved::DeferrorDef(_, id, _, _) if id.unique_id == use_uid => {
                 Some(format!("deferror {}", id.name))
             }
-            sigil::resolved::Resolved::EnumDef(_, _, _, variants) => variants
+            sigil::resolved::Resolved::EnumDef(_, _, _, variants, _) => variants
                 .iter()
                 .find(|variant| variant.id.unique_id == use_uid)
                 .map(|variant| format!("enum variant {}", variant.id.name)),
@@ -3226,6 +3226,37 @@ fn process_self_typechecks_inside_process_handler() {
 }"#,
     )
     .expect("Process::self should typecheck inside process handler");
+}
+
+#[test]
+fn genserver_additional_call_handler_typechecks_as_process_context() {
+    typecheck_module_source_result(
+        r#"defgenserver Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    handlers {
+      out: OutHandler = StdOut
+    }
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def info(state: Int) -> Result<(Int, Int)> {
+    Ok((state, state))
+  }
+
+  @call
+  def log(state: Int, message: String) -> Result<(Unit, Int)> {
+    _handler = ctx.out
+    _message = message
+    Ok(((), state))
+  }
+}"#,
+    )
+    .expect("additional @call handler should have process context access");
 }
 
 #[test]

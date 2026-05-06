@@ -125,7 +125,7 @@ impl Checker {
         // Pass 1: reserve deterministic tags for all user-defined types.
         for stmt in stmts {
             let maybe_decl = match stmt {
-                Resolved::StructDef(_, id, _) => {
+                Resolved::StructDef(_, id, _, _) => {
                     Some((&id.name, &id.span, TypeKind::Struct, Vec::new()))
                 }
                 Resolved::RecordDef(_, id, _) => {
@@ -134,7 +134,7 @@ impl Checker {
                 Resolved::DeferrorDef(_, id, _, _) => {
                     Some((&id.name, &id.span, TypeKind::ConcreteError, Vec::new()))
                 }
-                Resolved::EnumDef(_, id, type_params, _) => Some((
+                Resolved::EnumDef(_, id, type_params, _, _) => Some((
                     &id.name,
                     &id.span,
                     TypeKind::Enum,
@@ -178,6 +178,14 @@ impl Checker {
 
             self.env
                 .predeclare_type_def(name.clone(), kind, type_params);
+            match stmt {
+                Resolved::StructDef(_, id, _, attrs)
+                | Resolved::EnumDef(_, id, _, _, attrs) => {
+                    self.env
+                        .set_process_state_owner(&id.name, attrs.process_state_owner.clone());
+                }
+                _ => {}
+            }
         }
 
         self.ensure_no_type_cycles(stmts)?;
@@ -185,14 +193,22 @@ impl Checker {
         // Pass 2: finalize field signatures and constructor-like bindings.
         for stmt in stmts {
             match stmt {
-                Resolved::StructDef(_, id, fields) => {
+                Resolved::StructDef(_, id, fields, _) => {
                     let ty_fields = fields
                         .iter()
                         .map(|f| {
-                            Ok((
-                                f.name.clone(),
-                                self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?,
-                            ))
+                            let field_ty =
+                                self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?;
+                            if self.ty_contains_process_init(&field_ty) {
+                                return Err(TypeError {
+                                    message:
+                                        "ProcessInit<T> is only allowed as Lazy @init return type"
+                                            .into(),
+                                    span: f.span.clone(),
+                                    hint: None,
+                                });
+                            }
+                            Ok((f.name.clone(), field_ty))
                         })
                         .collect::<Result<Vec<_>, TypeError>>()?;
                     let private_fields = fields
@@ -215,10 +231,18 @@ impl Checker {
                     let ty_fields = fields
                         .iter()
                         .map(|f| {
-                            Ok((
-                                f.name.clone(),
-                                self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?,
-                            ))
+                            let field_ty =
+                                self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?;
+                            if self.ty_contains_process_init(&field_ty) {
+                                return Err(TypeError {
+                                    message:
+                                        "ProcessInit<T> is only allowed as Lazy @init return type"
+                                            .into(),
+                                    span: f.span.clone(),
+                                    hint: None,
+                                });
+                            }
+                            Ok((f.name.clone(), field_ty))
                         })
                         .collect::<Result<Vec<_>, TypeError>>()?;
                     let private_fields = fields
@@ -260,7 +284,7 @@ impl Checker {
                             hint: None,
                         })?;
                 }
-                Resolved::EnumDef(_, id, type_params, variants) => {
+                Resolved::EnumDef(_, id, type_params, variants, _) => {
                     let _ = self
                         .env
                         .resolve_type_def_signature(&id.name, Vec::new(), HashSet::new())
@@ -311,11 +335,21 @@ impl Checker {
                             .payload
                             .iter()
                             .map(|ty| {
-                                self.resolve_signature_ast_ty_in_context(
+                                let payload_ty = self.resolve_signature_ast_ty_in_context(
                                     ty,
                                     TypeSyntaxContext::General,
                                     &mut sig_tyvars,
-                                )
+                                )?;
+                                if self.ty_contains_process_init(&payload_ty) {
+                                    return Err(TypeError {
+                                        message:
+                                            "ProcessInit<T> is only allowed as Lazy @init return type"
+                                                .into(),
+                                        span: Self::ast_ty_span(ty).clone(),
+                                        hint: None,
+                                    });
+                                }
+                                Ok(payload_ty)
                             })
                             .collect::<Result<Vec<_>, _>>()?;
 
@@ -363,7 +397,7 @@ impl Checker {
 
         for stmt in stmts {
             match stmt {
-                Resolved::StructDef(_, id, fields)
+                Resolved::StructDef(_, id, fields, _)
                 | Resolved::RecordDef(_, id, fields)
                 | Resolved::DeferrorDef(_, id, fields, _) => {
                     decl_spans.insert(id.name.clone(), id.span.clone());
@@ -376,7 +410,7 @@ impl Checker {
                         }
                     }
                 }
-                Resolved::EnumDef(_, id, _, variants) => {
+                Resolved::EnumDef(_, id, _, variants, _) => {
                     decl_spans.insert(id.name.clone(), id.span.clone());
                     edges.entry(id.name.clone()).or_default();
                     let mut common_refs: Option<HashSet<String>> = None;
@@ -608,7 +642,10 @@ impl Checker {
         let mut structs_with_new: HashSet<String> = HashSet::new();
 
         for stmt in stmts {
-            if let Resolved::StructDef(_, id, fields) = stmt {
+            if let Resolved::StructDef(_, id, fields, attrs) = stmt {
+                if attrs.process_state_owner.is_some() {
+                    continue;
+                }
                 let expected_self_ty = Ty::Struct(
                     id.name.clone(),
                     fields
@@ -1600,6 +1637,21 @@ impl Checker {
                         )?,
                         None => Ty::Unit,
                     };
+                    let function_symbol = id.qualified_name.as_deref().unwrap_or(&id.name);
+                    if self.ty_contains_process_init(&ret)
+                        && !self.is_lazy_init_function_symbol(function_symbol)
+                    {
+                        return Err(TypeError {
+                            message:
+                                "ProcessInit<T> is only allowed as Lazy @init return type".into(),
+                            span: ret_ty
+                                .as_ref()
+                                .map(Self::ast_ty_span)
+                                .cloned()
+                                .unwrap_or_else(|| id.span.clone()),
+                            hint: None,
+                        });
+                    }
                     let type_params = tyvars
                         .values()
                         .filter_map(|ty| match ty {

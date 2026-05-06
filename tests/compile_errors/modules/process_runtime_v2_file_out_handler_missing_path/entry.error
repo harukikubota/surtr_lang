@@ -1,0 +1,2 @@
+phase: codegen
+contains: FileOutHandler requires named argument `path`

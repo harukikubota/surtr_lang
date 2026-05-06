@@ -52,6 +52,14 @@ defmod OutHandler {
   @builtin def __out_handler_write(pid: PID<OutHandler>, text: String) -> Result<Unit>
 }
 
+@doc """
+Marker module for process-local input handler dependencies.
+
+v2 standardizes `StdIn` as the builtin input handler identity. Buffered input
+test helpers remain a later surface extension.
+"""
+defmod InHandler {}
+
 defmod Task {
   @doc """
   Run a zero-argument task body and return its Result.

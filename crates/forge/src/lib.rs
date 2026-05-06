@@ -850,15 +850,18 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
         let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
         assert_eq!(bytecode.runtime_process_specs.entries.len(), 1);
         let spec = &bytecode.runtime_process_specs.entries[0];
-        assert_eq!(spec.process_name, "Counter");
-        assert_eq!(spec.module_path, "Counter");
-        assert!(!spec.boot);
-        assert!(spec.registry);
-        assert_eq!(spec.set_fun_idx.is_some(), true);
-        assert_eq!(spec.handlers.len(), 1);
-        assert_eq!(spec.handlers[0].slot, "out");
-        assert_eq!(spec.handlers[0].capability, "OutHandler");
-        assert_eq!(spec.handlers[0].default_target.name, "StdOut");
+        assert_eq!(spec.process_id, 0);
+        assert_eq!(spec.type_name, "Counter");
+        assert_eq!(spec.state.state_type.name, "Int");
+        assert_eq!(
+            spec.init.policy,
+            sindr::ir::RuntimeInitPolicy::Eager
+        );
+        assert_eq!(spec.handlers.len(), 3);
+        assert_eq!(spec.dependencies.handlers.len(), 1);
+        assert_eq!(spec.dependencies.handlers[0].slot, "out");
+        assert_eq!(spec.dependencies.handlers[0].capability, "OutHandler");
+        assert_eq!(spec.dependencies.handlers[0].default_target.name, "StdOut");
     }
 
     #[test]
@@ -964,27 +967,65 @@ supervisor_init {
         assert_eq!(bytecode.runtime_process_specs.entries.len(), 1);
         let spec = &bytecode.runtime_process_specs.entries[0];
         assert_eq!(spec.kind, sindr::ir::RuntimeProcessKind::GenServer);
-        assert_eq!(spec.handler_specs.len(), 3);
-        assert_eq!(spec.handler_specs[0].handler_id, 0);
-        assert_eq!(spec.handler_specs[0].name, "init");
+        assert_eq!(spec.handlers.len(), 3);
+        assert_eq!(spec.handlers[0].handler_id, 0);
+        assert_eq!(spec.handlers[0].name, "init");
         assert_eq!(
-            spec.handler_specs[0].kind,
+            spec.handlers[0].kind,
             sindr::ir::RuntimeHandlerKind::Init
         );
-        assert_eq!(spec.handler_specs[0].fun_idx, spec.init_fun_idx);
-        assert_eq!(spec.handler_specs[1].handler_id, 1);
-        assert_eq!(spec.handler_specs[1].name, "info");
+        assert_eq!(spec.handlers[0].fun_idx, spec.init.callable.fun_idx);
+        assert_eq!(spec.handlers[1].handler_id, 1);
+        assert_eq!(spec.handlers[1].name, "info");
         assert_eq!(
-            spec.handler_specs[1].kind,
+            spec.handlers[1].kind,
             sindr::ir::RuntimeHandlerKind::Call
         );
-        assert_eq!(spec.handler_specs[1].fun_idx, spec.get_fun_idx);
-        assert_eq!(spec.handler_specs[2].handler_id, 2);
-        assert_eq!(spec.handler_specs[2].name, "reset");
+        assert_eq!(spec.handlers[2].handler_id, 2);
+        assert_eq!(spec.handlers[2].name, "reset");
         assert_eq!(
-            spec.handler_specs[2].kind,
+            spec.handlers[2].kind,
             sindr::ir::RuntimeHandlerKind::Cast
         );
-        assert_eq!(Some(spec.handler_specs[2].fun_idx), spec.set_fun_idx);
+    }
+
+    #[test]
+    fn codegen_typed_program_emits_v2_process_spec_for_lazy_process_init() {
+        let typed = typed_module_program_with_builtin_prelude(
+            r#"defgenserver LazyCache {
+  meta {
+    instance: Singleton
+    init_policy: Lazy
+  }
+
+  @init
+  def init() -> Result<ProcessInit<Int>> {
+    Ok(Ready(0))
+  }
+
+  @call
+  def value(state: Int) -> Result<(Int, Int)> {
+    Ok((state, state))
+  }
+}"#,
+        );
+
+        let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
+        assert_eq!(bytecode.runtime_process_specs.entries.len(), 1);
+        let spec = &bytecode.runtime_process_specs.entries[0];
+        assert_eq!(spec.process_id, 0);
+        assert_eq!(spec.type_name, "LazyCache");
+        assert_eq!(spec.state.state_type.name, "Int");
+        assert_eq!(
+            spec.init.policy,
+            sindr::ir::RuntimeInitPolicy::Lazy
+        );
+        assert!(matches!(
+            spec.init.result_shape,
+            sindr::ir::RuntimeInitResultShape::LazyProcessInit { .. }
+        ));
+        assert_eq!(spec.dependencies.handlers.len(), 0);
+        assert!(spec.lifecycle.owner.is_none());
+        assert!(spec.supervision.parent.is_none());
     }
 }

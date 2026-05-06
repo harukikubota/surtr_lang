@@ -1,0 +1,5 @@
+defmod Api {
+  def ready() -> ProcessInit<Int> {
+    1
+  }
+}
