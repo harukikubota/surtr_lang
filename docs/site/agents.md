@@ -5,7 +5,7 @@ Surtr の `defagent` は、状態を runtime 管理下へ押し上げながら�
 最初に押さえるポイントは次の 3 つです。
 
 - singleton agent は `Type::pid()` で共有インスタンスへ入る
-- multi agent は `Type::spawn(...)` で `PID<T>` を受け取る
+- multi agent は `Type::init(...)` で `PID<T>` を受け取る
 - `get` / `set` はどちらも `PID<T>` を受け取る型付き API として使う
 
 `import` を使うと、`@get` / `@set` で公開された concrete 関数名は通常の関数と同じように unqualified 参照できます。いっぽうで compiler-managed な `pid` / `spawn` や hidden lower helper は import できず、直接呼び出しもできません。
@@ -72,8 +72,8 @@ cargo run -q -p rune -- run examples/process/agent_singleton_counter/entry.srt
 ```surtr
 include "./Agents.srt"
 
-alpha =? Worker::spawn(3)
-beta =? Worker::spawn(7)
+alpha =? Worker::init(3)
+beta =? Worker::init(7)
 
 print(inspect(Worker::get(alpha, "jobs")))
 print(inspect(Worker::get(beta, "jobs")))
@@ -89,10 +89,10 @@ cargo run -q -p rune -- run examples/process/agent_worker_multi/entry.srt
 
 読み方:
 
-- `Worker::spawn(3)` は `Result<PID<Worker>>` を返します
+- `Worker::init(3)` は `Result<PID<Worker>>` を返します
 - `=?` を使うと `Ok(pid)` を束縛しつつ、`Err(...)` はそのまま返せます
 - `alpha` と `beta` は別 PID なので、`set` しても state は混ざりません
-- `spawn` や `set` の失敗は panic ではなく `Result` として観測します
+- `init` や `set` の失敗は panic ではなく `Result` として観測します
 
 ## Singleton と Worker の選び方
 

@@ -467,6 +467,14 @@ fn result_named_ty(span: &Span, type_name: &str) -> AstTy {
     )
 }
 
+fn process_route_attrs(user_importable: bool, user_callable: bool) -> DeclAttrs {
+    DeclAttrs {
+        user_importable,
+        user_callable,
+        ..DeclAttrs::default()
+    }
+}
+
 fn param_vars(span: &Span, params: &[FunParam]) -> Vec<Ast> {
     params
         .iter()
@@ -512,35 +520,38 @@ fn process_state_bind(span: &Span, lower_module: &str) -> Ast {
     )
 }
 
-fn init_wrapper_ret_ty(span: &Span, init_def: &Ast) -> Result<Option<AstTy>, ParseError> {
-    let ret_ty = def_ret_ty(init_def)?.ok_or_else(|| {
-        ParseError::syntax("worker init wrapper requires return type", span.clone())
-    })?;
-    Ok(Some(AstTy::Func(
+fn init_spawn_closure(span: &Span, init_def: &Ast) -> Result<Ast, ParseError> {
+    let params = def_params(init_def)?.clone();
+    Ok(Ast::Closure(
         span.clone(),
         Vec::new(),
-        Box::new(ret_ty),
-    )))
+        Box::new(call(span, "__agent_init", param_vars(span, &params))),
+    ))
 }
 
-fn build_init_wrapper(span: &Span, init_def: &Ast) -> Result<Ast, ParseError> {
+fn build_worker_init_route_wrapper(
+    span: &Span,
+    process_name: &str,
+    wrapper_name: &str,
+    init_def: &Ast,
+) -> Result<Ast, ParseError> {
     let params = def_params(init_def)?.clone();
     let body = Ast::Block(
         span.clone(),
-        vec![Ast::Closure(
-            span.clone(),
-            Vec::new(),
-            Box::new(call(span, "__agent_init", param_vars(span, &params))),
+        vec![path_call(
+            span,
+            &["DynamicSupervisor", "spawn"],
+            vec![init_spawn_closure(span, init_def)?],
         )],
     );
     Ok(Ast::Def(
         span.clone(),
-        "init".to_string(),
+        wrapper_name.to_string(),
         def_type_params(init_def)?,
         params,
-        init_wrapper_ret_ty(span, init_def)?,
+        Some(result_pid_ty(span, process_name)),
         Box::new(body),
-        DeclAttrs::default(),
+        process_route_attrs(true, true),
     ))
 }
 
@@ -569,7 +580,7 @@ fn build_readonly_get_wrapper(
         surface_params,
         def_ret_ty(get_def)?,
         Box::new(body),
-        DeclAttrs::default(),
+        process_route_attrs(true, true),
     ))
 }
 
@@ -581,7 +592,7 @@ fn pid_param(span: &Span, agent_name: &str) -> FunParam {
     }
 }
 
-fn build_pid_wrapper(span: &Span, agent_name: &str) -> Ast {
+fn build_pid_wrapper(span: &Span, lower_module: &str, agent_name: &str) -> Ast {
     Ast::Def(
         span.clone(),
         "pid".to_string(),
@@ -590,31 +601,30 @@ fn build_pid_wrapper(span: &Span, agent_name: &str) -> Ast {
         Some(pid_ty(span, agent_name)),
         Box::new(Ast::Block(
             span.clone(),
-            vec![process_pid_call(span, "Agent", agent_name)],
+            vec![process_pid_call(span, lower_module, agent_name)],
         )),
-        DeclAttrs::default(),
+        process_route_attrs(false, false),
     )
 }
 
-fn build_spawn_wrapper(span: &Span, agent_name: &str, init_def: &Ast) -> Result<Ast, ParseError> {
-    let params = def_params(init_def)?.clone();
-    let body = Ast::Block(
+fn build_singleton_init_route_wrapper(
+    span: &Span,
+    lower_module: &str,
+    process_name: &str,
+    wrapper_name: &str,
+) -> Ast {
+    Ast::Def(
         span.clone(),
-        vec![path_call(
-            span,
-            &["DynamicSupervisor", "spawn"],
-            vec![call(span, "init", param_vars(span, &params))],
-        )],
-    );
-    Ok(Ast::Def(
-        span.clone(),
-        "spawn".to_string(),
-        def_type_params(init_def)?,
-        params,
-        Some(result_pid_ty(span, agent_name)),
-        Box::new(body),
-        DeclAttrs::default(),
-    ))
+        wrapper_name.to_string(),
+        Vec::new(),
+        Vec::new(),
+        Some(pid_ty(span, process_name)),
+        Box::new(Ast::Block(
+            span.clone(),
+            vec![process_pid_call(span, lower_module, process_name)],
+        )),
+        process_route_attrs(false, false),
+    )
 }
 
 fn build_supervisor_spawn_wrapper(span: &Span, supervisor_name: &str) -> Ast {
@@ -819,7 +829,7 @@ fn build_state_get_wrapper(
         surface_params,
         def_ret_ty(get_def)?,
         Box::new(body),
-        DeclAttrs::default(),
+        process_route_attrs(true, true),
     ))
 }
 
@@ -868,7 +878,7 @@ fn build_state_set_wrapper(
         surface_params,
         Some(result_unit_ty(span)),
         Box::new(body),
-        DeclAttrs::default(),
+        process_route_attrs(true, true),
     ))
 }
 
@@ -907,33 +917,44 @@ fn build_genserver_call_wrapper(
     wrapper_name: &str,
     internal_handler_name: &str,
     call_def: &Ast,
+    singleton: bool,
 ) -> Result<Ast, ParseError> {
     let params = def_params(call_def)?;
-    let surface_params = params.iter().skip(2).cloned().collect::<Vec<_>>();
+    let surface_params = if singleton {
+        params.iter().skip(2).cloned().collect::<Vec<_>>()
+    } else {
+        let mut surface_params = vec![pid_param(span, process_name)];
+        surface_params.extend(params.iter().skip(2).cloned());
+        surface_params
+    };
+    let forwarded_params = if singleton {
+        surface_params.as_slice()
+    } else {
+        &surface_params[1..]
+    };
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
-    call_args.extend(param_vars(span, &surface_params));
-    let body = Ast::Block(
+    call_args.extend(param_vars(span, forwarded_params));
+    let mut stmts = Vec::new();
+    if singleton {
+        stmts.push(pid_bind(span, "GenServer", process_name));
+    }
+    stmts.push(process_state_bind(span, "GenServer"));
+    stmts.push(Ast::SafeBind(
         span.clone(),
-        vec![
-            pid_bind(span, "GenServer", process_name),
-            process_state_bind(span, "GenServer"),
-            Ast::SafeBind(
-                span.clone(),
-                AstPattern::Var(span.clone(), "reply_state".to_string()),
-                Box::new(call(span, internal_handler_name, call_args)),
-            ),
-            Ast::SafeBind(
-                span.clone(),
-                AstPattern::Wildcard(span.clone()),
-                Box::new(internal_qualified_call(
-                    span,
-                    &["GenServer", "store"],
-                    vec![var(span, "pid"), genserver_pair_field(span, "_1")],
-                )),
-            ),
-            constructor_call(span, "Ok", vec![genserver_pair_field(span, "_0")]),
-        ],
-    );
+        AstPattern::Var(span.clone(), "reply_state".to_string()),
+        Box::new(call(span, internal_handler_name, call_args)),
+    ));
+    stmts.push(Ast::SafeBind(
+        span.clone(),
+        AstPattern::Wildcard(span.clone()),
+        Box::new(internal_qualified_call(
+            span,
+            &["GenServer", "store"],
+            vec![var(span, "pid"), genserver_pair_field(span, "_1")],
+        )),
+    ));
+    stmts.push(constructor_call(span, "Ok", vec![genserver_pair_field(span, "_0")]));
+    let body = Ast::Block(span.clone(), stmts);
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
@@ -941,7 +962,7 @@ fn build_genserver_call_wrapper(
         surface_params,
         result_reply_ty_from_call_ret(span, def_ret_ty(call_def)?),
         Box::new(body),
-        DeclAttrs::default(),
+        process_route_attrs(true, true),
     ))
 }
 
@@ -951,28 +972,39 @@ fn build_genserver_cast_wrapper(
     wrapper_name: &str,
     internal_handler_name: &str,
     cast_def: &Ast,
+    singleton: bool,
 ) -> Result<Ast, ParseError> {
     let params = def_params(cast_def)?;
-    let surface_params = params.iter().skip(2).cloned().collect::<Vec<_>>();
+    let surface_params = if singleton {
+        params.iter().skip(2).cloned().collect::<Vec<_>>()
+    } else {
+        let mut surface_params = vec![pid_param(span, process_name)];
+        surface_params.extend(params.iter().skip(2).cloned());
+        surface_params
+    };
+    let forwarded_params = if singleton {
+        surface_params.as_slice()
+    } else {
+        &surface_params[1..]
+    };
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
-    call_args.extend(param_vars(span, &surface_params));
-    let body = Ast::Block(
+    call_args.extend(param_vars(span, forwarded_params));
+    let mut stmts = Vec::new();
+    if singleton {
+        stmts.push(pid_bind(span, "GenServer", process_name));
+    }
+    stmts.push(process_state_bind(span, "GenServer"));
+    stmts.push(Ast::SafeBind(
         span.clone(),
-        vec![
-            pid_bind(span, "GenServer", process_name),
-            process_state_bind(span, "GenServer"),
-            Ast::SafeBind(
-                span.clone(),
-                AstPattern::Var(span.clone(), "next_state".to_string()),
-                Box::new(call(span, internal_handler_name, call_args)),
-            ),
-            internal_qualified_call(
-                span,
-                &["GenServer", "store"],
-                vec![var(span, "pid"), var(span, "next_state")],
-            ),
-        ],
-    );
+        AstPattern::Var(span.clone(), "next_state".to_string()),
+        Box::new(call(span, internal_handler_name, call_args)),
+    ));
+    stmts.push(internal_qualified_call(
+        span,
+        &["GenServer", "store"],
+        vec![var(span, "pid"), var(span, "next_state")],
+    ));
+    let body = Ast::Block(span.clone(), stmts);
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
@@ -980,7 +1012,7 @@ fn build_genserver_cast_wrapper(
         surface_params,
         Some(result_unit_ty(span)),
         Box::new(body),
-        DeclAttrs::default(),
+        process_route_attrs(true, true),
     ))
 }
 
@@ -1505,10 +1537,12 @@ impl Parser<'_> {
             ret_ty,
             Box::new(body),
             DeclAttrs {
-                visibility,
                 doc: attrs.doc,
                 auto_import: attrs.auto_import,
                 hidden: attrs.hidden,
+                visibility,
+                user_importable: attrs.user_importable,
+                user_callable: attrs.user_callable,
                 process_state_owner: attrs.process_state_owner,
             },
         ))
@@ -3839,6 +3873,7 @@ impl Parser<'_> {
                 call_name,
                 internal_name,
                 call_def,
+                process_meta.instance == AgentInstance::Singleton,
             )?);
         }
         for (cast_name, internal_name, cast_def) in &lowered_casts {
@@ -3848,7 +3883,19 @@ impl Parser<'_> {
                 cast_name,
                 internal_name,
                 cast_def,
+                process_meta.instance == AgentInstance::Singleton,
             )?);
+        }
+
+        if process_meta.instance == AgentInstance::Worker {
+            body.push(build_worker_init_route_wrapper(&span, &name, &init_name, &init_def)?);
+        } else {
+            body.push(build_singleton_init_route_wrapper(
+                &span,
+                "GenServer",
+                &name,
+                &init_name,
+            ));
         }
 
         let process_spec =
@@ -4014,10 +4061,15 @@ impl Parser<'_> {
             }
             AgentKind::State => {
                 if meta.instance == AgentInstance::Worker {
-                    body.push(build_init_wrapper(&span, &init_def)?);
-                    body.push(build_spawn_wrapper(&span, &name, &init_def)?);
+                    body.push(build_worker_init_route_wrapper(&span, &name, &init_name, &init_def)?);
                 } else {
-                    body.push(build_pid_wrapper(&span, &name));
+                    body.push(build_pid_wrapper(&span, "Agent", &name));
+                    body.push(build_singleton_init_route_wrapper(
+                        &span,
+                        "Agent",
+                        &name,
+                        &init_name,
+                    ));
                 }
                 let singleton = meta.instance == AgentInstance::Singleton;
                 body.push(build_state_get_wrapper(

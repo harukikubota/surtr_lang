@@ -2,12 +2,27 @@ use serde::{Deserialize, Serialize};
 use sindr::primitives::SurtrInt;
 use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, Symbol, Visibility};
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedDeclAttrs {
     pub doc: Option<String>,
     pub hidden: bool,
     pub visibility: Visibility,
+    pub user_importable: bool,
+    pub user_callable: bool,
     pub process_state_owner: Option<Symbol>,
+}
+
+impl Default for ResolvedDeclAttrs {
+    fn default() -> Self {
+        Self {
+            doc: None,
+            hidden: false,
+            visibility: Visibility::Public,
+            user_importable: true,
+            user_callable: true,
+            process_state_owner: None,
+        }
+    }
 }
 
 /// A resolved identifier — name + unique id + source location.

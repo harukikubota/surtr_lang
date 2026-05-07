@@ -7,6 +7,10 @@ fn hidden_builtin_import_message(fq_name: &str) -> String {
     format!("Import target `{fq_name}` is a hidden builtin and cannot be imported")
 }
 
+fn restricted_surface_import_message(fq_name: &str) -> String {
+    format!("Import target `{fq_name}` cannot be imported from user code")
+}
+
 fn auto_import_trait_names(declaration_index: &DeclarationIndex) -> HashSet<String> {
     declaration_index
         .values()
@@ -286,6 +290,10 @@ fn import_list_into_scope(
             issues.not_importable.push(fq_name);
             continue;
         }
+        if !entry.user_importable {
+            issues.not_importable.push(fq_name);
+            continue;
+        }
         if entry.hidden {
             issues.hidden_builtins.push(fq_name);
             continue;
@@ -394,6 +402,9 @@ fn import_module_into_scope(
             continue;
         }
         if !is_importable_declaration(&entry.kind) {
+            continue;
+        }
+        if !entry.user_importable {
             continue;
         }
         if entry.hidden {
@@ -598,6 +609,13 @@ fn import_single_into_scope(
     if !is_importable_declaration(&entry.kind) {
         return Err(ResolveError {
             message: format!("Import target `{}` is not importable", fq_name),
+            span,
+            related_labels: Vec::new(),
+        });
+    }
+    if !entry.user_importable {
+        return Err(ResolveError {
+            message: restricted_surface_import_message(&fq_name),
             span,
             related_labels: Vec::new(),
         });

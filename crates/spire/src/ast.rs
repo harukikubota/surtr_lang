@@ -19,13 +19,29 @@ pub enum Visibility {
 }
 
 /// Attributes attached to a declaration.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DeclAttrs {
     pub doc: Option<String>,
     pub auto_import: bool,
     pub hidden: bool,
     pub visibility: Visibility,
+    pub user_importable: bool,
+    pub user_callable: bool,
     pub process_state_owner: Option<Symbol>,
+}
+
+impl Default for DeclAttrs {
+    fn default() -> Self {
+        Self {
+            doc: None,
+            auto_import: false,
+            hidden: false,
+            visibility: Visibility::Public,
+            user_importable: true,
+            user_callable: true,
+            process_state_owner: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

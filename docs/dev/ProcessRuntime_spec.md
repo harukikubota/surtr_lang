@@ -392,7 +392,7 @@ defagent ImageWorker {
   }
 }
 
-pid =? ImageWorker::spawn(0)
+pid =? ImageWorker::init(0)
 _ =? ImageWorker::assign(pid, 3)
 jobs =? ImageWorker::value(pid)
 ```
@@ -476,7 +476,7 @@ text = CounterServer::view(pid, "count")
 Worker GenServer も public surface は自然な process owner API を使う。
 
 ```surtr
-pid =? QueueServer::spawn("image")
+pid =? QueueServer::init("image")
 _ =? QueueServer::push(pid, "a.png")
 size =? QueueServer::size(pid)
 ```

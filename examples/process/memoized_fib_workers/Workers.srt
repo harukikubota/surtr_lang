@@ -39,8 +39,8 @@ defgenserver FibManager {
 
   @init
   def init() -> Result<(PID<FibWorker>, PID<FibWorker>)> {
-    even =? FibWorker::spawn((0, 0))
-    odd =? FibWorker::spawn((1, 1))
+    even =? FibWorker::init((0, 0))
+    odd =? FibWorker::init((1, 1))
     Ok((even, odd))
   }
 

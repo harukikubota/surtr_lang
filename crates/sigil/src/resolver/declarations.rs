@@ -47,6 +47,8 @@ pub struct DeclarationEntry {
     pub auto_import: bool,
     pub hidden: bool,
     pub visibility: Visibility,
+    pub user_importable: bool,
+    pub user_callable: bool,
 }
 
 pub type DeclarationIndex = BTreeMap<String, DeclarationEntry>;
@@ -73,6 +75,14 @@ pub(super) fn is_importable_declaration(kind: &DeclarationKind) -> bool {
 
 fn entry_visibility(attrs: &DeclAttrs) -> Visibility {
     attrs.visibility
+}
+
+fn entry_user_importable(attrs: &DeclAttrs) -> bool {
+    attrs.user_importable
+}
+
+fn entry_user_callable(attrs: &DeclAttrs) -> bool {
+    attrs.user_callable
 }
 
 fn normalize_impl_method_name(target: &str, method_name: &str) -> String {
@@ -707,6 +717,8 @@ pub fn precollect_declaration_index(
                                 auto_import: false,
                                 hidden: attrs.hidden,
                                 visibility: entry_visibility(attrs),
+                                user_importable: entry_user_importable(attrs),
+                                user_callable: entry_user_callable(attrs),
                             },
                         );
                     }
@@ -740,6 +752,8 @@ pub fn precollect_declaration_index(
                             auto_import: attrs.auto_import,
                             hidden: false,
                             visibility: Visibility::Public,
+                            user_importable: true,
+                            user_callable: true,
                         },
                     );
 
@@ -773,6 +787,8 @@ pub fn precollect_declaration_index(
                                 auto_import: false,
                                 hidden: false,
                                 visibility: Visibility::Public,
+                                user_importable: true,
+                                user_callable: true,
                             },
                         );
                     }
@@ -831,6 +847,8 @@ pub fn precollect_declaration_index(
                                 auto_import: false,
                                 hidden: false,
                                 visibility: Visibility::Private,
+                                user_importable: false,
+                                user_callable: false,
                             },
                         );
                     }
@@ -870,6 +888,8 @@ pub fn precollect_declaration_index(
                             auto_import: false,
                             hidden: false,
                             visibility: Visibility::Public,
+                            user_importable: true,
+                            user_callable: true,
                         },
                     );
 
@@ -897,19 +917,23 @@ pub fn precollect_declaration_index(
                                 auto_import: false,
                                 hidden: false,
                                 visibility: Visibility::Public,
+                                user_importable: true,
+                                user_callable: true,
                             },
                         );
                     }
                     continue;
                 }
 
-                let (span, name, kind, visibility, hidden) = match stmt {
+                let (span, name, kind, visibility, hidden, user_importable, user_callable) = match stmt {
                     Ast::Def(span, name, _, _, _, _, attrs) => (
                         span,
                         name.as_str(),
                         DeclarationKind::Def,
                         entry_visibility(attrs),
                         false,
+                        entry_user_importable(attrs),
+                        entry_user_callable(attrs),
                     ),
                     Ast::ExtractorDef(span, name, _, _, _, _, attrs) => (
                         span,
@@ -917,6 +941,8 @@ pub fn precollect_declaration_index(
                         DeclarationKind::Extractor,
                         entry_visibility(attrs),
                         false,
+                        entry_user_importable(attrs),
+                        entry_user_callable(attrs),
                     ),
                     Ast::ConstDef(span, name, _, _, attrs) => (
                         span,
@@ -924,6 +950,8 @@ pub fn precollect_declaration_index(
                         DeclarationKind::Const,
                         entry_visibility(attrs),
                         false,
+                        entry_user_importable(attrs),
+                        entry_user_callable(attrs),
                     ),
                     Ast::BuiltinDecl(span, name, _, _, attrs) => (
                         span,
@@ -931,6 +959,8 @@ pub fn precollect_declaration_index(
                         DeclarationKind::Def,
                         Visibility::Public,
                         attrs.hidden,
+                        entry_user_importable(attrs),
+                        entry_user_callable(attrs),
                     ),
                     Ast::IntrinsicDecl(_, _, _, _) => continue,
                     Ast::BuiltinExtractorDecl(span, name, _, _, attrs) => (
@@ -939,6 +969,8 @@ pub fn precollect_declaration_index(
                         DeclarationKind::Extractor,
                         Visibility::Public,
                         attrs.hidden,
+                        entry_user_importable(attrs),
+                        entry_user_callable(attrs),
                     ),
                     Ast::ImplDef(_, _, _, _)
                     | Ast::TraitDef(_, _, _, _, _)
@@ -949,6 +981,8 @@ pub fn precollect_declaration_index(
                         DeclarationKind::ResultCtor,
                         Visibility::Public,
                         attrs.hidden,
+                        entry_user_importable(attrs),
+                        entry_user_callable(attrs),
                     ),
                     Ast::BuiltinTypeDecl(span, head, attrs) => (
                         span,
@@ -956,6 +990,8 @@ pub fn precollect_declaration_index(
                         DeclarationKind::BuiltinType,
                         Visibility::Public,
                         attrs.hidden,
+                        entry_user_importable(attrs),
+                        entry_user_callable(attrs),
                     ),
                     Ast::StructDef(span, name, _, _) => (
                         span,
@@ -963,6 +999,8 @@ pub fn precollect_declaration_index(
                         DeclarationKind::Struct,
                         Visibility::Public,
                         false,
+                        true,
+                        true,
                     ),
                     Ast::RecordDef(span, name, _, _) => (
                         span,
@@ -970,6 +1008,8 @@ pub fn precollect_declaration_index(
                         DeclarationKind::Record,
                         Visibility::Public,
                         false,
+                        true,
+                        true,
                     ),
                     Ast::DeferrorDef(span, name, _, _, _) => (
                         span,
@@ -977,6 +1017,8 @@ pub fn precollect_declaration_index(
                         DeclarationKind::Deferror,
                         Visibility::Public,
                         false,
+                        true,
+                        true,
                     ),
                     _ => continue,
                 };
@@ -1075,6 +1117,8 @@ pub fn precollect_declaration_index(
                         auto_import: false,
                         hidden,
                         visibility,
+                        user_importable,
+                        user_callable,
                     },
                 );
             }

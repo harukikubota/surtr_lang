@@ -4352,7 +4352,7 @@ fn test_defgenserver_preserves_multiple_call_and_cast_handler_specs() {
 }
 
 #[test]
-fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
+fn test_defagent_worker_init_route_is_public_surface() {
     let ast = parse_with_context(
         r#"defagent Worker {
   meta {
@@ -4379,27 +4379,30 @@ fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
             assert!(body.iter().all(
                 |node| !matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "pid")
             ));
-            let spawn_wrapper = body
-                .iter()
-                .find(
-                    |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "spawn"),
-                )
-                .expect("worker agent should include spawn wrapper");
             let init_wrapper = body
                 .iter()
                 .find(
                     |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "init"),
                 )
                 .expect("worker agent should include init wrapper");
-            match spawn_wrapper {
-                Ast::Def(_, _, _, _, Some(AstTy::Generic(_, ty_name, ty_args)), body, _) => {
-                    assert_eq!(ty_name, "Result");
-                    assert!(matches!(
-                        ty_args.as_slice(),
-                        [AstTy::Generic(_, inner_name, inner_args)]
-                            if inner_name == "PID"
-                                && matches!(inner_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Worker")
-                    ));
+            let set_wrapper = body
+                .iter()
+                .find(
+                    |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "set"),
+                )
+                .expect("worker agent should include set wrapper");
+            match init_wrapper {
+                Ast::Def(_, _, _, params, Some(AstTy::Generic(_, ty_name, ty_args)), body, _) => {
+                    assert_eq!(params.len(), 1);
+                    assert!(
+                        ty_name == "Result"
+                            && matches!(
+                                ty_args.as_slice(),
+                                [AstTy::Generic(_, inner_name, inner_args)]
+                                    if inner_name == "PID"
+                                        && matches!(inner_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Worker")
+                            )
+                    );
                     assert!(matches!(
                         body.as_ref(),
                         Ast::Block(_, stmts)
@@ -4414,40 +4417,7 @@ fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
                             )
                     ));
                 }
-                other => {
-                    panic!("expected spawn wrapper to return Result<PID<Worker>>, got {other:?}")
-                }
-            }
-            let set_wrapper = body
-                .iter()
-                .find(
-                    |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "set"),
-                )
-                .expect("worker agent should include set wrapper");
-            match init_wrapper {
-                Ast::Def(_, _, _, params, Some(AstTy::Func(_, ret_params, ret_ty)), body, _) => {
-                    assert_eq!(params.len(), 1);
-                    assert!(ret_params.is_empty());
-                    assert!(
-                        matches!(ret_ty.as_ref(), AstTy::Generic(_, name, _) if name == "Result")
-                    );
-                    assert!(matches!(
-                        body.as_ref(),
-                        Ast::Block(_, stmts)
-                            if matches!(
-                                stmts.as_slice(),
-                                [Ast::Closure(_, params, body)]
-                                    if params.is_empty()
-                                        && matches!(
-                                            body.as_ref(),
-                                            Ast::App(_, callee, args)
-                                                if args.len() == 1
-                                                    && matches!(callee.as_ref(), Ast::Var(_, name) if name == "__agent_init")
-                                        )
-                            )
-                    ));
-                }
-                other => panic!("expected init wrapper to return zero-arg callable, got {other:?}"),
+                other => panic!("expected init wrapper to return Result<PID<Worker>>, got {other:?}"),
             }
             match set_wrapper {
                 Ast::Def(_, _, _, _, _, body, _) => {
@@ -4482,6 +4452,89 @@ fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
             }
         }
         other => panic!("Expected Defagent, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_defgenserver_worker_init_route_uses_user_defined_name() {
+    let ast = parse_with_context(
+        r#"defgenserver QueueServer {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
+  @init
+  def boot(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @call
+  def size(state: Int) -> Result<(Int, Int)> {
+    Ok((state, state))
+  }
+
+  @cast
+  def reset(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("worker defgenserver should parse");
+
+    match &ast[0] {
+        Ast::Defgenserver(_, name, body, _, _) => {
+            assert_eq!(name, "QueueServer");
+            let init_wrapper = body
+                .iter()
+                .find(|node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "boot"))
+                .expect("worker genserver should expose @init name as public surface");
+            assert!(body.iter().all(
+                |node| !matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "spawn")
+            ));
+            let size_wrapper = body
+                .iter()
+                .find(|node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "size"))
+                .expect("worker genserver should include @call wrapper");
+            match init_wrapper {
+                Ast::Def(_, _, _, params, Some(AstTy::Generic(_, ty_name, ty_args)), body, _) => {
+                    assert_eq!(params.len(), 1);
+                    assert!(
+                        ty_name == "Result"
+                            && matches!(
+                                ty_args.as_slice(),
+                                [AstTy::Generic(_, inner_name, inner_args)]
+                                    if inner_name == "PID"
+                                        && matches!(inner_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "QueueServer")
+                            )
+                    );
+                    assert!(matches!(
+                        body.as_ref(),
+                        Ast::Block(_, stmts)
+                            if matches!(
+                                stmts.as_slice(),
+                                [Ast::App(_, callee, _)]
+                                    if matches!(
+                                        callee.as_ref(),
+                                        Ast::Path(_, path)
+                                            if path.segments.as_slice() == ["DynamicSupervisor", "spawn"]
+                                    )
+                            )
+                    ));
+                }
+                other => panic!("expected worker genserver init wrapper to return Result<PID<QueueServer>>, got {other:?}"),
+            }
+            match size_wrapper {
+                Ast::Def(_, _, _, params, _, _, _) => {
+                    assert!(matches!(
+                        params.as_slice(),
+                        [FunParam { name, ty: AstTy::Generic(_, ty_name, ty_args), .. }]
+                            if name == "pid"
+                                && ty_name == "PID"
+                                && matches!(ty_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "QueueServer")
+                    ));
+                }
+                other => panic!("expected worker genserver call wrapper with pid receiver, got {other:?}"),
+            }
+        }
+        other => panic!("Expected Defgenserver, got {other:?}"),
     }
 }
 

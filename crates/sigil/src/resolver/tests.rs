@@ -56,6 +56,37 @@ fn staged_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
     }
 }
 
+fn staged_process_module(ast: Vec<Ast>) -> StagedModuleAst {
+    match ast.into_iter().next().expect("process module should exist") {
+        Ast::Defagent(_, module_path, ast, process_spec, attrs) => StagedModuleAst {
+            module_path,
+            doc_module_path: None,
+            ast,
+            module_doc: attrs.doc,
+            auto_import: attrs.auto_import,
+            process_spec: Some(process_spec),
+        },
+        Ast::Defgenserver(_, module_path, ast, process_spec, attrs) => StagedModuleAst {
+            module_path,
+            doc_module_path: None,
+            ast,
+            module_doc: attrs.doc,
+            auto_import: attrs.auto_import,
+            process_spec: Some(process_spec),
+        },
+        Ast::Defsupervisor(_, module_path, ast, process_spec, attrs)
+        | Ast::DefdynamicSupervisor(_, module_path, ast, process_spec, attrs) => StagedModuleAst {
+            module_path,
+            doc_module_path: None,
+            ast,
+            module_doc: attrs.doc,
+            auto_import: attrs.auto_import,
+            process_spec: Some(process_spec),
+        },
+        other => panic!("expected process module, got {other:?}"),
+    }
+}
+
 fn staged_auto_import_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
     StagedModuleAst {
         module_path: module_path.to_string(),
@@ -90,6 +121,39 @@ deferror IndexOutOfBounds(detail: String) { detail }"#,
             "Bootstrap",
         ),
     )]];
+    full_stages.push(vec![
+        staged_module(
+            "Agent",
+            parse_module_ast(
+                r#"@hidden
+@builtin def pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>
+@hidden
+@builtin def state(pid: PID<$Process>) -> Result<$State>
+@hidden
+@builtin def store(pid: PID<$Process>, state: $State) -> Result<Unit>"#,
+                "Agent",
+            ),
+        ),
+        staged_module(
+            "GenServer",
+            parse_module_ast(
+                r#"@hidden
+@builtin def pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>
+@hidden
+@builtin def state(pid: PID<$Process>) -> Result<$State>
+@hidden
+@builtin def store(pid: PID<$Process>, state: $State) -> Result<Unit>"#,
+                "GenServer",
+            ),
+        ),
+        staged_module(
+            "DynamicSupervisor",
+            parse_module_ast(
+                r#"@builtin def spawn(worker_init: (-> Result<$State>)) -> Result<PID<$Process>>"#,
+                "DynamicSupervisor",
+            ),
+        ),
+    ]);
     full_stages.extend(module_stages.iter().cloned());
     let declaration_index =
         precollect_declaration_index(&full_stages).expect("precollect should succeed");
@@ -3661,6 +3725,181 @@ print(priv_fun(1))"#,
     assert!(err.message.contains("Undefined function priv_fun/1"));
     assert!(
         err.message.contains("Help: `OuterMod::priv_fun/1` is private"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_worker_process_init_surface_is_importable() {
+    let module_stages = vec![vec![staged_process_module(parse_module_ast(
+            r#"defagent FibWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+            "FibWorker",
+        ))]];
+
+    resolve_user_with_modules(
+        r#"import FibWorker::init
+worker =? init(1)
+print(inspect(worker))"#,
+        &module_stages,
+    )
+    .expect("worker init route should be importable");
+}
+
+#[test]
+fn test_singleton_process_init_surface_is_not_importable() {
+    let module_stages = vec![vec![staged_process_module(parse_module_ast(
+            r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+            "Counter",
+        ))]];
+
+    let err = resolve_user_with_modules(
+        r#"import Counter::init
+print("ok")"#,
+        &module_stages,
+    )
+    .expect_err("singleton init route import should fail");
+
+    assert!(
+        err.message.contains("Counter::init"),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("cannot be imported"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_compiler_generated_spawn_surface_is_not_exposed_to_user_imports() {
+    let module_stages = vec![vec![staged_process_module(parse_module_ast(
+            r#"defagent FibWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+            "FibWorker",
+        ))]];
+
+    let err = resolve_user_with_modules(
+        r#"import FibWorker::spawn
+print("ok")"#,
+        &module_stages,
+    )
+    .expect_err("compiler-generated spawn should not be exposed for import");
+
+    assert!(
+        err.message.contains("FibWorker::spawn"),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Unknown import member"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_worker_genserver_init_surface_is_importable() {
+    let module_stages = vec![vec![staged_process_module(parse_module_ast(
+            r#"defgenserver QueueServer {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
+  @init
+  def boot(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @call
+  def size(state: Int) -> Result<(Int, Int)> {
+    Ok((state, state))
+  }
+}"#,
+            "QueueServer",
+        ))]];
+
+    resolve_user_with_modules(
+        r#"import QueueServer::boot
+pid =? boot(1)
+print(inspect(pid))"#,
+        &module_stages,
+    )
+    .expect("worker genserver init route should be importable");
+}
+
+#[test]
+fn test_singleton_process_init_surface_is_not_callable_from_user_code() {
+    let module_stages = vec![vec![staged_process_module(parse_module_ast(
+            r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+            "Counter",
+        ))]];
+
+    let err = resolve_user_with_modules("print(inspect(Counter::init()))", &module_stages)
+        .expect_err("singleton init route call should fail");
+
+    assert!(
+        err.message.contains("Counter::init/0"),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("cannot be called"),
         "actual error: {}",
         err.message
     );

@@ -1098,6 +1098,42 @@ impl Resolver {
         format!("Function `{fq_name}/{arity}` is private")
     }
 
+    fn restricted_callable_error_message(&self, fq_name: &str, arity: usize) -> String {
+        format!("Function `{fq_name}/{arity}` cannot be called from user code")
+    }
+
+    fn declaration_entry_for_uid(&self, uid: u32) -> Option<&DeclarationEntry> {
+        self.declaration_uids
+            .iter()
+            .find_map(|(fq_name, entry_uid)| (*entry_uid == uid).then_some(fq_name))
+            .and_then(|fq_name| self.declaration_entries.get(fq_name))
+    }
+
+    fn ensure_user_callable_surface(
+        &self,
+        resolved_func: &Resolved,
+        span: &Span,
+        arity: usize,
+    ) -> Result<(), ResolveError> {
+        let Resolved::Var(_, id) = resolved_func else {
+            return Ok(());
+        };
+        if id.compiler_generated {
+            return Ok(());
+        }
+        let Some(entry) = self.declaration_entry_for_uid(id.unique_id) else {
+            return Ok(());
+        };
+        if entry.user_callable {
+            return Ok(());
+        }
+        Err(ResolveError {
+            message: self.restricted_callable_error_message(&entry.fq_name, arity),
+            span: span.clone(),
+            related_labels: Vec::new(),
+        })
+    }
+
     fn private_callable_hint_for_bare_name(&self, name: &str, arity: usize) -> Option<String> {
         let matches = self
             .explicit_module_imports
@@ -1629,6 +1665,7 @@ impl Resolver {
                 let resolved_func = self
                     .resolve_node(*func.clone())
                     .map_err(|err| self.map_undefined_callable_error(err, &func, args.len()))?;
+                self.ensure_user_callable_surface(&resolved_func, &span, args.len())?;
                 let resolved_args = args
                     .into_iter()
                     .map(|arg| match arg {
