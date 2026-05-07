@@ -1381,12 +1381,18 @@ impl Resolver {
             "__process_sleep" => "Use `Process::sleep(...)` instead.",
             "__task_call" => "Use `Task::call(...)` instead.",
             "__task_async" => "Use `Task::async(...)` instead.",
+            "__task_await" => "Use `Task::await(...)` instead.",
             "__task_launch" => "Use `Task::launch(...)` instead.",
             "__task_cast" => "Use `Task::cast(...)` instead.",
             "__task_call_timeout"
             | "__task_async_timeout"
+            | "__task_await_timeout"
             | "__task_launch_timeout"
-            | "__task_cast_timeout" => "Use the public Task API with `@timeout(...)` instead.",
+            | "__task_cast_timeout"
+            | "__workers_submit_timeout"
+            | "__workers_broadcast_timeout" => {
+                "Use the public Task/Workers API with `@timeout(...)` instead."
+            }
             "__process_pid" | "__process_spawn" | "__process_state" | "__process_store" => {
                 "This helper is compiler-managed; use `defagent`, `defgenserver`, or the public process surface instead."
             }

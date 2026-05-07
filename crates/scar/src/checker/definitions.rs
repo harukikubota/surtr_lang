@@ -1412,6 +1412,11 @@ impl Checker {
             if variant.enum_name == "MatchResult" && !self.in_extractor_body {
                 return Err(self.match_result_value_not_allowed_error(span));
             }
+            if matches!(variant.enum_name.as_str(), "StopReply" | "StopReason")
+                && !self.stop_constructor_allowed()
+            {
+                return Err(self.stop_constructor_error(span, &variant.enum_name));
+            }
             if args.len() != variant.payload.len() {
                 return Err(TypeError {
                     message: format!(

@@ -17,6 +17,10 @@
 diagnostics の正本である。`EldrVM spec` は VM が受け取る正規化済み runtime 契約と
 実行意味論のみを扱う。
 
+process runtime の変更を追うときは、まず `Process runtime spec` を開く。
+特に `@call` / `@cast` の戻り値契約、`@timeout(...)`、`TaskHandle` / `Task::await(...)`、
+worker stop semantics はこのページを正本とし、`doc/` 配下の作業メモを別正本として扱わない。
+
 ## 併読するとよいもの
 
 - [../../doc/要件定義v9.md](../../doc/要件定義v9.md)

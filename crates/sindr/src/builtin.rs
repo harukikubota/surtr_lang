@@ -481,6 +481,41 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(PID<$Process>, $State) -> Result<Unit>",
     },
     BuiltinMeta {
+        name: "__genserver_call_reply",
+        arity: 3,
+        sig_str: "(PID<$Process>, $State, $Reply) -> Result<$Reply>",
+    },
+    BuiltinMeta {
+        name: "__genserver_call_reply_later",
+        arity: 3,
+        sig_str: "(PID<$Process>, $State, (-> Result<$Reply>)) -> Result<$Reply>",
+    },
+    BuiltinMeta {
+        name: "__genserver_call_stop_normal",
+        arity: 2,
+        sig_str: "(PID<$Process>, $Reply) -> Result<$Reply>",
+    },
+    BuiltinMeta {
+        name: "__genserver_call_stop_error",
+        arity: 2,
+        sig_str: "(PID<$Process>, Error) -> Result<$Reply>",
+    },
+    BuiltinMeta {
+        name: "__genserver_cast_next",
+        arity: 2,
+        sig_str: "(PID<$Process>, $State) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__genserver_cast_stop_normal",
+        arity: 1,
+        sig_str: "(PID<$Process>) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__genserver_cast_stop_error",
+        arity: 2,
+        sig_str: "(PID<$Process>, Error) -> Result<Unit>",
+    },
+    BuiltinMeta {
         name: "__process_self",
         arity: 0,
         sig_str: "() -> PID<$Process>",
@@ -523,7 +558,12 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "__task_async",
         arity: 1,
-        sig_str: "((-> Result<$A>)) -> Result<$A>",
+        sig_str: "((-> Result<$A>)) -> TaskHandle<$A>",
+    },
+    BuiltinMeta {
+        name: "__task_await",
+        arity: 1,
+        sig_str: "(TaskHandle<$A>) -> Result<$A>",
     },
     BuiltinMeta {
         name: "__task_launch",
@@ -543,7 +583,12 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "__task_async_timeout",
         arity: 2,
-        sig_str: "(Duration, (-> Result<$A>)) -> Result<$A>",
+        sig_str: "(Duration, (-> Result<$A>)) -> TaskHandle<$A>",
+    },
+    BuiltinMeta {
+        name: "__task_await_timeout",
+        arity: 2,
+        sig_str: "(Duration, TaskHandle<$A>) -> Result<$A>",
     },
     BuiltinMeta {
         name: "__task_launch_timeout",
@@ -561,9 +606,19 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Workers<$Worker>, (PID<$Worker> -> Result<Unit>)) -> Result<Unit>",
     },
     BuiltinMeta {
+        name: "__workers_submit_timeout",
+        arity: 3,
+        sig_str: "(Duration, Workers<$Worker>, (PID<$Worker> -> Result<Unit>)) -> Result<Unit>",
+    },
+    BuiltinMeta {
         name: "__workers_broadcast",
         arity: 2,
         sig_str: "(Workers<$Worker>, (PID<$Worker> -> Result<$A>)) -> List<Result<$A>>",
+    },
+    BuiltinMeta {
+        name: "__workers_broadcast_timeout",
+        arity: 3,
+        sig_str: "(Duration, Workers<$Worker>, (PID<$Worker> -> Result<$A>)) -> List<Result<$A>>",
     },
     BuiltinMeta {
         name: "__workers_reserve",
@@ -793,6 +848,10 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         name: TypeName::WorkerLease.as_str(),
         params: &["$Worker"],
     },
+    BuiltinTypeMeta {
+        name: TypeName::TaskHandle.as_str(),
+        params: &["$T"],
+    },
 ];
 
 pub fn builtin_meta_by_name(name: &str) -> Option<&'static BuiltinMeta> {
@@ -831,6 +890,7 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
         Some("Workers::size") => "__workers_size",
         Some("Task::call") => "__task_call",
         Some("Task::async") => "__task_async",
+        Some("Task::await") => "__task_await",
         Some("Task::launch") => "__task_launch",
         Some("Task::cast") => "__task_cast",
         _ => declared_name,

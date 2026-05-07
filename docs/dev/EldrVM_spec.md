@@ -254,7 +254,7 @@ Opcode は以下のカテゴリを持つ。
 - `HashMap` の runtime 表現は immutable map を基準にし、duplicate key 更新時は後勝ちで値を上書きする
 - process / task / duration 系の hidden builtin は owner module (`Process`, `Task`, `Duration`) 側の `@hidden @builtin ...` 宣言に対応し、`CallBuiltin` で実装する。VM は process table / PID capability / handler callable invocation を経由する。詳細な process runtime 契約は [ProcessRuntime spec](./ProcessRuntime_spec.md) を正とする。
 - `Process::sleep(duration)` は runtime builtin とし、`Duration` 値を受け取って `Result<Unit>` を返す。
-- task timeout は `@timeout(100ms)` literal から hidden builtin 呼び出しへ lower し、dynamic timeout は初期フェーズでは許可しない。
+- process / workers / task await timeout は `@timeout(100ms)` literal から hidden builtin 呼び出しへ lower し、dynamic timeout は初期フェーズでは許可しない。
 - regex 系は Rust `regex` crate のラッパーとして builtin 実装し、regex 未サポート構文は `RegexCompileError` として返す
 - `RegexCaptures` の runtime 表現は `groups: Vec<Option<(start, end)>>`, `name_to_index: HashMap<String, usize>`, `input: String` を保持する
 - random 系は `CallBuiltin` で実装し、Opcode は追加しない。`RandomGenerator` は opaque な seedable state として保持し、半開区間が空の場合は `InvalidRandomRange` を `Result` の `Err` として返す

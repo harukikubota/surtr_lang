@@ -3978,8 +3978,7 @@ impl Checker {
         let ResolvedRecordLitArg::Positional(worker_init) = &args[0] else {
             unreachable!("validated named arguments above")
         };
-        let worker_process = self.supervisor_spawn_worker_process(worker_init)?;
-        let typed_init = self.check_node(worker_init)?;
+        let (worker_process, typed_init) = self.synthesize_supervisor_worker_init(worker_init)?;
         match self.resolve_ty(&typed_init.ty) {
             Ty::Func(params, _) if params.is_empty() => {}
             other => {
@@ -4177,8 +4176,7 @@ impl Checker {
         let ResolvedRecordLitArg::Positional(size_expr) = &args[1] else {
             unreachable!("validated named arguments above")
         };
-        let worker_process = self.supervisor_spawn_worker_process(worker_init)?;
-        let typed_init = self.check_node(worker_init)?;
+        let (worker_process, typed_init) = self.synthesize_supervisor_worker_init(worker_init)?;
         match self.resolve_ty(&typed_init.ty) {
             Ty::Func(params, _) if params.is_empty() => {}
             other => {
@@ -4305,6 +4303,9 @@ impl Checker {
         };
         let qualified = id.qualified_name.as_deref()?;
         let process_name = qualified.strip_suffix(&format!("::{method}"))?;
+        if process_name == "Supervisor" {
+            return None;
+        }
         self.supervisor_spec_by_name(process_name)
             .map(|spec| spec.process_name.clone())
     }
@@ -4321,9 +4322,52 @@ impl Checker {
         })
     }
 
-    fn supervisor_spawn_worker_process(&self, worker_init: &Resolved) -> Result<String, TypeError> {
+    fn worker_process_spec_for_init_route<'a>(
+        &'a self,
+        qualified: &str,
+    ) -> Option<(&'a TypedProcessSpec, &'a spire::ast::ProcessRuntimeHandlerSpec)> {
+        self.process_specs.iter().find_map(|spec| {
+            if spec.spec.instance != spire::ast::ProcessInstance::Worker {
+                return None;
+            }
+            spec.spec
+                .handler_specs
+                .iter()
+                .find(|handler| {
+                    handler.kind == spire::ast::ProcessRuntimeHandlerKind::Init
+                        && qualified == format!("{}::{}", spec.process_name, handler.name)
+                })
+                .map(|handler| (spec, handler))
+        })
+    }
+
+    fn worker_process_spec_for_internal_init_uid(&self, uid: u32) -> Option<&TypedProcessSpec> {
+        self.process_specs.iter().find(|spec| {
+            spec.spec.instance == spire::ast::ProcessInstance::Worker && spec.init_uid == uid
+        })
+    }
+
+    fn synthesize_supervisor_worker_init(
+        &mut self,
+        worker_init: &Resolved,
+    ) -> Result<(String, TypedNode), TypeError> {
         let span = self.resolved_span(worker_init).clone();
-        let Resolved::App(_, func, _) = worker_init else {
+        if let Resolved::Closure(_, params, _, body) = worker_init {
+            if params.is_empty() {
+                if let Resolved::App(_, func, _) = body.as_ref() {
+                    if let Resolved::Var(_, id) = func.as_ref() {
+                        if let Some(process_spec) =
+                            self.worker_process_spec_for_internal_init_uid(id.unique_id)
+                        {
+                            let process_name = process_spec.process_name.clone();
+                            let typed_init = self.check_node(worker_init)?;
+                            return Ok((process_name, typed_init));
+                        }
+                    }
+                }
+            }
+        }
+        let Resolved::App(_, func, args) = worker_init else {
             return Err(TypeError {
                 message: "supervisor spawn expects a worker init route reference".into(),
                 span,
@@ -4338,35 +4382,38 @@ impl Checker {
             });
         };
         let qualified = id.qualified_name.as_deref().unwrap_or(&id.name);
-        let Some(process_name) = qualified.strip_suffix("::init") else {
+        let Some((process_spec, init_handler)) = self.worker_process_spec_for_init_route(qualified)
+        else {
             return Err(TypeError {
                 message: "supervisor spawn expects a worker init route reference".into(),
                 span,
                 hint: Some("Use `MyWorker::init(args)`.".into()),
             });
         };
-        let Some(process_spec) = self
-            .process_specs
-            .iter()
-            .find(|spec| spec.process_name == process_name)
-        else {
-            return Err(TypeError {
-                message: format!("unknown worker process `{process_name}`"),
-                span,
-                hint: None,
-            });
-        };
-        if process_spec.spec.instance != spire::ast::ProcessInstance::Worker {
-            return Err(TypeError {
-                message: format!(
-                    "supervisor spawn requires a Worker init route, but `{}` is not a Worker process",
-                    process_spec.process_name
-                ),
-                span,
-                hint: Some("Use a process declared with `instance: Worker`.".into()),
-            });
-        }
-        Ok(process_spec.process_name.clone())
+        let process_name = process_spec.process_name.clone();
+        let internal_name = init_handler.internal_name.clone();
+        let init_uid = process_spec.init_uid;
+        let synthetic = Resolved::Closure(
+            span.clone(),
+            Vec::new(),
+            Vec::new(),
+            Box::new(Resolved::App(
+                span.clone(),
+                Box::new(Resolved::Var(
+                    span.clone(),
+                    ResolvedId {
+                        name: internal_name.clone(),
+                        qualified_name: Some(format!("{}::{}", process_name, internal_name)),
+                        unique_id: init_uid,
+                        compiler_generated: true,
+                        span: span.clone(),
+                    },
+                )),
+                args.clone(),
+            )),
+        );
+        let typed_init = self.check_node(&synthetic)?;
+        Ok((process_name, typed_init))
     }
 
     fn check_process_context_handler(

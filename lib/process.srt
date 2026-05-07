@@ -84,6 +84,47 @@ defgenserver ImageWorkerPool {
 @builtin type Workers<$Worker>
 
 @doc """
+Runtime-managed task handle for an async task body.
+
+`TaskHandle<$T>` is returned by `Task::async(...)` and consumed by
+`Task::await(...)`.
+"""
+@builtin type TaskHandle<$T>
+
+@doc """
+Return contract for worker `@call` handlers.
+"""
+defenum CallResult<$Reply, $State> {
+  Reply($Reply, $State),
+  ReplyLater($State, (-> Result<$Reply>)),
+  Stop(StopReply<$Reply>),
+}
+
+@doc """
+Stop payload for worker `@call` handlers.
+"""
+defenum StopReply<$Reply> {
+  Normal($Reply),
+  Error(Error),
+}
+
+@doc """
+Return contract for worker `@cast` handlers.
+"""
+defenum CastResult<$State> {
+  Next($State),
+  Stop(StopReason),
+}
+
+@doc """
+Stop payload for worker `@cast` handlers.
+"""
+defenum StopReason {
+  Normal,
+  Error(Error),
+}
+
+@doc """
 Runtime-managed reservation for one worker from a `Workers<$Worker>` handle.
 
 `WorkerLease<$Worker>` is returned by `Workers::reserve(workers)`. Pass the
@@ -126,9 +167,9 @@ impl Workers {
     }
 
     @cast
-    def submit(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Workers<ImageWorker>> {
+    def submit(workers: Workers<ImageWorker>, job: ImageJob) -> Result<CastResult<Workers<ImageWorker>>> {
       _ =? Workers::submit(workers, ImageWorker::assign(job))
-      Ok(workers)
+      Ok(CastResult::Next(workers))
     }
   }
   """
@@ -152,9 +193,9 @@ impl Workers {
     @call
     def current_states(
       workers: Workers<ImageWorker>
-    ) -> Result<(List<Result<ImageWorkerStateView>>, Workers<ImageWorker>)> {
+    ) -> Result<CallResult<List<Result<ImageWorkerStateView>>, Workers<ImageWorker>>> {
       views = Workers::broadcast(workers, ImageWorker::current_state())
-      Ok((views, workers))
+      Ok(CallResult::Reply(views, workers))
     }
   }
   """
@@ -197,8 +238,8 @@ impl Workers {
     }
 
     @call
-    def size(workers: Workers<ImageWorker>) -> Result<(Int, Workers<ImageWorker>)> {
-      Ok((Workers::size(workers), workers))
+    def size(workers: Workers<ImageWorker>) -> Result<CallResult<Int, Workers<ImageWorker>>> {
+      Ok(CallResult::Reply(Workers::size(workers), workers))
     }
   }
   """
@@ -503,13 +544,23 @@ defmod Task {
   @builtin def call(body: (-> Result<$A>)) -> Result<$A>
 
   @doc """
-  Run a zero-argument task body through the task runtime and return its Result.
+  Start a zero-argument task body through the task runtime and return a handle.
 
   ## REPL
   xldr(1)> Task::async({|| Ok("ready")})
+  <task>
+  """
+  @builtin def async(body: (-> Result<$A>)) -> TaskHandle<$A>
+
+  @doc """
+  Await a task handle and return its Result.
+
+  ## REPL
+  xldr(1)> task = Task::async({|| Ok("ready")})
+  xldr(2)> Task::await(task)
   Ok("ready")
   """
-  @builtin def async(body: (-> Result<$A>)) -> Result<$A>
+  @builtin def await(task: TaskHandle<$A>) -> Result<$A>
 
   @doc """
   Start a detached task body and return Ok(()) after the runtime accepts it.

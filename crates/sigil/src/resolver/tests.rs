@@ -3842,7 +3842,34 @@ print("ok")"#,
 
 #[test]
 fn test_worker_genserver_init_surface_is_importable() {
-    let module_stages = vec![vec![staged_process_module(parse_module_ast(
+    let module_stages = vec![vec![
+        staged_module(
+            "ProcessTypes",
+            parse_module_ast(
+                r#"defenum CallResult<$Reply, $State> {
+  Reply($Reply, $State),
+  ReplyLater($State, (-> Result<$Reply>)),
+  Stop(StopReply<$Reply>),
+}
+
+defenum StopReply<$Reply> {
+  Normal($Reply),
+  Error(Error),
+}
+
+defenum CastResult<$State> {
+  Next($State),
+  Stop(StopReason),
+}
+
+defenum StopReason {
+  Normal,
+  Error(Error),
+}"#,
+                "ProcessTypes",
+            ),
+        ),
+        staged_process_module(parse_module_ast(
             r#"defgenserver QueueServer {
   meta {
     instance: Worker
@@ -3853,12 +3880,13 @@ fn test_worker_genserver_init_surface_is_importable() {
   def boot(seed: Int) -> Result<Int> { Ok(seed) }
 
   @call
-  def size(state: Int) -> Result<(Int, Int)> {
-    Ok((state, state))
+  def size(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
   }
 }"#,
             "QueueServer",
-        ))]];
+        )),
+    ]];
 
     resolve_user_with_modules(
         r#"import QueueServer::boot

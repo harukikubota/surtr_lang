@@ -83,8 +83,9 @@
 - [ ] target down 後の reply を重複処理しないか
 
 ### 3-2. call / cast / get / set
-- [ ] `@call` は `Result<(Reply, State)>` 契約に従っているか
-- [ ] `@cast` / `@set` は `Result<State>` 契約に従っているか
+- [ ] `@call` は `Result<CallResult<Reply, State>>` 契約に従っているか
+- [ ] `@cast` は `Result<CastResult<State>>`、`@set` は `Result<State>` 契約に従っているか
+- [ ] `ReplyLater` / `Stop(...)` を返す場合の state commit、reply、停止処理が一貫しているか
 - [ ] `Err` 時に state を commit していないか
 - [ ] `Ok` 時に state commit と reply が一貫しているか
 
@@ -331,4 +332,3 @@ shared-memory の lock race より、runtime table と lifecycle 更新の race 
 - 誰にも観測されない worker
 - process-owned state の漏洩
 - runtime spec に抽象型が残ること
-

@@ -419,15 +419,15 @@ defgenserver CounterServer {
   }
 
   @call
-  def view(state: CounterServerState, label: String) -> Result<(String, CounterServerState)> {
-    Ok((label ++ "=" ++ to_string(state.value), state))
+  def view(state: CounterServerState, label: String) -> Result<CallResult<String, CounterServerState>> {
+    Ok(CallResult::Reply(label ++ "=" ++ to_string(state.value), state))
   }
 
   @cast
-  def add(state: CounterServerState, delta: Int) -> Result<CounterServerState> {
+  def add(state: CounterServerState, delta: Int) -> Result<CastResult<CounterServerState>> {
     next = state.value + delta
     if(next >= 0,
-      Ok(CounterServerState { value: next }),
+      Ok(CastResult::Next(CounterServerState { value: next })),
       Err(NoneError)
     )
   }
@@ -453,8 +453,8 @@ Handler 契約:
 |---|---|---|
 | `@init` Eager | `(...) -> Result<State>` | なし |
 | `@init` Lazy | `(...) -> Result<ProcessInit<State>>` | なし |
-| `@call` | `(State, Input...) -> Result<(Reply, State)>` | `Type::name(...Input) -> Result<Reply>` |
-| `@cast` | `(State, Input...) -> Result<State>` | `Type::name(...Input) -> Result<()>` |
+| `@call` | `(State, Input...) -> Result<CallResult<Reply, State>>` | `Type::name(...Input) -> Result<Reply>` |
+| `@cast` | `(State, Input...) -> Result<CastResult<State>>` | `Type::name(...Input) -> Result<()>` |
 
 import / 可視性ルール:
 
@@ -580,19 +580,19 @@ defgenserver ImagePool {
   }
 
   @cast
-  def submit(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Workers<ImageWorker>> {
+  def submit(workers: Workers<ImageWorker>, job: ImageJob) -> Result<CastResult<Workers<ImageWorker>>> {
     _ =? Workers::submit(workers, ImageWorker::assign(job))
-    Ok(workers)
+    Ok(CastResult::Next(workers))
   }
 
   @call
-  def values(workers: Workers<ImageWorker>) -> Result<(List<Result<Int>>, Workers<ImageWorker>)> {
-    Ok((Workers::broadcast(workers, ImageWorker::value()), workers))
+  def values(workers: Workers<ImageWorker>) -> Result<CallResult<List<Result<Int>>, Workers<ImageWorker>>> {
+    Ok(CallResult::Reply(Workers::broadcast(workers, ImageWorker::value()), workers))
   }
 
   @call
-  def count(workers: Workers<ImageWorker>) -> Result<(Int, Workers<ImageWorker>)> {
-    Ok((Workers::size(workers), workers))
+  def count(workers: Workers<ImageWorker>) -> Result<CallResult<Int, Workers<ImageWorker>>> {
+    Ok(CallResult::Reply(Workers::size(workers), workers))
   }
 }
 
@@ -623,14 +623,17 @@ defgenserver ImagePool {
   }
 
   @cast
-  def submit(state: ImagePoolState, job: ImageJob) -> Result<ImagePoolState> {
+  def submit(state: ImagePoolState, job: ImageJob) -> Result<CastResult<ImagePoolState>> {
     _ =? Workers::submit(state.workers, ImageWorker::assign(job))
-    Ok(ImagePoolState { workers: state.workers, accepted: state.accepted + 1 })
+    Ok(CastResult::Next(ImagePoolState {
+      workers: state.workers,
+      accepted: state.accepted + 1,
+    }))
   }
 
   @call
-  def count(state: ImagePoolState) -> Result<(Int, ImagePoolState)> {
-    Ok((Workers::size(state.workers), state))
+  def count(state: ImagePoolState) -> Result<CallResult<Int, ImagePoolState>> {
+    Ok(CallResult::Reply(Workers::size(state.workers), state))
   }
 }
 ```
@@ -675,10 +678,11 @@ enum ExitReason {
 初期フェーズの Task は使い捨て process として扱う。
 
 ```surtr
-result = Task::async({||
+task = Task::async({||
   Process::sleep(10ms)
   Ok("ready")
-}) @timeout(100ms)
+})
+result = Task::await(task) @timeout(100ms)
 ```
 
 `@timeout` は直前の runtime-managed call に timeout policy を付与する。timeout した場合、結果値は `Err(TimeOutError)` になる。
@@ -701,7 +705,8 @@ Process::sleep(10ms)
 
 ```surtr
 result = CacheClient::get("key") @timeout(100ms)
-result = Task::async({|| Ok("done") }) @timeout(1s)
+task = Task::async({|| Ok("done") })
+result = Task::await(task) @timeout(1s)
 ```
 
 | timeout | 起点 | 終点 | timeout 時 |
@@ -1367,8 +1372,8 @@ VM は少なくとも次の queue / table を持つ。
 | `defagent` | `@set` が複数ある | `agent-set-duplicate` | Agent allows at most one `@set` handler. | Use GenServer for multiple write protocols. |
 | `defagent` | `@get` が複数ある | `agent-get-duplicate` | Agent allows exactly one `@get` handler. | Use GenServer for multiple query protocols. |
 | `defgenserver` | `defp` を使った | `genserver-defp-not-allowed` | GenServer body uses `def`; visibility is controlled by annotations. | Replace `defp` with annotation-less `def`. |
-| `defgenserver` | `@call` の戻り値が `Result<Reply>` | `genserver-call-return-mismatch` | `@call` must return `Result<(Reply, State)>`. | Return both reply and next state. |
-| `defgenserver` | `@cast` の戻り値が `Result<()>` | `genserver-cast-return-mismatch` | `@cast` must return `Result<State>`. | Return the next state; external surface becomes `Result<()>`. |
+| `defgenserver` | `@call` の戻り値が `Result<Reply>` | `genserver-call-return-mismatch` | `@call` must return `Result<CallResult<Reply, State>>`. | Return `CallResult::Reply(...)`, `ReplyLater(...)`, or `Stop(...)`. |
+| `defgenserver` | `@cast` の戻り値が `Result<()>` | `genserver-cast-return-mismatch` | `@cast` must return `Result<CastResult<State>>`. | Return `CastResult::Next(...)` or `Stop(...)`. |
 | `meta.handlers` | default target が slot capability を満たさない | `handler-default-capability-mismatch` | handler default does not satisfy required capability. | Use a handler that implements the required capability. |
 | process body | handler slot を裸で参照した | `process-context-bare-access` | handler dependency must be accessed through `ctx.<slot>`. | Use `ctx.out` instead of `out`. |
 | process body | `ctx.<slot>` に代入した | `process-context-readonly` | process context handler is readonly. | Override it from `supervisor_init`. |

@@ -42,19 +42,19 @@ defgenserver MyPool {
   }
 
   @cast
-  def submit(workers: Workers<MyWorker>, next: Int) -> Result<Workers<MyWorker>> {
+  def submit(workers: Workers<MyWorker>, next: Int) -> Result<CastResult<Workers<MyWorker>>> {
     _ =? Workers::submit(workers, MyWorker::set(next))
-    Ok(workers)
+    Ok(CastResult::Next(workers))
   }
 
   @call
-  def values(workers: Workers<MyWorker>) -> Result<(List<Result<Int>>, Workers<MyWorker>)> {
-    Ok((Workers::broadcast(workers, MyWorker::value()), workers))
+  def values(workers: Workers<MyWorker>) -> Result<CallResult<List<Result<Int>>, Workers<MyWorker>>> {
+    Ok(CallResult::Reply(Workers::broadcast(workers, MyWorker::value()), workers))
   }
 
   @call
-  def count(workers: Workers<MyWorker>) -> Result<(Int, Workers<MyWorker>)> {
-    Ok((Workers::size(workers), workers))
+  def count(workers: Workers<MyWorker>) -> Result<CallResult<Int, Workers<MyWorker>>> {
+    Ok(CallResult::Reply(Workers::size(workers), workers))
   }
 }
 

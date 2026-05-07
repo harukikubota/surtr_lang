@@ -45,16 +45,16 @@ defgenserver FibManager {
   }
 
   @call
-  def value(state: (PID<FibWorker>, PID<FibWorker>), n: Int) -> Result<((String, Int), (PID<FibWorker>, PID<FibWorker>))> {
+  def value(state: (PID<FibWorker>, PID<FibWorker>), n: Int) -> Result<CallResult<(String, Int), (PID<FibWorker>, PID<FibWorker>)>> {
     selected =? select_worker(state, n)
     label = selected._0
     pid = selected._1
     match FibWorker::lookup(pid, n) {
-      Ok(value) => Ok((("hit-" ++ label, value), state)),
+      Ok(value) => Ok(CallResult::Reply(("hit-" ++ label, value), state)),
       Err(_) => {
         value = slow_fib(n)
         remembered =? FibWorker::remember(pid, (n, value))
-        Ok((("miss-" ++ label, value), state))
+        Ok(CallResult::Reply(("miss-" ++ label, value), state))
       },
     }
   }

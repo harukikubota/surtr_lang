@@ -1,1 +1,2 @@
-print(inspect(Task::async({|| Process::sleep(100ms) }) @timeout(1ms)))
+task = Task::async({|| Process::sleep(100ms) })
+print(inspect(Task::await(task) @timeout(1ms)))

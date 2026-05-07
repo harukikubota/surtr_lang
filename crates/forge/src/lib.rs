@@ -965,12 +965,12 @@ supervisor_init {
   def init() -> Result<Int> { Ok(0) }
 
   @call
-  def info(state: Int, message: String) -> Result<(String, Int)> {
-    Ok((message, state))
+  def info(state: Int, message: String) -> Result<CallResult<String, Int>> {
+    Ok(CallResult::Reply(message, state))
   }
 
   @cast
-  def reset(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+  def reset(_state: Int, next: Int) -> Result<CastResult<Int>> { Ok(CastResult::Next(next)) }
 }"#,
         );
 
@@ -1011,8 +1011,8 @@ supervisor_init {
   }
 
   @call
-  def value(state: Int) -> Result<(Int, Int)> {
-    Ok((state, state))
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
   }
 }"#,
         );

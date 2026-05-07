@@ -147,6 +147,20 @@ impl Checker {
         ))
     }
 
+    fn resolve_task_handle_surface_ty(&self, span: &Span, args: &[AstTy]) -> Result<Ty, TypeError> {
+        if args.len() != 1 {
+            return Err(TypeError {
+                message: "TaskHandle<T> requires exactly 1 type argument".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        Ok(Ty::Enum(
+            "TaskHandle".to_string(),
+            vec![self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?],
+        ))
+    }
+
     fn ast_ty_is_none_error_marker(ast_ty: &AstTy) -> bool {
         match ast_ty {
             AstTy::Named(_, name) | AstTy::Generic(_, name, _) => {
@@ -409,7 +423,8 @@ impl Checker {
                             | TypeName::Lens
                             | TypeName::Pid
                             | TypeName::Workers
-                            | TypeName::WorkerLease,
+                            | TypeName::WorkerLease
+                            | TypeName::TaskHandle,
                         )
                         | None => {
                             if let Some(def) = self.env.lookup_type_def(name) {
@@ -557,6 +572,20 @@ impl Checker {
                 "PID" => self.resolve_pid_surface_ty(span, args),
                 "Workers" => self.resolve_worker_handle_surface_ty(span, args, "Workers"),
                 "WorkerLease" => self.resolve_worker_handle_surface_ty(span, args, "WorkerLease"),
+                "TaskHandle" => {
+                    if args.len() != 1 {
+                        return Err(TypeError {
+                            message: "TaskHandle<T> requires exactly 1 type argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let inner = self.resolve_ast_ty_in_context(
+                        &args[0],
+                        TypeSyntaxContext::General,
+                    )?;
+                    Ok(Ty::Enum("TaskHandle".into(), vec![inner]))
+                }
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
@@ -596,6 +625,9 @@ impl Checker {
                     }
                     if Self::surface_type_name(name) == "WorkerLease" {
                         return self.resolve_worker_handle_surface_ty(span, args, "WorkerLease");
+                    }
+                    if Self::surface_type_name(name) == "TaskHandle" {
+                        return self.resolve_task_handle_surface_ty(span, args);
                     }
                     let def = self.env.lookup_type_def(name).ok_or_else(|| TypeError {
                         message: format!("Unknown generic type: {}", name),
@@ -842,6 +874,21 @@ impl Checker {
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "WorkerLease" => {
                 self.resolve_worker_handle_surface_ty(span, args, "WorkerLease")
             }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "TaskHandle" => {
+                if args.len() != 1 {
+                    return Err(TypeError {
+                        message: "TaskHandle<T> requires exactly 1 type argument".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let inner = self.resolve_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    tyvars,
+                )?;
+                Ok(Ty::Enum("TaskHandle".into(), vec![inner]))
+            }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "MatchResult" => {
                 if !self.match_result_type_allowed(context) {
                     return Err(self.match_result_not_allowed_error(span));
@@ -934,6 +981,21 @@ impl Checker {
                 }
                 if Self::surface_type_name(name) == "WorkerLease" {
                     return self.resolve_worker_handle_surface_ty(span, args, "WorkerLease");
+                }
+                if Self::surface_type_name(name) == "TaskHandle" {
+                    if args.len() != 1 {
+                        return Err(TypeError {
+                            message: "TaskHandle<T> requires exactly 1 type argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let inner = self.resolve_signature_ast_ty_in_context(
+                        &args[0],
+                        TypeSyntaxContext::General,
+                        tyvars,
+                    )?;
+                    return Ok(Ty::Enum("TaskHandle".into(), vec![inner]));
                 }
                 let def = self
                     .env
@@ -1175,6 +1237,22 @@ impl Checker {
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "WorkerLease" => {
                 self.resolve_worker_handle_surface_ty(span, args, "WorkerLease")
             }
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "TaskHandle" => {
+                if args.len() != 1 {
+                    return Err(TypeError {
+                        message: "TaskHandle<T> requires exactly 1 type argument".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let inner = self.resolve_trait_signature_ast_ty_in_context(
+                    &args[0],
+                    TypeSyntaxContext::General,
+                    self_ty,
+                    tyvars,
+                )?;
+                Ok(Ty::Enum("TaskHandle".into(), vec![inner]))
+            }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "MatchResult" => {
                 if !self.match_result_type_allowed(context) {
                     return Err(self.match_result_not_allowed_error(span));
@@ -1272,6 +1350,22 @@ impl Checker {
                 }
                 if Self::surface_type_name(name) == "WorkerLease" {
                     return self.resolve_worker_handle_surface_ty(span, args, "WorkerLease");
+                }
+                if Self::surface_type_name(name) == "TaskHandle" {
+                    if args.len() != 1 {
+                        return Err(TypeError {
+                            message: "TaskHandle<T> requires exactly 1 type argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let inner = self.resolve_trait_signature_ast_ty_in_context(
+                        &args[0],
+                        TypeSyntaxContext::General,
+                        self_ty,
+                        tyvars,
+                    )?;
+                    return Ok(Ty::Enum("TaskHandle".into(), vec![inner]));
                 }
                 let def = self
                     .env
@@ -1524,6 +1618,21 @@ impl Checker {
                 "PID" => self.resolve_pid_surface_ty(span, args),
                 "Workers" => self.resolve_worker_handle_surface_ty(span, args, "Workers"),
                 "WorkerLease" => self.resolve_worker_handle_surface_ty(span, args, "WorkerLease"),
+                "TaskHandle" => {
+                    if args.len() != 1 {
+                        return Err(TypeError {
+                            message: "TaskHandle<T> requires exactly 1 type argument".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let inner = self.resolve_builtin_ast_ty_in_context(
+                        &args[0],
+                        TypeSyntaxContext::General,
+                        tyvars,
+                    )?;
+                    Ok(Ty::Enum("TaskHandle".into(), vec![inner]))
+                }
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {

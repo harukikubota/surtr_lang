@@ -1,0 +1,39 @@
+defgenserver MyWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> {
+    Ok(seed)
+  }
+
+  @call
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+
+  @call
+  def delayed(state: Int) -> Result<CallResult<Int, Int>> {
+    next = state + 1
+    Ok(CallResult::ReplyLater(next, {||
+      Process::sleep(100ms)
+      Ok(next)
+    }))
+  }
+}
+
+defsupervisor MySup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+
+workers =? MySup::workers(MyWorker::init(1), 1)
+print(inspect(Workers::broadcast(workers, MyWorker::delayed())))
+print(inspect(Workers::broadcast(workers, MyWorker::value())))

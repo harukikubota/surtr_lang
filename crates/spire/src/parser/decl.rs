@@ -405,10 +405,16 @@ fn internal_qualified_call(span: &Span, segments: &[&str], args: Vec<Ast>) -> As
     )
 }
 
-fn constructor_call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
-    Ast::ConstructorCall(
+fn hidden_runtime_call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
+    Ast::App(
         span.clone(),
-        name.to_string(),
+        Box::new(Ast::InternalVar(
+            Span {
+                start: span.start,
+                end: span.start,
+            },
+            name.to_string(),
+        )),
         args.into_iter().map(positional).collect(),
     )
 }
@@ -886,6 +892,15 @@ fn result_reply_ty_from_call_ret(span: &Span, ret_ty: Option<AstTy>) -> Option<A
     match ret_ty {
         Some(AstTy::Generic(result_span, name, args)) if name == "Result" => {
             match args.as_slice() {
+                [AstTy::Generic(_, call_result, items)]
+                    if call_result == "CallResult" && !items.is_empty() =>
+                {
+                    Some(AstTy::Generic(
+                        result_span,
+                        "Result".to_string(),
+                        vec![items[0].clone()],
+                    ))
+                }
                 [AstTy::Tuple(_, items)] if !items.is_empty() => Some(AstTy::Generic(
                     result_span,
                     "Result".to_string(),
@@ -903,12 +918,8 @@ fn result_reply_ty_from_call_ret(span: &Span, ret_ty: Option<AstTy>) -> Option<A
     }
 }
 
-fn genserver_pair_field(span: &Span, field: &str) -> Ast {
-    Ast::FieldAccess(
-        span.clone(),
-        Box::new(var(span, "reply_state")),
-        field.to_string(),
-    )
+fn ctor_pattern(span: &Span, name: &str, args: Vec<AstPattern>) -> AstPattern {
+    AstPattern::Constructor(span.clone(), name.to_string(), args)
 }
 
 fn build_genserver_call_wrapper(
@@ -941,19 +952,89 @@ fn build_genserver_call_wrapper(
     stmts.push(process_state_bind(span, "GenServer"));
     stmts.push(Ast::SafeBind(
         span.clone(),
-        AstPattern::Var(span.clone(), "reply_state".to_string()),
+        AstPattern::Var(span.clone(), "call_result".to_string()),
         Box::new(call(span, internal_handler_name, call_args)),
     ));
-    stmts.push(Ast::SafeBind(
+    stmts.push(Ast::Match(
         span.clone(),
-        AstPattern::Wildcard(span.clone()),
-        Box::new(internal_qualified_call(
-            span,
-            &["GenServer", "store"],
-            vec![var(span, "pid"), genserver_pair_field(span, "_1")],
-        )),
+        Box::new(var(span, "call_result")),
+        vec![
+            AstMatchArm {
+                pattern: ctor_pattern(
+                    span,
+                    "CallResult::Reply",
+                    vec![
+                        AstPattern::Var(span.clone(), "reply".to_string()),
+                        AstPattern::Var(span.clone(), "next_state".to_string()),
+                    ],
+                ),
+                guard: None,
+                body: hidden_runtime_call(
+                    span,
+                    "__genserver_call_reply",
+                    vec![
+                        var(span, "pid"),
+                        var(span, "next_state"),
+                        var(span, "reply"),
+                    ],
+                ),
+            },
+            AstMatchArm {
+                pattern: ctor_pattern(
+                    span,
+                    "CallResult::ReplyLater",
+                    vec![
+                        AstPattern::Var(span.clone(), "next_state".to_string()),
+                        AstPattern::Var(span.clone(), "callback".to_string()),
+                    ],
+                ),
+                guard: None,
+                body: hidden_runtime_call(
+                    span,
+                    "__genserver_call_reply_later",
+                    vec![
+                        var(span, "pid"),
+                        var(span, "next_state"),
+                        var(span, "callback"),
+                    ],
+                ),
+            },
+            AstMatchArm {
+                pattern: ctor_pattern(
+                    span,
+                    "CallResult::Stop",
+                    vec![ctor_pattern(
+                        span,
+                        "StopReply::Normal",
+                        vec![AstPattern::Var(span.clone(), "reply".to_string())],
+                    )],
+                ),
+                guard: None,
+                body: hidden_runtime_call(
+                    span,
+                    "__genserver_call_stop_normal",
+                    vec![var(span, "pid"), var(span, "reply")],
+                ),
+            },
+            AstMatchArm {
+                pattern: ctor_pattern(
+                    span,
+                    "CallResult::Stop",
+                    vec![ctor_pattern(
+                        span,
+                        "StopReply::Error",
+                        vec![AstPattern::Var(span.clone(), "err".to_string())],
+                    )],
+                ),
+                guard: None,
+                body: hidden_runtime_call(
+                    span,
+                    "__genserver_call_stop_error",
+                    vec![var(span, "pid"), var(span, "err")],
+                ),
+            },
+        ],
     ));
-    stmts.push(constructor_call(span, "Ok", vec![genserver_pair_field(span, "_0")]));
     let body = Ast::Block(span.clone(), stmts);
     Ok(Ast::Def(
         span.clone(),
@@ -996,13 +1077,57 @@ fn build_genserver_cast_wrapper(
     stmts.push(process_state_bind(span, "GenServer"));
     stmts.push(Ast::SafeBind(
         span.clone(),
-        AstPattern::Var(span.clone(), "next_state".to_string()),
+        AstPattern::Var(span.clone(), "cast_result".to_string()),
         Box::new(call(span, internal_handler_name, call_args)),
     ));
-    stmts.push(internal_qualified_call(
-        span,
-        &["GenServer", "store"],
-        vec![var(span, "pid"), var(span, "next_state")],
+    stmts.push(Ast::Match(
+        span.clone(),
+        Box::new(var(span, "cast_result")),
+        vec![
+            AstMatchArm {
+                pattern: ctor_pattern(
+                    span,
+                    "CastResult::Next",
+                    vec![AstPattern::Var(span.clone(), "next_state".to_string())],
+                ),
+                guard: None,
+                body: hidden_runtime_call(
+                    span,
+                    "__genserver_cast_next",
+                    vec![var(span, "pid"), var(span, "next_state")],
+                ),
+            },
+            AstMatchArm {
+                pattern: ctor_pattern(
+                    span,
+                    "CastResult::Stop",
+                    vec![ctor_pattern(span, "StopReason::Normal", vec![])],
+                ),
+                guard: None,
+                body: hidden_runtime_call(
+                    span,
+                    "__genserver_cast_stop_normal",
+                    vec![var(span, "pid")],
+                ),
+            },
+            AstMatchArm {
+                pattern: ctor_pattern(
+                    span,
+                    "CastResult::Stop",
+                    vec![ctor_pattern(
+                        span,
+                        "StopReason::Error",
+                        vec![AstPattern::Var(span.clone(), "err".to_string())],
+                    )],
+                ),
+                guard: None,
+                body: hidden_runtime_call(
+                    span,
+                    "__genserver_cast_stop_error",
+                    vec![var(span, "pid"), var(span, "err")],
+                ),
+            },
+        ],
     ));
     let body = Ast::Block(span.clone(), stmts);
     Ok(Ast::Def(

@@ -105,6 +105,8 @@ cargo run -q -p rune -- run examples/process/agent_worker_multi/entry.srt
 - process API は `PID<T>` で型付けされるため、別 agent の PID を混ぜると compile error になります
 - `set` は利用側から見ると `Result<()>` です。内部 state 自体は返しません
 - `Task::call` / `Task::async` / `Task::launch` / `Task::cast` は別の task surface で、agent の PID 管理とは役割が異なります
+- `Task` 系では開始と待機を分けます。非同期開始は `Task::async(...)`、待機は `Task::await(task)` を使います
+- timeout を付ける場合は、開始側ではなく待機側の call に後置します
 
 ## 関連ページ
 

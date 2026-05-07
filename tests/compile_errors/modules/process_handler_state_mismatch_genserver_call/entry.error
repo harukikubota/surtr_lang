@@ -1,2 +1,2 @@
 phase: typecheck
-contains: @call handler `CounterServer::get` Result reply tuple state item must match process state type `CounterState`
+contains: @call handler `CounterServer::get` Result ok type must be CallResult<Reply, CounterState>

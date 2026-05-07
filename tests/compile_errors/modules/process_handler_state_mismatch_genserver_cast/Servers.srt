@@ -15,12 +15,12 @@ defgenserver CounterServer {
   }
 
   @call
-  def get(state: CounterState) -> Result<(Int, CounterState)> {
-    Ok((state.value, state))
+  def get(state: CounterState) -> Result<CallResult<Int, CounterState>> {
+    Ok(CallResult::Reply(state.value, state))
   }
 
   @cast
-  def set(wrong_state: Int, _next: Int) -> Result<CounterState> {
-    Ok(CounterState { value: wrong_state })
+  def set(wrong_state: Int, _next: Int) -> Result<CastResult<CounterState>> {
+    Ok(CastResult::Next(CounterState { value: wrong_state }))
   }
 }

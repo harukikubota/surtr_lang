@@ -1,0 +1,5 @@
+def normal_stop() -> StopReply<Int> {
+  StopReply::Normal(1)
+}
+
+print("stop reply outside worker")

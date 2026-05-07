@@ -389,6 +389,34 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_process_store,
     },
     BuiltinImpl {
+        name: "__genserver_call_reply",
+        func: builtin_genserver_call_reply,
+    },
+    BuiltinImpl {
+        name: "__genserver_call_reply_later",
+        func: builtin_genserver_call_reply_later,
+    },
+    BuiltinImpl {
+        name: "__genserver_call_stop_normal",
+        func: builtin_genserver_call_stop_normal,
+    },
+    BuiltinImpl {
+        name: "__genserver_call_stop_error",
+        func: builtin_genserver_call_stop_error,
+    },
+    BuiltinImpl {
+        name: "__genserver_cast_next",
+        func: builtin_genserver_cast_next,
+    },
+    BuiltinImpl {
+        name: "__genserver_cast_stop_normal",
+        func: builtin_genserver_cast_stop_normal,
+    },
+    BuiltinImpl {
+        name: "__genserver_cast_stop_error",
+        func: builtin_genserver_cast_stop_error,
+    },
+    BuiltinImpl {
         name: "__process_self",
         func: builtin_process_self,
     },
@@ -425,6 +453,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_task_async,
     },
     BuiltinImpl {
+        name: "__task_await",
+        func: builtin_task_await,
+    },
+    BuiltinImpl {
         name: "__task_launch",
         func: builtin_task_launch,
     },
@@ -441,6 +473,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_task_async_timeout,
     },
     BuiltinImpl {
+        name: "__task_await_timeout",
+        func: builtin_task_await_timeout,
+    },
+    BuiltinImpl {
         name: "__task_launch_timeout",
         func: builtin_task_launch_timeout,
     },
@@ -453,8 +489,16 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_workers_submit,
     },
     BuiltinImpl {
+        name: "__workers_submit_timeout",
+        func: builtin_workers_submit_timeout,
+    },
+    BuiltinImpl {
         name: "__workers_broadcast",
         func: builtin_workers_broadcast,
+    },
+    BuiltinImpl {
+        name: "__workers_broadcast_timeout",
+        func: builtin_workers_broadcast_timeout,
     },
     BuiltinImpl {
         name: "__workers_reserve",
@@ -779,6 +823,85 @@ fn builtin_process_store(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
     vm.process_store(&pid, args[1].clone())
 }
 
+fn builtin_genserver_call_reply(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Some(pid) = vm.pid_handle_like(&args[0]) else {
+        return Err(RuntimeError::new("__genserver_call_reply expects PID"));
+    };
+    vm.genserver_call_reply(&pid, args[1].clone(), args[2].clone())
+}
+
+fn builtin_genserver_call_reply_later(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let Some(pid) = vm.pid_handle_like(&args[0]) else {
+        return Err(RuntimeError::new("__genserver_call_reply_later expects PID"));
+    };
+    let Value::Callable(callback) = args[2].clone() else {
+        return Err(RuntimeError::new(
+            "__genserver_call_reply_later expects callback callable",
+        ));
+    };
+    vm.genserver_call_reply_later(&pid, args[1].clone(), callback)
+}
+
+fn builtin_genserver_call_stop_normal(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let Some(pid) = vm.pid_handle_like(&args[0]) else {
+        return Err(RuntimeError::new("__genserver_call_stop_normal expects PID"));
+    };
+    vm.genserver_call_stop_normal(&pid, args[1].clone())
+}
+
+fn builtin_genserver_call_stop_error(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let Some(pid) = vm.pid_handle_like(&args[0]) else {
+        return Err(RuntimeError::new("__genserver_call_stop_error expects PID"));
+    };
+    let Value::Error(err) = args[1].clone() else {
+        return Err(RuntimeError::new(
+            "__genserver_call_stop_error expects Error",
+        ));
+    };
+    vm.genserver_call_stop_error(&pid, *err)
+}
+
+fn builtin_genserver_cast_next(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Some(pid) = vm.pid_handle_like(&args[0]) else {
+        return Err(RuntimeError::new("__genserver_cast_next expects PID"));
+    };
+    vm.genserver_cast_next(&pid, args[1].clone())
+}
+
+fn builtin_genserver_cast_stop_normal(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let Some(pid) = vm.pid_handle_like(&args[0]) else {
+        return Err(RuntimeError::new("__genserver_cast_stop_normal expects PID"));
+    };
+    vm.genserver_cast_stop_normal(&pid)
+}
+
+fn builtin_genserver_cast_stop_error(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let Some(pid) = vm.pid_handle_like(&args[0]) else {
+        return Err(RuntimeError::new("__genserver_cast_stop_error expects PID"));
+    };
+    let Value::Error(err) = args[1].clone() else {
+        return Err(RuntimeError::new(
+            "__genserver_cast_stop_error expects Error",
+        ));
+    };
+    vm.genserver_cast_stop_error(&pid, *err)
+}
+
 fn builtin_process_self(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Process::self must be lowered to a process-owned PID binding before runtime",
@@ -837,6 +960,10 @@ fn builtin_task_async(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErr
     invoke_task_body(vm, &args[0], "__task_async", TaskMode::Async)
 }
 
+fn builtin_task_await(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    vm.await_task_handle(&args[0], None)
+}
+
 fn builtin_task_launch(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     invoke_task_body(vm, &args[0], "__task_launch", TaskMode::Launch)
 }
@@ -863,6 +990,11 @@ fn builtin_task_async_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, Ru
         "__task_async_timeout",
         TaskMode::Async,
     )
+}
+
+fn builtin_task_await_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let timeout_ms = duration_to_u64(vm, &args[0], "__task_await_timeout", "timeout")?;
+    vm.await_task_handle(&args[1], Some(timeout_ms))
 }
 
 fn builtin_task_launch_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -894,6 +1026,16 @@ fn builtin_workers_submit(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtim
     vm.workers_submit(handle, message.clone())
 }
 
+fn builtin_workers_submit_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let [timeout, Value::Workers(handle), Value::Callable(message)] = args.as_slice() else {
+        return Err(RuntimeError::new(
+            "__workers_submit_timeout expects Duration, Workers handle, and callable template",
+        ));
+    };
+    let timeout_ms = duration_to_u64(vm, timeout, "__workers_submit_timeout", "timeout")?;
+    vm.workers_submit_with_timeout(handle, message.clone(), timeout_ms)
+}
+
 fn builtin_workers_broadcast(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let [Value::Workers(handle), Value::Callable(message)] = args.as_slice() else {
         return Err(RuntimeError::new(
@@ -901,6 +1043,19 @@ fn builtin_workers_broadcast(vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
         ));
     };
     vm.workers_broadcast(handle, message.clone())
+}
+
+fn builtin_workers_broadcast_timeout(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let [timeout, Value::Workers(handle), Value::Callable(message)] = args.as_slice() else {
+        return Err(RuntimeError::new(
+            "__workers_broadcast_timeout expects Duration, Workers handle, and callable template",
+        ));
+    };
+    let timeout_ms = duration_to_u64(vm, timeout, "__workers_broadcast_timeout", "timeout")?;
+    vm.workers_broadcast_with_timeout(handle, message.clone(), timeout_ms)
 }
 
 fn builtin_workers_reserve(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

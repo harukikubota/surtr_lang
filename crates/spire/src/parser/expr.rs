@@ -696,7 +696,7 @@ impl Parser<'_> {
             Ast::App(_, func, args) => (*func, args),
             _ => {
                 return Err(ParseError::syntax(
-                    "@timeout(...) can only be applied to Task calls",
+                    "@timeout(...) can only be applied to runtime-managed calls",
                     Span {
                         start,
                         end: end_span.end,
@@ -709,18 +709,18 @@ impl Parser<'_> {
             Ast::Path(_, path) if path.segments.as_slice() == ["Task", "call"] => {
                 "__task_call_timeout"
             }
-            Ast::Path(_, path) if path.segments.as_slice() == ["Task", "async"] => {
-                "__task_async_timeout"
+            Ast::Path(_, path) if path.segments.as_slice() == ["Task", "await"] => {
+                "__task_await_timeout"
             }
-            Ast::Path(_, path) if path.segments.as_slice() == ["Task", "launch"] => {
-                "__task_launch_timeout"
+            Ast::Path(_, path) if path.segments.as_slice() == ["Workers", "submit"] => {
+                "__workers_submit_timeout"
             }
-            Ast::Path(_, path) if path.segments.as_slice() == ["Task", "cast"] => {
-                "__task_cast_timeout"
+            Ast::Path(_, path) if path.segments.as_slice() == ["Workers", "broadcast"] => {
+                "__workers_broadcast_timeout"
             }
             _ => {
                 return Err(ParseError::syntax(
-                    "@timeout(...) is only supported on Task::call/async/launch/cast",
+                    "@timeout(...) is only supported on Task::call/await and Workers::submit/broadcast",
                     Span {
                         start,
                         end: end_span.end,
@@ -729,9 +729,15 @@ impl Parser<'_> {
             }
         };
 
-        if args.len() != 1 || matches!(args[0], RecordLitArg::Named(_, _)) {
+        let expected_arity = match hidden_name {
+            "__task_call_timeout" | "__task_await_timeout" => 1,
+            "__workers_submit_timeout" | "__workers_broadcast_timeout" => 2,
+            _ => 1,
+        };
+
+        if args.len() != expected_arity || args.iter().any(|arg| matches!(arg, RecordLitArg::Named(_, _))) {
             return Err(ParseError::syntax(
-                "@timeout(...) expects a Task call with exactly one positional body argument",
+                "@timeout(...) expects positional arguments for the runtime-managed call",
                 Span {
                     start,
                     end: end_span.end,

@@ -269,12 +269,12 @@
 
 - 背景:
   - process runtime の大枠は `docs/dev/ProcessRuntime_spec.md` に固定したが、worker の user-facing API はまだ足場段階である。
-  - 検討メモでは `spawn`, `DynamicSupervisor::spawn`, `adopt`, `handoff`, `join`, `await`, `on_down`, `Process::exit`, `Process::sleep` の整列が未決として残っている。
+  - `@call` / `@cast` は `CallResult` / `CastResult` 契約へ移行し、user-facing stop surface は `Stop(...)` に寄せた。
+  - `Process::sleep` は scheduler timer、generic `Process::exit` は hidden のままにする方針も baseline として整理された。
 - 未確定点:
   - `Worker::spawn` と `DynamicSupervisor::spawn` の最終 surface をどう並べるか
   - `adopt` / `handoff` を user-facing API として公開するか、runtime intrinsic に留めるか
   - `join` / `await` / `on_down` を generic `receive` の代替となる目的別 API としてどう分けるか
-  - `Process::exit` と `Process::sleep` を worker lifecycle API とどう整合させるか
 - 受け入れ条件:
   - worker 生成、所有権移譲、終了観測の surface が REPL / script / project で一貫する。
   - current process ownership を default とする方針と `DynamicSupervisor` 配下運用の両方を矛盾なく説明できる。
@@ -286,16 +286,21 @@
 
 - 背景:
   - process runtime の基本契約は固まったが、ツーリング表示、boundary layer、VM 可視化、標準ライブラリ再編は最終段階で同期する想定のままである。
+  - `Task::async -> TaskHandle`, `Task::await`, `Workers::submit/broadcast @timeout(...)`, waiting/deadline の baseline は docs と実装の主要経路で同期が進んだ。
+  - worker stop の compile-time restriction と停止後 cleanup の主要経路は、現行の runtime / compile error / spec fixture で baseline 化が進んだ。
   - 現行実装でも `:doc`, `:sig`, `:type`, `:info`, `:lens`、runtime stats、標準 `Process` / `Task` API は存在するが、process-aware な見せ方は未完成である。
 - 未確定点:
+  - `ReplyLater` の layered timeout を正本 spec と runtime tests でどこまで明示固定するか
   - REPL / tooling 表示で init route、process API、singleton slot、supervisor tree をどこまで露出するか
   - domain error / runtime error / boot error を host outcome としてどう正規化するか
   - `RuntimeProcessSpec`, singleton slot, process table, deadline queue, waiting table, hidden message dispatch, supervisor tree をどの debug surface で見せるか
   - `Process`, `Task`, `File`, `Env`, `StdIn`, `StdOut`, `StdErr`, `Logger`, `DynamicSupervisor` の標準ライブラリ再編境界をどう切るか
 - 受け入れ条件:
+  - `ReplyLater` を維持するなら、outer timeout と callback 側 timeout の責務境界を正本 docs と tests の両方で説明できる。
   - 開発者向け spec と REPL / CLI / dump / viewer の観測導線が矛盾しない。
   - process runtime の host 境界と標準ライブラリ境界が `docs/dev/` と実装の両方で説明できる。
 - テスト方針:
+  - `ReplyLater` の timeout 契約を固定する場合は process runtime の spec / runtime test を追加して、outer timeout と callback 側 deadline の優先順位を回帰基準にする。
   - `unit/xldr` / `integration/repl` / `rune` integration で process-aware な表示と失敗形状を固定する。
   - `integration/build_roundtrip` / `run_eldr` / viewer 系テストで runtime metadata の可視化形状を固定する。
 
@@ -303,11 +308,12 @@
 
 - 背景:
   - `Workers<$Worker>` と `WorkerLease<$Worker>`、および `submit` / `broadcast` / `reserve` / `size` は現行 process runtime v2 の確定 surface である。
-  - 一方で設計メモには `submit_timeout`, `snapshot`, `idle_count`, `busy_count`, `drain`, `set_target` などの候補 API が残っている。
+  - timeout は `submit_timeout` のような別 public API ではなく、`Workers::*` 呼び出しに付く `@timeout(...)` modifier へ寄せる方針が baseline になった。
+  - 一方で設計メモには `snapshot`, `idle_count`, `busy_count`, `drain`, `set_target` などの候補 API が残っている。
 - 未確定点:
   - 追加 API を `Workers` の public surface に含めるか、pool wrapper 側 helper に留めるか
   - `snapshot` / `idle_count` / `busy_count` を観測 API として固定するか
-  - `submit_timeout` / `drain` / `set_target` を runtime primitive として持つか
+  - `drain` / `set_target` を runtime primitive として持つか
 - 受け入れ条件:
   - `Workers<$Worker>` が opaque closed handle である前提を崩さない。
   - pool 用 helper を増やしても `List<PID<_>>` 的な抽象漏れを起こさない。
@@ -319,6 +325,7 @@
 
 - 背景:
   - 現行仕様で確定しているのは、`Workers<$Worker>` が runtime-managed closed membership を持つことと、Singleton GenServer pool state に置く使い方までである。
+  - `Workers::broadcast` は `List<Result<T>>` を返し、timeout / error は worker ごとの結果へ閉じ込める方向が baseline になった。
   - ただし pool の増減、補充、再同期、worker 異常終了後の再構成方針はまだ固定していない。
 - 未確定点:
   - target worker 数を runtime が維持するか、user code が reconcile loop を持つか
@@ -367,14 +374,14 @@
 
 - 背景:
   - process runtime v2 では `Task`、`DynamicSupervisor`、worker lifecycle の土台は入ったが、Task supervision と worker lazy init は非対象として残っている。
-  - 既存 spec でも `Task.Supervisor`、`Task` と `DynamicSupervisor` の link、worker async/lazy init は後続課題扱いである。
+  - `Task::async -> TaskHandle<T>`、`Task::await(task) -> Result<T>`、`Task::await @timeout(...)` は baseline として確定し、待機系 surface の最小契約は既存 spec と実装で同期した。
 - 未確定点:
   - `Task.Supervisor` を独立 surface として持つか、`DynamicSupervisor` に統合するか
   - `Task` を supervisor 配下に link したときの ownership / restart / cancellation をどう扱うか
   - worker の lazy init や async init を `ProcessInit<T>` と別契約で導入するか
 - 受け入れ条件:
   - Task と worker の lifecycle 契約が既存の singleton / worker / supervisor モデルと衝突しない。
-  - timeout、waiting、completion 観測が scheduler / runtime diagnostics と整合する。
+  - supervisor / ownership / cancellation 契約を追加しても、既存の `TaskHandle` / `Task::await` baseline と衝突しない。
 - テスト方針:
   - 仕様確定後に Task spawn/link/cancel、worker async init、supervisor 配下 completion の spec fixture を追加する。
   - compile-time 制約を入れる場合は process runtime 系 compile error fixture を増やす。

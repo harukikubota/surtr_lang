@@ -1,0 +1,23 @@
+defgenserver CounterServer {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> {
+    Ok(0)
+  }
+
+  @call
+  def get(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+
+  @cast
+  def reset(_state: Int) -> Result<CastResult<Int>> {
+    Ok(CastResult::Stop(StopReason::Normal))
+  }
+}
+
+print("singleton stop reason")

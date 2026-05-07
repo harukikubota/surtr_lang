@@ -4772,9 +4772,29 @@ fn test_supervisor_init_rejects_parent_override() {
 #[test]
 fn test_task_timeout_literal_parses_in_project_context() {
     let ast = parse_with_context(
-        r#"value = Task::async({|| Ok(())}) @timeout(100ms)"#,
+        r#"value = Task::call({|| Ok(())}) @timeout(100ms)"#,
         ParserContext::project(1),
     )
     .expect("task timeout literal should parse");
+    assert!(!ast.is_empty());
+}
+
+#[test]
+fn test_workers_submit_timeout_literal_parses_in_project_context() {
+    let ast = parse_with_context(
+        r#"value = Workers::submit(workers, Worker::assign(job)) @timeout(100ms)"#,
+        ParserContext::project(1),
+    )
+    .expect("workers submit timeout literal should parse");
+    assert!(!ast.is_empty());
+}
+
+#[test]
+fn test_task_await_timeout_literal_parses_in_project_context() {
+    let ast = parse_with_context(
+        r#"value = Task::await(task) @timeout(100ms)"#,
+        ParserContext::project(1),
+    )
+    .expect("task await timeout literal should parse");
     assert!(!ast.is_empty());
 }

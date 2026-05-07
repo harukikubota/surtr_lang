@@ -40,8 +40,8 @@ defgenserver MyServer {
   def init() -> Result<Int> { Ok(1) }
 
   @call
-  def size(state: Int) -> Result<(Int, Int)> {
-    Ok((state, state))
+  def size(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
   }
 
   def hidden_size(_state: Int) -> Result<Int> { Ok(0) }
@@ -1181,7 +1181,7 @@ fn core_process_type_and_info_support_singletons_and_worker_pids() {
         "{singleton_info}"
     );
 
-    let spawn = engine.handle_line("pid =? MySup::spawn(MyWorker::init(1))");
+    let spawn = engine.handle_line("pid =? MyWorker::init(1)");
     let spawn_text = rendered_text(&spawn);
     assert!(spawn_text.contains("pid: PID<MyWorker>"), "{spawn_text}");
     assert!(!spawn_text.contains("PID<$Process>"), "{spawn_text}");

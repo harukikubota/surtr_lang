@@ -3356,15 +3356,15 @@ fn genserver_additional_call_handler_typechecks_as_process_context() {
   def init() -> Result<Int> { Ok(0) }
 
   @call
-  def info(state: Int) -> Result<(Int, Int)> {
-    Ok((state, state))
+  def info(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
   }
 
   @call
-  def log(state: Int, message: String) -> Result<(Unit, Int)> {
+  def log(state: Int, message: String) -> Result<CallResult<Unit, Int>> {
     _handler = ctx.out
     _message = message
-    Ok(((), state))
+    Ok(CallResult::Reply((), state))
   }
 }"#,
     )]);
@@ -3374,7 +3374,6 @@ fn genserver_additional_call_handler_typechecks_as_process_context() {
         r#"supervisor_init {
   Logger {}
 }
-
 info = Logger::info()
 done = Logger::log("hello")"#,
         spire::ParserContext::project(0),
@@ -3389,6 +3388,39 @@ done = Logger::log("hello")"#,
     .expect("resolve should succeed");
     crate::typecheck_staged_program(resolved)
         .expect("additional @call handler should have process context access");
+}
+
+#[test]
+fn genserver_call_handler_accepts_call_result_contract() {
+    let mut stages = std_module_stages();
+    stages.push(vec![staged_process_module(
+        r#"defgenserver Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def info(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+
+  @cast
+  def reset(_state: Int, next: Int) -> Result<CastResult<Int>> {
+    Ok(CastResult::Next(next))
+  }
+}"#,
+    )]);
+    let declaration_index =
+        sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
+    let resolved =
+        sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
+            .expect("resolve should succeed");
+    crate::typecheck_staged_program(resolved)
+        .expect("CallResult/CastResult handlers should typecheck");
 }
 
 #[test]
@@ -3629,6 +3661,15 @@ values = Workers::broadcast(workers, MyWorker::get("jobs"))"#,
     )
     .expect("workers broadcast should accept worker message template");
     assert!(!typed.nodes.is_empty());
+}
+
+#[test]
+fn task_await_accepts_task_handle() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"task = Task::async({|| Ok("ready")})
+value =? Task::await(task)"#,
+    );
+    assert!(!typed.is_empty());
 }
 
 #[test]

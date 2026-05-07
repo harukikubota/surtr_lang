@@ -67,6 +67,7 @@ pub enum Value {
     Pid(PidHandle),
     Workers(WorkersHandle),
     WorkerLease(WorkerLeaseHandle),
+    TaskHandle(u64),
     PendingFuture(u64),
 }
 
@@ -337,6 +338,7 @@ impl Value {
             Value::WorkerLease(handle) => {
                 format!("WorkerLease<{}>#{}", handle.pid.process_name, handle.pid.id)
             }
+            Value::TaskHandle(future_id) => format!("TaskHandle#{future_id}"),
             Value::PendingFuture(future_id) => format!("<pending:future#{future_id}>"),
         }
     }

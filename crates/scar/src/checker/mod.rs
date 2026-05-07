@@ -1884,8 +1884,10 @@ impl Checker {
         span: Span,
     ) -> Result<(), TypeError> {
         let has_state = self.process_result_ok_ty(ret).is_some_and(|ok| {
-            matches!(self.resolve_ty(&ok), Ty::Tuple(items) if items.len() == 2
-                && self.resolve_ty(&items[1]) == *state_ty)
+            matches!(self.resolve_ty(&ok), Ty::Enum(name, items)
+                if name == "CallResult"
+                    && items.len() == 2
+                    && self.resolve_ty(&items[1]) == *state_ty)
         });
         if has_state {
             return Ok(());
@@ -1893,7 +1895,37 @@ impl Checker {
 
         Err(TypeError {
             message: format!(
-                "@call handler `{}` Result reply tuple state item must match process state type `{}`",
+                "@call handler `{}` Result ok type must be CallResult<Reply, {}>",
+                Self::process_handler_public_name(process, handler_name),
+                state_name
+            ),
+            span,
+            hint: None,
+        })
+    }
+
+    fn validate_cast_handler_result_state(
+        &self,
+        process: &TypedProcessSpec,
+        handler_name: &str,
+        ret: &Ty,
+        state_ty: &Ty,
+        state_name: &str,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        let has_state = self.process_result_ok_ty(ret).is_some_and(|ok| {
+            matches!(self.resolve_ty(&ok), Ty::Enum(name, items)
+                if name == "CastResult"
+                    && items.len() == 1
+                    && self.resolve_ty(&items[0]) == *state_ty)
+        });
+        if has_state {
+            return Ok(());
+        }
+
+        Err(TypeError {
+            message: format!(
+                "@cast handler `{}` Result ok type must be CastResult<{}>",
                 Self::process_handler_public_name(process, handler_name),
                 state_name
             ),
@@ -2090,9 +2122,8 @@ impl Checker {
                             &state_name,
                             handler.span.clone(),
                         )?;
-                        self.validate_handler_result_ok_state(
+                        self.validate_cast_handler_result_state(
                             process,
-                            "cast",
                             &handler.name,
                             &ret,
                             &state_ty,
@@ -2123,6 +2154,50 @@ impl Checker {
         matches!(handler, "__agent_init" | "__agent_get" | "__agent_set")
             || handler.starts_with("__agent_call_")
             || handler.starts_with("__agent_cast_")
+    }
+
+    pub(super) fn current_process_spec(&self) -> Option<&TypedProcessSpec> {
+        let symbol = self.current_function_symbol.as_deref()?;
+        let (module, _) = symbol.rsplit_once("::")?;
+        self.process_specs
+            .iter()
+            .find(|spec| spec.module_path == module || spec.process_name == module)
+    }
+
+    pub(super) fn stop_constructor_allowed(&self) -> bool {
+        let Some(spec) = self.current_process_spec() else {
+            return false;
+        };
+        if spec.spec.kind != spire::ast::ProcessKind::GenServer
+            || spec.spec.instance != spire::ast::ProcessInstance::Worker
+        {
+            return false;
+        }
+        let Some(symbol) = self.current_function_symbol.as_deref() else {
+            return false;
+        };
+        let Some((_, function_name)) = symbol.rsplit_once("::") else {
+            return false;
+        };
+        function_name != "__agent_init"
+    }
+
+    pub(super) fn stop_constructor_error(
+        &self,
+        span: &Span,
+        enum_name: &str,
+    ) -> TypeError {
+        TypeError {
+            message: format!(
+                "{} can only be used inside Worker GenServer @call/@cast handlers or local helper functions",
+                enum_name
+            ),
+            span: span.clone(),
+            hint: Some(
+                "Use Stop(...) only from Worker defgenserver handlers or helper defs in the same process block."
+                    .into(),
+            ),
+        }
     }
 
     fn ty_contains_handler_capability_pid(&self, ty: &Ty, slots: &HashMap<String, String>) -> bool {

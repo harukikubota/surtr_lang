@@ -1,0 +1,33 @@
+defgenserver MyWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> {
+    Ok(seed)
+  }
+
+  @call
+  def stop_now(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Stop(StopReply::Normal(state)))
+  }
+}
+
+defsupervisor MySup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+
+workers =? MySup::workers(MyWorker::init(7), 1)
+print(to_string(Workers::size(workers)))
+match Workers::broadcast(workers, MyWorker::stop_now()) {
+  [Ok(reply)] => print(to_string(reply)),
+  other => print(inspect(other)),
+}

@@ -13,8 +13,8 @@ defgenserver Logger {
   }
 
   @call
-  def info(state: Int, message: String) -> Result<(Unit, Int)> {
+  def info(state: Int, message: String) -> Result<CallResult<Unit, Int>> {
     written =? OutHandler::write(ctx.out, message)
-    Ok((written, state))
+    Ok(CallResult::Reply(written, state))
   }
 }

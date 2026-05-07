@@ -41,6 +41,7 @@ pub enum TypeName {
     Pid,
     Workers,
     WorkerLease,
+    TaskHandle,
 }
 
 impl TypeName {
@@ -72,6 +73,7 @@ impl TypeName {
             Self::Pid => "PID",
             Self::Workers => "Workers",
             Self::WorkerLease => "WorkerLease",
+            Self::TaskHandle => "TaskHandle",
         }
     }
 
@@ -122,6 +124,7 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "PID" => Some(TypeName::Pid),
         "Workers" => Some(TypeName::Workers),
         "WorkerLease" => Some(TypeName::WorkerLease),
+        "TaskHandle" => Some(TypeName::TaskHandle),
         _ => None,
     }
 }

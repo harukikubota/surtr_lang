@@ -20,7 +20,7 @@ pub(super) fn initialize_scope() -> Scope {
     }
     if let Some(hidden_boundary_idx) = BUILTIN_METAS
         .iter()
-        .position(|meta| meta.name == "__task_cast_timeout")
+        .position(|meta| meta.name == "__workers_broadcast_timeout")
     {
         scope.advance_next_id_to(builtin_uid((hidden_boundary_idx + 1) as u16));
     }
