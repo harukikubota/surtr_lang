@@ -580,10 +580,8 @@ impl Checker {
                             hint: None,
                         });
                     }
-                    let inner = self.resolve_ast_ty_in_context(
-                        &args[0],
-                        TypeSyntaxContext::General,
-                    )?;
+                    let inner =
+                        self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     Ok(Ty::Enum("TaskHandle".into(), vec![inner]))
                 }
                 "Result" => {

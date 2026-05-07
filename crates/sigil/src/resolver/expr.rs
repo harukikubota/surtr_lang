@@ -1140,16 +1140,12 @@ impl Resolver {
             .iter()
             .filter_map(|module_name| {
                 let fq_name = format!("{module_name}::{name}");
-                self.callable_entry_for_name(&fq_name).and_then(|entry| {
-                    (entry.visibility == Visibility::Private).then_some(fq_name)
-                })
+                self.callable_entry_for_name(&fq_name)
+                    .and_then(|entry| (entry.visibility == Visibility::Private).then_some(fq_name))
             })
             .collect::<Vec<_>>();
         if matches.len() == 1 {
-            Some(format!(
-                " Help: `{}/{}` is private.",
-                matches[0], arity
-            ))
+            Some(format!(" Help: `{}/{}` is private.", matches[0], arity))
         } else {
             None
         }
@@ -1191,12 +1187,14 @@ impl Resolver {
                 if err.message == format!("Undefined variable: {}", path.segments.join("::")) =>
             {
                 ResolveError {
-                    message: Self::undefined_callable_arity_message(func, arity).unwrap_or_else(|| {
-                        format!(
-                            "Undefined variable or function: {}",
-                            path.segments.join("::")
-                        )
-                    }),
+                    message: Self::undefined_callable_arity_message(func, arity).unwrap_or_else(
+                        || {
+                            format!(
+                                "Undefined variable or function: {}",
+                                path.segments.join("::")
+                            )
+                        },
+                    ),
                     span: err.span,
                     related_labels: Vec::new(),
                 }
@@ -1533,11 +1531,10 @@ impl Resolver {
     }
 
     fn collect_explicit_module_imports(stmts: &[Ast]) -> HashSet<String> {
-        stmts.iter()
+        stmts
+            .iter()
             .filter_map(|stmt| match stmt {
-                Ast::Import(_, path, spire::ast::ImportSpec::All) => {
-                    Some(path.segments.join("::"))
-                }
+                Ast::Import(_, path, spire::ast::ImportSpec::All) => Some(path.segments.join("::")),
                 _ => None,
             })
             .collect()

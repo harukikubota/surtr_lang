@@ -300,7 +300,8 @@ fn resolve_stage_modules_parallel(
                         module_scope.advance_next_id_to(stage_local_base);
                         let mut resolver = Resolver::with_scope(module_scope);
                         resolver.current_module_path = Some(module.module_path.clone());
-                        resolver.declaration_entries = declaration_index.clone().into_iter().collect();
+                        resolver.declaration_entries =
+                            declaration_index.clone().into_iter().collect();
                         resolver.declaration_uids = declaration_uids.clone();
                         resolver.declaration_uid_kinds = declaration_uid_kinds.clone();
                         resolver.declaration_hidden_by_uid = declaration_hidden_by_uid.clone();

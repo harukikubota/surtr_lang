@@ -2182,11 +2182,7 @@ impl Checker {
         function_name != "__agent_init"
     }
 
-    pub(super) fn stop_constructor_error(
-        &self,
-        span: &Span,
-        enum_name: &str,
-    ) -> TypeError {
+    pub(super) fn stop_constructor_error(&self, span: &Span, enum_name: &str) -> TypeError {
         TypeError {
             message: format!(
                 "{} can only be used inside Worker GenServer @call/@cast handlers or local helper functions",

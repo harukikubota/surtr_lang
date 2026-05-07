@@ -1967,7 +1967,9 @@ impl VM {
         callback: Callable,
     ) -> Result<Value, RuntimeError> {
         let _ = self.process_store(pid, next_state)?;
-        let future_id = self.process_runtime.allocate_future(Some(pid.id), None, false);
+        let future_id = self
+            .process_runtime
+            .allocate_future(Some(pid.id), None, false);
         let correlation_id = self.process_runtime.allocate_correlation_id();
         self.process_runtime
             .register_reply_waiter(correlation_id, future_id);
@@ -1975,8 +1977,11 @@ impl VM {
         if let Some((awaiting_future, continuation)) =
             self.reply_waiting_from_outcome(outcome, correlation_id)?
         {
-            self.process_runtime
-                .register_detached_task(Some(pid.id), awaiting_future, continuation);
+            self.process_runtime.register_detached_task(
+                Some(pid.id),
+                awaiting_future,
+                continuation,
+            );
         }
         Ok(Value::PendingFuture(future_id))
     }
@@ -2097,8 +2102,7 @@ impl VM {
         _from_callback_timeout: bool,
     ) -> Vec<u64> {
         let primary_reply = self.process_reply_future_for_pid(pid);
-        let resumed = if let (Some(value), Some((correlation_id, _))) =
-            (reply_value, primary_reply)
+        let resumed = if let (Some(value), Some((correlation_id, _))) = (reply_value, primary_reply)
         {
             self.process_runtime.resolve_reply(correlation_id, value)
         } else {
@@ -2152,9 +2156,9 @@ impl VM {
                 })
             }
             StepOutcome::Pending { future_id, resume } => {
-                let completion_future =
-                    self.process_runtime
-                        .allocate_future_after(None, timeout_ms, true);
+                let completion_future = self
+                    .process_runtime
+                    .allocate_future_after(None, timeout_ms, true);
                 self.await_task_completion(
                     completion_future,
                     StepOutcome::Pending { future_id, resume },
@@ -3352,7 +3356,9 @@ impl VM {
                         if let (Some(completion_future), Some(value)) =
                             (completion_future, ready_value)
                         {
-                            let _ = self.process_runtime.resolve_future(completion_future, value);
+                            let _ = self
+                                .process_runtime
+                                .resolve_future(completion_future, value);
                         }
                     }
                     DetachedTaskContinuation::Resume {
@@ -3363,12 +3369,11 @@ impl VM {
                         if let Ok(Some((awaiting_future, continuation))) =
                             self.detached_waiting_from_outcome(resumed, completion_future)
                         {
-                            self.process_runtime
-                                .register_detached_task(
-                                    task.owner_pid,
-                                    awaiting_future,
-                                    continuation,
-                                );
+                            self.process_runtime.register_detached_task(
+                                task.owner_pid,
+                                awaiting_future,
+                                continuation,
+                            );
                         }
                     }
                     DetachedTaskContinuation::ResolveReply { correlation_id } => {
@@ -3460,24 +3465,22 @@ impl VM {
         completion_future: Option<FutureId>,
     ) -> Result<Option<(FutureId, DetachedTaskContinuation)>, RuntimeError> {
         match outcome {
-            StepOutcome::Halt(Value::PendingFuture(future_id)) => {
-                Ok(Some((
-                    future_id,
-                    DetachedTaskContinuation::AwaitValue { completion_future },
-                )))
-            }
-            StepOutcome::Pending { future_id, resume } => {
-                Ok(Some((
-                    future_id,
-                    DetachedTaskContinuation::Resume {
-                        resume,
-                        completion_future,
-                    },
-                )))
-            }
+            StepOutcome::Halt(Value::PendingFuture(future_id)) => Ok(Some((
+                future_id,
+                DetachedTaskContinuation::AwaitValue { completion_future },
+            ))),
+            StepOutcome::Pending { future_id, resume } => Ok(Some((
+                future_id,
+                DetachedTaskContinuation::Resume {
+                    resume,
+                    completion_future,
+                },
+            ))),
             StepOutcome::Halt(value) => {
                 if let Some(completion_future) = completion_future {
-                    let _ = self.process_runtime.resolve_future(completion_future, value);
+                    let _ = self
+                        .process_runtime
+                        .resolve_future(completion_future, value);
                 }
                 Ok(None)
             }
@@ -3734,8 +3737,11 @@ impl VM {
                 if let Some((awaiting_future, continuation)) =
                     self.detached_waiting_from_outcome(outcome, Some(completion_future))?
                 {
-                    self.process_runtime
-                        .register_detached_task(None, awaiting_future, continuation);
+                    self.process_runtime.register_detached_task(
+                        None,
+                        awaiting_future,
+                        continuation,
+                    );
                 }
                 Ok(Value::TaskHandle(completion_future))
             }
@@ -3745,8 +3751,11 @@ impl VM {
                     if let Some((awaiting_future, continuation)) =
                         self.detached_waiting_from_outcome(outcome, None)?
                     {
-                        self.process_runtime
-                            .register_detached_task(None, awaiting_future, continuation);
+                        self.process_runtime.register_detached_task(
+                            None,
+                            awaiting_future,
+                            continuation,
+                        );
                     }
                     return Ok(ok_vm_result(Value::Unit));
                 }
@@ -3765,8 +3774,11 @@ impl VM {
                     if let Some((awaiting_future, continuation)) =
                         self.detached_waiting_from_outcome(outcome, None)?
                     {
-                        self.process_runtime
-                            .register_detached_task(None, awaiting_future, continuation);
+                        self.process_runtime.register_detached_task(
+                            None,
+                            awaiting_future,
+                            continuation,
+                        );
                     }
                     return Ok(ok_vm_result(Value::Unit));
                 }
@@ -8075,7 +8087,11 @@ mod tests {
         };
         let mut vm = VM::new(bytecode);
         let pid = vm
-            .allocate_supervised_worker("Worker".into(), Some(Value::Int(int(41))), "DynamicSupervisor".into())
+            .allocate_supervised_worker(
+                "Worker".into(),
+                Some(Value::Int(int(41))),
+                "DynamicSupervisor".into(),
+            )
             .expect("worker allocation should succeed");
         let future_id = vm.process_runtime.allocate_future(Some(pid), Some(3), true);
         let correlation_id = vm.process_runtime.allocate_correlation_id();
@@ -8084,15 +8100,16 @@ mod tests {
         vm.process_runtime
             .mark_process_waiting(pid, super::ProcessWaitReason::Reply(correlation_id));
 
-        let resumed = vm.finalize_process_stop(
-            pid,
-            Some(super::ok_vm_result(Value::Int(int(99)))),
-            false,
-        );
+        let resumed =
+            vm.finalize_process_stop(pid, Some(super::ok_vm_result(Value::Int(int(99)))), false);
 
         assert!(resumed.is_empty());
         assert!(matches!(
-            vm.process_runtime.processes.get(&pid).expect("process exists").status,
+            vm.process_runtime
+                .processes
+                .get(&pid)
+                .expect("process exists")
+                .status,
             super::ProcessStatus::Stopped
         ));
         assert!(vm.process_runtime.reply_table.is_empty());
@@ -8105,7 +8122,11 @@ mod tests {
             .get("DynamicSupervisor")
             .is_none_or(|children| !children.contains(&pid)));
         assert!(matches!(
-            vm.process_runtime.futures.get(&future_id).expect("future remains tracked").state,
+            vm.process_runtime
+                .futures
+                .get(&future_id)
+                .expect("future remains tracked")
+                .state,
             super::FutureState::Ready(Value::Tagged { tag: 0, .. })
         ));
     }
@@ -8128,7 +8149,11 @@ mod tests {
         let mut vm = VM::new(bytecode);
         let pid = PidHandle {
             id: vm
-                .allocate_supervised_worker("Worker".into(), Some(Value::Int(int(41))), "DynamicSupervisor".into())
+                .allocate_supervised_worker(
+                    "Worker".into(),
+                    Some(Value::Int(int(41))),
+                    "DynamicSupervisor".into(),
+                )
                 .expect("worker allocation should succeed"),
             process_name: "Worker".into(),
         };
@@ -8142,7 +8167,11 @@ mod tests {
             Value::Tagged { tag: 1, fields } if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Boom")
         ));
         assert!(matches!(
-            vm.process_runtime.processes.get(&pid.id).expect("process exists").status,
+            vm.process_runtime
+                .processes
+                .get(&pid.id)
+                .expect("process exists")
+                .status,
             super::ProcessStatus::Stopped
         ));
         assert_eq!(
@@ -8173,7 +8202,11 @@ mod tests {
         let mut vm = VM::new(bytecode);
         let pid = PidHandle {
             id: vm
-                .allocate_supervised_worker("Worker".into(), Some(Value::Int(int(41))), "DynamicSupervisor".into())
+                .allocate_supervised_worker(
+                    "Worker".into(),
+                    Some(Value::Int(int(41))),
+                    "DynamicSupervisor".into(),
+                )
                 .expect("worker allocation should succeed"),
             process_name: "Worker".into(),
         };
@@ -8184,7 +8217,11 @@ mod tests {
 
         assert!(matches!(value, Value::Tagged { tag: 0, .. }));
         assert!(matches!(
-            vm.process_runtime.processes.get(&pid.id).expect("process exists").status,
+            vm.process_runtime
+                .processes
+                .get(&pid.id)
+                .expect("process exists")
+                .status,
             super::ProcessStatus::Stopped
         ));
         assert_eq!(
@@ -8223,7 +8260,11 @@ mod tests {
         let mut vm = VM::new(bytecode);
         let pid = PidHandle {
             id: vm
-                .allocate_supervised_worker("Worker".into(), Some(Value::Int(int(41))), "DynamicSupervisor".into())
+                .allocate_supervised_worker(
+                    "Worker".into(),
+                    Some(Value::Int(int(41))),
+                    "DynamicSupervisor".into(),
+                )
                 .expect("worker allocation should succeed"),
             process_name: "Worker".into(),
         };

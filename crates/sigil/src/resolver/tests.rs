@@ -3263,7 +3263,11 @@ print("ok")"#,
         "actual error: {}",
         err.message
     );
-    assert!(err.message.contains("User::new"), "actual error: {}", err.message);
+    assert!(
+        err.message.contains("User::new"),
+        "actual error: {}",
+        err.message
+    );
     assert!(
         err.message.contains("User::deconstruct"),
         "actual error: {}",
@@ -3371,7 +3375,8 @@ def use_value() -> Int {
     .expect_err("future-stage list import should fail");
 
     assert!(
-        err.message.contains("Invalid import members in `Provider`."),
+        err.message
+            .contains("Invalid import members in `Provider`."),
         "actual error: {}",
         err.message
     );
@@ -3701,7 +3706,11 @@ fn test_private_function_direct_qualified_call_reports_private() {
         .expect_err("qualified private function call should fail");
 
     assert!(err.message.contains("OuterMod::priv_fun/1"));
-    assert!(err.message.contains("is private"), "actual error: {}", err.message);
+    assert!(
+        err.message.contains("is private"),
+        "actual error: {}",
+        err.message
+    );
 }
 
 #[test]
@@ -3724,7 +3733,8 @@ print(priv_fun(1))"#,
 
     assert!(err.message.contains("Undefined function priv_fun/1"));
     assert!(
-        err.message.contains("Help: `OuterMod::priv_fun/1` is private"),
+        err.message
+            .contains("Help: `OuterMod::priv_fun/1` is private"),
         "actual error: {}",
         err.message
     );
@@ -3733,7 +3743,7 @@ print(priv_fun(1))"#,
 #[test]
 fn test_worker_process_init_surface_is_importable() {
     let module_stages = vec![vec![staged_process_module(parse_module_ast(
-            r#"defagent FibWorker {
+        r#"defagent FibWorker {
   meta {
     instance: Worker
     init_policy: Eager
@@ -3748,8 +3758,8 @@ fn test_worker_process_init_surface_is_importable() {
   @set
   def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
 }"#,
-            "FibWorker",
-        ))]];
+        "FibWorker",
+    ))]];
 
     resolve_user_with_modules(
         r#"import FibWorker::init
@@ -3763,7 +3773,7 @@ print(inspect(worker))"#,
 #[test]
 fn test_singleton_process_init_surface_is_not_importable() {
     let module_stages = vec![vec![staged_process_module(parse_module_ast(
-            r#"defagent Counter {
+        r#"defagent Counter {
   meta {
     instance: Singleton
     init_policy: Eager
@@ -3778,8 +3788,8 @@ fn test_singleton_process_init_surface_is_not_importable() {
   @set
   def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
 }"#,
-            "Counter",
-        ))]];
+        "Counter",
+    ))]];
 
     let err = resolve_user_with_modules(
         r#"import Counter::init
@@ -3803,7 +3813,7 @@ print("ok")"#,
 #[test]
 fn test_compiler_generated_spawn_surface_is_not_exposed_to_user_imports() {
     let module_stages = vec![vec![staged_process_module(parse_module_ast(
-            r#"defagent FibWorker {
+        r#"defagent FibWorker {
   meta {
     instance: Worker
     init_policy: Eager
@@ -3818,8 +3828,8 @@ fn test_compiler_generated_spawn_surface_is_not_exposed_to_user_imports() {
   @set
   def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
 }"#,
-            "FibWorker",
-        ))]];
+        "FibWorker",
+    ))]];
 
     let err = resolve_user_with_modules(
         r#"import FibWorker::spawn
@@ -3900,7 +3910,7 @@ print(inspect(pid))"#,
 #[test]
 fn test_singleton_process_init_surface_is_not_callable_from_user_code() {
     let module_stages = vec![vec![staged_process_module(parse_module_ast(
-            r#"defagent Counter {
+        r#"defagent Counter {
   meta {
     instance: Singleton
     init_policy: Eager
@@ -3915,8 +3925,8 @@ fn test_singleton_process_init_surface_is_not_callable_from_user_code() {
   @set
   def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
 }"#,
-            "Counter",
-        ))]];
+        "Counter",
+    ))]];
 
     let err = resolve_user_with_modules("print(inspect(Counter::init()))", &module_stages)
         .expect_err("singleton init route call should fail");

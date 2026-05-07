@@ -4325,7 +4325,10 @@ impl Checker {
     fn worker_process_spec_for_init_route<'a>(
         &'a self,
         qualified: &str,
-    ) -> Option<(&'a TypedProcessSpec, &'a spire::ast::ProcessRuntimeHandlerSpec)> {
+    ) -> Option<(
+        &'a TypedProcessSpec,
+        &'a spire::ast::ProcessRuntimeHandlerSpec,
+    )> {
         self.process_specs.iter().find_map(|spec| {
             if spec.spec.instance != spire::ast::ProcessInstance::Worker {
                 return None;

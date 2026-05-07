@@ -835,7 +835,9 @@ fn builtin_genserver_call_reply_later(
     args: Vec<Value>,
 ) -> Result<Value, RuntimeError> {
     let Some(pid) = vm.pid_handle_like(&args[0]) else {
-        return Err(RuntimeError::new("__genserver_call_reply_later expects PID"));
+        return Err(RuntimeError::new(
+            "__genserver_call_reply_later expects PID",
+        ));
     };
     let Value::Callable(callback) = args[2].clone() else {
         return Err(RuntimeError::new(
@@ -850,15 +852,14 @@ fn builtin_genserver_call_stop_normal(
     args: Vec<Value>,
 ) -> Result<Value, RuntimeError> {
     let Some(pid) = vm.pid_handle_like(&args[0]) else {
-        return Err(RuntimeError::new("__genserver_call_stop_normal expects PID"));
+        return Err(RuntimeError::new(
+            "__genserver_call_stop_normal expects PID",
+        ));
     };
     vm.genserver_call_stop_normal(&pid, args[1].clone())
 }
 
-fn builtin_genserver_call_stop_error(
-    vm: &mut VM,
-    args: Vec<Value>,
-) -> Result<Value, RuntimeError> {
+fn builtin_genserver_call_stop_error(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let Some(pid) = vm.pid_handle_like(&args[0]) else {
         return Err(RuntimeError::new("__genserver_call_stop_error expects PID"));
     };
@@ -882,15 +883,14 @@ fn builtin_genserver_cast_stop_normal(
     args: Vec<Value>,
 ) -> Result<Value, RuntimeError> {
     let Some(pid) = vm.pid_handle_like(&args[0]) else {
-        return Err(RuntimeError::new("__genserver_cast_stop_normal expects PID"));
+        return Err(RuntimeError::new(
+            "__genserver_cast_stop_normal expects PID",
+        ));
     };
     vm.genserver_cast_stop_normal(&pid)
 }
 
-fn builtin_genserver_cast_stop_error(
-    vm: &mut VM,
-    args: Vec<Value>,
-) -> Result<Value, RuntimeError> {
+fn builtin_genserver_cast_stop_error(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let Some(pid) = vm.pid_handle_like(&args[0]) else {
         return Err(RuntimeError::new("__genserver_cast_stop_error expects PID"));
     };
@@ -1045,10 +1045,7 @@ fn builtin_workers_broadcast(vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
     vm.workers_broadcast(handle, message.clone())
 }
 
-fn builtin_workers_broadcast_timeout(
-    vm: &mut VM,
-    args: Vec<Value>,
-) -> Result<Value, RuntimeError> {
+fn builtin_workers_broadcast_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let [timeout, Value::Workers(handle), Value::Callable(message)] = args.as_slice() else {
         return Err(RuntimeError::new(
             "__workers_broadcast_timeout expects Duration, Workers handle, and callable template",

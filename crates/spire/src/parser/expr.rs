@@ -735,7 +735,11 @@ impl Parser<'_> {
             _ => 1,
         };
 
-        if args.len() != expected_arity || args.iter().any(|arg| matches!(arg, RecordLitArg::Named(_, _))) {
+        if args.len() != expected_arity
+            || args
+                .iter()
+                .any(|arg| matches!(arg, RecordLitArg::Named(_, _)))
+        {
             return Err(ParseError::syntax(
                 "@timeout(...) expects positional arguments for the runtime-managed call",
                 Span {
