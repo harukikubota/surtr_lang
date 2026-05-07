@@ -1,0 +1,17 @@
+defagent Counter {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @get
+  def read(state: Int) -> Result<Int> { Ok(state) }
+
+  @doc """
+  Internal helper docs.
+  """
+  def hidden_value(_state: Int) -> Result<Int> { Ok(99) }
+}

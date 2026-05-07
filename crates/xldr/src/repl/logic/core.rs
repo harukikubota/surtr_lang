@@ -1203,7 +1203,13 @@ impl ReplEngine {
 
         match matches.as_slice() {
             [] => self
-                .concrete_process_alias_doc_output(&canonical)
+                .private_declaration(&canonical)
+                .map(Self::private_doc_output)
+                .or_else(|| {
+                    self.private_declaration(symbol)
+                        .map(Self::private_doc_output)
+                })
+                .or_else(|| self.concrete_process_alias_doc_output(&canonical))
                 .or_else(|| self.undocumented_doc_output(&canonical))
                 .map(|output| ReplResult::ok(output))
                 .unwrap_or_else(|| {
@@ -1406,7 +1412,7 @@ impl ReplEngine {
                 && self
                     .declaration_index
                     .get(symbol)
-                    .is_none_or(Self::declaration_is_queryable);
+                    .is_none_or(Self::declaration_is_public_surface);
         }
         self.visible_uid_matches(symbol, &entry.qualified_name)
             || (entry.module_path.starts_with("__Script::")
@@ -1459,8 +1465,8 @@ impl ReplEngine {
         })
     }
 
-    fn declaration_is_queryable(entry: &sigil::DeclarationEntry) -> bool {
-        entry.visibility == spire::ast::Visibility::Public || entry.hidden
+    fn declaration_is_public_surface(entry: &sigil::DeclarationEntry) -> bool {
+        entry.visibility == spire::ast::Visibility::Public
     }
 
     fn parse_pid_type_name(ty: &str) -> Option<&str> {
@@ -1616,11 +1622,11 @@ impl ReplEngine {
     fn visible_declaration<'a>(&'a self, symbol: &str) -> Option<&'a sigil::DeclarationEntry> {
         if Self::is_qualified_symbol(symbol) {
             let entry = self.declaration_index.get(symbol)?;
-            return Self::declaration_is_queryable(entry).then_some(entry);
+            return Self::declaration_is_public_surface(entry).then_some(entry);
         }
         let visible_uid = self.sigil_session.lookup_uid(symbol)?;
         self.declaration_index.values().find(|entry| {
-            Self::declaration_is_queryable(entry)
+            Self::declaration_is_public_surface(entry)
                 && (entry.name == symbol
                     || entry
                         .name
@@ -1629,6 +1635,46 @@ impl ReplEngine {
                         .is_some_and(|tail| tail == symbol))
                 && self.sigil_session.lookup_uid(&entry.fq_name) == Some(visible_uid)
         })
+    }
+
+    fn private_declaration<'a>(&'a self, symbol: &str) -> Option<&'a sigil::DeclarationEntry> {
+        if Self::is_qualified_symbol(symbol) {
+            let entry = self.declaration_index.get(symbol)?;
+            return (!Self::declaration_is_public_surface(entry)).then_some(entry);
+        }
+        let visible_uid = self.sigil_session.lookup_uid(symbol)?;
+        self.declaration_index.values().find(|entry| {
+            !Self::declaration_is_public_surface(entry)
+                && (entry.name == symbol
+                    || entry
+                        .name
+                        .rsplit("::")
+                        .next()
+                        .is_some_and(|tail| tail == symbol))
+                && self.sigil_session.lookup_uid(&entry.fq_name) == Some(visible_uid)
+        })
+    }
+
+    fn private_doc_output(entry: &sigil::DeclarationEntry) -> ReplOutput {
+        Self::plain(vec![
+            format!(
+                "`{}` is private and cannot be queried with `:doc`.",
+                entry.fq_name
+            ),
+            "Add `@doc` only to public declarations.".to_string(),
+        ])
+        .output
+    }
+
+    fn private_sig_output(entry: &sigil::DeclarationEntry) -> ReplOutput {
+        Self::plain(vec![
+            format!(
+                "`{}` is private and cannot be queried with `:sig`.",
+                entry.fq_name
+            ),
+            "Only public declarations are visible to REPL signature lookup.".to_string(),
+        ])
+        .output
     }
 
     fn declaration_signature(&self, decl: &sigil::DeclarationEntry) -> Option<String> {
@@ -1842,7 +1888,12 @@ impl ReplEngine {
         }
         let matches = self.match_typed_call_docs(query);
         match matches.as_slice() {
-            [] => Self::plain(vec![format!("No docs found for {}", source_query)]),
+            [] => self
+                .private_declaration(query.callee.strip_suffix('!').unwrap_or(&query.callee))
+                .map(|entry| ReplResult::ok(Self::private_doc_output(entry)))
+                .unwrap_or_else(|| {
+                    Self::plain(vec![format!("No docs found for {}", source_query)])
+                }),
             [entry] => ReplResult::ok(Self::doc_resolved_output(entry)),
             entries => Self::plain(Self::ambiguous_doc_lines(source_query, entries)),
         }
@@ -2028,7 +2079,7 @@ impl ReplEngine {
             && self
                 .declaration_index
                 .get(&canonical)
-                .is_some_and(|entry| !Self::declaration_is_queryable(entry))
+                .is_some_and(|entry| !Self::declaration_is_public_surface(entry))
         {
             return None;
         }
@@ -2148,6 +2199,9 @@ impl ReplEngine {
                         Self::styled(vec![rendered])
                     }
                     None => {
+                        if let Some(entry) = self.private_declaration(trimmed) {
+                            return ReplResult::ok(Self::private_sig_output(entry));
+                        }
                         if self.binding_info(trimmed).is_some() {
                             Self::plain(vec![
                                 format!("No signature found for {}", trimmed),
@@ -3419,7 +3473,12 @@ impl ReplEngine {
                 };
                 Self::styled(rendered.lines().map(|line| line.to_string()).collect())
             }
-            [] => Self::plain(vec![format!("No signature found for {}", source_query)]),
+            [] => self
+                .private_declaration(query.callee.strip_suffix('!').unwrap_or(&query.callee))
+                .map(|entry| ReplResult::ok(Self::private_sig_output(entry)))
+                .unwrap_or_else(|| {
+                    Self::plain(vec![format!("No signature found for {}", source_query)])
+                }),
             entries => Self::plain(Self::ambiguous_doc_lines(source_query, entries)),
         }
     }

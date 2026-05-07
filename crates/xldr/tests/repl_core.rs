@@ -1142,11 +1142,24 @@ fn core_process_public_surface_respects_annotations() {
     assert!(public_doc.contains("MyWorker::read"), "{public_doc}");
 
     let private_sig = rendered_text(&engine.handle_line(":sig MyServer::hidden_size"));
-    assert!(private_sig.contains("No signature found"), "{private_sig}");
+    assert!(
+        private_sig
+            .contains("`MyServer::hidden_size` is private and cannot be queried with `:sig`."),
+        "{private_sig}"
+    );
+    assert!(
+        private_sig.contains("Only public declarations are visible to REPL signature lookup."),
+        "{private_sig}"
+    );
 
     let private_doc = rendered_text(&engine.handle_line(":doc MyWorker::hidden_value"));
     assert!(
-        private_doc.contains("No docs found") || private_doc.contains("No docs found for"),
+        private_doc
+            .contains("`MyWorker::hidden_value` is private and cannot be queried with `:doc`."),
+        "{private_doc}"
+    );
+    assert!(
+        private_doc.contains("Add `@doc` only to public declarations."),
         "{private_doc}"
     );
 

@@ -60,6 +60,40 @@ impl AgentMeta {
     }
 }
 
+fn validate_doc_visibility(attrs: &DeclAttrs, span: &Span) -> Result<(), ParseError> {
+    if attrs.doc.is_some() && attrs.visibility == Visibility::Private {
+        return Err(private_doc_forbidden_error(span.clone()));
+    }
+    Ok(())
+}
+
+fn parse_doc_attr_in_place(parser: &mut Parser, attrs: &mut DeclAttrs) -> Result<(), ParseError> {
+    if attrs.doc.is_some() {
+        return Err(ParseError::syntax(
+            "@doc may only appear once before a declaration",
+            parser.peek_span(),
+        ));
+    }
+    match parser.peek().clone() {
+        Token::DocString(text) => {
+            if Parser::string_has_interpolation(&text) {
+                return Err(ParseError::syntax(
+                    "@doc does not allow string interpolation",
+                    parser.peek_span(),
+                ));
+            }
+            parser.advance();
+            attrs.doc = Some(text);
+            Ok(())
+        }
+        Token::Eof => Err(ParseError::incomplete("doc string", parser.peek_span())),
+        _ => Err(ParseError::syntax(
+            "@doc expects a triple-quoted doc string",
+            parser.peek_span(),
+        )),
+    }
+}
+
 fn make_process_helper_private(def: Ast) -> Ast {
     match def {
         Ast::Def(span, name, type_params, params, ret_ty, body, mut attrs) => {
@@ -67,6 +101,36 @@ fn make_process_helper_private(def: Ast) -> Ast {
             Ast::Def(span, name, type_params, params, ret_ty, body, attrs)
         }
         other => other,
+    }
+}
+
+fn private_doc_forbidden_error(span: Span) -> ParseError {
+    ParseError::syntax("@doc is only allowed on public declarations", span)
+}
+
+fn ast_decl_attrs(ast: &Ast) -> Option<&DeclAttrs> {
+    match ast {
+        Ast::Def(_, _, _, _, _, _, attrs)
+        | Ast::ConstDef(_, _, _, _, attrs)
+        | Ast::ExtractorDef(_, _, _, _, _, _, attrs)
+        | Ast::BuiltinDecl(_, _, _, _, attrs)
+        | Ast::IntrinsicDecl(_, _, _, attrs)
+        | Ast::BuiltinExtractorDecl(_, _, _, _, attrs)
+        | Ast::BuiltinTypeDecl(_, _, attrs)
+        | Ast::ResultCtorDecl(_, _, _, _, attrs)
+        | Ast::StructDef(_, _, _, attrs)
+        | Ast::RecordDef(_, _, _, attrs)
+        | Ast::DeferrorDef(_, _, _, _, attrs)
+        | Ast::EnumDef(_, _, _, _, attrs)
+        | Ast::Defmod(_, _, _, attrs)
+        | Ast::Defagent(_, _, _, _, attrs)
+        | Ast::Defgenserver(_, _, _, _, attrs)
+        | Ast::Defsupervisor(_, _, _, _, attrs)
+        | Ast::DefdynamicSupervisor(_, _, _, _, attrs)
+        | Ast::TraitDef(_, _, _, _, attrs)
+        | Ast::ImplDef(_, _, _, attrs)
+        | Ast::TraitImplDef(_, _, _, _, _, attrs) => Some(attrs),
+        _ => None,
     }
 }
 
@@ -1651,7 +1715,7 @@ impl Parser<'_> {
             body_stmts,
         );
 
-        Ok(Ast::Def(
+        let ast = Ast::Def(
             Span {
                 start: sp.start,
                 end: end.end,
@@ -1670,7 +1734,10 @@ impl Parser<'_> {
                 user_callable: attrs.user_callable,
                 process_state_owner: attrs.process_state_owner,
             },
-        ))
+        );
+        let attrs = ast_decl_attrs(&ast).expect("impl method is a declaration");
+        validate_doc_visibility(attrs, ast.span())?;
+        Ok(ast)
     }
 
     pub(super) fn parse_builtin_impl_method_decl(
@@ -1983,6 +2050,65 @@ impl Parser<'_> {
                 ast_ty_span(ty).clone(),
             )),
         }
+    }
+
+    fn parse_agent_member_prefixes(
+        &mut self,
+    ) -> Result<(Option<AgentHandlerKind>, DeclAttrs), ParseError> {
+        let mut marker = None;
+        let mut attrs = DeclAttrs::default();
+        while let Token::Annotator(name) = self.peek().clone() {
+            match name.as_str() {
+                "doc" => {
+                    self.advance();
+                    self.skip_newlines();
+                    parse_doc_attr_in_place(self, &mut attrs)?;
+                }
+                "init" | "get" | "set" => {
+                    if marker.is_some() {
+                        return Err(ParseError::syntax(
+                            "process member may only have one handler marker",
+                            self.peek_span(),
+                        ));
+                    }
+                    marker = Some(self.parse_agent_handler_marker()?);
+                }
+                _ => break,
+            }
+            self.skip_newlines();
+        }
+        Ok((marker, attrs))
+    }
+
+    fn parse_genserver_member_prefixes(
+        &mut self,
+    ) -> Result<(Option<(String, Span)>, DeclAttrs), ParseError> {
+        let mut marker = None;
+        let mut attrs = DeclAttrs::default();
+        while let Token::Annotator(name) = self.peek().clone() {
+            match name.as_str() {
+                "doc" => {
+                    self.advance();
+                    self.skip_newlines();
+                    parse_doc_attr_in_place(self, &mut attrs)?;
+                }
+                "init" | "call" | "cast" => {
+                    if marker.is_some() {
+                        return Err(ParseError::syntax(
+                            "process member may only have one handler marker",
+                            self.peek_span(),
+                        ));
+                    }
+                    let span = self.peek_span();
+                    self.advance();
+                    self.skip_newlines();
+                    marker = Some((name, span));
+                }
+                _ => break,
+            }
+            self.skip_newlines();
+        }
+        Ok((marker, attrs))
     }
 
     pub(super) fn parse_defmod_with_attrs(
@@ -2934,7 +3060,7 @@ impl Parser<'_> {
                 ));
             }
             match self.peek() {
-                Token::Def => self.parse_def_with_attrs(attrs, Some(start)),
+                Token::Def | Token::Defp => self.parse_def_with_attrs(attrs, Some(start)),
                 Token::Defmod => self.parse_defmod_with_attrs(attrs, Some(start)),
                 Token::Deftrait => self.parse_trait_def_with_attrs(attrs, Some(start)),
                 Token::Impl => self.parse_impl_def_with_attrs(attrs, Some(start)),
@@ -3742,20 +3868,14 @@ impl Parser<'_> {
             if matches!(self.peek(), Token::Eof) {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
-            let marker = if matches!(self.peek(), Token::Annotator(name) if matches!(name.as_str(), "init" | "get" | "set"))
-            {
-                Some(self.parse_agent_handler_marker()?)
-            } else {
-                None
-            };
-            self.skip_newlines();
+            let (marker, member_attrs) = self.parse_agent_member_prefixes()?;
             if marker.is_some() && !matches!(self.peek(), Token::Def) {
                 return Err(ParseError::syntax(
                     "Agent handler marker must be followed by def inside defagent",
                     self.peek_span(),
                 ));
             }
-            let def = self.parse_def_with_attrs(DeclAttrs::default(), None)?;
+            let def = self.parse_def_with_attrs(member_attrs, None)?;
             self.ensure_stmt_boundary(&def, true)?;
             match marker {
                 Some(AgentHandlerKind::Init) => {
@@ -3785,7 +3905,13 @@ impl Parser<'_> {
                     }
                     set = Some(AgentHandler { def });
                 }
-                None => helpers.push(make_process_helper_private(def)),
+                None => {
+                    let def = make_process_helper_private(def);
+                    let attrs = ast_decl_attrs(&def)
+                        .expect("process helper lowering always produces a declaration");
+                    validate_doc_visibility(attrs, def.span())?;
+                    helpers.push(def);
+                }
             }
             self.skip_newlines();
         }
@@ -3871,18 +3997,7 @@ impl Parser<'_> {
             if matches!(self.peek(), Token::Eof) {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
-            let marker = if let Token::Annotator(marker) = self.peek().clone() {
-                if matches!(marker.as_str(), "init" | "call" | "cast") {
-                    let span = self.peek_span();
-                    self.advance();
-                    self.skip_newlines();
-                    Some((marker, span))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let (marker, member_attrs) = self.parse_genserver_member_prefixes()?;
 
             if marker.is_some() && !matches!(self.peek(), Token::Def) {
                 return Err(ParseError::syntax(
@@ -3896,7 +4011,7 @@ impl Parser<'_> {
                     self.peek_span(),
                 ));
             }
-            let def = self.parse_def_with_attrs(DeclAttrs::default(), None)?;
+            let def = self.parse_def_with_attrs(member_attrs, None)?;
             self.ensure_stmt_boundary(&def, true)?;
             match marker {
                 Some((marker, marker_span)) if marker == "init" => {
@@ -3921,7 +4036,13 @@ impl Parser<'_> {
                         marker_span,
                     ));
                 }
-                None => helpers.push(make_process_helper_private(def)),
+                None => {
+                    let def = make_process_helper_private(def);
+                    let attrs = ast_decl_attrs(&def)
+                        .expect("process helper lowering always produces a declaration");
+                    validate_doc_visibility(attrs, def.span())?;
+                    helpers.push(def);
+                }
             }
             self.skip_newlines();
         }
@@ -4013,7 +4134,9 @@ impl Parser<'_> {
         }
 
         if process_meta.instance == AgentInstance::Worker {
-            body.push(build_worker_init_route_wrapper(&span, &name, &init_name, &init_def)?);
+            body.push(build_worker_init_route_wrapper(
+                &span, &name, &init_name, &init_def,
+            )?);
         } else {
             body.push(build_singleton_init_route_wrapper(
                 &span,
@@ -4186,14 +4309,13 @@ impl Parser<'_> {
             }
             AgentKind::State => {
                 if meta.instance == AgentInstance::Worker {
-                    body.push(build_worker_init_route_wrapper(&span, &name, &init_name, &init_def)?);
+                    body.push(build_worker_init_route_wrapper(
+                        &span, &name, &init_name, &init_def,
+                    )?);
                 } else {
                     body.push(build_pid_wrapper(&span, "Agent", &name));
                     body.push(build_singleton_init_route_wrapper(
-                        &span,
-                        "Agent",
-                        &name,
-                        &init_name,
+                        &span, "Agent", &name, &init_name,
                     ));
                 }
                 let singleton = meta.instance == AgentInstance::Singleton;
@@ -4594,6 +4716,13 @@ impl Parser<'_> {
         let (sp, name, type_params, params, ret_ty, visibility) = self.parse_def_signature()?;
         let mut attrs = attrs;
         attrs.visibility = visibility;
+        validate_doc_visibility(
+            &attrs,
+            &Span {
+                start: annotator_start.unwrap_or(sp.start),
+                end: sp.end,
+            },
+        )?;
 
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
@@ -4613,7 +4742,7 @@ impl Parser<'_> {
             body_stmts,
         );
 
-        Ok(Ast::Def(
+        let ast = Ast::Def(
             Span {
                 start: annotator_start.unwrap_or(sp.start),
                 end: end.end,
@@ -4624,7 +4753,8 @@ impl Parser<'_> {
             ret_ty,
             Box::new(body),
             attrs,
-        ))
+        );
+        Ok(ast)
     }
 
     pub(super) fn parse_extractor_def_with_attrs(

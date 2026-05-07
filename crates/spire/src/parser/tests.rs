@@ -40,6 +40,19 @@ fn test_defp_marks_definition_private() {
 }
 
 #[test]
+fn test_doc_on_private_def_is_rejected() {
+    let err = parse(
+        r#"@doc """Hidden helper."""
+defp helper() -> String { "ok" }"#,
+    )
+    .expect_err("@doc on defp should fail");
+
+    assert!(err
+        .message()
+        .contains("@doc is only allowed on public declarations"));
+}
+
+#[test]
 fn test_const_definition_surface() {
     let ast = parse("public const APP_NAME: String = \"surtr\"").unwrap();
     match &ast[0] {
@@ -146,6 +159,33 @@ defenum CounterEvent {
 }
 
 #[test]
+fn test_doc_on_private_process_helper_is_rejected() {
+    let err = parse_with_context(
+        r#"defagent Counter {
+  meta {
+    instance: Worker
+    init_policy: Eager
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @get
+  def read(state: Int) -> Result<Int> { Ok(state) }
+
+  @doc """Internal helper."""
+  def hidden_value(_state: Int) -> Result<Int> { Ok(99) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("@doc on lowered private process helper should fail");
+
+    assert!(err
+        .message()
+        .contains("@doc is only allowed on public declarations"));
+}
+
+#[test]
 fn test_duplicate_doc_annotation_reports_later_span_for_struct_decl() {
     let src = r#"@doc """first"""
 @doc """second"""
@@ -188,6 +228,28 @@ impl User {
     assert!(err
         .message()
         .contains("Only @doc / @hidden / @builtin are allowed before impl members"));
+}
+
+#[test]
+fn test_doc_on_private_impl_member_is_rejected() {
+    let err = parse_with_context(
+        r#"defstruct User {
+  name: String,
+}
+
+impl User {
+  @doc """Normalize a private helper."""
+  defp normalize(self) -> Self {
+    self
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("@doc on private impl member should fail");
+
+    assert!(err
+        .message()
+        .contains("@doc is only allowed on public declarations"));
 }
 
 #[test]
@@ -4417,7 +4479,9 @@ fn test_defagent_worker_init_route_is_public_surface() {
                             )
                     ));
                 }
-                other => panic!("expected init wrapper to return Result<PID<Worker>>, got {other:?}"),
+                other => {
+                    panic!("expected init wrapper to return Result<PID<Worker>>, got {other:?}")
+                }
             }
             match set_wrapper {
                 Ast::Def(_, _, _, _, _, body, _) => {
@@ -4531,7 +4595,9 @@ fn test_defgenserver_worker_init_route_uses_user_defined_name() {
                                 && matches!(ty_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "QueueServer")
                     ));
                 }
-                other => panic!("expected worker genserver call wrapper with pid receiver, got {other:?}"),
+                other => panic!(
+                    "expected worker genserver call wrapper with pid receiver, got {other:?}"
+                ),
             }
         }
         other => panic!("Expected Defgenserver, got {other:?}"),
