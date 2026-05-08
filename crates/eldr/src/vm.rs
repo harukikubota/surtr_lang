@@ -699,7 +699,7 @@ impl VM {
     }
 
     /// Create an empty VM intended for REPL/incremental execution.
-    pub fn new_interactive(type_registry: TypeRegistry) -> Self {
+    pub(crate) fn new_interactive(type_registry: TypeRegistry) -> Self {
         Self::new(Bytecode {
             type_registry,
             ..Bytecode::default()
@@ -2952,7 +2952,7 @@ impl VM {
     }
 
     /// Execute a chunk atomically, preserving the existing VM state on failure.
-    pub fn push_atomic(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError> {
+    pub(crate) fn push_atomic(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError> {
         self.verify_chunk(&chunk)?;
         let checkpoint = self.checkpoint_for_chunk(&chunk);
         let result = match self.execute_chunk(chunk) {

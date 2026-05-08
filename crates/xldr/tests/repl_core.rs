@@ -378,6 +378,27 @@ defmod Math {
 }
 
 #[test]
+fn core_from_project_module_stages_exposes_compiled_project_definitions() {
+    let mut engine = ReplEngine::from_project_module_stages(&[vec![xldr::ModuleInput {
+        file_name: "math.srt".into(),
+        source: r#"
+defmod Math {
+  def add2(x: Int, y: Int) -> Int { x + y }
+}
+"#
+        .into(),
+        module_path: "Math".into(),
+    }]])
+    .expect("project preload should bootstrap");
+
+    let imported = engine.handle_line("import Math::add2");
+    assert!(rendered_text(&imported).contains("Imported Math::add2"));
+
+    let call = engine.handle_line("add2(20, 22)");
+    assert!(rendered_text(&call).contains("42"));
+}
+
+#[test]
 fn core_from_module_source_rejects_include_directive() {
     let result = ReplEngine::from_module_source(
         "math.srt",

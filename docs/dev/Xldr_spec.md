@@ -49,7 +49,7 @@ Xldr は対話セッション中に次を保持する。
 - Sigil セッション
 - Scar セッション
 - Forge セッション
-- Eldr VM
+- Eldr `InteractiveVm`
 - Eldr VM 内の process runtime 状態
 - 行番号付きの結果履歴
 - 補完候補シンボル集合
@@ -70,6 +70,8 @@ REPL セッションの BootPlan はセッション開始時に固定する。�
 - REPL user chunk は標準定義ソース読み込み後に `SourceKind::ReplChunk` として追加される
 - `surtr repl --module <file>` は追加の definition source を 1 件だけ preload し、`Std + 単品 definition` として成立する場合に限って受理する
 - `surtr repl --script <file>` は追加の script source を 1 件だけ preload し、`include` を解決したうえで declaration area を compile し、top-level expr があれば REPL 開始前に一度だけ実行する
+- script 引数による REPL 開始は `Std + include module + script` を同一 compile unit として compile し、script runtime input を `InteractiveVm::push_atomic()` 経由で実行してから通常 REPL に入る
+- project runner 引数による REPL 開始は、Rune が解決した compile 対象 module stage を Xldr に渡し、Xldr が `Std + project module stages` をまとめて compile 済みの `InteractiveVm` 初期状態として構築してから通常 REPL に入る
 - `surtr repl --script <file>` が将来 `supervisor_init` を含む場合、preload compile unit の BootPlan として取り込み、REPL 開始後の user chunk では boot 構成を変更しない
 - `--module` と `--script` を併用した場合は `module -> script` の順で同一 compile unit として読む
 - preload mode は CLI 入口の `--module` / `--script` 引数で確定し、Xldr 側で source token を読んで mode 推定しない
@@ -80,6 +82,7 @@ REPL セッションの BootPlan はセッション開始時に固定する。�
 - REPL user chunk の top-level 宣言は `def` / `import` のみ許可し、`const`、型定義、`impl`、`defmod` は parse error とする
 - REPL user chunk の top-level `def` は、セッション内の暗黙擬似モジュールに属する関数として扱う
 - したがって REPL は「module 外に関数がある」例外ではなく、明示 `defmod` を省略した module-like namespace 実行として扱う
+- Eldr の `last_result` は REPL 表示・履歴・将来の command 用 property であり、通常の名前解決対象にはしない
 - 初期補完候補には `Ok`, `Err` と builtin 名を含める
 - セッションは `.eldr` と live compile の両方から doc metadata を保持し、`:doc` 表示へ利用する
 - `.eldr` から初期化した場合、標準 library の compile-time context は source から復元する

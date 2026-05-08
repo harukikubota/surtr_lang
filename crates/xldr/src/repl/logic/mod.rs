@@ -1,9 +1,12 @@
 pub mod command;
 pub mod core;
+pub(crate) mod eval;
 pub mod output;
+pub(crate) mod preload;
 pub mod presenter;
 mod query;
 pub mod render;
+pub(crate) mod session;
 pub mod styled;
 
 pub use command::{parse_repl_command, ReplCommand};

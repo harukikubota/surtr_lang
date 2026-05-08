@@ -79,6 +79,10 @@ Eldr は次を担わない。
 
 ### 3.5 REPL 増分実行（`push_atomic`）契約
 
+- 公開境界は batch 実行用の `VM` と、REPL/対話実行用の `InteractiveVm` に分ける
+- `VM` は完全な `Bytecode` の `run()` と opcode / process runtime 実行を担う
+- `InteractiveVm` は `VM` を内包し、`BytecodeChunk` の原子的 append 実行、REPL host I/O buffering、`last_result`、`.eldr` 保存用 `snapshot_bytecode()` を担う
+- Xldr は source-level REPL policy を持つが、Eldr は `SourceKind::ReplChunk` や暗黙モジュールを解釈しない
 - `BytecodeChunk` の `LoadConst` / `MakeError` は chunk-local index で生成される
 - `push_atomic()` は `const_base` / `error_template_base` により絶対 index へ再配置する
 - `push_atomic()` は jump 先も append 後の opcode 位置へ再配置する
@@ -87,9 +91,11 @@ Eldr は次を担わない。
 - top-level 実行は append された `code_base` から開始し、最初の `Halt` で停止する
 - 関数本体は top-level `Halt` 後ろに配置され、top-level からは到達不能であり、`Call` / `CallClosure` でのみ到達する
 - 実装は VM 全体 clone ではなく、append した bytecode 断片と実行時状態の checkpoint / rollback で原子性を保つ
-- `push_atomic()` の返り値は chunk 実行終了時点の stack top 1 値のみとする。stack が空なら `Unit` を返す
+- `InteractiveVm::push_atomic()` の返り値は `ChunkExecution` とし、chunk 実行終了時点の stack top 1 値を `value` に保持する。stack が空なら `Unit` を返す
+- `last_result` はユーザー言語の通常 binding ではなく、直近の batch 実行または committed chunk の結果を保持する REPL-facing session property とする
 - `push_atomic()` 完了後、VM の operand stack は空に戻す。REPL は前回 chunk の stack 内容を次回 chunk へ持ち越さない
 - `push_atomic()` は chunk 実行を原子的に扱い、失敗時は VM 状態を更新しない
+- rollback 対象は bytecode append 分、function overwrite、locals、operand stack、call frames、pc、process runtime、exit code、標準 I/O / REPL host I/O / test event cursor、`last_result` とする
 
 ### 3.6 トップレベル名衝突ポリシー（コンパイラ契約）
 

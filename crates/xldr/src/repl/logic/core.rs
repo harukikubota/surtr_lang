@@ -19,12 +19,13 @@ use spire::ast::{Ast, AstTy, BinOp, ImportSpec, RecordLitArg, Span};
 
 use super::command::{parse_repl_command, ReplCommand};
 use super::output::{ReplOutput, ReplResult};
+use super::preload::PreloadCompileMode;
 use super::query::{
     ast_ty_from_query_arg, format_query_ty, parse_binding_query_type, parse_repl_query,
     parse_signature_type, CaptureQuery, OperatorRhs, QueryArg, QueryArgKind, ReplQuery,
     TypedCallQuery, TypedOperatorQuery,
 };
-use super::render;
+use super::{eval, render, session};
 use crate::loader::{self, StagedModule};
 use crate::ErrorDisplayMode;
 use crate::{
@@ -170,7 +171,7 @@ struct PreloadedChunkState {
     declaration_index: sigil::DeclarationIndex,
     sigil_session: sigil::SigilSession,
     scar_checkpoint: scar::ScarCheckpoint,
-    vm: eldr::VM,
+    vm: eldr::InteractiveVm,
     docs: Vec<DocEntry>,
     process_metadata: BTreeMap<String, ReplProcessMetadata>,
     symbols: BTreeSet<String>,
@@ -201,7 +202,7 @@ pub struct ReplEngine {
     sigil_session: sigil::SigilSession,
     scar_session: scar::ScarSession,
     forge_session: forge::ForgeSession,
-    vm: eldr::VM,
+    vm: eldr::InteractiveVm,
     pending: String,
     next_line: usize,
     results: Vec<Option<Value>>,
@@ -218,8 +219,7 @@ impl ReplEngine {
         let std_module_inputs = collect_additional_default_std_module_inputs()?;
         let repl_sources = loader::collect_repl_sources_with_module_stages(&[std_module_inputs])?;
         let forge_session = forge::ForgeSession::new();
-        let mut vm = eldr::VM::new_interactive(forge_session.type_registry());
-        vm.enable_repl_host_io_buffering();
+        let vm = session::empty_interactive_vm(forge_session.type_registry());
         let mut engine = Self {
             sources: repl_sources.sources,
             builtin_source_id: repl_sources.builtin_source_id,
@@ -273,8 +273,7 @@ impl ReplEngine {
 
         let docs = bytecode.docs.clone();
         let forge_session = forge::ForgeSession::from_bytecode(&bytecode);
-        let mut vm = eldr::VM::new(bytecode);
-        vm.enable_repl_host_io_buffering();
+        let vm = session::bytecode_interactive_vm(bytecode);
 
         // Populate completion symbols from the pre-loaded function table.
         let mut symbols: BTreeSet<String> = ["Ok", "Err"]
@@ -337,6 +336,13 @@ impl ReplEngine {
         Self::from_preload_sources(Some((file_name, source)), None)
     }
 
+    pub fn from_project_module_stages(
+        module_input_stages: &[Vec<crate::ModuleInput>],
+    ) -> Result<Self, ReplLoadError> {
+        let state = compile_project_repl_chunk(module_input_stages)?;
+        Self::from_preloaded_state(state)
+    }
+
     pub fn from_preload_files(
         module_path: Option<&str>,
         script_path: Option<&str>,
@@ -377,6 +383,10 @@ impl ReplEngine {
         script: Option<(&str, &str)>,
     ) -> Result<Self, ReplLoadError> {
         let state = compile_preloaded_repl_chunk(module, script)?;
+        Self::from_preloaded_state(state)
+    }
+
+    fn from_preloaded_state(state: PreloadedChunkState) -> Result<Self, ReplLoadError> {
         let forge_session = forge::ForgeSession::from_bytecode(&state.vm.snapshot_bytecode());
 
         Ok(Self {
@@ -964,14 +974,14 @@ impl ReplEngine {
 
     fn report_error_value(&self, value: &Value) -> Vec<String> {
         error_display::emit_runtime_value_error_with_registry(
-            &self.vm,
+            self.vm.as_vm(),
             value,
             &self.sources,
             self.repl_source_id,
             self.error_display_mode,
         );
         error_display::runtime_value_error_lines_with_registry(
-            &self.vm,
+            self.vm.as_vm(),
             value,
             &self.sources,
             self.repl_source_id,
@@ -4859,7 +4869,8 @@ impl ReplEngine {
         }
 
         match self.vm.push_atomic(chunk) {
-            Ok(value) => {
+            Ok(execution) => {
+                let value = eval::committed_chunk_value(execution);
                 self.sync_scar_fun_index_with_vm();
                 self.sync_repl_chunk_function_indices(&meta.function_defs, &chunk_functions);
                 if let Some(rendered) = self.report_main_result_error_if_any(&value) {
@@ -4874,7 +4885,8 @@ impl ReplEngine {
                     .with_stderr(stderr);
                 }
 
-                let rendered = render::format_result_lines(&self.vm, Some(&value), Some(&meta));
+                let rendered =
+                    render::format_result_lines(self.vm.as_vm(), Some(&value), Some(&meta));
 
                 let (mut all_rendered, stderr) = self.prepend_repl_host_stdout_lines(rendered);
                 if import_only {
@@ -5081,7 +5093,7 @@ impl ReplEngine {
 
         match self.results[line_num - 1].clone() {
             Some(value) => {
-                let displayed = inspect_value(&self.vm, &value);
+                let displayed = inspect_value(self.vm.as_vm(), &value);
                 self.bump_line(Some(value), None);
                 Self::plain(vec![displayed])
             }
@@ -5113,6 +5125,28 @@ fn compile_preloaded_repl_chunk(
             module_input_stages.push(vec![module.clone()]);
         }
     }
+    compile_repl_preload_from_module_stages(
+        module_input_stages,
+        prepared_script,
+        PreloadCompileMode::SCRIPT,
+    )
+}
+
+fn compile_project_repl_chunk(
+    project_module_input_stages: &[Vec<crate::ModuleInput>],
+) -> Result<PreloadedChunkState, ReplLoadError> {
+    let std_module_inputs =
+        collect_additional_default_std_module_inputs().map_err(ReplLoadError::Load)?;
+    let mut module_input_stages = vec![std_module_inputs];
+    module_input_stages.extend(project_module_input_stages.iter().cloned());
+    compile_repl_preload_from_module_stages(module_input_stages, None, PreloadCompileMode::PROJECT)
+}
+
+fn compile_repl_preload_from_module_stages(
+    module_input_stages: Vec<Vec<crate::ModuleInput>>,
+    prepared_script: Option<PreparedScriptPreload>,
+    mode: PreloadCompileMode,
+) -> Result<PreloadedChunkState, ReplLoadError> {
     let mut repl_sources = loader::collect_repl_sources_with_module_stages(&module_input_stages)
         .map_err(ReplLoadError::Load)?;
 
@@ -5140,7 +5174,7 @@ fn compile_preloaded_repl_chunk(
     };
     let snapshot = crate::default_stdlib_semantic_snapshot().map_err(ReplLoadError::Load)?;
     let (module_stage_asts, raw_module_stages, user_ast, script_runtime_inputs) =
-        parse_preload_sources(&compile_sources, &snapshot)?;
+        parse_preload_sources(&compile_sources, &snapshot, mode.compile_unit_kind)?;
 
     let script_preload_docs = crate::collect_doc_entries(
         &[],
@@ -5229,8 +5263,8 @@ fn compile_preloaded_repl_chunk(
             staged_program,
             scar::TypecheckContext {
                 runtime_policy: derive_runtime_policy(
-                    CompileUnitKind::Script,
-                    SourceKind::Script,
+                    mode.compile_unit_kind,
+                    mode.runtime_source_kind,
                     None,
                 ),
                 enforce_builtin_type_contracts: false,
@@ -5285,10 +5319,9 @@ fn compile_preloaded_repl_chunk(
                 .owned_context(compile_sources.builtin_source_id)
         });
     let mut vm = match source_context {
-        Some((source, file_name)) => {
-            eldr::VM::new(snapshot.bytecode.clone()).with_source(source, file_name)
-        }
-        None => eldr::VM::new(snapshot.bytecode.clone()),
+        Some((source, file_name)) => session::bytecode_interactive_vm(snapshot.bytecode.clone())
+            .with_source(source, file_name),
+        None => session::bytecode_interactive_vm(snapshot.bytecode.clone()),
     };
     vm.push_atomic(chunk).map_err(|e| ReplLoadError::Runtime {
         file_name: compile_sources
@@ -5354,6 +5387,7 @@ fn compile_preloaded_repl_chunk(
 fn parse_preload_sources(
     compile_sources: &crate::CompileSources,
     snapshot: &crate::DefaultStdlibSnapshot,
+    compile_unit_kind: CompileUnitKind,
 ) -> Result<
     (
         Vec<Vec<sigil::StagedModuleAst>>,
@@ -5367,7 +5401,7 @@ fn parse_preload_sources(
     let raw_module_stages = compile_sources.module_stages.clone();
     let mut suffix_stages = crate::parse_module_stages_from_compile_sources_suffix(
         compile_sources,
-        CompileUnitKind::Script,
+        compile_unit_kind,
         snapshot.default_stage_count,
     )
     .map_err(|e| ReplLoadError::Diagnostic {
@@ -6210,7 +6244,7 @@ mod tests {
             }]])
             .expect("test module stage should load");
         let forge_session = forge::ForgeSession::new();
-        let vm = eldr::VM::new_interactive(forge_session.type_registry());
+        let vm = session::empty_interactive_vm(forge_session.type_registry());
 
         ReplEngine {
             sources: repl_sources.sources,
@@ -6297,7 +6331,7 @@ mod tests {
     fn bootstrap_std_modules_returns_runtime_failure() {
         let mut engine =
             bootstrap_engine_with_module("defmod Broken { def nope() -> Int { 1 } }", "Broken");
-        engine.vm = eldr::VM::new_interactive(engine.forge_session.type_registry());
+        engine.vm = session::empty_interactive_vm(engine.forge_session.type_registry());
         engine
             .vm
             .push_atomic(sindr::ir::BytecodeChunk {
