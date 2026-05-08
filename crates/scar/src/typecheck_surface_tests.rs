@@ -1,5 +1,6 @@
 use scar::typed::{
-    OperatorTraitOp, TraitCallOrigin, TypedInner, TypedLensSegment, TypedNode, TypedProgram,
+    OperatorTraitOp, TraitCallOrigin, TypedInner, TypedLensPathKind, TypedLensSegment, TypedNode,
+    TypedProgram,
 };
 use scar::types::Ty;
 use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
@@ -411,12 +412,81 @@ expr.add"#,
 }
 
 #[test]
+fn facet_preview_requires_variant_path_and_records_path_kind() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defenum Expr {
+  Add(Int, Int),
+  Halt,
+}
+expr = Expr::Add(1, 2)
+Facet::preview(Expr.Add / Tuple._0, expr)"#,
+    );
+    let last = typed.last().expect("typed program should not be empty");
+    let TypedInner::LensView { path, .. } = &last.node else {
+        panic!("expected Facet::preview to lower as a view");
+    };
+    assert_eq!(path.path_kind, TypedLensPathKind::Variant);
+    assert!(matches!(
+        &last.ty,
+        scar::types::Ty::Result(ok, err)
+            if matches!(ok.as_ref(), scar::types::Ty::Int)
+                && matches!(err.as_ref(), scar::types::Ty::Error)
+    ));
+
+    let err = typecheck_with_rules(
+        r#"defrecord User(name: String)
+user = User("alice")
+Facet::preview(User.name, user)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("preview should reject structural paths");
+    assert!(err
+        .message
+        .contains("Facet::preview requires a variant Facet"));
+}
+
+#[test]
+fn facet_preview_accepts_option_variant() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"value: Option<Int> = Option::Some(1)
+Facet::preview(Option.Some, value)"#,
+    );
+    let last = typed.last().expect("typed program should not be empty");
+    let TypedInner::LensView { path, .. } = &last.node else {
+        panic!("expected Facet::preview to lower as a view");
+    };
+    assert_eq!(path.path_kind, TypedLensPathKind::Variant);
+    assert!(matches!(
+        &last.ty,
+        scar::types::Ty::Result(ok, err)
+            if matches!(ok.as_ref(), scar::types::Ty::Int)
+                && matches!(err.as_ref(), scar::types::Ty::Error)
+    ));
+}
+
+#[test]
+fn lens_surface_is_removed_after_facet_rename() {
+    let err = resolve_with_builtin_prelude_result(
+        r#"defrecord User(name: String)
+user = User("alice")
+Lens::view(User.name, user)"#,
+    )
+    .expect_err("Lens surface should be removed");
+    assert!(
+        err.message.contains("Undefined variable")
+            || err.message.contains("Undefined function")
+            || err.message.contains("Unknown")
+            || err.message.contains("No docs")
+    );
+}
+
+#[test]
 fn lens_compose_typecheck_success_and_mismatch() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
 user = User(Profile("alice"))
-Lens::view(Lens::compose(User.profile, Profile.name), user)"#,
+Facet::view(Facet::compose(User.profile, Profile.name), user)"#,
     );
     assert!(matches!(
         typed.last().map(|node| &node.ty),
@@ -426,11 +496,11 @@ Lens::view(Lens::compose(User.profile, Profile.name), user)"#,
     let err = typecheck_with_rules(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
-Lens::compose(Profile.name, User.profile)"#,
+Facet::compose(Profile.name, User.profile)"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("mismatched compose should fail");
-    assert!(err.message.contains("Lens::compose source/focus mismatch"));
+    assert!(err.message.contains("Facet::compose source/focus mismatch"));
 }
 
 #[test]
@@ -439,7 +509,7 @@ fn lens_slash_compose_typecheck_success_and_mismatch() {
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
 user = User(Profile("alice"))
-Lens::view(User.profile / Profile.name, user)"#,
+Facet::view(User.profile / Profile.name, user)"#,
     );
     assert!(matches!(
         typed.last().map(|node| &node.ty),
@@ -461,7 +531,7 @@ fn lens_set_returns_result_source() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
 user = User("alice")
-Lens::set(User.name, user, "bob")"#,
+Facet::set(User.name, user, "bob")"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(
@@ -478,7 +548,7 @@ fn lens_over_requires_unary_result_callable() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
 user = User("alice")
-Lens::over(User.name, user, {|name| Ok(name)})"#,
+Facet::over(User.name, user, {|name| Ok(name)})"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(
@@ -492,13 +562,13 @@ Lens::over(User.name, user, {|name| Ok(name)})"#,
     let err = typecheck_with_rules(
         r#"defrecord User(name: String)
 user = User("alice")
-Lens::over(User.name, user, {|name| name})"#,
+Facet::over(User.name, user, {|name| name})"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("non-Result update function should fail");
     assert!(err
         .message
-        .contains("Lens::over update function must return Result"));
+        .contains("Facet::over update function must return Result"));
 }
 
 #[test]
@@ -518,7 +588,7 @@ fn lens_set_accepts_plain_value_for_result_focus() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(score: Result<Int>)
 user = User(Err(NoneError))
-Lens::set(User.score, user, 3)"#,
+Facet::set(User.score, user, 3)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(
@@ -534,7 +604,7 @@ fn lens_over_accepts_success_updater_for_result_focus() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(score: Result<Int>)
 user = User(Ok(1))
-Lens::over(User.score, user, {|score| Ok(score + 1)})"#,
+Facet::over(User.score, user, {|score| Ok(score + 1)})"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.node, TypedInner::LensOver { .. }));
@@ -545,13 +615,13 @@ fn lens_over_rejects_result_container_updater_for_result_focus() {
     let err = typecheck_with_rules(
         r#"defrecord User(score: Result<Int>)
 user = User(Ok(1))
-Lens::over(User.score, user, {|score| Ok(Ok(score))})"#,
+Facet::over(User.score, user, {|score| Ok(Ok(score))})"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("Result container updater should fail for Lens::over");
+    .expect_err("Result container updater should fail for Facet::over");
     assert!(err
         .message
-        .contains("Lens::over update function output mismatch"));
+        .contains("Facet::over update function output mismatch"));
 }
 
 #[test]
@@ -559,7 +629,7 @@ fn lens_over_result_requires_result_container_updater() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(score: Result<Int>)
 user = User(Ok(1))
-Lens::over_result(User.score, user, {|score| Ok(score)})"#,
+Facet::over_result(User.score, user, {|score| Ok(score)})"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.node, TypedInner::LensOver { .. }));
@@ -567,20 +637,167 @@ Lens::over_result(User.score, user, {|score| Ok(score)})"#,
     let err = typecheck_with_rules(
         r#"defrecord User(score: Result<Int>)
 user = User(Ok(1))
-Lens::over_result(User.score, user, {|score| Ok(1)})"#,
+Facet::over_result(User.score, user, {|score| Ok(1)})"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("plain success updater should fail for Lens::over_result");
+    .expect_err("plain success updater should fail for Facet::over_result");
     assert!(err
         .message
-        .contains("Lens::over_result update function output mismatch"));
+        .contains("Facet::over_result update function output mismatch"));
+}
+
+#[test]
+fn readonly_lens_view_succeeds_and_preserves_path_metadata() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defstruct Profile {
+  name: String,
+}
+
+defstruct User {
+  readonly profile: Profile,
+}
+
+impl Profile {
+  def new(name: String) -> Self {
+    Profile { name: name }
+  }
+}
+
+impl User {
+  def new(profile: Profile) -> Self {
+    User { profile: profile }
+  }
+}
+
+user = User(Profile("alice"))
+Facet::view(User.profile.name, user)"#,
+    );
+    let last = typed.last().expect("typed program should not be empty");
+    let TypedInner::LensView { path, .. } = &last.node else {
+        panic!("expected LensView");
+    };
+    assert!(matches!(last.ty, scar::types::Ty::Str));
+    match &path.segments[0] {
+        TypedLensSegment::Field {
+            readonly,
+            container_type_name,
+            ..
+        } => {
+            assert!(*readonly);
+            assert_eq!(container_type_name, "User");
+        }
+        other => panic!("expected field segment, got {other:?}"),
+    }
+}
+
+#[test]
+fn readonly_field_blocks_deep_mutation_but_owner_can_replace_property() {
+    let err = typecheck_with_rules(
+        r#"defstruct Profile {
+  name: String,
+}
+
+defstruct User {
+  readonly profile: Profile,
+}
+
+impl Profile {
+  def new(name: String) -> Self {
+    Profile { name: name }
+  }
+}
+
+impl User {
+  def new(profile: Profile) -> Self {
+    User { profile: profile }
+  }
+}
+
+user = User(Profile("alice"))
+Facet::set(User.profile.name, user, "bob")"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("deep mutation through readonly field should fail");
+    assert!(err.message.contains("readonly field User.profile"));
+
+    let typed = typecheck_with_builtin_prelude(
+        r#"defstruct Profile {
+  name: String,
+}
+
+defstruct User {
+  readonly profile: Profile,
+}
+
+impl Profile {
+  def new(name: String) -> Self {
+    Profile { name: name }
+  }
+}
+
+impl User {
+  def new(profile: Profile) -> Self {
+    User { profile: profile }
+  }
+
+  def replace_profile(self: Self, next_profile: Profile) -> Result<User> {
+    Facet::set(User.profile, self, next_profile)
+  }
+}"#,
+    );
+    assert!(matches!(
+        typed.last().map(|node| &node.node),
+        Some(TypedInner::Def(..))
+    ));
+}
+
+#[test]
+fn readonly_struct_root_blocks_mutating_lens_even_for_owner() {
+    let err = typecheck_with_rules(
+        r#"@readonly
+defstruct Profile {
+  name: String,
+}
+
+impl Profile {
+  def new(name: String) -> Self {
+    Profile { name: name }
+  }
+}
+
+profile = Profile("alice")
+Facet::over(Profile.name, profile, {|name| Ok(name)})"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("readonly root should reject mutating lens");
+    assert!(err.message.contains("readonly type Profile"));
+
+    let err = typecheck_with_rules(
+        r#"@readonly
+defstruct Profile {
+  name: String,
+}
+
+impl Profile {
+  def new(name: String) -> Self {
+    Profile { name: name }
+  }
+
+  def rename(self: Self, next_name: String) -> Result<Profile> {
+    Facet::set(Profile.name, self, next_name)
+  }
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("readonly root should also reject owner mutation");
+    assert!(err.message.contains("readonly type Profile"));
 }
 
 #[test]
 fn lens_standalone_tuple_root_is_rejected() {
     let err = resolve_with_builtin_prelude_result(
         r#"pair = (1, "one")
-Lens::view(_0, pair)"#,
+Facet::view(_0, pair)"#,
     )
     .expect_err("standalone tuple root should fail during resolve");
     assert!(err.message.contains("Undefined variable: _0"));
@@ -592,7 +809,7 @@ fn lens_bindings_can_be_reused_by_lens_intrinsics() {
         r#"defrecord User(name: String)
 user = User("alice")
 lens = User.name
-Lens::view(lens, user)"#,
+Facet::view(lens, user)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
@@ -603,7 +820,7 @@ Lens::view(lens, user)"#,
 fn lens_tuple_type_root_view_works_with_expected_context() {
     let typed = typecheck_with_builtin_prelude(
         r#"pair = ("alice", 42)
-Lens::view(Tuple._0, pair)"#,
+Facet::view(Tuple._0, pair)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
@@ -615,7 +832,7 @@ fn deferred_tuple_lens_binding_can_be_reused_by_lens_intrinsics() {
     let typed = typecheck_with_builtin_prelude(
         r#"pair = ("alice", 42)
 lens = Tuple._1
-Lens::view(lens, pair)"#,
+Facet::view(lens, pair)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Int));
@@ -629,7 +846,7 @@ fn deferred_tuple_lens_binding_can_compose_before_consumption() {
 pair = (Profile("alice"), 42)
 outer = Tuple._0
 path = outer / Profile.name
-Lens::view(path, pair)"#,
+Facet::view(path, pair)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
@@ -641,7 +858,7 @@ fn lens_tuple_type_root_compose_works_as_inner_path() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(pair: (String, Int))
 user = User(("alice", 42))
-Lens::view(Lens::compose(User.pair, Tuple._0), user)"#,
+Facet::view(Facet::compose(User.pair, Tuple._0), user)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
@@ -652,7 +869,7 @@ fn lens_tuple_type_root_slash_compose_works_as_inner_path() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(pair: (String, Int))
 user = User(("alice", 42))
-Lens::view(User.pair / Tuple._0, user)"#,
+Facet::view(User.pair / Tuple._0, user)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
@@ -663,11 +880,11 @@ fn lens_const_slash_compose_allows_lens_consts() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
-const USER_PROFILE: Lens<User, Profile> = User.profile
-const PROFILE_NAME: Lens<Profile, String> = Profile.name
-const FULL_NAME: Lens<User, String> = USER_PROFILE / PROFILE_NAME
+const USER_PROFILE: Facet<User, Profile> = User.profile
+const PROFILE_NAME: Facet<Profile, String> = Profile.name
+const FULL_NAME: Facet<User, String> = USER_PROFILE / PROFILE_NAME
 user = User(Profile("alice"))
-Lens::view(FULL_NAME, user)"#,
+Facet::view(FULL_NAME, user)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
@@ -683,7 +900,7 @@ const BAD = VALUE / VALUE"#,
     .expect_err("non-lens const refs should fail");
     assert!(err
         .message
-        .contains("const value must be a primitive literal or a lens path"));
+        .contains("const value must be a primitive literal or a facet path"));
 }
 
 #[test]
@@ -709,11 +926,11 @@ fn lens_capture_is_rejected_for_scope_local_model() {
     let err = typecheck_with_rules(
         r#"defrecord User(name: String)
 lens = User.name
-getter = {|user| Lens::view(lens, user)}
+getter = {|user| Facet::view(lens, user)}
 getter(User("alice"))"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("capturing Lens value should fail");
+    .expect_err("capturing Facet value should fail");
     assert!(err.message.contains("cannot be captured by closures"));
 }
 
@@ -727,7 +944,7 @@ fn lens_values_cannot_be_embedded_in_runtime_containers() {
     .expect_err("tuple literal should reject lens");
     assert!(tuple_err
         .message
-        .contains("Tuple literal cannot contain Lens values"));
+        .contains("Tuple literal cannot contain Facet values"));
 
     let list_err = typecheck_with_rules(
         r#"defrecord User(name: String)
@@ -737,7 +954,7 @@ fn lens_values_cannot_be_embedded_in_runtime_containers() {
     .expect_err("list literal should reject lens");
     assert!(list_err
         .message
-        .contains("List literal cannot contain Lens values"));
+        .contains("List literal cannot contain Facet values"));
 
     let ok_err = typecheck_with_rules(
         r#"defrecord User(name: String)
@@ -747,14 +964,14 @@ Ok(User.name)"#,
     .expect_err("result constructors should reject lens");
     assert!(ok_err
         .message
-        .contains("Result constructors cannot contain Lens values"));
+        .contains("Result constructors cannot contain Facet values"));
 }
 
 #[test]
 fn nested_lens_types_are_rejected_in_function_signatures() {
     let param_err = typecheck_with_rules(
         r#"defrecord User(name: String)
-def bad(values: List<Lens<User, String>>) -> Unit { () }"#,
+def bad(values: List<Facet<User, String>>) -> Unit { () }"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("nested lens in parameter type should fail");
@@ -764,7 +981,7 @@ def bad(values: List<Lens<User, String>>) -> Unit { () }"#,
 
     let ret_err = typecheck_with_rules(
         r#"defrecord User(name: String)
-def bad() -> List<Lens<User, String>> { [] }"#,
+def bad() -> List<Facet<User, String>> { [] }"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("nested lens in return type should fail");
@@ -912,10 +1129,10 @@ User { name: name, password: password }
   }
 }
 user = User("alice", "s3cr3t")
-Lens::view(User.password, user)"#,
+Facet::view(User.password, user)"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("private capability root in Lens::view should fail");
+    .expect_err("private capability root in Facet::view should fail");
     assert!(err.message.contains("Field 'User.password' is private"));
 }
 
@@ -925,7 +1142,7 @@ fn lens_scope_local_value_can_flow_to_closure_after_view() {
         r#"defrecord User(name: String)
 user = User("alice")
 lens = User.name
-name = Lens::view(lens, user)
+name = Facet::view(lens, user)
 reader = {|| name}
 reader()"#,
     );
@@ -940,17 +1157,17 @@ fn lens_runtime_transport_restrictions_remain() {
 print(to_string(User.name))"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("passing Lens value as argument should fail");
-    assert!(arg_err.message.contains("cannot accept Lens values"));
+    .expect_err("passing Facet value as argument should fail");
+    assert!(arg_err.message.contains("cannot accept Facet values"));
 
     let return_err = typecheck_with_rules(
         r#"defrecord User(name: String)
-def bad() -> Lens<User, String> {
+def bad() -> Facet<User, String> {
   User.name
 }"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("returning Lens value should fail");
+    .expect_err("returning Facet value should fail");
     assert!(return_err
         .message
         .contains("cannot appear in function return types"));
@@ -964,9 +1181,9 @@ lens = User.name
 consume(lens)"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("passing Lens binding as runtime function argument should fail");
+    .expect_err("passing Facet binding as runtime function argument should fail");
     assert!(
-        arg_var_err.message.contains("cannot accept Lens values")
+        arg_var_err.message.contains("cannot accept Facet values")
             || arg_var_err.message.contains("Argument type mismatch")
             || arg_var_err.message.contains("compile-time only")
     );
@@ -1088,7 +1305,7 @@ User { name: name, age: age }
     let typed = typecheck(resolved).expect("forward struct reference should typecheck");
     assert!(typed
         .iter()
-        .any(|node| matches!(node.node, TypedInner::StructDef(_, _, _, _))));
+        .any(|node| matches!(node.node, TypedInner::StructDef(_, _, _, _, _))));
 }
 
 #[test]
@@ -1163,9 +1380,8 @@ deferror NotFound(code: String) {
         nodes
             .iter()
             .filter_map(|node| match &node.node {
-                TypedInner::StructDef(tag, name, _, _) | TypedInner::RecordDef(tag, name, _, _) => {
-                    Some((name.clone(), *tag))
-                }
+                TypedInner::StructDef(tag, name, _, _, _)
+                | TypedInner::RecordDef(tag, name, _, _, _) => Some((name.clone(), *tag)),
                 TypedInner::DeferrorDef(tag, _, id, _, _) => Some((id.name.clone(), *tag)),
                 _ => None,
             })
@@ -1205,7 +1421,7 @@ print(to_string(value))"#,
     assert!(
         typed
             .iter()
-            .any(|node| matches!(node.node, TypedInner::RecordDef(_, _, _, _))),
+            .any(|node| matches!(node.node, TypedInner::RecordDef(_, _, _, _, _))),
         "expected namespaced record definition to survive typechecking"
     );
     assert!(

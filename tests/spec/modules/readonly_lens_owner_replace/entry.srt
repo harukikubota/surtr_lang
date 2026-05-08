@@ -1,0 +1,2 @@
+user =? User::replace_profile(User(Profile("alice")), Profile("bob"))
+print(Facet::view(User.profile.name, user))

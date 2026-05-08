@@ -1855,6 +1855,7 @@ impl Resolver {
                             ty: self.resolve_type_annotation(f.ty)?,
                             span: f.span,
                             visibility: f.visibility,
+                            readonly: f.readonly,
                         })
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?;
@@ -1889,6 +1890,7 @@ impl Resolver {
                             ty: self.resolve_type_annotation(f.ty)?,
                             span: f.span,
                             visibility: f.visibility,
+                            readonly: f.readonly,
                         })
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?;
@@ -1925,6 +1927,7 @@ impl Resolver {
                         ty: self.resolve_type_annotation(f.ty)?,
                         span: f.span,
                         visibility: f.visibility,
+                        readonly: f.readonly,
                     });
                 }
                 let mut show_resolver = Resolver::with_scope(error_scope);

@@ -1,19 +1,20 @@
-# Lens
+# Facet
 
-`Lens` は runtime value ではなく、compile-time にだけ存在する path capability です。  
-正本の `@doc` は `../../lib/lens.srt` にあります。
+`Facet` は同一スコープ内でのみ使用可能な path capability です。  
+正本の `@doc` は `../../lib/facet.srt` にあります。
 
 ## まず API を見る
 
-- `Lens::view(lens, source)`
-- `Lens::set(lens, source, value)`
-- `Lens::over(lens, source, update_fun)`
-- `Lens::over_result(lens, source, update_fun)`
+- `Facet::view(facet, source)`
+- `Facet::preview(facet, source)`
+- `Facet::set(facet, source, value)`
+- `Facet::over(facet, source, update_fun)`
+- `Facet::over_result(facet, source, update_fun)`
 - `outer / inner`
-- `Lens::compose(outer, inner)`
+- `Facet::compose(outer, inner)`
 
 `T?` は `Result<T, NoneError>` に下がるため、optional-looking な field でも
-Lens では `Result` focus として扱われます。
+Facet では `Result` focus として扱われます。
 そのため `Result` を返す helper とつないで更新したい field には
 `Option<T>` より `T?` の方が自然です。
 
@@ -21,17 +22,17 @@ Lens では `Result` focus として扱われます。
 
 tuple path は REPL でそのまま試しやすいです。
 
-`Tuple._N` は `Lens` 文脈の中だけでなく、同一スコープの一時 binding としても
-保持できます。binding 自体は runtime value ではなく deferred path として扱われ、
-あとから `Lens::view/set/over/over_result` や `/` に渡した時点で concrete な
-`Lens<S, A>` に specialize されます。
+`Tuple._N` は `Facet` 文脈の中だけでなく、同一スコープの一時 binding としても
+保持できます。binding は deferred path として扱われ、あとから
+`Facet::view/set/over/over_result` や `/` に渡した時点で concrete な
+`Facet<S, A>` に specialize されます。
 
 ### get
 
 ```text
 xldr(1)> pair = ("alice", 42)
 > pair: (String, Int) = ("alice", 42)
-xldr(2)> print(Lens::view(Tuple._0, pair))
+xldr(2)> print(Facet::view(Tuple._0, pair))
 alice
 xldr(3)>
 ```
@@ -41,7 +42,7 @@ xldr(3)>
 ```text
 xldr(1)> pair = ("alice", 42)
 > pair: (String, Int) = ("alice", 42)
-xldr(2)> pair2 =? Lens::set(Tuple._1, pair, 99)
+xldr(2)> pair2 =? Facet::set(Tuple._1, pair, 99)
 > pair2: (String, Int) = ("alice", 99)
 xldr(3)> print(inspect(pair2))
 ("alice", 99)
@@ -54,15 +55,15 @@ xldr(4)>
 xldr(1)> pair = ("alice", 42)
 > pair: (String, Int) = ("alice", 42)
 xldr(2)> second = Tuple._1
-> second: Lens<_, _> = Tuple._1
-xldr(3)> print(Lens::view(second, pair))
+> second: Facet<_, _> = Tuple._1
+xldr(3)> print(Facet::view(second, pair))
 42
 xldr(4)>
 ```
 
 ## `var_name.lenspath` での参照
 
-`Lens` では `var_name.lenspath` 形式の sugar が使えます。  
+`Facet` では `var_name.lenspath` 形式の sugar が使えます。  
 これは `value.segment` をその値へ適用する read sugar です。
 
 ```surtr
@@ -73,8 +74,8 @@ first = pair._0
 概念的には次と同じです。
 
 ```surtr
-name = Lens::view(User.name, user)
-first = Lens::view(Tuple._0, pair)
+name = Facet::view(User.name, user)
+first = Facet::view(Tuple._0, pair)
 ```
 
 ## struct path
@@ -85,35 +86,35 @@ defstruct User {
   age: Int,
 }
 
-name_lens = User.name
+name_facet = User.name
 ```
 
 - `User.name` で path を作る
-- `Lens::view(User.name, user)` で読む
-- `Lens::set(User.name, user, "bob")` で置き換える
-- `Lens::over(User.age, user, {|age| Ok(age + 1) })` で更新する
+- `Facet::view(User.name, user)` で読む
+- `Facet::set(User.name, user, "bob")` で置き換える
+- `Facet::over(User.age, user, {|age| Ok(age + 1) })` で更新する
 
 `Result` field に対しては次も使えます。
 
-- `Lens::set(User.nickname, user, "bob")`
-- `Lens::over(User.nickname, user, normalize)`
-- `Lens::over_result(User.nickname, user, rewrite_result)`
+- `Facet::set(User.nickname, user, "bob")`
+- `Facet::over(User.nickname, user, normalize)`
+- `Facet::over_result(User.nickname, user, rewrite_result)`
 
-`nickname: String?` なら、`Lens::set(...)` の plain `"bob"` は `Ok("bob")` として格納されます。
+`nickname: String?` なら、`Facet::set(...)` の plain `"bob"` は `Ok("bob")` として格納されます。
 
 ## record path
 
 ```surtr
 defrecord Config(host: String, port: Int)
 
-host_lens = Config.host
+host_facet = Config.host
 ```
 
 record でも読み方は同じです。
 
-- `Lens::view(Config.host, config)`
-- `Lens::set(Config.port, config, 8080)`
-- `Lens::over(Config.port, config, {|port| Ok(port + 1) })`
+- `Facet::view(Config.host, config)`
+- `Facet::set(Config.port, config, 8080)`
+- `Facet::over(Config.port, config, {|port| Ok(port + 1) })`
 
 ## enum path
 
@@ -125,17 +126,18 @@ defenum Expr {
   Add((Expr, Expr)),
 }
 
-add_lens = Expr.Add
+add_facet = Expr.Add
 ```
 
-- `Lens::view(Expr.Add, expr)` は `Result<...>` になる
+- `Facet::view(Expr.Add, expr)` は `Result<...>` になる
+- `Facet::preview(Expr.Add, expr)` は variant path 専用の明示 API
 - 現在値が別 variant なら `Err(...)` になる
 - `set` / `over` でも同じく variant mismatch が失敗になる
 - `over_result` は `Result` focus 全体を書き換えたいときに使う
 
 ## compose
 
-ネストした path は `outer / inner` でつなぎます。`Lens::compose(...)` も同じ意味で使えます。
+ネストした path は `outer / inner` でつなぎます。`Facet::compose(...)` も同じ意味で使えます。
 
 ```surtr
 defstruct Profile {
@@ -160,7 +162,7 @@ impl User {
 
 profile_name = User.profile / Profile.name
 # or
-profile_name = Lens::compose(User.profile, Profile.name)
+profile_name = Facet::compose(User.profile, Profile.name)
 # or
 profile_name = User.profile.name
 ```
@@ -175,11 +177,11 @@ compose した path は REPL や inspect 表示で canonical path に圧縮さ�
 
 ```text
 xldr(1)> outer = User.profile
-> outer: Lens<_, _> = User.profile
+> outer: Facet<_, _> = User.profile
 xldr(2)> inner = Profile.name
-> inner: Lens<_, _> = Profile.name
+> inner: Facet<_, _> = Profile.name
 xldr(3)> path = outer / inner
-> path: Lens<_, _> = User.profile.name
+> path: Facet<_, _> = User.profile.name
 xldr(4)>
 ```
 
@@ -192,21 +194,21 @@ xldr(4)>
 
 ## REPL で path を確認する
 
-`Lens` binding は runtime value ではないため、REPL では `:type` / `:info` /
-`:lens` を役割分担して使うのが自然です。
+`Facet` binding は同一スコープ内で使う path capability なので、REPL では
+`:type` / `:info` / `:facet` を役割分担して使うのが自然です。
 
 - `:type path`
-  - `Lens<S, A>` または未解決なら `Lens<_, _>` を見る
+  - `Facet<S, A>` または未解決なら `Facet<_, _>` を見る
 - `:info path`
   - type と canonical `full path` を軽く確認する
-- `:lens path`
+- `:facet path`
   - segment 一覧と、`Result` 化しうる停止点を詳しく確認する
 
-### `:lens` の例
+### `:facet` の例
 
 ```text
-xldr(1)> :lens Expr.Add.value
-type: Lens<Expr, Int>
+xldr(1)> :facet Expr.Add.value
+type: Facet<Expr, Int>
 full path: Expr.Add.value
 segments:
 1. Expr.Add
@@ -225,11 +227,11 @@ may stop at:
 1. Expr.Add - variant mismatch returns Result
 ```
 
-`Result<T>` source から始める value-side query でも、停止点は `:lens` にまとまります。
+`Result<T>` source から始める value-side query でも、停止点は `:facet` にまとまります。
 
 ```text
-xldr(1)> :lens result_user.profile.name
-type: Lens<Result<User>, String>
+xldr(1)> :facet result_user.profile.name
+type: Facet<Result<User>, String>
 full path: User.profile.name
 may stop at:
 1. source - input already starts in Result context
@@ -237,7 +239,7 @@ may stop at:
 
 ## `Result` focus の更新
 
-`Lens::set` と `Lens::over` は `Result<A>` focus に対して少し ergonomic です。
+`Facet::set` と `Facet::over` は `Result<A>` focus に対して少し ergonomic です。
 
 - `set` は plain `A` も受け取り、`Ok(A)` を格納する
 - `over` は `A -> Result<A>` updater を受け取り、`Ok(value)` の payload だけ更新する
@@ -248,7 +250,7 @@ defstruct User {
   nickname: String?,
 }
 
-normalized =? Lens::over(User.nickname, user, {|name|
+normalized =? Facet::over(User.nickname, user, {|name|
   Ok(String::trim(name))
 })
 ```
@@ -259,35 +261,43 @@ normalized =? Lens::over(User.nickname, user, {|name|
 
 ## 制約
 
-- `Lens` は compile-time only
-- 同一スコープ内で消費する
+- `Facet` は同一スコープ内でのみ使用可能
 - 関数引数として渡したり、戻り値にしたり、`List` や `Result` に入れたりしない
 - private field path は、その private field が見えるスコープの外では compile error になる
+- readonly は path 作成ではなく mutating Facet operation に対して判定される
+
+## readonly
+
+- `readonly profile: Profile` のような readonly field は read 用 path としては使えます
+- `Facet::view(User.profile.name, user)` のような read は許可されます
+- `Facet::set(User.profile.name, user, "bob")` のような深い mutable traversal は拒否されます
+- owner の `impl User` 本体では `Facet::set(User.profile, self, next_profile)` のような property そのものの置換だけが許可されます
+- `@readonly defstruct Profile { ... }` は readonly root になり、`Facet::set(Profile.name, profile, ...)` のような mutable Facet operation を owner を含めて拒否します
 
 ## private field path
 
-private field を path root にした `Lens` は、スコープ外では作れません。
+private field を path root にした `Facet` は、スコープ外では作れません。
 
 ```surtr
-lens = User.password
+facet = User.password
 ```
 
 これは `User.password` が private のとき、外側スコープでは compile error です。  
-同様に `Lens::view(User.password, user)` のような参照も拒否されます。
+同様に `Facet::view(User.password, user)` のような参照も拒否されます。
 
-詳しい外部契約は `../../lib/lens.srt` と `./standard-library.md` の `Lens` 節を参照してください。
+詳しい外部契約は `../../lib/facet.srt` と `./standard-library.md` の `Facet` 節を参照してください。
 
 ## 確認したソース
 
 - ソース
-  - `../../lib/lens.srt`
+  - `../../lib/facet.srt`
   - `../../crates/scar/src/lib.rs`
 
 ## 躓きやすいポイント
 
 - `var_name.lenspath` は read sugar であって、field access 一般の許可とは同義ではありません。private field は見える範囲でしか path にできません。
-- `Tuple._0` のような tuple root は、いまは同一スコープの local binding になら置けます。ただし runtime value にはならず、`Lens::view(...)` や `/` で消費する必要があります。
+- `Tuple._0` のような tuple root は、同一スコープの local binding として保持できます。`Facet::view(...)` や `/` で同じスコープ内に消費してください。
 - compose した path は canonical 表示へ圧縮されるので、`User.profile / Profile.name` を inspect すると `User.profile.name` に見えます。`/` の組み立て履歴そのものは残りません。
-- variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:lens <binding|expr>` で確認するのが一番わかりやすいです。
-- `Lens` を closure capture や runtime container に運ぶのではなく、`Lens::view(...)` 済みの値を運ぶのが基本です。
+- variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:facet <binding|expr>` で確認するのが一番わかりやすいです。
+- スコープをまたぐときは `Facet` ではなく、`Facet::view(...)` 済みの値を渡します。
 - `Result` を返す updater とつなぐ field には、`Option<T>` より `T?` の方が更新パイプが短くなります。

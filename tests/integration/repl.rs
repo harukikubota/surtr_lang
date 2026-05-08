@@ -639,7 +639,7 @@ def from_script() -> Int { inc(1) }
 #[test]
 fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     let output = run_repl_session(
-        ":doc Tuple\n:sig Tuple\n:doc Config\n:doc StyledDocStyle\n:doc add\nimport Add::add\n:doc add\npair = (\"alice\", 2)\nresult_pair = (Ok(2), \"ok\")\n:sig pair._1\n:sig Lens::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})\n:quit\n",
+        ":doc Tuple\n:sig Tuple\n:doc Config\n:doc StyledDocStyle\n:doc add\nimport Add::add\n:doc add\npair = (\"alice\", 2)\nresult_pair = (Ok(2), \"ok\")\n:sig pair._1\n:sig Facet::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -687,7 +687,7 @@ fn repl_colorizes_closure_doc_footer_and_type_output() {
 #[test]
 fn repl_supports_deferred_lens_bindings_and_lens_command() {
     let output = run_repl_session(
-        "a = Tuple._1\npair = (\"alice\", 2)\nLens::view(a, pair)\n:lens a\n:lens BitWidth.Any\n:quit\n",
+        "a = Tuple._1\npair = (\"alice\", 2)\nFacet::view(a, pair)\n:facet a\n:facet BitWidth.Any\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -697,9 +697,9 @@ fn repl_supports_deferred_lens_bindings_and_lens_command() {
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("a: Lens<_, _> = Tuple._1"), "{stdout}");
+    assert!(stdout.contains("a: Facet<_, _> = Tuple._1"), "{stdout}");
     assert!(stdout.contains("2"), "{stdout}");
-    assert!(stdout.contains("LensPath"), "{stdout}");
+    assert!(stdout.contains("FacetPath"), "{stdout}");
     assert!(stdout.contains("view result: _"), "{stdout}");
     assert!(stdout.contains("full path: Tuple._1"), "{stdout}");
     assert!(stdout.contains("Flow"), "{stdout}");
@@ -719,7 +719,7 @@ fn repl_supports_deferred_lens_bindings_and_lens_command() {
 #[test]
 fn repl_renders_top_level_lens_compose_expressions() {
     let output =
-        run_repl_session("ep = IntBase.Oct\na = Tuple._1\na / ep\nLens::compose(a, ep)\n:quit\n");
+        run_repl_session("ep = IntBase.Oct\na = Tuple._1\na / ep\nFacet::compose(a, ep)\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -729,11 +729,11 @@ fn repl_renders_top_level_lens_compose_expressions() {
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(
-        stdout.contains("ep: Lens<IntBase, Unit> = IntBase.Oct"),
+        stdout.contains("ep: Facet<IntBase, Unit> = IntBase.Oct"),
         "{stdout}"
     );
-    assert!(stdout.contains("a: Lens<_, _> = Tuple._1"), "{stdout}");
-    assert!(stdout.contains("Lens<_, _> = Tuple._1.Oct"), "{stdout}");
+    assert!(stdout.contains("a: Facet<_, _> = Tuple._1"), "{stdout}");
+    assert!(stdout.contains("Facet<_, _> = Tuple._1.Oct"), "{stdout}");
 }
 
 #[test]

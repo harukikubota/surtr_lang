@@ -102,6 +102,7 @@ pub enum Token {
     Cond,
     Private,
     Public,
+    Readonly,
     Const,
     Type,
     Where,

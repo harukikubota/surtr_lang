@@ -1,0 +1,23 @@
+defstruct Profile {
+  name: String,
+}
+
+defstruct User {
+  readonly profile: Profile,
+}
+
+impl Profile {
+  def new(name: String) -> Self {
+    Profile { name: name }
+  }
+}
+
+impl User {
+  def new(profile: Profile) -> Self {
+    User { profile: profile }
+  }
+
+  def replace_profile(self: Self, next_profile: Profile) -> Result<User> {
+    Facet::set(User.profile, self, next_profile)
+  }
+}

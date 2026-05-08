@@ -62,6 +62,8 @@ pub struct TypeDefInfo {
     pub type_params: Vec<Symbol>,
     pub fields: Vec<(Symbol, Ty)>,
     pub private_fields: HashSet<Symbol>,
+    pub readonly_fields: HashSet<Symbol>,
+    pub readonly_root: bool,
     pub process_state_owner: Option<Symbol>,
     pub state: TypeDefState,
 }
@@ -222,6 +224,8 @@ impl TypeEnv {
                 type_params,
                 fields: Vec::new(),
                 private_fields: HashSet::new(),
+                readonly_fields: HashSet::new(),
+                readonly_root: false,
                 process_state_owner: None,
                 state: TypeDefState::Declared,
             },
@@ -243,11 +247,15 @@ impl TypeEnv {
         name: &str,
         fields: Vec<(Symbol, Ty)>,
         private_fields: HashSet<Symbol>,
+        readonly_fields: HashSet<Symbol>,
+        readonly_root: bool,
     ) -> Option<u32> {
         let key = canonical_type_key(name);
         let def = self.type_defs.get_mut(&key)?;
         def.fields = fields;
         def.private_fields = private_fields;
+        def.readonly_fields = readonly_fields;
+        def.readonly_root = readonly_root;
         def.state = TypeDefState::SignatureResolved;
         Some(def.tag)
     }
@@ -269,6 +277,16 @@ impl TypeEnv {
     pub fn is_private_field(&self, type_name: &str, field_name: &str) -> bool {
         self.lookup_type_def(type_name)
             .is_some_and(|def| def.private_fields.contains(field_name))
+    }
+
+    pub fn is_readonly_field(&self, type_name: &str, field_name: &str) -> bool {
+        self.lookup_type_def(type_name)
+            .is_some_and(|def| def.readonly_fields.contains(field_name))
+    }
+
+    pub fn is_readonly_root(&self, type_name: &str) -> bool {
+        self.lookup_type_def(type_name)
+            .is_some_and(|def| def.readonly_root)
     }
 
     pub fn is_type_signature_resolved(&self, name: &str) -> bool {
@@ -381,6 +399,8 @@ mod tests {
             "ApiError",
             vec![("code".into(), Ty::Int), ("msg".into(), Ty::Str)],
             HashSet::new(),
+            HashSet::new(),
+            false,
         );
         assert_eq!(resolved, Some(tag));
         assert!(env.is_type_signature_resolved("ApiError"));
@@ -401,6 +421,8 @@ mod tests {
             "Pair",
             vec![("first".into(), Ty::Int), ("second".into(), Ty::Str)],
             HashSet::new(),
+            HashSet::new(),
+            false,
         );
 
         assert_eq!(tag, 2);
@@ -422,6 +444,8 @@ mod tests {
             "User",
             vec![("name".into(), Ty::Str), ("password".into(), Ty::Str)],
             HashSet::from(["password".into()]),
+            HashSet::new(),
+            false,
         );
 
         assert!(env.is_private_field("User", "password"));
@@ -429,5 +453,25 @@ mod tests {
         assert!(env.is_private_field("Types::User", "password"));
         assert!(env.is_type_signature_resolved("Global::User"));
         assert!(env.is_type_signature_resolved("Types::User"));
+    }
+
+    #[test]
+    fn readonly_metadata_lookup_accepts_global_and_module_prefixed_names() {
+        let mut env = TypeEnv::new();
+        env.predeclare_type_def("Profile".into(), TypeKind::Struct, Vec::new());
+        env.resolve_type_def_signature(
+            "Profile",
+            vec![("name".into(), Ty::Str), ("score".into(), Ty::Int)],
+            HashSet::new(),
+            HashSet::from(["name".into()]),
+            true,
+        );
+
+        assert!(env.is_readonly_field("Profile", "name"));
+        assert!(env.is_readonly_field("Global::Profile", "name"));
+        assert!(env.is_readonly_field("Types::Profile", "name"));
+        assert!(env.is_readonly_root("Profile"));
+        assert!(env.is_readonly_root("Global::Profile"));
+        assert!(env.is_readonly_root("Types::Profile"));
     }
 }

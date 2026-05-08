@@ -429,12 +429,12 @@ fn core_reuses_deferred_tuple_lens_bindings_between_inputs() {
     let mut engine = engine();
 
     let lens = engine.handle_line("a = Tuple._1");
-    assert!(rendered_text(&lens).contains("a: Lens<_, _> = Tuple._1"));
+    assert!(rendered_text(&lens).contains("a: Facet<_, _> = Tuple._1"));
 
     let pair = engine.handle_line("pair = (\"alice\", 2)");
     assert!(rendered_text(&pair).contains("pair: (String, Int) = (\"alice\", 2)"));
 
-    let value = engine.handle_line("Lens::view(a, pair)");
+    let value = engine.handle_line("Facet::view(a, pair)");
     assert!(rendered_text(&value).contains("2"));
 }
 
@@ -456,40 +456,54 @@ fn core_renders_top_level_lens_compose_expressions_without_codegen_leak() {
     let mut engine = engine();
 
     let tuple_lens = engine.handle_line("a = Tuple._1");
-    assert!(rendered_text(&tuple_lens).contains("a: Lens<_, _> = Tuple._1"));
+    assert!(rendered_text(&tuple_lens).contains("a: Facet<_, _> = Tuple._1"));
 
     let enum_lens = engine.handle_line("ep = IntBase.Oct");
-    assert!(rendered_text(&enum_lens).contains("ep: Lens<IntBase, Unit> = IntBase.Oct"));
+    assert!(rendered_text(&enum_lens).contains("ep: Facet<IntBase, Unit> = IntBase.Oct"));
 
     let slash = engine.handle_line("a / ep");
     let slash = rendered_text(&slash);
-    assert!(slash.contains("Lens<_, _> = Tuple._1.Oct"), "{slash}");
+    assert!(slash.contains("Facet<_, _> = Tuple._1.Oct"), "{slash}");
 
-    let helper = engine.handle_line("Lens::compose(a, ep)");
+    let helper = engine.handle_line("Facet::compose(a, ep)");
     let helper = rendered_text(&helper);
-    assert!(helper.contains("Lens<_, _> = Tuple._1.Oct"), "{helper}");
+    assert!(helper.contains("Facet<_, _> = Tuple._1.Oct"), "{helper}");
 }
 
 #[test]
-fn core_lens_command_reports_segments_and_stop_points() {
+fn core_facet_command_reports_kind_apis_segments_and_stop_points() {
     let mut engine = engine();
 
     let binding = engine.handle_line("path = Tuple._0");
-    assert!(rendered_text(&binding).contains("path: Lens<_, _> = Tuple._0"));
+    assert!(rendered_text(&binding).contains("path: Facet<_, _> = Tuple._0"));
 
-    let lens_info = engine.handle_line(":lens path");
-    assert!(matches!(lens_info.output, ReplOutput::StyledDoc { .. }));
-    let lens_info = rendered_text(&lens_info);
-    assert!(lens_info.contains("## LensPath"), "{lens_info}");
-    assert!(lens_info.contains("type: Lens<_, _>"), "{lens_info}");
-    assert!(lens_info.contains("view result: _"), "{lens_info}");
-    assert!(lens_info.contains("full path: Tuple._0"), "{lens_info}");
-    assert!(lens_info.contains("## Flow"), "{lens_info}");
-    assert!(lens_info.contains("hop 1: Tuple._0"), "{lens_info}");
-    assert!(lens_info.contains("relation: _ -> _"), "{lens_info}");
+    let facet_info = engine.handle_line(":facet path");
+    assert!(matches!(facet_info.output, ReplOutput::StyledDoc { .. }));
+    let facet_info = rendered_text(&facet_info);
+    assert!(facet_info.contains("## FacetPath"), "{facet_info}");
+    assert!(facet_info.contains("type: Facet<_, _>"), "{facet_info}");
+    assert!(facet_info.contains("kind: structural"), "{facet_info}");
+    assert!(facet_info.contains("view API: Facet::view"), "{facet_info}");
+    assert!(
+        facet_info.contains("preview API: unavailable"),
+        "{facet_info}"
+    );
+    assert!(facet_info.contains("view result: _"), "{facet_info}");
+    assert!(facet_info.contains("full path: Tuple._0"), "{facet_info}");
+    assert!(facet_info.contains("## Flow"), "{facet_info}");
+    assert!(facet_info.contains("hop 1: Tuple._0"), "{facet_info}");
+    assert!(facet_info.contains("relation: _ -> _"), "{facet_info}");
 
-    let fallible = engine.handle_line(":lens BitWidth.Any");
+    let legacy = engine.handle_line(":lens path");
+    assert!(rendered_text(&legacy).contains("Unknown REPL command: :lens"));
+
+    let fallible = engine.handle_line(":facet BitWidth.Any");
     let fallible = rendered_text(&fallible);
+    assert!(fallible.contains("kind: variant"), "{fallible}");
+    assert!(
+        fallible.contains("preview API: Facet::preview"),
+        "{fallible}"
+    );
     assert!(
         fallible.contains("view result: Result<Int, Error>"),
         "{fallible}"
@@ -1542,11 +1556,11 @@ fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
     assert!(tuple_doc.contains("Tuple._1"), "{tuple_doc}");
     assert!(tuple_doc.contains("pair._1"), "{tuple_doc}");
     assert!(
-        tuple_doc.contains("Lens::view(Tuple._1, pair)"),
+        tuple_doc.contains("Facet::view(Tuple._1, pair)"),
         "{tuple_doc}"
     );
     assert!(
-        tuple_doc.contains("Lens::set(Tuple._1, pair, 3)"),
+        tuple_doc.contains("Facet::set(Tuple._1, pair, 3)"),
         "{tuple_doc}"
     );
 
@@ -1621,7 +1635,7 @@ fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
     let field_sig = signature_text(&field_sig);
     assert!(field_sig.contains("defined:"), "{field_sig}");
     assert!(
-        field_sig.contains("Lens::view(Tuple._1, pair)"),
+        field_sig.contains("Facet::view(Tuple._1, pair)"),
         "{field_sig}"
     );
     assert!(field_sig.contains("specialized:"), "{field_sig}");
@@ -1630,7 +1644,7 @@ fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
     let view_sig = engine.handle_line(":sig pair._1");
     let view_sig = signature_text(&view_sig);
     assert!(view_sig.contains("defined:"), "{view_sig}");
-    assert!(view_sig.contains("Lens::view("), "{view_sig}");
+    assert!(view_sig.contains("Facet::view("), "{view_sig}");
     assert!(view_sig.contains("specialized:"), "{view_sig}");
     assert!(view_sig.contains("pair._1: Int"), "{view_sig}");
 
@@ -1642,7 +1656,7 @@ fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
     );
 
     let compose_sig =
-        engine.handle_line(":sig Lens::compose(StyledDocSegment.style, StyledDocStyle.bold)");
+        engine.handle_line(":sig Facet::compose(StyledDocSegment.style, StyledDocStyle.bold)");
     let compose_sig = rendered_text(&compose_sig);
     assert!(
         compose_sig.contains("Unsupported command query argument `StyledDocSegment.style`"),
@@ -1650,7 +1664,7 @@ fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
     );
 
     let over_result_sig = engine.handle_line(
-        ":sig Lens::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})",
+        ":sig Facet::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})",
     );
     let over_result_sig = rendered_text(&over_result_sig);
     assert!(

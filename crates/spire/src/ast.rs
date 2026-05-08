@@ -24,6 +24,7 @@ pub struct DeclAttrs {
     pub doc: Option<String>,
     pub auto_import: bool,
     pub hidden: bool,
+    pub readonly: bool,
     pub visibility: Visibility,
     pub user_importable: bool,
     pub user_callable: bool,
@@ -36,6 +37,7 @@ impl Default for DeclAttrs {
             doc: None,
             auto_import: false,
             hidden: false,
+            readonly: false,
             visibility: Visibility::Public,
             user_importable: true,
             user_callable: true,
@@ -291,6 +293,7 @@ pub struct StructField {
     pub ty: AstTy,
     pub span: Span,
     pub visibility: Visibility,
+    pub readonly: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -299,6 +302,7 @@ pub struct RecordField {
     pub ty: AstTy,
     pub span: Span,
     pub visibility: Visibility,
+    pub readonly: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

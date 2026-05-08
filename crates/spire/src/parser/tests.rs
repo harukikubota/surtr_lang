@@ -84,9 +84,68 @@ fn test_private_field_modifier_is_preserved() {
             assert_eq!(name, "User");
             assert_eq!(fields[0].name, "password");
             assert_eq!(fields[0].visibility, Visibility::Private);
+            assert!(!fields[0].readonly);
             assert_eq!(fields[1].name, "name");
             assert_eq!(fields[1].visibility, Visibility::Public);
+            assert!(!fields[1].readonly);
             assert_eq!(attrs, &DeclAttrs::default());
+        }
+        _ => panic!("Expected StructDef"),
+    }
+}
+
+#[test]
+fn test_readonly_struct_field_modifier_is_preserved() {
+    let ast = parse_with_context(
+        "defstruct User { readonly profile: Profile, public readonly name: String }",
+        ParserContext::project(0),
+    )
+    .unwrap();
+    match &ast[0] {
+        Ast::StructDef(_, name, fields, attrs) => {
+            assert_eq!(name, "User");
+            assert_eq!(fields[0].name, "profile");
+            assert!(fields[0].readonly);
+            assert_eq!(fields[0].visibility, Visibility::Public);
+            assert_eq!(fields[1].name, "name");
+            assert!(fields[1].readonly);
+            assert_eq!(fields[1].visibility, Visibility::Public);
+            assert_eq!(attrs, &DeclAttrs::default());
+        }
+        _ => panic!("Expected StructDef"),
+    }
+}
+
+#[test]
+fn test_readonly_record_field_modifier_is_rejected() {
+    let err = parse_with_context(
+        "defrecord User(readonly name: String)",
+        ParserContext::project(0),
+    )
+    .expect_err("readonly record field should fail");
+
+    assert!(err
+        .message()
+        .contains("readonly field modifier is only supported on `defstruct` fields"));
+}
+
+#[test]
+fn test_readonly_struct_metadata_and_field_modifier_are_preserved() {
+    let ast = parse_with_context(
+        "@readonly\ndefstruct User { private readonly password: String, readonly name: String }",
+        ParserContext::project(0),
+    )
+    .unwrap();
+    match &ast[0] {
+        Ast::StructDef(_, name, fields, attrs) => {
+            assert_eq!(name, "User");
+            assert!(attrs.readonly);
+            assert_eq!(fields[0].name, "password");
+            assert_eq!(fields[0].visibility, Visibility::Private);
+            assert!(fields[0].readonly);
+            assert_eq!(fields[1].name, "name");
+            assert_eq!(fields[1].visibility, Visibility::Public);
+            assert!(fields[1].readonly);
         }
         _ => panic!("Expected StructDef"),
     }
@@ -2615,13 +2674,13 @@ fn test_legacy_pipe_compose_operator_is_rejected() {
 
 #[test]
 fn test_lens_slash_compose_expression_parses() {
-    parse(r#"value = Lens::view(User.profile / Profile.name, user)"#)
+    parse(r#"value = Facet::view(User.profile / Profile.name, user)"#)
         .expect("lens slash compose should parse");
 }
 
 #[test]
 fn test_lens_slash_compose_chain_parses() {
-    parse(r#"value = Lens::view(Config.root / Project.current / Tuple._0, cfg)"#)
+    parse(r#"value = Facet::view(Config.root / Project.current / Tuple._0, cfg)"#)
         .expect("chained lens slash compose should parse");
 }
 

@@ -71,7 +71,7 @@ mod tests {
     const DURATION_MODULE_SOURCE: &str = include_str!("../../../lib/types/duration.srt");
     const PROCESS_MODULE_SOURCE: &str = include_str!("../../../lib/process.srt");
     const OPTION_MODULE_SOURCE: &str = include_str!("../../../lib/types/option.srt");
-    const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/lens.srt");
+    const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/facet.srt");
     const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/types/float.srt");
     const RANDOM_MODULE_SOURCE: &str = include_str!("../../../lib/Random.srt");
     const STYLED_DOC_MODULE_SOURCE: &str = include_str!("../../../lib/styled_doc.srt");
@@ -229,7 +229,7 @@ mod tests {
                 ("Duration", DURATION_MODULE_SOURCE),
                 ("Process", PROCESS_MODULE_SOURCE),
                 ("Option", OPTION_MODULE_SOURCE),
-                ("Lens", LENS_MODULE_SOURCE),
+                ("Facet", LENS_MODULE_SOURCE),
                 ("Float", FLOAT_MODULE_SOURCE),
                 ("Random", RANDOM_MODULE_SOURCE),
                 ("StyledDoc", STYLED_DOC_MODULE_SOURCE),
@@ -700,8 +700,8 @@ largest = Numeric::max(1.5, 2.5)"#,
         let bytecode = codegen_source(
             r#"defrecord User(name: String)
 user = User("alice")
-user2 = Lens::set(User.name, user, "bob")
-user3 = Lens::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
+user2 = Facet::set(User.name, user, "bob")
+user3 = Facet::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
         );
 
         let lens_set_id = builtin_id_by_name("set").expect("set builtin metadata must exist");
@@ -727,7 +727,7 @@ user3 = Lens::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
         let bytecode = codegen_source(
             r#"defrecord User(name: String)
 lens = User.name
-name = Lens::view(lens, User("alice"))
+name = Facet::view(lens, User("alice"))
 getter = {|| name}
 result = getter()"#,
         );
@@ -759,7 +759,7 @@ result = getter()"#,
   Halt,
 }
 expr = Expr::Halt
-Lens::view(Expr.Add, expr)"#,
+Facet::view(Expr.Add, expr)"#,
         );
 
         let has_segment_detail = bytecode.constants.iter().any(|constant| {

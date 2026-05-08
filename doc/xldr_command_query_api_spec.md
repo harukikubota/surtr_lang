@@ -56,14 +56,14 @@ query parser は Surtr 式 parser ではない。
 | `:sig` | 関数、constructor、extractor、enum variant surface、impl specialization の signature を表示する | `SigTarget` |
 | `:info` | 定義、binding、dispatch、operator query の解決情報を表示する | `InfoTarget` |
 | `:type` | REPL binding の型と TypeIdentity を表示する | `TypeTarget` |
-| `:lens` | LensPath の型遷移、停止点、fallible segment を表示する | `LensTarget` |
+| `:facet` | FacetPath の型遷移、停止点、fallible segment を表示する | `LensTarget` |
 | `:v` | history value または binding value を表示する | `HistoryIndex` / `BindingKey` |
 | `:help` | command help を表示する | `Topic?` |
 | `:error` | error 表示モードを確認・変更する | `full` / `summary` |
 | `:save` | REPL session を保存する | `Path` |
 | `:quit` | REPL を終了する | なし |
 
-この文書では、主に `:doc`, `:sig`, `:info`, `:type`, `:lens` を対象にする。
+この文書では、主に `:doc`, `:sig`, `:info`, `:type`, `:facet` を対象にする。
 
 ---
 
@@ -919,42 +919,42 @@ Try:
 
 ---
 
-## 9. `:lens`
+## 9. `:facet`
 
 ### 9.1 目的
 
-`:lens` は LensPath の詳細を表示する。
+`:facet` は FacetPath の詳細を表示する。
 
 表示すべき情報:
 
-- canonical LensPath
+- canonical FacetPath
 - 各 segment の型遷移
 - stop point
 - Result を返しうる segment
-- 最終的な Lens 型
+- 最終的な Facet 型
 
 ### 9.2 LensTarget
 
 ```text
 LensTarget
-  = LensPathRef
-  | ForcedBindingKey where binding is LensPath / Lens
+  = FacetPathRef
+  | ForcedBindingKey where binding is FacetPath / Facet
 ```
 
 有効例:
 
 ```text
-:lens User.address.name
-:lens Tuple._1
-:lens $address_name_lens
+:facet User.address.name
+:facet Tuple._1
+:facet $address_name_lens
 ```
 
 無効例:
 
 ```text
-:lens 1 + 2
-:lens user.address.name   # value access expression として扱うなら無効
-:lens map(xs, &to_string)
+:facet 1 + 2
+:facet user.address.name   # value access expression として扱うなら無効
+:facet map(xs, &to_string)
 ```
 
 出力例:
@@ -968,7 +968,7 @@ path:
     .name    : Address -> String
 
 result:
-  Lens(User, String)
+  Facet(User, String)
 
 fallible:
   no
@@ -985,7 +985,7 @@ path:
     .host     : Database -> String
 
 result:
-  Lens(Config, Result<String>)
+  Facet(Config, Result<String>)
 
 fallible:
   yes
@@ -1102,14 +1102,14 @@ f = &print
 
 ## 11. コマンド別許可トークン表
 
-| Token / Shape | `:doc` | `:sig` | `:info` | `:type` | `:lens` |
+| Token / Shape | `:doc` | `:sig` | `:info` | `:type` | `:facet` |
 |---|---:|---:|---:|---:|---:|
 | `SymbolRef` | yes | yes | yes | no | no |
 | `QualifiedRef` | yes | yes | yes | no | no |
 | `OperatorRef` | yes | yes | yes | no | no |
-| `ConcreteTypeKey` | yes | context | yes | no | LensPath 起点のみ |
+| `ConcreteTypeKey` | yes | context | yes | no | FacetPath 起点のみ |
 | `BindingKey` | no for doc binding | callable/context | yes | yes | no |
-| `$BindingKey` | yes | callable/context | yes | yes | yes if Lens |
+| `$BindingKey` | yes | callable/context | yes | yes | yes if Facet |
 | `TypedCallQuery` | yes | yes | yes | no | no |
 | `TypedOperatorQuery` | yes | yes | yes | no | no |
 | `ConstructorTarget` | yes | yes | yes | no | no |
@@ -1469,17 +1469,17 @@ Examples:
   :type $b
 ```
 
-### 13.5 `:lens`
+### 13.5 `:facet`
 
 ```text
 Usage:
-  :lens <LensPath>
-  :lens $<lens-binding>
+  :facet <FacetPath>
+  :facet $<lens-binding>
 
 Examples:
-  :lens User.address.name
-  :lens Tuple._1
-  :lens $address_name_lens
+  :facet User.address.name
+  :facet Tuple._1
+  :facet $address_name_lens
 ```
 
 ---
@@ -1661,7 +1661,7 @@ ResolvedQueryRequest
   | Sig(SigQuery)
   | Info(InfoQuery)
   | Type(TypeQuery)
-  | Lens(LensQuery)
+  | Facet(LensQuery)
 ```
 
 resolver が見る情報:

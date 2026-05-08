@@ -299,6 +299,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "cond" => Token::Cond,
                 "private" => Token::Private,
                 "public" => Token::Public,
+                "readonly" => Token::Readonly,
                 "const" => Token::Const,
                 "type" => Token::Type,
                 "where" => Token::Where,

@@ -591,7 +591,7 @@ impl Checker {
             if self.ty_contains_lens(&param_ty) {
                 return Err(TypeError {
                     message:
-                        "Lens is compile-time only in Stage1 and cannot appear in function parameter types"
+                        "Facet is compile-time only in Stage1 and cannot appear in function parameter types"
                             .into(),
                     span: param.id.span.clone(),
                     hint: None,
@@ -615,7 +615,7 @@ impl Checker {
         if self.ty_contains_lens(&expected_ret) {
             return Err(TypeError {
                 message:
-                    "Lens is compile-time only in Stage1 and cannot appear in function return types"
+                    "Facet is compile-time only in Stage1 and cannot appear in function return types"
                         .into(),
                 span: span.clone(),
                 hint: None,
@@ -794,7 +794,7 @@ impl Checker {
         if self.ty_contains_lens(&param_ty) {
             return Err(TypeError {
                 message:
-                    "Lens is compile-time only in Stage1 and cannot appear in extractor parameter types"
+                    "Facet is compile-time only in Stage1 and cannot appear in extractor parameter types"
                         .into(),
                 span: param.id.span.clone(),
                 hint: None,
@@ -814,7 +814,7 @@ impl Checker {
         if self.ty_contains_lens(&expected_ret) {
             return Err(TypeError {
                 message:
-                    "Lens is compile-time only in Stage1 and cannot appear in extractor return types"
+                    "Facet is compile-time only in Stage1 and cannot appear in extractor return types"
                         .into(),
                 span: span.clone(),
                 hint: None,
@@ -1101,9 +1101,25 @@ impl Checker {
             .map(|field| field.name.clone())
             .collect::<HashSet<_>>();
 
+        let readonly_fields = fields
+            .iter()
+            .filter(|field| field.readonly)
+            .map(|field| field.name.clone())
+            .collect::<HashSet<_>>();
+        let readonly_root = self
+            .env
+            .lookup_type_def(&id.name)
+            .is_some_and(|def| def.readonly_root);
+
         let tag = self
             .env
-            .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
+            .resolve_type_def_signature(
+                &id.name,
+                ty_fields.clone(),
+                private_fields,
+                readonly_fields,
+                readonly_root,
+            )
             .ok_or_else(|| TypeError {
                 message: format!("Unknown struct type declaration: {}", id.name),
                 span: span.clone(),
@@ -1114,15 +1130,24 @@ impl Checker {
             .bind_var(id.unique_id, Ty::Struct(id.name.clone(), ty_fields.clone()));
 
         let field_names: Vec<String> = ty_fields.iter().map(|(n, _)| n.clone()).collect();
-        let private_flags: Vec<bool> = fields
+        let field_policies = fields
             .iter()
-            .map(|field| field.visibility == spire::ast::Visibility::Private)
+            .map(|field| crate::typed::TypedFieldPolicy {
+                private: field.visibility == spire::ast::Visibility::Private,
+                readonly: field.readonly,
+            })
             .collect();
 
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::StructDef(tag, id.name.clone(), field_names, private_flags),
+            node: TypedInner::StructDef(
+                tag,
+                id.name.clone(),
+                field_names,
+                field_policies,
+                readonly_root,
+            ),
         })
     }
 
@@ -1191,9 +1216,22 @@ impl Checker {
             .map(|field| field.name.clone())
             .collect::<HashSet<_>>();
 
+        let readonly_fields = fields
+            .iter()
+            .filter(|field| field.readonly)
+            .map(|field| field.name.clone())
+            .collect::<HashSet<_>>();
+        let readonly_root = false;
+
         let tag = self
             .env
-            .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
+            .resolve_type_def_signature(
+                &id.name,
+                ty_fields.clone(),
+                private_fields,
+                readonly_fields,
+                readonly_root,
+            )
             .ok_or_else(|| TypeError {
                 message: format!("Unknown record type declaration: {}", id.name),
                 span: span.clone(),
@@ -1204,15 +1242,24 @@ impl Checker {
             .bind_var(id.unique_id, Ty::Record(id.name.clone(), ty_fields.clone()));
 
         let field_names: Vec<String> = ty_fields.iter().map(|(n, _)| n.clone()).collect();
-        let private_flags: Vec<bool> = fields
+        let field_policies = fields
             .iter()
-            .map(|field| field.visibility == spire::ast::Visibility::Private)
+            .map(|field| crate::typed::TypedFieldPolicy {
+                private: field.visibility == spire::ast::Visibility::Private,
+                readonly: field.readonly,
+            })
             .collect();
 
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::RecordDef(tag, id.name.clone(), field_names, private_flags),
+            node: TypedInner::RecordDef(
+                tag,
+                id.name.clone(),
+                field_names,
+                field_policies,
+                readonly_root,
+            ),
         })
     }
 
@@ -1305,10 +1352,10 @@ impl Checker {
             if self.ty_contains_lens(&typed_val.ty) {
                 return Err(TypeError {
                     message:
-                        "Struct literal fields cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                        "Struct literal fields cannot contain Facet values in Stage1 (Facet is compile-time only)"
                             .into(),
                     span: typed_val.span.clone(),
-                    hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                    hint: Some("Apply Facet::view/set/over before constructing runtime values.".into()),
                 });
             }
             if !self.types_compatible(def_ty, &typed_val.ty) {
@@ -1354,11 +1401,11 @@ impl Checker {
                     if self.ty_contains_lens(&typed.ty) {
                         return Err(TypeError {
                             message:
-                                "Result constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                "Result constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                     .into(),
                             span: typed.span.clone(),
                             hint: Some(
-                                "Apply Lens::view/set/over before wrapping with Ok(...) or Err(...)."
+                                "Apply Facet::view/set/over before wrapping with Ok(...) or Err(...)."
                                     .into(),
                             ),
                         });
@@ -1445,10 +1492,10 @@ impl Checker {
                 if self.ty_contains_lens(&typed.ty) {
                     return Err(TypeError {
                         message:
-                            "Enum constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                            "Enum constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                 .into(),
                         span: typed.span.clone(),
-                        hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                        hint: Some("Apply Facet::view/set/over before constructing runtime values.".into()),
                     });
                 }
                 if !self.types_compatible(expected, &typed.ty) {
@@ -1512,11 +1559,11 @@ impl Checker {
                         if self.ty_contains_lens(&typed_val.ty) {
                             return Err(TypeError {
                                 message:
-                                    "Constructor arguments cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                    "Constructor arguments cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                         .into(),
                                 span: typed_val.span.clone(),
                                 hint: Some(
-                                    "Apply Lens::view/set/over before passing constructor arguments."
+                                    "Apply Facet::view/set/over before passing constructor arguments."
                                         .into(),
                                 ),
                             });
@@ -1604,11 +1651,11 @@ impl Checker {
                         if self.ty_contains_lens(&typed.ty) {
                             return Err(TypeError {
                                 message:
-                                    "Constructor arguments cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                    "Constructor arguments cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                         .into(),
                                 span: typed.span.clone(),
                                 hint: Some(
-                                    "Apply Lens::view/set/over before passing constructor arguments."
+                                    "Apply Facet::view/set/over before passing constructor arguments."
                                         .into(),
                                 ),
                             });
@@ -1776,10 +1823,10 @@ impl Checker {
                     if self.ty_contains_lens(&typed_val.ty) {
                         return Err(TypeError {
                             message:
-                                "Record constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                "Record constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                     .into(),
                             span: typed_val.span.clone(),
-                            hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                            hint: Some("Apply Facet::view/set/over before constructing runtime values.".into()),
                         });
                     }
                     let (_, def_ty) = &def.fields[i];
@@ -1822,10 +1869,10 @@ impl Checker {
                     if self.ty_contains_lens(&typed_val.ty) {
                         return Err(TypeError {
                             message:
-                                "Record constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                "Record constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                     .into(),
                             span: typed_val.span.clone(),
-                            hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                            hint: Some("Apply Facet::view/set/over before constructing runtime values.".into()),
                         });
                     }
                     let (_, def_ty) = &def.fields[idx];
@@ -1911,6 +1958,8 @@ impl Checker {
                     .filter(|field| field.visibility == spire::ast::Visibility::Private)
                     .map(|field| field.name.clone())
                     .collect(),
+                HashSet::new(),
+                false,
             )
             .ok_or_else(|| TypeError {
                 message: format!("Unknown error type declaration: {}", id.name),

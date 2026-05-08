@@ -201,6 +201,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_lens_view,
     },
     BuiltinImpl {
+        name: "preview",
+        func: builtin_lens_preview,
+    },
+    BuiltinImpl {
         name: "compose",
         func: builtin_lens_compose,
     },
@@ -1820,31 +1824,37 @@ fn builtin_map_values_list(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runt
 
 fn builtin_lens_view(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
-        "Lens::view should be lowered in Forge (runtime builtin call indicates lowering bug)",
+        "Facet::view should be lowered in Forge (runtime builtin call indicates lowering bug)",
+    ))
+}
+
+fn builtin_lens_preview(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Facet::preview should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
 fn builtin_lens_compose(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
-        "Lens::compose should be lowered in Forge (runtime builtin call indicates lowering bug)",
+        "Facet::compose should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
 fn builtin_lens_set(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
-        "Lens::set should be lowered in Forge (runtime builtin call indicates lowering bug)",
+        "Facet::set should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
 fn builtin_lens_over(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
-        "Lens::over should be lowered in Forge (runtime builtin call indicates lowering bug)",
+        "Facet::over should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
 fn builtin_lens_over_result(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
-        "Lens::over_result should be lowered in Forge (runtime builtin call indicates lowering bug)",
+        "Facet::over_result should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
@@ -3157,7 +3167,7 @@ mod tests {
             include_str!("../../../lib/types/generator.srt"),
             include_str!("../../../lib/types/hash_map.srt"),
             include_str!("../../../lib/types/result.srt"),
-            include_str!("../../../lib/lens.srt"),
+            include_str!("../../../lib/facet.srt"),
             include_str!("../../../lib/types/string.srt"),
             include_str!("../../../lib/types/regex.srt"),
             include_str!("../../../lib/Random.srt"),

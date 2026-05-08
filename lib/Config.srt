@@ -1,6 +1,6 @@
 # Standard helper struct for project-style configuration examples.
 # `Config` is handy in REPL-facing docs because it is already loaded with the
-# standard library and has named fields that work well with `Lens`.
+# standard library and has named fields that work well with `Facet`.
 defstruct Config {
   name: String,
   entrypoint: String,

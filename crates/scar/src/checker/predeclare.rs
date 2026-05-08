@@ -66,10 +66,10 @@ impl Checker {
 
             if !self.const_surface_is_allowed(value) {
                 return Err(TypeError {
-                    message: "const value must be a primitive literal or a lens path".into(),
+                    message: "const value must be a primitive literal or a facet path".into(),
                     span: span.clone(),
                     hint: Some(
-                        "V1 const supports literal values, lens paths, Lens const refs, and `/` composition of those lens values only.".into(),
+                        "V1 const supports literal values, facet paths, Facet const refs, and `/` composition of those facet values only.".into(),
                     ),
                 });
             }
@@ -92,10 +92,10 @@ impl Checker {
                 ),
                 _ => {
                     return Err(TypeError {
-                        message: "const value must be a primitive literal or a lens path".into(),
+                        message: "const value must be a primitive literal or a facet path".into(),
                         span: span.clone(),
                         hint: Some(
-                            "Use `const NAME = 1`, `const NAME = User.profile`, or compose Lens consts with `/`.".into(),
+                            "Use `const NAME = 1`, `const NAME = User.profile`, or compose Facet consts with `/`.".into(),
                         ),
                     })
                 }
@@ -192,7 +192,7 @@ impl Checker {
         // Pass 2: finalize field signatures and constructor-like bindings.
         for stmt in stmts {
             match stmt {
-                Resolved::StructDef(_, id, fields, _) => {
+                Resolved::StructDef(_, id, fields, attrs) => {
                     let ty_fields = fields
                         .iter()
                         .map(|f| {
@@ -215,8 +215,19 @@ impl Checker {
                         .filter(|field| field.visibility == spire::ast::Visibility::Private)
                         .map(|field| field.name.clone())
                         .collect::<HashSet<_>>();
+                    let readonly_fields = fields
+                        .iter()
+                        .filter(|field| field.readonly)
+                        .map(|field| field.name.clone())
+                        .collect::<HashSet<_>>();
                     self.env
-                        .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
+                        .resolve_type_def_signature(
+                            &id.name,
+                            ty_fields.clone(),
+                            private_fields,
+                            readonly_fields,
+                            attrs.readonly,
+                        )
                         .ok_or_else(|| TypeError {
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
@@ -250,7 +261,13 @@ impl Checker {
                         .map(|field| field.name.clone())
                         .collect::<HashSet<_>>();
                     self.env
-                        .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
+                        .resolve_type_def_signature(
+                            &id.name,
+                            ty_fields.clone(),
+                            private_fields,
+                            HashSet::new(),
+                            false,
+                        )
                         .ok_or_else(|| TypeError {
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
@@ -276,7 +293,13 @@ impl Checker {
                         .map(|field| field.name.clone())
                         .collect::<HashSet<_>>();
                     self.env
-                        .resolve_type_def_signature(&id.name, ty_fields, private_fields)
+                        .resolve_type_def_signature(
+                            &id.name,
+                            ty_fields,
+                            private_fields,
+                            HashSet::new(),
+                            false,
+                        )
                         .ok_or_else(|| TypeError {
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
@@ -286,7 +309,13 @@ impl Checker {
                 Resolved::EnumDef(_, id, type_params, variants, _) => {
                     let _ = self
                         .env
-                        .resolve_type_def_signature(&id.name, Vec::new(), HashSet::new())
+                        .resolve_type_def_signature(
+                            &id.name,
+                            Vec::new(),
+                            HashSet::new(),
+                            HashSet::new(),
+                            false,
+                        )
                         .ok_or_else(|| TypeError {
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
@@ -829,7 +858,7 @@ impl Checker {
             Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
                 Self::collect_ty_vars(inner, out)
             }
-            Ty::Lens(source, focus) | Ty::Result(source, focus) => {
+            Ty::Facet(source, focus) | Ty::Result(source, focus) => {
                 Self::collect_ty_vars(source, out);
                 Self::collect_ty_vars(focus, out);
             }
@@ -993,7 +1022,7 @@ impl Checker {
             Ty::Pid(name) => Some(format!("PID<{name}>")),
             Ty::Result(_, _) => Some("Result".into()),
             Ty::List(_) => Some("List".into()),
-            Ty::Lens(_, _) => Some("Lens".into()),
+            Ty::Facet(_, _) => Some("Facet".into()),
             Ty::Func(_, _) => Some("Function".into()),
             Ty::Struct(name, _) | Ty::Record(name, _) => Some(name),
             Ty::Enum(name, _) => Some(name),

@@ -161,14 +161,14 @@ impl Checker {
                         }
                         _ => self.resolve_ty(&stored_ty),
                     };
-                    if matches!(ty, Ty::Lens(_, _)) {
+                    if matches!(ty, Ty::Facet(_, _)) {
                         if let Some(path) = self.lens_bindings.get(&id.unique_id).cloned() {
                             return Ok(match path {
                                 StoredLensPath::Concrete(path) => {
                                     let source_ty = self.resolve_ty(&path.source_ty);
                                     let focus_ty = self.resolve_ty(&path.focus_ty);
                                     TypedNode {
-                                        ty: Ty::Lens(
+                                        ty: Ty::Facet(
                                             Box::new(source_ty.clone()),
                                             Box::new(focus_ty.clone()),
                                         ),
@@ -176,7 +176,9 @@ impl Checker {
                                         node: TypedInner::LensPath(TypedLensPath {
                                             source_ty,
                                             focus_ty,
+                                            path_kind: path.path_kind,
                                             may_fail: path.may_fail,
+                                            source_readonly_root: path.source_readonly_root,
                                             segments: path.segments,
                                         }),
                                     }
@@ -189,7 +191,7 @@ impl Checker {
                             });
                         }
                         return Err(TypeError {
-                            message: "Lens value is not statically resolvable at this usage site"
+                            message: "Facet value is not statically resolvable at this usage site"
                                 .into(),
                             span: span.clone(),
                             hint: Some(
@@ -285,7 +287,7 @@ impl Checker {
                 } else {
                     self.check_node(rhs)?
                 };
-                let lens_path = if matches!(typed_rhs.ty, Ty::Lens(_, _)) {
+                let lens_path = if matches!(typed_rhs.ty, Ty::Facet(_, _)) {
                     Some(self.stored_lens_path_from_node(typed_rhs.clone(), span)?)
                 } else {
                     None
@@ -481,13 +483,15 @@ impl Checker {
             TypedInner::LensPath(path) => Ok(StoredLensPath::Concrete(TypedLensPath {
                 source_ty: self.resolve_ty(&path.source_ty),
                 focus_ty: self.resolve_ty(&path.focus_ty),
+                path_kind: path.path_kind,
                 may_fail: path.may_fail,
+                source_readonly_root: path.source_readonly_root,
                 segments: path.segments,
             })),
             TypedInner::PendingLensPath(path) => Ok(StoredLensPath::Pending(path)),
             _ => Err(TypeError {
                 message:
-                    "Lens values are compile-time only in Stage1 and cannot be stored or passed around"
+                    "Facet values are compile-time only in Stage1 and cannot be stored or passed around"
                         .into(),
                 span: span.clone(),
                 hint: Some("Use type-root path expressions inline (e.g. User.name).".into()),
@@ -513,7 +517,7 @@ impl Checker {
             }
             TypedPattern::Wildcard(_) => Ok(()),
             _ => Err(TypeError {
-                message: "Lens values can only be bound to variables or `_` patterns".into(),
+                message: "Facet values can only be bound to variables or `_` patterns".into(),
                 span: span.clone(),
                 hint: Some("Use `lens = User.name` or `_ = User.name`.".into()),
             }),
@@ -560,11 +564,11 @@ impl Checker {
         rhs: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_rhs = self.check_node(rhs)?;
-        if matches!(typed_rhs.ty, Ty::Lens(_, _)) {
+        if matches!(typed_rhs.ty, Ty::Facet(_, _)) {
             return Err(TypeError {
-                message: "Lens values cannot be bound with `=?`".into(),
+                message: "Facet values cannot be bound with `=?`".into(),
                 span: typed_rhs.span.clone(),
-                hint: Some("Use `=` for compile-time Lens bindings.".into()),
+                hint: Some("Use `=` for compile-time Facet bindings.".into()),
             });
         }
         let rhs_ty = self.resolve_ty(&typed_rhs.ty);
@@ -2929,21 +2933,16 @@ impl Checker {
         };
         if let Some(qualified_name) = id.qualified_name.as_deref() {
             return match qualified_name {
-                "Lens::view" => Some("view"),
-                "Lens::compose" => Some("compose"),
-                "Lens::set" => Some("set"),
-                "Lens::over" => Some("over"),
-                "Lens::over_result" => Some("over_result"),
+                "Facet::view" => Some("view"),
+                "Facet::preview" => Some("preview"),
+                "Facet::compose" => Some("compose"),
+                "Facet::set" => Some("set"),
+                "Facet::over" => Some("over"),
+                "Facet::over_result" => Some("over_result"),
                 _ => None,
             };
         }
-        match id.name.as_str() {
-            // Keep legacy fallback for Stage1 names.
-            "view" => Some("view"),
-            "compose" => Some("compose"),
-            "over_result" => Some("over_result"),
-            _ => None,
-        }
+        None
     }
 
     fn lens_segment_name(segment: &TypedLensSegment) -> String {
@@ -2958,7 +2957,7 @@ impl Checker {
         let source_tv = self.env.fresh_tyvar();
         let focus_tv = self.env.fresh_tyvar();
         TypedNode {
-            ty: Ty::Lens(Box::new(source_tv), Box::new(focus_tv)),
+            ty: Ty::Facet(Box::new(source_tv), Box::new(focus_tv)),
             span: span.clone(),
             node: TypedInner::PendingLensPath(path),
         }
@@ -2975,7 +2974,7 @@ impl Checker {
                 if !self.types_compatible(&source_ty_hint, expected_source) {
                     return Err(TypeError {
                         message: format!(
-                            "Lens path source type mismatch: path expects {}, got {}",
+                            "Facet path source type mismatch: path expects {}, got {}",
                             self.ty_name(&source_ty_hint),
                             self.ty_name(expected_source)
                         ),
@@ -2989,11 +2988,11 @@ impl Checker {
             let Some(expected_source) = expected_source else {
                 return Err(TypeError {
                     message:
-                        "Tuple._N requires Lens type context (e.g. Lens::view(Tuple._1, source_tuple))"
+                        "Tuple._N requires Facet type context (e.g. Facet::view(Tuple._1, source_tuple))"
                             .into(),
                     span: span.clone(),
                     hint: Some(
-                        "Use Tuple._N only where a Lens<(...), ...> is expected.".into(),
+                        "Use Tuple._N only where a Facet<(...), ...> is expected.".into(),
                     ),
                 });
             };
@@ -3016,9 +3015,11 @@ impl Checker {
         }
 
         Ok(TypedLensPath {
-            source_ty,
+            source_ty: source_ty.clone(),
             focus_ty: current_source,
+            path_kind: TypedLensPathKind::from_may_fail(may_fail),
             may_fail,
+            source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments,
         })
     }
@@ -3029,9 +3030,9 @@ impl Checker {
         span: &Span,
         expected_source: Option<&Ty>,
     ) -> Result<TypedLensPath, TypeError> {
-        if !matches!(typed.ty, Ty::Lens(_, _)) {
+        if !matches!(typed.ty, Ty::Facet(_, _)) {
             return Err(TypeError {
-                message: format!("Expected Lens<...> value, got {}", self.ty_name(&typed.ty)),
+                message: format!("Expected Facet<...> value, got {}", self.ty_name(&typed.ty)),
                 span: typed.span.clone(),
                 hint: None,
             });
@@ -3040,7 +3041,9 @@ impl Checker {
             TypedInner::LensPath(path) => Ok(TypedLensPath {
                 source_ty: self.resolve_ty(&path.source_ty),
                 focus_ty: self.resolve_ty(&path.focus_ty),
+                path_kind: path.path_kind,
                 may_fail: path.may_fail,
+                source_readonly_root: path.source_readonly_root,
                 segments: path.segments,
             }),
             TypedInner::PendingLensPath(path) => {
@@ -3048,7 +3051,7 @@ impl Checker {
             }
             _ => Err(TypeError {
                 message:
-                    "Lens values are compile-time only in Stage1 and cannot be stored or passed around"
+                    "Facet values are compile-time only in Stage1 and cannot be stored or passed around"
                         .into(),
                 span: span.clone(),
                 hint: Some("Use type-root path expressions inline (e.g. User.name).".into()),
@@ -3064,7 +3067,7 @@ impl Checker {
         operator_name: &str,
     ) -> Result<TypedNode, TypeError> {
         let expected_right_focus = self.env.fresh_tyvar();
-        let expected_right_ty = Ty::Lens(
+        let expected_right_ty = Ty::Facet(
             Box::new(self.resolve_ty(&left_path.focus_ty)),
             Box::new(expected_right_focus),
         );
@@ -3092,11 +3095,19 @@ impl Checker {
         let path = TypedLensPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
+            path_kind: if left_path.path_kind == TypedLensPathKind::Variant
+                || right_path.path_kind == TypedLensPathKind::Variant
+            {
+                TypedLensPathKind::Variant
+            } else {
+                TypedLensPathKind::Structural
+            },
             may_fail: left_path.may_fail || right_path.may_fail,
+            source_readonly_root: left_path.source_readonly_root,
             segments,
         };
         Ok(TypedNode {
-            ty: Ty::Lens(Box::new(source_ty), Box::new(focus_ty)),
+            ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
             span: span.clone(),
             node: TypedInner::LensPath(path),
         })
@@ -3122,7 +3133,7 @@ impl Checker {
             }
             _ => Err(TypeError {
                 message:
-                    "Lens values are compile-time only in Stage1 and cannot be stored or passed around"
+                    "Facet values are compile-time only in Stage1 and cannot be stored or passed around"
                         .into(),
                 span: span.clone(),
                 hint: Some("Use type-root path expressions inline (e.g. User.name).".into()),
@@ -3137,7 +3148,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if args.len() != 2 {
             return Err(TypeError {
-                message: format!("Lens::compose expects 2 argument(s), got {}", args.len()),
+                message: format!("Facet::compose expects 2 argument(s), got {}", args.len()),
                 span: span.clone(),
                 hint: None,
             });
@@ -3147,7 +3158,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                message: "Lens::compose does not accept named arguments".into(),
+                message: "Facet::compose does not accept named arguments".into(),
                 span: span.clone(),
                 hint: None,
             });
@@ -3163,13 +3174,13 @@ impl Checker {
         let left = self.check_node(left_expr)?;
         match left.node {
             TypedInner::LensPath(path) => {
-                self.compose_lens_paths(span, path, right_expr, "Lens::compose")
+                self.compose_lens_paths(span, path, right_expr, "Facet::compose")
             }
             TypedInner::PendingLensPath(path) => {
                 self.compose_pending_lens_paths(span, path, right_expr)
             }
             _ => Err(TypeError {
-                message: format!("Expected Lens<...> value, got {}", self.ty_name(&left.ty)),
+                message: format!("Expected Facet<...> value, got {}", self.ty_name(&left.ty)),
                 span: left.span.clone(),
                 hint: None,
             }),
@@ -3182,9 +3193,9 @@ impl Checker {
         source_expr: &Resolved,
     ) -> Result<(TypedNode, bool, Ty), TypeError> {
         let typed_source = self.check_node(source_expr)?;
-        if matches!(typed_source.ty, Ty::Lens(_, _)) {
+        if matches!(typed_source.ty, Ty::Facet(_, _)) {
             return Err(TypeError {
-                message: format!("{} source value cannot be a Lens", op_name),
+                message: format!("{} source value cannot be a Facet", op_name),
                 span: typed_source.span.clone(),
                 hint: None,
             });
@@ -3207,7 +3218,7 @@ impl Checker {
         source_input_ty: &Ty,
     ) -> Result<TypedLensPath, TypeError> {
         let expected_focus_ty = self.env.fresh_tyvar();
-        let expected_path_ty = Ty::Lens(
+        let expected_path_ty = Ty::Facet(
             Box::new(self.resolve_ty(source_value_ty)),
             Box::new(expected_focus_ty),
         );
@@ -3237,7 +3248,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if args.len() != 2 {
             return Err(TypeError {
-                message: format!("Lens::view expects 2 argument(s), got {}", args.len()),
+                message: format!("Facet::view expects 2 argument(s), got {}", args.len()),
                 span: span.clone(),
                 hint: None,
             });
@@ -3247,7 +3258,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                message: "Lens::view does not accept named arguments".into(),
+                message: "Facet::view does not accept named arguments".into(),
                 span: span.clone(),
                 hint: None,
             });
@@ -3261,10 +3272,10 @@ impl Checker {
         };
 
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_lens_source_value("Lens::view", source_expr)?;
+            self.check_lens_source_value("Facet::view", source_expr)?;
         let path = self.check_lens_path_argument(
             span,
-            "Lens::view",
+            "Facet::view",
             path_expr,
             &source_value_ty,
             &typed_source.ty,
@@ -3288,14 +3299,14 @@ impl Checker {
         })
     }
 
-    fn check_lens_set_intrinsic(
+    fn check_lens_preview_intrinsic(
         &mut self,
         span: &Span,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
-        if args.len() != 3 {
+        if args.len() != 2 {
             return Err(TypeError {
-                message: format!("Lens::set expects 3 argument(s), got {}", args.len()),
+                message: format!("Facet::preview expects 2 argument(s), got {}", args.len()),
                 span: span.clone(),
                 hint: None,
             });
@@ -3305,7 +3316,66 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                message: "Lens::set does not accept named arguments".into(),
+                message: "Facet::preview does not accept named arguments".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let ResolvedRecordLitArg::Positional(path_expr) = &args[0] else {
+            unreachable!("validated argument form above")
+        };
+        let ResolvedRecordLitArg::Positional(source_expr) = &args[1] else {
+            unreachable!("validated argument form above")
+        };
+
+        let (typed_source, source_is_result, source_value_ty) =
+            self.check_lens_source_value("Facet::preview", source_expr)?;
+        let path = self.check_lens_path_argument(
+            span,
+            "Facet::preview",
+            path_expr,
+            &source_value_ty,
+            &typed_source.ty,
+        )?;
+        if path.path_kind != TypedLensPathKind::Variant {
+            return Err(TypeError {
+                message: "Facet::preview requires a variant Facet".into(),
+                span: span.clone(),
+                hint: Some("Use Facet::view for structural field and tuple paths.".into()),
+            });
+        }
+
+        let focus_ty = self.resolve_ty(&path.focus_ty);
+        Ok(TypedNode {
+            ty: Ty::Result(Box::new(focus_ty), Box::new(Ty::Error)),
+            span: span.clone(),
+            node: TypedInner::LensView {
+                source: Box::new(typed_source),
+                path,
+                source_is_result,
+            },
+        })
+    }
+
+    fn check_lens_set_intrinsic(
+        &mut self,
+        span: &Span,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        if args.len() != 3 {
+            return Err(TypeError {
+                message: format!("Facet::set expects 3 argument(s), got {}", args.len()),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: "Facet::set does not accept named arguments".into(),
                 span: span.clone(),
                 hint: None,
             });
@@ -3322,14 +3392,15 @@ impl Checker {
         };
 
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_lens_source_value("Lens::set", source_expr)?;
+            self.check_lens_source_value("Facet::set", source_expr)?;
         let path = self.check_lens_path_argument(
             span,
-            "Lens::set",
+            "Facet::set",
             path_expr,
             &source_value_ty,
             &typed_source.ty,
         )?;
+        self.check_mutating_lens_path_permissions("Facet::set", &path, span)?;
 
         let resolved_focus_ty = self.resolve_ty(&path.focus_ty);
         let (typed_value, mode) = if let Ty::Result(ok, _) = &resolved_focus_ty {
@@ -3341,7 +3412,7 @@ impl Checker {
             } else {
                 return Err(TypeError {
                     message: format!(
-                        "Lens::set value type mismatch: expected {} or {}, got {}",
+                        "Facet::set value type mismatch: expected {} or {}, got {}",
                         self.ty_name(&path.focus_ty),
                         self.ty_name(ok.as_ref()),
                         self.ty_name(&typed_value.ty)
@@ -3355,7 +3426,7 @@ impl Checker {
             if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
                 return Err(TypeError {
                     message: format!(
-                        "Lens::set value type mismatch: expected {}, got {}",
+                        "Facet::set value type mismatch: expected {}, got {}",
                         self.ty_name(&path.focus_ty),
                         self.ty_name(&typed_value.ty)
                     ),
@@ -3389,7 +3460,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if args.len() != 3 {
             return Err(TypeError {
-                message: format!("Lens::over expects 3 argument(s), got {}", args.len()),
+                message: format!("Facet::over expects 3 argument(s), got {}", args.len()),
                 span: span.clone(),
                 hint: None,
             });
@@ -3399,7 +3470,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                message: "Lens::over does not accept named arguments".into(),
+                message: "Facet::over does not accept named arguments".into(),
                 span: span.clone(),
                 hint: None,
             });
@@ -3416,18 +3487,19 @@ impl Checker {
         };
 
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_lens_source_value("Lens::over", source_expr)?;
+            self.check_lens_source_value("Facet::over", source_expr)?;
         let path = self.check_lens_path_argument(
             span,
-            "Lens::over",
+            "Facet::over",
             path_expr,
             &source_value_ty,
             &typed_source.ty,
         )?;
+        self.check_mutating_lens_path_permissions("Facet::over", &path, span)?;
 
         let typed_update = self.check_node(update_expr)?;
         let mode = self.check_lens_over_callable(
-            "Lens::over",
+            "Facet::over",
             span,
             &path.focus_ty,
             &typed_update,
@@ -3458,7 +3530,7 @@ impl Checker {
         if args.len() != 3 {
             return Err(TypeError {
                 message: format!(
-                    "Lens::over_result expects 3 argument(s), got {}",
+                    "Facet::over_result expects 3 argument(s), got {}",
                     args.len()
                 ),
                 span: span.clone(),
@@ -3470,7 +3542,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                message: "Lens::over_result does not accept named arguments".into(),
+                message: "Facet::over_result does not accept named arguments".into(),
                 span: span.clone(),
                 hint: None,
             });
@@ -3487,29 +3559,30 @@ impl Checker {
         };
 
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_lens_source_value("Lens::over_result", source_expr)?;
+            self.check_lens_source_value("Facet::over_result", source_expr)?;
         let path = self.check_lens_path_argument(
             span,
-            "Lens::over_result",
+            "Facet::over_result",
             path_expr,
             &source_value_ty,
             &typed_source.ty,
         )?;
+        self.check_mutating_lens_path_permissions("Facet::over_result", &path, span)?;
 
         if !matches!(self.resolve_ty(&path.focus_ty), Ty::Result(_, _)) {
             return Err(TypeError {
                 message: format!(
-                    "Lens::over_result requires Result focus, got {}",
+                    "Facet::over_result requires Result focus, got {}",
                     self.ty_name(&path.focus_ty)
                 ),
                 span: span.clone(),
-                hint: Some("Use Lens::over for plain focus updates.".into()),
+                hint: Some("Use Facet::over for plain focus updates.".into()),
             });
         }
 
         let typed_update = self.check_node(update_expr)?;
         let mode = self.check_lens_over_callable(
-            "Lens::over_result",
+            "Facet::over_result",
             span,
             &path.focus_ty,
             &typed_update,
@@ -3617,6 +3690,119 @@ impl Checker {
         Ok(mode)
     }
 
+    fn readonly_type_name(ty: &Ty) -> Option<&str> {
+        match ty {
+            Ty::Struct(name, _) | Ty::Record(name, _) => Some(name.as_str()),
+            _ => None,
+        }
+    }
+
+    fn check_mutating_lens_path_permissions(
+        &self,
+        lens_name: &str,
+        path: &TypedLensPath,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        if path.source_readonly_root {
+            let resolved_source_ty = self.resolve_ty(&path.source_ty);
+            let type_name = Self::readonly_type_name(&resolved_source_ty).unwrap_or("<anonymous>");
+            return Err(TypeError {
+                message: format!(
+                    "{} cannot mutably traverse readonly type {}",
+                    lens_name, type_name
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "Use an explicit helper that returns a replacement value instead.".into(),
+                ),
+            });
+        }
+
+        for (index, segment) in path.segments.iter().enumerate() {
+            let is_final = index + 1 == path.segments.len();
+            match segment {
+                TypedLensSegment::Field {
+                    field_name,
+                    container_type_name,
+                    readonly,
+                    focus_readonly_root,
+                    focus_type_name,
+                    ..
+                } => {
+                    if *readonly {
+                        let owner_can_replace = is_final
+                            && self.current_impl_struct_target.as_deref()
+                                == Some(container_type_name.as_str());
+                        if !owner_can_replace {
+                            let hint = if is_final {
+                                format!(
+                                    "Only impl {} may replace the property itself.",
+                                    container_type_name
+                                )
+                            } else {
+                                format!(
+                                    "Readonly field {}.{} can only be replaced as a whole; it cannot be traversed to update nested state.",
+                                    container_type_name, field_name
+                                )
+                            };
+                            return Err(TypeError {
+                                message: format!(
+                                    "{} cannot mutably traverse readonly field {}.{}; only the owner can replace the property itself",
+                                    lens_name, container_type_name, field_name
+                                ),
+                                span: span.clone(),
+                                hint: Some(hint),
+                            });
+                        }
+                    }
+
+                    if *focus_readonly_root && !is_final {
+                        let type_name = focus_type_name
+                            .as_deref()
+                            .unwrap_or(container_type_name.as_str());
+                        return Err(TypeError {
+                            message: format!(
+                                "{} cannot mutably traverse readonly type {}",
+                                lens_name, type_name
+                            ),
+                            span: span.clone(),
+                            hint: Some(
+                                "Replace the containing property with a freshly computed value instead."
+                                    .into(),
+                            ),
+                        });
+                    }
+                }
+                TypedLensSegment::Tuple {
+                    focus_readonly_root,
+                    focus_type_name,
+                    ..
+                }
+                | TypedLensSegment::Variant {
+                    focus_readonly_root,
+                    focus_type_name,
+                    ..
+                } => {
+                    if *focus_readonly_root && !is_final {
+                        return Err(TypeError {
+                            message: format!(
+                                "{} cannot mutably traverse readonly type {}",
+                                lens_name,
+                                focus_type_name.as_deref().unwrap_or("<anonymous>")
+                            ),
+                            span: span.clone(),
+                            hint: Some(
+                                "Replace the containing value with an updated copy instead.".into(),
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn try_check_lens_intrinsic_app(
         &mut self,
         span: &Span,
@@ -3625,6 +3811,7 @@ impl Checker {
     ) -> Result<Option<TypedNode>, TypeError> {
         match self.lens_intrinsic_kind(func) {
             Some("view") => Ok(Some(self.check_lens_view_intrinsic(span, args)?)),
+            Some("preview") => Ok(Some(self.check_lens_preview_intrinsic(span, args)?)),
             Some("compose") => Ok(Some(self.check_lens_compose_intrinsic(span, args)?)),
             Some("set") => Ok(Some(self.check_lens_set_intrinsic(span, args)?)),
             Some("over") => Ok(Some(self.check_lens_over_intrinsic(span, args)?)),
@@ -3642,11 +3829,11 @@ impl Checker {
         if args.iter().any(|arg| self.ty_contains_lens(&arg.ty)) {
             return Err(TypeError {
                 message: format!(
-                    "{} cannot accept Lens values in Stage1 (Lens is compile-time only)",
+                    "{} cannot accept Facet values in Stage1 (Facet is compile-time only)",
                     callee
                 ),
                 span: span.clone(),
-                hint: Some("Apply Lens::view(...) before passing the value.".into()),
+                hint: Some("Apply Facet::view(...) before passing the value.".into()),
             });
         }
         Ok(())
@@ -3660,12 +3847,12 @@ impl Checker {
         if self.ty_contains_lens(&value.ty) {
             return Err(TypeError {
                 message: format!(
-                    "{} cannot contain Lens values in Stage1 (Lens is compile-time only)",
+                    "{} cannot contain Facet values in Stage1 (Facet is compile-time only)",
                     context
                 ),
                 span: value.span.clone(),
                 hint: Some(
-                    "Consume Lens with Lens::view/set/over first, then pass the plain value."
+                    "Consume Facet with Facet::view/set/over first, then pass the plain value."
                         .into(),
                 ),
             });
@@ -4537,12 +4724,12 @@ impl Checker {
 
             for capture in captures {
                 if let Some(ty) = self.env.lookup_var(capture.unique_id).cloned() {
-                    if matches!(ty, Ty::Lens(_, _)) {
+                    if matches!(ty, Ty::Facet(_, _)) {
                         return Err(TypeError {
-                            message: "Lens values are scope-local compile-time capabilities and cannot be captured by closures".into(),
+                            message: "Facet values are scope-local compile-time capabilities and cannot be captured by closures".into(),
                             span: capture.span.clone(),
                             hint: Some(
-                                "Consume the Lens in the current scope with Lens::view/set/over before creating the closure."
+                                "Consume the Facet in the current scope with Facet::view/set/over before creating the closure."
                                     .into(),
                             ),
                         });
@@ -4560,13 +4747,13 @@ impl Checker {
                 self.rewrite_repl_closure_helper_error(params, &param_tys, expected, body, err)
             })?;
             self.profiler.finish(ProfileEvent::ClosureBody, profile);
-            if matches!(typed_body.ty, Ty::Lens(_, _)) {
+            if matches!(typed_body.ty, Ty::Facet(_, _)) {
                 return Err(TypeError {
                     message:
-                        "Lens is compile-time only in Stage1 and cannot be returned from closures"
+                        "Facet is compile-time only in Stage1 and cannot be returned from closures"
                             .into(),
                     span: typed_body.span.clone(),
-                    hint: Some("Use Lens::view(...) inside the closure instead.".into()),
+                    hint: Some("Use Facet::view(...) inside the closure instead.".into()),
                 });
             }
             // The closure result type is needed immediately for inference, but
@@ -4939,7 +5126,7 @@ impl Checker {
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_node(left)?;
-        if matches!(typed_left.ty, Ty::Lens(_, _)) {
+        if matches!(typed_left.ty, Ty::Facet(_, _)) {
             return match typed_left.node {
                 TypedInner::LensPath(path) => self.compose_lens_paths(span, path, right, "`/`"),
                 TypedInner::PendingLensPath(path) => {
@@ -4947,7 +5134,7 @@ impl Checker {
                 }
                 _ => Err(TypeError {
                     message: format!(
-                        "Expected Lens<...> value, got {}",
+                        "Expected Facet<...> value, got {}",
                         self.ty_name(&typed_left.ty)
                     ),
                     span: typed_left.span.clone(),
@@ -5728,6 +5915,9 @@ impl Checker {
                     TypedLensSegment::Tuple {
                         field_index: index as u32,
                         tuple_len: items.len() as u32,
+                        focus_readonly_root: self.ty_is_readonly_root(&field_ty),
+                        focus_type_name: Self::readonly_type_name(&self.resolve_ty(&field_ty))
+                            .map(str::to_string),
                     },
                     field_ty,
                     false,
@@ -5776,6 +5966,11 @@ impl Checker {
                         field_name: field.to_string(),
                         field_index,
                         container_field_count: fields.len() as u32,
+                        container_type_name: name.clone(),
+                        readonly: self.env.is_readonly_field(&name, field),
+                        focus_readonly_root: self.ty_is_readonly_root(&field_ty),
+                        focus_type_name: Self::readonly_type_name(&self.resolve_ty(&field_ty))
+                            .map(str::to_string),
                     },
                     field_ty,
                     false,
@@ -5825,6 +6020,9 @@ impl Checker {
                         variant_name: variant.short_name,
                         variant_tag: variant.tag,
                         payload_arity,
+                        focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
+                        focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
+                            .map(str::to_string),
                     },
                     focus_ty,
                     true,
@@ -5881,17 +6079,17 @@ impl Checker {
         };
         let expected_ty = self.resolve_ty(expected_ty);
         let (expected_source, expected_focus) = match expected_ty {
-            Ty::Lens(source, focus) => (source.as_ref().clone(), focus.as_ref().clone()),
+            Ty::Facet(source, focus) => (source.as_ref().clone(), focus.as_ref().clone()),
             other => {
                 return Err(TypeError {
                     message: format!(
-                        "Tuple.{} requires expected Lens<..., ...> context, got {}",
+                        "Tuple.{} requires expected Facet<..., ...> context, got {}",
                         field,
                         self.ty_name(&other)
                     ),
                     span: span.clone(),
                     hint: Some(
-                        "Use Tuple._N as a Lens path argument in Lens::view/set/over.".into(),
+                        "Use Tuple._N as a Facet path argument in Facet::view/set/over.".into(),
                     ),
                 });
             }
@@ -5943,18 +6141,23 @@ impl Checker {
         let path = TypedLensPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
+            path_kind: TypedLensPathKind::Structural,
             may_fail: false,
+            source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments: vec![TypedLensSegment::Tuple {
                 field_index: index as u32,
                 tuple_len: match &source_ty {
                     Ty::Tuple(items) => items.len() as u32,
                     _ => unreachable!("source_ty is always Tuple here"),
                 },
+                focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
+                focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
+                    .map(str::to_string),
             }],
         };
 
         Ok(Some(TypedNode {
-            ty: Ty::Lens(Box::new(source_ty), Box::new(focus_ty)),
+            ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
             span: span.clone(),
             node: TypedInner::LensPath(path),
         }))
@@ -5987,7 +6190,7 @@ impl Checker {
             }
         }
 
-        if matches!(typed_expr.ty, Ty::Lens(_, _)) {
+        if matches!(typed_expr.ty, Ty::Facet(_, _)) {
             let path = self.resolve_lens_path_from_node(typed_expr, span, None)?;
             let (segment, focus_ty, may_fail) =
                 self.resolve_lens_segment_for_source_ty(&path.focus_ty, field, span, true)?;
@@ -5998,11 +6201,17 @@ impl Checker {
             let combined = TypedLensPath {
                 source_ty: source_ty.clone(),
                 focus_ty: focus_ty.clone(),
+                path_kind: if path.path_kind == TypedLensPathKind::Variant || may_fail {
+                    TypedLensPathKind::Variant
+                } else {
+                    TypedLensPathKind::Structural
+                },
                 may_fail: path.may_fail || may_fail,
+                source_readonly_root: path.source_readonly_root,
                 segments,
             };
             return Ok(TypedNode {
-                ty: Ty::Lens(Box::new(source_ty), Box::new(focus_ty)),
+                ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
                 span: span.clone(),
                 node: TypedInner::LensPath(combined),
             });
@@ -6017,11 +6226,13 @@ impl Checker {
                 let path = TypedLensPath {
                     source_ty: source_ty.clone(),
                     focus_ty: focus_ty.clone(),
+                    path_kind: TypedLensPathKind::from_may_fail(may_fail),
                     may_fail,
+                    source_readonly_root: self.ty_is_readonly_root(&source_ty),
                     segments: vec![segment],
                 };
                 return Ok(TypedNode {
-                    ty: Ty::Lens(Box::new(source_ty), Box::new(focus_ty)),
+                    ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
                     span: span.clone(),
                     node: TypedInner::LensPath(path),
                 });
@@ -6038,7 +6249,9 @@ impl Checker {
         let path = TypedLensPath {
             source_ty: source_focus_ty,
             focus_ty: focus_ty.clone(),
+            path_kind: TypedLensPathKind::from_may_fail(may_fail),
             may_fail,
+            source_readonly_root: false,
             segments: vec![segment],
         };
         let out_ty = if source_is_result || path.may_fail {
@@ -6065,6 +6278,13 @@ impl Checker {
         field: &str,
     ) -> Result<TypedNode, TypeError> {
         self.check_field_access_with_expected(span, expr, field, None)
+    }
+
+    fn ty_is_readonly_root(&self, ty: &Ty) -> bool {
+        match self.resolve_ty(ty) {
+            Ty::Struct(name, _) | Ty::Record(name, _) => self.env.is_readonly_root(&name),
+            _ => false,
+        }
     }
 }
 
@@ -6132,5 +6352,209 @@ fn trim_script_qualified_display_name(qualified_name: &str) -> String {
         format!("{}::{}", parent, name)
     } else {
         name.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+    use crate::env::TypeKind;
+    use crate::typed::{TypedLensPath, TypedLensPathKind, TypedLensSegment};
+
+    fn test_span() -> Span {
+        Span { start: 0, end: 0 }
+    }
+
+    fn setup_type(
+        checker: &mut Checker,
+        name: &str,
+        fields: Vec<(&str, Ty)>,
+        readonly_fields: &[&str],
+        readonly_root: bool,
+    ) {
+        checker
+            .env
+            .predeclare_type_def(name.into(), TypeKind::Struct, Vec::new());
+        checker.env.resolve_type_def_signature(
+            name,
+            fields
+                .into_iter()
+                .map(|(field, ty)| (field.into(), ty))
+                .collect(),
+            HashSet::new(),
+            readonly_fields
+                .iter()
+                .map(|field| (*field).into())
+                .collect(),
+            readonly_root,
+        );
+    }
+
+    fn field_segment(
+        container_type_name: &str,
+        field_name: &str,
+        field_index: u32,
+        readonly: bool,
+        focus_readonly_root: bool,
+        focus_type_name: Option<&str>,
+    ) -> TypedLensSegment {
+        TypedLensSegment::Field {
+            field_name: field_name.into(),
+            field_index,
+            container_field_count: 1,
+            container_type_name: container_type_name.into(),
+            readonly,
+            focus_readonly_root,
+            focus_type_name: focus_type_name.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn mutating_lens_rejects_deep_traversal_through_readonly_field_even_for_owner() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[], false);
+        setup_type(
+            &mut checker,
+            "User",
+            vec![(
+                "profile",
+                Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+            )],
+            &["profile"],
+            false,
+        );
+        checker.current_impl_struct_target = Some("User".into());
+
+        let path = TypedLensPath {
+            source_ty: Ty::Struct(
+                "User".into(),
+                vec![(
+                    "profile".into(),
+                    Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+                )],
+            ),
+            focus_ty: Ty::Str,
+            path_kind: TypedLensPathKind::Structural,
+            may_fail: false,
+            source_readonly_root: false,
+            segments: vec![
+                field_segment("User", "profile", 0, true, false, Some("Profile")),
+                field_segment("Profile", "name", 0, false, false, Some("String")),
+            ],
+        };
+
+        let err = checker
+            .check_mutating_lens_path_permissions("Facet::set", &path, &test_span())
+            .expect_err("deep traversal through readonly field should fail");
+        assert!(err.message.contains("readonly field User.profile"));
+        assert!(err.message.contains("replace the property itself"));
+    }
+
+    #[test]
+    fn mutating_lens_allows_owner_to_replace_readonly_field_itself() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[], false);
+        setup_type(
+            &mut checker,
+            "User",
+            vec![(
+                "profile",
+                Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+            )],
+            &["profile"],
+            false,
+        );
+        checker.current_impl_struct_target = Some("User".into());
+
+        let path = TypedLensPath {
+            source_ty: Ty::Struct(
+                "User".into(),
+                vec![(
+                    "profile".into(),
+                    Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+                )],
+            ),
+            focus_ty: Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+            path_kind: TypedLensPathKind::Structural,
+            may_fail: false,
+            source_readonly_root: false,
+            segments: vec![field_segment(
+                "User",
+                "profile",
+                0,
+                true,
+                false,
+                Some("Profile"),
+            )],
+        };
+
+        checker
+            .check_mutating_lens_path_permissions("Facet::set", &path, &test_span())
+            .expect("owner replacement of readonly field should succeed");
+    }
+
+    #[test]
+    fn mutating_lens_rejects_readonly_root_and_nested_readonly_type_boundaries() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[], true);
+        setup_type(
+            &mut checker,
+            "User",
+            vec![(
+                "profile",
+                Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+            )],
+            &[],
+            false,
+        );
+        checker.current_impl_struct_target = Some("Profile".into());
+
+        let readonly_root_path = TypedLensPath {
+            source_ty: Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+            focus_ty: Ty::Str,
+            path_kind: TypedLensPathKind::Structural,
+            may_fail: false,
+            source_readonly_root: true,
+            segments: vec![field_segment(
+                "Profile",
+                "name",
+                0,
+                false,
+                false,
+                Some("String"),
+            )],
+        };
+        let err = checker
+            .check_mutating_lens_path_permissions("Facet::over", &readonly_root_path, &test_span())
+            .expect_err("readonly root should fail");
+        assert!(err.message.contains("readonly type Profile"));
+
+        let nested_readonly_path = TypedLensPath {
+            source_ty: Ty::Struct(
+                "User".into(),
+                vec![(
+                    "profile".into(),
+                    Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+                )],
+            ),
+            focus_ty: Ty::Str,
+            path_kind: TypedLensPathKind::Structural,
+            may_fail: false,
+            source_readonly_root: false,
+            segments: vec![
+                field_segment("User", "profile", 0, false, true, Some("Profile")),
+                field_segment("Profile", "name", 0, false, false, Some("String")),
+            ],
+        };
+        let err = checker
+            .check_mutating_lens_path_permissions(
+                "Facet::over_result",
+                &nested_readonly_path,
+                &test_span(),
+            )
+            .expect_err("nested readonly type boundary should fail");
+        assert!(err.message.contains("readonly type Profile"));
     }
 }

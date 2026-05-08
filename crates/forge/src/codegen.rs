@@ -162,8 +162,8 @@ fn collect_missing_singleton_calls(
         | TypedInner::TraitDef(_, _)
         | TypedInner::TraitImplDef(_, _)
         | TypedInner::BuiltinExtractorDecl(_, _, _)
-        | TypedInner::StructDef(_, _, _, _)
-        | TypedInner::RecordDef(_, _, _, _) => {}
+        | TypedInner::StructDef(_, _, _, _, _)
+        | TypedInner::RecordDef(_, _, _, _, _) => {}
         TypedInner::SupervisorSpawn {
             supervisor_process,
             init,
@@ -1357,6 +1357,7 @@ pub struct ReplLensSegmentInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplLensInfo {
     pub ty: String,
+    pub path_kind: String,
     pub view_result_ty: String,
     pub full_path: String,
     pub segments: Vec<ReplLensSegmentInfo>,
@@ -1971,7 +1972,7 @@ fn lens_path_full_path(path: &TypedLensPath) -> String {
         }
     }
     if rendered.is_empty() {
-        "<lens>".to_string()
+        "<facet>".to_string()
     } else {
         rendered
     }
@@ -2056,6 +2057,7 @@ fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
             }
             Some(ReplLensInfo {
                 ty: ty_to_string(&node.ty),
+                path_kind: path.path_kind.as_str().to_string(),
                 view_result_ty: if path_is_fallible {
                     format!("Result<{}, Error>", ty_to_string(&path.focus_ty))
                 } else {
@@ -2068,9 +2070,10 @@ fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
         }
         TypedInner::PendingLensPath(path) => Some(ReplLensInfo {
             ty: ty_to_string(&node.ty),
+            path_kind: "structural".to_string(),
             view_result_ty: "_".to_string(),
             full_path: if path.segments.is_empty() {
-                "<lens>".to_string()
+                "<facet>".to_string()
             } else {
                 let mut rendered = String::new();
                 for (index, segment) in path.segments.iter().enumerate() {
@@ -2103,7 +2106,7 @@ fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
                     source_ty: "_".to_string(),
                     focus_ty: "_".to_string(),
                     fallible: false,
-                    reason: "requires Lens context to specialize".to_string(),
+                    reason: "requires Facet context to specialize".to_string(),
                 })
                 .collect(),
             stop_points: Vec::new(),
@@ -2135,7 +2138,7 @@ fn collect_stmt_meta(
                 lens_info_for_node(rhs),
             );
         }
-        TypedInner::StructDef(_, name, field_names, _) => {
+        TypedInner::StructDef(_, name, field_names, _, _) => {
             type_defs.push(TypeDefDisplay {
                 name: name.clone(),
                 kind: ReplTypeKind::Struct,
@@ -2145,7 +2148,7 @@ fn collect_stmt_meta(
                     .collect(),
             });
         }
-        TypedInner::RecordDef(_, name, field_names, _) => {
+        TypedInner::RecordDef(_, name, field_names, _, _) => {
             type_defs.push(TypeDefDisplay {
                 name: name.clone(),
                 kind: ReplTypeKind::Record,
@@ -2403,8 +2406,8 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Lazy(inner) => format!("Lazy<{}>", ty_to_string(inner)),
         Ty::TypeRef(inner) => format!("TypeRef<{}>", ty_to_string(inner)),
         Ty::Pid(name) => format!("PID<{}>", name),
-        Ty::Lens(source, focus) => {
-            format!("Lens<{}, {}>", ty_to_string(source), ty_to_string(focus))
+        Ty::Facet(source, focus) => {
+            format!("Facet<{}, {}>", ty_to_string(source), ty_to_string(focus))
         }
         Ty::Tuple(items) => format!(
             "({})",
@@ -3086,7 +3089,7 @@ impl Codegen {
                     TypedInner::LensPath(_) | TypedInner::PendingLensPath(_)
                 )
             {
-                // REPL chunks may end with a LensPath expression so the session can
+                // REPL chunks may end with a FacetPath expression so the session can
                 // inspect the canonical path without materializing a runtime value.
                 self.emit_unit_const();
             } else {
@@ -3331,7 +3334,7 @@ impl Codegen {
             }
 
             TypedInner::Bind(pat, rhs) => {
-                if matches!(rhs.ty, Ty::Lens(_, _)) {
+                if matches!(rhs.ty, Ty::Facet(_, _)) {
                     self.reserve_pattern_slots_for_lens_bind(pat);
                     let unit_idx = self.add_constant(Constant::Unit);
                     self.emit(Opcode::LoadConst(unit_idx));
@@ -3656,7 +3659,7 @@ impl Codegen {
             TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => {
                 return Err(CodegenError {
                     message:
-                        "Lens path value leaked to codegen; Lens is compile-time only in Stage1"
+                        "Facet path value leaked to codegen; Facet is compile-time only in Stage1"
                             .into(),
                     span: node.span.clone(),
                 });
@@ -3780,25 +3783,25 @@ impl Codegen {
                 self.emit_callable_ref(target)?;
             }
 
-            TypedInner::StructDef(tag, name, field_names, private_flags) => {
+            TypedInner::StructDef(tag, name, field_names, field_policies, _) => {
                 self.state.type_registry.register(TypeEntry {
                     tag: *tag,
                     name: name.clone(),
                     kind: TypeKind::Struct,
                     field_names: field_names.clone(),
-                    private_flags: private_flags.clone(),
+                    private_flags: field_policies.iter().map(|policy| policy.private).collect(),
                 });
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
-            TypedInner::RecordDef(tag, name, field_names, private_flags) => {
+            TypedInner::RecordDef(tag, name, field_names, field_policies, _) => {
                 self.state.type_registry.register(TypeEntry {
                     tag: *tag,
                     name: name.clone(),
                     kind: TypeKind::Record,
                     field_names: field_names.clone(),
-                    private_flags: private_flags.clone(),
+                    private_flags: field_policies.iter().map(|policy| policy.private).collect(),
                 });
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
@@ -3982,7 +3985,7 @@ impl Codegen {
     ) -> Result<(), CodegenError> {
         if !matches!(node.ty, Ty::Result(_, _)) {
             return Err(CodegenError {
-                message: "Internal invariant broken: Lens::set/over must return Result".into(),
+                message: "Internal invariant broken: Facet::set/over must return Result".into(),
                 span: node.span.clone(),
             });
         }
@@ -4076,6 +4079,7 @@ impl Codegen {
             TypedLensSegment::Tuple {
                 field_index,
                 tuple_len,
+                ..
             } => {
                 let focus_slot = self.state.next_slot;
                 self.state.next_slot += 1;
@@ -4110,6 +4114,7 @@ impl Codegen {
                 variant_name,
                 variant_tag,
                 payload_arity,
+                ..
             } => {
                 self.emit(Opcode::LoadLocal(current_slot));
                 self.emit(Opcode::GetTag);
@@ -4180,7 +4185,7 @@ impl Codegen {
 
                 self.patch_label(mismatch_label);
                 let detail = format!(
-                    "Variant mismatch at segment {} ({}) in lens path: expected variant {}::{}, but got a different variant",
+                    "Variant mismatch at segment {} ({}) in facet path: expected variant {}::{}, but got a different variant",
                     segment_idx + 1,
                     Self::lens_segment_display(&path.segments[segment_idx]),
                     enum_name,
@@ -4327,6 +4332,7 @@ impl Codegen {
                     variant_name,
                     variant_tag,
                     payload_arity,
+                    ..
                 } => {
                     let Some(end_label) = mismatch_end else {
                         return Err(CodegenError {
@@ -4352,7 +4358,7 @@ impl Codegen {
 
                     self.patch_label(mismatch_label);
                     let detail = format!(
-                        "Variant mismatch at segment {} ({}) in lens path: expected variant {}::{}, but got a different variant",
+                        "Variant mismatch at segment {} ({}) in facet path: expected variant {}::{}, but got a different variant",
                         segment_idx + 1,
                         Self::lens_segment_display(segment),
                         enum_name,

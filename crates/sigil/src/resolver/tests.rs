@@ -1206,6 +1206,33 @@ fn test_builtin_type_decl_resolution() {
 }
 
 #[test]
+fn test_struct_readonly_metadata_and_fields_resolve() {
+    let ast = spire::parse_with_context(
+        "@readonly\ndefstruct User { private readonly password: String, readonly name: String }",
+        spire::ParserContext::project(0),
+    )
+    .expect("readonly struct should parse");
+    let mut resolver = Resolver::new();
+    let resolved = resolver
+        .resolve_program(ast)
+        .expect("readonly struct should resolve");
+
+    match &resolved[0] {
+        Resolved::StructDef(_, id, fields, attrs) => {
+            assert_eq!(id.name, "User");
+            assert!(attrs.readonly);
+            assert_eq!(fields[0].name, "password");
+            assert_eq!(fields[0].visibility, spire::ast::Visibility::Private);
+            assert!(fields[0].readonly);
+            assert_eq!(fields[1].name, "name");
+            assert_eq!(fields[1].visibility, spire::ast::Visibility::Public);
+            assert!(fields[1].readonly);
+        }
+        other => panic!("Expected StructDef, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_module_builtin_can_be_resolved_by_qualified_name() {
     let module_stages = vec![vec![staged_module(
         "Int",

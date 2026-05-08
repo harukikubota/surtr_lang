@@ -926,6 +926,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     ty: shift_ast_ty(f.ty, delta),
                     span: shift_span(f.span, delta),
                     visibility: f.visibility,
+                    readonly: f.readonly,
                 })
                 .collect(),
             shift_decl_attrs(attrs),
@@ -940,6 +941,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     ty: shift_ast_ty(f.ty, delta),
                     span: shift_span(f.span, delta),
                     visibility: f.visibility,
+                    readonly: f.readonly,
                 })
                 .collect(),
             shift_decl_attrs(attrs),
@@ -987,6 +989,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     ty: shift_ast_ty(f.ty, delta),
                     span: shift_span(f.span, delta),
                     visibility: f.visibility,
+                    readonly: f.readonly,
                 })
                 .collect(),
             Box::new(shift_ast_span(*show_expr, delta)),

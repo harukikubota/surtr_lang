@@ -1,2 +1,2 @@
 user = User(Profile("alice"))
-print(Lens::view(Lens::compose(User.profile, Profile.name), user))
+print(Facet::view(Facet::compose(User.profile, Profile.name), user))

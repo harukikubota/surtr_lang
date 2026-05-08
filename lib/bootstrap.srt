@@ -302,8 +302,8 @@ attach the relevant bounds information.
 deferror IndexOutOfBounds(detail: String) { detail }
 
 @doc """
-Concrete bootstrap error for enum-variant selector mismatch in lens access.
-`Lens::view` returns this when a variant segment does not match the runtime
+Concrete bootstrap error for enum-variant selector mismatch in Facet access.
+`Facet::view` returns this when a variant segment does not match the runtime
 value's tag.
 """
 deferror VariantMismatch(detail: String) { detail }
