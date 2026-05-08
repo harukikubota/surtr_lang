@@ -570,7 +570,7 @@ impl ReplEngine {
             self.vm.set_source(source, file_name);
         }
 
-        if let Err(e) = self.vm.push_atomic(chunk) {
+        if let Err(e) = self.vm.push_atomic_bootstrap(chunk) {
             let file_name = self.vm.source_file().unwrap_or("<runtime>").to_string();
             return Err(LoadError::BootstrapFailed {
                 phase: "runtime".into(),
@@ -4904,7 +4904,8 @@ impl ReplEngine {
                     self.symbols.insert(name.clone());
                 }
                 self.append_docs(docs);
-                self.bump_line(Some(value), Some(meta.clone()));
+                let history_value = history_value_for_result(&self.vm, &value, &meta);
+                self.bump_line(Some(history_value), Some(meta.clone()));
                 self.pending.clear();
                 ReplResult::ok(ReplOutput::EvalSuccess {
                     idx,
@@ -5323,7 +5324,7 @@ fn compile_repl_preload_from_module_stages(
             .with_source(source, file_name),
         None => session::bytecode_interactive_vm(snapshot.bytecode.clone()),
     };
-    vm.push_atomic(chunk).map_err(|e| ReplLoadError::Runtime {
+    vm.push_atomic_bootstrap(chunk).map_err(|e| ReplLoadError::Runtime {
         file_name: compile_sources
             .sources
             .file_name(user_source_id)
@@ -5805,6 +5806,21 @@ fn local_diagnostic_span(compile_sources: &crate::CompileSources, span: &Span) -
     } else {
         Span { start: 0, end: 0 }
     }
+}
+
+fn history_value_for_result(
+    vm: &eldr::InteractiveVm,
+    value: &Value,
+    meta: &forge::ChunkMeta,
+) -> Value {
+    if matches!(value, Value::Unit) {
+        if let Some(binding) = meta.bindings.last() {
+            if let Some(bound) = vm.get_local(binding.slot_id) {
+                return bound;
+            }
+        }
+    }
+    value.clone()
 }
 
 fn apply_preload_imports(
@@ -6484,5 +6500,26 @@ mod tests {
         let applied = engine.handle_line("f1(10)");
         let applied_text = ReplEngine::repl_result_text(&applied);
         assert!(applied_text.contains("15"), "{applied_text}");
+    }
+
+    #[test]
+    fn repl_session_rejects_top_level_def_capturing_existing_value_binding() {
+        let mut engine = ReplEngine::new().expect("engine should initialize");
+
+        let bind = engine.handle_line("x = 1");
+        assert!(!bind.should_exit);
+        assert!(engine.sigil_session.lookup_uid("x").is_some());
+
+        let ast = spire::parse("def f() -> Int { x }").expect("parse failed");
+        let err = engine
+            .sigil_session
+            .resolve(ast)
+            .expect_err("top-level capture must fail");
+        assert!(
+            err.message
+                .contains("Top-level definition `f` cannot reference value binding `x`"),
+            "{}",
+            err.message
+        );
     }
 }

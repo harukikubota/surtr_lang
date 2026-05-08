@@ -95,6 +95,7 @@ Eldr は次を担わない。
 - `last_result` はユーザー言語の通常 binding ではなく、直近の batch 実行または committed chunk の結果を保持する REPL-facing session property とする
 - `push_atomic()` 完了後、VM の operand stack は空に戻す。REPL は前回 chunk の stack 内容を次回 chunk へ持ち越さない
 - `push_atomic()` は chunk 実行を原子的に扱い、失敗時は VM 状態を更新しない
+- `InteractiveVm::push_atomic()` は公開 REPL 境界として append-only function table を強制し、`fun_idx < current_function_len` の `FunctionEntry` を含む chunk を拒否する
 - rollback 対象は bytecode append 分、function overwrite、locals、operand stack、call frames、pc、process runtime、exit code、標準 I/O / REPL host I/O / test event cursor、`last_result` とする
 
 ### 3.6 トップレベル名衝突ポリシー（コンパイラ契約）

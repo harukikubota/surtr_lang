@@ -232,6 +232,69 @@ fn core_rolls_back_failed_input_without_losing_previous_state() {
 }
 
 #[test]
+fn core_rebinding_uses_latest_value_and_grows_snapshot_locals() {
+    let mut engine = engine();
+    let dir = tempfile_dir("xldr-repl-core-rebind");
+    let first_path = dir.join("after-first.eldr");
+    let path = dir.join("session.eldr");
+
+    let first = engine.handle_line("x = 1");
+    assert!(rendered_text(&first).contains("x: Int = 1"));
+    assert_eq!(engine.prompt(), "xldr(2)> ");
+
+    let first_save = engine.handle_line(&format!(":save {}", first_path.display()));
+    assert!(rendered_text(&first_save).contains("saved to"));
+    let first_bytes = fs::read(&first_path).expect("first .eldr should exist");
+    let first_snapshot =
+        sindr::ir::Bytecode::decode(&first_bytes).expect("first .eldr should decode");
+
+    let second = engine.handle_line("x = 2");
+    assert!(rendered_text(&second).contains("x: Int = 2"));
+
+    let value = engine.handle_line("x");
+    assert!(rendered_text(&value).contains("2"));
+
+    let recalled = engine.handle_line(":v 1");
+    assert!(
+        rendered_text(&recalled).contains("1"),
+        "kind={} text={}",
+        output_kind(&recalled.output),
+        rendered_text(&recalled)
+    );
+
+    let save = engine.handle_line(&format!(":save {}", path.display()));
+    assert!(rendered_text(&save).contains("saved to"));
+    let bytes = fs::read(&path).expect("saved .eldr should exist");
+    let snapshot = sindr::ir::Bytecode::decode(&bytes).expect("saved .eldr should decode");
+    assert!(
+        snapshot.num_locals >= first_snapshot.num_locals + 1,
+        "num_locals did not grow: before={}, after={}",
+        first_snapshot.num_locals,
+        snapshot.num_locals
+    );
+}
+
+#[test]
+fn core_rejects_top_level_def_capturing_session_value_binding() {
+    let mut engine = engine();
+
+    let bind = engine.handle_line("x = 1");
+    assert!(rendered_text(&bind).contains("x: Int = 1"));
+
+    let def = engine.handle_line("def f() -> Int { x }");
+    assert!(!def.should_exit);
+    assert!(
+        matches!(def.output, ReplOutput::EvalError { .. }),
+        "kind={} text={}",
+        output_kind(&def.output),
+        rendered_text(&def)
+    );
+    assert!(
+        rendered_text(&def).contains("Top-level definition `f` cannot reference value binding `x`")
+    );
+}
+
+#[test]
 fn core_rejects_repl_forbidden_top_level_declarations() {
     let mut engine = engine();
 

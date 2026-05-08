@@ -617,4 +617,6 @@ struct Resolver {
     current_module_path: Option<String>,
     current_stage_impl_targets: Option<HashMap<String, declarations::ImplTargetResolution>>,
     allow_top_level_shadowing: bool,
+    forbidden_top_level_value_bindings: HashMap<u32, String>,
+    current_top_level_def_name: Option<String>,
 }

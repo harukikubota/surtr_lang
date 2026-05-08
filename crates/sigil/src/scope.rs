@@ -67,6 +67,10 @@ impl Scope {
         self.bindings.get(name).copied()
     }
 
+    pub fn bindings(&self) -> impl Iterator<Item = (&str, u32)> {
+        self.bindings.iter().map(|(name, uid)| (name.as_str(), *uid))
+    }
+
     /// Current next_id value (for chaining scopes).
     pub fn next_id(&self) -> u32 {
         self.next_id

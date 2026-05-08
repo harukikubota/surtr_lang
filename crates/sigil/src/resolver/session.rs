@@ -123,10 +123,17 @@ impl SigilSession {
 
     pub fn replace_scope_with_declarations(
         &mut self,
-        scope: Scope,
+        mut scope: Scope,
         declaration_index: &DeclarationIndex,
     ) {
         let declaration_uids = assign_declaration_uids(declaration_index);
+        let next_local_id = declaration_uids
+            .values()
+            .copied()
+            .max()
+            .map(|uid| uid.saturating_add(1))
+            .unwrap_or_else(|| scope.next_id());
+        scope.advance_next_id_to(next_local_id);
         self.declaration_entries = declaration_index.clone().into_iter().collect();
         let declaration_uid_kinds = declaration_uid_kind_map(declaration_index, &declaration_uids);
         let declaration_hidden_by_uid = declaration_index

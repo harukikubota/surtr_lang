@@ -1262,6 +1262,8 @@ impl Resolver {
             current_module_path: None,
             current_stage_impl_targets: None,
             allow_top_level_shadowing: false,
+            forbidden_top_level_value_bindings: HashMap::new(),
+            current_top_level_def_name: None,
         }
     }
 
@@ -1280,6 +1282,8 @@ impl Resolver {
             current_module_path: None,
             current_stage_impl_targets: None,
             allow_top_level_shadowing: false,
+            forbidden_top_level_value_bindings: HashMap::new(),
+            current_top_level_def_name: None,
         }
     }
 
@@ -1307,9 +1311,29 @@ impl Resolver {
         child.current_module_path = self.current_module_path.clone();
         child.current_stage_impl_targets = self.current_stage_impl_targets.clone();
         child.allow_top_level_shadowing = self.allow_top_level_shadowing;
+        child.forbidden_top_level_value_bindings =
+            self.forbidden_top_level_value_bindings.clone();
+        child.current_top_level_def_name = self.current_top_level_def_name.clone();
         let out = f(&mut child)?;
         self.scope.advance_next_id_to(child.scope.next_id());
         Ok(out)
+    }
+
+    fn top_level_value_bindings(&self) -> HashMap<u32, String> {
+        self.scope
+            .bindings()
+            .filter(|(_, uid)| !self.declaration_uid_kinds.contains_key(uid))
+            .map(|(name, uid)| (uid, name.to_string()))
+            .collect()
+    }
+
+    fn forbids_top_level_value_capture_in_defs(&self) -> bool {
+        match self.current_module_path.as_deref() {
+            None => true,
+            Some("__Repl::Session") => true,
+            Some(path) if path.starts_with("__Script::") => true,
+            _ => false,
+        }
     }
 
     pub(super) fn is_constructor_style_head(name: &str) -> bool {
@@ -1463,6 +1487,19 @@ impl Resolver {
                 message: format!(
                     "Extractor '{}' can only be used in MatchBlock/LHS positions. Use it on the left side of match, =?, or =. If you need a value-level API, write a normal def that returns Result or Option explicitly.",
                     name
+                ),
+                span,
+                related_labels: Vec::new(),
+            });
+        }
+        if let Some(binding_name) = self.forbidden_top_level_value_bindings.get(&uid) {
+            let def_name = self
+                .current_top_level_def_name
+                .as_deref()
+                .unwrap_or("<top-level>");
+            return Err(ResolveError {
+                message: format!(
+                    "Top-level definition `{def_name}` cannot reference value binding `{binding_name}`"
                 ),
                 span,
                 related_labels: Vec::new(),
@@ -2016,6 +2053,11 @@ impl Resolver {
                 body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 body_resolver.current_module_path = self.current_module_path.clone();
                 body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
+                if self.forbids_top_level_value_capture_in_defs() {
+                    body_resolver.forbidden_top_level_value_bindings =
+                        self.top_level_value_bindings();
+                    body_resolver.current_top_level_def_name = Some(name.clone());
+                }
                 let resolved_type_params = self.resolve_type_params(type_params)?;
                 let resolved_params = params
                     .into_iter()

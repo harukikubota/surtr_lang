@@ -2144,6 +2144,24 @@ fn test_shadowing() {
 }
 
 #[test]
+fn test_top_level_def_cannot_capture_top_level_value_binding() {
+    let err = parse_and_resolve("x = 1\ndef f() -> Int { x }")
+        .expect_err("top-level def capture must fail");
+    assert!(
+        err.message
+            .contains("Top-level definition `f` cannot reference value binding `x`"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn test_top_level_def_param_shadowing_still_resolves() {
+    parse_and_resolve("x = 1\ndef f(x: Int) -> Int { x }")
+        .expect("function params should shadow top-level bindings");
+}
+
+#[test]
 fn test_match_wildcard_and_literals() {
     let resolved = parse_and_resolve(
         r#"s = "a"
@@ -2998,6 +3016,24 @@ fn test_sigil_session_scope_persists_across_calls() {
     let resolved = session.resolve(ast2).expect("second resolve failed");
     assert!(
         matches!(&resolved[0], Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "y")
+    );
+}
+
+#[test]
+fn test_sigil_session_top_level_def_cannot_capture_prior_value_binding() {
+    let mut session = SigilSession::with_module_path(Some("__Repl::Session".to_string()));
+    let first = spire::parse("x = 1").expect("parse failed");
+    session.resolve(first).expect("bind should resolve");
+
+    let second = spire::parse("def f() -> Int { x }").expect("parse failed");
+    let err = session
+        .resolve(second)
+        .expect_err("top-level def capture must fail across session chunks");
+    assert!(
+        err.message
+            .contains("Top-level definition `f` cannot reference value binding `x`"),
+        "{}",
+        err.message
     );
 }
 

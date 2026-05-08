@@ -81,6 +81,8 @@ REPL セッションの BootPlan はセッション開始時に固定する。�
 - preload script に `defagent` / `defgenserver` / `defsupervisor` などの process 宣言が含まれる場合、REPL は declaration area から process module stage を抽出し、後続の対話入力でも concrete process surface と runtime metadata を継続参照できる
 - REPL user chunk の top-level 宣言は `def` / `import` のみ許可し、`const`、型定義、`impl`、`defmod` は parse error とする
 - REPL user chunk の top-level `def` は、セッション内の暗黙擬似モジュールに属する関数として扱う
+- REPL user chunk の top-level value binding は同名再束縛を許可するが、既存 binding slot を再利用せず append-only に新 slot を割り当てる
+- REPL user chunk の top-level `def` body は、同一セッションの top-level value binding を参照してはならない。参照可能なのは通常関数と同じく引数、関数内 local、visible function/import、標準定義だけとする
 - したがって REPL は「module 外に関数がある」例外ではなく、明示 `defmod` を省略した module-like namespace 実行として扱う
 - Eldr の `last_result` は REPL 表示・履歴・将来の command 用 property であり、通常の名前解決対象にはしない
 - 初期補完候補には `Ok`, `Err` と builtin 名を含める
@@ -157,6 +159,8 @@ REPL 実装は次の 3 層に分ける。
 | `:save <path>` | 現在の REPL session を `.eldr` に保存する |
 
 REPL command query は Surtr 式 parser ではなく、command query parser と semantic resolver の組で扱う。
+
+- `:v <N>` は visible binding table を引き直さず、評価時に commit された値を履歴から再表示する。後続の同名再束縛は過去行の再表示結果を変えない
 
 - 共通引数 surface は `ConcreteTypeKey | BindingKey | ForcedBindingKey | CaptureQuery` に限定する
 - `ConcreteTypeKey` は `Int`, `Result<Int>`, `(Int -> String)` のような具象型のみを受け、`$T`, `List<$T>`, `impl Numeric` は受けない
