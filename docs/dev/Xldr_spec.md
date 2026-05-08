@@ -57,6 +57,14 @@ Xldr は対話セッション中に次を保持する。
 REPL セッションの BootPlan はセッション開始時に固定する。対話入力の chunk は
 既存 VM / process runtime 状態へ増分適用されるが、session 中に boot 構成を変更しない。
 
+Xldr は少なくとも次の session phase を区別する。
+
+- `Bootstrap`: 標準定義ソースを compile して `InteractiveVm` 初期状態を組み立てる段階
+- `Preload`: `--module` / `--script` / project runner 由来の compile 結果を live REPL 前に適用する段階
+- `Live`: 通常の対話入力を `SourceKind::ReplChunk` として増分 compile / execute する段階
+
+phase ごとの VM 実行ポリシーは Xldr が決め、Eldr へは `InteractiveChunkPolicy` として渡す。`Bootstrap` と `Preload` は `Preload` policy、`Live` は `ReplAppendOnly` policy を使う。
+
 ### 3.2 初期化
 
 - セッション開始時に標準 definition source を `Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Facet, Float, Config, Project, Random, IO, StyledDoc, Test]` の順で読み込む
@@ -70,19 +78,20 @@ REPL セッションの BootPlan はセッション開始時に固定する。�
 - REPL user chunk は標準定義ソース読み込み後に `SourceKind::ReplChunk` として追加される
 - `surtr repl --module <file>` は追加の definition source を 1 件だけ preload し、`Std + 単品 definition` として成立する場合に限って受理する
 - `surtr repl --script <file>` は追加の script source を 1 件だけ preload し、`include` を解決したうえで declaration area を compile し、top-level expr があれば REPL 開始前に一度だけ実行する
-- script 引数による REPL 開始は `Std + include module + script` を同一 compile unit として compile し、script runtime input を `InteractiveVm::push_atomic()` 経由で実行してから通常 REPL に入る
+- script 引数による REPL 開始は `Std + include module + script` を同一 compile unit として compile し、script runtime input を `InteractiveVm::push_chunk(..., Preload)` 経由で実行してから通常 REPL に入る
 - project runner 引数による REPL 開始は、Rune が解決した compile 対象 module stage を Xldr に渡し、Xldr が `Std + project module stages` をまとめて compile 済みの `InteractiveVm` 初期状態として構築してから通常 REPL に入る
 - `surtr repl --script <file>` が将来 `supervisor_init` を含む場合、preload compile unit の BootPlan として取り込み、REPL 開始後の user chunk では boot 構成を変更しない
 - `--module` と `--script` を併用した場合は `module -> script` の順で同一 compile unit として読む
 - preload mode は CLI 入口の `--module` / `--script` 引数で確定し、Xldr 側で source token を読んで mode 推定しない
 - `include` や `Project::add_path(...)` で追加される file は definition source として扱い、script と definition の判定を再度行わない
-- preload 後の対話入力自体は引き続き `SourceKind::ReplChunk` として扱い、REPL 増分ポリシーは広げない
+- preload 後の対話入力自体は引き続き `SourceKind::ReplChunk` として扱い、VM 実行 phase を `Live` へ切り替えたうえで append-only policy を適用する
 - preload script が導入した binding / function / doc metadata は、そのまま後続の REPL 対話入力から参照できる
 - preload script に `defagent` / `defgenserver` / `defsupervisor` などの process 宣言が含まれる場合、REPL は declaration area から process module stage を抽出し、後続の対話入力でも concrete process surface と runtime metadata を継続参照できる
 - REPL user chunk の top-level 宣言は `def` / `import` のみ許可し、`const`、型定義、`impl`、`defmod` は parse error とする
 - REPL user chunk の top-level `def` は、セッション内の暗黙擬似モジュールに属する関数として扱う
 - REPL user chunk の top-level value binding は同名再束縛を許可するが、既存 binding slot を再利用せず append-only に新 slot を割り当てる
 - REPL user chunk の top-level `def` body は、同一セッションの top-level value binding を参照してはならない。参照可能なのは通常関数と同じく引数、関数内 local、visible function/import、標準定義だけとする
+- この top-level `def` capture 禁止は REPL source semantics であり、VM の append-only policy とは別責務として Xldr/Sigil 側で検証する
 - したがって REPL は「module 外に関数がある」例外ではなく、明示 `defmod` を省略した module-like namespace 実行として扱う
 - Eldr の `last_result` は REPL 表示・履歴・将来の command 用 property であり、通常の名前解決対象にはしない
 - 初期補完候補には `Ok`, `Err` と builtin 名を含める

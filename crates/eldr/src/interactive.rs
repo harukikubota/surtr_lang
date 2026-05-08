@@ -5,6 +5,15 @@ use std::time::Duration;
 use crate::error::RuntimeError;
 use crate::vm::VM;
 
+/// Execution policy for one interactive bytecode chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InteractiveChunkPolicy {
+    /// Live REPL input must preserve append-only VM growth invariants.
+    ReplAppendOnly,
+    /// Bootstrap / preload input may extend structural metadata before live REPL begins.
+    Preload,
+}
+
 /// Result of one committed interactive bytecode chunk.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChunkExecution {
@@ -58,17 +67,12 @@ impl InteractiveVm {
         self.vm.snapshot_bytecode()
     }
 
-    pub fn push_atomic(&mut self, chunk: BytecodeChunk) -> Result<ChunkExecution, RuntimeError> {
-        self.verify_append_only_chunk(&chunk)?;
-        self.vm
-            .push_atomic(chunk)
-            .map(|value| ChunkExecution { value })
-    }
-
-    pub fn push_atomic_bootstrap(
+    pub fn push_chunk(
         &mut self,
         chunk: BytecodeChunk,
+        policy: InteractiveChunkPolicy,
     ) -> Result<ChunkExecution, RuntimeError> {
+        self.verify_chunk_policy(&chunk, policy)?;
         self.vm
             .push_atomic(chunk)
             .map(|value| ChunkExecution { value })
@@ -138,7 +142,14 @@ impl InteractiveVm {
         self.vm.pump_background_to_next_deadline()
     }
 
-    fn verify_append_only_chunk(&self, chunk: &BytecodeChunk) -> Result<(), RuntimeError> {
+    fn verify_chunk_policy(
+        &self,
+        chunk: &BytecodeChunk,
+        policy: InteractiveChunkPolicy,
+    ) -> Result<(), RuntimeError> {
+        if policy == InteractiveChunkPolicy::Preload {
+            return Ok(());
+        }
         let current_function_len = self.vm.function_entries().len();
         if let Some(entry) = chunk
             .functions
@@ -171,7 +182,7 @@ impl InteractiveVm {
 
 #[cfg(test)]
 mod tests {
-    use super::InteractiveVm;
+    use super::{InteractiveChunkPolicy, InteractiveVm};
     use sindr::ir::{
         Bytecode, BytecodeChunk, FunctionEntry, Opcode, RuntimeBootPlan, RuntimeCallableRef,
         RuntimeInitPolicy, RuntimeInitResultShape, RuntimeInitSpec, RuntimeProcessInstance,
@@ -225,7 +236,7 @@ mod tests {
         let mut vm = InteractiveVm::from_bytecode(bytecode);
 
         let err = vm
-            .push_atomic(BytecodeChunk {
+            .push_chunk(BytecodeChunk {
                 opcodes: vec![Opcode::Halt, Opcode::Return],
                 source_map: None,
                 const_base: 0,
@@ -240,7 +251,7 @@ mod tests {
                 docs: Vec::new(),
                 runtime_process_specs: Vec::new(),
                 runtime_boot_plan: Default::default(),
-            })
+            }, InteractiveChunkPolicy::ReplAppendOnly)
             .expect_err("interactive vm must reject function replacement");
 
         assert!(
@@ -267,7 +278,7 @@ mod tests {
         });
 
         let err = vm
-            .push_atomic(chunk)
+            .push_chunk(chunk, InteractiveChunkPolicy::ReplAppendOnly)
             .expect_err("repl mode must reject type entries");
         assert!(err.message.contains("type_entries"), "{}", err.message);
     }
@@ -301,7 +312,7 @@ mod tests {
         });
 
         let err = vm
-            .push_atomic(chunk)
+            .push_chunk(chunk, InteractiveChunkPolicy::ReplAppendOnly)
             .expect_err("repl mode must reject runtime specs");
         assert!(
             err.message.contains("runtime_process_specs"),
@@ -324,7 +335,7 @@ mod tests {
         };
 
         let err = vm
-            .push_atomic(chunk)
+            .push_chunk(chunk, InteractiveChunkPolicy::ReplAppendOnly)
             .expect_err("repl mode must reject runtime boot plan");
         assert!(
             err.message.contains("runtime_boot_plan"),
@@ -345,7 +356,7 @@ mod tests {
             private_flags: Vec::new(),
         });
 
-        vm.push_atomic_bootstrap(chunk)
+        vm.push_chunk(chunk, InteractiveChunkPolicy::Preload)
             .expect("bootstrap mode should allow structural chunk");
         assert!(
             vm.type_registry().entries.iter().any(|entry| entry.tag == 99),

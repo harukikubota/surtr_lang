@@ -4,6 +4,7 @@ use std::panic;
 use std::path::{Path, PathBuf};
 
 use diagnostics::{DiagnosticSpec, SourceId, SourceRegistry};
+use eldr::interactive::InteractiveChunkPolicy;
 use eldr::builtin::inspect_value;
 use eldr::value::{TypeKind, Value};
 use forge::bytecode::populate_error_template_lines;
@@ -186,6 +187,22 @@ struct ReplProcessMetadata {
     instance: spire::ast::ProcessInstance,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplSessionPhase {
+    Bootstrap,
+    Preload,
+    Live,
+}
+
+impl ReplSessionPhase {
+    fn execution_policy(self) -> InteractiveChunkPolicy {
+        match self {
+            Self::Bootstrap | Self::Preload => InteractiveChunkPolicy::Preload,
+            Self::Live => InteractiveChunkPolicy::ReplAppendOnly,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct ReplImportResult {
     imported_symbols: Vec<String>,
@@ -215,6 +232,14 @@ pub struct ReplEngine {
 }
 
 impl ReplEngine {
+    fn execute_vm_chunk(
+        &mut self,
+        chunk: sindr::ir::BytecodeChunk,
+        phase: ReplSessionPhase,
+    ) -> Result<eldr::interactive::ChunkExecution, eldr::RuntimeError> {
+        self.vm.push_chunk(chunk, phase.execution_policy())
+    }
+
     pub fn new() -> Result<Self, LoadError> {
         let std_module_inputs = collect_additional_default_std_module_inputs()?;
         let repl_sources = loader::collect_repl_sources_with_module_stages(&[std_module_inputs])?;
@@ -570,7 +595,7 @@ impl ReplEngine {
             self.vm.set_source(source, file_name);
         }
 
-        if let Err(e) = self.vm.push_atomic_bootstrap(chunk) {
+        if let Err(e) = self.execute_vm_chunk(chunk, ReplSessionPhase::Bootstrap) {
             let file_name = self.vm.source_file().unwrap_or("<runtime>").to_string();
             return Err(LoadError::BootstrapFailed {
                 phase: "runtime".into(),
@@ -4868,7 +4893,7 @@ impl ReplEngine {
             self.vm.set_source(source_str, file_name);
         }
 
-        match self.vm.push_atomic(chunk) {
+        match self.execute_vm_chunk(chunk, ReplSessionPhase::Live) {
             Ok(execution) => {
                 let value = eval::committed_chunk_value(execution);
                 self.sync_scar_fun_index_with_vm();
@@ -5324,7 +5349,8 @@ fn compile_repl_preload_from_module_stages(
             .with_source(source, file_name),
         None => session::bytecode_interactive_vm(snapshot.bytecode.clone()),
     };
-    vm.push_atomic_bootstrap(chunk).map_err(|e| ReplLoadError::Runtime {
+    vm.push_chunk(chunk, ReplSessionPhase::Preload.execution_policy())
+        .map_err(|e| ReplLoadError::Runtime {
         file_name: compile_sources
             .sources
             .file_name(user_source_id)
@@ -6249,7 +6275,29 @@ fn signature_return_type(signature: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eldr::interactive::InteractiveChunkPolicy;
     use eldr::value::CallableTarget;
+    use sindr::ir::{BootEntrySource, BytecodeChunk, Constant, Opcode, RuntimeBootPlan, SingletonBootEntry};
+    use sindr::runtime::{TypeEntry, TypeKind};
+
+    fn interactive_test_chunk() -> BytecodeChunk {
+        BytecodeChunk {
+            opcodes: vec![Opcode::LoadConst(0), Opcode::Halt],
+            source_map: None,
+            const_base: 0,
+            constants: vec![Constant::Int(sindr::primitives::int(1))],
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
+            functions: Vec::new(),
+            docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
+        }
+    }
 
     fn bootstrap_engine_with_module(source: &str, module_path: &str) -> ReplEngine {
         let repl_sources =
@@ -6350,22 +6398,25 @@ mod tests {
         engine.vm = session::empty_interactive_vm(engine.forge_session.type_registry());
         engine
             .vm
-            .push_atomic(sindr::ir::BytecodeChunk {
-                opcodes: vec![sindr::ir::Opcode::Halt],
-                source_map: None,
-                const_base: 0,
-                constants: vec![sindr::ir::Constant::Int(sindr::primitives::int(1))],
-                new_locals: 0,
-                type_entries: Vec::new(),
-                dbg_template_base: 0,
-                dbg_templates: Vec::new(),
-                error_template_base: 0,
-                error_templates: Vec::new(),
-                functions: Vec::new(),
-                docs: Vec::new(),
-                runtime_process_specs: Vec::new(),
-                runtime_boot_plan: Default::default(),
-            })
+            .push_chunk(
+                sindr::ir::BytecodeChunk {
+                    opcodes: vec![sindr::ir::Opcode::Halt],
+                    source_map: None,
+                    const_base: 0,
+                    constants: vec![sindr::ir::Constant::Int(sindr::primitives::int(1))],
+                    new_locals: 0,
+                    type_entries: Vec::new(),
+                    dbg_template_base: 0,
+                    dbg_templates: Vec::new(),
+                    error_template_base: 0,
+                    error_templates: Vec::new(),
+                    functions: Vec::new(),
+                    docs: Vec::new(),
+                    runtime_process_specs: Vec::new(),
+                    runtime_boot_plan: Default::default(),
+                },
+                InteractiveChunkPolicy::ReplAppendOnly,
+            )
             .expect("vm bootstrap corruption setup should succeed");
 
         let err = engine
@@ -6521,5 +6572,62 @@ mod tests {
             "{}",
             err.message
         );
+    }
+
+    #[test]
+    fn repl_session_phase_maps_to_interactive_vm_policy() {
+        assert_eq!(
+            ReplSessionPhase::Bootstrap.execution_policy(),
+            InteractiveChunkPolicy::Preload
+        );
+        assert_eq!(
+            ReplSessionPhase::Preload.execution_policy(),
+            InteractiveChunkPolicy::Preload
+        );
+        assert_eq!(
+            ReplSessionPhase::Live.execution_policy(),
+            InteractiveChunkPolicy::ReplAppendOnly
+        );
+    }
+
+    #[test]
+    fn bootstrap_phase_allows_structural_vm_growth() {
+        let mut engine = ReplEngine::new().expect("engine should initialize");
+        let mut chunk = interactive_test_chunk();
+        chunk.const_base = engine.vm.bytecode().constants.len() as u32;
+        chunk.error_template_base = engine.vm.bytecode().error_templates.len() as u32;
+        chunk.type_entries.push(TypeEntry {
+            tag: 99,
+            name: "Extra".into(),
+            kind: TypeKind::Struct,
+            field_names: Vec::new(),
+            private_flags: Vec::new(),
+        });
+
+        let execution = engine
+            .execute_vm_chunk(chunk, ReplSessionPhase::Bootstrap)
+            .expect("bootstrap phase should allow preload-style chunk");
+
+        assert_eq!(execution.value, Value::Int(sindr::primitives::int(1)));
+    }
+
+    #[test]
+    fn live_phase_rejects_runtime_boot_plan_growth() {
+        let mut engine = ReplEngine::new().expect("engine should initialize");
+        let mut chunk = interactive_test_chunk();
+        chunk.runtime_boot_plan = RuntimeBootPlan {
+            singletons: vec![SingletonBootEntry {
+                process_name: "Counter".into(),
+                init_timeout_ms: 5000,
+                source: BootEntrySource::ExplicitConfig,
+            }],
+            ..RuntimeBootPlan::default()
+        };
+
+        let err = engine
+            .execute_vm_chunk(chunk, ReplSessionPhase::Live)
+            .expect_err("live phase should reject runtime boot plan growth");
+
+        assert!(err.message.contains("runtime_boot_plan"), "{}", err.message);
     }
 }
