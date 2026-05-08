@@ -38,6 +38,7 @@ pub(super) fn resolve_decl_attrs(attrs: &DeclAttrs) -> ResolvedDeclAttrs {
     ResolvedDeclAttrs {
         doc: attrs.doc.clone(),
         hidden: attrs.hidden,
+        readonly: attrs.readonly,
         visibility: attrs.visibility,
         user_importable: attrs.user_importable,
         user_callable: attrs.user_callable,

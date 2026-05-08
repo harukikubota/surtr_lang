@@ -837,11 +837,11 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             ),
-            TypedInner::StructDef(tag, name, field_names, private_flags) => {
-                TypedInner::StructDef(tag, name, field_names, private_flags)
+            TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root) => {
+                TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root)
             }
-            TypedInner::RecordDef(tag, name, field_names, private_flags) => {
-                TypedInner::RecordDef(tag, name, field_names, private_flags)
+            TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root) => {
+                TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::TraitDef(name, methods) => TypedInner::TraitDef(name, methods),
@@ -1486,6 +1486,7 @@ impl Checker {
                 source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                 focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
                 may_fail: path.may_fail,
+                source_readonly_root: path.source_readonly_root,
                 segments: path.segments,
             }),
             TypedInner::PendingLensPath(path) => TypedInner::PendingLensPath(PendingLensPath {
@@ -1504,6 +1505,7 @@ impl Checker {
                     source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                     focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
                     may_fail: path.may_fail,
+                    source_readonly_root: path.source_readonly_root,
                     segments: path.segments,
                 },
                 source_is_result,
@@ -1520,6 +1522,7 @@ impl Checker {
                     source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                     focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
                     may_fail: path.may_fail,
+                    source_readonly_root: path.source_readonly_root,
                     segments: path.segments,
                 },
                 value: Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
@@ -1538,6 +1541,7 @@ impl Checker {
                     source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                     focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
                     may_fail: path.may_fail,
+                    source_readonly_root: path.source_readonly_root,
                     segments: path.segments,
                 },
                 update_fun: Box::new(self.substitute_typed_node_with_mapping(*update_fun, mapping)),
@@ -1640,11 +1644,11 @@ impl Checker {
                     .map(|arg| self.substitute_typed_node_with_mapping(arg, mapping))
                     .collect(),
             ),
-            TypedInner::StructDef(tag, name, field_names, private_flags) => {
-                TypedInner::StructDef(tag, name, field_names, private_flags)
+            TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root) => {
+                TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root)
             }
-            TypedInner::RecordDef(tag, name, field_names, private_flags) => {
-                TypedInner::RecordDef(tag, name, field_names, private_flags)
+            TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root) => {
+                TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::TraitDef(name, methods) => TypedInner::TraitDef(name, methods),

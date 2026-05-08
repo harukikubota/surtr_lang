@@ -1101,9 +1101,25 @@ impl Checker {
             .map(|field| field.name.clone())
             .collect::<HashSet<_>>();
 
+        let readonly_fields = fields
+            .iter()
+            .filter(|field| field.readonly)
+            .map(|field| field.name.clone())
+            .collect::<HashSet<_>>();
+        let readonly_root = self
+            .env
+            .lookup_type_def(&id.name)
+            .is_some_and(|def| def.readonly_root);
+
         let tag = self
             .env
-            .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
+            .resolve_type_def_signature(
+                &id.name,
+                ty_fields.clone(),
+                private_fields,
+                readonly_fields,
+                readonly_root,
+            )
             .ok_or_else(|| TypeError {
                 message: format!("Unknown struct type declaration: {}", id.name),
                 span: span.clone(),
@@ -1114,15 +1130,24 @@ impl Checker {
             .bind_var(id.unique_id, Ty::Struct(id.name.clone(), ty_fields.clone()));
 
         let field_names: Vec<String> = ty_fields.iter().map(|(n, _)| n.clone()).collect();
-        let private_flags: Vec<bool> = fields
+        let field_policies = fields
             .iter()
-            .map(|field| field.visibility == spire::ast::Visibility::Private)
+            .map(|field| crate::typed::TypedFieldPolicy {
+                private: field.visibility == spire::ast::Visibility::Private,
+                readonly: field.readonly,
+            })
             .collect();
 
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::StructDef(tag, id.name.clone(), field_names, private_flags),
+            node: TypedInner::StructDef(
+                tag,
+                id.name.clone(),
+                field_names,
+                field_policies,
+                readonly_root,
+            ),
         })
     }
 
@@ -1191,9 +1216,22 @@ impl Checker {
             .map(|field| field.name.clone())
             .collect::<HashSet<_>>();
 
+        let readonly_fields = fields
+            .iter()
+            .filter(|field| field.readonly)
+            .map(|field| field.name.clone())
+            .collect::<HashSet<_>>();
+        let readonly_root = false;
+
         let tag = self
             .env
-            .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
+            .resolve_type_def_signature(
+                &id.name,
+                ty_fields.clone(),
+                private_fields,
+                readonly_fields,
+                readonly_root,
+            )
             .ok_or_else(|| TypeError {
                 message: format!("Unknown record type declaration: {}", id.name),
                 span: span.clone(),
@@ -1204,15 +1242,24 @@ impl Checker {
             .bind_var(id.unique_id, Ty::Record(id.name.clone(), ty_fields.clone()));
 
         let field_names: Vec<String> = ty_fields.iter().map(|(n, _)| n.clone()).collect();
-        let private_flags: Vec<bool> = fields
+        let field_policies = fields
             .iter()
-            .map(|field| field.visibility == spire::ast::Visibility::Private)
+            .map(|field| crate::typed::TypedFieldPolicy {
+                private: field.visibility == spire::ast::Visibility::Private,
+                readonly: field.readonly,
+            })
             .collect();
 
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::RecordDef(tag, id.name.clone(), field_names, private_flags),
+            node: TypedInner::RecordDef(
+                tag,
+                id.name.clone(),
+                field_names,
+                field_policies,
+                readonly_root,
+            ),
         })
     }
 
@@ -1911,6 +1958,8 @@ impl Checker {
                     .filter(|field| field.visibility == spire::ast::Visibility::Private)
                     .map(|field| field.name.clone())
                     .collect(),
+                HashSet::new(),
+                false,
             )
             .ok_or_else(|| TypeError {
                 message: format!("Unknown error type declaration: {}", id.name),

@@ -36,6 +36,14 @@ or `Err(...)`.
 
 Private field paths follow the same visibility rules as ordinary field access.
 Outside the allowed scope, `User.secret`-style path roots are compile errors.
+
+Readonly follows a different rule boundary from private visibility.
+
+- `readonly field` path segments may still be formed and viewed
+- readonly is checked when mutating Lens operations are applied
+- owner code may replace a readonly field itself
+- writable traversal through a readonly field is rejected
+- `@readonly defstruct` blocks writable Lens operations rooted in that struct
 """
 @builtin type Lens<$S, $A>
 
@@ -62,6 +70,9 @@ impl Lens {
 
   When the selector does not match, the result is `Err(VariantMismatch(...))`.
 
+  `Lens::view` may cross readonly fields and readonly struct boundaries because
+  readonly is enforced only for mutating Lens operations.
+
   ## REPL
   xldr(1)> cfg = Config::new("demo")
   > cfg: Config = Config { name: "demo", entrypoint: "Main::main", paths: [] }
@@ -87,6 +98,12 @@ impl Lens {
   as `Ok($A)`.
   This is especially useful for `T?` fields because `T?` lowers to
   `Result<T, NoneError>`.
+
+  Readonly rules:
+
+  - readonly field traversal is rejected for mutation
+  - owner code may replace the readonly field itself when the path ends there
+  - `@readonly defstruct` roots reject `set` entirely
 
   For nested updates, compose the path first:
 
@@ -120,6 +137,8 @@ impl Lens {
   This makes `Result`-backed fields compose directly with ordinary
   `A -> Result<A>` update helpers.
 
+  The same readonly restrictions as `set` apply here.
+
   `update_fun` must return `Result`.
   If `update_fun` returns `Err(...)`, that error is propagated as-is.
 
@@ -149,6 +168,8 @@ impl Lens {
 
   `update_fun` must return `Result`.
   If `update_fun` returns `Err(...)`, that error is propagated as-is.
+
+  The same readonly restrictions as `set` apply here.
   """
   @builtin def over_result(lens: Lens<$S, Result<$A>>, source: $S, update_fun: (Result<$A> -> Result<Result<$A>>)) -> Result<$S>
 

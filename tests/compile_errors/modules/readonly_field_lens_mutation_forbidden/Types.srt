@@ -1,0 +1,19 @@
+defstruct Profile {
+  name: String,
+}
+
+defstruct User {
+  readonly profile: Profile,
+}
+
+impl Profile {
+  def new(name: String) -> Self {
+    Profile { name: name }
+  }
+}
+
+impl User {
+  def new(profile: Profile) -> Self {
+    User { profile: profile }
+  }
+}

@@ -263,6 +263,15 @@ normalized =? Lens::over(User.nickname, user, {|name|
 - 同一スコープ内で消費する
 - 関数引数として渡したり、戻り値にしたり、`List` や `Result` に入れたりしない
 - private field path は、その private field が見えるスコープの外では compile error になる
+- readonly は path 作成ではなく mutating Lens operation に対して判定される
+
+## readonly
+
+- `readonly profile: Profile` のような readonly field は read 用 path としては使えます
+- `Lens::view(User.profile.name, user)` のような read は許可されます
+- `Lens::set(User.profile.name, user, "bob")` のような深い mutable traversal は拒否されます
+- owner の `impl User` 本体では `Lens::set(User.profile, self, next_profile)` のような property そのものの置換だけが許可されます
+- `@readonly defstruct Profile { ... }` は readonly root になり、`Lens::set(Profile.name, profile, ...)` のような mutable Lens operation を owner を含めて拒否します
 
 ## private field path
 

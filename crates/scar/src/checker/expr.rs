@@ -177,6 +177,7 @@ impl Checker {
                                             source_ty,
                                             focus_ty,
                                             may_fail: path.may_fail,
+                                            source_readonly_root: path.source_readonly_root,
                                             segments: path.segments,
                                         }),
                                     }
@@ -482,6 +483,7 @@ impl Checker {
                 source_ty: self.resolve_ty(&path.source_ty),
                 focus_ty: self.resolve_ty(&path.focus_ty),
                 may_fail: path.may_fail,
+                source_readonly_root: path.source_readonly_root,
                 segments: path.segments,
             })),
             TypedInner::PendingLensPath(path) => Ok(StoredLensPath::Pending(path)),
@@ -3016,9 +3018,10 @@ impl Checker {
         }
 
         Ok(TypedLensPath {
-            source_ty,
+            source_ty: source_ty.clone(),
             focus_ty: current_source,
             may_fail,
+            source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments,
         })
     }
@@ -3041,6 +3044,7 @@ impl Checker {
                 source_ty: self.resolve_ty(&path.source_ty),
                 focus_ty: self.resolve_ty(&path.focus_ty),
                 may_fail: path.may_fail,
+                source_readonly_root: path.source_readonly_root,
                 segments: path.segments,
             }),
             TypedInner::PendingLensPath(path) => {
@@ -3093,6 +3097,7 @@ impl Checker {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
             may_fail: left_path.may_fail || right_path.may_fail,
+            source_readonly_root: left_path.source_readonly_root,
             segments,
         };
         Ok(TypedNode {
@@ -3330,6 +3335,7 @@ impl Checker {
             &source_value_ty,
             &typed_source.ty,
         )?;
+        self.check_mutating_lens_path_permissions("Lens::set", &path, span)?;
 
         let resolved_focus_ty = self.resolve_ty(&path.focus_ty);
         let (typed_value, mode) = if let Ty::Result(ok, _) = &resolved_focus_ty {
@@ -3424,6 +3430,7 @@ impl Checker {
             &source_value_ty,
             &typed_source.ty,
         )?;
+        self.check_mutating_lens_path_permissions("Lens::over", &path, span)?;
 
         let typed_update = self.check_node(update_expr)?;
         let mode = self.check_lens_over_callable(
@@ -3495,6 +3502,7 @@ impl Checker {
             &source_value_ty,
             &typed_source.ty,
         )?;
+        self.check_mutating_lens_path_permissions("Lens::over_result", &path, span)?;
 
         if !matches!(self.resolve_ty(&path.focus_ty), Ty::Result(_, _)) {
             return Err(TypeError {
@@ -3615,6 +3623,119 @@ impl Checker {
         }
 
         Ok(mode)
+    }
+
+    fn readonly_type_name(ty: &Ty) -> Option<&str> {
+        match ty {
+            Ty::Struct(name, _) | Ty::Record(name, _) => Some(name.as_str()),
+            _ => None,
+        }
+    }
+
+    fn check_mutating_lens_path_permissions(
+        &self,
+        lens_name: &str,
+        path: &TypedLensPath,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        if path.source_readonly_root {
+            let resolved_source_ty = self.resolve_ty(&path.source_ty);
+            let type_name = Self::readonly_type_name(&resolved_source_ty).unwrap_or("<anonymous>");
+            return Err(TypeError {
+                message: format!(
+                    "{} cannot mutably traverse readonly type {}",
+                    lens_name, type_name
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "Use an explicit helper that returns a replacement value instead.".into(),
+                ),
+            });
+        }
+
+        for (index, segment) in path.segments.iter().enumerate() {
+            let is_final = index + 1 == path.segments.len();
+            match segment {
+                TypedLensSegment::Field {
+                    field_name,
+                    container_type_name,
+                    readonly,
+                    focus_readonly_root,
+                    focus_type_name,
+                    ..
+                } => {
+                    if *readonly {
+                        let owner_can_replace = is_final
+                            && self.current_impl_struct_target.as_deref()
+                                == Some(container_type_name.as_str());
+                        if !owner_can_replace {
+                            let hint = if is_final {
+                                format!(
+                                    "Only impl {} may replace the property itself.",
+                                    container_type_name
+                                )
+                            } else {
+                                format!(
+                                    "Readonly field {}.{} can only be replaced as a whole; it cannot be traversed to update nested state.",
+                                    container_type_name, field_name
+                                )
+                            };
+                            return Err(TypeError {
+                                message: format!(
+                                    "{} cannot mutably traverse readonly field {}.{}; only the owner can replace the property itself",
+                                    lens_name, container_type_name, field_name
+                                ),
+                                span: span.clone(),
+                                hint: Some(hint),
+                            });
+                        }
+                    }
+
+                    if *focus_readonly_root && !is_final {
+                        let type_name = focus_type_name
+                            .as_deref()
+                            .unwrap_or(container_type_name.as_str());
+                        return Err(TypeError {
+                            message: format!(
+                                "{} cannot mutably traverse readonly type {}",
+                                lens_name, type_name
+                            ),
+                            span: span.clone(),
+                            hint: Some(
+                                "Replace the containing property with a freshly computed value instead."
+                                    .into(),
+                            ),
+                        });
+                    }
+                }
+                TypedLensSegment::Tuple {
+                    focus_readonly_root,
+                    focus_type_name,
+                    ..
+                }
+                | TypedLensSegment::Variant {
+                    focus_readonly_root,
+                    focus_type_name,
+                    ..
+                } => {
+                    if *focus_readonly_root && !is_final {
+                        return Err(TypeError {
+                            message: format!(
+                                "{} cannot mutably traverse readonly type {}",
+                                lens_name,
+                                focus_type_name.as_deref().unwrap_or("<anonymous>")
+                            ),
+                            span: span.clone(),
+                            hint: Some(
+                                "Replace the containing value with an updated copy instead.".into(),
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn try_check_lens_intrinsic_app(
@@ -5728,6 +5849,9 @@ impl Checker {
                     TypedLensSegment::Tuple {
                         field_index: index as u32,
                         tuple_len: items.len() as u32,
+                        focus_readonly_root: self.ty_is_readonly_root(&field_ty),
+                        focus_type_name: Self::readonly_type_name(&self.resolve_ty(&field_ty))
+                            .map(str::to_string),
                     },
                     field_ty,
                     false,
@@ -5776,6 +5900,11 @@ impl Checker {
                         field_name: field.to_string(),
                         field_index,
                         container_field_count: fields.len() as u32,
+                        container_type_name: name.clone(),
+                        readonly: self.env.is_readonly_field(&name, field),
+                        focus_readonly_root: self.ty_is_readonly_root(&field_ty),
+                        focus_type_name: Self::readonly_type_name(&self.resolve_ty(&field_ty))
+                            .map(str::to_string),
                     },
                     field_ty,
                     false,
@@ -5825,6 +5954,9 @@ impl Checker {
                         variant_name: variant.short_name,
                         variant_tag: variant.tag,
                         payload_arity,
+                        focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
+                        focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
+                            .map(str::to_string),
                     },
                     focus_ty,
                     true,
@@ -5944,12 +6076,16 @@ impl Checker {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
             may_fail: false,
+            source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments: vec![TypedLensSegment::Tuple {
                 field_index: index as u32,
                 tuple_len: match &source_ty {
                     Ty::Tuple(items) => items.len() as u32,
                     _ => unreachable!("source_ty is always Tuple here"),
                 },
+                focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
+                focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
+                    .map(str::to_string),
             }],
         };
 
@@ -5999,6 +6135,7 @@ impl Checker {
                 source_ty: source_ty.clone(),
                 focus_ty: focus_ty.clone(),
                 may_fail: path.may_fail || may_fail,
+                source_readonly_root: path.source_readonly_root,
                 segments,
             };
             return Ok(TypedNode {
@@ -6018,6 +6155,7 @@ impl Checker {
                     source_ty: source_ty.clone(),
                     focus_ty: focus_ty.clone(),
                     may_fail,
+                    source_readonly_root: self.ty_is_readonly_root(&source_ty),
                     segments: vec![segment],
                 };
                 return Ok(TypedNode {
@@ -6039,6 +6177,7 @@ impl Checker {
             source_ty: source_focus_ty,
             focus_ty: focus_ty.clone(),
             may_fail,
+            source_readonly_root: false,
             segments: vec![segment],
         };
         let out_ty = if source_is_result || path.may_fail {
@@ -6065,6 +6204,13 @@ impl Checker {
         field: &str,
     ) -> Result<TypedNode, TypeError> {
         self.check_field_access_with_expected(span, expr, field, None)
+    }
+
+    fn ty_is_readonly_root(&self, ty: &Ty) -> bool {
+        match self.resolve_ty(ty) {
+            Ty::Struct(name, _) | Ty::Record(name, _) => self.env.is_readonly_root(&name),
+            _ => false,
+        }
     }
 }
 
@@ -6132,5 +6278,205 @@ fn trim_script_qualified_display_name(qualified_name: &str) -> String {
         format!("{}::{}", parent, name)
     } else {
         name.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+    use crate::env::TypeKind;
+    use crate::typed::{TypedLensPath, TypedLensSegment};
+
+    fn test_span() -> Span {
+        Span { start: 0, end: 0 }
+    }
+
+    fn setup_type(
+        checker: &mut Checker,
+        name: &str,
+        fields: Vec<(&str, Ty)>,
+        readonly_fields: &[&str],
+        readonly_root: bool,
+    ) {
+        checker
+            .env
+            .predeclare_type_def(name.into(), TypeKind::Struct, Vec::new());
+        checker.env.resolve_type_def_signature(
+            name,
+            fields
+                .into_iter()
+                .map(|(field, ty)| (field.into(), ty))
+                .collect(),
+            HashSet::new(),
+            readonly_fields
+                .iter()
+                .map(|field| (*field).into())
+                .collect(),
+            readonly_root,
+        );
+    }
+
+    fn field_segment(
+        container_type_name: &str,
+        field_name: &str,
+        field_index: u32,
+        readonly: bool,
+        focus_readonly_root: bool,
+        focus_type_name: Option<&str>,
+    ) -> TypedLensSegment {
+        TypedLensSegment::Field {
+            field_name: field_name.into(),
+            field_index,
+            container_field_count: 1,
+            container_type_name: container_type_name.into(),
+            readonly,
+            focus_readonly_root,
+            focus_type_name: focus_type_name.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn mutating_lens_rejects_deep_traversal_through_readonly_field_even_for_owner() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[], false);
+        setup_type(
+            &mut checker,
+            "User",
+            vec![(
+                "profile",
+                Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+            )],
+            &["profile"],
+            false,
+        );
+        checker.current_impl_struct_target = Some("User".into());
+
+        let path = TypedLensPath {
+            source_ty: Ty::Struct(
+                "User".into(),
+                vec![(
+                    "profile".into(),
+                    Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+                )],
+            ),
+            focus_ty: Ty::Str,
+            may_fail: false,
+            source_readonly_root: false,
+            segments: vec![
+                field_segment("User", "profile", 0, true, false, Some("Profile")),
+                field_segment("Profile", "name", 0, false, false, Some("String")),
+            ],
+        };
+
+        let err = checker
+            .check_mutating_lens_path_permissions("Lens::set", &path, &test_span())
+            .expect_err("deep traversal through readonly field should fail");
+        assert!(err.message.contains("readonly field User.profile"));
+        assert!(err.message.contains("replace the property itself"));
+    }
+
+    #[test]
+    fn mutating_lens_allows_owner_to_replace_readonly_field_itself() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[], false);
+        setup_type(
+            &mut checker,
+            "User",
+            vec![(
+                "profile",
+                Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+            )],
+            &["profile"],
+            false,
+        );
+        checker.current_impl_struct_target = Some("User".into());
+
+        let path = TypedLensPath {
+            source_ty: Ty::Struct(
+                "User".into(),
+                vec![(
+                    "profile".into(),
+                    Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+                )],
+            ),
+            focus_ty: Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+            may_fail: false,
+            source_readonly_root: false,
+            segments: vec![field_segment(
+                "User",
+                "profile",
+                0,
+                true,
+                false,
+                Some("Profile"),
+            )],
+        };
+
+        checker
+            .check_mutating_lens_path_permissions("Lens::set", &path, &test_span())
+            .expect("owner replacement of readonly field should succeed");
+    }
+
+    #[test]
+    fn mutating_lens_rejects_readonly_root_and_nested_readonly_type_boundaries() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[], true);
+        setup_type(
+            &mut checker,
+            "User",
+            vec![(
+                "profile",
+                Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+            )],
+            &[],
+            false,
+        );
+        checker.current_impl_struct_target = Some("Profile".into());
+
+        let readonly_root_path = TypedLensPath {
+            source_ty: Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+            focus_ty: Ty::Str,
+            may_fail: false,
+            source_readonly_root: true,
+            segments: vec![field_segment(
+                "Profile",
+                "name",
+                0,
+                false,
+                false,
+                Some("String"),
+            )],
+        };
+        let err = checker
+            .check_mutating_lens_path_permissions("Lens::over", &readonly_root_path, &test_span())
+            .expect_err("readonly root should fail");
+        assert!(err.message.contains("readonly type Profile"));
+
+        let nested_readonly_path = TypedLensPath {
+            source_ty: Ty::Struct(
+                "User".into(),
+                vec![(
+                    "profile".into(),
+                    Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+                )],
+            ),
+            focus_ty: Ty::Str,
+            may_fail: false,
+            source_readonly_root: false,
+            segments: vec![
+                field_segment("User", "profile", 0, false, true, Some("Profile")),
+                field_segment("Profile", "name", 0, false, false, Some("String")),
+            ],
+        };
+        let err = checker
+            .check_mutating_lens_path_permissions(
+                "Lens::over_result",
+                &nested_readonly_path,
+                &test_span(),
+            )
+            .expect_err("nested readonly type boundary should fail");
+        assert!(err.message.contains("readonly type Profile"));
     }
 }

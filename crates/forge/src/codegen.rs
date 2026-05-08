@@ -162,8 +162,8 @@ fn collect_missing_singleton_calls(
         | TypedInner::TraitDef(_, _)
         | TypedInner::TraitImplDef(_, _)
         | TypedInner::BuiltinExtractorDecl(_, _, _)
-        | TypedInner::StructDef(_, _, _, _)
-        | TypedInner::RecordDef(_, _, _, _) => {}
+        | TypedInner::StructDef(_, _, _, _, _)
+        | TypedInner::RecordDef(_, _, _, _, _) => {}
         TypedInner::SupervisorSpawn {
             supervisor_process,
             init,
@@ -2135,7 +2135,7 @@ fn collect_stmt_meta(
                 lens_info_for_node(rhs),
             );
         }
-        TypedInner::StructDef(_, name, field_names, _) => {
+        TypedInner::StructDef(_, name, field_names, _, _) => {
             type_defs.push(TypeDefDisplay {
                 name: name.clone(),
                 kind: ReplTypeKind::Struct,
@@ -2145,7 +2145,7 @@ fn collect_stmt_meta(
                     .collect(),
             });
         }
-        TypedInner::RecordDef(_, name, field_names, _) => {
+        TypedInner::RecordDef(_, name, field_names, _, _) => {
             type_defs.push(TypeDefDisplay {
                 name: name.clone(),
                 kind: ReplTypeKind::Record,
@@ -3780,25 +3780,25 @@ impl Codegen {
                 self.emit_callable_ref(target)?;
             }
 
-            TypedInner::StructDef(tag, name, field_names, private_flags) => {
+            TypedInner::StructDef(tag, name, field_names, field_policies, _) => {
                 self.state.type_registry.register(TypeEntry {
                     tag: *tag,
                     name: name.clone(),
                     kind: TypeKind::Struct,
                     field_names: field_names.clone(),
-                    private_flags: private_flags.clone(),
+                    private_flags: field_policies.iter().map(|policy| policy.private).collect(),
                 });
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
-            TypedInner::RecordDef(tag, name, field_names, private_flags) => {
+            TypedInner::RecordDef(tag, name, field_names, field_policies, _) => {
                 self.state.type_registry.register(TypeEntry {
                     tag: *tag,
                     name: name.clone(),
                     kind: TypeKind::Record,
                     field_names: field_names.clone(),
-                    private_flags: private_flags.clone(),
+                    private_flags: field_policies.iter().map(|policy| policy.private).collect(),
                 });
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
@@ -4076,6 +4076,7 @@ impl Codegen {
             TypedLensSegment::Tuple {
                 field_index,
                 tuple_len,
+                ..
             } => {
                 let focus_slot = self.state.next_slot;
                 self.state.next_slot += 1;
@@ -4110,6 +4111,7 @@ impl Codegen {
                 variant_name,
                 variant_tag,
                 payload_arity,
+                ..
             } => {
                 self.emit(Opcode::LoadLocal(current_slot));
                 self.emit(Opcode::GetTag);
@@ -4327,6 +4329,7 @@ impl Codegen {
                     variant_name,
                     variant_tag,
                     payload_arity,
+                    ..
                 } => {
                     let Some(end_label) = mismatch_end else {
                         return Err(CodegenError {

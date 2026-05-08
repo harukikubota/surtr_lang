@@ -435,6 +435,7 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                     ty: rewrite_self_type(field.ty, target),
                     span: field.span,
                     visibility: field.visibility,
+                    readonly: field.readonly,
                 })
                 .collect(),
             Box::new(rewrite_self_ast(*show_expr, target)),

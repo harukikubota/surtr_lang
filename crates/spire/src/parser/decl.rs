@@ -1248,17 +1248,50 @@ impl Parser<'_> {
         Ok(())
     }
 
-    pub(super) fn parse_field_visibility(&mut self) -> Visibility {
-        if matches!(self.peek(), Token::Private) {
-            self.advance();
-            self.skip_newlines();
-            Visibility::Private
-        } else if matches!(self.peek(), Token::Public) {
-            self.advance();
-            self.skip_newlines();
-            Visibility::Public
-        } else {
-            Visibility::Public
+    pub(super) fn parse_field_modifiers(&mut self) -> Result<(Visibility, bool), ParseError> {
+        let mut visibility = Visibility::Public;
+        let mut saw_visibility = false;
+        let mut readonly = false;
+
+        loop {
+            match self.peek() {
+                Token::Private => {
+                    if saw_visibility {
+                        return Err(ParseError::syntax(
+                            "field visibility may only be specified once",
+                            self.peek_span(),
+                        ));
+                    }
+                    saw_visibility = true;
+                    visibility = Visibility::Private;
+                    self.advance();
+                    self.skip_newlines();
+                }
+                Token::Public => {
+                    if saw_visibility {
+                        return Err(ParseError::syntax(
+                            "field visibility may only be specified once",
+                            self.peek_span(),
+                        ));
+                    }
+                    saw_visibility = true;
+                    visibility = Visibility::Public;
+                    self.advance();
+                    self.skip_newlines();
+                }
+                Token::Readonly => {
+                    if readonly {
+                        return Err(ParseError::syntax(
+                            "readonly field modifier may only be specified once",
+                            self.peek_span(),
+                        ));
+                    }
+                    readonly = true;
+                    self.advance();
+                    self.skip_newlines();
+                }
+                _ => return Ok((visibility, readonly)),
+            }
         }
     }
 
@@ -1729,6 +1762,7 @@ impl Parser<'_> {
                 doc: attrs.doc,
                 auto_import: attrs.auto_import,
                 hidden: attrs.hidden,
+                readonly: attrs.readonly,
                 visibility,
                 user_importable: attrs.user_importable,
                 user_callable: attrs.user_callable,
@@ -2341,7 +2375,7 @@ impl Parser<'_> {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
             self.skip_newlines();
-            let visibility = self.parse_field_visibility();
+            let (visibility, readonly) = self.parse_field_modifiers()?;
             let (fname, fspan) = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let fty = self.parse_type()?;
@@ -2350,6 +2384,7 @@ impl Parser<'_> {
                 ty: fty,
                 span: fspan,
                 visibility,
+                readonly,
             });
             self.skip_newlines();
             if matches!(self.peek(), Token::Comma) {
@@ -2392,7 +2427,13 @@ impl Parser<'_> {
                     return Err(ParseError::incomplete(")", self.peek_span()));
                 }
                 self.skip_newlines();
-                let visibility = self.parse_field_visibility();
+                let (visibility, readonly) = self.parse_field_modifiers()?;
+                if readonly {
+                    return Err(ParseError::syntax(
+                        "readonly field modifier is only supported on `defstruct` fields",
+                        self.peek_span(),
+                    ));
+                }
                 let (fname, fspan) = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let fty = self.parse_type()?;
@@ -2401,6 +2442,7 @@ impl Parser<'_> {
                     ty: fty,
                     span: fspan,
                     visibility,
+                    readonly,
                 });
                 self.skip_newlines();
                 if matches!(self.peek(), Token::Comma) {
@@ -2639,7 +2681,13 @@ impl Parser<'_> {
                         return Err(ParseError::incomplete(")", self.peek_span()));
                     }
                     self.skip_newlines();
-                    let visibility = self.parse_field_visibility();
+                    let (visibility, readonly) = self.parse_field_modifiers()?;
+                    if readonly {
+                        return Err(ParseError::syntax(
+                            "readonly field modifier is only supported on `defstruct` fields",
+                            self.peek_span(),
+                        ));
+                    }
                     let (fname, fspan) = self.expect_ident()?;
                     self.expect(&Token::Colon)?;
                     let fty = self.parse_type()?;
@@ -2648,6 +2696,7 @@ impl Parser<'_> {
                         ty: fty,
                         span: fspan,
                         visibility,
+                        readonly,
                     });
                     self.skip_newlines();
                     if matches!(self.peek(), Token::Comma) {
@@ -2980,6 +3029,15 @@ impl Parser<'_> {
                     }
                     attrs.hidden = true;
                 }
+                "readonly" => {
+                    if attrs.readonly {
+                        return Err(ParseError::syntax(
+                            "@readonly may only appear once before a declaration",
+                            annotator_span,
+                        ));
+                    }
+                    attrs.readonly = true;
+                }
                 "entrypoint" => {
                     return Err(ParseError::syntax(
                         "@entrypoint has been removed",
@@ -3048,6 +3106,12 @@ impl Parser<'_> {
             if attrs.hidden {
                 return Err(ParseError::syntax(
                     "@hidden is only allowed together with @builtin in standard/internal source",
+                    start_span.unwrap_or_else(|| self.peek_span()),
+                ));
+            }
+            if attrs.readonly && !matches!(self.peek(), Token::Defstruct) {
+                return Err(ParseError::syntax(
+                    "@readonly may only annotate `defstruct` declarations",
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
             }

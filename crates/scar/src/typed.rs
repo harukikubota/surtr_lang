@@ -129,17 +129,31 @@ pub enum TypedLensSegment {
         field_name: String,
         field_index: u32,
         container_field_count: u32,
+        container_type_name: String,
+        readonly: bool,
+        focus_readonly_root: bool,
+        focus_type_name: Option<String>,
     },
     Tuple {
         field_index: u32,
         tuple_len: u32,
+        focus_readonly_root: bool,
+        focus_type_name: Option<String>,
     },
     Variant {
         enum_name: String,
         variant_name: String,
         variant_tag: u32,
         payload_arity: u32,
+        focus_readonly_root: bool,
+        focus_type_name: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypedFieldPolicy {
+    pub private: bool,
+    pub readonly: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -147,6 +161,7 @@ pub struct TypedLensPath {
     pub source_ty: Ty,
     pub focus_ty: Ty,
     pub may_fail: bool,
+    pub source_readonly_root: bool,
     pub segments: Vec<TypedLensSegment>,
 }
 
@@ -320,11 +335,11 @@ pub enum TypedInner {
     /// Captured function value
     Capture(Box<TypedNode>, Vec<TypedNode>),
 
-    /// Struct definition — tag + name + field names + private flags (for TypeRegistry)
-    StructDef(u32, String, Vec<String>, Vec<bool>),
+    /// Struct definition — tag + name + field names + field policies + readonly-root flag
+    StructDef(u32, String, Vec<String>, Vec<TypedFieldPolicy>, bool),
 
-    /// Record definition — tag + name + field names + private flags (for TypeRegistry)
-    RecordDef(u32, String, Vec<String>, Vec<bool>),
+    /// Record definition — tag + name + field names + field policies + readonly-root flag
+    RecordDef(u32, String, Vec<String>, Vec<TypedFieldPolicy>, bool),
 
     /// Semicolon — explicit Unit coercion
     Semi(Box<TypedNode>),

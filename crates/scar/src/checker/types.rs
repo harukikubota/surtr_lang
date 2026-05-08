@@ -2198,6 +2198,7 @@ impl Checker {
             source_ty: self.resolve_ty(&path.source_ty),
             focus_ty: self.resolve_ty(&path.focus_ty),
             may_fail: path.may_fail,
+            source_readonly_root: path.source_readonly_root,
             segments: path.segments,
         }
     }
@@ -2525,11 +2526,11 @@ impl Checker {
                     .map(|arg| self.resolve_typed_node(arg))
                     .collect(),
             ),
-            TypedInner::StructDef(tag, name, field_names, private_flags) => {
-                TypedInner::StructDef(tag, name, field_names, private_flags)
+            TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root) => {
+                TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root)
             }
-            TypedInner::RecordDef(tag, name, field_names, private_flags) => {
-                TypedInner::RecordDef(tag, name, field_names, private_flags)
+            TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root) => {
+                TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::TraitDef(name, methods) => TypedInner::TraitDef(name, methods),

@@ -6,6 +6,7 @@ use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, Symbol, Visibility};
 pub struct ResolvedDeclAttrs {
     pub doc: Option<String>,
     pub hidden: bool,
+    pub readonly: bool,
     pub visibility: Visibility,
     pub user_importable: bool,
     pub user_callable: bool,
@@ -17,6 +18,7 @@ impl Default for ResolvedDeclAttrs {
         Self {
             doc: None,
             hidden: false,
+            readonly: false,
             visibility: Visibility::Public,
             user_importable: true,
             user_callable: true,
@@ -318,6 +320,7 @@ pub struct ResolvedField {
     pub ty: AstTy,
     pub span: Span,
     pub visibility: Visibility,
+    pub readonly: bool,
 }
 
 /// Function parameter (resolved).

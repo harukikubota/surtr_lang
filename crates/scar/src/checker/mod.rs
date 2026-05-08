@@ -1454,8 +1454,8 @@ impl ScarSession {
             | TypedInner::TraitDef(_, _)
             | TypedInner::TraitImplDef(_, _)
             | TypedInner::BuiltinExtractorDecl(_, _, _)
-            | TypedInner::StructDef(_, _, _, _)
-            | TypedInner::RecordDef(_, _, _, _) => {}
+            | TypedInner::StructDef(_, _, _, _, _)
+            | TypedInner::RecordDef(_, _, _, _, _) => {}
         }
     }
 

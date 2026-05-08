@@ -192,7 +192,7 @@ impl Checker {
         // Pass 2: finalize field signatures and constructor-like bindings.
         for stmt in stmts {
             match stmt {
-                Resolved::StructDef(_, id, fields, _) => {
+                Resolved::StructDef(_, id, fields, attrs) => {
                     let ty_fields = fields
                         .iter()
                         .map(|f| {
@@ -215,8 +215,19 @@ impl Checker {
                         .filter(|field| field.visibility == spire::ast::Visibility::Private)
                         .map(|field| field.name.clone())
                         .collect::<HashSet<_>>();
+                    let readonly_fields = fields
+                        .iter()
+                        .filter(|field| field.readonly)
+                        .map(|field| field.name.clone())
+                        .collect::<HashSet<_>>();
                     self.env
-                        .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
+                        .resolve_type_def_signature(
+                            &id.name,
+                            ty_fields.clone(),
+                            private_fields,
+                            readonly_fields,
+                            attrs.readonly,
+                        )
                         .ok_or_else(|| TypeError {
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
@@ -250,7 +261,13 @@ impl Checker {
                         .map(|field| field.name.clone())
                         .collect::<HashSet<_>>();
                     self.env
-                        .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
+                        .resolve_type_def_signature(
+                            &id.name,
+                            ty_fields.clone(),
+                            private_fields,
+                            HashSet::new(),
+                            false,
+                        )
                         .ok_or_else(|| TypeError {
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
@@ -276,7 +293,13 @@ impl Checker {
                         .map(|field| field.name.clone())
                         .collect::<HashSet<_>>();
                     self.env
-                        .resolve_type_def_signature(&id.name, ty_fields, private_fields)
+                        .resolve_type_def_signature(
+                            &id.name,
+                            ty_fields,
+                            private_fields,
+                            HashSet::new(),
+                            false,
+                        )
                         .ok_or_else(|| TypeError {
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
@@ -286,7 +309,13 @@ impl Checker {
                 Resolved::EnumDef(_, id, type_params, variants, _) => {
                     let _ = self
                         .env
-                        .resolve_type_def_signature(&id.name, Vec::new(), HashSet::new())
+                        .resolve_type_def_signature(
+                            &id.name,
+                            Vec::new(),
+                            HashSet::new(),
+                            HashSet::new(),
+                            false,
+                        )
                         .ok_or_else(|| TypeError {
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),

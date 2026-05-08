@@ -577,6 +577,153 @@ Lens::over_result(User.score, user, {|score| Ok(1)})"#,
 }
 
 #[test]
+fn readonly_lens_view_succeeds_and_preserves_path_metadata() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defstruct Profile {
+  name: String,
+}
+
+defstruct User {
+  readonly profile: Profile,
+}
+
+impl Profile {
+  def new(name: String) -> Self {
+    Profile { name: name }
+  }
+}
+
+impl User {
+  def new(profile: Profile) -> Self {
+    User { profile: profile }
+  }
+}
+
+user = User(Profile("alice"))
+Lens::view(User.profile.name, user)"#,
+    );
+    let last = typed.last().expect("typed program should not be empty");
+    let TypedInner::LensView { path, .. } = &last.node else {
+        panic!("expected LensView");
+    };
+    assert!(matches!(last.ty, scar::types::Ty::Str));
+    match &path.segments[0] {
+        TypedLensSegment::Field {
+            readonly,
+            container_type_name,
+            ..
+        } => {
+            assert!(*readonly);
+            assert_eq!(container_type_name, "User");
+        }
+        other => panic!("expected field segment, got {other:?}"),
+    }
+}
+
+#[test]
+fn readonly_field_blocks_deep_mutation_but_owner_can_replace_property() {
+    let err = typecheck_with_rules(
+        r#"defstruct Profile {
+  name: String,
+}
+
+defstruct User {
+  readonly profile: Profile,
+}
+
+impl Profile {
+  def new(name: String) -> Self {
+    Profile { name: name }
+  }
+}
+
+impl User {
+  def new(profile: Profile) -> Self {
+    User { profile: profile }
+  }
+}
+
+user = User(Profile("alice"))
+Lens::set(User.profile.name, user, "bob")"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("deep mutation through readonly field should fail");
+    assert!(err.message.contains("readonly field User.profile"));
+
+    let typed = typecheck_with_builtin_prelude(
+        r#"defstruct Profile {
+  name: String,
+}
+
+defstruct User {
+  readonly profile: Profile,
+}
+
+impl Profile {
+  def new(name: String) -> Self {
+    Profile { name: name }
+  }
+}
+
+impl User {
+  def new(profile: Profile) -> Self {
+    User { profile: profile }
+  }
+
+  def replace_profile(self: Self, next_profile: Profile) -> Result<User> {
+    Lens::set(User.profile, self, next_profile)
+  }
+}"#,
+    );
+    assert!(matches!(
+        typed.last().map(|node| &node.node),
+        Some(TypedInner::Def(..))
+    ));
+}
+
+#[test]
+fn readonly_struct_root_blocks_mutating_lens_even_for_owner() {
+    let err = typecheck_with_rules(
+        r#"@readonly
+defstruct Profile {
+  name: String,
+}
+
+impl Profile {
+  def new(name: String) -> Self {
+    Profile { name: name }
+  }
+}
+
+profile = Profile("alice")
+Lens::over(Profile.name, profile, {|name| Ok(name)})"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("readonly root should reject mutating lens");
+    assert!(err.message.contains("readonly type Profile"));
+
+    let err = typecheck_with_rules(
+        r#"@readonly
+defstruct Profile {
+  name: String,
+}
+
+impl Profile {
+  def new(name: String) -> Self {
+    Profile { name: name }
+  }
+
+  def rename(self: Self, next_name: String) -> Result<Profile> {
+    Lens::set(Profile.name, self, next_name)
+  }
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("readonly root should also reject owner mutation");
+    assert!(err.message.contains("readonly type Profile"));
+}
+
+#[test]
 fn lens_standalone_tuple_root_is_rejected() {
     let err = resolve_with_builtin_prelude_result(
         r#"pair = (1, "one")
@@ -1088,7 +1235,7 @@ User { name: name, age: age }
     let typed = typecheck(resolved).expect("forward struct reference should typecheck");
     assert!(typed
         .iter()
-        .any(|node| matches!(node.node, TypedInner::StructDef(_, _, _, _))));
+        .any(|node| matches!(node.node, TypedInner::StructDef(_, _, _, _, _))));
 }
 
 #[test]
@@ -1163,9 +1310,8 @@ deferror NotFound(code: String) {
         nodes
             .iter()
             .filter_map(|node| match &node.node {
-                TypedInner::StructDef(tag, name, _, _) | TypedInner::RecordDef(tag, name, _, _) => {
-                    Some((name.clone(), *tag))
-                }
+                TypedInner::StructDef(tag, name, _, _, _)
+                | TypedInner::RecordDef(tag, name, _, _, _) => Some((name.clone(), *tag)),
                 TypedInner::DeferrorDef(tag, _, id, _, _) => Some((id.name.clone(), *tag)),
                 _ => None,
             })
@@ -1205,7 +1351,7 @@ print(to_string(value))"#,
     assert!(
         typed
             .iter()
-            .any(|node| matches!(node.node, TypedInner::RecordDef(_, _, _, _))),
+            .any(|node| matches!(node.node, TypedInner::RecordDef(_, _, _, _, _))),
         "expected namespaced record definition to survive typechecking"
     );
     assert!(
