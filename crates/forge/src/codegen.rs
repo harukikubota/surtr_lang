@@ -3030,7 +3030,9 @@ impl Codegen {
         stmts: Vec<TypedNode>,
         pop_last: bool,
     ) -> Result<(), CodegenError> {
-        // Contract with VM::push_atomic():
+        // Contract with interactive chunk execution:
+        // - InteractiveVm::push_chunk(...) and VM::push_atomic(...) both expect
+        //   top-level code first and callable bodies only after the top-level Halt.
         // - Main/top-level statements are emitted first.
         // - A single Halt terminates top-level execution.
         // - Function bodies are emitted strictly after Halt and are entered only via Call/CallClosure.

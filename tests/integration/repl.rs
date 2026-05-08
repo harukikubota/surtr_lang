@@ -591,6 +591,57 @@ answer = one()
 }
 
 #[test]
+fn repl_process_script_preload_survives_live_repl_process_declaration_rejection() {
+    let temp = unique_temp_dir("repl-process-script-preload");
+    let script_path = temp.join("process_preload.srt");
+    fs::write(
+        &script_path,
+        r#"
+defgenserver MyServer {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(1) }
+
+  @call
+  def size(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}
+
+supervisor_init {
+  MyServer {}
+}
+"#,
+    )
+    .expect("failed to write process preload script");
+
+    let output = run_repl_session_with_args(
+        &[
+            "--script",
+            script_path.to_str().expect("script path must be utf-8"),
+        ],
+        ":sig MyServer::size\nsupervisor_init { MyServer {} }\n:sig MyServer::size\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert_eq!(stdout.matches("MyServer::size() -> Result<Int, Error>").count(), 2, "{stdout}");
+    assert!(stderr.contains("This top-level declaration is not allowed in REPL chunks"), "{stderr}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn repl_module_and_script_preload_flags_share_one_compile_unit() {
     let temp = unique_temp_dir("repl-module-script-preload");
     let module_path = temp.join("helper.srt");
