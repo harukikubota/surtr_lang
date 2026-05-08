@@ -1250,7 +1250,7 @@ impl Checker {
             Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
                 self.collect_bound_tyvars_in_ty(&inner, ordered, seen)
             }
-            Ty::Lens(source, focus) => {
+            Ty::Facet(source, focus) => {
                 self.collect_bound_tyvars_in_ty(&source, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&focus, ordered, seen);
             }
@@ -1485,6 +1485,7 @@ impl Checker {
             TypedInner::LensPath(path) => TypedInner::LensPath(TypedLensPath {
                 source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                 focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+                path_kind: path.path_kind,
                 may_fail: path.may_fail,
                 source_readonly_root: path.source_readonly_root,
                 segments: path.segments,
@@ -1504,6 +1505,7 @@ impl Checker {
                 path: TypedLensPath {
                     source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                     focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+                    path_kind: path.path_kind,
                     may_fail: path.may_fail,
                     source_readonly_root: path.source_readonly_root,
                     segments: path.segments,
@@ -1521,6 +1523,7 @@ impl Checker {
                 path: TypedLensPath {
                     source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                     focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+                    path_kind: path.path_kind,
                     may_fail: path.may_fail,
                     source_readonly_root: path.source_readonly_root,
                     segments: path.segments,
@@ -1540,6 +1543,7 @@ impl Checker {
                 path: TypedLensPath {
                     source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                     focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+                    path_kind: path.path_kind,
                     may_fail: path.may_fail,
                     source_readonly_root: path.source_readonly_root,
                     segments: path.segments,
@@ -1820,7 +1824,7 @@ impl Checker {
                 .cloned()
                 .unwrap_or_else(|| self.resolve_ty(ty)),
             Ty::List(inner) => Ty::List(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
-            Ty::Lens(source, focus) => Ty::Lens(
+            Ty::Facet(source, focus) => Ty::Facet(
                 Box::new(self.substitute_ty_with_mapping(source, mapping)),
                 Box::new(self.substitute_ty_with_mapping(focus, mapping)),
             ),

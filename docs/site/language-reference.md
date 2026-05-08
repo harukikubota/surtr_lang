@@ -486,7 +486,7 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 現在の標準定義ソース層は次の順序でロードされます。
 
 ```text
-Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Option, Task, Lens, Float, Config, Project, Random, IO] -> ユーザ拡張
+Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Option, Task, Facet, Float, Config, Project, Random, IO] -> ユーザ拡張
 ```
 
 ### auto import

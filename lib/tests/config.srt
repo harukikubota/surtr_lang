@@ -47,14 +47,14 @@ test("Config") {
     }
   }
 
-  describe("lens integration") {
+  describe("facet integration") {
     it("updates the entrypoint through a root lens") {
-      updated =? Lens::set(Config.entrypoint, Config::new("Lens"), "Lens::main")
-      assert_eq("Lens::main", updated.entrypoint)
+      updated =? Facet::set(Config.entrypoint, Config::new("Facet"), "Facet::main")
+      assert_eq("Facet::main", updated.entrypoint)
     }
 
-    it("updates paths through Lens::over") {
-      updated =? Lens::over(Config.paths, Config::new("Lens"), {|paths|
+    it("updates paths through Facet::over") {
+      updated =? Facet::over(Config.paths, Config::new("Facet"), {|paths|
         Ok(List::append(paths, ["./src"]))
       })
       assert_eq(["./src"], updated.paths)

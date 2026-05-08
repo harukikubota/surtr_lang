@@ -242,27 +242,32 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "view",
         arity: 2,
-        sig_str: "(Lens<$S, $A>, $S) -> Result<$A>",
+        sig_str: "(Facet<$S, $A>, $S) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "preview",
+        arity: 2,
+        sig_str: "(Facet<$S, $A>, $S) -> Result<$A>",
     },
     BuiltinMeta {
         name: "compose",
         arity: 2,
-        sig_str: "(Lens<$S, $A>, Lens<$A, $B>) -> Lens<$S, $B>",
+        sig_str: "(Facet<$S, $A>, Facet<$A, $B>) -> Facet<$S, $B>",
     },
     BuiltinMeta {
         name: "set",
         arity: 3,
-        sig_str: "(Lens<$S, $A>, $S, $A) -> Result<$S>",
+        sig_str: "(Facet<$S, $A>, $S, $A) -> Result<$S>",
     },
     BuiltinMeta {
         name: "over",
         arity: 3,
-        sig_str: "(Lens<$S, $A>, $S, ($A -> Result<$A>)) -> Result<$S>",
+        sig_str: "(Facet<$S, $A>, $S, ($A -> Result<$A>)) -> Result<$S>",
     },
     BuiltinMeta {
         name: "over_result",
         arity: 3,
-        sig_str: "(Lens<$S, Result<$A>>, $S, (Result<$A> -> Result<Result<$A>>)) -> Result<$S>",
+        sig_str: "(Facet<$S, Result<$A>>, $S, (Result<$A> -> Result<Result<$A>>)) -> Result<$S>",
     },
     BuiltinMeta {
         name: "__test_capture_stdout",
@@ -837,7 +842,7 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         params: &[],
     },
     BuiltinTypeMeta {
-        name: TypeName::Lens.as_str(),
+        name: TypeName::Facet.as_str(),
         params: &["$S", "$A"],
     },
     BuiltinTypeMeta {

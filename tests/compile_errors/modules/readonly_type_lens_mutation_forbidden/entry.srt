@@ -1,2 +1,2 @@
 profile = Profile("alice")
-Lens::over(Profile.name, profile, {|name| Ok(name)})
+Facet::over(Profile.name, profile, {|name| Ok(name)})

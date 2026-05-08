@@ -1,2 +1,2 @@
 user = User(Profile("alice"))
-Lens::set(User.profile.name, user, "bob")
+Facet::set(User.profile.name, user, "bob")

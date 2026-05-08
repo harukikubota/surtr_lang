@@ -66,10 +66,10 @@ impl Checker {
 
             if !self.const_surface_is_allowed(value) {
                 return Err(TypeError {
-                    message: "const value must be a primitive literal or a lens path".into(),
+                    message: "const value must be a primitive literal or a facet path".into(),
                     span: span.clone(),
                     hint: Some(
-                        "V1 const supports literal values, lens paths, Lens const refs, and `/` composition of those lens values only.".into(),
+                        "V1 const supports literal values, facet paths, Facet const refs, and `/` composition of those facet values only.".into(),
                     ),
                 });
             }
@@ -92,10 +92,10 @@ impl Checker {
                 ),
                 _ => {
                     return Err(TypeError {
-                        message: "const value must be a primitive literal or a lens path".into(),
+                        message: "const value must be a primitive literal or a facet path".into(),
                         span: span.clone(),
                         hint: Some(
-                            "Use `const NAME = 1`, `const NAME = User.profile`, or compose Lens consts with `/`.".into(),
+                            "Use `const NAME = 1`, `const NAME = User.profile`, or compose Facet consts with `/`.".into(),
                         ),
                     })
                 }
@@ -858,7 +858,7 @@ impl Checker {
             Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
                 Self::collect_ty_vars(inner, out)
             }
-            Ty::Lens(source, focus) | Ty::Result(source, focus) => {
+            Ty::Facet(source, focus) | Ty::Result(source, focus) => {
                 Self::collect_ty_vars(source, out);
                 Self::collect_ty_vars(focus, out);
             }
@@ -1022,7 +1022,7 @@ impl Checker {
             Ty::Pid(name) => Some(format!("PID<{name}>")),
             Ty::Result(_, _) => Some("Result".into()),
             Ty::List(_) => Some("List".into()),
-            Ty::Lens(_, _) => Some("Lens".into()),
+            Ty::Facet(_, _) => Some("Facet".into()),
             Ty::Func(_, _) => Some("Function".into()),
             Ty::Struct(name, _) | Ty::Record(name, _) => Some(name),
             Ty::Enum(name, _) => Some(name),

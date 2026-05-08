@@ -58,7 +58,7 @@ impl Checker {
             Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
                 Self::ty_exposes_error_value(inner)
             }
-            Ty::Lens(source, focus) => {
+            Ty::Facet(source, focus) => {
                 Self::ty_exposes_error_value(source) || Self::ty_exposes_error_value(focus)
             }
             Ty::Tuple(items) | Ty::Enum(_, items) => items.iter().any(Self::ty_exposes_error_value),
@@ -420,7 +420,7 @@ impl Checker {
                             | TypeName::Closure
                             | TypeName::MatchArms
                             | TypeName::CondClauses
-                            | TypeName::Lens
+                            | TypeName::Facet
                             | TypeName::Pid
                             | TypeName::Workers
                             | TypeName::WorkerLease
@@ -555,10 +555,10 @@ impl Checker {
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     Ok(Ty::Enum("ProcessInit".into(), vec![inner_ty]))
                 }
-                "Lens" => {
+                "Facet" => {
                     if args.len() != 2 {
                         return Err(TypeError {
-                            message: "Lens<S, A> requires exactly 2 type arguments".into(),
+                            message: "Facet<S, A> requires exactly 2 type arguments".into(),
                             span: span.clone(),
                             hint: None,
                         });
@@ -567,7 +567,7 @@ impl Checker {
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     let focus =
                         self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::General)?;
-                    Ok(Ty::Lens(Box::new(source), Box::new(focus)))
+                    Ok(Ty::Facet(Box::new(source), Box::new(focus)))
                 }
                 "PID" => self.resolve_pid_surface_ty(span, args),
                 "Workers" => self.resolve_worker_handle_surface_ty(span, args, "Workers"),
@@ -843,10 +843,10 @@ impl Checker {
                 )?;
                 Ok(Ty::Enum("ProcessInit".into(), vec![inner]))
             }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Lens" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Facet" => {
                 if args.len() != 2 {
                     return Err(TypeError {
-                        message: "Lens<S, A> requires exactly 2 type arguments".into(),
+                        message: "Facet<S, A> requires exactly 2 type arguments".into(),
                         span: span.clone(),
                         hint: None,
                     });
@@ -861,7 +861,7 @@ impl Checker {
                     TypeSyntaxContext::General,
                     tyvars,
                 )?;
-                Ok(Ty::Lens(Box::new(source), Box::new(focus)))
+                Ok(Ty::Facet(Box::new(source), Box::new(focus)))
             }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "PID" => {
                 self.resolve_pid_surface_ty(span, args)
@@ -1204,10 +1204,10 @@ impl Checker {
                 )?;
                 Ok(Ty::Enum("ProcessInit".into(), vec![inner]))
             }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Lens" => {
+            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Facet" => {
                 if args.len() != 2 {
                     return Err(TypeError {
-                        message: "Lens<S, A> requires exactly 2 type arguments".into(),
+                        message: "Facet<S, A> requires exactly 2 type arguments".into(),
                         span: span.clone(),
                         hint: None,
                     });
@@ -1224,7 +1224,7 @@ impl Checker {
                     self_ty,
                     tyvars,
                 )?;
-                Ok(Ty::Lens(Box::new(source), Box::new(focus)))
+                Ok(Ty::Facet(Box::new(source), Box::new(focus)))
             }
             AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "PID" => {
                 self.resolve_pid_surface_ty(span, args)
@@ -1593,10 +1593,10 @@ impl Checker {
                     )?;
                     Ok(Ty::Enum("ProcessInit".into(), vec![inner_ty]))
                 }
-                "Lens" => {
+                "Facet" => {
                     if args.len() != 2 {
                         return Err(TypeError {
-                            message: "Lens<S, A> requires exactly 2 type arguments".into(),
+                            message: "Facet<S, A> requires exactly 2 type arguments".into(),
                             span: span.clone(),
                             hint: None,
                         });
@@ -1611,7 +1611,7 @@ impl Checker {
                         TypeSyntaxContext::General,
                         tyvars,
                     )?;
-                    Ok(Ty::Lens(Box::new(source), Box::new(focus)))
+                    Ok(Ty::Facet(Box::new(source), Box::new(focus)))
                 }
                 "PID" => self.resolve_pid_surface_ty(span, args),
                 "Workers" => self.resolve_worker_handle_surface_ty(span, args, "Workers"),
@@ -1787,7 +1787,7 @@ impl Checker {
                     _ => false,
                 }
             }
-            (Ty::Lens(src_a, focus_a), Ty::Lens(src_b, focus_b)) => {
+            (Ty::Facet(src_a, focus_a), Ty::Facet(src_b, focus_b)) => {
                 self.types_compatible(src_a, src_b) && self.types_compatible(focus_a, focus_b)
             }
             (Ty::Tuple(a), Ty::Tuple(b)) => {
@@ -1878,7 +1878,7 @@ impl Checker {
             Ty::List(inner) => self.ty_contains_var(&inner, needle),
             Ty::TypeRef(inner) | Ty::Lazy(inner) => self.ty_contains_var(&inner, needle),
             Ty::Pid(_) => false,
-            Ty::Lens(source, focus) => {
+            Ty::Facet(source, focus) => {
                 self.ty_contains_var(&source, needle) || self.ty_contains_var(&focus, needle)
             }
             Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_var(item, needle)),
@@ -1916,7 +1916,7 @@ impl Checker {
             Ty::TypeRef(inner) => Ty::TypeRef(Box::new(self.resolve_ty(inner))),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.resolve_ty(inner))),
             Ty::Pid(name) => Ty::Pid(name.clone()),
-            Ty::Lens(source, focus) => Ty::Lens(
+            Ty::Facet(source, focus) => Ty::Facet(
                 Box::new(self.resolve_ty(source)),
                 Box::new(self.resolve_ty(focus)),
             ),
@@ -1992,7 +1992,7 @@ impl Checker {
             }
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
             Ty::Pid(name) => Ty::Pid(name.clone()),
-            Ty::Lens(source, focus) => Ty::Lens(
+            Ty::Facet(source, focus) => Ty::Facet(
                 Box::new(self.instantiate_ty_with_fresh(source, fresh)),
                 Box::new(self.instantiate_ty_with_fresh(focus, fresh)),
             ),
@@ -2114,8 +2114,8 @@ impl Checker {
             Ty::Lazy(inner) => format!("Lazy<{}>", self.ty_name(inner)),
             Ty::TypeRef(inner) => format!("TypeRef<{}>", self.ty_name(inner)),
             Ty::Pid(name) => format!("PID<{}>", name),
-            Ty::Lens(source, focus) => {
-                format!("Lens<{}, {}>", self.ty_name(source), self.ty_name(focus))
+            Ty::Facet(source, focus) => {
+                format!("Facet<{}, {}>", self.ty_name(source), self.ty_name(focus))
             }
             Ty::Tuple(items) => format!(
                 "({})",
@@ -2161,7 +2161,7 @@ impl Checker {
 
     pub(super) fn ty_contains_lens(&self, ty: &Ty) -> bool {
         match self.resolve_ty(ty) {
-            Ty::Lens(_, _) => true,
+            Ty::Facet(_, _) => true,
             Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
                 self.ty_contains_lens(inner.as_ref())
             }
@@ -2197,6 +2197,7 @@ impl Checker {
         TypedLensPath {
             source_ty: self.resolve_ty(&path.source_ty),
             focus_ty: self.resolve_ty(&path.focus_ty),
+            path_kind: path.path_kind,
             may_fail: path.may_fail,
             source_readonly_root: path.source_readonly_root,
             segments: path.segments,

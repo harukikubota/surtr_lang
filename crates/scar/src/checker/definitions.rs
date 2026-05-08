@@ -591,7 +591,7 @@ impl Checker {
             if self.ty_contains_lens(&param_ty) {
                 return Err(TypeError {
                     message:
-                        "Lens is compile-time only in Stage1 and cannot appear in function parameter types"
+                        "Facet is compile-time only in Stage1 and cannot appear in function parameter types"
                             .into(),
                     span: param.id.span.clone(),
                     hint: None,
@@ -615,7 +615,7 @@ impl Checker {
         if self.ty_contains_lens(&expected_ret) {
             return Err(TypeError {
                 message:
-                    "Lens is compile-time only in Stage1 and cannot appear in function return types"
+                    "Facet is compile-time only in Stage1 and cannot appear in function return types"
                         .into(),
                 span: span.clone(),
                 hint: None,
@@ -794,7 +794,7 @@ impl Checker {
         if self.ty_contains_lens(&param_ty) {
             return Err(TypeError {
                 message:
-                    "Lens is compile-time only in Stage1 and cannot appear in extractor parameter types"
+                    "Facet is compile-time only in Stage1 and cannot appear in extractor parameter types"
                         .into(),
                 span: param.id.span.clone(),
                 hint: None,
@@ -814,7 +814,7 @@ impl Checker {
         if self.ty_contains_lens(&expected_ret) {
             return Err(TypeError {
                 message:
-                    "Lens is compile-time only in Stage1 and cannot appear in extractor return types"
+                    "Facet is compile-time only in Stage1 and cannot appear in extractor return types"
                         .into(),
                 span: span.clone(),
                 hint: None,
@@ -1352,10 +1352,10 @@ impl Checker {
             if self.ty_contains_lens(&typed_val.ty) {
                 return Err(TypeError {
                     message:
-                        "Struct literal fields cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                        "Struct literal fields cannot contain Facet values in Stage1 (Facet is compile-time only)"
                             .into(),
                     span: typed_val.span.clone(),
-                    hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                    hint: Some("Apply Facet::view/set/over before constructing runtime values.".into()),
                 });
             }
             if !self.types_compatible(def_ty, &typed_val.ty) {
@@ -1401,11 +1401,11 @@ impl Checker {
                     if self.ty_contains_lens(&typed.ty) {
                         return Err(TypeError {
                             message:
-                                "Result constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                "Result constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                     .into(),
                             span: typed.span.clone(),
                             hint: Some(
-                                "Apply Lens::view/set/over before wrapping with Ok(...) or Err(...)."
+                                "Apply Facet::view/set/over before wrapping with Ok(...) or Err(...)."
                                     .into(),
                             ),
                         });
@@ -1492,10 +1492,10 @@ impl Checker {
                 if self.ty_contains_lens(&typed.ty) {
                     return Err(TypeError {
                         message:
-                            "Enum constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                            "Enum constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                 .into(),
                         span: typed.span.clone(),
-                        hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                        hint: Some("Apply Facet::view/set/over before constructing runtime values.".into()),
                     });
                 }
                 if !self.types_compatible(expected, &typed.ty) {
@@ -1559,11 +1559,11 @@ impl Checker {
                         if self.ty_contains_lens(&typed_val.ty) {
                             return Err(TypeError {
                                 message:
-                                    "Constructor arguments cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                    "Constructor arguments cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                         .into(),
                                 span: typed_val.span.clone(),
                                 hint: Some(
-                                    "Apply Lens::view/set/over before passing constructor arguments."
+                                    "Apply Facet::view/set/over before passing constructor arguments."
                                         .into(),
                                 ),
                             });
@@ -1651,11 +1651,11 @@ impl Checker {
                         if self.ty_contains_lens(&typed.ty) {
                             return Err(TypeError {
                                 message:
-                                    "Constructor arguments cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                    "Constructor arguments cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                         .into(),
                                 span: typed.span.clone(),
                                 hint: Some(
-                                    "Apply Lens::view/set/over before passing constructor arguments."
+                                    "Apply Facet::view/set/over before passing constructor arguments."
                                         .into(),
                                 ),
                             });
@@ -1823,10 +1823,10 @@ impl Checker {
                     if self.ty_contains_lens(&typed_val.ty) {
                         return Err(TypeError {
                             message:
-                                "Record constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                "Record constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                     .into(),
                             span: typed_val.span.clone(),
-                            hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                            hint: Some("Apply Facet::view/set/over before constructing runtime values.".into()),
                         });
                     }
                     let (_, def_ty) = &def.fields[i];
@@ -1869,10 +1869,10 @@ impl Checker {
                     if self.ty_contains_lens(&typed_val.ty) {
                         return Err(TypeError {
                             message:
-                                "Record constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                "Record constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                     .into(),
                             span: typed_val.span.clone(),
-                            hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                            hint: Some("Apply Facet::view/set/over before constructing runtime values.".into()),
                         });
                     }
                     let (_, def_ty) = &def.fields[idx];

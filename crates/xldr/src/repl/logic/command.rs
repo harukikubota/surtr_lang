@@ -6,7 +6,7 @@ pub enum ReplCommand {
     Sig { symbol: String },
     Info { query: String },
     Type { symbol: String },
-    Lens { query: String },
+    Facet { query: String },
     Error { mode: Option<String> },
     ValueRecall { arg: String },
     Save { path: String },
@@ -48,7 +48,7 @@ pub fn parse_repl_command(trimmed: &str) -> Option<ReplCommand> {
         "type" => ReplCommand::Type {
             symbol: rest.to_string(),
         },
-        "lens" => ReplCommand::Lens {
+        "facet" => ReplCommand::Facet {
             query: rest.to_string(),
         },
         "error" => ReplCommand::Error {
@@ -156,11 +156,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_lens_command_with_query() {
-        let parsed = parse_repl_command(":lens path").expect("command should parse");
+    fn parse_facet_command_with_query() {
+        let parsed = parse_repl_command(":facet path").expect("command should parse");
         assert!(matches!(
             parsed,
-            ReplCommand::Lens { query } if query == "path"
+            ReplCommand::Facet { query } if query == "path"
         ));
     }
 }

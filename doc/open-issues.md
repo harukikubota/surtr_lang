@@ -12,13 +12,13 @@
 ### OI-000 `const` の将来拡張境界
 
 - 背景:
-  - V1 の `const` は top-level / literal / lens path alias に限定して導入した。
+  - V1 の `const` は top-level / literal / Facet path alias に限定して導入した。
 - 未確定点:
   - compile-time evaluable な純粋式まで広げるか
   - associated consts を trait / impl に導入するか
   - local / `defmod` / `impl` scope const を許可するか
 - 受け入れ条件:
-  - 追加する場合も runtime transport 制約と名前解決規則が崩れない。
+  - 追加する場合も Facet の同一スコープ使用規約と名前解決規則が崩れない。
   - 現行 V1 の global const namespace と互換性を保てる。
 
 ### OI-001 宣言インデックス収集の責務境界
@@ -288,7 +288,7 @@
   - process runtime の基本契約は固まったが、ツーリング表示、boundary layer、VM 可視化、標準ライブラリ再編は最終段階で同期する想定のままである。
   - `Task::async -> TaskHandle`, `Task::await`, `Workers::submit/broadcast @timeout(...)`, waiting/deadline の baseline は docs と実装の主要経路で同期が進んだ。
   - worker stop の compile-time restriction と停止後 cleanup の主要経路は、現行の runtime / compile error / spec fixture で baseline 化が進んだ。
-  - 現行実装でも `:doc`, `:sig`, `:type`, `:info`, `:lens`、runtime stats、標準 `Process` / `Task` API は存在するが、process-aware な見せ方は未完成である。
+  - 現行実装でも `:doc`, `:sig`, `:type`, `:info`, `:facet`、runtime stats、標準 `Process` / `Task` API は存在するが、process-aware な見せ方は未完成である。
 - 未確定点:
   - `ReplyLater` の layered timeout を正本 spec と runtime tests でどこまで明示固定するか
   - REPL / tooling 表示で init route、process API、singleton slot、supervisor tree をどこまで露出するか

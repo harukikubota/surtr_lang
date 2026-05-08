@@ -3,7 +3,7 @@ Standard heterogenous compose operator trait declaration.
 `Compose<$Rhs, $Out>` models the `/` operator for values whose composition
 changes the RHS and output types.
 
-This operator family is intended for path-like composition such as `Lens`.
+This operator family is intended for path-like composition such as `Facet`.
 It is not arithmetic division; use `safe_div` for division.
 """
 deftrait Compose<$Rhs, $Out> {

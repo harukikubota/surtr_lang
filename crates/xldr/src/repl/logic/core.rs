@@ -995,7 +995,7 @@ impl ReplEngine {
             ":info <query>        Show derived information for visible symbols, queries, or process handles"
                 .to_string(),
             ":type <binding>      Show the type for a visible binding or singleton process owner".to_string(),
-            ":lens <binding|expr> Inspect a LensPath and its stop points".to_string(),
+            ":facet <binding|expr> Inspect a FacetPath and its API boundaries".to_string(),
             ":error [full|summary]  Show or change error display mode".to_string(),
             ":save <path.eldr>    Save the current session as .eldr".to_string(),
             ":v <line>            Recall a previous result".to_string(),
@@ -1040,9 +1040,10 @@ impl ReplEngine {
 
     fn lens_help_lines() -> Vec<String> {
         vec![
-            "Usage: :lens <binding|expr>".to_string(),
-            "Examples: :lens path, :lens Tuple._1, :lens BitWidth.Any".to_string(),
-            "Shows canonical path, segment details, and where the path may stop.".to_string(),
+            "Usage: :facet <binding|expr>".to_string(),
+            "Examples: :facet path, :facet Tuple._1, :facet BitWidth.Any".to_string(),
+            "Shows canonical path, API availability, segment details, and where the path may stop."
+                .to_string(),
         ]
     }
 
@@ -1055,7 +1056,7 @@ impl ReplEngine {
             "sig" => Self::sig_help_lines(),
             "info" => Self::info_help_lines(),
             "type" => Self::type_help_lines(),
-            "lens" => Self::lens_help_lines(),
+            "facet" => Self::lens_help_lines(),
             other => {
                 let mut rendered = vec![format!("No help found for :{}", other)];
                 rendered.push("Type :help for available REPL commands.".to_string());
@@ -1433,9 +1434,9 @@ impl ReplEngine {
         ReplOutput::DocResolved {
             symbol: "Tuple".to_string(),
             signature: None,
-            summary: Some("Tuple doc surface for tuple values and Lens paths.".to_string()),
+            summary: Some("Tuple doc surface for tuple values and Facet paths.".to_string()),
             source_snippet: Some(
-                "Tuple is the doc surface for tuple values and `Tuple._N` lens roots.\nValues use `pair._0`, `pair._1`, ... and lens paths use `Tuple._0`, `Tuple._1`, ...\nExamples:\n- pair: (String, Int)\n- pair._0\n- pair._1\n- Lens::view(Tuple._0, pair)\n- Lens::view(Tuple._1, pair)\n- Lens::set(Tuple._1, pair, 3)"
+                "Tuple is the doc surface for tuple values and `Tuple._N` facet roots.\nValues use `pair._0`, `pair._1`, ... and facet paths use `Tuple._0`, `Tuple._1`, ...\nExamples:\n- pair: (String, Int)\n- pair._0\n- pair._1\n- Facet::view(Tuple._0, pair)\n- Facet::view(Tuple._1, pair)\n- Facet::set(Tuple._1, pair, 3)"
                     .to_string(),
             ),
             details: Vec::new(),
@@ -2217,7 +2218,7 @@ impl ReplEngine {
                 }
             }
             Ok(ReplQuery::TypedCall(query)) => {
-                if query.callee.starts_with('&') || query.callee.starts_with("Lens::") {
+                if query.callee.starts_with('&') || query.callee.starts_with("Facet::") {
                     self.handle_sig_expression(trimmed)
                 } else {
                     self.handle_sig_typed_call(trimmed, &query)
@@ -2305,8 +2306,18 @@ impl ReplEngine {
 
     fn render_lens_info(info: &forge::ReplLensInfo) -> Vec<String> {
         let mut lines = vec![
-            "## LensPath".to_string(),
+            "## FacetPath".to_string(),
             format!("type: {}", info.ty),
+            format!("kind: {}", info.path_kind),
+            "view API: Facet::view".to_string(),
+            format!(
+                "preview API: {}",
+                if info.path_kind == "variant" {
+                    "Facet::preview"
+                } else {
+                    "unavailable"
+                }
+            ),
             format!("view result: {}", info.view_result_ty),
             format!("full path: {}", info.full_path),
             "## Flow".to_string(),
@@ -2424,7 +2435,7 @@ impl ReplEngine {
                 );
                 return ReplResult::ok(ReplOutput::EvalError {
                     idx: self.results.len(),
-                    source: format!(":lens {source_query}"),
+                    source: format!(":facet {source_query}"),
                     rendered,
                 });
             }
@@ -2443,7 +2454,7 @@ impl ReplEngine {
                 );
                 return ReplResult::ok(ReplOutput::EvalError {
                     idx: self.results.len(),
-                    source: format!(":lens {source_query}"),
+                    source: format!(":facet {source_query}"),
                     rendered,
                 });
             }
@@ -2474,7 +2485,7 @@ impl ReplEngine {
                 );
                 return ReplResult::ok(ReplOutput::EvalError {
                     idx: self.results.len(),
-                    source: format!(":lens {source_query}"),
+                    source: format!(":facet {source_query}"),
                     rendered,
                 });
             }
@@ -2485,7 +2496,7 @@ impl ReplEngine {
         };
         let Some(info) = Self::lens_info_for_typed_node(root) else {
             return Self::plain(vec![format!(
-                "`{source_query}` is not a LensPath binding or expression."
+                "`{source_query}` is not a FacetPath binding or expression."
             )]);
         };
 
@@ -2900,13 +2911,13 @@ impl ReplEngine {
     fn defined_signature_for_expr(expr: &Ast, typed: &TypedNode) -> String {
         match &typed.node {
             TypedInner::FieldAccess(source, idx) => format!(
-                "Lens::view({}, {})",
+                "Facet::view({}, {})",
                 Self::tuple_lens_segment(*idx),
                 Self::typed_source_expr_name(source)
                     .unwrap_or_else(|| Self::field_access_source(expr))
             ),
             TypedInner::LensView { source, path, .. } => format!(
-                "Lens::view({}, {})",
+                "Facet::view({}, {})",
                 Self::render_typed_lens_path(path),
                 Self::typed_source_expr_name(source).unwrap_or("<source>".to_string())
             ),
@@ -2916,7 +2927,7 @@ impl ReplEngine {
                 value,
                 ..
             } => format!(
-                "Lens::set({}, {}, {})",
+                "Facet::set({}, {}, {})",
                 Self::render_typed_lens_path(path),
                 Self::typed_source_expr_name(source).unwrap_or("<source>".to_string()),
                 Self::typed_source_expr_name(value).unwrap_or("value".to_string())
@@ -2930,9 +2941,9 @@ impl ReplEngine {
             } => format!(
                 "{}({}, {}, {})",
                 if matches!(mode, TypedLensOverMode::FocusResult) {
-                    "Lens::over_result"
+                    "Facet::over_result"
                 } else {
-                    "Lens::over"
+                    "Facet::over"
                 },
                 Self::render_typed_lens_path(path),
                 Self::typed_source_expr_name(source).unwrap_or("<source>".to_string()),
@@ -2941,7 +2952,7 @@ impl ReplEngine {
             TypedInner::LensPath(_path) => {
                 let rendered = match expr {
                     Ast::BinOp(_, BinOp::Slash, left, right) => format!(
-                        "Lens::compose({}, {})",
+                        "Facet::compose({}, {})",
                         Self::source_expr_string(left),
                         Self::source_expr_string(right)
                     ),
@@ -2953,7 +2964,7 @@ impl ReplEngine {
                 let _ = path;
                 let rendered = match expr {
                     Ast::BinOp(_, BinOp::Slash, left, right) => format!(
-                        "Lens::compose({}, {})",
+                        "Facet::compose({}, {})",
                         Self::source_expr_string(left),
                         Self::source_expr_string(right)
                     ),
@@ -3175,7 +3186,7 @@ impl ReplEngine {
             }
         }
         if rendered.is_empty() {
-            "<lens>".to_string()
+            "<facet>".to_string()
         } else {
             rendered
         }
@@ -3279,6 +3290,7 @@ impl ReplEngine {
         }
         forge::ReplLensInfo {
             ty: Self::ty_to_string(ty),
+            path_kind: path.path_kind.as_str().to_string(),
             view_result_ty: if source_is_result || path_is_fallible {
                 format!("Result<{}, Error>", Self::ty_to_string(&path.focus_ty))
             } else {
@@ -3295,7 +3307,7 @@ impl ReplEngine {
             TypedInner::LensPath(path) => Some(Self::lens_info_from_path(path, &node.ty, false)),
             TypedInner::PendingLensPath(path) => {
                 let full_path = if path.segments.is_empty() {
-                    "<lens>".to_string()
+                    "<facet>".to_string()
                 } else {
                     let mut rendered = String::new();
                     for (index, segment) in path.segments.iter().enumerate() {
@@ -3313,6 +3325,7 @@ impl ReplEngine {
                 };
                 Some(forge::ReplLensInfo {
                     ty: Self::ty_to_string(&node.ty),
+                    path_kind: "structural".to_string(),
                     view_result_ty: "_".to_string(),
                     full_path,
                     segments: path
@@ -3332,7 +3345,7 @@ impl ReplEngine {
                             source_ty: "_".to_string(),
                             focus_ty: "_".to_string(),
                             fallible: false,
-                            reason: "requires Lens context to specialize".to_string(),
+                            reason: "requires Facet context to specialize".to_string(),
                         })
                         .collect(),
                     stop_points: Vec::new(),
@@ -3344,7 +3357,7 @@ impl ReplEngine {
                 ..
             } => Some(Self::lens_info_from_path(
                 path,
-                &Ty::Lens(
+                &Ty::Facet(
                     Box::new(path.source_ty.clone()),
                     Box::new(path.focus_ty.clone()),
                 ),
@@ -3374,9 +3387,9 @@ impl ReplEngine {
             Ty::Lazy(inner) => format!("Lazy<{}>", Self::ty_to_string(inner)),
             Ty::TypeRef(inner) => format!("TypeRef<{}>", Self::ty_to_string(inner)),
             Ty::Pid(name) => format!("PID<{}>", name),
-            Ty::Lens(source, focus) => {
+            Ty::Facet(source, focus) => {
                 format!(
-                    "Lens<{}, {}>",
+                    "Facet<{}, {}>",
                     Self::ty_to_string(source),
                     Self::ty_to_string(focus)
                 )
@@ -3974,8 +3987,8 @@ impl ReplEngine {
                 (
                     AstTy::Generic(_, left_name, left_args),
                     AstTy::Generic(_, right_name, right_args),
-                ) if left_name == "Lens"
-                    && right_name == "Lens"
+                ) if left_name == "Facet"
+                    && right_name == "Facet"
                     && left_args.len() == 2
                     && right_args.len() == 2 =>
                 {
@@ -3986,7 +3999,7 @@ impl ReplEngine {
                     )?;
                     let result_ty = AstTy::Generic(
                         Span { start: 0, end: 0 },
-                        "Lens".to_string(),
+                        "Facet".to_string(),
                         vec![left_args[0].clone(), right_args[1].clone()],
                     );
                     Ok((
@@ -4000,7 +4013,7 @@ impl ReplEngine {
                     ))
                 }
                 _ => Err(
-                    "`/` currently models Lens composition. Use `safe_div(...)` for division."
+                    "`/` currently models Facet composition. Use `safe_div(...)` for division."
                         .to_string(),
                 ),
             },
@@ -4521,7 +4534,7 @@ impl ReplEngine {
 
     fn render_type_identity(&self, binding: &forge::BindingInfo, value: Option<&Value>) -> String {
         if binding.lens_info.is_some() {
-            return "TypeIdentity::LensPath".to_string();
+            return "TypeIdentity::FacetPath".to_string();
         }
         if let Some(kind) = binding.callable_kind {
             return match kind {
@@ -4623,7 +4636,7 @@ impl ReplEngine {
                     ReplCommand::Type { symbol } => {
                         return self.handle_type(&symbol);
                     }
-                    ReplCommand::Lens { query } => {
+                    ReplCommand::Facet { query } => {
                         return self.handle_lens(&query);
                     }
                     ReplCommand::Error { mode } => {

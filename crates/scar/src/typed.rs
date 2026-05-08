@@ -156,10 +156,34 @@ pub struct TypedFieldPolicy {
     pub readonly: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TypedLensPathKind {
+    Structural,
+    Variant,
+}
+
+impl TypedLensPathKind {
+    pub fn from_may_fail(may_fail: bool) -> Self {
+        if may_fail {
+            Self::Variant
+        } else {
+            Self::Structural
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Structural => "structural",
+            Self::Variant => "variant",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedLensPath {
     pub source_ty: Ty,
     pub focus_ty: Ty,
+    pub path_kind: TypedLensPathKind,
     pub may_fail: bool,
     pub source_readonly_root: bool,
     pub segments: Vec<TypedLensSegment>,
@@ -261,14 +285,14 @@ pub enum TypedInner {
     /// later source/focus context before they can be fully specialized.
     PendingLensPath(PendingLensPath),
 
-    /// Lens view application with compile-time path metadata.
+    /// Facet view application with compile-time path metadata.
     LensView {
         source: Box<TypedNode>,
         path: TypedLensPath,
         source_is_result: bool,
     },
 
-    /// Lens set application with compile-time path metadata.
+    /// Facet set application with compile-time path metadata.
     LensSet {
         source: Box<TypedNode>,
         path: TypedLensPath,
@@ -277,7 +301,7 @@ pub enum TypedInner {
         mode: TypedLensSetMode,
     },
 
-    /// Lens over application with compile-time path metadata.
+    /// Facet over application with compile-time path metadata.
     LensOver {
         source: Box<TypedNode>,
         path: TypedLensPath,

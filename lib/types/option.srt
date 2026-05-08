@@ -6,7 +6,7 @@ It is not part of Surtr's failure-propagation machinery: `=?` still rejects
 explicit conversion.
 The type sugar `T?` does not build `Option<T>`; it lowers to
 `Result<T, NoneError>` instead.
-For data-model fields, prefer `T?` when the value should compose with Lens
+For data-model fields, prefer `T?` when the value should compose with Facet
 updates or `Result`-returning helper functions.
 Using `Option<T>` in a struct field is still valid, but Result-oriented updates
 usually need explicit conversion in and out of `Option`.

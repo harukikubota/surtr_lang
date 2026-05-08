@@ -17,7 +17,7 @@ Surtr の標準定義ソースは language surface の一部です。
   - capability: `Numeric`, `Show`, `Compare`, `From`, `TryFrom`
   - operator dispatch / compatibility: `Eq`, `Ord`, `Concat` など
 - type modules
-  - `Int`, `String`, `Regex`, `Boolean`, `Error`, `List`, `Result`, `Option`, `HashMap`, `Lens`, `Float`
+  - `Int`, `String`, `Regex`, `Boolean`, `Error`, `List`, `Result`, `Option`, `HashMap`, `Facet`, `Float`
 - effect / runtime-facing modules
   - `Process`, `IO`, `Task`, `Random`
 
@@ -28,7 +28,7 @@ Surtr の標準定義ソースは language surface の一部です。
 - 変換: `../../lib/traits/from.srt`, `../../lib/traits/try_from.srt`
 - 型ごとの helper: `../../lib/types/int.srt`, `../../lib/types/string.srt`, `../../lib/types/list.srt` など
 - 正規表現: `../../lib/types/regex.srt`
-- Lens path: `../../lib/lens.srt`
+- Facet path: `../../lib/facet.srt`
 
 ## auto import されるもの
 
@@ -50,18 +50,18 @@ xldr(2)>
 - `Kernel` を先に触りたいなら `./kernel.md`
 - `Regex` を触りたいなら `./regex.md`
 - trait 系を見たいなら `./trait-impls.md`
-- path 操作を見たいなら `./lens.md`
+- path 操作を見たいなら `./facet.md`
 
 ## 確認したソース
 
 - ソース
   - `../../lib/kernel.srt`
-  - `../../lib/lens.srt`
+  - `../../lib/facet.srt`
   - `../../lib/traits/numeric.srt`
 
 ## 躓きやすいポイント
 
 - auto import されるのは `Bootstrap`, `Kernel`, `Result` と `@autoimport` 付き標準 trait だけで、他の標準定義ソースは明示 `import` 前提です。
-- `Lens` は標準定義ソースに見えても runtime value ではなく、compile-time only capability です。
+- `Facet` は標準定義ソースに見えても同一スコープ内でのみ使用可能な capability です。
 - `Ord` は互換 helper で、新しい比較 API の正本は `Compare` です。
 - REPL は OnceRead universe なので、読み込み後に trait universe を増分更新する前提ではありません。

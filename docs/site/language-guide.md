@@ -742,7 +742,7 @@ not_fn = &`Boolean::not`
 現在の Surtr では、標準定義ソースを次の順で先に読み込みます。
 
 ```text
-Bootstrap -> [SpecialTypes, Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> user source
+Bootstrap -> [SpecialTypes, Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Facet, Float] -> user source
 ```
 
 役割の分け方は次のとおりです。

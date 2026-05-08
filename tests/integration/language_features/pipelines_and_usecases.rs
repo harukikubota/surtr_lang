@@ -611,16 +611,16 @@ fn lens_result_helpers_support_set_over_and_over_result() {
         r#"defrecord User(score: Result<Int>)
 
 user1 = User(Err(NoneError))
-user2 =? Lens::set(User.score, user1, 3)
+user2 =? Facet::set(User.score, user1, 3)
 print("set:" ++ inspect(user2.score))
 
-user3 =? Lens::over(User.score, user2, {|score| Ok(score + 1)})
+user3 =? Facet::over(User.score, user2, {|score| Ok(score + 1)})
 print("over ok:" ++ inspect(user3.score))
 
-user4 =? Lens::over(User.score, user1, {|score| Ok(score + 1)})
+user4 =? Facet::over(User.score, user1, {|score| Ok(score + 1)})
 print("skip:" ++ inspect(user4.score))
 
-user5 =? Lens::over_result(User.score, user1, {|score: Result<Int>| Ok(Ok(9))})
+user5 =? Facet::over_result(User.score, user1, {|score: Result<Int>| Ok(Ok(9))})
 print("over_result:" ++ inspect(user5.score))"#,
         &[
             "set:Ok(Ok(3))",

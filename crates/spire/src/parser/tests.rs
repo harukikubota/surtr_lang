@@ -2674,13 +2674,13 @@ fn test_legacy_pipe_compose_operator_is_rejected() {
 
 #[test]
 fn test_lens_slash_compose_expression_parses() {
-    parse(r#"value = Lens::view(User.profile / Profile.name, user)"#)
+    parse(r#"value = Facet::view(User.profile / Profile.name, user)"#)
         .expect("lens slash compose should parse");
 }
 
 #[test]
 fn test_lens_slash_compose_chain_parses() {
-    parse(r#"value = Lens::view(Config.root / Project.current / Tuple._0, cfg)"#)
+    parse(r#"value = Facet::view(Config.root / Project.current / Tuple._0, cfg)"#)
         .expect("chained lens slash compose should parse");
 }
 

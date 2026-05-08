@@ -18,6 +18,6 @@ impl User {
   }
 
   def replace_profile(self: Self, next_profile: Profile) -> Result<User> {
-    Lens::set(User.profile, self, next_profile)
+    Facet::set(User.profile, self, next_profile)
   }
 }

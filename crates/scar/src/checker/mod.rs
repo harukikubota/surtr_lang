@@ -710,11 +710,11 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
                 };
                 Ty::Lazy(Box::new(inner.clone()))
             }
-            "Lens" => {
+            "Facet" => {
                 let [source, focus] = args.as_slice() else {
-                    return Err("Lens requires exactly 2 type arguments".into());
+                    return Err("Facet requires exactly 2 type arguments".into());
                 };
-                Ty::Lens(Box::new(source.clone()), Box::new(focus.clone()))
+                Ty::Facet(Box::new(source.clone()), Box::new(focus.clone()))
             }
             "TypeRef" => {
                 let [inner] = args.as_slice() else {
@@ -1198,7 +1198,7 @@ impl ScarSession {
                 }
                 Self::rewrite_fun_indices_in_ty(ret, rewrites);
             }
-            Ty::Lens(source, focus) => {
+            Ty::Facet(source, focus) => {
                 Self::rewrite_fun_indices_in_ty(source, rewrites);
                 Self::rewrite_fun_indices_in_ty(focus, rewrites);
             }
@@ -1780,7 +1780,7 @@ impl Checker {
             | Ty::Hole
             | Ty::Var(_)
             | Ty::Error
-            | Ty::Lens(_, _) => false,
+            | Ty::Facet(_, _) => false,
         }
     }
 
@@ -1965,7 +1965,7 @@ impl Checker {
             Ty::List(inner) | Ty::Lazy(inner) | Ty::TypeRef(inner) => {
                 self.ty_contains_process_state_type(&inner)
             }
-            Ty::Lens(root, focus) => self
+            Ty::Facet(root, focus) => self
                 .ty_contains_process_state_type(&root)
                 .or_else(|| self.ty_contains_process_state_type(&focus)),
             Ty::Tuple(items) => items
@@ -2235,7 +2235,7 @@ impl Checker {
             | Ty::Unit
             | Ty::Error
             | Ty::Hole => false,
-            Ty::Lens(source, focus) => {
+            Ty::Facet(source, focus) => {
                 self.ty_contains_handler_capability_pid(&source, slots)
                     || self.ty_contains_handler_capability_pid(&focus, slots)
             }
