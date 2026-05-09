@@ -283,6 +283,7 @@ impl<'a> Parser<'a> {
                 Self::anonymous_callable_call_target(rhs)
             }
             Ast::Capture(_, _, _)
+            | Ast::FacetCapture(_, _)
             | Ast::Closure(_, _, _)
             | Ast::Grouped(_, _)
             | Ast::App(_, _, _) => Some(stmt),
@@ -1542,6 +1543,10 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*expr, delta)),
             field,
         ),
+        Ast::FacetCapture(span, expr) => Ast::FacetCapture(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*expr, delta)),
+        ),
         Ast::StructDef(span, name, fields, attrs) => Ast::StructDef(
             shift_span(span, delta),
             name,
@@ -1943,6 +1948,7 @@ impl Ast {
             | Ast::Dbg(s, _)
             | Ast::Match(s, _, _)
             | Ast::FieldAccess(s, _, _)
+            | Ast::FacetCapture(s, _)
             | Ast::StructDef(s, _, _, _)
             | Ast::RecordDef(s, _, _, _)
             | Ast::StructLit(s, _, _)

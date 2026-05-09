@@ -222,7 +222,8 @@ impl Resolver {
             | Ast::SafeBind(_, _, rhs)
             | Ast::Grouped(_, rhs)
             | Ast::Semi(_, rhs)
-            | Ast::FieldAccess(_, rhs, _) => self.collect_capture_placeholders(
+            | Ast::FieldAccess(_, rhs, _)
+            | Ast::FacetCapture(_, rhs) => self.collect_capture_placeholders(
                 rhs,
                 allow_placeholders,
                 inside_placeholder_capture,
@@ -1853,6 +1854,10 @@ impl Resolver {
                 }
                 let resolved_expr = self.resolve_node(*expr)?;
                 Ok(Resolved::FieldAccess(span, Box::new(resolved_expr), field))
+            }
+            Ast::FacetCapture(span, expr) => {
+                let resolved_expr = self.resolve_node(*expr)?;
+                Ok(Resolved::FacetCapture(span, Box::new(resolved_expr)))
             }
 
             Ast::Block(span, stmts) => {

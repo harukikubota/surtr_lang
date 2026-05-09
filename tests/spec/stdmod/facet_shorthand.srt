@@ -1,0 +1,12 @@
+defrecord User(name: String, score: Result<Int>)
+
+pair = ("alice", 42)
+print(to_string(Facet::view(~pair._1)))
+print(to_string(Facet::replace(~pair._1, 99)._1))
+
+user = User("alice", Ok(1))
+print(Facet::view(~user.name))
+user2 =? Facet::set(~user.name, "bob")
+print(user2.name)
+user3 =? Facet::over(~user2.score, {|score| Ok(score + 1)})
+print(inspect(user3.score))

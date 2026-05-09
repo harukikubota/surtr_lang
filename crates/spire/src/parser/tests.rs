@@ -3323,6 +3323,64 @@ fn test_tuple_dot_numeric_index_is_rejected() {
 }
 
 #[test]
+fn test_facet_capture_shorthand_parses_field_access_chain() {
+    let ast = parse("Facet::set(~user.profile.name, \"bob\")").unwrap();
+    match &ast[0] {
+        Ast::App(_, callee, args) => {
+            assert!(matches!(callee.as_ref(), Ast::Path(_, path) if path.segments == vec!["Facet", "set"]));
+            assert!(matches!(
+                &args[0],
+                RecordLitArg::Positional(Ast::FacetCapture(_, inner))
+                    if matches!(inner.as_ref(),
+                        Ast::FieldAccess(_, expr, field)
+                            if field == "name"
+                                && matches!(expr.as_ref(),
+                                    Ast::FieldAccess(_, expr2, field2)
+                                        if field2 == "profile"
+                                            && matches!(expr2.as_ref(), Ast::Var(_, name) if name == "user")
+                                )
+                    )
+            ));
+        }
+        other => panic!("Expected App, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_facet_capture_shorthand_parses_grouped_and_call_roots() {
+    let ast = parse("Facet::replace(~(make_pair())._1, 99)").unwrap();
+    match &ast[0] {
+        Ast::App(_, _, args) => {
+            assert!(matches!(
+                &args[0],
+                RecordLitArg::Positional(Ast::FacetCapture(_, inner))
+                    if matches!(inner.as_ref(),
+                        Ast::FieldAccess(_, expr, field)
+                            if field == "_1"
+                                && matches!(expr.as_ref(), Ast::Grouped(_, _))
+                    )
+            ));
+        }
+        other => panic!("Expected App, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_facet_capture_shorthand_allows_bare_inner_expr_for_later_diagnostics() {
+    let ast = parse("Facet::view(~user)").unwrap();
+    match &ast[0] {
+        Ast::App(_, _, args) => {
+            assert!(matches!(
+                &args[0],
+                RecordLitArg::Positional(Ast::FacetCapture(_, inner))
+                    if matches!(inner.as_ref(), Ast::Var(_, name) if name == "user")
+            ));
+        }
+        other => panic!("Expected App, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_one_tuple_literal_is_rejected() {
     let err = parse("pair = (1,)").expect_err("Expected parse error");
     assert!(err.message().contains("1-tuple literals are not supported"));

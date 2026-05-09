@@ -5926,6 +5926,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::Dbg(span, _)
         | Ast::Match(span, _, _)
         | Ast::FieldAccess(span, _, _)
+        | Ast::FacetCapture(span, _)
         | Ast::StructDef(span, _, _, _)
         | Ast::RecordDef(span, _, _, _)
         | Ast::StructLit(span, _, _)

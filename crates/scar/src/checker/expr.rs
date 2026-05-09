@@ -18,6 +18,11 @@ fn combine_hint_parts(parts: &[Option<String>]) -> Option<String> {
     }
 }
 
+enum FacetPathInput<'a> {
+    Expr(&'a Resolved),
+    Capture(PendingFacetPath),
+}
+
 impl Checker {
     fn is_repl_chunk(&self) -> bool {
         self.runtime_policy == RuntimeSourcePolicy::repl_chunk()
@@ -796,6 +801,14 @@ impl Checker {
             Resolved::Match(span, scrutinee, arms) => self.check_match(span, scrutinee, arms),
 
             Resolved::FieldAccess(span, expr, field) => self.check_field_access(span, expr, field),
+            Resolved::FacetCapture(span, _) => Err(TypeError {
+                message: "`~source.path` is Facet API shorthand and must be consumed as the first argument of Facet::view/preview/replace/set/over/over_result".into(),
+                span: span.clone(),
+                hint: Some(
+                    "Use the shorthand only inside a Facet API call such as `Facet::set(~user.name, value)`."
+                        .into(),
+                ),
+            }),
             Resolved::ProcessContextHandler(span, slot) => {
                 self.check_process_context_handler(span, slot)
             }
@@ -1334,6 +1347,7 @@ impl Checker {
             | Resolved::RecoverKind(span, _, _, _)
             | Resolved::Match(span, _, _)
             | Resolved::FieldAccess(span, _, _)
+            | Resolved::FacetCapture(span, _)
             | Resolved::ProcessContextHandler(span, _)
             | Resolved::StructLit(span, _, _)
             | Resolved::ConstructorCall(span, _, _)
@@ -3684,6 +3698,81 @@ impl Checker {
         Ok((typed_source, source_is_result, source_value_ty))
     }
 
+    fn expand_facet_capture_path(
+        &self,
+        op_name: &str,
+        span: &Span,
+        expr: &Resolved,
+    ) -> Result<(Resolved, PendingFacetPath), TypeError> {
+        let mut segments = Vec::new();
+        let mut current = expr.clone();
+        loop {
+            match current {
+                Resolved::FieldAccess(_, inner, field) => {
+                    segments.push(field);
+                    current = *inner;
+                }
+                Resolved::Grouped(_, inner) => {
+                    current = *inner;
+                }
+                _ => break,
+            }
+        }
+        if segments.is_empty() {
+            return Err(TypeError {
+                message: format!("{op_name} shorthand requires a field or tuple path").into(),
+                span: span.clone(),
+                hint: Some(
+                    "Write `~source.field` or `~source._0`. Use canonical `Facet::compose(...)` or a type-root path when you need a standalone Facet path."
+                        .into(),
+                ),
+            });
+        }
+        segments.reverse();
+        Ok((
+            current,
+            PendingFacetPath {
+                source_ty_hint: None,
+                segments,
+            },
+        ))
+    }
+
+    fn check_facet_path_input(
+        &mut self,
+        span: &Span,
+        op_name: &str,
+        path_input: FacetPathInput<'_>,
+        source_value_ty: &Ty,
+        source_input_ty: &Ty,
+    ) -> Result<TypedFacetPath, TypeError> {
+        match path_input {
+            FacetPathInput::Expr(path_expr) => self.check_facet_path_argument(
+                span,
+                op_name,
+                path_expr,
+                source_value_ty,
+                source_input_ty,
+            ),
+            FacetPathInput::Capture(path) => {
+                let path = self.specialize_pending_facet_path(path, span, Some(source_value_ty))?;
+                if !self.types_compatible(&path.source_ty, source_value_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "{} source type mismatch: facet expects {}, got {}",
+                            op_name,
+                            self.ty_name(&path.source_ty),
+                            self.ty_name(source_input_ty)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                Ok(path)
+            }
+        }
+    }
+
     fn check_facet_path_argument(
         &mut self,
         span: &Span,
@@ -3721,13 +3810,6 @@ impl Checker {
         span: &Span,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
-        if args.len() != 2 {
-            return Err(TypeError {
-                message: format!("Facet::view expects 2 argument(s), got {}", args.len()),
-                span: span.clone(),
-                hint: None,
-            });
-        }
         if args
             .iter()
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
@@ -3738,20 +3820,32 @@ impl Checker {
                 hint: None,
             });
         }
-
-        let ResolvedRecordLitArg::Positional(path_expr) = &args[0] else {
-            unreachable!("validated argument form above")
-        };
-        let ResolvedRecordLitArg::Positional(source_expr) = &args[1] else {
-            unreachable!("validated argument form above")
+        if args.len() != 1 && args.len() != 2 {
+            return Err(TypeError {
+                message: format!("Facet::view expects 1 or 2 argument(s), got {}", args.len()),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let (source_expr, path_input) = match args {
+            [ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr))] => {
+                let (source_expr, path) =
+                    self.expand_facet_capture_path("Facet::view", capture_span, expr)?;
+                (source_expr, FacetPathInput::Capture(path))
+            }
+            [
+                ResolvedRecordLitArg::Positional(path_expr),
+                ResolvedRecordLitArg::Positional(source_expr),
+            ] => (source_expr.clone(), FacetPathInput::Expr(path_expr)),
+            _ => unreachable!("validated argument form above"),
         };
 
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_facet_source_value("Facet::view", source_expr)?;
-        let path = self.check_facet_path_argument(
+            self.check_facet_source_value("Facet::view", &source_expr)?;
+        let path = self.check_facet_path_input(
             span,
             "Facet::view",
-            path_expr,
+            path_input,
             &source_value_ty,
             &typed_source.ty,
         )?;
@@ -3779,13 +3873,6 @@ impl Checker {
         span: &Span,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
-        if args.len() != 2 {
-            return Err(TypeError {
-                message: format!("Facet::preview expects 2 argument(s), got {}", args.len()),
-                span: span.clone(),
-                hint: None,
-            });
-        }
         if args
             .iter()
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
@@ -3796,20 +3883,32 @@ impl Checker {
                 hint: None,
             });
         }
-
-        let ResolvedRecordLitArg::Positional(path_expr) = &args[0] else {
-            unreachable!("validated argument form above")
-        };
-        let ResolvedRecordLitArg::Positional(source_expr) = &args[1] else {
-            unreachable!("validated argument form above")
+        if args.len() != 1 && args.len() != 2 {
+            return Err(TypeError {
+                message: format!("Facet::preview expects 1 or 2 argument(s), got {}", args.len()),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let (source_expr, path_input) = match args {
+            [ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr))] => {
+                let (source_expr, path) =
+                    self.expand_facet_capture_path("Facet::preview", capture_span, expr)?;
+                (source_expr, FacetPathInput::Capture(path))
+            }
+            [
+                ResolvedRecordLitArg::Positional(path_expr),
+                ResolvedRecordLitArg::Positional(source_expr),
+            ] => (source_expr.clone(), FacetPathInput::Expr(path_expr)),
+            _ => unreachable!("validated argument form above"),
         };
 
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_facet_source_value("Facet::preview", source_expr)?;
-        let path = self.check_facet_path_argument(
+            self.check_facet_source_value("Facet::preview", &source_expr)?;
+        let path = self.check_facet_path_input(
             span,
             "Facet::preview",
-            path_expr,
+            path_input,
             &source_value_ty,
             &typed_source.ty,
         )?;
@@ -3838,13 +3937,6 @@ impl Checker {
         span: &Span,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
-        if args.len() != 3 {
-            return Err(TypeError {
-                message: format!("Facet::set expects 3 argument(s), got {}", args.len()),
-                span: span.clone(),
-                hint: None,
-            });
-        }
         if args
             .iter()
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
@@ -3855,23 +3947,36 @@ impl Checker {
                 hint: None,
             });
         }
-
-        let ResolvedRecordLitArg::Positional(path_expr) = &args[0] else {
-            unreachable!("validated argument form above")
-        };
-        let ResolvedRecordLitArg::Positional(source_expr) = &args[1] else {
-            unreachable!("validated argument form above")
-        };
-        let ResolvedRecordLitArg::Positional(value_expr) = &args[2] else {
-            unreachable!("validated argument form above")
+        if args.len() != 2 && args.len() != 3 {
+            return Err(TypeError {
+                message: format!("Facet::set expects 2 or 3 argument(s), got {}", args.len()),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let (source_expr, path_input, value_expr) = match args {
+            [
+                ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)),
+                ResolvedRecordLitArg::Positional(value_expr),
+            ] => {
+                let (source_expr, path) =
+                    self.expand_facet_capture_path("Facet::set", capture_span, expr)?;
+                (source_expr, FacetPathInput::Capture(path), value_expr)
+            }
+            [
+                ResolvedRecordLitArg::Positional(path_expr),
+                ResolvedRecordLitArg::Positional(source_expr),
+                ResolvedRecordLitArg::Positional(value_expr),
+            ] => (source_expr.clone(), FacetPathInput::Expr(path_expr), value_expr),
+            _ => unreachable!("validated argument form above"),
         };
 
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_facet_source_value("Facet::set", source_expr)?;
-        let path = self.check_facet_path_argument(
+            self.check_facet_source_value("Facet::set", &source_expr)?;
+        let path = self.check_facet_path_input(
             span,
             "Facet::set",
-            path_expr,
+            path_input,
             &source_value_ty,
             &typed_source.ty,
         )?;
@@ -3933,13 +4038,6 @@ impl Checker {
         span: &Span,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
-        if args.len() != 3 {
-            return Err(TypeError {
-                message: format!("Facet::replace expects 3 argument(s), got {}", args.len()),
-                span: span.clone(),
-                hint: None,
-            });
-        }
         if args
             .iter()
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
@@ -3950,19 +4048,32 @@ impl Checker {
                 hint: None,
             });
         }
-
-        let ResolvedRecordLitArg::Positional(path_expr) = &args[0] else {
-            unreachable!("validated argument form above")
-        };
-        let ResolvedRecordLitArg::Positional(source_expr) = &args[1] else {
-            unreachable!("validated argument form above")
-        };
-        let ResolvedRecordLitArg::Positional(value_expr) = &args[2] else {
-            unreachable!("validated argument form above")
+        if args.len() != 2 && args.len() != 3 {
+            return Err(TypeError {
+                message: format!("Facet::replace expects 2 or 3 argument(s), got {}", args.len()),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let (source_expr, path_input, value_expr) = match args {
+            [
+                ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)),
+                ResolvedRecordLitArg::Positional(value_expr),
+            ] => {
+                let (source_expr, path) =
+                    self.expand_facet_capture_path("Facet::replace", capture_span, expr)?;
+                (source_expr, FacetPathInput::Capture(path), value_expr)
+            }
+            [
+                ResolvedRecordLitArg::Positional(path_expr),
+                ResolvedRecordLitArg::Positional(source_expr),
+                ResolvedRecordLitArg::Positional(value_expr),
+            ] => (source_expr.clone(), FacetPathInput::Expr(path_expr), value_expr),
+            _ => unreachable!("validated argument form above"),
         };
 
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_facet_source_value("Facet::replace", source_expr)?;
+            self.check_facet_source_value("Facet::replace", &source_expr)?;
         if source_is_result {
             return Err(TypeError {
                 message: "Facet::replace requires a plain source value".into(),
@@ -3970,10 +4081,10 @@ impl Checker {
                 hint: Some("Use Facet::set when the source is already Result<T>.".into()),
             });
         }
-        let path = self.check_facet_path_argument(
+        let path = self.check_facet_path_input(
             span,
             "Facet::replace",
-            path_expr,
+            path_input,
             &source_value_ty,
             &typed_source.ty,
         )?;
@@ -4017,13 +4128,6 @@ impl Checker {
         span: &Span,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
-        if args.len() != 3 {
-            return Err(TypeError {
-                message: format!("Facet::over expects 3 argument(s), got {}", args.len()),
-                span: span.clone(),
-                hint: None,
-            });
-        }
         if args
             .iter()
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
@@ -4034,23 +4138,36 @@ impl Checker {
                 hint: None,
             });
         }
-
-        let ResolvedRecordLitArg::Positional(path_expr) = &args[0] else {
-            unreachable!("validated argument form above")
-        };
-        let ResolvedRecordLitArg::Positional(source_expr) = &args[1] else {
-            unreachable!("validated argument form above")
-        };
-        let ResolvedRecordLitArg::Positional(update_expr) = &args[2] else {
-            unreachable!("validated argument form above")
+        if args.len() != 2 && args.len() != 3 {
+            return Err(TypeError {
+                message: format!("Facet::over expects 2 or 3 argument(s), got {}", args.len()),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let (source_expr, path_input, update_expr) = match args {
+            [
+                ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)),
+                ResolvedRecordLitArg::Positional(update_expr),
+            ] => {
+                let (source_expr, path) =
+                    self.expand_facet_capture_path("Facet::over", capture_span, expr)?;
+                (source_expr, FacetPathInput::Capture(path), update_expr)
+            }
+            [
+                ResolvedRecordLitArg::Positional(path_expr),
+                ResolvedRecordLitArg::Positional(source_expr),
+                ResolvedRecordLitArg::Positional(update_expr),
+            ] => (source_expr.clone(), FacetPathInput::Expr(path_expr), update_expr),
+            _ => unreachable!("validated argument form above"),
         };
 
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_facet_source_value("Facet::over", source_expr)?;
-        let path = self.check_facet_path_argument(
+            self.check_facet_source_value("Facet::over", &source_expr)?;
+        let path = self.check_facet_path_input(
             span,
             "Facet::over",
-            path_expr,
+            path_input,
             &source_value_ty,
             &typed_source.ty,
         )?;
@@ -4086,16 +4203,6 @@ impl Checker {
         span: &Span,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
-        if args.len() != 3 {
-            return Err(TypeError {
-                message: format!(
-                    "Facet::over_result expects 3 argument(s), got {}",
-                    args.len()
-                ),
-                span: span.clone(),
-                hint: None,
-            });
-        }
         if args
             .iter()
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
@@ -4106,23 +4213,39 @@ impl Checker {
                 hint: None,
             });
         }
-
-        let ResolvedRecordLitArg::Positional(path_expr) = &args[0] else {
-            unreachable!("validated argument form above")
-        };
-        let ResolvedRecordLitArg::Positional(source_expr) = &args[1] else {
-            unreachable!("validated argument form above")
-        };
-        let ResolvedRecordLitArg::Positional(update_expr) = &args[2] else {
-            unreachable!("validated argument form above")
+        if args.len() != 2 && args.len() != 3 {
+            return Err(TypeError {
+                message: format!(
+                    "Facet::over_result expects 2 or 3 argument(s), got {}",
+                    args.len()
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let (source_expr, path_input, update_expr) = match args {
+            [
+                ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)),
+                ResolvedRecordLitArg::Positional(update_expr),
+            ] => {
+                let (source_expr, path) =
+                    self.expand_facet_capture_path("Facet::over_result", capture_span, expr)?;
+                (source_expr, FacetPathInput::Capture(path), update_expr)
+            }
+            [
+                ResolvedRecordLitArg::Positional(path_expr),
+                ResolvedRecordLitArg::Positional(source_expr),
+                ResolvedRecordLitArg::Positional(update_expr),
+            ] => (source_expr.clone(), FacetPathInput::Expr(path_expr), update_expr),
+            _ => unreachable!("validated argument form above"),
         };
 
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_facet_source_value("Facet::over_result", source_expr)?;
-        let path = self.check_facet_path_argument(
+            self.check_facet_source_value("Facet::over_result", &source_expr)?;
+        let path = self.check_facet_path_input(
             span,
             "Facet::over_result",
-            path_expr,
+            path_input,
             &source_value_ty,
             &typed_source.ty,
         )?;

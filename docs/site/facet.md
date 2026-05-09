@@ -18,6 +18,11 @@ Facet では `Result` focus として扱われます。
 そのため `Result` を返す helper とつないで更新したい field には
 `Option<T>` より `T?` の方が自然です。
 
+また、source を伴う API では `~source.path` shorthand が使えます。
+これは source 実体と structural path の組を compiler-managed に expand する sugar で、
+source expression はちょうど 1 回だけ評価されます。
+API 固有の制約自体は `Facet::*` 側が通常どおり判定します。
+
 ## tuple path
 
 tuple path は REPL でそのまま試しやすいです。
@@ -77,6 +82,18 @@ first = pair._0
 name = Facet::view(User.name, user)
 first = Facet::view(Tuple._0, pair)
 ```
+
+更新系では shorthand も使えます。
+
+```surtr
+name = Facet::view(~user.name)
+user2 =? Facet::set(~user.name, "bob")
+pair2 = Facet::replace(~pair._1, 99)
+```
+
+`~source.path` は first-class `Facet` 値にはなりません。
+binding、関数引数、戻り値、container 格納には使えず、
+`Facet::view/preview/replace/set/over/over_result` の第1引数位置でだけ消費できます。
 
 ## struct path
 

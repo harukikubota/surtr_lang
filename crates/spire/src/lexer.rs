@@ -419,6 +419,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             ';' => Token::Semicolon,
             '|' => Token::Pipe,
             '&' => Token::Amp,
+            '~' => Token::Tilde,
             '$' => Token::Dollar,
             _ => {
                 return Err(ParseError::syntax(

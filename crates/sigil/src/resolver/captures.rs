@@ -164,7 +164,9 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 collect_captures_inner(&arm.body, &mut arm_bound, free);
             }
         }
-        Resolved::FieldAccess(_, expr, _) => collect_captures_inner(expr, bound, free),
+        Resolved::FieldAccess(_, expr, _) | Resolved::FacetCapture(_, expr) => {
+            collect_captures_inner(expr, bound, free)
+        }
         Resolved::ProcessContextHandler(_, _) => {}
         Resolved::TypeRefWitness(_, _) => {}
         Resolved::StructLit(_, _, fields) => {

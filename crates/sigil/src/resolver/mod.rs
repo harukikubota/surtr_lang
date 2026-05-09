@@ -388,6 +388,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         }
         Resolved::Grouped(_, inner)
         | Resolved::FieldAccess(_, inner, _)
+        | Resolved::FacetCapture(_, inner)
         | Resolved::Semi(_, inner) => {
             rebase_resolved_node(inner, base, offset);
         }

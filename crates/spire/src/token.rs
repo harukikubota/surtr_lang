@@ -70,6 +70,7 @@ pub enum Token {
     LiftCompose,    // >*
     KleisliCompose, // >=>
     Amp,            // &
+    Tilde,          // ~
     Dollar,         // $
 
     // ── Statement separators ──

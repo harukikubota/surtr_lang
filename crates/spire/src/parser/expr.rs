@@ -621,6 +621,7 @@ impl Parser<'_> {
 
             // Capture / placeholder capture: &foo, &foo(&1), &1
             Token::Amp => self.parse_capture_expr(sp),
+            Token::Tilde => self.parse_facet_capture_expr(sp),
 
             Token::FuncLiteral(_) => Err(ParseError::syntax(
                 "FuncLiteral must appear in infix position",
@@ -1635,6 +1636,18 @@ impl Parser<'_> {
             },
             Box::new(target),
             args,
+        ))
+    }
+
+    pub(super) fn parse_facet_capture_expr(&mut self, sp: Span) -> Result<Ast, ParseError> {
+        self.expect(&Token::Tilde)?;
+        let inner = self.parse_postfix()?;
+        Ok(Ast::FacetCapture(
+            Span {
+                start: sp.start,
+                end: inner.span().end,
+            },
+            Box::new(inner),
         ))
     }
 

@@ -148,6 +148,9 @@ pub enum Resolved {
     /// Field access: `expr.field`
     FieldAccess(Span, Box<Resolved>, Symbol),
 
+    /// Compiler-managed Facet shorthand capture: `~source.path`
+    FacetCapture(Span, Box<Resolved>),
+
     /// Process-local handler dependency access: `ctx.<slot>`.
     ProcessContextHandler(Span, Symbol),
 

@@ -676,6 +676,71 @@ Facet::set(User.score, user, 3)"#,
 }
 
 #[test]
+fn facet_shorthand_view_and_mutation_forms_typecheck() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord User(name: String, score: Result<Int>)
+user = User("alice", Ok(1))
+name = Facet::view(~user.name)
+updated =? Facet::set(~user.name, "bob")
+replaced = Facet::replace(~updated.name, "carol")
+bumped =? Facet::over(~replaced.score, {|score| Ok(score + 1)})
+Facet::over_result(~bumped.score, {|score| Ok(score)})"#,
+    );
+    let last = typed.last().expect("typed program should not be empty");
+    assert!(matches!(last.node, TypedInner::FacetOver { .. }));
+}
+
+#[test]
+fn facet_shorthand_reuses_existing_facet_api_errors() {
+    let preview_err = typecheck_with_rules(
+        r#"defrecord User(name: String)
+user = User("alice")
+Facet::preview(~user.name)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("structural shorthand should fail for preview");
+    assert!(preview_err
+        .message
+        .contains("Facet::preview requires a variant Facet"));
+
+    let replace_err = typecheck_with_rules(
+        r#"defrecord User(name: String)
+result_user = Ok(User("alice"))
+Facet::replace(~result_user.name, "bob")"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("result source shorthand should fail for replace");
+    assert!(replace_err
+        .message
+        .contains("Facet::replace requires a plain source value"));
+}
+
+#[test]
+fn facet_shorthand_misuse_is_rejected_outside_facet_api() {
+    let bind_err = typecheck_with_rules(
+        r#"defrecord User(name: String)
+user = User("alice")
+path = ~user.name"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("shorthand binding should fail");
+    assert!(bind_err
+        .message
+        .contains("must be consumed as the first argument of Facet::view/preview/replace/set/over/over_result"));
+
+    let missing_path_err = typecheck_with_rules(
+        r#"defrecord User(name: String)
+user = User("alice")
+Facet::view(~user)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("missing path should fail");
+    assert!(missing_path_err
+        .message
+        .contains("requires a field or tuple path"));
+}
+
+#[test]
 fn facet_over_accepts_success_updater_for_result_focus() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(score: Result<Int>)

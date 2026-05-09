@@ -525,6 +525,7 @@ match Facet::view(Expr.Add, expr) {
 ```surtr
 user2 =? Facet::set(User.name, user, "bob")
 pair2 =? Facet::set(Tuple._1, pair, 4)
+user3 =? Facet::set(~user.name, "carol")
 ```
 
 ネストした値も同じです。
@@ -542,6 +543,7 @@ user2 =? Facet::set(profile_name, user, "bob")
 user2 =? Facet::over(User.name, user, {|name|
   Ok(name ++ "!")
 })
+user3 =? Facet::over(~user.name, {|name| Ok(name ++ "!")})
 ```
 
 - `update_fun` は `A -> Result<A>` を返す必要がある
@@ -558,6 +560,7 @@ focus が `Result<A>` のとき、`over` は `Ok(value)` の payload だけを�
 - `update_fun` は `Result<A> -> Result<Result<A>>`
 - `Ok(...)` と `Err(...)` の両方を明示的に作り直したい場面向け
 - successful payload だけ触りたいなら `over` の方が軽い
+- `~source.path` shorthand は source を伴う `Facet` API の第1引数だけで使える
 
 ### `Facet::compose`
 

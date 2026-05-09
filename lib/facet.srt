@@ -23,6 +23,13 @@ Common path forms:
 - function-form nested path: `Facet::compose(User.profile, Profile.name)`
 - enum variant selector: `Expr.Add`
 - value sugar: `value.segment`
+- shorthand source/path capture: `~value.segment`
+
+`~value.segment` is compiler-managed shorthand that expands to a source value and
+structural path when consumed by `Facet::view/preview/replace/set/over/over_result`.
+The source expression is evaluated exactly once.
+It is never a first-class `Facet` value, and API-specific validity is still
+decided by the consuming `Facet` operation.
 
 `Facet` can be bound and consumed only in the same scope:
 
@@ -83,6 +90,11 @@ impl Facet {
   xldr(2)> pair._0
   "alice"
 
+  xldr(1)> pair = ("alice", 42)
+  > pair: (String, Int) = ("alice", 42)
+  xldr(2)> Facet::view(~pair._0)
+  "alice"
+
   xldr(1)> Facet::view(BitWidth.Any, BitWidth::Any(5))
   Ok(5)
   """
@@ -123,6 +135,8 @@ impl Facet {
   > pair: (String, Int) = ("alice", 42)
   xldr(2)> Facet::replace(Tuple._1, pair, 99)
   ("alice", 99)
+  xldr(3)> Facet::replace(~pair._1, 99)
+  ("alice", 99)
   """
   @builtin def replace(facet: Facet<$S, $A>, source: $S, value: $A) -> $S
 
@@ -157,6 +171,8 @@ impl Facet {
   > pair: (String, Int) = ("alice", 42)
   xldr(2)> pair2 =? Facet::set(Tuple._1, pair, 99)
   > pair2: (String, Int) = ("alice", 99)
+  xldr(3)> pair3 =? Facet::set(~pair._1, 99)
+  > pair3: (String, Int) = ("alice", 99)
 
   xldr(1)> bw2 =? Facet::set(BitWidth.Any, BitWidth::Any(5), 7)
   > bw2: BitWidth = BitWidth::Any(7)
@@ -189,6 +205,8 @@ impl Facet {
   > pair: (String, Int) = ("alice", 42)
   xldr(2)> pair2 =? Facet::over(Tuple._1, pair, {|n| Ok(n + 1)})
   > pair2: (String, Int) = ("alice", 43)
+  xldr(3)> pair3 =? Facet::over(~pair._1, {|n| Ok(n + 1)})
+  > pair3: (String, Int) = ("alice", 43)
 
   xldr(1)> bw2 =? Facet::over(BitWidth.Any, BitWidth::Any(7), {|n| Ok(n + 1)})
   > bw2: BitWidth = BitWidth::Any(8)
@@ -207,6 +225,8 @@ impl Facet {
   If `update_fun` returns `Err(...)`, that error is propagated as-is.
 
   The same readonly restrictions as `set` apply here.
+
+  `~value.segment` shorthand may also be used here for structural value paths.
   """
   @builtin def over_result(facet: Facet<$S, Result<$A>>, source: $S, update_fun: (Result<$A> -> Result<Result<$A>>)) -> Result<$S>
 

@@ -484,6 +484,9 @@ pub enum Ast {
     /// Field access: `user.name`, `pair._0`
     FieldAccess(Span, Box<Ast>, Symbol),
 
+    /// Compiler-managed Facet shorthand capture: `~source.path`
+    FacetCapture(Span, Box<Ast>),
+
     /// Struct definition: `defstruct User { name: String, age: Int }`
     StructDef(Span, Symbol, Vec<StructField>, DeclAttrs),
 

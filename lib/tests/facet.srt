@@ -25,6 +25,12 @@ test("Facet") {
       second = Tuple._1
       assert_eq(7, Facet::view(second, demo_fixture()._1))
     }
+
+    it("supports shorthand source/path expansion for reads") {
+      fixture = demo_fixture()
+      assert_eq("Main::main", Facet::view(~fixture._0._0.entrypoint))
+      assert_eq(7, Facet::view(~fixture._1._1))
+    }
   }
 
   describe("set and over") {
@@ -47,6 +53,14 @@ test("Facet") {
       assert_eq("Ok(Ok(\"captain\"))", inspect(updated._0._1))
     }
 
+    it("supports shorthand source/path expansion for mutations") {
+      fixture = demo_fixture()
+      renamed =? Facet::set(~fixture._0._0.entrypoint, "App::main")
+      bumped =? Facet::over(~renamed._1._1, {|value| bump(value)})
+      assert_eq("App::main", bumped._0._0.entrypoint)
+      assert_eq(8, bumped._1._1)
+    }
+
     it("over updates only successful Result payloads") {
       ok_fixture = demo_fixture()
       pending = pending_fixture()
@@ -59,6 +73,12 @@ test("Facet") {
     it("over_result can rewrite the whole Result focus") {
       updated =? Facet::over_result(Tuple._0 / Tuple._1, pending_fixture(), {|_| Ok(Ok("fallback"))})
       assert_eq("Ok(Ok(\"fallback\"))", inspect(updated._0._1))
+    }
+
+    it("replace works through shorthand on plain structural paths") {
+      fixture = demo_fixture()
+      updated = Facet::replace(~fixture._1._1, 99)
+      assert_eq(99, updated._1._1)
     }
 
     it("propagates updater errors") {
