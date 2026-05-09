@@ -149,16 +149,21 @@ defstruct User {
 このときの可視性ルールは少し特徴的です。
 
 - `User.password` のような type-root access は `impl User` / `impl Trait for User` の外では不可
-- `user.password` のような value access 自体は許可される
-- ただし `user.password` を外側 closure の中で直接読むことは不可
+- `user.password` のような value access も同じく `impl User` / `impl Trait for User` の外では不可
+- closure の中かどうかで特別扱いはされず、field access が path segment を作る時点で同じ規則が適用される
 
 ```surtr
-password = user.password
-reader = {|| password}
+impl User {
+  def password_via_reader(self) -> String {
+    password = self.password
+    reader = {|| password}
+    reader()
+  }
+}
 ```
 
-上のように、一度 plain value として取り出してから closure に渡す形は許可されます。  
-一方で `{|| user.password}` は compile error です。
+上のように owner impl の内側で一度 plain value として取り出してから closure に渡す形は許可されます。  
+一方で impl の外側にある `{|| user.password}` は compile error です。
 
 Facet の `User.password` path も同じ private 境界に従います。path と更新 API の詳細は `./facet.md` を参照してください。
 

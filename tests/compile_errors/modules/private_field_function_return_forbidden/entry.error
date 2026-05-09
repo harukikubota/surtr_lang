@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Field 'User.password' is private

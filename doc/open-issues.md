@@ -226,10 +226,10 @@
 ### OI-014 private value 持ち出し warning 方針
 
 - 背景:
-  - 現行仕様では private value access の禁止境界は整理済みだが、`return user.password` のような値の持ち出しに warning を出すかは未確定である。
+  - private field access 自体は FacetPath 生成時に owner impl 境界で拒否する方針へ整理済みだが、owner impl 内で得た plain value を返す形に warning を出すかは未確定である。
   - これは安全性というより lint / UX の契約として残っている論点である。
 - 未確定点:
-  - warning を導入するか
+  - owner impl 内の `return self.password` / `return user.password` に warning を導入するか
   - 導入する場合の severity、文言、lint 体系との接続
 - 受け入れ条件:
   - warning 導入有無が `doc/要件定義v9.md` と `docs/dev/テスト方針.md` で一貫する。

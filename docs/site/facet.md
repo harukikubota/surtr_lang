@@ -283,7 +283,8 @@ facet = User.password
 ```
 
 これは `User.password` が private のとき、外側スコープでは compile error です。  
-同様に `Facet::view(User.password, user)` のような参照も拒否されます。
+同様に `Facet::view(User.password, user)` のような参照も拒否されます。  
+また `user.password` のような value access も同じ field access lowering を通るため、owner の `impl Type` / `impl Trait for Type` の外では拒否されます。
 
 詳しい外部契約は `../../lib/facet.srt` と `./standard-library.md` の `Facet` 節を参照してください。
 
@@ -295,7 +296,7 @@ facet = User.password
 
 ## 躓きやすいポイント
 
-- `var_name.lenspath` は read sugar であって、field access 一般の許可とは同義ではありません。private field は見える範囲でしか path にできません。
+- `var_name.lenspath` は read sugar であって、field access 一般の許可とは同義ではありません。private field は見える範囲でしか path にできず、`value.private_field` も同じ境界で拒否されます。
 - `Tuple._0` のような tuple root は、同一スコープの local binding として保持できます。`Facet::view(...)` や `/` で同じスコープ内に消費してください。
 - compose した path は canonical 表示へ圧縮されるので、`User.profile / Profile.name` を inspect すると `User.profile.name` に見えます。`/` の組み立て履歴そのものは残りません。
 - variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:facet <binding|expr>` で確認するのが一番わかりやすいです。

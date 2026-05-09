@@ -676,7 +676,7 @@ impl Checker {
             self.env
                 .lookup_type_def(&impl_target)
                 .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
-                .then_some(impl_target)
+                .then_some(Self::surface_name(&impl_target).to_string())
         });
         let typed_body = self.check_body_in_isolated_scope(
             &local_bindings,
@@ -806,11 +806,17 @@ impl Checker {
         )?;
 
         let current_symbol = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
+        let impl_target = Self::split_impl_method_id(id).and_then(|(impl_target, _method)| {
+            self.env
+                .lookup_type_def(&impl_target)
+                .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
+                .then_some(Self::surface_name(&impl_target).to_string())
+        });
         let typed_body = self.check_body_in_isolated_scope(
             &local_bindings,
             expected_ret.clone(),
             current_symbol,
-            None,
+            impl_target,
             true,
             body,
         )?;
@@ -959,7 +965,7 @@ impl Checker {
                 .env
                 .lookup_type_def(&target_name)
                 .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
-                .then_some(target_name.clone());
+                .then_some(Self::surface_name(&target_name).to_string());
             let typed_body = self.check_body_in_isolated_scope(
                 &local_bindings,
                 expected_ret.clone(),
@@ -1259,7 +1265,8 @@ impl Checker {
             .clone();
 
         if !id.compiler_generated {
-            if self.current_impl_struct_target.as_deref() != Some(def.name.as_str()) {
+            let owner_name = Self::surface_name(&def.name);
+            if self.current_impl_struct_target.as_deref() != Some(owner_name) {
                 return Err(TypeError {
                     message: format!(
                         "Struct literal `{}` is only allowed inside `impl {} {{ ... }}` method bodies",

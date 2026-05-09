@@ -1001,8 +1001,31 @@ def bad() -> List<Facet<User, String>> { [] }"#,
 }
 
 #[test]
-fn private_value_access_is_allowed_but_capability_root_is_rejected() {
+fn private_field_access_is_allowed_inside_owner_impl_only() {
     let typed = typecheck_with_builtin_prelude(
+        r#"defstruct User {
+  name: String,
+  private password: String,
+}
+impl User {
+  def new(name: String, password: String) -> Self {
+User { name: name, password: password }
+  }
+
+  def read_password(self) -> String {
+    self.password
+  }
+}
+user = User("alice", "s3cr3t")
+User::read_password(user)"#,
+    );
+    let last = typed.last().expect("typed program should not be empty");
+    assert!(matches!(last.ty, scar::types::Ty::Str));
+}
+
+#[test]
+fn private_field_access_outside_owner_impl_is_rejected_for_value_and_capability_roots() {
+    let value_err = typecheck_with_rules(
         r#"defstruct User {
   name: String,
   private password: String,
@@ -1014,12 +1037,12 @@ User { name: name, password: password }
 }
 user = User("alice", "s3cr3t")
 user.password"#,
-    );
-    let last = typed.last().expect("typed program should not be empty");
-    assert!(matches!(last.ty, scar::types::Ty::Str));
-    assert!(matches!(last.node, TypedInner::FacetView { .. }));
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("private value access should fail outside impl");
+    assert!(value_err.message.contains("Field 'User.password' is private"));
 
-    let err = typecheck_with_rules(
+    let capability_err = typecheck_with_rules(
         r#"defstruct User {
   name: String,
   private password: String,
@@ -1033,12 +1056,12 @@ User.password"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("private capability root should fail");
-    assert!(err.message.contains("Field 'User.password' is private"));
+    assert!(capability_err.message.contains("Field 'User.password' is private"));
 }
 
 #[test]
-fn private_value_access_inside_closure_is_allowed() {
-    let typed = typecheck_with_rules(
+fn private_field_access_inside_closure_is_rejected_outside_owner_impl() {
+    let err = typecheck_with_rules(
         r#"defstruct User {
   name: String,
   private password: String,
@@ -1052,57 +1075,13 @@ user = User("alice", "s3cr3t")
 {|| user.password}"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect("private value access inside closure should typecheck");
-    let last = typed.last().expect("typed program should not be empty");
-    assert!(matches!(last.ty, scar::types::Ty::Func(_, _)));
+    .expect_err("private value access inside closure should fail outside impl");
+    assert!(err.message.contains("Field 'User.password' is private"));
 }
 
 #[test]
-fn private_value_can_be_returned_as_plain_value() {
-    let typed = typecheck_with_builtin_prelude(
-        r#"defstruct User {
-  name: String,
-  private password: String,
-}
-impl User {
-  def new(name: String, password: String) -> Self {
-User { name: name, password: password }
-  }
-}
-def read_password(user: User) -> String {
-  user.password
-}
-user = User("alice", "s3cr3t")
-read_password(user)"#,
-    );
-    let last = typed.last().expect("typed program should not be empty");
-    assert!(matches!(last.ty, scar::types::Ty::Str));
-}
-
-#[test]
-fn private_value_capture_after_scope_local_read_is_allowed() {
-    let typed = typecheck_with_builtin_prelude(
-        r#"defstruct User {
-  name: String,
-  private password: String,
-}
-impl User {
-  def new(name: String, password: String) -> Self {
-User { name: name, password: password }
-  }
-}
-user = User("alice", "s3cr3t")
-password = user.password
-reader = {|| password}
-reader()"#,
-    );
-    let last = typed.last().expect("typed program should not be empty");
-    assert!(matches!(last.ty, scar::types::Ty::Str));
-}
-
-#[test]
-fn private_value_access_inside_param_closure_is_allowed() {
-    let typed = typecheck_with_rules(
+fn private_field_access_inside_param_closure_is_rejected_outside_owner_impl() {
+    let err = typecheck_with_rules(
         r#"defstruct User {
   name: String,
   private password: String,
@@ -1117,9 +1096,8 @@ user = User("alice", "s3cr3t")
 reader(user)"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect("private value access inside parameter closure should typecheck");
-    let last = typed.last().expect("typed program should not be empty");
-    assert!(matches!(last.ty, scar::types::Ty::Str));
+    .expect_err("private value access inside parameter closure should fail outside impl");
+    assert!(err.message.contains("Field 'User.password' is private"));
 }
 
 #[test]

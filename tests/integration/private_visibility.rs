@@ -52,8 +52,8 @@ fn private_visibility_value_access_spec_fixture_passes() {
         })
         .expect("private value access spec fixture should exist");
 
-    let output =
-        run_multi_source_case(&fixture.case).expect("private value access spec should run");
+    let output = run_multi_source_case(&fixture.case)
+        .expect("private value access inside owner impl spec should run");
     assert_eq!(
         normalize_text(&output.join("\n")),
         normalize_text(fixture.expected),
@@ -71,8 +71,8 @@ fn private_visibility_function_return_private_value_spec_fixture_passes() {
         })
         .expect("private function return spec fixture should exist");
 
-    let output =
-        run_multi_source_case(&fixture.case).expect("private function return spec should run");
+    let output = run_multi_source_case(&fixture.case)
+        .expect("private function return inside owner impl spec should run");
     assert_eq!(
         normalize_text(&output.join("\n")),
         normalize_text(fixture.expected),
@@ -89,8 +89,8 @@ fn private_visibility_value_capture_safe_spec_fixture_passes() {
         })
         .expect("private value capture safe spec fixture should exist");
 
-    let output =
-        run_multi_source_case(&fixture.case).expect("private value capture safe spec should run");
+    let output = run_multi_source_case(&fixture.case)
+        .expect("private value capture inside owner impl spec should run");
     assert_eq!(
         normalize_text(&output.join("\n")),
         normalize_text(fixture.expected),
@@ -110,6 +110,17 @@ fn private_visibility_compile_error_fixtures_pass() {
                         .join("tests/compile_errors/modules/private_field_type_root_bind_forbidden")
                 || case_dir
                     == &repo_root()
+                        .join("tests/compile_errors/modules/private_field_closure_escape_forbidden")
+                || case_dir
+                    == &repo_root().join(
+                        "tests/compile_errors/modules/private_field_param_closure_escape_forbidden",
+                    )
+                || case_dir
+                    == &repo_root().join(
+                        "tests/compile_errors/modules/private_field_function_return_forbidden",
+                    )
+                || case_dir
+                    == &repo_root()
                         .join("tests/compile_errors/modules/private_def_import_forbidden")
                 || case_dir
                     == &repo_root()
@@ -119,7 +130,7 @@ fn private_visibility_compile_error_fixtures_pass() {
 
     assert_eq!(
         cases.len(),
-        4,
+        7,
         "private visibility compile fixtures should exist"
     );
 

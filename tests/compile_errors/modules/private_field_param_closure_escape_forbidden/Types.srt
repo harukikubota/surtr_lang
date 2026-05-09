@@ -7,8 +7,4 @@ impl User {
   def new(name: String, password: String) -> Self {
     User { name: name, password: password }
   }
-
-  def password_of(user: User) -> String {
-    user.password
-  }
 }

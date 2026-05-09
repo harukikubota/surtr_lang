@@ -7,4 +7,10 @@ impl User {
   def new(name: String, password: String) -> Self {
     User { name: name, password: password }
   }
+
+  def password_via_reader(self) -> String {
+    password = self.password
+    reader = {|| password}
+    reader()
+  }
 }

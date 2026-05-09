@@ -32,8 +32,9 @@ Common path forms:
 It cannot be passed as a function argument, returned, captured by a closure, or
 stored inside containers such as `List`, tuples, `Ok(...)`, or `Err(...)`.
 
-Private field paths follow the same visibility rules as ordinary field access.
-Outside the allowed scope, `User.secret`-style path roots are compile errors.
+Private field paths are validated when a facet path segment is formed.
+Outside the owning `impl Type` / `impl Trait for Type`, both `User.secret` and
+`value.secret` are compile errors.
 
 Readonly follows a different rule boundary from private visibility.
 

@@ -6051,7 +6051,7 @@ impl Checker {
         source_ty: &Ty,
         field: &str,
         span: &Span,
-        for_capability: bool,
+        _for_capability: bool,
     ) -> Result<(TypedFacetSegment, Ty, bool), TypeError> {
         match self.resolve_ty(source_ty) {
             Ty::Tuple(items) => {
@@ -6091,10 +6091,10 @@ impl Checker {
             }
             Ty::Struct(name, fields) | Ty::Record(name, fields) => {
                 if self.env.is_private_field(&name, field) {
-                    let outside_impl =
-                        self.current_impl_struct_target.as_deref() != Some(name.as_str());
                     let display_name = Self::surface_name(&name);
-                    if for_capability && outside_impl {
+                    let outside_impl =
+                        self.current_impl_struct_target.as_deref() != Some(display_name);
+                    if outside_impl {
                         return Err(TypeError {
                             message: format!("Field '{}.{}' is private", display_name, field),
                             span: span.clone(),

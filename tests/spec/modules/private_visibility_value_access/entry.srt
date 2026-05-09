@@ -1,3 +1,2 @@
 user = User("alice", "s3cr3t")
-print(inspect(user))
-print(user.password)
+print(User::reveal_password(user))
