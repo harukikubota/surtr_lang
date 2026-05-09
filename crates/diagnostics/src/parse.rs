@@ -174,7 +174,9 @@ pub fn parse_error_spec(source: &str, message: impl Into<String>, span: Span) ->
 
 fn previous_non_empty_line_span(source: &str, pos: usize) -> Option<Span> {
     let lines = line_spans(source);
-    let current_idx = lines.iter().position(|(start, end)| *start <= pos && pos <= *end)?;
+    let current_idx = lines
+        .iter()
+        .position(|(start, end)| *start <= pos && pos <= *end)?;
     for idx in (0..current_idx).rev() {
         let Some(span) = trimmed_line_span(source, lines[idx]) else {
             continue;

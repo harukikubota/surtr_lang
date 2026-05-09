@@ -2406,7 +2406,9 @@ impl Checker {
             TypedInner::ProcessContextHandler { process_name, slot } => {
                 TypedInner::ProcessContextHandler { process_name, slot }
             }
-            TypedInner::FacetPath(path) => TypedInner::FacetPath(self.resolve_typed_facet_path(path)),
+            TypedInner::FacetPath(path) => {
+                TypedInner::FacetPath(self.resolve_typed_facet_path(path))
+            }
             TypedInner::PendingFacetPath(path) => TypedInner::PendingFacetPath(PendingFacetPath {
                 source_ty_hint: path.source_ty_hint.map(|ty| self.resolve_ty(&ty)),
                 segments: path.segments,

@@ -1434,8 +1434,10 @@ impl Checker {
             if Self::surface_name(&variant.enum_name) == "MatchResult" && !self.in_extractor_body {
                 return Err(self.match_result_value_not_allowed_error(span));
             }
-            if matches!(Self::surface_name(&variant.enum_name), "StopReply" | "StopReason")
-                && !self.stop_constructor_allowed()
+            if matches!(
+                Self::surface_name(&variant.enum_name),
+                "StopReply" | "StopReason"
+            ) && !self.stop_constructor_allowed()
             {
                 return Err(self.stop_constructor_error(span, &variant.enum_name));
             }

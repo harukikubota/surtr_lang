@@ -1248,7 +1248,10 @@ fn core_process_doc_and_sig_support_hidden_and_concrete_surfaces() {
     );
 
     let concrete_pid_doc = doc_text(&engine.handle_line(":doc MyServer::pid"));
-    assert!(concrete_pid_doc.contains("MyServer::pid"), "{concrete_pid_doc}");
+    assert!(
+        concrete_pid_doc.contains("MyServer::pid"),
+        "{concrete_pid_doc}"
+    );
     assert!(
         concrete_pid_doc
             .contains("Compiler-managed lower target for GenServer singleton PID lookup."),
@@ -1261,7 +1264,8 @@ fn core_process_doc_and_sig_support_hidden_and_concrete_surfaces() {
 
     let hidden_pid_sig = signature_text(&engine.handle_line(":sig GenServer::pid"));
     assert!(
-        hidden_pid_sig.contains("GenServer::pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>"),
+        hidden_pid_sig
+            .contains("GenServer::pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>"),
         "{hidden_pid_sig}"
     );
 
@@ -1324,7 +1328,10 @@ fn core_process_sig_owner_summary_includes_init_pid_and_messages() {
         owner_sig.contains("@init init() -> Result<PID<MyServer>>"),
         "{owner_sig}"
     );
-    assert!(owner_sig.contains("@pid pid() -> PID<MyServer>"), "{owner_sig}");
+    assert!(
+        owner_sig.contains("@pid pid() -> PID<MyServer>"),
+        "{owner_sig}"
+    );
     assert!(
         owner_sig.contains("@call size(pid: PID<MyServer>) -> Result<Int, Error>"),
         "{owner_sig}"

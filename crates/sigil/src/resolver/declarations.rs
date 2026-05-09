@@ -199,19 +199,15 @@ pub(super) fn collect_stage_impl_target_resolutions(
                 None => {
                     resolutions.insert(name.clone(), ImplTargetResolution::Unique(kind.clone()));
                     if let Some(surface_name) = name.strip_prefix("Global::") {
-                        resolutions.insert(
-                            surface_name.to_string(),
-                            ImplTargetResolution::Unique(kind),
-                        );
+                        resolutions
+                            .insert(surface_name.to_string(), ImplTargetResolution::Unique(kind));
                     }
                 }
                 Some(ImplTargetResolution::Unique(_)) | Some(ImplTargetResolution::Ambiguous) => {
                     resolutions.insert(name.clone(), ImplTargetResolution::Ambiguous);
                     if let Some(surface_name) = name.strip_prefix("Global::") {
-                        resolutions.insert(
-                            surface_name.to_string(),
-                            ImplTargetResolution::Ambiguous,
-                        );
+                        resolutions
+                            .insert(surface_name.to_string(), ImplTargetResolution::Ambiguous);
                     }
                 }
             }

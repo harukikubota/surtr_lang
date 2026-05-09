@@ -470,7 +470,10 @@ fn repl_keeps_print_output_plain_while_coloring_bindings_and_values() {
     assert!(!inspect_line.contains("\u{1b}["), "{stdout}");
 
     assert!(stdout.contains("xldr(3)> \u{1b}[36mx\u{1b}[0m"), "{stdout}");
-    assert!(stdout.contains("xldr(4)> \u{1b}[96mStringEncoding::Utf8\u{1b}[0m"), "{stdout}");
+    assert!(
+        stdout.contains("xldr(4)> \u{1b}[96mStringEncoding::Utf8\u{1b}[0m"),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -697,8 +700,17 @@ supervisor_init {
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
-    assert_eq!(stdout.matches("MyServer::size() -> Result<Int, Error>").count(), 2, "{stdout}");
-    assert!(stderr.contains("This top-level declaration is not allowed in REPL chunks"), "{stderr}");
+    assert_eq!(
+        stdout
+            .matches("MyServer::size() -> Result<Int, Error>")
+            .count(),
+        2,
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains("This top-level declaration is not allowed in REPL chunks"),
+        "{stderr}"
+    );
 
     let _ = fs::remove_dir_all(temp);
 }
@@ -753,7 +765,10 @@ supervisor_init {
         stdout.contains("Compiler-managed lower target for GenServer singleton PID lookup."),
         "{stdout}"
     );
-    assert!(stdout.contains("MyServer::pid() -> PID<MyServer>"), "{stdout}");
+    assert!(
+        stdout.contains("MyServer::pid() -> PID<MyServer>"),
+        "{stdout}"
+    );
     assert!(stdout.contains("GenServer MyServer"), "{stdout}");
     assert!(
         stdout.contains("@init init() -> Result<PID<MyServer>>"),

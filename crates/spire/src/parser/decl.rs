@@ -1532,7 +1532,8 @@ impl Parser<'_> {
         if matches!(self.peek(), Token::For) {
             self.advance();
             self.skip_newlines();
-            let target_ty = Self::canonicalize_impl_target_ty(self.parse_type_in_impl_context(None)?);
+            let target_ty =
+                Self::canonicalize_impl_target_ty(self.parse_type_in_impl_context(None)?);
             let self_target = self.trait_impl_self_target_name(&target_ty)?;
             self.skip_newlines();
             self.expect(&Token::LBrace)?;
@@ -2192,7 +2193,9 @@ impl Parser<'_> {
         self.expect(&Token::Defmod)?;
         let (name, _) = self.expect_qualified_ident(2, "module")?;
         let reserved_check_name = name.rsplit("::").next().unwrap_or(&name);
-        if reserved_check_name != "ProcessInit" && builtin_type_meta_by_name(reserved_check_name).is_some() {
+        if reserved_check_name != "ProcessInit"
+            && builtin_type_meta_by_name(reserved_check_name).is_some()
+        {
             return Err(ParseError::syntax(
                 format!(
                     "Module name `{}` is reserved by a canonical builtin type declaration",

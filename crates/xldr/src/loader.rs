@@ -1153,7 +1153,10 @@ mod tests {
         let source = r#"defmod Auth::Math {
   def add(x: Int, y: Int) -> Int { x + y }
 }"#;
-        assert_eq!(derive_primary_module_path(source).as_deref(), Some("Auth::Math"));
+        assert_eq!(
+            derive_primary_module_path(source).as_deref(),
+            Some("Auth::Math")
+        );
     }
 
     #[test]
@@ -1163,7 +1166,10 @@ mod tests {
     def add(x: Int, y: Int) -> Int { x + y }
   }
 }"#;
-        assert_eq!(derive_primary_module_path(source).as_deref(), Some("Auth::Math"));
+        assert_eq!(
+            derive_primary_module_path(source).as_deref(),
+            Some("Auth::Math")
+        );
     }
 
     #[test]

@@ -498,9 +498,10 @@ fn collect_doc_entries_for_ast(
                     match method {
                         spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, attrs) => {
                             if let Some(doc) = &attrs.doc {
-                                let qualified_method_name =
-                                    if surface_path_name(module_path) == surface_path_name(target) {
-                                        format!("{}::{name}", surface_path_name(target))
+                                let qualified_method_name = if surface_path_name(module_path)
+                                    == surface_path_name(target)
+                                {
+                                    format!("{}::{name}", surface_path_name(target))
                                 } else {
                                     qualified_name(module_path, &format!("{target}::{name}"))
                                 };
@@ -521,9 +522,10 @@ fn collect_doc_entries_for_ast(
                         }
                         spire::ast::Ast::BuiltinDecl(_, name, params, ret_ty, attrs) => {
                             if let Some(doc) = &attrs.doc {
-                                let qualified_method_name =
-                                    if surface_path_name(module_path) == surface_path_name(target) {
-                                        format!("{}::{name}", surface_path_name(target))
+                                let qualified_method_name = if surface_path_name(module_path)
+                                    == surface_path_name(target)
+                                {
+                                    format!("{}::{name}", surface_path_name(target))
                                 } else {
                                     qualified_name(module_path, &format!("{target}::{name}"))
                                 };
@@ -552,9 +554,10 @@ fn collect_doc_entries_for_ast(
                             attrs,
                         ) => {
                             if let Some(doc) = &attrs.doc {
-                                let qualified_method_name =
-                                    if surface_path_name(module_path) == surface_path_name(target) {
-                                        format!("{}::{name}", surface_path_name(target))
+                                let qualified_method_name = if surface_path_name(module_path)
+                                    == surface_path_name(target)
+                                {
+                                    format!("{}::{name}", surface_path_name(target))
                                 } else {
                                     qualified_name(module_path, &format!("{target}::{name}"))
                                 };
@@ -575,9 +578,10 @@ fn collect_doc_entries_for_ast(
                         }
                         spire::ast::Ast::BuiltinExtractorDecl(_, name, param, ret_ty, attrs) => {
                             if let Some(doc) = &attrs.doc {
-                                let qualified_method_name =
-                                    if surface_path_name(module_path) == surface_path_name(target) {
-                                        format!("{}::{name}", surface_path_name(target))
+                                let qualified_method_name = if surface_path_name(module_path)
+                                    == surface_path_name(target)
+                                {
+                                    format!("{}::{name}", surface_path_name(target))
                                 } else {
                                     qualified_name(module_path, &format!("{target}::{name}"))
                                 };

@@ -208,7 +208,11 @@ impl Value {
             parts.push("..private".to_string());
         }
 
-        format!("{}({})", Self::surface_type_name(type_name), parts.join(", "))
+        format!(
+            "{}({})",
+            Self::surface_type_name(type_name),
+            parts.join(", ")
+        )
     }
 
     /// Display string for `to_string` built-in.

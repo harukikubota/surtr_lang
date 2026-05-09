@@ -526,9 +526,9 @@ fn test_resolve_allows_impl_target_defined_in_another_file_same_stage() {
 
     let resolved = resolve_user_with_modules("value = 0", &module_stages)
         .expect("split impl in same stage should resolve");
-    assert!(resolved
-        .iter()
-        .any(|node| matches!(node, Resolved::Def(_, id, ..) if id.name == "Global::User::normalize")));
+    assert!(resolved.iter().any(
+        |node| matches!(node, Resolved::Def(_, id, ..) if id.name == "Global::User::normalize")
+    ));
 }
 
 #[test]
@@ -726,9 +726,9 @@ normalized = User::normalize(user)"#,
         &module_stages,
     )
     .expect("qualified impl calls should resolve through type owner");
-    assert!(resolved
-        .iter()
-        .any(|node| matches!(node, Resolved::Def(_, id, ..) if id.name == "Global::User::normalize")));
+    assert!(resolved.iter().any(
+        |node| matches!(node, Resolved::Def(_, id, ..) if id.name == "Global::User::normalize")
+    ));
 }
 
 #[test]
@@ -1309,7 +1309,10 @@ def parse_base(base: IntBase) -> Int {
         .iter()
         .find_map(|node| match node {
             Resolved::Def(_, id, _, _, _, body, _) if id.name == "parse_base" => {
-                assert_eq!(id.qualified_name.as_deref(), Some("Global::Int::parse_base"));
+                assert_eq!(
+                    id.qualified_name.as_deref(),
+                    Some("Global::Int::parse_base")
+                );
                 match body.as_ref() {
                     Resolved::Block(_, stmts) => stmts.iter().find_map(|stmt| match stmt {
                         Resolved::App(_, func, _) => match func.as_ref() {
@@ -2206,9 +2209,7 @@ fn test_duplicate_top_level_struct_is_error() {
 defstruct User { name: String }"#,
     );
     let err = result.expect_err("duplicate struct must fail");
-    assert!(err
-        .message
-        .contains("Duplicate top-level definition: User"));
+    assert!(err.message.contains("Duplicate top-level definition: User"));
 }
 
 #[test]

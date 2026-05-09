@@ -1820,7 +1820,9 @@ impl VM {
             .type_registry()
             .entries
             .iter()
-            .find(|entry| entry.name == "SupervisorStatus" || entry.name == "Global::SupervisorStatus")
+            .find(|entry| {
+                entry.name == "SupervisorStatus" || entry.name == "Global::SupervisorStatus"
+            })
             .map(|entry| entry.tag)
         else {
             return Err(RuntimeError::new("SupervisorStatus type is not registered"));

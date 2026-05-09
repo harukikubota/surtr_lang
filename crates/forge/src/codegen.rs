@@ -862,7 +862,10 @@ fn runtime_type_ref_from_ast(ty: &AstTy) -> RuntimeTypeRef {
             AstTy::Generic(_, name, args) => format!(
                 "{}<{}>",
                 name,
-                args.iter().map(ast_ty_to_string).collect::<Vec<_>>().join(", ")
+                args.iter()
+                    .map(ast_ty_to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
             AstTy::Tuple(_, items) => format!(
                 "({})",

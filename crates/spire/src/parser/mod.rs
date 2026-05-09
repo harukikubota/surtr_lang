@@ -816,13 +816,9 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
             parts
                 .into_iter()
                 .map(|part| match part {
-                    InterpolatedPart::Expr(expr) => {
-                        InterpolatedPart::Expr(Box::new(rewrite_process_owner_refs(
-                            *expr,
-                            old_name,
-                            new_name,
-                        )))
-                    }
+                    InterpolatedPart::Expr(expr) => InterpolatedPart::Expr(Box::new(
+                        rewrite_process_owner_refs(*expr, old_name, new_name),
+                    )),
                     other => other,
                 })
                 .collect(),
@@ -896,24 +892,22 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
             Box::new(rewrite_process_owner_refs(*show_expr, old_name, new_name)),
             attrs,
         ),
-        Ast::Def(span, name, type_params, params, ret_ty, body, attrs) => {
-            Ast::Def(
-                span,
-                name,
-                type_params,
-                params
-                    .into_iter()
-                    .map(|param| FunParam {
-                        name: param.name,
-                        ty: rewrite_process_owner_ty(param.ty, old_name, new_name),
-                        span: param.span,
-                    })
-                    .collect(),
-                ret_ty.map(|ty| rewrite_process_owner_ty(ty, old_name, new_name)),
-                Box::new(rewrite_process_owner_refs(*body, old_name, new_name)),
-                attrs,
-            )
-        }
+        Ast::Def(span, name, type_params, params, ret_ty, body, attrs) => Ast::Def(
+            span,
+            name,
+            type_params,
+            params
+                .into_iter()
+                .map(|param| FunParam {
+                    name: param.name,
+                    ty: rewrite_process_owner_ty(param.ty, old_name, new_name),
+                    span: param.span,
+                })
+                .collect(),
+            ret_ty.map(|ty| rewrite_process_owner_ty(ty, old_name, new_name)),
+            Box::new(rewrite_process_owner_refs(*body, old_name, new_name)),
+            attrs,
+        ),
         Ast::ConstDef(span, name, ty, expr, attrs) => Ast::ConstDef(
             span,
             name,
@@ -1156,7 +1150,9 @@ fn validate_top_level_namespace_owner_collisions(ast: &[Ast]) -> Result<(), Pars
         if let Ast::Namespace(span, name, _) = node {
             if name == IMPLICIT_ROOT_NAMESPACE {
                 return Err(ParseError::syntax(
-                    format!("`{IMPLICIT_ROOT_NAMESPACE}` is reserved for the implicit root namespace"),
+                    format!(
+                        "`{IMPLICIT_ROOT_NAMESPACE}` is reserved for the implicit root namespace"
+                    ),
                     span.clone(),
                 ));
             }

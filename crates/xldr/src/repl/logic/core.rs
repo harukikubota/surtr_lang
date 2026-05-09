@@ -4,12 +4,12 @@ use std::panic;
 use std::path::{Path, PathBuf};
 
 use diagnostics::{DiagnosticSpec, SourceId, SourceRegistry};
-use eldr::interactive::InteractiveChunkPolicy;
 use eldr::builtin::inspect_value;
+use eldr::interactive::InteractiveChunkPolicy;
 use eldr::value::{TypeKind, Value};
 use forge::bytecode::populate_error_template_lines;
 use scar::typed::{
-    TraitCallOrigin, TypedInner, TypedFacetOverMode, TypedFacetPath, TypedFacetSegment, TypedNode,
+    TraitCallOrigin, TypedFacetOverMode, TypedFacetPath, TypedFacetSegment, TypedInner, TypedNode,
 };
 use scar::types::Ty;
 use sigil::error::ResolveError;
@@ -1579,7 +1579,10 @@ impl ReplEngine {
 
     fn pid_type_from_value(value: &Value) -> Option<String> {
         match value {
-            Value::Pid(pid) => Some(format!("PID<{}>", crate::surface_rendered_name(&pid.process_name))),
+            Value::Pid(pid) => Some(format!(
+                "PID<{}>",
+                crate::surface_rendered_name(&pid.process_name)
+            )),
             _ => None,
         }
     }
@@ -1678,10 +1681,7 @@ impl ReplEngine {
         }) {
             if metadata.instance == spire::ast::ProcessInstance::Singleton {
                 let owner = crate::surface_rendered_name(owner);
-                return Some((
-                    symbol.to_string(),
-                    format!("{symbol}() -> PID<{owner}>"),
-                ));
+                return Some((symbol.to_string(), format!("{symbol}() -> PID<{owner}>")));
             }
         }
         self.vm
@@ -1798,7 +1798,11 @@ impl ReplEngine {
         metadata: &ReplProcessMetadata,
     ) -> Option<Vec<String>> {
         let owner = crate::surface_rendered_name(owner);
-        let mut lines = vec![format!("{} {}", Self::process_kind_heading(metadata.kind), owner)];
+        let mut lines = vec![format!(
+            "{} {}",
+            Self::process_kind_heading(metadata.kind),
+            owner
+        )];
 
         let init_spec = metadata
             .handler_specs
@@ -1806,7 +1810,11 @@ impl ReplEngine {
             .find(|spec| spec.kind == spire::ast::ProcessRuntimeHandlerKind::Init)?;
         if let Some(init_sig) = self.render_process_init_summary_signature(&owner, &init_spec.name)
         {
-            lines.push(format!("{} {}", Self::process_handler_label(init_spec.kind), init_sig));
+            lines.push(format!(
+                "{} {}",
+                Self::process_handler_label(init_spec.kind),
+                init_sig
+            ));
         }
         if metadata.instance == spire::ast::ProcessInstance::Singleton {
             if let Some(pid_sig) = self.render_process_surface_signature(&owner, "pid") {
@@ -1818,7 +1826,11 @@ impl ReplEngine {
                 continue;
             }
             if let Some(sig) = self.render_process_message_signature(&owner, metadata, &spec.name) {
-                lines.push(format!("{} {}", Self::process_handler_label(spec.kind), sig));
+                lines.push(format!(
+                    "{} {}",
+                    Self::process_handler_label(spec.kind),
+                    sig
+                ));
             }
         }
         Some(lines)
@@ -1836,7 +1848,11 @@ impl ReplEngine {
                 continue;
             }
             if let Some(sig) = self.render_process_message_signature(&owner, metadata, &spec.name) {
-                lines.push(format!("{} {}", Self::process_handler_label(spec.kind), sig));
+                lines.push(format!(
+                    "{} {}",
+                    Self::process_handler_label(spec.kind),
+                    sig
+                ));
             }
         }
         (lines.len() > 1).then_some(lines)
@@ -1922,16 +1938,15 @@ impl ReplEngine {
 
     fn declaration_signature(&self, decl: &sigil::DeclarationEntry) -> Option<String> {
         match decl.kind {
-            sigil::DeclarationKind::Struct => {
-                Some(crate::format_struct_signature(crate::surface_path_name(&decl.name)))
-            }
-            sigil::DeclarationKind::Record => {
-                Some(crate::format_record_signature(crate::surface_path_name(&decl.name)))
-            }
-            sigil::DeclarationKind::Deferror => Some(format!(
-                "deferror {}",
-                crate::surface_path_name(&decl.name)
+            sigil::DeclarationKind::Struct => Some(crate::format_struct_signature(
+                crate::surface_path_name(&decl.name),
             )),
+            sigil::DeclarationKind::Record => Some(crate::format_record_signature(
+                crate::surface_path_name(&decl.name),
+            )),
+            sigil::DeclarationKind::Deferror => {
+                Some(format!("deferror {}", crate::surface_path_name(&decl.name)))
+            }
             sigil::DeclarationKind::Enum => {
                 Some(format!("defenum {}", crate::surface_path_name(&decl.name)))
             }
@@ -2031,7 +2046,10 @@ impl ReplEngine {
         match kind {
             forge::ReplCallableKind::Capture => {
                 let mut details = vec![format!("binding: {symbol}")];
-                details.push(format!("type: {}", crate::surface_rendered_name(&binding.ty)));
+                details.push(format!(
+                    "type: {}",
+                    crate::surface_rendered_name(&binding.ty)
+                ));
                 if let Value::Callable(callable) = value {
                     let capture_count = callable.lexical_captures.len();
                     if capture_count == 0 {
@@ -2383,16 +2401,11 @@ impl ReplEngine {
             }
         }
 
-        if let Some(entry) = self
-            .docs
-            .iter()
-            .rev()
-            .find(|entry| {
-                qualified_lookup
-                    && crate::surface_path_name(&entry.qualified_name)
-                        == crate::surface_path_name(&canonical)
-            })
-        {
+        if let Some(entry) = self.docs.iter().rev().find(|entry| {
+            qualified_lookup
+                && crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(&canonical)
+        }) {
             if let Some(signature) = entry.signature.clone() {
                 return Some((entry.qualified_name.clone(), signature));
             }
@@ -2441,14 +2454,14 @@ impl ReplEngine {
             };
             if let Some(value) = self.vm.get_local(binding.slot_id) {
                 if let Some((owner, metadata)) = self.process_metadata_for_pid_value(&value) {
-                    if let Some(lines) =
-                        self.process_pid_binding_sig_summary_lines(owner, metadata)
+                    if let Some(lines) = self.process_pid_binding_sig_summary_lines(owner, metadata)
                     {
                         return Self::styled(lines);
                     }
                 }
             }
-            if let Some((owner, metadata)) = self.process_metadata_for_pid_type(binding.ty.as_str()) {
+            if let Some((owner, metadata)) = self.process_metadata_for_pid_type(binding.ty.as_str())
+            {
                 if let Some(lines) = self.process_pid_binding_sig_summary_lines(owner, metadata) {
                     return Self::styled(lines);
                 }
@@ -2559,7 +2572,10 @@ impl ReplEngine {
         if binding.facet_info.is_some() {
             return Self::styled(vec![
                 binding_name.to_string(),
-                format!("type: {}", crate::surface_rendered_name(binding.ty.as_str())),
+                format!(
+                    "type: {}",
+                    crate::surface_rendered_name(binding.ty.as_str())
+                ),
                 format!("identity: {}", self.render_type_identity(binding, None)),
             ]);
         }
@@ -2613,8 +2629,14 @@ impl ReplEngine {
                     "unavailable"
                 }
             ),
-            format!("view result: {}", crate::surface_rendered_name(&info.view_result_ty)),
-            format!("full path: {}", crate::surface_rendered_name(&info.full_path)),
+            format!(
+                "view result: {}",
+                crate::surface_rendered_name(&info.view_result_ty)
+            ),
+            format!(
+                "full path: {}",
+                crate::surface_rendered_name(&info.full_path)
+            ),
             "## Flow".to_string(),
         ];
 
@@ -2854,7 +2876,10 @@ impl ReplEngine {
                     "origin: repl".to_string(),
                     format!("type: {rendered_ty}"),
                     "identity: TypeIdentity::Type".to_string(),
-                    format!("defined: PID<{}>", crate::surface_rendered_name(process_name)),
+                    format!(
+                        "defined: PID<{}>",
+                        crate::surface_rendered_name(process_name)
+                    ),
                     format!("instance: {:?}", metadata.instance),
                     format!("runtime kind: {:?}", metadata.kind),
                 ]);
@@ -2883,7 +2908,10 @@ impl ReplEngine {
         lines.push(format!("kind: {kind}"));
         lines.push("origin: repl".to_string());
         if binding.facet_info.is_some() {
-            lines.push(format!("type: {}", crate::surface_rendered_name(&binding.ty)));
+            lines.push(format!(
+                "type: {}",
+                crate::surface_rendered_name(&binding.ty)
+            ));
             lines.push(format!(
                 "identity: {}",
                 self.render_type_identity(binding, None)
@@ -2895,7 +2923,10 @@ impl ReplEngine {
                 ));
             }
         } else if let Some(value) = self.vm.get_local(binding.slot_id) {
-            lines.push(format!("type: {}", crate::surface_rendered_name(&binding.ty)));
+            lines.push(format!(
+                "type: {}",
+                crate::surface_rendered_name(&binding.ty)
+            ));
             lines.push(format!(
                 "identity: {}",
                 self.render_type_identity(binding, Some(&value))
@@ -3711,9 +3742,7 @@ impl ReplEngine {
                     Self::ty_to_string(err)
                 )
             }
-            Ty::Struct(name, _) | Ty::Record(name, _) => {
-                crate::surface_path_name(name).to_string()
-            }
+            Ty::Struct(name, _) | Ty::Record(name, _) => crate::surface_path_name(name).to_string(),
             Ty::Enum(name, args) => {
                 let name = crate::surface_path_name(name);
                 if args.is_empty() {
@@ -3911,15 +3940,11 @@ impl ReplEngine {
     }
 
     fn enum_variant_signature_lines(&self, decl: &sigil::DeclarationEntry) -> Option<Vec<String>> {
-        let entry = self
-            .docs
-            .iter()
-            .rev()
-            .find(|entry| {
-                entry.kind == DocKind::Type
-                    && crate::surface_path_name(&entry.qualified_name)
-                        == crate::surface_path_name(&decl.fq_name)
-            });
+        let entry = self.docs.iter().rev().find(|entry| {
+            entry.kind == DocKind::Type
+                && crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(&decl.fq_name)
+        });
         if let Some(entry) = entry {
             if let Some(signature) = entry.signature.as_deref() {
                 if let Some((_owner_surface, variants_src)) =
@@ -5660,13 +5685,13 @@ fn compile_repl_preload_from_module_stages(
     };
     vm.push_chunk(chunk, ReplSessionPhase::Preload.execution_policy())
         .map_err(|e| ReplLoadError::Runtime {
-        file_name: compile_sources
-            .sources
-            .file_name(user_source_id)
-            .unwrap_or("<repl-preload>")
-            .to_string(),
-        message: e.to_string(),
-    })?;
+            file_name: compile_sources
+                .sources
+                .file_name(user_source_id)
+                .unwrap_or("<repl-preload>")
+                .to_string(),
+            message: e.to_string(),
+        })?;
 
     let mut symbols: BTreeSet<String> = ["Ok", "Err"]
         .into_iter()
@@ -6619,7 +6644,9 @@ mod tests {
     use super::*;
     use eldr::interactive::InteractiveChunkPolicy;
     use eldr::value::CallableTarget;
-    use sindr::ir::{BootEntrySource, BytecodeChunk, Constant, Opcode, RuntimeBootPlan, SingletonBootEntry};
+    use sindr::ir::{
+        BootEntrySource, BytecodeChunk, Constant, Opcode, RuntimeBootPlan, SingletonBootEntry,
+    };
     use sindr::runtime::{TypeEntry, TypeKind};
 
     fn interactive_test_chunk() -> BytecodeChunk {
@@ -7013,7 +7040,10 @@ supervisor_init {
         let tick = engine.handle_line("Ticker::tick(p)");
         assert!(!tick.should_exit, "{}", ReplEngine::repl_result_text(&tick));
         assert!(
-            !matches!(tick.output, ReplOutput::EvalError { .. } | ReplOutput::Diagnostic { .. }),
+            !matches!(
+                tick.output,
+                ReplOutput::EvalError { .. } | ReplOutput::Diagnostic { .. }
+            ),
             "{}",
             ReplEngine::repl_result_text(&tick)
         );

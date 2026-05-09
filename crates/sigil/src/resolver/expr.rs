@@ -1314,8 +1314,7 @@ impl Resolver {
         child.current_module_path = self.current_module_path.clone();
         child.current_stage_impl_targets = self.current_stage_impl_targets.clone();
         child.allow_top_level_shadowing = self.allow_top_level_shadowing;
-        child.forbidden_top_level_value_bindings =
-            self.forbidden_top_level_value_bindings.clone();
+        child.forbidden_top_level_value_bindings = self.forbidden_top_level_value_bindings.clone();
         child.current_top_level_def_name = self.current_top_level_def_name.clone();
         let out = f(&mut child)?;
         self.scope.advance_next_id_to(child.scope.next_id());

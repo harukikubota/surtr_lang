@@ -685,10 +685,7 @@ impl Checker {
                         })
                         .collect::<Result<Vec<_>, TypeError>>()?,
                 );
-                struct_defs.insert(
-                    id.name.clone(),
-                    (id.span.clone(), expected_self_ty.clone()),
-                );
+                struct_defs.insert(id.name.clone(), (id.span.clone(), expected_self_ty.clone()));
                 if let Some(surface_name) = id.name.strip_prefix("Global::") {
                     struct_defs.insert(
                         surface_name.to_string(),

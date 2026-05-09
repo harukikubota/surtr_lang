@@ -676,7 +676,10 @@ mod tests {
         history.record("repeat");
         history.record("next");
 
-        assert_eq!(history.entries, vec!["repeat".to_string(), "next".to_string()]);
+        assert_eq!(
+            history.entries,
+            vec!["repeat".to_string(), "next".to_string()]
+        );
     }
 
     #[test]

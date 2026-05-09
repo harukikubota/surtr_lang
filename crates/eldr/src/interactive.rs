@@ -236,22 +236,25 @@ mod tests {
         let mut vm = InteractiveVm::from_bytecode(bytecode);
 
         let err = vm
-            .push_chunk(BytecodeChunk {
-                opcodes: vec![Opcode::Halt, Opcode::Return],
-                source_map: None,
-                const_base: 0,
-                constants: Vec::new(),
-                new_locals: 0,
-                type_entries: Vec::new(),
-                error_template_base: 0,
-                error_templates: Vec::new(),
-                dbg_template_base: 0,
-                dbg_templates: Vec::new(),
-                functions: vec![function_entry(0, 1, "Main::new")],
-                docs: Vec::new(),
-                runtime_process_specs: Vec::new(),
-                runtime_boot_plan: Default::default(),
-            }, InteractiveChunkPolicy::ReplAppendOnly)
+            .push_chunk(
+                BytecodeChunk {
+                    opcodes: vec![Opcode::Halt, Opcode::Return],
+                    source_map: None,
+                    const_base: 0,
+                    constants: Vec::new(),
+                    new_locals: 0,
+                    type_entries: Vec::new(),
+                    error_template_base: 0,
+                    error_templates: Vec::new(),
+                    dbg_template_base: 0,
+                    dbg_templates: Vec::new(),
+                    functions: vec![function_entry(0, 1, "Main::new")],
+                    docs: Vec::new(),
+                    runtime_process_specs: Vec::new(),
+                    runtime_boot_plan: Default::default(),
+                },
+                InteractiveChunkPolicy::ReplAppendOnly,
+            )
             .expect_err("interactive vm must reject function replacement");
 
         assert!(
@@ -336,11 +339,7 @@ mod tests {
         let err = vm
             .push_chunk(chunk, InteractiveChunkPolicy::ReplAppendOnly)
             .expect_err("repl mode must reject runtime boot plan");
-        assert!(
-            err.message.contains("runtime_boot_plan"),
-            "{}",
-            err.message
-        );
+        assert!(err.message.contains("runtime_boot_plan"), "{}", err.message);
     }
 
     #[test]
@@ -358,7 +357,10 @@ mod tests {
         vm.push_chunk(chunk, InteractiveChunkPolicy::Preload)
             .expect("bootstrap mode should allow structural chunk");
         assert!(
-            vm.type_registry().entries.iter().any(|entry| entry.tag == 99),
+            vm.type_registry()
+                .entries
+                .iter()
+                .any(|entry| entry.tag == 99),
             "bootstrap type entry should be committed"
         );
     }

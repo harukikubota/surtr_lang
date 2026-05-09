@@ -1863,7 +1863,11 @@ impl Checker {
     }
 
     fn process_handler_public_name(process: &TypedProcessSpec, handler_name: &str) -> String {
-        format!("{}::{}", Self::surface_name(&process.process_name), handler_name)
+        format!(
+            "{}::{}",
+            Self::surface_name(&process.process_name),
+            handler_name
+        )
     }
 
     fn validate_handler_first_param_state(
@@ -2002,10 +2006,8 @@ impl Checker {
             ) {
                 continue;
             }
-            let state_ty = self.resolve_ast_ty_in_context(
-                &process.spec.state,
-                TypeSyntaxContext::General,
-            )?;
+            let state_ty =
+                self.resolve_ast_ty_in_context(&process.spec.state, TypeSyntaxContext::General)?;
             let Some(Ty::UserFunc { ret, .. } | Ty::BuiltinFunc { ret, .. }) =
                 self.env.lookup_var(process.init_uid)
             else {
