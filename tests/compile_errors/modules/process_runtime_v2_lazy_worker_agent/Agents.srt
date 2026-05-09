@@ -2,6 +2,7 @@ defagent Counter {
   meta {
     instance: Worker
     init_policy: Lazy
+    state: Int
   }
 
   @init

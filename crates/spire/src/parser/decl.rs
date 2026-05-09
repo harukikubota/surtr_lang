@@ -23,6 +23,7 @@ enum AgentInstance {
 struct AgentMeta {
     kind: AgentKind,
     instance: AgentInstance,
+    state: AstTy,
     boot: bool,
     registry: bool,
     lazy: bool,
@@ -50,6 +51,7 @@ impl AgentMeta {
             process_name,
             kind: self.kind.into_process_kind(),
             instance: self.instance.into_process_instance(),
+            state: self.state,
             boot: self.boot,
             registry: self.registry,
             lazy: self.lazy,
@@ -151,6 +153,7 @@ enum InitPolicy {
 struct ProcessMeta {
     instance: AgentInstance,
     init_policy: InitPolicy,
+    state: AstTy,
     handlers: Vec<ProcessHandlerDependency>,
 }
 
@@ -1796,7 +1799,6 @@ impl Parser<'_> {
                 visibility,
                 user_importable: attrs.user_importable,
                 user_callable: attrs.user_callable,
-                process_state_owner: attrs.process_state_owner,
             },
         );
         let attrs = ast_decl_attrs(&ast).expect("impl method is a declaration");
@@ -2994,23 +2996,15 @@ impl Parser<'_> {
                 }
                 "agent" => {
                     return Err(ParseError::syntax(
-                        "@agent(...) metadata is no longer supported. Use `meta { instance, init_policy }` inside the process definition.",
+                        "@agent(...) metadata is no longer supported. Use `meta { instance, init_policy, state }` inside the process definition.",
                         annotator_span,
                     ));
                 }
                 "process_state" => {
-                    if attrs.process_state_owner.is_some() {
-                        return Err(ParseError::syntax(
-                            "@process_state may only appear once before a declaration",
-                            annotator_span,
-                        ));
-                    }
-                    self.expect(&Token::LParen)?;
-                    self.skip_newlines();
-                    let (owner, _) = self.expect_ident()?;
-                    self.skip_newlines();
-                    self.expect(&Token::RParen)?;
-                    attrs.process_state_owner = Some(owner);
+                    return Err(ParseError::syntax(
+                        "@process_state has been removed. Declare process state with `meta { state: StateTy }` inside the process definition.",
+                        annotator_span,
+                    ));
                 }
                 "doc" => {
                     if attrs.doc.is_some() {
@@ -3143,14 +3137,6 @@ impl Parser<'_> {
             if attrs.readonly && !matches!(self.peek(), Token::Defstruct) {
                 return Err(ParseError::syntax(
                     "@readonly may only annotate `defstruct` declarations",
-                    start_span.unwrap_or_else(|| self.peek_span()),
-                ));
-            }
-            if attrs.process_state_owner.is_some()
-                && !matches!(self.peek(), Token::Defstruct | Token::Defenum)
-            {
-                return Err(ParseError::syntax(
-                    "@process_state may only annotate `defstruct` or `defenum` declarations",
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
             }
@@ -3681,6 +3667,7 @@ impl Parser<'_> {
             process_name: name.clone(),
             kind: runtime_kind,
             instance: ProcessInstance::Singleton,
+            state: AstTy::Named(span.clone(), "Unit".to_string()),
             boot: false,
             registry: true,
             lazy: false,
@@ -3820,11 +3807,16 @@ impl Parser<'_> {
             ));
         }
         self.skip_newlines();
-        self.expect(&Token::LBrace)?;
+        let lbrace_span = self.expect(&Token::LBrace)?;
         self.skip_newlines();
+        let meta_span = Span {
+            start: head_span.start,
+            end: lbrace_span.end,
+        };
 
         let mut instance = None;
         let mut init_policy = None;
+        let mut state = None;
         let mut handlers = Vec::new();
 
         while !matches!(self.peek(), Token::RBrace) {
@@ -3864,6 +3856,11 @@ impl Parser<'_> {
                         }
                     });
                 }
+                "state" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    state = Some(self.parse_type()?);
+                }
                 "handlers" => {
                     handlers = self.parse_process_meta_handlers()?;
                 }
@@ -3884,8 +3881,9 @@ impl Parser<'_> {
 
         Ok(ProcessMeta {
             instance: instance
-                .ok_or_else(|| ParseError::syntax("meta requires instance", self.peek_span()))?,
+                .ok_or_else(|| ParseError::syntax("meta requires instance", meta_span.clone()))?,
             init_policy: init_policy.unwrap_or(InitPolicy::Eager),
+            state: state.ok_or_else(|| ParseError::syntax("meta requires state", meta_span))?,
             handlers,
         })
     }
@@ -4040,6 +4038,7 @@ impl Parser<'_> {
                     AgentKind::ReadOnly
                 },
                 instance: process_meta.instance,
+                state: process_meta.state,
                 boot: false,
                 registry: process_meta.instance == AgentInstance::Singleton,
                 lazy: process_meta.init_policy == InitPolicy::Lazy,
@@ -4246,6 +4245,7 @@ impl Parser<'_> {
                 process_name: name.clone(),
                 kind: ProcessKind::GenServer,
                 instance: process_meta.instance.into_process_instance(),
+                state: process_meta.state,
                 boot: false,
                 registry: process_meta.instance == AgentInstance::Singleton,
                 lazy: process_meta.init_policy == InitPolicy::Lazy,

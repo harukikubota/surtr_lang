@@ -118,6 +118,7 @@ fn process_context_out_handler_can_target_stderr() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
     handlers {
       err: OutHandler = StdErr
     }
@@ -149,6 +150,7 @@ fn process_context_out_handler_can_target_file() {
   meta {{
     instance: Singleton
     init_policy: Eager
+    state: Int
     handlers {{
       out: OutHandler = StdOut
     }}

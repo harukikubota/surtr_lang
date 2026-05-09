@@ -636,6 +636,7 @@ defgenserver MyServer {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init

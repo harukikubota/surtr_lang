@@ -3537,6 +3537,7 @@ fn process_self_typechecks_inside_process_handler() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -3568,6 +3569,7 @@ fn genserver_additional_call_handler_typechecks_as_process_context() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
     handlers {
       out: OutHandler = StdOut
     }
@@ -3619,6 +3621,7 @@ fn genserver_call_handler_accepts_call_result_contract() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -3645,12 +3648,119 @@ fn genserver_call_handler_accepts_call_result_contract() {
 }
 
 #[test]
+fn process_meta_state_mismatch_is_rejected() {
+    let mut stages = std_module_stages();
+    stages.push(vec![staged_process_module(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: String) -> Result<Int> { Ok(0) }
+}"#,
+    )]);
+    let declaration_index =
+        sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
+    let resolved =
+        sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
+            .expect("resolve should succeed");
+    let err =
+        crate::typecheck_staged_program(resolved).expect_err("meta.state mismatch should fail");
+
+    assert!(err
+        .message
+        .contains("@get handler `Counter::get` first parameter must match process state type `Int`"));
+}
+
+#[test]
+fn user_defined_process_state_can_appear_in_public_signatures() {
+    let user_ast = spire::parse_with_context(
+        r#"defstruct CounterState {
+  value: Int,
+}
+
+impl CounterState {
+  def new(value: Int) -> Self {
+    CounterState { value: value }
+  }
+}
+
+defmod Helper {
+  def expose(state: CounterState) -> CounterState {
+    state
+  }
+}"#,
+        spire::ParserContext::module(0, None),
+    )
+    .expect("source should parse");
+    let mut stages = std_module_stages();
+    let mut user_modules = Vec::new();
+    let mut global_ast = Vec::new();
+    for stmt in user_ast {
+        match stmt {
+            spire::ast::Ast::Defmod(_, module_path, ast, attrs) => {
+                user_modules.push(sigil::StagedModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast,
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: None,
+                });
+            }
+            other => global_ast.push(other),
+        }
+    }
+    if !global_ast.is_empty() {
+        user_modules.push(sigil::StagedModuleAst {
+            module_path: String::new(),
+            doc_module_path: None,
+            ast: global_ast,
+            module_doc: None,
+            auto_import: false,
+            process_spec: None,
+        });
+    }
+    user_modules.push(staged_process_module(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: CounterState
+  }
+
+  @init
+  def init() -> Result<CounterState> { Ok(CounterState::new(0)) }
+
+  @get
+  def get(state: CounterState) -> Result<CounterState> { Ok(state) }
+}"#,
+    ));
+    stages.push(user_modules);
+    let declaration_index =
+        sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
+    let resolved =
+        sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
+            .expect("resolve should succeed");
+
+    crate::typecheck_staged_program(resolved)
+        .expect("user-defined process state should be allowed in public signatures");
+}
+
+#[test]
 fn typecheck_staged_program_keeps_process_specs() {
     let ast = spire::parse_with_context(
         r#"defagent Counter {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -3735,6 +3845,7 @@ fn typecheck_supervisor_spawn_fixture(
   meta {
     instance: Worker
     init_policy: Eager
+    state: Int
   }
 
   @init

@@ -185,36 +185,17 @@ defrecord Point(x: Float, y: Float)"#,
 }
 
 #[test]
-fn test_process_state_annotation_parses_for_struct_and_enum_decls() {
-    let ast = parse_with_context(
+fn test_process_state_annotation_is_rejected() {
+    let err = parse_with_context(
         r#"@process_state(Counter)
 defstruct CounterState {
   value: Int,
-}
-
-@process_state(Counter)
-defenum CounterEvent {
-  Changed(Int)
 }"#,
         ParserContext::module(1, None),
     )
-    .expect("@process_state should parse on process-owned state types");
+    .expect_err("@process_state should be rejected");
 
-    match &ast[0] {
-        Ast::StructDef(_, name, _, attrs) => {
-            assert_eq!(name, "Global::CounterState");
-            assert_eq!(attrs.process_state_owner.as_deref(), Some("Global::Counter"));
-        }
-        other => panic!("Expected StructDef, got {other:?}"),
-    }
-
-    match &ast[1] {
-        Ast::EnumDef(_, name, _, _, attrs) => {
-            assert_eq!(name, "Global::CounterEvent");
-            assert_eq!(attrs.process_state_owner.as_deref(), Some("Global::Counter"));
-        }
-        other => panic!("Expected EnumDef, got {other:?}"),
-    }
+    assert!(err.message().contains("@process_state has been removed"));
 }
 
 #[test]
@@ -224,6 +205,7 @@ fn test_doc_on_private_process_helper_is_rejected() {
   meta {
     instance: Worker
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4264,6 +4246,7 @@ defagent Counter {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4359,6 +4342,7 @@ fn test_defagent_parses_as_dedicated_process_ast_node() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4392,6 +4376,7 @@ fn test_defagent_meta_handlers_are_preserved_in_process_spec() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
     handlers {
       out: OutHandler = StdOut
     }
@@ -4409,6 +4394,10 @@ fn test_defagent_meta_handlers_are_preserved_in_process_spec() {
 
     match &ast[0] {
         Ast::Defagent(_, _, _, process_spec, _) => {
+            assert!(matches!(
+                &process_spec.state,
+                crate::ast::AstTy::Named(_, name) if name == "Int"
+            ));
             assert_eq!(process_spec.handlers.len(), 1);
             assert_eq!(process_spec.handlers[0].slot, "out");
             assert_eq!(process_spec.handlers[0].capability, "OutHandler");
@@ -4425,6 +4414,7 @@ fn test_defgenserver_preserves_runtime_handler_specs() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4467,12 +4457,35 @@ fn test_defgenserver_preserves_runtime_handler_specs() {
 }
 
 #[test]
+fn test_process_meta_requires_state() {
+    let err = parse_with_context(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int) -> Result<Int> { Ok(state) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("process meta without state should fail");
+
+    assert!(err.message().contains("meta requires state"));
+}
+
+#[test]
 fn test_defgenserver_preserves_multiple_call_and_cast_handler_specs() {
     let ast = parse_with_context(
         r#"defgenserver Logger {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4547,6 +4560,7 @@ fn test_defagent_worker_init_route_is_public_surface() {
   meta {
     instance: Worker
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4653,6 +4667,7 @@ fn test_defgenserver_worker_init_route_uses_user_defined_name() {
   meta {
     instance: Worker
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4824,6 +4839,7 @@ fn test_defsupervisor_rejects_instance_and_init_policy_meta_keys() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 }"#,
         ParserContext::module(1, None),
@@ -4843,6 +4859,7 @@ fn test_defagent_rejects_compiler_managed_surface_names() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4868,6 +4885,7 @@ fn test_defgenserver_rejects_compiler_managed_surface_names() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init

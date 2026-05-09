@@ -1611,6 +1611,37 @@ impl Checker {
         name.strip_prefix("Global::").unwrap_or(name)
     }
 
+    fn surface_ast_ty(ast_ty: &AstTy) -> String {
+        match ast_ty {
+            AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => Self::surface_name(name).into(),
+            AstTy::Generic(_, name, args) => format!(
+                "{}<{}>",
+                Self::surface_name(name),
+                args.iter()
+                    .map(Self::surface_ast_ty)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Tuple(_, items) => format!(
+                "({})",
+                items
+                    .iter()
+                    .map(Self::surface_ast_ty)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Func(_, params, ret) => format!(
+                "({} -> {})",
+                params
+                    .iter()
+                    .map(Self::surface_ast_ty)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                Self::surface_ast_ty(ret)
+            ),
+        }
+    }
+
     pub(super) fn surface_qualified_name<'a>(name: Option<&'a str>) -> Option<&'a str> {
         name.map(Self::surface_name)
     }
@@ -1953,63 +1984,6 @@ impl Checker {
         })
     }
 
-    pub(super) fn ty_contains_process_state_type(&self, ty: &Ty) -> Option<(String, String)> {
-        match self.resolve_ty(ty) {
-            Ty::Struct(name, fields) | Ty::Record(name, fields) => {
-                if let Some(owner) = self
-                    .env
-                    .lookup_type_def(&name)
-                    .and_then(|def| def.process_state_owner.clone())
-                {
-                    return Some((name, owner));
-                }
-                fields
-                    .iter()
-                    .find_map(|(_, field_ty)| self.ty_contains_process_state_type(field_ty))
-            }
-            Ty::Enum(name, args) => {
-                if let Some(owner) = self
-                    .env
-                    .lookup_type_def(&name)
-                    .and_then(|def| def.process_state_owner.clone())
-                {
-                    return Some((name, owner));
-                }
-                args.iter()
-                    .find_map(|arg| self.ty_contains_process_state_type(arg))
-            }
-            Ty::Result(ok, err) => self
-                .ty_contains_process_state_type(&ok)
-                .or_else(|| self.ty_contains_process_state_type(&err)),
-            Ty::List(inner) | Ty::Lazy(inner) | Ty::TypeRef(inner) => {
-                self.ty_contains_process_state_type(&inner)
-            }
-            Ty::Facet(root, focus) => self
-                .ty_contains_process_state_type(&root)
-                .or_else(|| self.ty_contains_process_state_type(&focus)),
-            Ty::Tuple(items) => items
-                .iter()
-                .find_map(|item| self.ty_contains_process_state_type(item)),
-            Ty::Func(params, ret) => params
-                .iter()
-                .find_map(|param| self.ty_contains_process_state_type(param))
-                .or_else(|| self.ty_contains_process_state_type(&ret)),
-            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => params
-                .iter()
-                .find_map(|param| self.ty_contains_process_state_type(param))
-                .or_else(|| self.ty_contains_process_state_type(&ret)),
-            Ty::Int
-            | Ty::Float
-            | Ty::Str
-            | Ty::Bool
-            | Ty::Unit
-            | Ty::Pid(_)
-            | Ty::Hole
-            | Ty::Var(_)
-            | Ty::Error => None,
-        }
-    }
-
     fn validate_process_state_contracts(&self) -> Result<(), TypeError> {
         for process in &self.process_specs {
             if !matches!(
@@ -2018,6 +1992,10 @@ impl Checker {
             ) {
                 continue;
             }
+            let state_ty = self.resolve_ast_ty_in_context(
+                &process.spec.state,
+                TypeSyntaxContext::General,
+            )?;
             let Some(Ty::UserFunc { ret, .. } | Ty::BuiltinFunc { ret, .. }) =
                 self.env.lookup_var(process.init_uid)
             else {
@@ -2027,7 +2005,7 @@ impl Checker {
                 Ty::Result(ok, _) => ok.as_ref().clone(),
                 other => other,
             };
-            let state_ty = if process.spec.lazy {
+            let init_state_ty = if process.spec.lazy {
                 self.process_init_state_ty(&init_ok_ty)
                     .ok_or_else(|| TypeError {
                         message: format!(
@@ -2048,26 +2026,20 @@ impl Checker {
                 init_ok_ty
             };
 
-            let state_name = match self.resolve_ty(&state_ty) {
-                Ty::Struct(name, _) | Ty::Enum(name, _) | Ty::Record(name, _) => name,
-                _ => continue,
-            };
-            let Some(def) = self.env.lookup_type_def(&state_name) else {
-                continue;
-            };
-            if def.process_state_owner.as_deref() != Some(process.process_name.as_str()) {
+            let init_state_ty = self.resolve_ty(&init_state_ty);
+            let state_ty = self.resolve_ty(&state_ty);
+            let state_name = Self::surface_ast_ty(&process.spec.state);
+            if init_state_ty != state_ty {
                 return Err(TypeError {
                     message: format!(
-                        "process state type `{}` must be annotated with @process_state({})",
-                        Self::surface_name(&state_name),
-                        Self::surface_name(&process.process_name)
+                        "@init handler `{}::init` Result ok type must match process state type `{}`",
+                        Self::surface_name(&process.process_name),
+                        state_name,
                     ),
                     span: Span { start: 0, end: 0 },
                     hint: None,
                 });
             }
-
-            let state_ty = self.resolve_ty(&state_ty);
             let handler_uids = process
                 .handler_uids
                 .iter()

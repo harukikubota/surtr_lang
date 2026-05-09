@@ -1080,6 +1080,7 @@ print(to_string(1))
   meta {
     instance: Worker
     init_policy: Eager
+    state: Int
   }
 
   @init

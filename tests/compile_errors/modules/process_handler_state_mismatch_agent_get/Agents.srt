@@ -1,17 +1,23 @@
-@process_state(Counter)
 defstruct CounterState {
   value: Int,
+}
+
+impl CounterState {
+  def new(value: Int) -> Self {
+    CounterState { value: value }
+  }
 }
 
 defagent Counter {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: CounterState
   }
 
   @init
   def init() -> Result<CounterState> {
-    Ok(CounterState { value: 0 })
+    Ok(CounterState::new(0))
   }
 
   @get
@@ -21,6 +27,6 @@ defagent Counter {
 
   @set
   def set(_state: CounterState, next: Int) -> Result<CounterState> {
-    Ok(CounterState { value: next })
+    Ok(CounterState::new(next))
   }
 }

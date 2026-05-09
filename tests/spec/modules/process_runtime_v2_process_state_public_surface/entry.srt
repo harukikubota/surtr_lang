@@ -1,0 +1,3 @@
+import Api::expose
+
+print(inspect(expose(CounterState::new(7))))

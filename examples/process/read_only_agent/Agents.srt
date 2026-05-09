@@ -2,6 +2,7 @@ defagent Env {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: String
   }
 
   @init

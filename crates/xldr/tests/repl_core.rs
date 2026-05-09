@@ -16,6 +16,7 @@ defagent MyWorker {
   meta {
     instance: Worker
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -34,6 +35,7 @@ defgenserver MyServer {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init

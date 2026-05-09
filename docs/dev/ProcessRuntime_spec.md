@@ -50,14 +50,14 @@
 
 | 領域 | 現行 | 変更後 |
 |---|---|---|
-| process metadata | `@agent(kind, instance, boot, registry, lazy)` | `meta { instance, init_policy }` |
+| process metadata | `@agent(kind, instance, boot, registry, lazy)` | `meta { instance, init_policy, state }` |
 | process kind | `ReadOnlyAgent / StateAgent` 中心 | `Agent / GenServer / Supervisor / Task / DynamicSupervisor` を共通 spec 化 |
 | instance 名 | `Multi` が残る | `Worker` に統一 |
 | Agent kind | metadata の `kind` 明示 | `@set` の有無から導出 |
 | boot / registry / lazy | process 定義 metadata に混在 | `init_policy` は定義側、起動対象・timeout・override は Boot / supervisor 側。`boot: Required` などの policy 指定は使わない |
 | VM 入力 | Agent lowering 由来の metadata | immutable `RuntimeProcessSpec` + `RuntimeBootPlan` |
 | Lazy | 初回 state access で materialize する実装がある | VM boot 時に process instance を起動し、Ready まで scheduler 管理 |
-| Process state | hidden builtin `__process_state` がある | surface annotation `@process_state(Owner)` を導入 |
+| Process state | hidden builtin `__process_state` がある | `meta { state: StateTy }` で process state を宣言する |
 | GenServer | 未実装 | `defgenserver` / `@call` / `@cast` を追加 |
 | Supervisor | Root 足場中心 | Root / Runtime / Dynamic の概念を spec / runtime に反映 |
 | Worker owner | allocation 時 `owner: None` の経路がある | default owner = current process |
@@ -74,8 +74,8 @@
 
 | 入力範囲 | 変わる仕様 |
 |---|---|
-| parser / AST | `meta {}`、`meta.handlers`、`ctx.<slot>`、`supervisor_init`、`defgenserver`、`@process_state`、`ProcessInit<T>` の出現制限を扱う |
-| semantic check | Agent kind 導出、process-owned state 検査、Lazy 許可 kind 検査、Boot timeout 範囲検査、handler capability / override 検査を行う |
+| parser / AST | `meta {}`、`meta.state`、`meta.handlers`、`ctx.<slot>`、`supervisor_init`、`defgenserver`、`ProcessInit<T>` の出現制限を扱う |
+| semantic check | Agent kind 導出、process state 契約一致、Lazy 許可 kind 検査、Boot timeout 範囲検査、handler capability / override 検査を行う |
 | IR / runtime metadata | `RuntimeProcessSpec`、`RuntimeHandlerSpec`、`RuntimeInitSpec`、`RuntimeBootPlan` へ正規化する |
 | codegen | surface syntax ではなく、正規化済み spec と dispatch 情報を VM に渡す |
 | VM / scheduler | `Initializing`、`Ready`、`Waiting`、`deadline_queue`、`waiting_table`、`init_waiters`、process context の handler slot を扱う |
@@ -106,6 +106,7 @@ defagent Counter {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   ...
@@ -118,6 +119,7 @@ defagent Counter {
 |---|---|
 | `instance` | `Singleton` または `Worker` |
 | `init_policy` | `Eager` または `Lazy` |
+| `state` | process handler が扱う state 型。primitive / container / user-defined のいずれも明記必須 |
 | `handlers` | process-local readonly handler dependency と default target |
 
 定義側に置かないもの:
@@ -217,33 +219,33 @@ Lazy `@init` が `Err(error)` を返した場合は、ユーザによる回復�
 
 Supervisor は state を持たないため Lazy init の概念を持たない。Worker の Lazy は将来課題とし、当面は同期 API 実装を優先する。
 
-### 3.8 `@process_state`
+### 3.8 process state declaration
 
-ユーザ定義型を live process state として使う場合、`@process_state(Owner)` を必須とする。
+process state は process 定義側の `meta.state` を唯一の宣言場所とする。
 
 ```surtr
-@process_state(Counter)
 defstruct CounterState {
   value: Int,
 }
+
+impl CounterState {
+  def new(value: Int) -> Self {
+    CounterState { value: value }
+  }
+}
+
+defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: CounterState
+  }
+}
 ```
 
-| state 型 | marker |
-|---|---|
-| primitive | 不要 |
-| builtin container | 不要 |
-| user-defined struct / record / enum | 必須 |
-
-`@process_state` が付いた型は owner process 外で次を禁止する。
-
-- 構築
-- public API 型位置への出現
-- lens root
-- pattern match
-- field access
-- 通常関数の引数・戻り値としての公開
-
-owner process 内では struct literal / field access / lens 操作を許可する。private field 指定は冗長 warning とする。
+`meta.state` は primitive / builtin container / user-defined type のいずれでも省略不可とする。
+user-defined state 型は通常の type と同じ規則に従い、public signature・pattern match・field access・外側スコープでの構築に追加制約を持たない。
+struct literal / `new` 契約 / private field は process state でも一般 struct と同一ルールを適用する。
 
 ### 3.8.1 compiler-managed lower surface
 
@@ -290,20 +292,26 @@ Agent kind は `@set` の有無から導出する。
 Eager Agent:
 
 ```surtr
-@process_state(Counter)
 defstruct CounterState {
   value: Int,
+}
+
+impl CounterState {
+  def new(value: Int) -> Self {
+    CounterState { value: value }
+  }
 }
 
 defagent Counter {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: CounterState
   }
 
   @init
   def init() -> Result<CounterState> {
-    Ok(CounterState { value: 0 })
+    Ok(CounterState::new(0))
   }
 
   @get
@@ -315,7 +323,7 @@ defagent Counter {
   def set(state: CounterState, delta: Int) -> Result<CounterState> {
     next = state.value + delta
     if(next >= 0,
-      Ok(CounterState { value: next }),
+      Ok(CounterState::new(next)),
       Err(NoneError)
     )
   }
@@ -334,7 +342,6 @@ _ = Counter::set(1)
 Lazy Agent:
 
 ```surtr
-@process_state(CacheClient)
 defstruct CacheState {
   client: Client,
 }
@@ -343,6 +350,7 @@ defagent CacheClient {
   meta {
     instance: Singleton
     init_policy: Lazy
+    state: CacheState
   }
 
   @init
@@ -365,20 +373,26 @@ defagent CacheClient {
 Worker Agent:
 
 ```surtr
-@process_state(ImageWorker)
 defstruct ImageWorkerState {
   jobs: Int,
+}
+
+impl ImageWorkerState {
+  def new(jobs: Int) -> Self {
+    ImageWorkerState { jobs: jobs }
+  }
 }
 
 defagent ImageWorker {
   meta {
     instance: Worker
     init_policy: Eager
+    state: ImageWorkerState
   }
 
   @init
   def init(start: Int) -> Result<ImageWorkerState> {
-    Ok(ImageWorkerState { jobs: start })
+    Ok(ImageWorkerState::new(start))
   }
 
   @get
@@ -388,7 +402,7 @@ defagent ImageWorker {
 
   @set
   def assign(state: ImageWorkerState, delta: Int) -> Result<ImageWorkerState> {
-    Ok(ImageWorkerState { jobs: state.jobs + delta })
+    Ok(ImageWorkerState::new(state.jobs + delta))
   }
 }
 
@@ -402,20 +416,26 @@ jobs =? ImageWorker::value(pid)
 GenServer は複数 query / command を持つ stateful process とする。
 
 ```surtr
-@process_state(CounterServer)
 defstruct CounterServerState {
   value: Int,
+}
+
+impl CounterServerState {
+  def new(value: Int) -> Self {
+    CounterServerState { value: value }
+  }
 }
 
 defgenserver CounterServer {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: CounterServerState
   }
 
   @init
   def init() -> Result<CounterServerState> {
-    Ok(CounterServerState { value: 0 })
+    Ok(CounterServerState::new(0))
   }
 
   @call
@@ -427,7 +447,7 @@ defgenserver CounterServer {
   def add(state: CounterServerState, delta: Int) -> Result<CastResult<CounterServerState>> {
     next = state.value + delta
     if(next >= 0,
-      Ok(CastResult::Next(CounterServerState { value: next })),
+      Ok(CastResult::Next(CounterServerState::new(next))),
       Err(NoneError)
     )
   }
@@ -556,7 +576,7 @@ ImageWorkerSupervisor::workers(MyWorker::init(args), 4)
 - `Workers` API は worker message template だけを受ける
 - `reserve` は `WorkerLease<$Worker>` を返し、裸の PID 抽出 API は出さない
 - `Sup::workers(...)` は Singleton GenServer の `@init` で worker pool state を作る経路として使う
-- `Workers<$Worker>` は Singleton GenServer の state として保持する。state そのものを `Workers<$Worker>` にしてよいし、`@process_state` 付き struct の field に含めてもよい
+- `Workers<$Worker>` は Singleton GenServer の state として保持する。state そのものを `Workers<$Worker>` にしてよいし、user-defined state struct の field に含めてもよい
 - public surface は `Workers::submit` / `Workers::reserve` / `Workers::broadcast` / `Workers::size` に限る
 - `Workers::submit` / `Workers::reserve` / `Workers::broadcast` / `Workers::size` は Singleton GenServer の `@call` / `@cast` / 同じ `defgenserver` 内 helper から使う
 
@@ -601,34 +621,37 @@ values =? ImagePool::values()
 count =? ImagePool::count()
 ```
 
-追加 state と一緒に保持する場合は `@process_state` 付き state 型の field に含める。
+追加 state と一緒に保持する場合は user-defined state struct の field に含める。
 
 ```surtr
-@process_state(ImagePool)
 defstruct ImagePoolState {
   workers: Workers<ImageWorker>,
   accepted: Int,
+}
+
+impl ImagePoolState {
+  def new(workers: Workers<ImageWorker>, accepted: Int) -> Self {
+    ImagePoolState { workers: workers, accepted: accepted }
+  }
 }
 
 defgenserver ImagePool {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: ImagePoolState
   }
 
   @init
   def init() -> Result<ImagePoolState> {
     workers =? ImageWorkerSupervisor::workers(ImageWorker::init(0), 2)
-    Ok(ImagePoolState { workers: workers, accepted: 0 })
+    Ok(ImagePoolState::new(workers, 0))
   }
 
   @cast
   def submit(state: ImagePoolState, job: ImageJob) -> Result<CastResult<ImagePoolState>> {
     _ =? Workers::submit(state.workers, ImageWorker::assign(job))
-    Ok(CastResult::Next(ImagePoolState {
-      workers: state.workers,
-      accepted: state.accepted + 1,
-    }))
+    Ok(CastResult::Next(ImagePoolState::new(state.workers, state.accepted + 1)))
   }
 
   @call
@@ -1362,7 +1385,7 @@ VM は少なくとも次の queue / table を持つ。
 
 | 発生箇所 | 条件 | error id | 簡易メッセージ | help |
 |---|---|---|---|---|
-| `meta` | `@agent(...)` を使っている | `process-meta-deprecated` | `@agent(...)` metadata is no longer supported. | Use `meta { instance, init_policy }` inside the process definition. |
+| `meta` | `@agent(...)` を使っている | `process-meta-deprecated` | `@agent(...)` metadata is no longer supported. | Use `meta { instance, init_policy, state }` inside the process definition. |
 | `meta` | `boot` を定義側に置いた | `process-meta-boot-not-allowed` | boot settings must be declared in `supervisor_init`. | Move boot policy and timeout to Boot configuration. |
 | `meta` | `registry` を定義側に置いた | `process-meta-registry-not-allowed` | registry settings are runtime / boot concerns. | Remove registry from process meta. |
 | `meta` | `init_policy: Lazy` を Worker に付けた | `process-lazy-not-allowed` | Lazy init is only allowed for Singleton Agent / Singleton GenServer. | Use `Eager`, or define an async call API. |
@@ -1391,19 +1414,16 @@ VM は少なくとも次の queue / table を持つ。
 | struct field | `ProcessInit<T>` を field に使った | `process-init-type-position` | `ProcessInit<T>` cannot appear in data types. | Store a domain-specific status enum instead. |
 | `@call` / `@get` | `ProcessInit<T>` を返した | `process-init-type-position` | `ProcessInit<T>` must not leak into process public API. | Return a View / Reply type. |
 
-### 5.3 process-owned state
+### 5.3 process state contracts
 
 | 発生箇所 | 条件 | error id | 簡易メッセージ | help |
 |---|---|---|---|---|
-| state position | user-defined State に `@process_state` がない | `process-state-missing-marker` | `CounterState` is used as process-owned state but is not marked. | Add `@process_state(Counter)`. |
-| state position | owner が違う | `process-state-owner-mismatch` | `CounterState` is owned by another process. | Use the state type owned by this process. |
-| public API | process-owned State を返した | `process-state-leak` | process-owned state cannot appear in public API. | Return View / Snapshot / Reply. |
-| public API | process-owned State を引数で受けた | `process-state-leak` | process-owned state cannot be accepted from outside. | Accept an input command type instead. |
-| owner 外 | struct literal を使った | `process-state-construction-outside-owner` | process-owned state can only be constructed inside owner process. | Construct it in the owner process, or expose a View type. |
-| owner 外 | field access した | `process-state-field-access-outside-owner` | process-owned state fields are not accessible outside owner process. | Use process API. |
-| owner 外 | pattern match した | `process-state-pattern-outside-owner` | process-owned state cannot be pattern matched outside owner process. | Use process API. |
-| owner 外 | lens root にした | `process-state-lens-outside-owner` | process-owned state cannot be used as lens root outside owner process. | Use a public View / Snapshot. |
-| owner 内 | private field を指定した | `process-state-private-field-redundant` | private field marker is redundant for process-owned state. | Remove the private marker if unnecessary. |
+| `meta` | `state` がない | `process-state-missing` | process metadata requires `state`. | Add `state: StateTy` to the process `meta` block. |
+| `@init` | `Result` ok 型が `meta.state` と違う | `process-state-init-mismatch` | `@init` result type must match the declared process state type. | Return the type declared in `meta.state`. |
+| handler | 第1引数 state が `meta.state` と違う | `process-state-param-mismatch` | handler state parameter must match the declared process state type. | Change the first parameter to the type declared in `meta.state`. |
+| Agent `@set` | `Result` ok 型が `meta.state` と違う | `process-state-return-mismatch` | `@set` result type must match the declared process state type. | Return the type declared in `meta.state`. |
+| GenServer `@call` | `CallResult<Reply, State>` の `State` が `meta.state` と違う | `process-state-call-result-mismatch` | `@call` state result must match the declared process state type. | Use the type declared in `meta.state` for `CallResult`. |
+| GenServer `@cast` | `CastResult<State>` の `State` が `meta.state` と違う | `process-state-cast-result-mismatch` | `@cast` state result must match the declared process state type. | Use the type declared in `meta.state` for `CastResult`. |
 
 ### 5.4 Boot 定義
 

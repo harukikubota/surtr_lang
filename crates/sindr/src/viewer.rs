@@ -798,7 +798,6 @@ mod tests {
                     instance: RuntimeProcessInstance::Worker,
                     state: crate::ir::RuntimeStateSpec {
                         state_type: crate::ir::RuntimeTypeRef { name: "Int".into() },
-                        owner_process: Some("Counter".into()),
                     },
                     init: crate::ir::RuntimeInitSpec {
                         callable: crate::ir::RuntimeCallableRef { fun_idx: 0 },

@@ -64,7 +64,6 @@ pub struct TypeDefInfo {
     pub private_fields: HashSet<Symbol>,
     pub readonly_fields: HashSet<Symbol>,
     pub readonly_root: bool,
-    pub process_state_owner: Option<Symbol>,
     pub state: TypeDefState,
 }
 
@@ -226,17 +225,10 @@ impl TypeEnv {
                 private_fields: HashSet::new(),
                 readonly_fields: HashSet::new(),
                 readonly_root: false,
-                process_state_owner: None,
                 state: TypeDefState::Declared,
             },
         );
         tag
-    }
-
-    pub fn set_process_state_owner(&mut self, name: &str, owner: Option<Symbol>) {
-        if let Some(def) = self.type_defs.get_mut(&canonical_type_key(name)) {
-            def.process_state_owner = owner;
-        }
     }
 
     /// Finalize a predeclared type definition with its field signature.

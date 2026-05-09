@@ -42,7 +42,6 @@ pub(super) fn resolve_decl_attrs(attrs: &DeclAttrs) -> ResolvedDeclAttrs {
         visibility: attrs.visibility,
         user_importable: attrs.user_importable,
         user_callable: attrs.user_callable,
-        process_state_owner: attrs.process_state_owner.clone(),
     }
 }
 

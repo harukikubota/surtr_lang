@@ -1,2 +1,0 @@
-phase: typecheck
-contains: process state type `CounterState` cannot appear in public function signatures

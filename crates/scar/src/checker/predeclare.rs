@@ -178,13 +178,6 @@ impl Checker {
 
             self.env
                 .predeclare_type_def(name.clone(), kind, type_params);
-            match stmt {
-                Resolved::StructDef(_, id, _, attrs) | Resolved::EnumDef(_, id, _, _, attrs) => {
-                    self.env
-                        .set_process_state_owner(&id.name, attrs.process_state_owner.clone());
-                }
-                _ => {}
-            }
         }
 
         self.ensure_no_type_cycles(stmts)?;
@@ -676,10 +669,7 @@ impl Checker {
         let mut structs_with_new: HashSet<String> = HashSet::new();
 
         for stmt in stmts {
-            if let Resolved::StructDef(_, id, fields, attrs) = stmt {
-                if attrs.process_state_owner.is_some() {
-                    continue;
-                }
+            if let Resolved::StructDef(_, id, fields, _attrs) = stmt {
                 let expected_self_ty = Ty::Struct(
                     id.name.clone(),
                     fields

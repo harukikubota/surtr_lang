@@ -218,6 +218,7 @@ fn test_resolve_staged_program_keeps_process_specs() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -3892,6 +3893,7 @@ fn test_worker_process_init_surface_is_importable() {
   meta {
     instance: Worker
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -3922,6 +3924,7 @@ fn test_singleton_process_init_surface_is_not_importable() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -3962,6 +3965,7 @@ fn test_compiler_generated_spawn_surface_is_not_exposed_to_user_imports() {
   meta {
     instance: Worker
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4029,6 +4033,7 @@ defenum StopReason {
   meta {
     instance: Worker
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4059,6 +4064,7 @@ fn test_singleton_process_init_surface_is_not_callable_from_user_code() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init

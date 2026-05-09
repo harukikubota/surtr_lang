@@ -2,6 +2,7 @@ defagent FibWorker {
   meta {
     instance: Worker
     init_policy: Eager
+    state: List<(Int, Int)>
   }
 
   @init
@@ -35,6 +36,7 @@ defgenserver FibManager {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: (PID<FibWorker>, PID<FibWorker>)
   }
 
   @init

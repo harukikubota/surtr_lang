@@ -10,7 +10,6 @@ pub struct ResolvedDeclAttrs {
     pub visibility: Visibility,
     pub user_importable: bool,
     pub user_callable: bool,
-    pub process_state_owner: Option<Symbol>,
 }
 
 impl Default for ResolvedDeclAttrs {
@@ -22,7 +21,6 @@ impl Default for ResolvedDeclAttrs {
             visibility: Visibility::Public,
             user_importable: true,
             user_callable: true,
-            process_state_owner: None,
         }
     }
 }

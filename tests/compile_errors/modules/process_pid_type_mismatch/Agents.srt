@@ -2,6 +2,7 @@ defagent Counter {
   meta {
     instance: Worker
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -24,6 +25,7 @@ defagent Clock {
   meta {
     instance: Worker
     init_policy: Eager
+    state: Int
   }
 
   @init

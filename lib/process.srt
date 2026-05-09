@@ -62,22 +62,28 @@ defgenserver ImageWorkerPool {
 
 State contains the worker set:
 
-@process_state(ImageWorkerPool)
 defstruct ImageWorkerPoolState {
   workers: Workers<ImageWorker>,
   accepted: Int,
+}
+
+impl ImageWorkerPoolState {
+  def new(workers: Workers<ImageWorker>, accepted: Int) -> Self {
+    ImageWorkerPoolState { workers: workers, accepted: accepted }
+  }
 }
 
 defgenserver ImageWorkerPool {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: ImageWorkerPoolState
   }
 
   @init
   def init() -> Result<ImageWorkerPoolState> {
     workers =? ImageWorkerSupervisor::workers(ImageWorker::init("./input"), 4)
-    Ok(ImageWorkerPoolState { workers: workers, accepted: 0 })
+    Ok(ImageWorkerPoolState::new(workers, 0))
   }
 }
 """

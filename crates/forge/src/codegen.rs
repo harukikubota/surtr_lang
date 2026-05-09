@@ -14,7 +14,8 @@ use sindr::ir::{
 };
 use sindr::primitives::int;
 use spire::ast::{
-    BinOp, Lit, ProcessInstance, ProcessRuntimeHandlerKind, Span, SupervisorInitSpec, Visibility,
+    AstTy, BinOp, Lit, ProcessInstance, ProcessRuntimeHandlerKind, Span, SupervisorInitSpec,
+    Visibility,
 };
 
 use crate::bytecode::*;
@@ -854,6 +855,43 @@ fn runtime_type_ref(ty: &Ty) -> RuntimeTypeRef {
     }
 }
 
+fn runtime_type_ref_from_ast(ty: &AstTy) -> RuntimeTypeRef {
+    fn ast_ty_to_string(ty: &AstTy) -> String {
+        match ty {
+            AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => name.clone(),
+            AstTy::Generic(_, name, args) => format!(
+                "{}<{}>",
+                name,
+                args.iter().map(ast_ty_to_string).collect::<Vec<_>>().join(", ")
+            ),
+            AstTy::Tuple(_, items) => format!(
+                "({})",
+                items
+                    .iter()
+                    .map(ast_ty_to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Func(_, params, ret) => {
+                let params = params
+                    .iter()
+                    .map(ast_ty_to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if params.is_empty() {
+                    format!("(-> {})", ast_ty_to_string(ret))
+                } else {
+                    format!("({} -> {})", params, ast_ty_to_string(ret))
+                }
+            }
+        }
+    }
+
+    RuntimeTypeRef {
+        name: ast_ty_to_string(ty),
+    }
+}
+
 fn build_runtime_process_specs(
     process_specs: &[TypedProcessSpec],
     nodes: &[TypedNode],
@@ -1075,8 +1113,8 @@ fn build_runtime_process_specs(
                 ),
                 span: Span { start: 0, end: 0 },
             })?;
-        let state_ty = init_state_ty(init_ret_ty, spec.spec.lazy, &spec.process_name)?;
-        let state_type = runtime_type_ref(&state_ty);
+        let _state_ty = init_state_ty(init_ret_ty, spec.spec.lazy, &spec.process_name)?;
+        let state_type = runtime_type_ref_from_ast(&spec.spec.state);
         let result_type = runtime_type_ref(init_ret_ty);
         let init_policy = if spec.spec.lazy {
             RuntimeInitPolicy::Lazy
@@ -1103,7 +1141,6 @@ fn build_runtime_process_specs(
             },
             state: RuntimeStateSpec {
                 state_type: state_type.clone(),
-                owner_process: Some(spec.process_name.clone()),
             },
             init: RuntimeInitSpec {
                 callable: RuntimeCallableRef {
@@ -6651,6 +6688,7 @@ mod process_runtime_v2_tests {
                 process_name: name.to_string(),
                 kind: ProcessKind::Agent,
                 instance: ProcessInstance::Singleton,
+                state: AstTy::Named(span(0, 0), "Int".to_string()),
                 boot: false,
                 registry: false,
                 lazy: false,

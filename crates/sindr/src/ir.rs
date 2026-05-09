@@ -414,8 +414,6 @@ pub struct RuntimeTypeRef {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeStateSpec {
     pub state_type: RuntimeTypeRef,
-    #[serde(default)]
-    pub owner_process: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1635,7 +1633,6 @@ mod tests {
                 state_type: RuntimeTypeRef {
                     name: "Int".to_string(),
                 },
-                owner_process: Some("Counter".to_string()),
             },
             init: RuntimeInitSpec {
                 callable: RuntimeCallableRef { fun_idx: 0 },
@@ -1768,7 +1765,6 @@ mod tests {
                     state_type: RuntimeTypeRef {
                         name: "Int".to_string(),
                     },
-                    owner_process: Some("LazyCache".to_string()),
                 },
                 init: RuntimeInitSpec {
                     callable: RuntimeCallableRef { fun_idx: 0 },

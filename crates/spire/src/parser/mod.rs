@@ -424,6 +424,7 @@ fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, Pa
         Ast::Defagent(span, name, body, mut process_spec, attrs) => {
             let qualified = qualify_namespace_head(namespace, &name, 2, &span, "process", true)?;
             process_spec.process_name = qualified.clone();
+            process_spec.state = qualify_namespace_type(process_spec.state, namespace)?;
             Ok(Ast::Defagent(
                 span,
                 qualified.clone(),
@@ -435,6 +436,7 @@ fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, Pa
         Ast::Defgenserver(span, name, body, mut process_spec, attrs) => {
             let qualified = qualify_namespace_head(namespace, &name, 2, &span, "process", true)?;
             process_spec.process_name = qualified.clone();
+            process_spec.state = qualify_namespace_type(process_spec.state, namespace)?;
             Ok(Ast::Defgenserver(
                 span,
                 qualified.clone(),
@@ -446,6 +448,7 @@ fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, Pa
         Ast::Defsupervisor(span, name, body, mut process_spec, attrs) => {
             let qualified = qualify_namespace_head(namespace, &name, 2, &span, "process", true)?;
             process_spec.process_name = qualified.clone();
+            process_spec.state = qualify_namespace_type(process_spec.state, namespace)?;
             Ok(Ast::Defsupervisor(
                 span,
                 qualified.clone(),
@@ -457,6 +460,7 @@ fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, Pa
         Ast::DefdynamicSupervisor(span, name, body, mut process_spec, attrs) => {
             let qualified = qualify_namespace_head(namespace, &name, 2, &span, "process", true)?;
             process_spec.process_name = qualified.clone();
+            process_spec.state = qualify_namespace_type(process_spec.state, namespace)?;
             Ok(Ast::DefdynamicSupervisor(
                 span,
                 qualified.clone(),
@@ -492,27 +496,27 @@ fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, Pa
             span.clone(),
             qualify_namespace_head(namespace, &name, 2, &span, "type", true)?,
             fields,
-            qualify_process_state_owner_attr(attrs, Some(namespace), &span)?,
+            attrs,
         )),
         Ast::RecordDef(span, name, fields, attrs) => Ok(Ast::RecordDef(
             span.clone(),
             qualify_namespace_head(namespace, &name, 2, &span, "type", true)?,
             fields,
-            qualify_process_state_owner_attr(attrs, Some(namespace), &span)?,
+            attrs,
         )),
         Ast::DeferrorDef(span, name, fields, show_expr, attrs) => Ok(Ast::DeferrorDef(
             span.clone(),
             qualify_namespace_head(namespace, &name, 2, &span, "type", true)?,
             fields,
             show_expr,
-            qualify_process_state_owner_attr(attrs, Some(namespace), &span)?,
+            attrs,
         )),
         Ast::EnumDef(span, name, type_params, variants, attrs) => Ok(Ast::EnumDef(
             span.clone(),
             qualify_namespace_head(namespace, &name, 2, &span, "type", true)?,
             type_params,
             variants,
-            qualify_process_state_owner_attr(attrs, Some(namespace), &span)?,
+            attrs,
         )),
         Ast::BuiltinTypeDecl(span, mut head, attrs) => {
             head.name = qualify_namespace_head(namespace, &head.name, 2, &span, "type", true)?;
@@ -617,27 +621,6 @@ fn canonicalize_root_owner_name(name: &str) -> String {
     }
 }
 
-fn canonicalize_process_state_owner_attr(mut attrs: DeclAttrs) -> DeclAttrs {
-    if let Some(owner) = attrs.process_state_owner.clone() {
-        attrs.process_state_owner = Some(canonicalize_root_owner_name(&owner));
-    }
-    attrs
-}
-
-fn qualify_process_state_owner_attr(
-    mut attrs: DeclAttrs,
-    namespace: Option<&str>,
-    span: &Span,
-) -> Result<DeclAttrs, ParseError> {
-    if let Some(owner) = attrs.process_state_owner.clone() {
-        attrs.process_state_owner = Some(match namespace {
-            Some(namespace) => qualify_namespace_head(namespace, &owner, 2, span, "process", true)?,
-            None => owner,
-        });
-    }
-    Ok(attrs)
-}
-
 fn canonicalize_root_owner_heads(ast: Vec<Ast>) -> Result<Vec<Ast>, ParseError> {
     ast.into_iter()
         .map(|node| match node {
@@ -650,6 +633,8 @@ fn canonicalize_root_owner_heads(ast: Vec<Ast>) -> Result<Vec<Ast>, ParseError> 
             Ast::Defagent(span, name, body, mut process_spec, attrs) => {
                 let canonical_name = canonicalize_root_owner_name(&name);
                 process_spec.process_name = canonical_name.clone();
+                process_spec.state =
+                    rewrite_process_owner_ty(process_spec.state, &name, &canonical_name);
                 Ok(Ast::Defagent(
                     span,
                     canonical_name.clone(),
@@ -661,6 +646,8 @@ fn canonicalize_root_owner_heads(ast: Vec<Ast>) -> Result<Vec<Ast>, ParseError> 
             Ast::Defgenserver(span, name, body, mut process_spec, attrs) => {
                 let canonical_name = canonicalize_root_owner_name(&name);
                 process_spec.process_name = canonical_name.clone();
+                process_spec.state =
+                    rewrite_process_owner_ty(process_spec.state, &name, &canonical_name);
                 Ok(Ast::Defgenserver(
                     span,
                     canonical_name.clone(),
@@ -672,6 +659,8 @@ fn canonicalize_root_owner_heads(ast: Vec<Ast>) -> Result<Vec<Ast>, ParseError> 
             Ast::Defsupervisor(span, name, body, mut process_spec, attrs) => {
                 let canonical_name = canonicalize_root_owner_name(&name);
                 process_spec.process_name = canonical_name.clone();
+                process_spec.state =
+                    rewrite_process_owner_ty(process_spec.state, &name, &canonical_name);
                 Ok(Ast::Defsupervisor(
                     span,
                     canonical_name.clone(),
@@ -683,6 +672,8 @@ fn canonicalize_root_owner_heads(ast: Vec<Ast>) -> Result<Vec<Ast>, ParseError> 
             Ast::DefdynamicSupervisor(span, name, body, mut process_spec, attrs) => {
                 let canonical_name = canonicalize_root_owner_name(&name);
                 process_spec.process_name = canonical_name.clone();
+                process_spec.state =
+                    rewrite_process_owner_ty(process_spec.state, &name, &canonical_name);
                 Ok(Ast::DefdynamicSupervisor(
                     span,
                     canonical_name.clone(),
@@ -695,27 +686,27 @@ fn canonicalize_root_owner_heads(ast: Vec<Ast>) -> Result<Vec<Ast>, ParseError> 
                 span,
                 canonicalize_root_owner_name(&name),
                 fields,
-                canonicalize_process_state_owner_attr(attrs),
+                attrs,
             )),
             Ast::RecordDef(span, name, fields, attrs) => Ok(Ast::RecordDef(
                 span,
                 canonicalize_root_owner_name(&name),
                 fields,
-                canonicalize_process_state_owner_attr(attrs),
+                attrs,
             )),
             Ast::DeferrorDef(span, name, fields, show_expr, attrs) => Ok(Ast::DeferrorDef(
                 span,
                 canonicalize_root_owner_name(&name),
                 fields,
                 show_expr,
-                canonicalize_process_state_owner_attr(attrs),
+                attrs,
             )),
             Ast::EnumDef(span, name, type_params, variants, attrs) => Ok(Ast::EnumDef(
                 span,
                 canonicalize_root_owner_name(&name),
                 type_params,
                 variants,
-                canonicalize_process_state_owner_attr(attrs),
+                attrs,
             )),
             other => Ok(other),
         })
@@ -905,10 +896,7 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
             Box::new(rewrite_process_owner_refs(*show_expr, old_name, new_name)),
             attrs,
         ),
-        Ast::Def(span, name, type_params, params, ret_ty, body, mut attrs) => {
-            if attrs.process_state_owner.as_deref() == Some(old_name) {
-                attrs.process_state_owner = Some(new_name.to_string());
-            }
+        Ast::Def(span, name, type_params, params, ret_ty, body, attrs) => {
             Ast::Def(
                 span,
                 name,
@@ -1374,6 +1362,7 @@ fn shift_decl_attrs(attrs: DeclAttrs) -> DeclAttrs {
 }
 
 fn shift_process_spec(mut spec: ProcessSpec, delta: usize) -> ProcessSpec {
+    spec.state = shift_ast_ty(spec.state, delta);
     spec.handlers = spec
         .handlers
         .into_iter()

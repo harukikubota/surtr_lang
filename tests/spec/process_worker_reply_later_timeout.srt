@@ -2,6 +2,7 @@ defgenserver MyWorker {
   meta {
     instance: Worker
     init_policy: Eager
+    state: Int
   }
 
   @init

@@ -827,6 +827,7 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
     handlers {
       out: OutHandler = StdOut
     }
@@ -872,6 +873,7 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
     handlers {
       out: OutHandler = StdOut
     }
@@ -925,6 +927,7 @@ supervisor_init {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
     handlers {
       out: OutHandler = StdOut
     }
@@ -959,6 +962,7 @@ supervisor_init {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -1003,6 +1007,7 @@ supervisor_init {
   meta {
     instance: Singleton
     init_policy: Lazy
+    state: Int
   }
 
   @init

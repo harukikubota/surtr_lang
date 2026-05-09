@@ -294,7 +294,6 @@ mod tests {
             instance: RuntimeProcessInstance::Worker,
             state: RuntimeStateSpec {
                 state_type: RuntimeTypeRef { name: "Int".into() },
-                owner_process: None,
             },
             init: RuntimeInitSpec {
                 callable: RuntimeCallableRef { fun_idx: 0 },

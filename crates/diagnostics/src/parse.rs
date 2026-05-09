@@ -1,5 +1,6 @@
 use crate::heuristics::{
-    line_span_containing, rewrite_line_at_span, slice_chars, trimmed_line_span_containing,
+    line_span_containing, line_spans, rewrite_line_at_span, slice_chars, trimmed_line_span,
+    trimmed_line_span_containing,
 };
 use crate::{simple_error, Color, DiagnosticLabel, DiagnosticSpec};
 use spire::ast::Span;
@@ -87,6 +88,30 @@ pub fn parse_error_spec(source: &str, message: impl Into<String>, span: Span) ->
         );
     }
 
+    if message == "meta requires state" {
+        spec.help = Some(
+            "Add a state declaration inside `meta { ... }`. For example:\n\n  state: Int".into(),
+        );
+    }
+
+    if message == "meta requires instance" {
+        spec.help = Some(
+            "Add an instance declaration inside `meta { ... }`. For example:\n\n  instance: Singleton"
+                .into(),
+        );
+    }
+
+    if message == "meta requires state" || message == "meta requires instance" {
+        if let Some(process_decl_span) = previous_non_empty_line_span(source, span.start) {
+            spec.labels.push(DiagnosticLabel {
+                source_id: None,
+                span: process_decl_span,
+                message: "process declaration".into(),
+                color: Some(Color::Blue),
+            });
+        }
+    }
+
     if let Some(token) = message.strip_prefix("Unexpected token: ") {
         if let Some(line_span) = line_span_containing(source, span.start) {
             let line = slice_chars(source, line_span.0, line_span.1);
@@ -145,4 +170,18 @@ pub fn parse_error_spec(source: &str, message: impl Into<String>, span: Span) ->
     }
 
     spec
+}
+
+fn previous_non_empty_line_span(source: &str, pos: usize) -> Option<Span> {
+    let lines = line_spans(source);
+    let current_idx = lines.iter().position(|(start, end)| *start <= pos && pos <= *end)?;
+    for idx in (0..current_idx).rev() {
+        let Some(span) = trimmed_line_span(source, lines[idx]) else {
+            continue;
+        };
+        if span.start < span.end {
+            return Some(span);
+        }
+    }
+    None
 }

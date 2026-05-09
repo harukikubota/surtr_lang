@@ -5548,7 +5548,6 @@ mod tests {
             instance,
             state: RuntimeStateSpec {
                 state_type: state_type.clone(),
-                owner_process: Some(process_name.into()),
             },
             init: RuntimeInitSpec {
                 callable: RuntimeCallableRef {

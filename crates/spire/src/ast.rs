@@ -28,7 +28,6 @@ pub struct DeclAttrs {
     pub visibility: Visibility,
     pub user_importable: bool,
     pub user_callable: bool,
-    pub process_state_owner: Option<Symbol>,
 }
 
 impl Default for DeclAttrs {
@@ -41,7 +40,6 @@ impl Default for DeclAttrs {
             visibility: Visibility::Public,
             user_importable: true,
             user_callable: true,
-            process_state_owner: None,
         }
     }
 }
@@ -68,6 +66,7 @@ pub struct ProcessSpec {
     pub process_name: Symbol,
     pub kind: ProcessKind,
     pub instance: ProcessInstance,
+    pub state: AstTy,
     pub boot: bool,
     pub registry: bool,
     pub lazy: bool,

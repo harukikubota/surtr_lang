@@ -2,6 +2,7 @@ defagent MyWorker {
   meta {
     instance: Worker
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -34,6 +35,7 @@ defgenserver MyPool {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Workers<MyWorker>
   }
 
   @init

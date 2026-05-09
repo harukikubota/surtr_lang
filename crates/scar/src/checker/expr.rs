@@ -6222,20 +6222,6 @@ impl Checker {
         }
         let typed_expr = self.check_node(expr)?;
 
-        if let Some((state_name, owner)) = self.ty_contains_process_state_type(&typed_expr.ty) {
-            if self.current_process_name().as_deref() != Some(owner.as_str()) {
-                return Err(TypeError {
-                    message: format!(
-                        "process state type `{}` can only be accessed inside process `{}`",
-                        Self::surface_name(&state_name),
-                        Self::surface_name(&owner)
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                });
-            }
-        }
-
         if matches!(typed_expr.ty, Ty::Facet(_, _)) {
             let path = self.resolve_lens_path_from_node(typed_expr, span, None)?;
             let (segment, focus_ty, may_fail) =
