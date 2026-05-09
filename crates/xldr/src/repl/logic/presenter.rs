@@ -12,7 +12,9 @@ pub enum PresentedResultKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PresentedResult {
+    pub stdout_lines: Vec<String>,
     pub lines: Vec<String>,
+    pub stderr_lines: Vec<String>,
     pub kind: PresentedResultKind,
 }
 
@@ -37,7 +39,8 @@ pub struct PresentedInteraction {
 }
 
 pub fn present_for_cli(result: &ReplResult, color: bool) -> Vec<String> {
-    match &result.output {
+    let mut output = result.stdout.clone();
+    let rendered = match &result.output {
         ReplOutput::EvalSuccess { rendered, .. } => rendered
             .iter()
             .map(|line| {
@@ -96,27 +99,38 @@ pub fn present_for_cli(result: &ReplResult, color: bool) -> Vec<String> {
         ReplOutput::EvalError { .. }
         | ReplOutput::StatusMessage(_)
         | ReplOutput::EvalStarted { .. } => Vec::new(),
-    }
+    };
+    output.extend(rendered);
+    output
 }
 
 pub fn present_for_interaction(result: ReplResult) -> PresentedInteraction {
     let should_exit = result.should_exit;
+    let stdout = result.stdout;
     let stderr = result.stderr;
     let event = match result.output {
         ReplOutput::EvalSuccess { rendered, .. } => PresentedEvent::Result(PresentedResult {
-            lines: rendered.into_iter().chain(stderr).collect(),
+            stdout_lines: stdout,
+            lines: rendered,
+            stderr_lines: stderr,
             kind: PresentedResultKind::EvalSuccess,
         }),
         ReplOutput::EvalError { rendered, .. } => PresentedEvent::Result(PresentedResult {
-            lines: rendered.into_iter().chain(stderr).collect(),
+            stdout_lines: stdout,
+            lines: rendered,
+            stderr_lines: stderr,
             kind: PresentedResultKind::EvalError,
         }),
         ReplOutput::PlainText { lines } => PresentedEvent::Result(PresentedResult {
-            lines: lines.into_iter().chain(stderr).collect(),
+            stdout_lines: stdout,
+            lines,
+            stderr_lines: stderr,
             kind: PresentedResultKind::PlainText,
         }),
         ReplOutput::StyledDoc { lines } => PresentedEvent::Result(PresentedResult {
-            lines: lines.into_iter().chain(stderr).collect(),
+            stdout_lines: stdout,
+            lines,
+            stderr_lines: stderr,
             kind: PresentedResultKind::Info,
         }),
         ReplOutput::Diagnostic {
@@ -124,9 +138,10 @@ pub fn present_for_interaction(result: ReplResult) -> PresentedInteraction {
             summary_tail,
         } => {
             rendered.extend(summary_tail);
-            rendered.extend(stderr);
             PresentedEvent::Result(PresentedResult {
+                stdout_lines: stdout,
                 lines: rendered,
+                stderr_lines: stderr,
                 kind: PresentedResultKind::Diagnostic,
             })
         }
@@ -156,7 +171,9 @@ pub fn present_for_interaction(result: ReplResult) -> PresentedInteraction {
                 PresentedEvent::None
             } else {
                 PresentedEvent::Result(PresentedResult {
-                    lines: std::iter::once(message).chain(stderr).collect(),
+                    stdout_lines: stdout,
+                    lines: vec![message],
+                    stderr_lines: stderr,
                     kind: PresentedResultKind::Info,
                 })
             }

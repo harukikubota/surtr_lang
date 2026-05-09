@@ -1131,15 +1131,6 @@ impl ReplEngine {
         )
     }
 
-    fn prepend_repl_host_stdout_lines(
-        &mut self,
-        mut rendered: Vec<String>,
-    ) -> (Vec<String>, Vec<String>) {
-        let (mut stdout, stderr) = self.take_repl_host_io_lines();
-        stdout.append(&mut rendered);
-        (stdout, stderr)
-    }
-
     fn repl_command_diagnostic(
         &self,
         source: &str,
@@ -5027,7 +5018,7 @@ impl ReplEngine {
                 self.sync_scar_fun_index_with_vm();
                 self.sync_repl_chunk_function_indices(&meta.function_defs, &chunk_functions);
                 if let Some(rendered) = self.report_main_result_error_if_any(&value) {
-                    let (rendered, stderr) = self.prepend_repl_host_stdout_lines(rendered);
+                    let (stdout, stderr) = self.take_repl_host_io_lines();
                     self.bump_line(None, None);
                     self.pending.clear();
                     return ReplResult::ok(ReplOutput::EvalError {
@@ -5035,13 +5026,15 @@ impl ReplEngine {
                         source,
                         rendered,
                     })
+                    .with_stdout(stdout)
                     .with_stderr(stderr);
                 }
 
                 let rendered =
                     render::format_result_lines(self.vm.as_vm(), Some(&value), Some(&meta));
 
-                let (mut all_rendered, stderr) = self.prepend_repl_host_stdout_lines(rendered);
+                let (stdout, stderr) = self.take_repl_host_io_lines();
+                let mut all_rendered = rendered;
                 if import_only {
                     for label in &import_result.success_labels {
                         all_rendered.push(format!("Imported {}", label));
@@ -5065,6 +5058,7 @@ impl ReplEngine {
                     source,
                     rendered: all_rendered,
                 })
+                .with_stdout(stdout)
                 .with_stderr(stderr)
             }
             Err(e) => {
@@ -5080,7 +5074,7 @@ impl ReplEngine {
                     location.clone(),
                     self.error_display_mode,
                 );
-                let (rendered, stderr) = self.prepend_repl_host_stdout_lines(rendered);
+                let (stdout, stderr) = self.take_repl_host_io_lines();
                 error_display::emit_runtime_error_with_registry(
                     &e,
                     &self.sources,
@@ -5095,6 +5089,7 @@ impl ReplEngine {
                     source,
                     rendered,
                 })
+                .with_stdout(stdout)
                 .with_stderr(stderr)
             }
         }
@@ -5127,12 +5122,13 @@ impl ReplEngine {
                     location,
                     self.error_display_mode,
                 );
-                let (rendered, stderr) = self.prepend_repl_host_stdout_lines(rendered);
+                let (stdout, stderr) = self.take_repl_host_io_lines();
                 ReplResult::ok(ReplOutput::EvalError {
                     idx: self.results.len(),
                     source: "<background>".to_string(),
                     rendered,
                 })
+                .with_stdout(stdout)
                 .with_stderr(stderr)
             }
         }
@@ -5157,12 +5153,13 @@ impl ReplEngine {
                     location,
                     self.error_display_mode,
                 );
-                let (rendered, stderr) = self.prepend_repl_host_stdout_lines(rendered);
+                let (stdout, stderr) = self.take_repl_host_io_lines();
                 ReplResult::ok(ReplOutput::EvalError {
                     idx: self.results.len(),
                     source: "<background>".to_string(),
                     rendered,
                 })
+                .with_stdout(stdout)
                 .with_stderr(stderr)
             }
         }
@@ -5184,12 +5181,13 @@ impl ReplEngine {
                     location,
                     self.error_display_mode,
                 );
-                let (rendered, stderr) = self.prepend_repl_host_stdout_lines(rendered);
+                let (stdout, stderr) = self.take_repl_host_io_lines();
                 ReplResult::ok(ReplOutput::EvalError {
                     idx: self.results.len(),
                     source: "<background>".to_string(),
                     rendered,
                 })
+                .with_stdout(stdout)
                 .with_stderr(stderr)
             }
         }

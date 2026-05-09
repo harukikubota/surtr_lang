@@ -102,6 +102,16 @@ fn rendered_text(result: &ReplResult) -> String {
     rendered(result).join("\n")
 }
 
+fn visible_text(result: &ReplResult) -> String {
+    result
+        .stdout
+        .iter()
+        .chain(rendered(result).iter())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn doc_text(result: &ReplResult) -> String {
     match &result.output {
         ReplOutput::DocResolved {
@@ -313,7 +323,7 @@ fn core_routes_print_side_effects_into_repl_result_lines() {
     let result = engine.handle_line(r#"print("hello from repl")"#);
 
     assert!(!result.should_exit);
-    assert_eq!(rendered_text(&result), "hello from repl");
+    assert_eq!(visible_text(&result), "hello from repl");
     assert!(result.stderr.is_empty());
 }
 
@@ -348,7 +358,7 @@ fn core_routes_background_prints_into_pump_result_lines() {
     let background = engine.advance_background_time(Duration::from_millis(5));
 
     assert!(!background.should_exit);
-    assert_eq!(rendered_text(&background), "hello from background");
+    assert_eq!(visible_text(&background), "hello from background");
 }
 
 #[test]

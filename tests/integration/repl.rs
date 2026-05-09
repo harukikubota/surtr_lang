@@ -448,6 +448,32 @@ fn repl_colorizes_doc_for_qualified_kernel_if() {
 }
 
 #[test]
+fn repl_keeps_print_output_plain_while_coloring_bindings_and_values() {
+    let output = run_repl_session_with_color(
+        "print(\"tick 1\")\nprint(inspect(Ok(True)))\nx = 1\nStringEncoding::Utf8\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines = stdout.lines().collect::<Vec<_>>();
+    let print_line = lines.get(1).expect("expected first print output line");
+    assert_eq!(strip_ansi(print_line), "xldr(1)> tick 1", "{stdout}");
+    assert!(!print_line.contains("\u{1b}["), "{stdout}");
+
+    let inspect_line = lines.get(2).expect("expected inspect output line");
+    assert_eq!(strip_ansi(inspect_line), "xldr(2)> Ok(True)", "{stdout}");
+    assert!(!inspect_line.contains("\u{1b}["), "{stdout}");
+
+    assert!(stdout.contains("xldr(3)> \u{1b}[36mx\u{1b}[0m"), "{stdout}");
+    assert!(stdout.contains("xldr(4)> \u{1b}[96mStringEncoding::Utf8\u{1b}[0m"), "{stdout}");
+}
+
+#[test]
 fn repl_error_summary_then_full_changes_diagnostic_detail() {
     let output =
         run_repl_session(":error summary\n:error bad\n:error full\nworse: Int = \"oops\"\n:quit\n");

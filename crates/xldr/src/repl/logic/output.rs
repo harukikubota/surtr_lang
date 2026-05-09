@@ -40,6 +40,7 @@ pub enum ReplOutput {
 pub struct ReplResult {
     pub output: ReplOutput,
     pub should_exit: bool,
+    pub stdout: Vec<String>,
     pub stderr: Vec<String>,
 }
 
@@ -48,6 +49,7 @@ impl ReplResult {
         Self {
             output,
             should_exit: false,
+            stdout: Vec::new(),
             stderr: Vec::new(),
         }
     }
@@ -56,8 +58,14 @@ impl ReplResult {
         Self {
             output,
             should_exit: true,
+            stdout: Vec::new(),
             stderr: Vec::new(),
         }
+    }
+
+    pub fn with_stdout(mut self, mut stdout: Vec<String>) -> Self {
+        self.stdout.append(&mut stdout);
+        self
     }
 
     pub fn with_stderr(mut self, mut stderr: Vec<String>) -> Self {

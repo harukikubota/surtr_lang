@@ -77,7 +77,10 @@ impl Widget for ResultsPaneWidget<'_> {
         }
 
         for entry in self.app.results.iter() {
-            let entry_lines_len = 1 + entry.rendered_lines.len();
+            let entry_lines_len = 1
+                + entry.stdout_lines.len()
+                + entry.rendered_lines.len()
+                + entry.stderr_lines.len();
             let entry_height = (entry_lines_len as u16).saturating_add(2);
             if y.saturating_add(entry_height) > max_y {
                 break;
@@ -105,8 +108,14 @@ impl Widget for ResultsPaneWidget<'_> {
                 PresentedResultKind::Diagnostic => Style::default().fg(Color::Red),
                 PresentedResultKind::EvalSuccess => Style::default().fg(Color::Green),
             };
+            for line in entry.stdout_lines.iter() {
+                entry_lines.push(Line::raw(line.clone()));
+            }
             for line in entry.rendered_lines.iter() {
                 entry_lines.push(Line::styled(line.clone(), rendered_style));
+            }
+            for line in entry.stderr_lines.iter() {
+                entry_lines.push(Line::styled(line.clone(), Style::default().fg(Color::Red)));
             }
 
             let entry_area = Rect {

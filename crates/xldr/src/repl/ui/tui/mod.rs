@@ -59,7 +59,9 @@ pub fn run_command(options: TuiOptions) -> Result<(), i32> {
     if let Some(path) = &options.eldr_path {
         app.push_result(
             path.clone(),
+            Vec::new(),
             vec![format!("loaded {path}")],
+            Vec::new(),
             PresentedResultKind::Info,
         );
     }
