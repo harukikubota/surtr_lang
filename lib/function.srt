@@ -127,12 +127,10 @@ defmod Function {
   ("10", "ok")
   """
   def first(f: ($A -> $C)) -> (($A, $B) -> ($C, $B)) {
-    &first_apply(&1, f)
-  }
-
-  defp first_apply(pair: ($A, $B), f: ($A -> $C)) -> ($C, $B) {
-    (left, right) = pair
-    (f(left), right)
+    {|pair: ($A, $B)|
+      (left, right) = pair
+      (f(left), right)
+    }
   }
 
   @doc """
@@ -144,12 +142,10 @@ defmod Function {
   (10, 4)
   """
   def second(f: ($B -> $C)) -> (($A, $B) -> ($A, $C)) {
-    &second_apply(&1, f)
-  }
-
-  defp second_apply(pair: ($A, $B), f: ($B -> $C)) -> ($A, $C) {
-    (left, right) = pair
-    (left, f(right))
+    {|pair: ($A, $B)|
+      (left, right) = pair
+      (left, f(right))
+    }
   }
 
   @doc """

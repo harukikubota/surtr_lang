@@ -512,6 +512,7 @@ impl Checker {
     fn check_body_in_isolated_scope(
         &mut self,
         local_bindings: &[(u32, Ty)],
+        local_annotation_tyvars: HashMap<String, Ty>,
         function_return_ty: Ty,
         function_symbol: String,
         impl_target: Option<String>,
@@ -519,6 +520,7 @@ impl Checker {
         body: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let saved_function_return_ty = self.function_return_ty.clone();
+        let saved_local_annotation_tyvars = self.local_annotation_tyvars.clone();
         let saved_current_function_symbol = self.current_function_symbol.clone();
         let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
         let saved_in_extractor_body = self.in_extractor_body;
@@ -527,6 +529,7 @@ impl Checker {
 
         self.env.push_var_scope();
         self.function_return_ty = Some(function_return_ty);
+        self.local_annotation_tyvars = local_annotation_tyvars;
         self.current_function_symbol = Some(function_symbol);
         self.current_impl_struct_target = impl_target;
         self.in_extractor_body = in_extractor_body;
@@ -544,6 +547,7 @@ impl Checker {
 
         self.env.pop_var_scope();
         self.function_return_ty = saved_function_return_ty;
+        self.local_annotation_tyvars = saved_local_annotation_tyvars;
         self.current_function_symbol = saved_current_function_symbol;
         self.current_impl_struct_target = saved_current_impl_struct_target;
         self.in_extractor_body = saved_in_extractor_body;
@@ -680,6 +684,7 @@ impl Checker {
         });
         let typed_body = self.check_body_in_isolated_scope(
             &local_bindings,
+            tyvars.clone(),
             expected_ret.clone(),
             current_symbol,
             impl_target,
@@ -814,6 +819,7 @@ impl Checker {
         });
         let typed_body = self.check_body_in_isolated_scope(
             &local_bindings,
+            tyvars.clone(),
             expected_ret.clone(),
             current_symbol,
             impl_target,
@@ -968,6 +974,7 @@ impl Checker {
                 .then_some(Self::surface_name(&target_name).to_string());
             let typed_body = self.check_body_in_isolated_scope(
                 &local_bindings,
+                HashMap::new(),
                 expected_ret.clone(),
                 method.function_id.name.clone(),
                 impl_target,

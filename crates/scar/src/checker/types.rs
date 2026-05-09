@@ -390,6 +390,18 @@ impl Checker {
         match ast_ty {
             AstTy::Named(span, name) => {
                 match Self::surface_type_name(name) {
+                    generic_name if generic_name.starts_with('$') => self
+                        .local_annotation_tyvars
+                        .get(generic_name)
+                        .cloned()
+                        .ok_or_else(|| TypeError {
+                            message: format!("Unknown type: {}", name),
+                            span: span.clone(),
+                            hint: Some(
+                                "Local type annotations may only reference type parameters declared on the surrounding function or method signature."
+                                    .into(),
+                            ),
+                        }),
                     "_" | "Hole" => self.resolve_hole_surface_ty(span, context),
                     "MatchArms" | "CondClauses" => Err(self
                         .clause_block_type_not_allowed_error(span, Self::surface_type_name(name))),

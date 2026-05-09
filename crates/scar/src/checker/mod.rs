@@ -1590,6 +1590,7 @@ impl Default for ScarSession {
 struct Checker {
     env: TypeEnv,
     function_return_ty: Option<Ty>,
+    local_annotation_tyvars: HashMap<String, Ty>,
     current_function_symbol: Option<String>,
     current_impl_struct_target: Option<String>,
     in_extractor_body: bool,
@@ -1660,6 +1661,7 @@ impl Checker {
         Self {
             env: initialize_env(),
             function_return_ty: None,
+            local_annotation_tyvars: HashMap::new(),
             current_function_symbol: None,
             current_impl_struct_target: None,
             in_extractor_body: false,
@@ -1705,6 +1707,7 @@ impl Checker {
         Self {
             env,
             function_return_ty: None,
+            local_annotation_tyvars: HashMap::new(),
             current_function_symbol: None,
             current_impl_struct_target: None,
             in_extractor_body: false,
@@ -1754,6 +1757,7 @@ impl Checker {
             },
         );
         checker.function_return_ty = self.function_return_ty.clone();
+        checker.local_annotation_tyvars = self.local_annotation_tyvars.clone();
         checker.current_function_symbol = self.current_function_symbol.clone();
         checker.current_impl_struct_target = self.current_impl_struct_target.clone();
         checker.in_extractor_body = self.in_extractor_body;

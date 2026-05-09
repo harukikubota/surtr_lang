@@ -2769,6 +2769,47 @@ fn closure_param_annotation_must_match_expected_signature() {
 }
 
 #[test]
+fn local_binding_annotation_can_reference_outer_generic_type_param() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"def id(x: $A) -> $A {
+  y: $A = x
+  y
+}"#,
+    );
+    assert!(typed
+        .iter()
+        .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
+}
+
+#[test]
+fn closure_param_annotation_can_reference_outer_generic_type_param() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"def keep(x: $A) -> $A {
+  same: ($A -> $A) = {|value: $A| value}
+  same(x)
+}"#,
+    );
+    assert!(typed
+        .iter()
+        .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
+}
+
+#[test]
+fn generic_first_can_inline_tuple_rebuild_with_closure_param_annotation() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"def first(f: ($A -> $C)) -> (($A, $B) -> ($C, $B)) {
+  {|pair: ($A, $B)|
+    (left, right) = pair
+    (f(left), right)
+  }
+}"#,
+    );
+    assert!(typed
+        .iter()
+        .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
+}
+
+#[test]
 fn sibling_closures_keep_substitution_state_local() {
     let typed = typecheck_with_builtin_prelude(
         r#"int_id: (Int -> Int) = {|value| value}
