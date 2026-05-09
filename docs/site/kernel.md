@@ -58,9 +58,9 @@ xldr(2)> print(inspect(pair))
 xldr(3)>
 ```
 
-## `always`
+## `Function::always`
 
-`always(value)` は ignored-input callable を返します。
+`Function::always(value)` は ignored-input callable を返します。
 
 ```text
 xldr(1)> always = always(1)

@@ -1544,7 +1544,7 @@ fn core_sig_typed_call_queries_specialize_polymorphic_returns() {
     let sig = engine.handle_line(":sig id(Int)");
     let sig = signature_text(&sig);
     assert!(
-        sig.contains("defined:\n  Kernel::id(value: $A) -> $A"),
+        sig.contains("defined:\n  Function::id(value: $A) -> $A"),
         "{sig}"
     );
     assert!(sig.contains("specialized:\n  id(Int) -> Int"), "{sig}");

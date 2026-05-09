@@ -235,6 +235,6 @@ compiler-special type contract の一部だからです。
 ## 関連ページ
 
 - target-oriented conversion surface は `./type-annotations.md`
-- `Kernel::always` と ignored-input callable は `./kernel.md`
+- `Function::always` と ignored-input callable は `./kernel.md`
 - 標準定義ソース全体の配置は `./standard-library.md`
 - language-wide ルール一覧は `./language-reference.md`

@@ -54,7 +54,7 @@ test("Function") {
 
   describe("on helper") {
     it("call form lifts a comparison through a key function") {
-      by_len = Kernel::on({|left, right| compare(left, right)}, &String::len)
+      by_len = Function::on({|left, right| compare(left, right)}, &String::len)
       sorted = List::sort_by(["a", "abcd", "xy"], by_len)
       assert_eq(["a", "xy", "abcd"], sorted)
     }
@@ -63,7 +63,7 @@ test("Function") {
       assert_eq(Ordering::Greater, on("a", "b"))
     }
 
-    it("infix form resolves to Kernel::on even when shadowed") {
+    it("infix form resolves to Function::on even when shadowed") {
       sorted = List::sort_by(["a", "abcd", "xy"], &compare `on` &String::len)
       assert_eq(["a", "xy", "abcd"], sorted)
     }

@@ -13,23 +13,23 @@ enum FuncLiteralBodyKind {
 }
 
 impl Parser<'_> {
-    fn kernel_on_path(span: Span) -> Ast {
+    fn function_on_path(span: Span) -> Ast {
         Ast::Path(
             span.clone(),
             AstPath {
                 span,
-                segments: vec!["Kernel".into(), "on".into()],
+                segments: vec!["Function".into(), "on".into()],
             },
         )
     }
 
-    fn is_kernel_on_path(path: &AstPath) -> bool {
-        matches!(path.segments.as_slice(), [module, name] if module == "Kernel" && name == "on")
+    fn is_function_on_path(path: &AstPath) -> bool {
+        matches!(path.segments.as_slice(), [module, name] if module == "Function" && name == "on")
     }
 
     fn is_low_precedence_on_target(kind: &FuncLiteralBodyKind) -> bool {
         matches!(kind, FuncLiteralBodyKind::Name(name) if name == "on")
-            || matches!(kind, FuncLiteralBodyKind::Path(path) if Self::is_kernel_on_path(path))
+            || matches!(kind, FuncLiteralBodyKind::Path(path) if Self::is_function_on_path(path))
     }
 
     fn parse_func_literal_body(body: &str, span: Span) -> Result<FuncLiteralBodyKind, ParseError> {
@@ -103,7 +103,7 @@ impl Parser<'_> {
             self.advance();
             let right = self.parse_flow_expr()?;
             let func = match func_kind {
-                FuncLiteralBodyKind::Name(_) => Self::kernel_on_path(func_span),
+                FuncLiteralBodyKind::Name(_) => Self::function_on_path(func_span),
                 FuncLiteralBodyKind::Path(path) => Ast::Path(path.span.clone(), path),
                 FuncLiteralBodyKind::Operator(_) => unreachable!("validated low-precedence target"),
             };

@@ -365,11 +365,11 @@ value: Int =? parse_int("1")
   `FnCapture(module: M, name: f, signature: sig)` 形式で表示する
 - `Result` と `List` を `|*>`, `|>=`, `>*`, `>=>` で混在させない
 - `|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度・左結合
-- unqualified infix `` `on` `` と `` `Kernel::on` `` は flow より低優先度
+- unqualified infix `` `on` `` と `` `Function::on` `` は flow より低優先度
 - 結合優先度は `Bind < StdOn < Apply=Compose < Logical < Expr`
 - `Expr` クラスの `+`, `-`, `*`, `++` は同列・左結合
 - comparison 系 (`==`, `!=`, `<`, `>`, `<=`, `>=`) は `Logical` クラス
-- ``left `on` right`` は scope に見えている `on` ではなく、常に `Kernel::on(left, right)` として解釈される
+- ``left `on` right`` は scope に見えている `on` ではなく、常に `Function::on(left, right)` として解釈される
 - ``left `Other::on` right`` はその qualified path を使い、通常の `Expr` クラスに留まる
 
 ## 5. パターン

@@ -10,6 +10,7 @@ use spire::ast::Ast;
 
 const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../../lib/bootstrap.srt");
 const SPECIAL_TYPES_SOURCE: &str = include_str!("../../../../lib/types/special_types.srt");
+const FUNCTION_PRELUDE_SOURCE: &str = include_str!("../../../../lib/function.srt");
 const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../../lib/kernel.srt");
 const ADD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/add.srt");
 const SUB_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/sub.srt");
@@ -390,6 +391,10 @@ pub(crate) fn std_module_stages_with_overrides(
             (
                 "SpecialTypes",
                 pick_override("SpecialTypes", SPECIAL_TYPES_SOURCE, overrides),
+            ),
+            (
+                "Function",
+                pick_override("Function", FUNCTION_PRELUDE_SOURCE, overrides),
             ),
             (
                 "Kernel",

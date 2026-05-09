@@ -2096,7 +2096,7 @@ fn test_unqualified_on_is_lower_precedence_than_compose() {
             Ast::App(_, func, args) => {
                 assert!(matches!(
                     func.as_ref(),
-                    Ast::Path(_, AstPath { segments, .. }) if segments == &vec!["Kernel".to_string(), "on".to_string()]
+                    Ast::Path(_, AstPath { segments, .. }) if segments == &vec!["Function".to_string(), "on".to_string()]
                 ));
                 assert!(matches!(
                     args.as_slice(),
@@ -2110,21 +2110,21 @@ fn test_unqualified_on_is_lower_precedence_than_compose() {
                             )
                 ));
             }
-            other => panic!("Expected Kernel::on(...) call, got {:?}", other),
+            other => panic!("Expected Function::on(...) call, got {:?}", other),
         },
         other => panic!("Expected bind, got {:?}", other),
     }
 }
 
 #[test]
-fn test_kernel_on_path_is_lower_precedence_than_compose() {
-    let ast = parse("x = a `Kernel::on` b >> c").unwrap();
+fn test_function_on_path_is_lower_precedence_than_compose() {
+    let ast = parse("x = a `Function::on` b >> c").unwrap();
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::App(_, func, args) => {
                 assert!(matches!(
                     func.as_ref(),
-                    Ast::Path(_, AstPath { segments, .. }) if segments == &vec!["Kernel".to_string(), "on".to_string()]
+                    Ast::Path(_, AstPath { segments, .. }) if segments == &vec!["Function".to_string(), "on".to_string()]
                 ));
                 assert!(matches!(
                     args.as_slice(),
@@ -2138,7 +2138,38 @@ fn test_kernel_on_path_is_lower_precedence_than_compose() {
                             )
                 ));
             }
-            other => panic!("Expected Kernel::on(...) call, got {:?}", other),
+            other => panic!("Expected Function::on(...) call, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_kernel_on_path_stays_expr_tier() {
+    let ast = parse("x = a `Kernel::on` b >> c").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::Compose(_, left, right) => {
+                assert!(matches!(right.as_ref(), Ast::Var(_, name) if name == "c"));
+                assert!(matches!(
+                    left.as_ref(),
+                    Ast::App(_, func, args)
+                        if matches!(
+                            func.as_ref(),
+                            Ast::Path(_, AstPath { segments, .. }) if segments == &vec!["Kernel".to_string(), "on".to_string()]
+                        )
+                        && matches!(
+                            args.as_slice(),
+                            [RecordLitArg::Positional(lhs), RecordLitArg::Positional(rhs)]
+                                if matches!(lhs, Ast::Var(_, name) if name == "a")
+                                    && matches!(rhs, Ast::Var(_, name) if name == "b")
+                        )
+                ));
+            }
+            other => panic!(
+                "Expected compose with expr-tier Kernel::on call, got {:?}",
+                other
+            ),
         },
         other => panic!("Expected bind, got {:?}", other),
     }
