@@ -38,13 +38,21 @@ use self::imports::{build_global_scope, build_module_scope};
 
 const STAGE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+fn surface_module_name(module_path: &str) -> String {
+    module_path
+        .strip_prefix("Global::")
+        .unwrap_or(module_path)
+        .to_string()
+}
+
 fn auto_import_module_names(module_stages: &[Vec<StagedModuleAst>]) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = HashSet::new();
     for stage in module_stages {
         for module in stage {
-            if module.auto_import && seen.insert(module.module_path.clone()) {
-                names.push(module.module_path.clone());
+            let module_name = surface_module_name(&module.module_path);
+            if module.auto_import && seen.insert(module_name.clone()) {
+                names.push(module_name);
             }
         }
     }

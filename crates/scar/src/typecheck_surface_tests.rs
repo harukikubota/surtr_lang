@@ -1725,10 +1725,15 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
     let variant_uid = resolved
         .iter()
         .find_map(|node| match node {
-            sigil::resolved::Resolved::EnumDef(_, id, _, variants, _) if id.name == "BitWidth" => {
+            sigil::resolved::Resolved::EnumDef(_, id, _, variants, _)
+                if id.name == "BitWidth" || id.name == "Global::BitWidth" =>
+            {
                 variants
                     .iter()
-                    .find(|variant| variant.id.name == "BitWidth::W8")
+                    .find(|variant| {
+                        variant.id.name == "BitWidth::W8"
+                            || variant.id.name == "Global::BitWidth::W8"
+                    })
                     .map(|variant| variant.id.unique_id)
             }
             _ => None,
@@ -1768,9 +1773,9 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(
-        colliding_defs,
-        vec!["enum variant BitWidth::W8".to_string()],
+    assert!(
+        colliding_defs == vec!["enum variant BitWidth::W8".to_string()]
+            || colliding_defs == vec!["enum variant Global::BitWidth::W8".to_string()],
         "unexpected declarations sharing uid {use_uid}: {colliding_defs:?}"
     );
 }
@@ -2524,7 +2529,7 @@ kleisli_option = &maybe_parse >=> &maybe_show"#,
                     rhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
                 }
             )
-            && matches!(result_ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::Enum(name, args) if name == "Option" && matches!(args.as_slice(), [Ty::Str])))
+            && matches!(result_ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::Enum(name, args) if (name == "Option" || name == "Global::Option") && matches!(args.as_slice(), [Ty::Str])))
     }));
     assert!(calls.iter().any(|(trait_name, method_name, origin, result_ty)| {
         trait_name.starts_with("KleisliComposable<")
@@ -2537,7 +2542,7 @@ kleisli_option = &maybe_parse >=> &maybe_show"#,
                     rhs_ty: Ty::UserFunc { .. } | Ty::Func(_, _) | Ty::BuiltinFunc { .. },
                 }
             )
-            && matches!(result_ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::Enum(name, args) if name == "Option" && matches!(args.as_slice(), [Ty::Str])))
+            && matches!(result_ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::Enum(name, args) if (name == "Option" || name == "Global::Option") && matches!(args.as_slice(), [Ty::Str])))
     }));
 }
 
@@ -2582,7 +2587,7 @@ bound = Boxed::Box(1) |>= &stringify"#,
             TypedInner::Bind(_, rhs) => Some(&rhs.ty),
             _ => None,
         })
-        .filter(|ty| matches!(ty, Ty::Enum(name, _) if name == "Boxed"))
+        .filter(|ty| matches!(ty, Ty::Enum(name, _) if name == "Boxed" || name == "Global::Boxed"))
         .count();
     assert_eq!(boxed_results, 2);
 }
@@ -2895,7 +2900,7 @@ value: Result<Duration> = Duration(10)"#,
     assert!(matches!(
         &rhs.ty,
         Ty::Result(ok, err)
-            if matches!(ok.as_ref(), Ty::Struct(name, _) if name == "Duration")
+            if matches!(ok.as_ref(), Ty::Struct(name, _) if name == "Global::Duration")
                 && matches!(err.as_ref(), Ty::Error)
     ));
 }
@@ -2960,7 +2965,7 @@ dur = Duration(10)"#,
     assert!(matches!(
         &rhs.ty,
         Ty::Result(ok, err)
-            if matches!(ok.as_ref(), Ty::Struct(name, _) if name == "Duration")
+            if matches!(ok.as_ref(), Ty::Struct(name, _) if name == "Global::Duration")
                 && matches!(err.as_ref(), Ty::Error)
     ));
 }
@@ -3689,10 +3694,10 @@ fn typecheck_staged_program_keeps_process_specs() {
     let spec = typed
         .process_specs
         .iter()
-        .find(|spec| spec.process_name == "Counter")
+        .find(|spec| spec.process_name == "Counter" || spec.process_name == "Global::Counter")
         .expect("Counter process spec should exist");
-    assert_eq!(spec.module_path, "Counter");
-    assert_eq!(spec.process_name, "Counter");
+    assert!(spec.module_path == "Counter" || spec.module_path == "Global::Counter");
+    assert!(spec.process_name == "Counter" || spec.process_name == "Global::Counter");
     assert!(!spec.spec.boot);
 }
 

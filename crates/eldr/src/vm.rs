@@ -1446,14 +1446,22 @@ impl VM {
         process_name: &str,
         timeout_ms: Option<u64>,
     ) -> Result<u64, RuntimeError> {
-        if let Some(pid) = self.process_runtime.singleton_by_name.get(process_name) {
-            return Ok(*pid);
+        let canonical_name = self
+            .process_runtime
+            .canonical_process_name(process_name)
+            .unwrap_or(process_name)
+            .to_string();
+        if let Some(pid) = self
+            .process_runtime
+            .singleton_pid_by_process_name(&canonical_name)
+        {
+            return Ok(pid);
         }
         if let Some(detail) = self
             .process_runtime
             .root_supervisor
             .boot_failures
-            .get(process_name)
+            .get(&canonical_name)
             .cloned()
         {
             return Err(self.boot_failure_error(process_name, &detail));
@@ -1461,8 +1469,7 @@ impl VM {
 
         let Some(spec) = self
             .process_runtime
-            .specs_by_name
-            .get(process_name)
+            .spec_by_process_name(&canonical_name)
             .cloned()
         else {
             return Err(RuntimeError::new(format!(
@@ -1487,7 +1494,7 @@ impl VM {
                 self.process_runtime
                     .root_supervisor
                     .boot_failures
-                    .insert(process_name.to_string(), detail.clone());
+                    .insert(canonical_name.clone(), detail.clone());
                 return Err(self.boot_failure_error(process_name, &detail));
             }
         }
@@ -1499,7 +1506,7 @@ impl VM {
                     self.process_runtime
                         .root_supervisor
                         .boot_failures
-                        .insert(process_name.to_string(), detail.clone());
+                        .insert(canonical_name.clone(), detail.clone());
                     return Err(RuntimeError::process_init_timeout(format!(
                         "process `{process_name}` failed to boot: {detail}"
                     )));
@@ -1511,17 +1518,17 @@ impl VM {
                 self.process_runtime
                     .root_supervisor
                     .boot_failures
-                    .insert(process_name.to_string(), detail.clone());
+                    .insert(canonical_name.clone(), detail.clone());
                 return Err(RuntimeError::process_init_failed(format!(
                     "process `{process_name}` failed to boot: {detail}"
                 )));
             }
         };
 
-        let pid = self.allocate_process_state(process_name.to_string(), Some(state))?;
+        let pid = self.allocate_process_state(canonical_name.clone(), Some(state))?;
         self.process_runtime
             .singleton_by_name
-            .insert(process_name.to_string(), pid);
+            .insert(canonical_name, pid);
         Ok(pid)
     }
 
@@ -1572,9 +1579,14 @@ impl VM {
     ) -> Result<Value, RuntimeError> {
         self.ensure_root_supervisor_booted()?;
         let pid = self.ensure_singleton_available(&process_name)?;
+        let canonical_name = self
+            .process_runtime
+            .canonical_process_name(&process_name)
+            .unwrap_or(process_name.as_str())
+            .to_string();
         Ok(Value::Pid(PidHandle {
             id: pid,
-            process_name,
+            process_name: canonical_name,
         }))
     }
 
@@ -1585,8 +1597,7 @@ impl VM {
     ) -> Result<Value, RuntimeError> {
         let Some(target) = self
             .process_runtime
-            .handler_contexts
-            .get(&process_name)
+            .handler_targets_for_process(&process_name)
             .and_then(|slots| slots.get(&slot))
         else {
             return Err(RuntimeError::new(format!(
@@ -1809,7 +1820,7 @@ impl VM {
             .type_registry()
             .entries
             .iter()
-            .find(|entry| entry.name == "SupervisorStatus")
+            .find(|entry| entry.name == "SupervisorStatus" || entry.name == "Global::SupervisorStatus")
             .map(|entry| entry.tag)
         else {
             return Err(RuntimeError::new("SupervisorStatus type is not registered"));
@@ -1817,7 +1828,12 @@ impl VM {
         Ok(ok_vm_result(Value::Tagged {
             tag,
             fields: vec![
-                Value::Str(supervisor_name),
+                Value::Str(
+                    supervisor_name
+                        .strip_prefix("Global::")
+                        .unwrap_or(&supervisor_name)
+                        .to_string(),
+                ),
                 Value::Int(int(child_count)),
                 Value::Str(policy.strategy),
                 Value::Int(int(policy.max_restarts as i64)),
@@ -5110,6 +5126,46 @@ impl ProcessRuntime {
                 (spec.type_name.clone(), slots)
             })
             .collect();
+    }
+
+    fn canonical_process_name<'a>(&'a self, process_name: &'a str) -> Option<&'a str> {
+        if self.specs_by_name.contains_key(process_name) {
+            return Some(process_name);
+        }
+        if let Some(surface_name) = process_name.strip_prefix("Global::") {
+            if self.specs_by_name.contains_key(surface_name) {
+                return Some(surface_name);
+            }
+        } else {
+            let canonical_name = format!("Global::{process_name}");
+            if self.specs_by_name.contains_key(&canonical_name) {
+                return self
+                    .specs_by_name
+                    .get_key_value(&canonical_name)
+                    .map(|(name, _)| name.as_str());
+            }
+        }
+        None
+    }
+
+    fn spec_by_process_name(&self, process_name: &str) -> Option<&RuntimeProcessSpec> {
+        self.canonical_process_name(process_name)
+            .and_then(|canonical_name| self.specs_by_name.get(canonical_name))
+    }
+
+    fn singleton_pid_by_process_name(&self, process_name: &str) -> Option<u64> {
+        self.canonical_process_name(process_name)
+            .and_then(|canonical_name| self.singleton_by_name.get(canonical_name).copied())
+            .or_else(|| self.singleton_by_name.get(process_name).copied())
+    }
+
+    fn handler_targets_for_process(
+        &self,
+        process_name: &str,
+    ) -> Option<&BTreeMap<String, RuntimeHandlerTarget>> {
+        self.canonical_process_name(process_name)
+            .and_then(|canonical_name| self.handler_contexts.get(canonical_name))
+            .or_else(|| self.handler_contexts.get(process_name))
     }
 
     fn spec_for_id(&self, spec_id: u32) -> Option<&RuntimeProcessSpec> {

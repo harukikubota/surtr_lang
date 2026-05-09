@@ -8,8 +8,9 @@ impl Checker {
         params: &[ResolvedFunParam],
         ret_ty: &Option<AstTy>,
     ) -> Result<TypedNode, TypeError> {
-        let is_kernel_is_match =
-            id.name == "is_match" && id.qualified_name.as_deref() == Some("Kernel::is_match");
+        let is_kernel_is_match = id.name == "is_match"
+            && Self::surface_qualified_name(id.qualified_name.as_deref())
+                == Some("Kernel::is_match");
         let is_special_form = if id.name == "is_match" {
             is_kernel_is_match
         } else {
@@ -92,7 +93,7 @@ impl Checker {
             _ => unreachable!(),
         };
 
-        if id.qualified_name.as_deref() != Some(expected_qname) {
+        if Self::surface_qualified_name(id.qualified_name.as_deref()) != Some(expected_qname) {
             return Err(TypeError {
                 message: format!(
                     "Special-form declaration `{}` is only allowed in std module `Kernel`.",
@@ -252,7 +253,7 @@ impl Checker {
         params: &[String],
         _attrs: &ResolvedDeclAttrs,
     ) -> Result<TypedNode, TypeError> {
-        let Some(meta) = builtin_type_meta_by_name(&id.name) else {
+        let Some(meta) = builtin_type_meta_by_name(Self::surface_name(&id.name)) else {
             return Err(TypeError {
                 message: format!("Unknown builtin type declaration: {}", id.name),
                 span: span.clone(),
@@ -360,7 +361,7 @@ impl Checker {
             }
         };
 
-        if id.qualified_name.as_deref() != Some(expected_qname) {
+        if Self::surface_qualified_name(id.qualified_name.as_deref()) != Some(expected_qname) {
             return Err(TypeError {
                 message: format!(
                     "Result constructor declaration `{}` is only allowed in std module `Result`.",
@@ -635,12 +636,13 @@ impl Checker {
                 return Err(TypeError {
                     message: format!(
                         "process state type `{}` cannot appear in public function signatures",
-                        state_name
+                        Self::surface_name(&state_name)
                     ),
                     span: span.clone(),
                     hint: Some(format!(
                         "Keep `{}` values inside process `{}` handlers.",
-                        state_name, owner
+                        Self::surface_name(&state_name),
+                        Self::surface_name(&owner)
                     )),
                 });
             }
@@ -1291,7 +1293,7 @@ impl Checker {
                         hint: None,
                     });
                 }
-            } else if self.current_impl_struct_target.as_deref() != Some(id.name.as_str()) {
+            } else if self.current_impl_struct_target.as_deref() != Some(def.name.as_str()) {
                 return Err(TypeError {
                     message: format!(
                         "Struct literal `{}` is only allowed inside `impl {} {{ ... }}` method bodies",
@@ -1456,10 +1458,10 @@ impl Checker {
 
         if let Some(variant) = self.lookup_enum_variant_by_constructor_id(id.unique_id) {
             let variant = self.instantiate_enum_variant(&variant);
-            if variant.enum_name == "MatchResult" && !self.in_extractor_body {
+            if Self::surface_name(&variant.enum_name) == "MatchResult" && !self.in_extractor_body {
                 return Err(self.match_result_value_not_allowed_error(span));
             }
-            if matches!(variant.enum_name.as_str(), "StopReply" | "StopReason")
+            if matches!(Self::surface_name(&variant.enum_name), "StopReply" | "StopReason")
                 && !self.stop_constructor_allowed()
             {
                 return Err(self.stop_constructor_error(span, &variant.enum_name));

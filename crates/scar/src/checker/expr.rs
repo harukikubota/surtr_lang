@@ -208,8 +208,15 @@ impl Checker {
 
                 if let Some(variant) = self.lookup_enum_variant_by_constructor_id(id.unique_id) {
                     let variant = self.instantiate_enum_variant(&variant);
-                    if variant.enum_name == "MatchResult" && !self.in_extractor_body {
+                    if Self::surface_name(&variant.enum_name) == "MatchResult"
+                        && !self.in_extractor_body
+                    {
                         return Err(self.match_result_value_not_allowed_error(span));
+                    }
+                    if matches!(Self::surface_name(&variant.enum_name), "StopReply" | "StopReason")
+                        && !self.stop_constructor_allowed()
+                    {
+                        return Err(self.stop_constructor_error(span, &variant.enum_name));
                     }
                     if !variant.payload.is_empty() {
                         return Err(TypeError {
@@ -572,7 +579,7 @@ impl Checker {
             });
         }
         let rhs_ty = self.resolve_ty(&typed_rhs.ty);
-        if matches!(&rhs_ty, Ty::Enum(name, _) if name == "Option") {
+        if matches!(&rhs_ty, Ty::Enum(name, _) if Self::surface_name(name) == "Option") {
             return Err(TypeError {
                 message: "Option is not a SafeBind target; `=?` propagates Result-style failures, not optional values.".into(),
                 span: typed_rhs.span.clone(),
@@ -1190,8 +1197,19 @@ impl Checker {
                         let Ty::UserFunc { fun_idx, .. } = function_ty else {
                             return None;
                         };
+                        let display_name = method
+                            .function_id
+                            .qualified_name
+                            .as_deref()
+                            .map(|qualified_name| {
+                                callable_definition_display_name(
+                                    qualified_name,
+                                    &method.function_id.name,
+                                )
+                            })
+                            .unwrap_or_else(|| Checker::surface_name(&method.function_id.name).into());
                         return Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
-                            name: method.function_id.name.clone(),
+                            name: display_name,
                             fun_idx: *fun_idx,
                         }));
                     }
@@ -1264,8 +1282,16 @@ impl Checker {
                 let Ty::UserFunc { fun_idx, .. } = function_ty else {
                     return None;
                 };
+                let display_name = method
+                    .function_id
+                    .qualified_name
+                    .as_deref()
+                    .map(|qualified_name| {
+                        callable_definition_display_name(qualified_name, &method.function_id.name)
+                    })
+                    .unwrap_or_else(|| Checker::surface_name(&method.function_id.name).into());
                 return Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
-                    name: method.function_id.name.clone(),
+                    name: display_name,
                     fun_idx: *fun_idx,
                 }));
             }
@@ -1337,9 +1363,17 @@ impl Checker {
                     self.substitutions = before;
                     continue;
                 };
+                let display_name = method
+                    .function_id
+                    .qualified_name
+                    .as_deref()
+                    .map(|qualified_name| {
+                        callable_definition_display_name(qualified_name, &method.function_id.name)
+                    })
+                    .unwrap_or_else(|| Checker::surface_name(&method.function_id.name).into());
                 return Some((
                     TraitDispatch::Static(TraitDispatchTarget::UserFunction {
-                        name: method.function_id.name.clone(),
+                        name: display_name,
                         fun_idx: *fun_idx,
                     }),
                     resolved_trait_args,
@@ -1731,7 +1765,7 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             }),
-            Ty::Enum(name, _) if name == "Option" => Err(TypeError {
+            Ty::Enum(name, _) if Self::surface_name(&name) == "Option" => Err(TypeError {
                 message: format!(
                     "{} expects a plain function on the right-hand side; use {} for contextual output",
                     op_name,
@@ -1910,7 +1944,7 @@ impl Checker {
                     });
                 }
             }
-            Ty::Enum(name, args) if name == "Option" && args.len() == 1 => {
+            Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
                 if !self.types_compatible(&args[0], &rhs_in) {
                     return Err(TypeError {
                         message: format!(
@@ -2002,7 +2036,8 @@ impl Checker {
 
         let typed_left = self.check_node(left)?;
         let receiver_ty = self.resolve_ty(&typed_left.ty);
-        let is_option_ctx = |ty: &Ty| matches!(ty, Ty::Enum(name, _) if name == "Option");
+        let is_option_ctx =
+            |ty: &Ty| matches!(ty, Ty::Enum(name, _) if Self::surface_name(name) == "Option");
         match (&receiver_ty, self.resolve_ty(&rhs_ret)) {
             (Ty::Result(ok, err), Ty::Result(next_ok, next_err)) => {
                 if !self.types_compatible(ok.as_ref(), &rhs_in)
@@ -2046,7 +2081,9 @@ impl Checker {
                 }
             }
             (Ty::Enum(name, args), Ty::Enum(next_name, _))
-                if name == "Option" && args.len() == 1 && next_name == "Option" =>
+                if Self::surface_name(&name) == "Option"
+                    && args.len() == 1
+                    && Self::surface_name(&next_name) == "Option" =>
             {
                 if !self.types_compatible(&args[0], &rhs_in) {
                     return Err(TypeError {
@@ -2157,7 +2194,7 @@ impl Checker {
                 )),
                 });
             }
-            (Ty::Enum(name, _), rhs_plain) if name == "Option" => {
+            (Ty::Enum(name, _), rhs_plain) if Self::surface_name(&name) == "Option" => {
                 return Err(TypeError {
                 message: format!(
                     "`|>=` requires the right-hand side to return Option, got {}",
@@ -2396,7 +2433,7 @@ impl Checker {
                     "`>*`",
                 )
             }
-            Ty::Enum(name, args) if name == "Option" && args.len() == 1 => {
+            Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
                 if !self.types_compatible(&args[0], &right_in) {
                     return Err(TypeError {
                         message:
@@ -2416,7 +2453,7 @@ impl Checker {
                         )),
                     });
                 }
-                let mapped_ty = Ty::Enum("Option".into(), vec![self.resolve_ty(&right_out)]);
+                let mapped_ty = Ty::Enum(name, vec![self.resolve_ty(&right_out)]);
                 let result_ty =
                     Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(mapped_ty.clone()));
                 let receiver_ty = self.resolve_ty(&typed_left.ty);
@@ -2550,8 +2587,8 @@ impl Checker {
                 )
             }
             (Ty::Enum(name, args), Ty::Enum(next_name, next_args))
-                if name == "Option"
-                    && next_name == "Option"
+                if Self::surface_name(&name) == "Option"
+                    && Self::surface_name(&next_name) == "Option"
                     && args.len() == 1
                     && next_args.len() == 1 =>
             {
@@ -2573,7 +2610,7 @@ impl Checker {
                         )),
                     });
                 }
-                let chained_ty = Ty::Enum("Option".into(), vec![self.resolve_ty(&next_args[0])]);
+                let chained_ty = Ty::Enum(name, vec![self.resolve_ty(&next_args[0])]);
                 let result_ty =
                     Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(chained_ty.clone()));
                 let receiver_ty = self.resolve_ty(&typed_left.ty);
@@ -2932,7 +2969,7 @@ impl Checker {
             return None;
         };
         if let Some(qualified_name) = id.qualified_name.as_deref() {
-            return match qualified_name {
+            return match Self::surface_name(qualified_name) {
                 "Facet::view" => Some("view"),
                 "Facet::preview" => Some("preview"),
                 "Facet::compose" => Some("compose"),
@@ -3692,7 +3729,7 @@ impl Checker {
 
     fn readonly_type_name(ty: &Ty) -> Option<&str> {
         match ty {
-            Ty::Struct(name, _) | Ty::Record(name, _) => Some(name.as_str()),
+            Ty::Struct(name, _) | Ty::Record(name, _) => Some(Self::surface_name(name)),
             _ => None,
         }
     }
@@ -3732,6 +3769,7 @@ impl Checker {
                     if *readonly {
                         let owner_can_replace = is_final
                             && self.current_impl_struct_target.as_deref()
+                                .map(Self::surface_name)
                                 == Some(container_type_name.as_str());
                         if !owner_can_replace {
                             let hint = if is_final {
@@ -4452,7 +4490,7 @@ impl Checker {
         let Ty::Pid(pid_process) = self.resolve_ty(first_param) else {
             return Ok(None);
         };
-        if pid_process != process_name {
+        if Self::surface_name(&pid_process) != Self::surface_name(&process_name) {
             return Ok(None);
         }
         if args.len() != remaining_params.len() {
@@ -4490,7 +4528,7 @@ impl Checker {
         };
         let qualified = id.qualified_name.as_deref()?;
         let process_name = qualified.strip_suffix(&format!("::{method}"))?;
-        if process_name == "Supervisor" {
+        if Self::surface_name(process_name) == "Supervisor" {
             return None;
         }
         self.supervisor_spec_by_name(process_name)
@@ -4499,7 +4537,7 @@ impl Checker {
 
     fn supervisor_spec_by_name(&self, process_name: &str) -> Option<&TypedProcessSpec> {
         self.process_specs.iter().find(|spec| {
-            spec.process_name == process_name
+            Self::surface_name(&spec.process_name) == Self::surface_name(process_name)
                 && matches!(
                     spec.spec.kind,
                     spire::ast::ProcessKind::Supervisor
@@ -4525,7 +4563,8 @@ impl Checker {
                 .iter()
                 .find(|handler| {
                     handler.kind == spire::ast::ProcessRuntimeHandlerKind::Init
-                        && qualified == format!("{}::{}", spec.process_name, handler.name)
+                        && Self::surface_name(qualified)
+                            == Self::surface_name(&format!("{}::{}", spec.process_name, handler.name))
                 })
                 .map(|handler| (spec, handler))
         })
@@ -4627,7 +4666,8 @@ impl Checker {
             return Err(TypeError {
                 message: format!(
                     "handler slot `{}` is not declared for process `{}`",
-                    slot, process_name
+                    slot,
+                    Self::surface_name(&process_name)
                 ),
                 span: span.clone(),
                 hint: Some("Declare the slot in meta.handlers before using ctx.<slot>.".into()),
@@ -5927,13 +5967,14 @@ impl Checker {
                 if self.env.is_private_field(&name, field) {
                     let outside_impl =
                         self.current_impl_struct_target.as_deref() != Some(name.as_str());
+                    let display_name = Self::surface_name(&name);
                     if for_capability && outside_impl {
                         return Err(TypeError {
-                            message: format!("Field '{}.{}' is private", name, field),
+                            message: format!("Field '{}.{}' is private", display_name, field),
                             span: span.clone(),
                             hint: Some(format!(
                                 "Expose the value through a public method on {} instead.",
-                                name
+                                display_name
                             )),
                         });
                     }
@@ -5941,12 +5982,12 @@ impl Checker {
                         return Err(TypeError {
                             message: format!(
                                 "Field '{}.{}' is private and cannot be accessed from closures outside impl {}",
-                                name, field, name
+                                display_name, field, display_name
                             ),
                             span: span.clone(),
                             hint: Some(format!(
                                 "Read {}.{} in the current scope first, then capture the plain value.",
-                                name, field
+                                display_name, field
                             )),
                         });
                     }
@@ -5966,7 +6007,7 @@ impl Checker {
                         field_name: field.to_string(),
                         field_index,
                         container_field_count: fields.len() as u32,
-                        container_type_name: name.clone(),
+                        container_type_name: Self::surface_name(&name).to_string(),
                         readonly: self.env.is_readonly_field(&name, field),
                         focus_readonly_root: self.ty_is_readonly_root(&field_ty),
                         focus_type_name: Self::readonly_type_name(&self.resolve_ty(&field_ty))
@@ -5979,7 +6020,10 @@ impl Checker {
             Ty::Enum(enum_name, _) => {
                 if self.lookup_enum_variants_of(&enum_name).is_none() {
                     return Err(TypeError {
-                        message: format!("No variants found for enum {}", enum_name),
+                        message: format!(
+                            "No variants found for enum {}",
+                            Self::surface_name(&enum_name)
+                        ),
                         span: span.clone(),
                         hint: None,
                     });
@@ -5989,7 +6033,8 @@ impl Checker {
                     return Err(TypeError {
                         message: format!(
                             "No variant selector '{}' on {} (use PascalCase constructor names)",
-                            field, enum_name
+                            field,
+                            Self::surface_name(&enum_name)
                         ),
                         span: span.clone(),
                         hint: None,
@@ -6182,7 +6227,8 @@ impl Checker {
                 return Err(TypeError {
                     message: format!(
                         "process state type `{}` can only be accessed inside process `{}`",
-                        state_name, owner
+                        Self::surface_name(&state_name),
+                        Self::surface_name(&owner)
                     ),
                     span: span.clone(),
                     hint: None,
@@ -6315,10 +6361,14 @@ fn callable_definition_display_name(qualified_name: &str, local_name: &str) -> S
         if parts.len() == 4 {
             parts.reverse();
             if parts[2] == local_tail {
-                return qualified_name.to_string();
+                let display_name = local_name
+                    .strip_prefix("Global::")
+                    .unwrap_or(local_name)
+                    .replace("::Global::", "::");
+                return trim_script_qualified_display_name(&display_name);
             }
         }
-        return local_name.to_string();
+        return Checker::surface_name(local_name).to_string();
     }
 
     let display_name = if qualified_name
@@ -6326,9 +6376,9 @@ fn callable_definition_display_name(qualified_name: &str, local_name: &str) -> S
         .next()
         .is_some_and(|tail| tail == local_tail)
     {
-        qualified_name.to_string()
+        Checker::surface_name(qualified_name).to_string()
     } else {
-        local_name.to_string()
+        Checker::surface_name(local_name).to_string()
     };
     trim_script_qualified_display_name(&display_name)
 }

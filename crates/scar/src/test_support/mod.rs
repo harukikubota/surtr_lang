@@ -119,15 +119,19 @@ fn parse_std_module_stage(
             .count()
     }
 
+    fn surface_module_name(name: &str) -> &str {
+        name.strip_prefix("Global::").unwrap_or(name)
+    }
+
     fn find_result_owner_module(lowered: &[sigil::StagedModuleAst]) -> Option<usize> {
         lowered.iter().position(|module| {
-            module.module_path == "Result"
+            surface_module_name(&module.module_path) == "Result"
                 && matches!(
                     module
                         .ast
                         .iter()
                         .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
-                    Some(Ast::ImplDef(_, target, _, _)) if target == "Result"
+                    Some(Ast::ImplDef(_, target, _, _)) if surface_module_name(target) == "Result"
                 )
         })
     }

@@ -6,7 +6,8 @@ use sindr::builtin::{builtin_type_meta_by_name, builtin_type_supports_inherent_i
 use serde::{Deserialize, Serialize};
 
 fn is_reserved_builtin_type_redefinition(name: &str) -> bool {
-    builtin_type_meta_by_name(name).is_some() && name != "ProcessInit"
+    let surface_name = name.strip_prefix("Global::").unwrap_or(name);
+    builtin_type_meta_by_name(surface_name).is_some() && surface_name != "ProcessInit"
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -109,6 +110,16 @@ fn type_decl_entry_module_path() -> String {
     String::new()
 }
 
+fn surface_name(name: &str) -> &str {
+    name.strip_prefix("Global::").unwrap_or(name)
+}
+
+fn define_surface_alias(scope: &mut Scope, canonical_name: &str, uid: u32) {
+    if surface_name(canonical_name) != canonical_name {
+        scope.define_with_id(surface_name(canonical_name), uid);
+    }
+}
+
 pub(super) fn trait_method_qualified_name(trait_name: &str, method_name: &str) -> String {
     format!("{}::{}", trait_name, method_name)
 }
@@ -186,10 +197,22 @@ pub(super) fn collect_stage_impl_target_resolutions(
             };
             match resolutions.get(name) {
                 None => {
-                    resolutions.insert(name.clone(), ImplTargetResolution::Unique(kind));
+                    resolutions.insert(name.clone(), ImplTargetResolution::Unique(kind.clone()));
+                    if let Some(surface_name) = name.strip_prefix("Global::") {
+                        resolutions.insert(
+                            surface_name.to_string(),
+                            ImplTargetResolution::Unique(kind),
+                        );
+                    }
                 }
                 Some(ImplTargetResolution::Unique(_)) | Some(ImplTargetResolution::Ambiguous) => {
                     resolutions.insert(name.clone(), ImplTargetResolution::Ambiguous);
+                    if let Some(surface_name) = name.strip_prefix("Global::") {
+                        resolutions.insert(
+                            surface_name.to_string(),
+                            ImplTargetResolution::Ambiguous,
+                        );
+                    }
                 }
             }
         }
@@ -638,7 +661,7 @@ pub fn precollect_declaration_index(
                         return Err(ResolveError {
                             message: format!(
                                 "Multiple impl blocks for `{}` are not allowed",
-                                target_fq
+                                surface_name(&target_fq)
                             ),
                             span: span.clone(),
                             related_labels: vec![
@@ -700,7 +723,7 @@ pub fn precollect_declaration_index(
                             return Err(ResolveError {
                                 message: format!(
                                     "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
-                                    fq_name, prev.stage_index, prev.module_path
+                                    surface_name(&fq_name), prev.stage_index, prev.module_path
                                 ),
                                 span: method_span.clone(),
                             related_labels: Vec::new(),
@@ -736,7 +759,7 @@ pub fn precollect_declaration_index(
                         return Err(ResolveError {
                             message: format!(
                                 "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
-                                fq_name, prev.stage_index, prev.module_path
+                                surface_name(&fq_name), prev.stage_index, prev.module_path
                             ),
                             span: span.clone(),
                         related_labels: Vec::new(),
@@ -771,7 +794,7 @@ pub fn precollect_declaration_index(
                             return Err(ResolveError {
                                 message: format!(
                                     "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
-                                    method_fq_name, prev.stage_index, prev.module_path
+                                    surface_name(&method_fq_name), prev.stage_index, prev.module_path
                                 ),
                                 span: method.span.clone(),
                             related_labels: Vec::new(),
@@ -827,7 +850,7 @@ pub fn precollect_declaration_index(
                             return Err(ResolveError {
                                 message: format!(
                                     "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
-                                    internal_name, prev.stage_index, prev.module_path
+                                    surface_name(&internal_name), prev.stage_index, prev.module_path
                                 ),
                                 span: method_span.clone(),
                             related_labels: Vec::new(),
@@ -861,7 +884,7 @@ pub fn precollect_declaration_index(
                         return Err(ResolveError {
                             message: format!(
                                 "Type name `{}` is reserved by a canonical builtin type declaration",
-                                name
+                                name.strip_prefix("Global::").unwrap_or(name)
                             ),
                             span: span.clone(),
                             related_labels: Vec::new(),
@@ -872,7 +895,7 @@ pub fn precollect_declaration_index(
                         return Err(ResolveError {
                             message: format!(
                                 "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
-                                fq_name, prev.stage_index, prev.module_path
+                                surface_name(&fq_name), prev.stage_index, prev.module_path
                             ),
                             span: span.clone(),
                         related_labels: Vec::new(),
@@ -901,7 +924,7 @@ pub fn precollect_declaration_index(
                             return Err(ResolveError {
                                 message: format!(
                                     "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
-                                    variant_fq_name, prev.stage_index, prev.module_path
+                                    surface_name(&variant_fq_name), prev.stage_index, prev.module_path
                                 ),
                                 span: variant.span.clone(),
                             related_labels: Vec::new(),
@@ -1040,7 +1063,7 @@ pub fn precollect_declaration_index(
                     return Err(ResolveError {
                         message: format!(
                             "Type name `{}` is reserved by a canonical builtin type declaration",
-                            name
+                            name.strip_prefix("Global::").unwrap_or(name)
                         ),
                         span: span.clone(),
                         related_labels: Vec::new(),
@@ -1091,7 +1114,7 @@ pub fn precollect_declaration_index(
                     return Err(ResolveError {
                         message: format!(
                             "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
-                            fq_name, prev.stage_index, prev.module_path
+                            surface_name(&fq_name), prev.stage_index, prev.module_path
                         ),
                         span: span.clone(),
                     related_labels: Vec::new(),
@@ -1188,7 +1211,7 @@ impl Resolver {
                         return Err(ResolveError {
                             message: format!(
                                 "Multiple impl blocks for `{}` are not allowed",
-                                target
+                                surface_name(&target)
                             ),
                             span: span.clone(),
                             related_labels: vec![
@@ -1380,16 +1403,17 @@ impl Resolver {
         for stmt in stmts {
             match stmt {
                 Ast::Def(span, name, _, _, _, _, _) => {
-                    if !declared_in_batch.insert(name.clone()) {
+                    let surface = surface_name(name).to_string();
+                    if !declared_in_batch.insert(surface.clone()) {
                         return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", name),
+                            message: format!("Duplicate top-level definition: {}", surface),
                             span: span.clone(),
                             related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
                         return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", name),
+                            message: format!("Duplicate top-level definition: {}", surface),
                             span: span.clone(),
                             related_labels: Vec::new(),
                         });
@@ -1412,18 +1436,20 @@ impl Resolver {
                     // Keep the outer scope at the most recent declaration,
                     // so forward references resolve to the latest top-level definition.
                     self.scope.define_with_id(name, uid);
+                    define_surface_alias(&mut self.scope, &qualified_name, uid);
                 }
                 Ast::ExtractorDef(span, name, _, _, _, _, _) => {
-                    if !declared_in_batch.insert(name.clone()) {
+                    let surface = surface_name(name).to_string();
+                    if !declared_in_batch.insert(surface.clone()) {
                         return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", name),
+                            message: format!("Duplicate top-level definition: {}", surface),
                             span: span.clone(),
                             related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
                         return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", name),
+                            message: format!("Duplicate top-level definition: {}", surface),
                             span: span.clone(),
                             related_labels: Vec::new(),
                         });
@@ -1445,6 +1471,7 @@ impl Resolver {
                     self.declaration_uid_kinds
                         .insert(uid, DeclarationKind::Extractor);
                     self.scope.define_with_id(name, uid);
+                    define_surface_alias(&mut self.scope, &qualified_name, uid);
                 }
                 Ast::ConstDef(span, name, _, _, attrs) => {
                     if !declared_in_batch.insert(name.clone()) {
@@ -1482,6 +1509,7 @@ impl Resolver {
                     self.declaration_uid_kinds
                         .insert(uid, DeclarationKind::Const);
                     self.scope.define_with_id(name, uid);
+                    define_surface_alias(&mut self.scope, &qualified_name, uid);
                 }
                 Ast::TraitDef(span, name, _type_params, methods, _) => {
                     if !declared_in_batch.insert(name.clone()) {
@@ -1634,18 +1662,20 @@ impl Resolver {
                     self.declaration_uid_kinds
                         .insert(uid, DeclarationKind::ResultCtor);
                     self.scope.define_with_id(name, uid);
+                    define_surface_alias(&mut self.scope, name, uid);
                 }
                 Ast::BuiltinTypeDecl(span, head, _) => {
-                    if !declared_in_batch.insert(head.name.clone()) {
+                    let surface = surface_name(&head.name).to_string();
+                    if !declared_in_batch.insert(surface.clone()) {
                         return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", head.name),
+                            message: format!("Duplicate top-level definition: {}", surface),
                             span: span.clone(),
                             related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(&head.name).is_some() {
                         return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", head.name),
+                            message: format!("Duplicate top-level definition: {}", surface),
                             span: span.clone(),
                             related_labels: Vec::new(),
                         });
@@ -1665,30 +1695,33 @@ impl Resolver {
                         .push_back(uid);
                     self.declaration_uid_kinds
                         .insert(uid, DeclarationKind::BuiltinType);
+                    self.scope.define_with_id(&head.name, uid);
+                    define_surface_alias(&mut self.scope, &head.name, uid);
                 }
                 Ast::StructDef(span, name, _, _)
                 | Ast::RecordDef(span, name, _, _)
                 | Ast::DeferrorDef(span, name, _, _, _) => {
+                    let surface = surface_name(name).to_string();
                     if is_reserved_builtin_type_redefinition(name) {
                         return Err(ResolveError {
                             message: format!(
                                 "Type name `{}` is reserved by a canonical builtin type declaration",
-                                name
+                                name.strip_prefix("Global::").unwrap_or(name)
                             ),
                             span: span.clone(),
                             related_labels: Vec::new(),
                         });
                     }
-                    if !declared_in_batch.insert(name.clone()) {
+                    if !declared_in_batch.insert(surface.clone()) {
                         return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", name),
+                            message: format!("Duplicate top-level definition: {}", surface),
                             span: span.clone(),
                             related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
                         return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", name),
+                            message: format!("Duplicate top-level definition: {}", surface),
                             span: span.clone(),
                             related_labels: Vec::new(),
                         });
@@ -1715,28 +1748,30 @@ impl Resolver {
                     };
                     self.declaration_uid_kinds.insert(uid, kind);
                     self.scope.define_with_id(name, uid);
+                    define_surface_alias(&mut self.scope, name, uid);
                 }
                 Ast::EnumDef(span, name, _, variants, _) => {
+                    let surface = surface_name(name).to_string();
                     if is_reserved_builtin_type_redefinition(name) {
                         return Err(ResolveError {
                             message: format!(
                                 "Type name `{}` is reserved by a canonical builtin type declaration",
-                                name
+                                name.strip_prefix("Global::").unwrap_or(name)
                             ),
                             span: span.clone(),
                             related_labels: Vec::new(),
                         });
                     }
-                    if !declared_in_batch.insert(name.clone()) {
+                    if !declared_in_batch.insert(surface.clone()) {
                         return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", name),
+                            message: format!("Duplicate top-level definition: {}", surface),
                             span: span.clone(),
                             related_labels: Vec::new(),
                         });
                     }
                     if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
                         return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", name),
+                            message: format!("Duplicate top-level definition: {}", surface),
                             span: span.clone(),
                             related_labels: Vec::new(),
                         });
@@ -1758,6 +1793,7 @@ impl Resolver {
                     self.declaration_uid_kinds
                         .insert(uid, DeclarationKind::Enum);
                     self.scope.define_with_id(name, uid);
+                    define_surface_alias(&mut self.scope, name, uid);
 
                     for variant in variants {
                         let qualified_ctor = format!("{}::{}", name, variant.name);
@@ -1799,6 +1835,7 @@ impl Resolver {
                         self.declaration_uid_kinds
                             .insert(ctor_uid, DeclarationKind::EnumVariant);
                         self.scope.define_with_id(&qualified_ctor, ctor_uid);
+                        define_surface_alias(&mut self.scope, &qualified_ctor, ctor_uid);
                     }
                 }
                 Ast::TraitImplDef(_, _, _, _, _, _) => {}

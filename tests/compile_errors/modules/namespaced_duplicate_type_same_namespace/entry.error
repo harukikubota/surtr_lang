@@ -1,3 +1,2 @@
-phase: resolve
-contains: Duplicate fully-qualified declaration
-contains: Auth::User
+phase: parse
+contains: namespace `Auth` is already defined in this scope

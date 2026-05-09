@@ -371,7 +371,9 @@ impl std::fmt::Display for LoadError {
             } => write!(
                 f,
                 "duplicate module path `{}` in `{}` and `{}`",
-                module_path, first_file_name, second_file_name
+                module_path.strip_prefix("Global::").unwrap_or(module_path),
+                first_file_name,
+                second_file_name
             ),
             Self::SourceReadFailed { file_name, message } => {
                 write!(f, "failed to read `{}`: {}", file_name, message)
@@ -677,6 +679,7 @@ pub fn collect_module_sources_with_modules(
 }
 
 pub fn is_default_std_module_path(module_path: &str) -> bool {
+    let module_path = module_path.strip_prefix("Global::").unwrap_or(module_path);
     module_path == BUILTIN_PRELUDE_MODULE_PATH
         || module_path == SPECIAL_TYPES_MODULE_PATH
         || module_path == KERNEL_PRELUDE_MODULE_PATH
@@ -1139,6 +1142,43 @@ mod tests {
         let source = r#"defmod Math {
   def add(x: Int, y: Int) -> Int { x + y }
 }"#;
-        assert_eq!(derive_primary_module_path(source).as_deref(), Some("Math"));
+        assert_eq!(
+            derive_primary_module_path(source).as_deref(),
+            Some("Global::Math")
+        );
+    }
+
+    #[test]
+    fn derive_primary_module_path_reads_qualified_module_definition() {
+        let source = r#"defmod Auth::Math {
+  def add(x: Int, y: Int) -> Int { x + y }
+}"#;
+        assert_eq!(derive_primary_module_path(source).as_deref(), Some("Auth::Math"));
+    }
+
+    #[test]
+    fn derive_primary_module_path_reads_namespace_lowered_module_definition() {
+        let source = r#"namespace Auth {
+  defmod Math {
+    def add(x: Int, y: Int) -> Int { x + y }
+  }
+}"#;
+        assert_eq!(derive_primary_module_path(source).as_deref(), Some("Auth::Math"));
+    }
+
+    #[test]
+    fn derive_primary_module_path_ignores_comments_and_blank_lines() {
+        let source = r#"
+# leading comment
+
+defmod Math {
+  # inside comment
+  def add(x: Int, y: Int) -> Int { x + y }
+}
+"#;
+        assert_eq!(
+            derive_primary_module_path(source).as_deref(),
+            Some("Global::Math")
+        );
     }
 }

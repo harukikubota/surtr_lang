@@ -98,18 +98,23 @@
 
 ### OI-006 `defmod` の module path 導出正本
 
-- 背景:
-  - `xldr::loader::derive_primary_module_path` は AST / lowering 優先になっているが、qualified head（`defmod A::B`, `namespace A { defmod B { ... } }`）を扱う token 走査 fallback がまだ残っている。
-  - loader が token 仕様に依存し続けると、字句変更やコメント配置の影響を受けやすい。
-- 未確定点:
-  - module path の正本を `spire` AST と `xldr` lowering のどちらに置くか
-  - qualified module path を AST 上でどう保持するか
-- 受け入れ条件:
-  - module path 抽出が token 走査 fallback なしで成立する。
+- 状態:
+  - 2026-05-09 に解決。module path の正本は `spire` の parse + namespace lowering 後 AST に置き、`xldr::loader::derive_primary_module_path` の token 走査 fallback を廃止した。
+- 確定事項:
+  - qualified head（`defmod A::B`）と namespace-lowered head（`namespace A { defmod B { ... } }`）は同じ canonical module path `A::B` に正規化する。
+  - internal canonical owner/module path は常に 2 セグメントで、bare global owner は `Global::Name` に正規化する。
+  - `Global` は compiler-reserved root namespace であり、user code から `Global::Type` / `Global::Kernel` のように明示できない。
+  - namespace 名と owner 名は同じ一意表で管理し、`namespace A` と `defmod A` / `defstruct A` のような衝突を禁止する。
+- 受け入れ結果:
+  - module path 抽出は token 走査 fallback なしで成立する。
   - コメントや空行に影響されず同じ module path を導出できる。
-- テスト方針:
-  - `unit/spire` または `unit/xldr` で `defmod Kernel` / `defmod A::B` の抽出結果を固定する。
-  - `rune` / `xldr` 経路で fallback なしでも同じ結果になることを確認する。
+  - `rune` / `xldr` は同じ canonicalization 規則を共有する。
+- テスト反映:
+  - `unit/spire` / `unit/xldr` で `defmod Kernel` / `defmod A::B` / `namespace A { defmod B { ... } }` の canonical path を固定した。
+  - loader / resolver 経路で `Global::...` internal canonical path と user-facing `Global` 省略表示の両方を確認した。
+- 仕様更新先:
+  - `doc/要件定義v9.md` 3.0, 4.2, 4.5
+  - `docs/dev/Xldr_spec.md` 3.2
 
 ### OI-007 Rune / Xldr の CLI エラー契約統一
 

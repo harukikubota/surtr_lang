@@ -582,12 +582,12 @@ print("ok")"#,
 
         let user = &bytecode.type_registry.entries[baseline.type_registry.entries.len()];
         assert!(user.tag >= 2);
-        assert_eq!(user.name, "User");
+        assert_eq!(user.name, "Global::User");
         assert_eq!(user.kind, TypeKind::Struct);
 
         let point = &bytecode.type_registry.entries[baseline.type_registry.entries.len() + 1];
         assert_eq!(point.tag, user.tag + 1);
-        assert_eq!(point.name, "Point");
+        assert_eq!(point.name, "Global::Point");
         assert_eq!(point.kind, TypeKind::Record);
     }
 
@@ -815,9 +815,9 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
             .filter_map(|entry| entry.qualified_name.as_deref())
             .collect::<Vec<_>>();
 
-        assert!(function_names.contains(&"List::max"));
-        assert!(function_names.contains(&"List::min"));
-        assert!(function_names.contains(&"List::sort"));
+        assert!(function_names.contains(&"Global::List::max"));
+        assert!(function_names.contains(&"Global::List::min"));
+        assert!(function_names.contains(&"Global::List::sort"));
     }
 
     #[test]
@@ -853,9 +853,9 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
             .runtime_process_specs
             .entries
             .iter()
-            .find(|entry| entry.type_name == "Counter")
+            .find(|entry| entry.type_name == "Global::Counter")
             .expect("Counter runtime process spec");
-        assert_eq!(spec.type_name, "Counter");
+        assert_eq!(spec.type_name, "Global::Counter");
         assert_eq!(spec.state.state_type.name, "Int");
         assert_eq!(spec.init.policy, sindr::ir::RuntimeInitPolicy::Eager);
         assert_eq!(spec.handlers.len(), 3);
@@ -902,18 +902,18 @@ supervisor_init {
         let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
         assert_eq!(bytecode.runtime_boot_plan.singletons.len(), 1);
         let entry = &bytecode.runtime_boot_plan.singletons[0];
-        assert_eq!(entry.process_name, "Logger");
+        assert_eq!(entry.process_name, "Global::Logger");
         assert_eq!(entry.init_timeout_ms, 5_000);
         assert_eq!(bytecode.runtime_boot_plan.handler_overrides.len(), 1);
         let handler = &bytecode.runtime_boot_plan.handler_overrides[0];
-        assert_eq!(handler.target_process, "Logger");
+        assert_eq!(handler.target_process, "Global::Logger");
         assert_eq!(handler.slot, "out");
         assert_eq!(handler.handler_target.name, "FileOutHandler");
         assert_eq!(handler.handler_target.named_args[0].name, "path");
         assert_eq!(handler.handler_target.named_args[0].value, "./logs/app.log");
         assert_eq!(bytecode.runtime_boot_plan.supervisor_overrides.len(), 1);
         let supervisor = &bytecode.runtime_boot_plan.supervisor_overrides[0];
-        assert_eq!(supervisor.process_name, "DynamicSupervisor");
+        assert_eq!(supervisor.process_name, "Global::DynamicSupervisor");
         assert_eq!(supervisor.policy.max_restarts, 10);
         assert!(supervisor.policy.allow_adopt);
     }
@@ -980,7 +980,7 @@ supervisor_init {
             .runtime_process_specs
             .entries
             .iter()
-            .find(|entry| entry.type_name == "Logger")
+            .find(|entry| entry.type_name == "Global::Logger")
             .expect("Logger runtime process spec");
         assert_eq!(spec.kind, sindr::ir::RuntimeProcessKind::GenServer);
         assert_eq!(spec.handlers.len(), 3);
@@ -1023,9 +1023,9 @@ supervisor_init {
             .runtime_process_specs
             .entries
             .iter()
-            .find(|entry| entry.type_name == "LazyCache")
+            .find(|entry| entry.type_name == "Global::LazyCache")
             .expect("LazyCache runtime process spec");
-        assert_eq!(spec.type_name, "LazyCache");
+        assert_eq!(spec.type_name, "Global::LazyCache");
         assert_eq!(spec.state.state_type.name, "Int");
         assert_eq!(spec.init.policy, sindr::ir::RuntimeInitPolicy::Lazy);
         assert!(matches!(

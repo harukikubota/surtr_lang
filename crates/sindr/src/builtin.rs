@@ -864,6 +864,7 @@ pub fn builtin_meta_by_name(name: &str) -> Option<&'static BuiltinMeta> {
 }
 
 pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&str>) -> &'a str {
+    let qualified_name = qualified_name.map(|name| name.strip_prefix("Global::").unwrap_or(name));
     match qualified_name {
         Some("IO::get") => "io_get",
         Some("IO::get_line") => "io_get_line",

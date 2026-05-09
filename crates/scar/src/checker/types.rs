@@ -2,8 +2,16 @@ use super::*;
 use sindr::names::{builtin_type_name, TypeName};
 
 impl Checker {
+    fn canonical_user_type_name(name: &str) -> String {
+        if name.contains("::") {
+            name.to_string()
+        } else {
+            format!("Global::{name}")
+        }
+    }
+
     pub(super) fn is_duration_ty(ty: &Ty) -> bool {
-        matches!(ty, Ty::Struct(name, _) if name == "Duration")
+        matches!(ty, Ty::Struct(name, _) if Self::surface_name(name) == "Duration")
     }
 
     fn match_result_not_allowed_error(&self, span: &Span) -> TypeError {
@@ -84,7 +92,7 @@ impl Checker {
 
     pub(super) fn allows_std_error_function_param_exception(id: &ResolvedId) -> bool {
         matches!(
-            id.qualified_name.as_deref(),
+            Self::surface_qualified_name(id.qualified_name.as_deref()),
             Some("Result::tap_err") | Some("Result::_tap_err_value") | Some("Test::_finish_it_err")
         )
     }
@@ -343,7 +351,7 @@ impl Checker {
         match ast_ty {
             AstTy::Named(_, name) => {
                 if !name.starts_with('$') {
-                    out.push(name.clone());
+                    out.push(Self::canonical_user_type_name(name));
                 }
             }
             AstTy::Generic(_, _, args) => {
@@ -362,12 +370,12 @@ impl Checker {
                 }
                 Self::collect_type_ref_names(ret, out);
             }
-            AstTy::ImplTrait(_, name) => out.push(name.clone()),
+            AstTy::ImplTrait(_, name) => out.push(Self::canonical_user_type_name(name)),
         }
     }
 
     fn surface_type_name<'a>(name: &'a str) -> &'a str {
-        name.strip_prefix("Global::").unwrap_or(name)
+        Self::surface_name(name)
     }
 
     pub(super) fn resolve_ast_ty_in_context(
@@ -386,81 +394,79 @@ impl Checker {
                     "MatchArms" | "CondClauses" => Err(self
                         .clause_block_type_not_allowed_error(span, Self::surface_type_name(name))),
                     "Seq" => Err(self.seq_not_allowed_error(span)),
-                    builtin_name => match builtin_type_name(builtin_name) {
-                        Some(TypeName::Int) => Ok(Ty::Int),
-                        Some(TypeName::Float) => Ok(Ty::Float),
-                        Some(TypeName::String) => Ok(Ty::Str),
-                        Some(TypeName::Boolean) => Ok(Ty::Bool),
-                        Some(TypeName::Unit) => Ok(Ty::Unit),
-                        Some(TypeName::Error) => Ok(Ty::Error),
-                        Some(TypeName::Regex) => {
-                            Ok(Ty::Enum(TypeName::Regex.as_str().into(), Vec::new()))
-                        }
-                        Some(TypeName::RegexCaptures) => Ok(Ty::Enum(
-                            TypeName::RegexCaptures.as_str().into(),
-                            Vec::new(),
-                        )),
-                        Some(TypeName::RegexMatch) => {
-                            Ok(Ty::Enum(TypeName::RegexMatch.as_str().into(), Vec::new()))
-                        }
-                        Some(TypeName::RandomGenerator) => Ok(Ty::Enum(
-                            TypeName::RandomGenerator.as_str().into(),
-                            Vec::new(),
-                        )),
-                        Some(
-                            TypeName::List
-                            | TypeName::HashMap
-                            | TypeName::Generator
-                            | TypeName::Result
-                            | TypeName::Duration
-                            | TypeName::ProcessInit
-                            | TypeName::Lazy
-                            | TypeName::TypeRef
-                            | TypeName::Hole
-                            | TypeName::Closure
-                            | TypeName::MatchArms
-                            | TypeName::CondClauses
-                            | TypeName::Facet
-                            | TypeName::Pid
-                            | TypeName::Workers
-                            | TypeName::WorkerLease
-                            | TypeName::TaskHandle,
-                        )
-                        | None => {
-                            if let Some(def) = self.env.lookup_type_def(name) {
-                                match &def.kind {
-                                    crate::env::TypeKind::Struct => {
-                                        Ok(Ty::Struct(def.name.clone(), def.fields.clone()))
-                                    }
-                                    crate::env::TypeKind::Record => {
-                                        Ok(Ty::Record(def.name.clone(), def.fields.clone()))
-                                    }
-                                    crate::env::TypeKind::ConcreteError => Ok(Ty::Error),
-                                    crate::env::TypeKind::Enum => {
-                                        if def.type_params.is_empty() {
-                                            Ok(Ty::Enum(def.name.clone(), Vec::new()))
-                                        } else {
-                                            Err(TypeError {
-                                                message: format!(
-                                                    "Type {} requires {} type argument(s)",
-                                                    name,
-                                                    def.type_params.len()
-                                                ),
-                                                span: span.clone(),
-                                                hint: None,
-                                            })
-                                        }
-                                    }
+                    builtin_name => {
+                        if let Some(def) = self.env.lookup_type_def(name) {
+                            match &def.kind {
+                                crate::env::TypeKind::Struct => {
+                                    return Ok(Ty::Struct(def.name.clone(), def.fields.clone()));
                                 }
-                            } else {
-                                Err(TypeError {
-                                    message: format!("Unknown type: {}", name),
-                                    span: span.clone(),
-                                    hint: None,
-                                })
+                                crate::env::TypeKind::Record => {
+                                    return Ok(Ty::Record(def.name.clone(), def.fields.clone()));
+                                }
+                                crate::env::TypeKind::ConcreteError => return Ok(Ty::Error),
+                                crate::env::TypeKind::Enum => {
+                                    if def.type_params.is_empty() {
+                                        return Ok(Ty::Enum(def.name.clone(), Vec::new()));
+                                    }
+                                    return Err(TypeError {
+                                        message: format!(
+                                            "Type {} requires {} type argument(s)",
+                                            name,
+                                            def.type_params.len()
+                                        ),
+                                        span: span.clone(),
+                                        hint: None,
+                                    });
+                                }
                             }
                         }
-                    },
+                        match builtin_type_name(builtin_name) {
+                            Some(TypeName::Int) => Ok(Ty::Int),
+                            Some(TypeName::Float) => Ok(Ty::Float),
+                            Some(TypeName::String) => Ok(Ty::Str),
+                            Some(TypeName::Boolean) => Ok(Ty::Bool),
+                            Some(TypeName::Unit) => Ok(Ty::Unit),
+                            Some(TypeName::Error) => Ok(Ty::Error),
+                            Some(TypeName::Regex) => {
+                                Ok(Ty::Enum(TypeName::Regex.as_str().into(), Vec::new()))
+                            }
+                            Some(TypeName::RegexCaptures) => Ok(Ty::Enum(
+                                TypeName::RegexCaptures.as_str().into(),
+                                Vec::new(),
+                            )),
+                            Some(TypeName::RegexMatch) => {
+                                Ok(Ty::Enum(TypeName::RegexMatch.as_str().into(), Vec::new()))
+                            }
+                            Some(TypeName::RandomGenerator) => Ok(Ty::Enum(
+                                TypeName::RandomGenerator.as_str().into(),
+                                Vec::new(),
+                            )),
+                            Some(
+                                TypeName::List
+                                | TypeName::HashMap
+                                | TypeName::Generator
+                                | TypeName::Result
+                                | TypeName::Duration
+                                | TypeName::ProcessInit
+                                | TypeName::Lazy
+                                | TypeName::TypeRef
+                                | TypeName::Hole
+                                | TypeName::Closure
+                                | TypeName::MatchArms
+                                | TypeName::CondClauses
+                                | TypeName::Facet
+                                | TypeName::Pid
+                                | TypeName::Workers
+                                | TypeName::WorkerLease
+                                | TypeName::TaskHandle,
+                            )
+                            | None => Err(TypeError {
+                                message: format!("Unknown type: {}", name),
+                                span: span.clone(),
+                                hint: None,
+                            }),
+                        }
+                    }
                 }
             }
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
@@ -1774,13 +1780,18 @@ impl Checker {
             (Ty::TypeRef(a), Ty::TypeRef(b)) | (Ty::Lazy(a), Ty::Lazy(b)) => {
                 self.types_compatible(a, b)
             }
-            (Ty::Pid(a), Ty::Pid(b)) => a == b || a.starts_with('$') || b.starts_with('$'),
+            (Ty::Pid(a), Ty::Pid(b)) => {
+                Self::canonical_user_type_name(a) == Self::canonical_user_type_name(b)
+                    || a.starts_with('$')
+                    || b.starts_with('$')
+            }
             (Ty::Pid(expected_process), Ty::Enum(name, args))
                 if name == "WorkerLease" && args.len() == 1 =>
             {
                 match args.first() {
                     Some(Ty::Pid(actual_process)) => {
-                        expected_process == actual_process
+                        Self::canonical_user_type_name(expected_process)
+                            == Self::canonical_user_type_name(actual_process)
                             || expected_process.starts_with('$')
                             || actual_process.starts_with('$')
                     }
@@ -1807,10 +1818,14 @@ impl Checker {
             (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
                 self.types_compatible(ok1, ok2) && self.types_compatible(err1, err2)
             }
-            (Ty::Struct(n1, _), Ty::Struct(n2, _)) => n1 == n2,
-            (Ty::Record(n1, _), Ty::Record(n2, _)) => n1 == n2,
+            (Ty::Struct(n1, _), Ty::Struct(n2, _)) => {
+                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+            }
+            (Ty::Record(n1, _), Ty::Record(n2, _)) => {
+                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+            }
             (Ty::Enum(n1, args1), Ty::Enum(n2, args2)) => {
-                n1 == n2
+                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
                     && args1.len() == args2.len()
                     && args1
                         .iter()
@@ -2113,7 +2128,7 @@ impl Checker {
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
             Ty::Lazy(inner) => format!("Lazy<{}>", self.ty_name(inner)),
             Ty::TypeRef(inner) => format!("TypeRef<{}>", self.ty_name(inner)),
-            Ty::Pid(name) => format!("PID<{}>", name),
+            Ty::Pid(name) => format!("PID<{}>", Self::surface_type_name(name)),
             Ty::Facet(source, focus) => {
                 format!("Facet<{}, {}>", self.ty_name(source), self.ty_name(focus))
             }
@@ -2127,14 +2142,14 @@ impl Checker {
             ),
             Ty::Result(ok, _) => format!("Result<{}>", self.ty_name(ok)),
             Ty::Var(n) => format!("${}", n),
-            Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
+            Ty::Struct(name, _) | Ty::Record(name, _) => Self::surface_type_name(name).to_string(),
             Ty::Enum(name, args) => {
                 if args.is_empty() {
-                    name.clone()
+                    Self::surface_type_name(name).to_string()
                 } else {
                     format!(
                         "{}<{}>",
-                        name,
+                        Self::surface_type_name(name),
                         args.iter()
                             .map(|arg| self.ty_name(arg))
                             .collect::<Vec<_>>()

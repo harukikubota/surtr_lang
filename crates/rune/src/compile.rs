@@ -1114,7 +1114,9 @@ pid: PID<MyWorker> =? MySup::spawn(MyWorker::init(1))
         let declaration_index = sigil::precollect_declaration_index(&[process_stage.clone()])
             .expect("process declarations should precollect");
         assert!(
-            declaration_index.contains_key("MyWorker::init"),
+            declaration_index
+                .keys()
+                .any(|key| key == "MyWorker::init" || key == "Global::MyWorker::init"),
             "expected process declaration index to expose MyWorker::init, got keys: {:?}",
             declaration_index.keys().collect::<Vec<_>>()
         );

@@ -502,9 +502,13 @@ fn initialize_env() -> TypeEnv {
     // `Duration` is a stdlib-defined struct, but builtin signatures mention it
     // before stdlib declarations are typechecked. Reserve its type head here so
     // builtin signature parsing can treat it as the same struct identity.
-    env.predeclare_type_def("Duration".into(), crate::env::TypeKind::Struct, Vec::new());
     env.predeclare_type_def(
-        "SupervisorStatus".into(),
+        "Global::Duration".into(),
+        crate::env::TypeKind::Struct,
+        Vec::new(),
+    );
+    env.predeclare_type_def(
+        "Global::SupervisorStatus".into(),
         crate::env::TypeKind::Struct,
         Vec::new(),
     );
@@ -1603,6 +1607,14 @@ struct Checker {
 }
 
 impl Checker {
+    pub(super) fn surface_name<'a>(name: &'a str) -> &'a str {
+        name.strip_prefix("Global::").unwrap_or(name)
+    }
+
+    pub(super) fn surface_qualified_name<'a>(name: Option<&'a str>) -> Option<&'a str> {
+        name.map(Self::surface_name)
+    }
+
     fn new(context: TypecheckContext) -> Self {
         Self {
             env: initialize_env(),
@@ -1810,7 +1822,7 @@ impl Checker {
     }
 
     fn process_handler_public_name(process: &TypedProcessSpec, handler_name: &str) -> String {
-        format!("{}::{}", process.process_name, handler_name)
+        format!("{}::{}", Self::surface_name(&process.process_name), handler_name)
     }
 
     fn validate_handler_first_param_state(
@@ -1824,7 +1836,14 @@ impl Checker {
         span: Span,
     ) -> Result<(), TypeError> {
         let state_param = match params.first() {
-            Some(first) if matches!(self.resolve_ty(first), Ty::Pid(name) if name == process.process_name) => {
+            Some(first)
+                if matches!(
+                    self.resolve_ty(first),
+                    Ty::Pid(name)
+                        if Self::surface_name(&name)
+                            == Self::surface_name(&process.process_name)
+                ) =>
+            {
                 params.get(1)
             }
             _ => params.first(),
@@ -1838,7 +1857,7 @@ impl Checker {
                 "@{} handler `{}` first parameter must match process state type `{}`",
                 handler_kind,
                 Self::process_handler_public_name(process, handler_name),
-                state_name
+                Self::surface_name(state_name)
             ),
             span,
             hint: None,
@@ -1867,7 +1886,7 @@ impl Checker {
                 "@{} handler `{}` Result ok type must match process state type `{}`",
                 handler_kind,
                 Self::process_handler_public_name(process, handler_name),
-                state_name
+                Self::surface_name(state_name)
             ),
             span,
             hint: None,
@@ -1885,7 +1904,7 @@ impl Checker {
     ) -> Result<(), TypeError> {
         let has_state = self.process_result_ok_ty(ret).is_some_and(|ok| {
             matches!(self.resolve_ty(&ok), Ty::Enum(name, items)
-                if name == "CallResult"
+                if Self::surface_name(&name) == "CallResult"
                     && items.len() == 2
                     && self.resolve_ty(&items[1]) == *state_ty)
         });
@@ -1897,7 +1916,7 @@ impl Checker {
             message: format!(
                 "@call handler `{}` Result ok type must be CallResult<Reply, {}>",
                 Self::process_handler_public_name(process, handler_name),
-                state_name
+                Self::surface_name(state_name)
             ),
             span,
             hint: None,
@@ -1915,7 +1934,7 @@ impl Checker {
     ) -> Result<(), TypeError> {
         let has_state = self.process_result_ok_ty(ret).is_some_and(|ok| {
             matches!(self.resolve_ty(&ok), Ty::Enum(name, items)
-                if name == "CastResult"
+                if Self::surface_name(&name) == "CastResult"
                     && items.len() == 1
                     && self.resolve_ty(&items[0]) == *state_ty)
         });
@@ -1927,7 +1946,7 @@ impl Checker {
             message: format!(
                 "@cast handler `{}` Result ok type must be CastResult<{}>",
                 Self::process_handler_public_name(process, handler_name),
-                state_name
+                Self::surface_name(state_name)
             ),
             span,
             hint: None,
@@ -2040,7 +2059,8 @@ impl Checker {
                 return Err(TypeError {
                     message: format!(
                         "process state type `{}` must be annotated with @process_state({})",
-                        state_name, process.process_name
+                        Self::surface_name(&state_name),
+                        Self::surface_name(&process.process_name)
                     ),
                     span: Span { start: 0, end: 0 },
                     hint: None,

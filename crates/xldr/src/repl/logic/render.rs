@@ -4,8 +4,8 @@ use forge::{ChunkMeta, ReplCallableDisplay};
 
 fn rendered_binding_type(binding_ty: &str, value: &Value) -> String {
     match value {
-        Value::Pid(pid) => format!("PID<{}>", pid.process_name),
-        _ => binding_ty.to_string(),
+        Value::Pid(pid) => format!("PID<{}>", crate::surface_rendered_name(&pid.process_name)),
+        _ => crate::surface_rendered_name(binding_ty),
     }
 }
 
@@ -33,7 +33,12 @@ pub fn format_result_lines(
                 .iter()
                 .filter_map(|b| {
                     if let Some(lens_info) = &b.lens_info {
-                        return Some(format!("{}: {} = {}", b.name, b.ty, lens_info.full_path));
+                        return Some(format!(
+                            "{}: {} = {}",
+                            b.name,
+                            crate::surface_rendered_name(&b.ty),
+                            crate::surface_rendered_name(&lens_info.full_path)
+                        ));
                     }
 
                     let val = vm.get_local(b.slot_id)?;
@@ -43,10 +48,12 @@ pub fn format_result_lines(
                         |display| match display {
                             ReplCallableDisplay::FnCapture { module, name, sig } => format!(
                                 "FnCapture(module: {}, name: {}, sig: {})",
-                                module, name, sig
+                                crate::surface_rendered_name(module),
+                                name,
+                                crate::surface_rendered_name(sig)
                             ),
                             ReplCallableDisplay::Closure { sig } => {
-                                format!("Closure{}", sig)
+                                format!("Closure{}", crate::surface_rendered_name(sig))
                             }
                         },
                     );

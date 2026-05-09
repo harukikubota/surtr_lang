@@ -19,6 +19,10 @@ fn auto_import_trait_names(declaration_index: &DeclarationIndex) -> HashSet<Stri
         .collect()
 }
 
+fn surface_name(name: &str) -> &str {
+    name.strip_prefix("Global::").unwrap_or(name)
+}
+
 pub(super) fn build_global_scope(
     index: &DeclarationIndex,
     declaration_uids: &HashMap<String, u32>,
@@ -49,6 +53,12 @@ pub(super) fn build_global_scope(
                 continue;
             }
             scope.define_with_id(fq_name, *uid);
+            if surface_name(fq_name) != fq_name {
+                scope.define_with_id(surface_name(fq_name), *uid);
+            }
+            if surface_name(&entry.name) != entry.name {
+                scope.define_with_id(surface_name(&entry.name), *uid);
+            }
             if matches!(
                 entry.kind,
                 DeclarationKind::Trait | DeclarationKind::TraitMethod
@@ -127,6 +137,12 @@ pub(super) fn build_module_scope(
                 if let Some(uid) = declaration_uids.get(&entry.fq_name) {
                     scope.define_with_id(&entry.name, *uid);
                     scope.define_with_id(&entry.fq_name, *uid);
+                    if surface_name(&entry.name) != entry.name {
+                        scope.define_with_id(surface_name(&entry.name), *uid);
+                    }
+                    if surface_name(&entry.fq_name) != entry.fq_name {
+                        scope.define_with_id(surface_name(&entry.fq_name), *uid);
+                    }
                 }
             }
         }
@@ -163,7 +179,9 @@ fn special_non_importable_member(
     member_name: &str,
 ) -> bool {
     matches!(
-        declaration_index.get(module_name),
+        declaration_index
+            .get(module_name)
+            .or_else(|| declaration_index.get(&format!("Global::{module_name}"))),
         Some(entry) if entry.kind == DeclarationKind::Struct && member_name == "deconstruct"
     )
 }
@@ -257,7 +275,7 @@ fn import_list_into_scope(
     let module_exists = import_context
         .declaration_index
         .values()
-        .any(|entry| entry.module_path == module_name);
+        .any(|entry| surface_name(&entry.module_path) == module_name);
     if !module_exists {
         return Err(ResolveError {
             message: format!("Unknown module import: {}", module_name),
@@ -273,7 +291,15 @@ fn import_list_into_scope(
             .record_member_import(module_name, name, &span)?;
 
         let fq_name = format!("{}::{}", module_name, name);
-        let Some(entry) = import_context.declaration_index.get(&fq_name) else {
+        let Some(entry) = import_context.declaration_index.values().find(|entry| {
+            surface_name(&entry.module_path) == module_name
+                && (entry.name == *name
+                    || entry
+                        .name
+                        .rsplit("::")
+                        .next()
+                        .is_some_and(|tail| tail == name))
+        }) else {
             if special_non_importable_member(import_context.declaration_index, module_name, name) {
                 issues.not_importable.push(fq_name);
                 continue;
@@ -332,7 +358,7 @@ fn import_list_into_scope(
         if entry.kind == DeclarationKind::Trait {
             let trait_prefix = format!("{}::", name);
             for method_entry in import_context.declaration_index.values() {
-                if method_entry.module_path != module_name
+                if surface_name(&method_entry.module_path) != module_name
                     || method_entry.kind != DeclarationKind::TraitMethod
                     || !method_entry.name.starts_with(&trait_prefix)
                 {
@@ -398,7 +424,7 @@ fn import_module_into_scope(
     let mut imported_any = false;
     let mut blocked_by_stage = false;
     for entry in import_context.declaration_index.values() {
-        if entry.module_path != module_name {
+        if surface_name(&entry.module_path) != module_name {
             continue;
         }
         if !is_importable_declaration(&entry.kind) {
@@ -442,7 +468,10 @@ fn import_module_into_scope(
             related_labels: Vec::new(),
         })
     } else if matches!(
-        import_context.declaration_index.get(module_name),
+        import_context
+            .declaration_index
+            .get(module_name)
+            .or_else(|| import_context.declaration_index.get(&format!("Global::{module_name}"))),
         Some(entry) if entry.kind == DeclarationKind::Struct
     ) {
         // Struct declarations stay directly visible by name so `User()` can
@@ -575,7 +604,15 @@ fn import_single_into_scope(
         .record_member_import(module_name, name, &span)?;
 
     let fq_name = format!("{}::{}", module_name, name);
-    let Some(entry) = import_context.declaration_index.get(&fq_name) else {
+    let Some(entry) = import_context.declaration_index.values().find(|entry| {
+        surface_name(&entry.module_path) == module_name
+            && (entry.name == name
+                || entry
+                    .name
+                    .rsplit("::")
+                    .next()
+                    .is_some_and(|tail| tail == name))
+    }) else {
         if special_non_importable_member(import_context.declaration_index, module_name, name) {
             return Err(ResolveError {
                 message: format!("Import target `{}` is not importable", fq_name),
@@ -586,7 +623,7 @@ fn import_single_into_scope(
         let module_exists = import_context
             .declaration_index
             .values()
-            .any(|entry| entry.module_path == module_name);
+            .any(|entry| surface_name(&entry.module_path) == module_name);
         return Err(ResolveError {
             message: if module_exists {
                 format!("Unknown import member: {}", fq_name)
@@ -671,7 +708,7 @@ fn import_single_into_scope(
     if entry.kind == DeclarationKind::Trait {
         let trait_prefix = format!("{}::", name);
         for method_entry in import_context.declaration_index.values() {
-            if method_entry.module_path != module_name
+            if surface_name(&method_entry.module_path) != module_name
                 || method_entry.kind != DeclarationKind::TraitMethod
                 || !method_entry.name.starts_with(&trait_prefix)
             {
@@ -768,10 +805,10 @@ fn bind_import_name(
                     entry.auto_import
                         || import_context
                             .auto_import_modules
-                            .contains(entry.module_path.as_str())
+                            .contains(surface_name(&entry.module_path))
                         || import_context
                             .auto_import_traits
-                            .contains(&entry.module_path)
+                            .contains(surface_name(&entry.module_path))
                 });
             if !existing_is_auto_imported {
                 return Ok(());
@@ -804,10 +841,10 @@ fn bind_import_name(
                 entry.auto_import
                     || import_context
                         .auto_import_modules
-                        .contains(entry.module_path.as_str())
+                        .contains(surface_name(&entry.module_path))
                     || import_context
                         .auto_import_traits
-                        .contains(&entry.module_path)
+                        .contains(surface_name(&entry.module_path))
             });
         if existing_is_auto_imported {
             scope.define_with_id(short_name, uid);

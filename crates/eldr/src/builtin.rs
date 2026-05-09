@@ -666,7 +666,12 @@ fn builtin_inspect(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError>
 
 fn builtin_error_kind(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let rich = decode_error_arg(&args[0], "kind", "err")?;
-    Ok(Value::Str(rich.kind))
+    Ok(Value::Str(
+        rich.kind
+            .strip_prefix("Global::")
+            .unwrap_or(&rich.kind)
+            .to_string(),
+    ))
 }
 
 fn builtin_error_message(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -2297,12 +2302,13 @@ fn inspect_non_callable_value(vm: &VM, value: &Value) -> String {
 
 fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
     if let Some(entry) = vm.type_registry().lookup(tag) {
-        if entry.name == "Duration" {
+        if entry.name == "Duration" || entry.name == "Global::Duration" {
             if let Some(Value::Int(ms)) = fields.first() {
                 return format!("{ms}ms");
             }
         }
         let render_named_value = || {
+            let display_name = entry.name.strip_prefix("Global::").unwrap_or(&entry.name);
             let hidden_field_count = entry.private_flags.iter().filter(|flag| **flag).count();
             let mut parts = entry
                 .field_names
@@ -2323,7 +2329,7 @@ fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
             if hidden_field_count > 0 {
                 parts.push("..private".to_string());
             }
-            format!("{}({})", entry.name, parts.join(", "))
+            format!("{}({})", display_name, parts.join(", "))
         };
 
         return match entry.kind {
@@ -2338,9 +2344,16 @@ fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
                     .collect::<Vec<_>>()
                     .join(", ");
                 if payload.is_empty() {
-                    entry.name.clone()
+                    entry
+                        .name
+                        .strip_prefix("Global::")
+                        .unwrap_or(&entry.name)
+                        .to_string()
                 } else {
-                    format!("{}({payload})", entry.name)
+                    format!(
+                        "{}({payload})",
+                        entry.name.strip_prefix("Global::").unwrap_or(&entry.name)
+                    )
                 }
             }
         };
@@ -2856,7 +2869,7 @@ fn duration_payload<'a>(vm: &'a VM, value: &'a Value) -> Result<&'a SurtrInt, Ru
                     tag
                 )));
             };
-            if entry.name != "Duration" {
+            if entry.name != "Duration" && entry.name != "Global::Duration" {
                 return Err(RuntimeError::new(format!(
                     "expected Duration struct tag, got {}",
                     entry.name

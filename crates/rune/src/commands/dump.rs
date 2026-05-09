@@ -173,8 +173,9 @@ fn build_dump_json(
         .map_err(|e| RuneError::message(1, format!("dump: failed to serialize header: {}", e)))?;
     let chunks = serde_json::to_value(&inspected.chunks)
         .map_err(|e| RuneError::message(1, format!("dump: failed to serialize chunks: {}", e)))?;
-    let bytecode = serde_json::to_value(&inspected.bytecode)
+    let mut bytecode = serde_json::to_value(&inspected.bytecode)
         .map_err(|e| RuneError::message(1, format!("dump: failed to serialize bytecode: {}", e)))?;
+    surface_strip_global_prefixes(&mut bytecode);
 
     Ok(json!({
         "file": file_path,
@@ -201,4 +202,37 @@ fn build_dump_json(
         "entrypoint_trace": entrypoint_trace,
         "bytecode": bytecode
     }))
+}
+
+fn surface_strip_global_prefixes(value: &mut Value) {
+    match value {
+        Value::String(text) => {
+            if let Some(stripped) = text.strip_prefix("Global::") {
+                *text = stripped.to_string();
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                surface_strip_global_prefixes(item);
+            }
+        }
+        Value::Object(map) => {
+            let keys = map.keys().cloned().collect::<Vec<_>>();
+            for key in keys {
+                let mut item = map
+                    .remove(&key)
+                    .expect("json object key should still exist during surface rewrite");
+                surface_strip_global_prefixes(&mut item);
+                let surface_key = key
+                    .strip_prefix("Global::")
+                    .unwrap_or(key.as_str())
+                    .to_string();
+                map.insert(surface_key, item);
+            }
+            for item in map.values_mut() {
+                surface_strip_global_prefixes(item);
+            }
+        }
+        _ => {}
+    }
 }

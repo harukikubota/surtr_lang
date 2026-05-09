@@ -353,7 +353,9 @@ impl TypeEnv {
     }
 
     pub fn enum_variants_of(&self, enum_name: &str) -> Option<&Vec<EnumVariantInfo>> {
-        self.enum_variants_by_enum.get(enum_name)
+        type_lookup_candidates(enum_name)
+            .into_iter()
+            .find_map(|candidate| self.enum_variants_by_enum.get(&candidate))
     }
 
     pub fn register_type_constructor_id(&mut self, unique_id: u32) {

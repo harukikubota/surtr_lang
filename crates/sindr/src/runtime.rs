@@ -178,6 +178,10 @@ pub enum CallableOrigin {
 }
 
 impl Value {
+    fn surface_type_name(type_name: &str) -> &str {
+        type_name.strip_prefix("Global::").unwrap_or(type_name)
+    }
+
     fn render_named_value(
         type_name: &str,
         field_names: &[String],
@@ -204,7 +208,7 @@ impl Value {
             parts.push("..private".to_string());
         }
 
-        format!("{}({})", type_name, parts.join(", "))
+        format!("{}({})", Self::surface_type_name(type_name), parts.join(", "))
     }
 
     /// Display string for `to_string` built-in.
@@ -265,7 +269,7 @@ impl Value {
             }
             Value::Tagged { tag, fields } => {
                 if let Some(entry) = registry.lookup(*tag) {
-                    if entry.name == "Duration" {
+                    if Self::surface_type_name(&entry.name) == "Duration" {
                         if let Some(Value::Int(ms)) = fields.first() {
                             return format!("{ms}ms");
                         }
@@ -286,9 +290,9 @@ impl Value {
                                 .collect::<Vec<_>>()
                                 .join(", ");
                             if payload.is_empty() {
-                                entry.name.clone()
+                                Self::surface_type_name(&entry.name).to_string()
                             } else {
-                                format!("{}({})", entry.name, payload)
+                                format!("{}({})", Self::surface_type_name(&entry.name), payload)
                             }
                         }
                     }
@@ -333,7 +337,11 @@ impl Value {
             }
             Value::RegexMatch(handle) => format!("RegexMatch({}..{})", handle.start, handle.end),
             Value::RandomGenerator(_) => "RandomGenerator(<opaque>)".to_string(),
-            Value::Pid(handle) => format!("PID({}#{})", handle.process_name, handle.id),
+            Value::Pid(handle) => format!(
+                "PID({}#{})",
+                Self::surface_type_name(&handle.process_name),
+                handle.id
+            ),
             Value::Workers(handle) => format!("Workers<{}>#{}", handle.process_name, handle.id),
             Value::WorkerLease(handle) => {
                 format!("WorkerLease<{}>#{}", handle.pid.process_name, handle.pid.id)
@@ -583,12 +591,18 @@ impl RichError {
     }
 
     pub fn to_eprint_lines(&self) -> Vec<String> {
-        let mut lines = vec![format!("Error: {}: {}", self.kind, self.visible_message())];
+        let display_kind = self.kind.strip_prefix("Global::").unwrap_or(&self.kind);
+        let mut lines = vec![format!(
+            "Error: {}: {}",
+            display_kind,
+            self.visible_message()
+        )];
         let mut next = self.cause.as_deref();
         while let Some(cause) = next {
+            let cause_kind = cause.kind.strip_prefix("Global::").unwrap_or(&cause.kind);
             lines.push(format!(
                 "Caused by: {}: {}",
-                cause.kind,
+                cause_kind,
                 cause.visible_message()
             ));
             next = cause.cause.as_deref();
@@ -613,7 +627,7 @@ impl RichError {
         lines.push(format!(
             "{}{}({:?})",
             first_prefix,
-            self.kind,
+            Value::surface_type_name(&self.kind),
             self.visible_message()
         ));
         if let Some(cause) = self.cause.as_deref() {

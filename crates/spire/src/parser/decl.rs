@@ -1206,6 +1206,29 @@ fn build_genserver_cast_wrapper(
 }
 
 impl Parser<'_> {
+    fn canonicalize_impl_target_name(name: String) -> String {
+        if name.contains("::") {
+            name
+        } else {
+            format!("Global::{name}")
+        }
+    }
+
+    fn canonicalize_impl_target_ty(ty: AstTy) -> AstTy {
+        match ty {
+            AstTy::Named(span, name) if !name.starts_with('$') && name != "Self" && name != "_" => {
+                AstTy::Named(span, Self::canonicalize_impl_target_name(name))
+            }
+            AstTy::ImplTrait(span, name) => {
+                AstTy::ImplTrait(span, Self::canonicalize_impl_target_name(name))
+            }
+            AstTy::Generic(span, name, args) => {
+                AstTy::Generic(span, Self::canonicalize_impl_target_name(name), args)
+            }
+            other => other,
+        }
+    }
+
     fn is_cap_pattern(name: &str) -> bool {
         let mut chars = name.chars();
         let Some(first) = chars.next() else {
@@ -1438,6 +1461,12 @@ impl Parser<'_> {
         let sp = self.peek_span();
         self.expect(&Token::Namespace)?;
         let (name, _) = self.expect_ident()?;
+        if name == "Global" {
+            return Err(ParseError::syntax(
+                "`Global` is reserved for the implicit root namespace",
+                sp,
+            ));
+        }
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         let body = self.parse_namespace_body_stmts()?;
@@ -1500,7 +1529,7 @@ impl Parser<'_> {
         if matches!(self.peek(), Token::For) {
             self.advance();
             self.skip_newlines();
-            let target_ty = self.parse_type_in_impl_context(None)?;
+            let target_ty = Self::canonicalize_impl_target_ty(self.parse_type_in_impl_context(None)?);
             let self_target = self.trait_impl_self_target_name(&target_ty)?;
             self.skip_newlines();
             self.expect(&Token::LBrace)?;
@@ -1611,6 +1640,7 @@ impl Parser<'_> {
         }
 
         let end = self.expect(&Token::RBrace)?;
+        let head = Self::canonicalize_impl_target_name(head);
         Ok(Ast::ImplDef(
             Span {
                 start,
@@ -2159,11 +2189,12 @@ impl Parser<'_> {
         }
         self.expect(&Token::Defmod)?;
         let (name, _) = self.expect_qualified_ident(2, "module")?;
-        if name != "ProcessInit" && builtin_type_meta_by_name(&name).is_some() {
+        let reserved_check_name = name.rsplit("::").next().unwrap_or(&name);
+        if reserved_check_name != "ProcessInit" && builtin_type_meta_by_name(reserved_check_name).is_some() {
             return Err(ParseError::syntax(
                 format!(
                     "Module name `{}` is reserved by a canonical builtin type declaration",
-                    name
+                    reserved_check_name
                 ),
                 sp,
             ));
@@ -2364,7 +2395,7 @@ impl Parser<'_> {
     ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Defstruct)?;
-        let (name, _) = self.expect_ident()?;
+        let (name, _) = self.expect_qualified_ident(2, "type")?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -2416,7 +2447,7 @@ impl Parser<'_> {
     ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Defrecord)?;
-        let (name, _) = self.expect_ident()?;
+        let (name, _) = self.expect_qualified_ident(2, "type")?;
         self.expect(&Token::LParen)?;
         self.skip_newlines();
 
@@ -2479,7 +2510,7 @@ impl Parser<'_> {
     ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Defenum)?;
-        let (name, _name_span) = self.expect_ident()?;
+        let (name, _name_span) = self.expect_qualified_ident(2, "type")?;
         let type_params = self.parse_decl_type_params()?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
@@ -2668,7 +2699,7 @@ impl Parser<'_> {
     ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Deferror)?;
-        let (name, _) = self.expect_ident()?;
+        let (name, _) = self.expect_qualified_ident(2, "type")?;
 
         // Optional fields: (field: Type, ...)
         let mut fields = Vec::new();
@@ -3620,7 +3651,7 @@ impl Parser<'_> {
             Token::Defsupervisor
         };
         self.expect(&token)?;
-        let (name, _) = self.expect_ident()?;
+        let (name, _) = self.expect_qualified_ident(2, "process")?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -3911,7 +3942,7 @@ impl Parser<'_> {
         start: usize,
     ) -> Result<Ast, ParseError> {
         self.expect(&Token::Defagent)?;
-        let (name, _name_span) = self.expect_ident()?;
+        let (name, _name_span) = self.expect_qualified_ident(2, "process")?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -4045,7 +4076,7 @@ impl Parser<'_> {
         start: usize,
     ) -> Result<Ast, ParseError> {
         self.expect(&Token::Defgenserver)?;
-        let (name, _) = self.expect_ident()?;
+        let (name, _) = self.expect_qualified_ident(2, "process")?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();

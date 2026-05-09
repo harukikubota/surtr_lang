@@ -81,7 +81,7 @@ fn test_private_field_modifier_is_preserved() {
     .unwrap();
     match &ast[0] {
         Ast::StructDef(_, name, fields, attrs) => {
-            assert_eq!(name, "User");
+            assert_eq!(name, "Global::User");
             assert_eq!(fields[0].name, "password");
             assert_eq!(fields[0].visibility, Visibility::Private);
             assert!(!fields[0].readonly);
@@ -103,7 +103,7 @@ fn test_readonly_struct_field_modifier_is_preserved() {
     .unwrap();
     match &ast[0] {
         Ast::StructDef(_, name, fields, attrs) => {
-            assert_eq!(name, "User");
+            assert_eq!(name, "Global::User");
             assert_eq!(fields[0].name, "profile");
             assert!(fields[0].readonly);
             assert_eq!(fields[0].visibility, Visibility::Public);
@@ -138,7 +138,7 @@ fn test_readonly_struct_metadata_and_field_modifier_are_preserved() {
     .unwrap();
     match &ast[0] {
         Ast::StructDef(_, name, fields, attrs) => {
-            assert_eq!(name, "User");
+            assert_eq!(name, "Global::User");
             assert!(attrs.readonly);
             assert_eq!(fields[0].name, "password");
             assert_eq!(fields[0].visibility, Visibility::Private);
@@ -167,7 +167,7 @@ defrecord Point(x: Float, y: Float)"#,
 
     match &ast[0] {
         Ast::StructDef(_, name, fields, attrs) => {
-            assert_eq!(name, "User");
+            assert_eq!(name, "Global::User");
             assert_eq!(fields.len(), 1);
             assert_eq!(attrs.doc.as_deref(), Some("User docs."));
         }
@@ -176,7 +176,7 @@ defrecord Point(x: Float, y: Float)"#,
 
     match &ast[1] {
         Ast::RecordDef(_, name, fields, attrs) => {
-            assert_eq!(name, "Point");
+            assert_eq!(name, "Global::Point");
             assert_eq!(fields.len(), 2);
             assert_eq!(attrs.doc.as_deref(), Some("Point docs."));
         }
@@ -202,16 +202,16 @@ defenum CounterEvent {
 
     match &ast[0] {
         Ast::StructDef(_, name, _, attrs) => {
-            assert_eq!(name, "CounterState");
-            assert_eq!(attrs.process_state_owner.as_deref(), Some("Counter"));
+            assert_eq!(name, "Global::CounterState");
+            assert_eq!(attrs.process_state_owner.as_deref(), Some("Global::Counter"));
         }
         other => panic!("Expected StructDef, got {other:?}"),
     }
 
     match &ast[1] {
         Ast::EnumDef(_, name, _, _, attrs) => {
-            assert_eq!(name, "CounterEvent");
-            assert_eq!(attrs.process_state_owner.as_deref(), Some("Counter"));
+            assert_eq!(name, "Global::CounterEvent");
+            assert_eq!(attrs.process_state_owner.as_deref(), Some("Global::Counter"));
         }
         other => panic!("Expected EnumDef, got {other:?}"),
     }
@@ -347,7 +347,7 @@ fn test_intrinsic_dbg_decl_parses_in_std_module() {
 
     match &ast[0] {
         Ast::Defmod(_, name, body, _) => {
-            assert_eq!(name, "Bootstrap");
+            assert_eq!(name, "Global::Bootstrap");
             match &body[0] {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "dbg!");
@@ -407,7 +407,7 @@ fn test_intrinsic_bind_decl_parses_in_std_module() {
 
     match &ast[0] {
         Ast::Defmod(_, name, body, _) => {
-            assert_eq!(name, "Bootstrap");
+            assert_eq!(name, "Global::Bootstrap");
             match &body[0] {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "=");
@@ -444,7 +444,7 @@ fn test_intrinsic_safebind_decl_parses_in_std_module() {
 
     match &ast[0] {
         Ast::Defmod(_, name, body, _) => {
-            assert_eq!(name, "Bootstrap");
+            assert_eq!(name, "Global::Bootstrap");
             match &body[0] {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "=?");
@@ -481,7 +481,7 @@ fn test_intrinsic_match_decl_parses_in_std_module() {
 
     match &ast[0] {
         Ast::Defmod(_, name, body, _) => {
-            assert_eq!(name, "Bootstrap");
+            assert_eq!(name, "Global::Bootstrap");
             match &body[0] {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "match");
@@ -518,7 +518,7 @@ fn test_intrinsic_cond_decl_parses_in_std_module() {
 
     match &ast[0] {
         Ast::Defmod(_, name, body, _) => {
-            assert_eq!(name, "Bootstrap");
+            assert_eq!(name, "Global::Bootstrap");
             match &body[0] {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "cond");
@@ -776,7 +776,7 @@ impl User {
         .expect("expected impl node");
     match impl_node {
         Ast::ImplDef(_, target, methods, attrs) => {
-            assert_eq!(target, "User");
+            assert_eq!(target, "Global::User");
             assert_eq!(attrs, &DeclAttrs::default());
             assert_eq!(methods.len(), 2);
             assert!(matches!(
@@ -813,7 +813,7 @@ impl Int {
         .expect("expected impl node");
     match impl_node {
         Ast::ImplDef(_, target, methods, _) => {
-            assert_eq!(target, "Int");
+            assert_eq!(target, "Global::Int");
             assert!(matches!(
                 methods.as_slice(),
                 [Ast::BuiltinDecl(_, name, _, Some(AstTy::Generic(_, ret, _)), attrs)]
@@ -876,7 +876,7 @@ fn test_trait_impl_parses_and_keeps_methods() {
         [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods, attrs)] => {
             assert_eq!(trait_name, "Numeric");
             assert!(trait_args.is_empty());
-            assert_eq!(target, "Int");
+            assert_eq!(target, "Global::Int");
             assert_eq!(attrs, &DeclAttrs::default());
             assert_eq!(methods.len(), 2);
             assert!(matches!(
@@ -907,7 +907,7 @@ fn test_trait_impl_accepts_builtin_def_method() {
     match ast.as_slice() {
         [Ast::TraitImplDef(_, trait_name, _, AstTy::Named(_, target), methods, _)] => {
             assert_eq!(trait_name, "Add");
-            assert_eq!(target, "Int");
+            assert_eq!(target, "Global::Int");
             assert!(matches!(
                 methods.as_slice(),
                 [Ast::BuiltinDecl(_, name, _, Some(AstTy::Named(_, ret)), _)]
@@ -961,7 +961,7 @@ impl Show for User {
     match &ast[1] {
         Ast::TraitImplDef(_, trait_name, _, target, _, attrs) => {
             assert_eq!(trait_name, "Show");
-            assert!(matches!(target, AstTy::Named(_, name) if name == "User"));
+            assert!(matches!(target, AstTy::Named(_, name) if name == "Global::User"));
             assert_eq!(attrs.doc.as_deref(), Some("Impl docs."));
         }
         _ => panic!("Expected TraitImplDef"),
@@ -1019,7 +1019,7 @@ impl User {
 
     match &ast[0] {
         Ast::ImplDef(_, target, _, attrs) => {
-            assert_eq!(target, "User");
+            assert_eq!(target, "Global::User");
             assert!(attrs.auto_import);
         }
         other => panic!("Expected ImplDef, got {other:?}"),
@@ -1088,7 +1088,7 @@ impl User {
 
     match &ast[1] {
         Ast::ImplDef(_, target, methods, _) => {
-            assert_eq!(target, "User");
+            assert_eq!(target, "Global::User");
             assert_eq!(methods.len(), 2);
             match &methods[0] {
                 Ast::Def(_, name, _, _, _, _, attrs) => {
@@ -1213,7 +1213,7 @@ fn test_doc_attributes_parse_for_trait_impl_methods() {
     match ast.as_slice() {
         [Ast::TraitImplDef(_, trait_name, _, AstTy::Named(_, target), methods, _)] => {
             assert_eq!(trait_name, "Show");
-            assert_eq!(target, "Int");
+            assert_eq!(target, "Global::Int");
             match &methods[0] {
                 Ast::Def(_, name, _, _, _, _, attrs) => {
                     assert_eq!(name, "to_string");
@@ -1288,7 +1288,7 @@ fn test_trait_impl_parses_trait_type_args() {
         [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods, attrs)] => {
             assert_eq!(trait_name, "From");
             assert!(matches!(trait_args.as_slice(), [AstTy::Named(_, name)] if name == "String"));
-            assert_eq!(target, "Int");
+            assert_eq!(target, "Global::Int");
             assert_eq!(attrs, &DeclAttrs::default());
             assert_eq!(methods.len(), 1);
         }
@@ -1481,7 +1481,7 @@ fn test_hidden_builtin_impl_member_parses() {
 
     match &ast[0] {
         Ast::ImplDef(_, target, body, _) => {
-            assert_eq!(target, "Task");
+            assert_eq!(target, "Global::Task");
             assert!(matches!(
                 &body[0],
                 Ast::BuiltinDecl(_, name, _, _, DeclAttrs { hidden: true, .. })
@@ -1533,7 +1533,7 @@ fn test_doc_annotates_defmod() {
     assert!(matches!(
         ast.as_slice(),
         [Ast::Defmod(_, name, _, DeclAttrs { doc: Some(doc), .. })]
-            if name == "Kernel" && doc == "Kernel docs"
+            if name == "Global::Kernel" && doc == "Kernel docs"
     ));
 }
 
@@ -1548,7 +1548,7 @@ fn test_autoimport_annotates_defmod() {
     assert!(matches!(
         ast.as_slice(),
         [Ast::Defmod(_, name, _, DeclAttrs { auto_import: true, .. })]
-            if name == "Kernel"
+            if name == "Global::Kernel"
     ));
 }
 
@@ -1563,7 +1563,7 @@ fn test_doc_annotates_deferror() {
     assert!(matches!(
         ast.as_slice(),
         [Ast::DeferrorDef(_, name, _, _, DeclAttrs { doc: Some(doc), .. })]
-            if name == "NoneError" && doc == "Missing value error"
+            if name == "Global::NoneError" && doc == "Missing value error"
     ));
 }
 
@@ -1669,7 +1669,7 @@ fn test_builtin_if_decl_accepts_keyword_name_in_std_module_member() {
 
     match &ast[0] {
         Ast::Defmod(_, name, body, _) => {
-            assert_eq!(name, "Kernel");
+            assert_eq!(name, "Global::Kernel");
             assert!(matches!(
                 &body[0],
                 Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _)
@@ -1693,7 +1693,7 @@ fn test_builtin_import_decl_accepts_keyword_name_in_std_module_member() {
 
     match &ast[0] {
         Ast::Defmod(_, name, body, _) => {
-            assert_eq!(name, "Bootstrap");
+            assert_eq!(name, "Global::Bootstrap");
             assert!(matches!(
                 &body[0],
                 Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _)
@@ -3599,7 +3599,7 @@ fn test_defmod_parses_module_body() {
 
     match ast.as_slice() {
         [Ast::Defmod(_, name, body, _)] => {
-            assert_eq!(name, "Kernel");
+            assert_eq!(name, "Global::Kernel");
             assert!(matches!(body.as_slice(), [Ast::Def(..)]));
         }
         _ => panic!("Expected single defmod declaration"),
@@ -3655,7 +3655,7 @@ fn test_defenum_parses_variants_with_payload_and_discriminant() {
 
     match ast.as_slice() {
         [Ast::EnumDef(_, name, type_params, variants, _)] => {
-            assert_eq!(name, "Direction");
+            assert_eq!(name, "Global::Direction");
             assert!(type_params.is_empty());
             assert_eq!(variants.len(), 3);
             assert_eq!(variants[0].name, "Up");
@@ -3682,7 +3682,7 @@ fn test_defenum_parses_generic_header() {
 
     match ast.as_slice() {
         [Ast::EnumDef(_, name, type_params, variants, _)] => {
-            assert_eq!(name, "ReduceStep");
+            assert_eq!(name, "Global::ReduceStep");
             assert_eq!(type_params.len(), 1);
             assert_eq!(type_params[0].name, "$A");
             assert_eq!(variants.len(), 2);
@@ -3813,6 +3813,74 @@ fn test_defmod_accepts_qualified_module_path() {
 }
 
 #[test]
+fn test_global_defmod_is_canonicalized_to_internal_root_path() {
+    let ast = parse_with_context(
+        "defmod Kernel { def name() -> String { \"repo\" } }",
+        ParserContext::module(1, None),
+    )
+    .expect("bare global defmod should parse");
+    assert!(matches!(ast.as_slice(), [Ast::Defmod(_, name, _, _)] if name == "Global::Kernel"));
+}
+
+#[test]
+fn test_namespace_block_lowers_bare_defmod_to_two_segment_canonical_path() {
+    let ast = parse_with_context(
+        r#"namespace Auth {
+  defmod Repo {
+    def name() -> String { "repo" }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("namespace declarations should lower into ordinary top-level declarations");
+    assert!(matches!(ast.as_slice(), [Ast::Defmod(_, name, _, _)] if name == "Auth::Repo"));
+}
+
+#[test]
+fn test_explicit_global_root_module_path_is_rejected() {
+    let err = parse_with_context(
+        "defmod Global::Kernel { def name() -> String { \"repo\" } }",
+        ParserContext::module(1, None),
+    )
+    .expect_err("explicit Global root should be rejected");
+    assert!(err.message().contains("Global"));
+}
+
+#[test]
+fn test_namespace_global_is_reserved() {
+    let err = parse_with_context(
+        "namespace Global { defmod Repo { def name() -> String { \"repo\" } } }",
+        ParserContext::module(1, None),
+    )
+    .expect_err("Global namespace should be reserved");
+    assert!(err.message().contains("Global"));
+}
+
+#[test]
+fn test_owner_name_cannot_reuse_namespace_name() {
+    let err = parse_with_context(
+        r#"namespace Auth {
+  defmod Auth {
+    def name() -> String { "repo" }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("owner name should not reuse active namespace name");
+    assert!(err.message().contains("Auth"));
+}
+
+#[test]
+fn test_global_type_names_are_canonicalized_to_internal_root_path() {
+    let ast = parse_with_context(
+        "defrecord User(name: String)",
+        ParserContext::module(1, None),
+    )
+    .expect("bare global type should parse");
+    assert!(matches!(ast.as_slice(), [Ast::RecordDef(_, name, _, _)] if name == "Global::User"));
+}
+
+#[test]
 fn test_impl_accepts_qualified_type_target() {
     let ast = parse_with_context(
         r#"impl Auth::User {
@@ -3842,7 +3910,7 @@ fn test_defmod_body_accepts_defextractor() {
     assert!(matches!(
         ast.as_slice(),
         [Ast::Defmod(_, name, body, _)]
-            if name == "Matchers"
+            if name == "Global::Matchers"
                 && matches!(body.as_slice(), [Ast::ExtractorDef(_, extractor_name, _, _, _, _, _)] if extractor_name == "never")
     ));
 }
@@ -3861,7 +3929,7 @@ fn test_defmod_body_accepts_import() {
     assert!(matches!(
         ast.as_slice(),
         [Ast::Defmod(_, name, body, _)]
-            if name == "Parser"
+            if name == "Global::Parser"
                 && matches!(body.as_slice(),
                     [
                         Ast::Import(_, AstPath { segments, .. }, ImportSpec::All),
@@ -3885,7 +3953,7 @@ fn test_impl_body_accepts_import() {
     assert!(matches!(
         ast.as_slice(),
         [Ast::ImplDef(_, target, body, _)]
-            if target == "User"
+            if target == "Global::User"
                 && matches!(body.as_slice(),
                     [
                         Ast::Import(_, AstPath { segments, .. }, ImportSpec::All),
@@ -3910,7 +3978,7 @@ fn test_trait_impl_body_accepts_import() {
         ast.as_slice(),
         [Ast::TraitImplDef(_, trait_name, _, AstTy::Named(_, target), body, _)]
             if trait_name == "Show"
-                && target == "User"
+                && target == "Global::User"
                 && matches!(body.as_slice(),
                     [
                         Ast::Import(_, AstPath { segments, .. }, ImportSpec::All),
@@ -3973,7 +4041,7 @@ fn test_std_module_compile_unit_accepts_builtin_decl() {
     )
     .expect("std module compile unit should accept builtin declarations");
     assert!(
-        matches!(ast.as_slice(), [Ast::Defmod(_, name, body, _)] if name == "Bootstrap"
+        matches!(ast.as_slice(), [Ast::Defmod(_, name, body, _)] if name == "Global::Bootstrap"
             && matches!(body.as_slice(), [Ast::BuiltinDecl(_, _, _, _, _)]))
     );
 }
@@ -3986,7 +4054,7 @@ fn test_std_module_compile_unit_accepts_builtin_type_decl() {
     )
     .expect("std module compile unit should accept builtin type declarations");
     assert!(
-        matches!(ast.as_slice(), [Ast::Defmod(_, name, body, _)] if name == "Bootstrap"
+        matches!(ast.as_slice(), [Ast::Defmod(_, name, body, _)] if name == "Global::Bootstrap"
             && matches!(body.as_slice(), [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name: builtin_name, .. }, _)] if builtin_name == "Int"))
     );
 }
@@ -4053,10 +4121,10 @@ impl Show for Auth::User {
         .any(|stmt| matches!(stmt, Ast::Defmod(_, name, _, _) if name == "Auth::Repo")));
     assert!(ast
         .iter()
-        .any(|stmt| matches!(stmt, Ast::DeferrorDef(_, name, _, _, _) if name == "Oops")));
+        .any(|stmt| matches!(stmt, Ast::DeferrorDef(_, name, _, _, _) if name == "Global::Oops")));
     assert!(ast
         .iter()
-        .any(|stmt| matches!(stmt, Ast::EnumDef(_, name, _, _, _) if name == "Role")));
+        .any(|stmt| matches!(stmt, Ast::EnumDef(_, name, _, _, _) if name == "Global::Role")));
     assert!(ast
         .iter()
         .any(|stmt| matches!(stmt, Ast::TraitDef(_, name, _, _, _) if name == "Named")));
@@ -4213,9 +4281,9 @@ defagent Counter {
 
     match &ast[0] {
         Ast::Defagent(_, name, body, process_spec, attrs) => {
-            assert_eq!(name, "Counter");
+            assert_eq!(name, "Global::Counter");
             assert_eq!(attrs.doc.as_deref(), Some("Counter agent docs."));
-            assert_eq!(process_spec.process_name, "Counter");
+            assert_eq!(process_spec.process_name, "Global::Counter");
             assert_eq!(process_spec.kind, crate::ast::ProcessKind::Agent);
             assert_eq!(
                 process_spec.instance,
@@ -4234,7 +4302,7 @@ defagent Counter {
                     assert!(params.is_empty());
                     assert_eq!(ty_name, "PID");
                     assert!(
-                        matches!(ty_args.as_slice(), [AstTy::Named(_, inner)] if inner == "Counter")
+                        matches!(ty_args.as_slice(), [AstTy::Named(_, inner)] if inner == "Global::Counter")
                     );
                 }
                 other => panic!("expected pid wrapper to return PID<Counter>, got {other:?}"),
@@ -4305,9 +4373,9 @@ fn test_defagent_parses_as_dedicated_process_ast_node() {
 
     match &ast[0] {
         Ast::Defagent(_, name, body, process_spec, attrs) => {
-            assert_eq!(name, "Counter");
+            assert_eq!(name, "Global::Counter");
             assert_eq!(attrs.doc, None);
-            assert_eq!(process_spec.process_name, "Counter");
+            assert_eq!(process_spec.process_name, "Global::Counter");
             assert_eq!(process_spec.kind, crate::ast::ProcessKind::Agent);
             assert!(body.iter().any(
                 |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "fetch")
@@ -4496,7 +4564,7 @@ fn test_defagent_worker_init_route_is_public_surface() {
 
     match &ast[0] {
         Ast::Defagent(_, name, body, _, _) => {
-            assert_eq!(name, "Worker");
+            assert_eq!(name, "Global::Worker");
             assert!(body.iter().all(
                 |node| !matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "pid")
             ));
@@ -4521,7 +4589,7 @@ fn test_defagent_worker_init_route_is_public_surface() {
                                 ty_args.as_slice(),
                                 [AstTy::Generic(_, inner_name, inner_args)]
                                     if inner_name == "PID"
-                                        && matches!(inner_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Worker")
+                                        && matches!(inner_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Global::Worker")
                             )
                     );
                     assert!(matches!(
@@ -4604,7 +4672,7 @@ fn test_defgenserver_worker_init_route_uses_user_defined_name() {
 
     match &ast[0] {
         Ast::Defgenserver(_, name, body, _, _) => {
-            assert_eq!(name, "QueueServer");
+            assert_eq!(name, "Global::QueueServer");
             let init_wrapper = body
                 .iter()
                 .find(|node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "boot"))
@@ -4625,7 +4693,7 @@ fn test_defgenserver_worker_init_route_uses_user_defined_name() {
                                 ty_args.as_slice(),
                                 [AstTy::Generic(_, inner_name, inner_args)]
                                     if inner_name == "PID"
-                                        && matches!(inner_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "QueueServer")
+                                        && matches!(inner_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Global::QueueServer")
                             )
                     );
                     assert!(matches!(
@@ -4651,7 +4719,7 @@ fn test_defgenserver_worker_init_route_uses_user_defined_name() {
                         [FunParam { name, ty: AstTy::Generic(_, ty_name, ty_args), .. }]
                             if name == "pid"
                                 && ty_name == "PID"
-                                && matches!(ty_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "QueueServer")
+                                && matches!(ty_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Global::QueueServer")
                     ));
                 }
                 other => panic!(
@@ -4681,7 +4749,7 @@ fn test_defsupervisor_generates_compiler_managed_surface_from_policy_meta() {
 
     match &ast[0] {
         Ast::Defsupervisor(_, name, body, process_spec, _) => {
-            assert_eq!(name, "AppSup");
+            assert_eq!(name, "Global::AppSup");
             assert_eq!(process_spec.kind, crate::ast::ProcessKind::Supervisor);
             assert!(body.iter().any(
                 |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "__agent_init")

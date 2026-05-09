@@ -179,8 +179,8 @@ deferror Oops(reason: String) { reason }"#,
 
     let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
     assert!(index.contains_key("Bootstrap::to_int"));
-    assert!(index.contains_key("Pair"));
-    assert!(index.contains_key("Oops"));
+    assert!(index.contains_key("Global::Pair"));
+    assert!(index.contains_key("Global::Oops"));
 }
 
 #[test]
@@ -254,8 +254,8 @@ fn test_resolve_staged_program_keeps_process_specs() {
 
     assert_eq!(resolved.process_specs.len(), 1);
     let spec = &resolved.process_specs[0];
-    assert_eq!(spec.module_path, "Counter");
-    assert_eq!(spec.process_name, "Counter");
+    assert_eq!(spec.module_path, "Global::Counter");
+    assert_eq!(spec.process_name, "Global::Counter");
 }
 
 #[test]
@@ -299,8 +299,10 @@ fn test_precollect_namespaced_duplicate_type_is_rejected() {
     let module_stages = vec![vec![staged_module(
         "",
         parse_module_ast(
-            r#"namespace Auth { defrecord User(name: String) }
-namespace Auth { defrecord User(name: String) }"#,
+            r#"namespace Auth {
+  defrecord User(name: String)
+  defrecord User(name: String)
+}"#,
             "",
         ),
     )]];
@@ -350,7 +352,7 @@ fn test_precollect_declaration_index_tracks_bootstrap_std_user_stage_split() {
     ];
 
     let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
-    assert_eq!(index["NoneError"].stage_index, 0);
+    assert_eq!(index["Global::NoneError"].stage_index, 0);
     assert_eq!(index["Std::Math::add"].stage_index, 1);
     assert_eq!(index["User::Main::main"].stage_index, 2);
 }
@@ -382,22 +384,24 @@ impl User {
     )]];
 
     let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
-    let ctor = index.get("User::new").expect("new should be indexed");
-    assert_eq!(ctor.module_path, "User");
+    let ctor = index
+        .get("Global::User::new")
+        .expect("new should be indexed");
+    assert_eq!(ctor.module_path, "Global::User");
     assert_eq!(ctor.name, "new");
     assert_eq!(ctor.kind, DeclarationKind::ImplCtorNew);
 
     let normalize = index
-        .get("User::normalize")
+        .get("Global::User::normalize")
         .expect("normalize should be indexed");
-    assert_eq!(normalize.module_path, "User");
+    assert_eq!(normalize.module_path, "Global::User");
     assert_eq!(normalize.name, "normalize");
     assert_eq!(normalize.kind, DeclarationKind::ImplMethod);
 
     let deconstruct = index
-        .get("User::deconstruct")
+        .get("Global::User::deconstruct")
         .expect("deconstruct should be indexed");
-    assert_eq!(deconstruct.module_path, "User");
+    assert_eq!(deconstruct.module_path, "Global::User");
     assert_eq!(deconstruct.name, "deconstruct");
     assert_eq!(deconstruct.kind, DeclarationKind::Extractor);
 }
@@ -423,9 +427,9 @@ impl Light {
 
     let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
     let stop_code = index
-        .get("Light::stop_code")
+        .get("Global::Light::stop_code")
         .expect("enum extractor should be indexed");
-    assert_eq!(stop_code.module_path, "Light");
+    assert_eq!(stop_code.module_path, "Global::Light");
     assert_eq!(stop_code.name, "stop_code");
     assert_eq!(stop_code.kind, DeclarationKind::Extractor);
 }
@@ -488,9 +492,9 @@ fn test_precollect_allows_impl_target_defined_in_another_file_same_stage() {
 
     let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
     let normalize = index
-        .get("User::normalize")
+        .get("Global::User::normalize")
         .expect("impl method should be indexed");
-    assert_eq!(normalize.module_path, "User");
+    assert_eq!(normalize.module_path, "Global::User");
     assert_eq!(normalize.kind, DeclarationKind::ImplMethod);
 }
 
@@ -523,7 +527,7 @@ fn test_resolve_allows_impl_target_defined_in_another_file_same_stage() {
         .expect("split impl in same stage should resolve");
     assert!(resolved
         .iter()
-        .any(|node| matches!(node, Resolved::Def(_, id, ..) if id.name == "User::normalize")));
+        .any(|node| matches!(node, Resolved::Def(_, id, ..) if id.name == "Global::User::normalize")));
 }
 
 #[test]
@@ -683,9 +687,9 @@ fn test_precollect_allows_impl_for_builtin_type_owner() {
 
     let index = precollect_declaration_index(&module_stages).expect("builtin impl should succeed");
     let method = index
-        .get("Int::abs_alias")
+        .get("Global::Int::abs_alias")
         .expect("builtin impl method should be indexed");
-    assert_eq!(method.module_path, "Int");
+    assert_eq!(method.module_path, "Global::Int");
     assert_eq!(method.kind, DeclarationKind::ImplMethod);
 }
 
@@ -711,8 +715,8 @@ impl User {
 
     let declaration_index =
         precollect_declaration_index(&module_stages).expect("precollect should succeed");
-    assert!(declaration_index.contains_key("User::new"));
-    assert!(declaration_index.contains_key("User::normalize"));
+    assert!(declaration_index.contains_key("Global::User::new"));
+    assert!(declaration_index.contains_key("Global::User::normalize"));
     assert!(!declaration_index.contains_key("Types::User::normalize"));
 
     let resolved = resolve_user_with_modules(
@@ -723,7 +727,7 @@ normalized = User::normalize(user)"#,
     .expect("qualified impl calls should resolve through type owner");
     assert!(resolved
         .iter()
-        .any(|node| matches!(node, Resolved::Def(_, id, ..) if id.name == "User::normalize")));
+        .any(|node| matches!(node, Resolved::Def(_, id, ..) if id.name == "Global::User::normalize")));
 }
 
 #[test]
@@ -811,7 +815,7 @@ impl Pair {
         precollect_declaration_index(&module_stages).expect_err("record impl should be rejected");
     assert!(err
         .message
-        .contains("impl target `Pair` must be a standard type, struct, or enum"));
+        .contains("impl target `Global::Pair` must be a standard type, struct, or enum"));
 }
 
 #[test]
@@ -830,7 +834,7 @@ fn test_precollect_rejects_impl_target_for_cond_clauses_builtin_type() {
         .expect_err("CondClauses builtin clause type should reject inherent impl");
     assert!(err
         .message
-        .contains("impl target `CondClauses` must be a standard type owner or a struct/enum defined in the current stage"));
+        .contains("impl target `Global::CondClauses` must be a standard type owner or a struct/enum defined in the current stage"));
 }
 
 #[test]
@@ -947,7 +951,7 @@ impl Add for Int {
     assert!(matches!(
         &resolved[1],
         Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), methods)
-            if id.name == "Add" && target == "Int" && methods.len() == 1
+            if id.name == "Add" && target == "Global::Int" && methods.len() == 1
     ));
 }
 
@@ -969,7 +973,7 @@ impl Add for Int {
         &resolved[1],
         Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), methods)
             if id.name == "Add"
-                && target == "Int"
+                && target == "Global::Int"
                 && methods.len() == 1
                 && methods[0].is_builtin
                 && methods[0].function_id.qualified_name.as_deref().is_some_and(|name| {
@@ -1160,7 +1164,7 @@ impl User {
         .iter()
         .find_map(|node| match node {
             Resolved::Def(_, id, _, _, _, body, _)
-                if id.qualified_name.as_deref() == Some("User::new") =>
+                if id.qualified_name.as_deref() == Some("Global::User::new") =>
             {
                 Some(body.as_ref())
             }
@@ -1219,7 +1223,7 @@ fn test_struct_readonly_metadata_and_fields_resolve() {
 
     match &resolved[0] {
         Resolved::StructDef(_, id, fields, attrs) => {
-            assert_eq!(id.name, "User");
+            assert_eq!(id.name, "Global::User");
             assert!(attrs.readonly);
             assert_eq!(fields[0].name, "password");
             assert_eq!(fields[0].visibility, spire::ast::Visibility::Private);
@@ -1261,6 +1265,82 @@ fn test_module_builtin_can_be_resolved_by_qualified_name() {
         },
         _ => panic!("Expected bind"),
     }
+}
+
+#[test]
+fn test_impl_method_in_canonical_module_keeps_same_uid_for_qualified_calls() {
+    let module_stages = vec![vec![staged_module(
+        "Global::Int",
+        parse_module_ast(
+            r#"defenum IntBase {
+  Dec,
+}
+
+impl IntBase {
+  def radix(self: Self) -> Int {
+    10
+  }
+}
+
+def parse_base(base: IntBase) -> Int {
+  IntBase::radix(base)
+}"#,
+            "Global::Int",
+        ),
+    )]];
+
+    let resolved =
+        resolve_user_with_modules("", &module_stages).expect("impl method module should resolve");
+
+    let decl_uid = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, _, _)
+                if id.qualified_name.as_deref() == Some("Global::IntBase::radix") =>
+            {
+                Some(id.unique_id)
+            }
+            _ => None,
+        })
+        .expect("expected impl method declaration");
+
+    let call_uid = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, body, _) if id.name == "parse_base" => {
+                assert_eq!(id.qualified_name.as_deref(), Some("Global::Int::parse_base"));
+                match body.as_ref() {
+                    Resolved::Block(_, stmts) => stmts.iter().find_map(|stmt| match stmt {
+                        Resolved::App(_, func, _) => match func.as_ref() {
+                            Resolved::Var(_, id)
+                                if id.name == "IntBase::radix"
+                                    && id.qualified_name.as_deref()
+                                        == Some("Global::IntBase::radix") =>
+                            {
+                                Some(id.unique_id)
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    }),
+                    Resolved::App(_, func, _) => match func.as_ref() {
+                        Resolved::Var(_, id)
+                            if id.name == "IntBase::radix"
+                                && id.qualified_name.as_deref()
+                                    == Some("Global::IntBase::radix") =>
+                        {
+                            Some(id.unique_id)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .expect("expected qualified impl method call");
+
+    assert_eq!(call_uid, decl_uid);
 }
 
 #[test]
@@ -2125,7 +2205,9 @@ fn test_duplicate_top_level_struct_is_error() {
 defstruct User { name: String }"#,
     );
     let err = result.expect_err("duplicate struct must fail");
-    assert!(err.message.contains("Duplicate top-level definition: User"));
+    assert!(err
+        .message
+        .contains("Duplicate top-level definition: User"));
 }
 
 #[test]
@@ -2605,7 +2687,7 @@ impl User {
             Resolved::App(_, func, _) => match func.as_ref() {
                 Resolved::Var(_, id) => {
                     assert_eq!(id.name, "greet");
-                    assert_eq!(id.qualified_name.as_deref(), Some("User::greet"));
+                    assert_eq!(id.qualified_name.as_deref(), Some("Global::User::greet"));
                 }
                 other => panic!("expected imported impl helper var, got {:?}", other),
             },

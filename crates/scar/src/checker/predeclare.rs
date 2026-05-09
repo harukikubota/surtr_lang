@@ -150,11 +150,11 @@ impl Checker {
                 continue;
             };
 
-            if builtin_type_meta_by_name(name).is_some() {
+            if builtin_type_meta_by_name(Self::surface_name(name)).is_some() {
                 return Err(TypeError {
                     message: format!(
                         "Type name `{}` is reserved by a canonical builtin type declaration",
-                        name
+                        Self::surface_name(name)
                     ),
                     span: span.clone(),
                     hint: Some("Builtin and canonical type names cannot be redefined.".into()),
@@ -540,6 +540,12 @@ impl Checker {
     }
 
     pub(super) fn split_impl_method_id(id: &ResolvedId) -> Option<(String, String)> {
+        if let Some(qualified) = id.qualified_name.as_deref() {
+            if let Some(split) = Self::split_impl_method_name(qualified) {
+                return Some(split);
+            }
+        }
+
         if let Some(split) = Self::split_impl_method_name(&id.name) {
             return Some(split);
         }
@@ -689,7 +695,16 @@ impl Checker {
                         })
                         .collect::<Result<Vec<_>, TypeError>>()?,
                 );
-                struct_defs.insert(id.name.clone(), (id.span.clone(), expected_self_ty));
+                struct_defs.insert(
+                    id.name.clone(),
+                    (id.span.clone(), expected_self_ty.clone()),
+                );
+                if let Some(surface_name) = id.name.strip_prefix("Global::") {
+                    struct_defs.insert(
+                        surface_name.to_string(),
+                        (id.span.clone(), expected_self_ty),
+                    );
+                }
             }
         }
 
@@ -700,6 +715,12 @@ impl Checker {
             if let Some((target, method)) = Self::split_impl_method_id(id) {
                 if method == "new" {
                     structs_with_new.insert(target.clone());
+                    if !target.contains("::") {
+                        structs_with_new.insert(format!("Global::{}", target));
+                    }
+                    if let Some(surface_name) = target.strip_prefix("Global::") {
+                        structs_with_new.insert(surface_name.to_string());
+                    }
                     let Some((span, expected_self_ty)) = struct_defs.get(&target) else {
                         continue;
                     };
@@ -740,7 +761,11 @@ impl Checker {
 
     pub(super) fn register_function_id(&mut self, id: &ResolvedId) {
         let key = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
-        self.function_ids_by_name.insert(key, id.clone());
+        self.function_ids_by_name.insert(key.clone(), id.clone());
+        if let Some(surface_key) = key.strip_prefix("Global::") {
+            self.function_ids_by_name
+                .insert(surface_key.to_string(), id.clone());
+        }
     }
 
     pub(super) fn trait_key(&self, id: &ResolvedId) -> String {
@@ -958,11 +983,42 @@ impl Checker {
     }
 
     fn public_trait_target_display(info: &TraitImplInfo) -> Option<String> {
-        let display = Self::ast_ty_key(&info.target_ast_ty);
+        let display = Self::surface_ast_ty_key(&info.target_ast_ty);
         let base = display.split('<').next().unwrap_or(display.as_str());
         match base {
             "TypeRef" | "Hole" | "Closure" | "MatchArms" | "CondClauses" | "Self" => None,
             _ => Some(display),
+        }
+    }
+
+    fn surface_ast_ty_key(ty: &AstTy) -> String {
+        match ty {
+            AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => Self::surface_name(name).into(),
+            AstTy::Generic(_, name, args) => format!(
+                "{}<{}>",
+                Self::surface_name(name),
+                args.iter()
+                    .map(Self::surface_ast_ty_key)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Tuple(_, items) => format!(
+                "({})",
+                items
+                    .iter()
+                    .map(Self::surface_ast_ty_key)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Func(_, params, ret) => format!(
+                "({} -> {})",
+                params
+                    .iter()
+                    .map(Self::surface_ast_ty_key)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                Self::surface_ast_ty_key(ret)
+            ),
         }
     }
 
@@ -1046,6 +1102,7 @@ impl Checker {
         method_name: &str,
         target_name: &str,
     ) -> Option<TraitDispatchTarget> {
+        let target_name = Self::surface_name(target_name);
         if matches!(target_name, "Int" | "Float") {
             let op = if self.trait_matches_short_name(trait_name, "Add") && method_name == "add" {
                 Some(BinOp::Add)

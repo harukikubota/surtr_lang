@@ -450,7 +450,7 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
     let observation = vm.observation().unwrap_or_default();
     let process_runtime = vm.process_runtime_snapshot();
 
-    json!({
+    let mut dump = json!({
         "schema_version": 1,
         "result": {
             "status": outcome.status(),
@@ -559,7 +559,42 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
             "dropped_events": observation.dropped_trace_events,
             "lines": observation.trace_lines,
         }
-    })
+    });
+    surface_strip_global_prefixes(&mut dump);
+    dump
+}
+
+fn surface_strip_global_prefixes(value: &mut JsonValue) {
+    match value {
+        JsonValue::String(text) => {
+            if let Some(stripped) = text.strip_prefix("Global::") {
+                *text = stripped.to_string();
+            }
+        }
+        JsonValue::Array(items) => {
+            for item in items {
+                surface_strip_global_prefixes(item);
+            }
+        }
+        JsonValue::Object(map) => {
+            let keys = map.keys().cloned().collect::<Vec<_>>();
+            for key in keys {
+                let mut item = map
+                    .remove(&key)
+                    .expect("json object key should still exist during surface rewrite");
+                surface_strip_global_prefixes(&mut item);
+                let surface_key = key
+                    .strip_prefix("Global::")
+                    .unwrap_or(key.as_str())
+                    .to_string();
+                map.insert(surface_key, item);
+            }
+            for item in map.values_mut() {
+                surface_strip_global_prefixes(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn report_final_result_error_if_any(vm: &eldr::VM) -> bool {
