@@ -442,7 +442,7 @@ SYP v0 では action に `ParserContext` を渡さない。
 ```text
 - action を AST 構築に集中させる
 - parser stack / 外側 nonterminal / 制御文脈を隠す
-- lens による深い外部更新を避ける
+- facet による深い外部更新を避ける
 - action の破壊的変更を抑える
 ```
 

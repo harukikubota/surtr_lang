@@ -416,19 +416,19 @@ struct TraitImplInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum ConstKind {
     PrimitiveLiteral,
-    LensPath,
+    FacetPath,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 enum StoredConstValue {
     Literal(Lit),
-    LensPath(TypedLensPath),
+    FacetPath(TypedFacetPath),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-enum StoredLensPath {
-    Concrete(TypedLensPath),
-    Pending(PendingLensPath),
+enum StoredFacetPath {
+    Concrete(TypedFacetPath),
+    Pending(PendingFacetPath),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -843,7 +843,7 @@ type TraitImplIndex = HashMap<String, Vec<TraitImplKey>>;
 pub struct ScarCheckpoint {
     env: TypeEnv,
     consts: HashMap<u32, ConstMeta>,
-    lens_bindings: HashMap<u32, StoredLensPath>,
+    facet_bindings: HashMap<u32, StoredFacetPath>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
@@ -853,13 +853,14 @@ pub struct ScarCheckpoint {
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
+    process_specs: Vec<TypedProcessSpec>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ScarSession {
     env: TypeEnv,
     consts: HashMap<u32, ConstMeta>,
-    lens_bindings: HashMap<u32, StoredLensPath>,
+    facet_bindings: HashMap<u32, StoredFacetPath>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
@@ -869,12 +870,13 @@ pub struct ScarSession {
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
+    process_specs: Vec<TypedProcessSpec>,
 }
 
 struct CheckerParts {
     env: TypeEnv,
     consts: HashMap<u32, ConstMeta>,
-    lens_bindings: HashMap<u32, StoredLensPath>,
+    facet_bindings: HashMap<u32, StoredFacetPath>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
@@ -891,7 +893,7 @@ impl ScarSession {
         Self {
             env: initialize_env(),
             consts: HashMap::new(),
-            lens_bindings: HashMap::new(),
+            facet_bindings: HashMap::new(),
             user_func_params: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
@@ -901,6 +903,7 @@ impl ScarSession {
             trait_impl_index_by_base_trait: HashMap::new(),
             trait_methods_by_qualified_name: HashMap::new(),
             tyvar_bounds: HashMap::new(),
+            process_specs: Vec::new(),
         }
     }
 
@@ -928,7 +931,7 @@ impl ScarSession {
         let mut checker = Checker::with_env_and_params(
             self.env.clone(),
             self.consts.clone(),
-            self.lens_bindings.clone(),
+            self.facet_bindings.clone(),
             self.user_func_params.clone(),
             self.impl_method_uids.clone(),
             self.function_ids_by_name.clone(),
@@ -942,10 +945,11 @@ impl ScarSession {
         );
         checker.set_process_handler_dependencies(&process_specs);
         let nodes = checker.check_program(program.resolved)?;
+        let persisted_process_specs = checker.process_specs.clone();
         let CheckerParts {
             env,
             consts,
-            lens_bindings,
+            facet_bindings,
             user_func_params,
             impl_method_uids,
             function_ids_by_name,
@@ -958,7 +962,7 @@ impl ScarSession {
         } = checker.into_parts();
         self.env = env;
         self.consts = consts;
-        self.lens_bindings = lens_bindings;
+        self.facet_bindings = facet_bindings;
         self.user_func_params = user_func_params;
         self.impl_method_uids = impl_method_uids;
         self.function_ids_by_name = function_ids_by_name;
@@ -968,6 +972,7 @@ impl ScarSession {
         self.trait_impl_index_by_base_trait = trait_impl_index_by_base_trait;
         self.trait_methods_by_qualified_name = trait_methods_by_qualified_name;
         self.tyvar_bounds = tyvar_bounds;
+        self.process_specs = persisted_process_specs;
         Ok(TypedProgram {
             nodes,
             process_specs,
@@ -983,7 +988,7 @@ impl ScarSession {
         let mut checker = Checker::with_env_and_params(
             self.env.clone(),
             self.consts.clone(),
-            self.lens_bindings.clone(),
+            self.facet_bindings.clone(),
             self.user_func_params.clone(),
             self.impl_method_uids.clone(),
             self.function_ids_by_name.clone(),
@@ -995,11 +1000,13 @@ impl ScarSession {
             self.tyvar_bounds.clone(),
             context,
         );
+        checker.set_process_handler_dependencies(self.process_specs.as_slice());
         let typed = checker.check_program(resolved)?;
+        let persisted_process_specs = checker.process_specs.clone();
         let CheckerParts {
             env,
             consts,
-            lens_bindings,
+            facet_bindings,
             user_func_params,
             impl_method_uids,
             function_ids_by_name,
@@ -1012,7 +1019,7 @@ impl ScarSession {
         } = checker.into_parts();
         self.env = env;
         self.consts = consts;
-        self.lens_bindings = lens_bindings;
+        self.facet_bindings = facet_bindings;
         self.user_func_params = user_func_params;
         self.impl_method_uids = impl_method_uids;
         self.function_ids_by_name = function_ids_by_name;
@@ -1022,6 +1029,7 @@ impl ScarSession {
         self.trait_impl_index_by_base_trait = trait_impl_index_by_base_trait;
         self.trait_methods_by_qualified_name = trait_methods_by_qualified_name;
         self.tyvar_bounds = tyvar_bounds;
+        self.process_specs = persisted_process_specs;
         Ok(typed)
     }
 
@@ -1029,7 +1037,7 @@ impl ScarSession {
         ScarCheckpoint {
             env: self.env.clone(),
             consts: self.consts.clone(),
-            lens_bindings: self.lens_bindings.clone(),
+            facet_bindings: self.facet_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
@@ -1039,6 +1047,7 @@ impl ScarSession {
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
+            process_specs: self.process_specs.clone(),
         }
     }
 
@@ -1053,7 +1062,7 @@ impl ScarSession {
     pub fn rollback(&mut self, checkpoint: ScarCheckpoint) {
         self.env = checkpoint.env;
         self.consts = checkpoint.consts;
-        self.lens_bindings = checkpoint.lens_bindings;
+        self.facet_bindings = checkpoint.facet_bindings;
         self.user_func_params = checkpoint.user_func_params;
         self.impl_method_uids = checkpoint.impl_method_uids;
         self.function_ids_by_name = checkpoint.function_ids_by_name;
@@ -1063,6 +1072,7 @@ impl ScarSession {
         self.trait_impl_index_by_base_trait = checkpoint.trait_impl_index_by_base_trait;
         self.trait_methods_by_qualified_name = checkpoint.trait_methods_by_qualified_name;
         self.tyvar_bounds = checkpoint.tyvar_bounds;
+        self.process_specs = checkpoint.process_specs;
     }
 
     pub fn ensure_next_fun_idx_at_least(&mut self, next_fun_idx: u32) {
@@ -1260,13 +1270,13 @@ impl ScarSession {
         }
     }
 
-    fn rewrite_fun_indices_in_lens_path(path: &mut TypedLensPath, rewrites: &HashMap<u32, u32>) {
+    fn rewrite_fun_indices_in_facet_path(path: &mut TypedFacetPath, rewrites: &HashMap<u32, u32>) {
         Self::rewrite_fun_indices_in_ty(&mut path.source_ty, rewrites);
         Self::rewrite_fun_indices_in_ty(&mut path.focus_ty, rewrites);
     }
 
-    fn rewrite_fun_indices_in_pending_lens_path(
-        path: &mut PendingLensPath,
+    fn rewrite_fun_indices_in_pending_facet_path(
+        path: &mut PendingFacetPath,
         rewrites: &HashMap<u32, u32>,
     ) {
         if let Some(source_ty_hint) = &mut path.source_ty_hint {
@@ -1385,19 +1395,19 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_node(value, rewrites);
             }
             TypedInner::ProcessContextHandler { .. } => {}
-            TypedInner::LensPath(path) => Self::rewrite_fun_indices_in_lens_path(path, rewrites),
-            TypedInner::PendingLensPath(path) => {
-                Self::rewrite_fun_indices_in_pending_lens_path(path, rewrites);
+            TypedInner::FacetPath(path) => Self::rewrite_fun_indices_in_facet_path(path, rewrites),
+            TypedInner::PendingFacetPath(path) => {
+                Self::rewrite_fun_indices_in_pending_facet_path(path, rewrites);
             }
-            TypedInner::LensView {
+            TypedInner::FacetView {
                 source,
                 path,
                 source_is_result: _,
             } => {
                 Self::rewrite_fun_indices_in_node(source, rewrites);
-                Self::rewrite_fun_indices_in_lens_path(path, rewrites);
+                Self::rewrite_fun_indices_in_facet_path(path, rewrites);
             }
-            TypedInner::LensSet {
+            TypedInner::FacetSet {
                 source,
                 path,
                 value,
@@ -1405,10 +1415,10 @@ impl ScarSession {
                 mode: _,
             } => {
                 Self::rewrite_fun_indices_in_node(source, rewrites);
-                Self::rewrite_fun_indices_in_lens_path(path, rewrites);
+                Self::rewrite_fun_indices_in_facet_path(path, rewrites);
                 Self::rewrite_fun_indices_in_node(value, rewrites);
             }
-            TypedInner::LensOver {
+            TypedInner::FacetOver {
                 source,
                 path,
                 update_fun,
@@ -1416,7 +1426,7 @@ impl ScarSession {
                 mode: _,
             } => {
                 Self::rewrite_fun_indices_in_node(source, rewrites);
-                Self::rewrite_fun_indices_in_lens_path(path, rewrites);
+                Self::rewrite_fun_indices_in_facet_path(path, rewrites);
                 Self::rewrite_fun_indices_in_node(update_fun, rewrites);
             }
             TypedInner::StructLit(_, fields) | TypedInner::ConstructorCall(_, fields) => {
@@ -1584,7 +1594,7 @@ struct Checker {
     current_impl_struct_target: Option<String>,
     in_extractor_body: bool,
     closure_depth: usize,
-    lens_bindings: HashMap<u32, StoredLensPath>,
+    facet_bindings: HashMap<u32, StoredFacetPath>,
     consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
@@ -1654,7 +1664,7 @@ impl Checker {
             current_impl_struct_target: None,
             in_extractor_body: false,
             closure_depth: 0,
-            lens_bindings: HashMap::new(),
+            facet_bindings: HashMap::new(),
             consts: HashMap::new(),
             user_func_params: HashMap::new(),
             impl_method_uids: HashMap::new(),
@@ -1680,7 +1690,7 @@ impl Checker {
     fn with_env_and_params(
         env: TypeEnv,
         consts: HashMap<u32, ConstMeta>,
-        lens_bindings: HashMap<u32, StoredLensPath>,
+        facet_bindings: HashMap<u32, StoredFacetPath>,
         user_func_params: HashMap<u32, Vec<String>>,
         impl_method_uids: HashMap<String, u32>,
         function_ids_by_name: HashMap<String, ResolvedId>,
@@ -1699,7 +1709,7 @@ impl Checker {
             current_impl_struct_target: None,
             in_extractor_body: false,
             closure_depth: 0,
-            lens_bindings,
+            facet_bindings,
             consts,
             user_func_params,
             impl_method_uids,
@@ -1727,7 +1737,7 @@ impl Checker {
         let mut checker = Checker::with_env_and_params(
             env,
             self.consts.clone(),
-            self.lens_bindings.clone(),
+            self.facet_bindings.clone(),
             self.user_func_params.clone(),
             self.impl_method_uids.clone(),
             self.function_ids_by_name.clone(),
@@ -1748,7 +1758,7 @@ impl Checker {
         checker.current_impl_struct_target = self.current_impl_struct_target.clone();
         checker.in_extractor_body = self.in_extractor_body;
         checker.closure_depth = self.closure_depth;
-        checker.lens_bindings = self.lens_bindings.clone();
+        checker.facet_bindings = self.facet_bindings.clone();
         checker.substitutions = self.substitutions.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
         checker.process_handler_dependencies = self.process_handler_dependencies.clone();
@@ -2307,7 +2317,7 @@ impl Checker {
         CheckerParts {
             env: self.env,
             consts: self.consts,
-            lens_bindings: self.lens_bindings,
+            facet_bindings: self.facet_bindings,
             user_func_params: self.user_func_params,
             impl_method_uids: self.impl_method_uids,
             function_ids_by_name: self.function_ids_by_name,

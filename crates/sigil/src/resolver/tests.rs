@@ -3276,7 +3276,7 @@ val = p.x"#,
 
 #[test]
 fn test_tuple_type_root_resolves_in_field_access() {
-    let resolved = parse_and_resolve("lens = Tuple._0").unwrap();
+    let resolved = parse_and_resolve("facet = Tuple._0").unwrap();
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::FieldAccess(_, expr, field) => {

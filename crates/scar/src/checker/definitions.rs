@@ -523,7 +523,7 @@ impl Checker {
         let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
         let saved_in_extractor_body = self.in_extractor_body;
         let saved_closure_depth = self.closure_depth;
-        let saved_lens_bindings = self.lens_bindings.clone();
+        let saved_facet_bindings = self.facet_bindings.clone();
 
         self.env.push_var_scope();
         self.function_return_ty = Some(function_return_ty);
@@ -548,7 +548,7 @@ impl Checker {
         self.current_impl_struct_target = saved_current_impl_struct_target;
         self.in_extractor_body = saved_in_extractor_body;
         self.closure_depth = saved_closure_depth;
-        self.lens_bindings = saved_lens_bindings;
+        self.facet_bindings = saved_facet_bindings;
 
         result
     }
@@ -589,7 +589,7 @@ impl Checker {
                     self.error_function_param_not_allowed_error(Self::ast_ty_span(&param.ty))
                 );
             }
-            if self.ty_contains_lens(&param_ty) {
+            if self.ty_contains_facet(&param_ty) {
                 return Err(TypeError {
                     message:
                         "Facet is compile-time only in Stage1 and cannot appear in function parameter types"
@@ -613,7 +613,7 @@ impl Checker {
             )?,
             None => Ty::Unit,
         };
-        if self.ty_contains_lens(&expected_ret) {
+        if self.ty_contains_facet(&expected_ret) {
             return Err(TypeError {
                 message:
                     "Facet is compile-time only in Stage1 and cannot appear in function return types"
@@ -770,7 +770,7 @@ impl Checker {
             )?,
             None => self.env.fresh_tyvar(),
         };
-        if self.ty_contains_lens(&param_ty) {
+        if self.ty_contains_facet(&param_ty) {
             return Err(TypeError {
                 message:
                     "Facet is compile-time only in Stage1 and cannot appear in extractor parameter types"
@@ -790,7 +790,7 @@ impl Checker {
             TypeSyntaxContext::ExtractorReturn,
             &mut tyvars,
         )?;
-        if self.ty_contains_lens(&expected_ret) {
+        if self.ty_contains_facet(&expected_ret) {
             return Err(TypeError {
                 message:
                     "Facet is compile-time only in Stage1 and cannot appear in extractor return types"
@@ -1317,7 +1317,7 @@ impl Checker {
                     hint: None,
                 })?;
             let typed_val = self.check_node(resolved_val)?;
-            if self.ty_contains_lens(&typed_val.ty) {
+            if self.ty_contains_facet(&typed_val.ty) {
                 return Err(TypeError {
                     message:
                         "Struct literal fields cannot contain Facet values in Stage1 (Facet is compile-time only)"
@@ -1366,7 +1366,7 @@ impl Checker {
             let inner = match &args[0] {
                 ResolvedRecordLitArg::Positional(expr) => {
                     let typed = self.check_node(expr)?;
-                    if self.ty_contains_lens(&typed.ty) {
+                    if self.ty_contains_facet(&typed.ty) {
                         return Err(TypeError {
                             message:
                                 "Result constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
@@ -1457,7 +1457,7 @@ impl Checker {
                         });
                     }
                 };
-                if self.ty_contains_lens(&typed.ty) {
+                if self.ty_contains_facet(&typed.ty) {
                     return Err(TypeError {
                         message:
                             "Enum constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
@@ -1524,7 +1524,7 @@ impl Checker {
                                 });
                             }
                         };
-                        if self.ty_contains_lens(&typed_val.ty) {
+                        if self.ty_contains_facet(&typed_val.ty) {
                             return Err(TypeError {
                                 message:
                                     "Constructor arguments cannot contain Facet values in Stage1 (Facet is compile-time only)"
@@ -1616,7 +1616,7 @@ impl Checker {
                             unreachable!("validated argument form above")
                         };
                         let typed = self.check_node(expr)?;
-                        if self.ty_contains_lens(&typed.ty) {
+                        if self.ty_contains_facet(&typed.ty) {
                             return Err(TypeError {
                                 message:
                                     "Constructor arguments cannot contain Facet values in Stage1 (Facet is compile-time only)"
@@ -1788,7 +1788,7 @@ impl Checker {
             for (i, arg) in args.iter().enumerate() {
                 if let ResolvedRecordLitArg::Positional(expr) = arg {
                     let typed_val = self.check_node(expr)?;
-                    if self.ty_contains_lens(&typed_val.ty) {
+                    if self.ty_contains_facet(&typed_val.ty) {
                         return Err(TypeError {
                             message:
                                 "Record constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
@@ -1834,7 +1834,7 @@ impl Checker {
                             hint: None,
                         })?;
                     let typed_val = self.check_node(expr)?;
-                    if self.ty_contains_lens(&typed_val.ty) {
+                    if self.ty_contains_facet(&typed_val.ty) {
                         return Err(TypeError {
                             message:
                                 "Record constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"

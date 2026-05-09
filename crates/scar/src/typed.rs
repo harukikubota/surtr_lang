@@ -124,7 +124,7 @@ pub enum OperatorTraitOp {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum TypedLensSegment {
+pub enum TypedFacetSegment {
     Field {
         field_name: String,
         field_index: u32,
@@ -157,12 +157,12 @@ pub struct TypedFieldPolicy {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TypedLensPathKind {
+pub enum TypedFacetPathKind {
     Structural,
     Variant,
 }
 
-impl TypedLensPathKind {
+impl TypedFacetPathKind {
     pub fn from_may_fail(may_fail: bool) -> Self {
         if may_fail {
             Self::Variant
@@ -180,29 +180,29 @@ impl TypedLensPathKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TypedLensPath {
+pub struct TypedFacetPath {
     pub source_ty: Ty,
     pub focus_ty: Ty,
-    pub path_kind: TypedLensPathKind,
+    pub path_kind: TypedFacetPathKind,
     pub may_fail: bool,
     pub source_readonly_root: bool,
-    pub segments: Vec<TypedLensSegment>,
+    pub segments: Vec<TypedFacetSegment>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PendingLensPath {
+pub struct PendingFacetPath {
     pub source_ty_hint: Option<Ty>,
     pub segments: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TypedLensSetMode {
+pub enum TypedFacetSetMode {
     Exact,
     WrapPlainResult,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TypedLensOverMode {
+pub enum TypedFacetOverMode {
     FocusValue,
     FocusResult,
 }
@@ -277,37 +277,37 @@ pub enum TypedInner {
         size: Box<TypedNode>,
     },
 
-    /// Compile-time lens constant path value. Stage 1 does not allow
-    /// first-class runtime transport of lens values.
-    LensPath(TypedLensPath),
+    /// Compile-time facet constant path value. Stage 1 does not allow
+    /// first-class runtime transport of facet values.
+    FacetPath(TypedFacetPath),
 
-    /// Deferred compile-time lens path value. Used for path bindings that need
+    /// Deferred compile-time facet path value. Used for path bindings that need
     /// later source/focus context before they can be fully specialized.
-    PendingLensPath(PendingLensPath),
+    PendingFacetPath(PendingFacetPath),
 
     /// Facet view application with compile-time path metadata.
-    LensView {
+    FacetView {
         source: Box<TypedNode>,
-        path: TypedLensPath,
+        path: TypedFacetPath,
         source_is_result: bool,
     },
 
     /// Facet set application with compile-time path metadata.
-    LensSet {
+    FacetSet {
         source: Box<TypedNode>,
-        path: TypedLensPath,
+        path: TypedFacetPath,
         value: Box<TypedNode>,
         source_is_result: bool,
-        mode: TypedLensSetMode,
+        mode: TypedFacetSetMode,
     },
 
     /// Facet over application with compile-time path metadata.
-    LensOver {
+    FacetOver {
         source: Box<TypedNode>,
-        path: TypedLensPath,
+        path: TypedFacetPath,
         update_fun: Box<TypedNode>,
         source_is_result: bool,
-        mode: TypedLensOverMode,
+        mode: TypedFacetOverMode,
     },
 
     /// Struct literal — tag + field values (in definition order)

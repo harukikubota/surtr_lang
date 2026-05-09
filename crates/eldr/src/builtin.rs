@@ -198,27 +198,27 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "view",
-        func: builtin_lens_view,
+        func: builtin_facet_view,
     },
     BuiltinImpl {
         name: "preview",
-        func: builtin_lens_preview,
+        func: builtin_facet_preview,
     },
     BuiltinImpl {
         name: "compose",
-        func: builtin_lens_compose,
+        func: builtin_facet_compose,
     },
     BuiltinImpl {
         name: "set",
-        func: builtin_lens_set,
+        func: builtin_facet_set,
     },
     BuiltinImpl {
         name: "over",
-        func: builtin_lens_over,
+        func: builtin_facet_over,
     },
     BuiltinImpl {
         name: "over_result",
-        func: builtin_lens_over_result,
+        func: builtin_facet_over_result,
     },
     BuiltinImpl {
         name: "__test_capture_stdout",
@@ -1827,37 +1827,37 @@ fn builtin_map_values_list(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runt
     Ok(Value::List(ListHandle::from_items(map.values())))
 }
 
-fn builtin_lens_view(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_view(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Facet::view should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
-fn builtin_lens_preview(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_preview(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Facet::preview should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
-fn builtin_lens_compose(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_compose(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Facet::compose should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
-fn builtin_lens_set(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_set(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Facet::set should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
-fn builtin_lens_over(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_over(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Facet::over should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
-fn builtin_lens_over_result(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_over_result(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Facet::over_result should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))

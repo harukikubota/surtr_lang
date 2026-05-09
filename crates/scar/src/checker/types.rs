@@ -2174,27 +2174,27 @@ impl Checker {
         }
     }
 
-    pub(super) fn ty_contains_lens(&self, ty: &Ty) -> bool {
+    pub(super) fn ty_contains_facet(&self, ty: &Ty) -> bool {
         match self.resolve_ty(ty) {
             Ty::Facet(_, _) => true,
             Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
-                self.ty_contains_lens(inner.as_ref())
+                self.ty_contains_facet(inner.as_ref())
             }
-            Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_lens(item)),
+            Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_facet(item)),
             Ty::Func(params, ret) => {
-                params.iter().any(|param| self.ty_contains_lens(param))
-                    || self.ty_contains_lens(ret.as_ref())
+                params.iter().any(|param| self.ty_contains_facet(param))
+                    || self.ty_contains_facet(ret.as_ref())
             }
             Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
-                params.iter().any(|param| self.ty_contains_lens(param))
-                    || self.ty_contains_lens(ret.as_ref())
+                params.iter().any(|param| self.ty_contains_facet(param))
+                    || self.ty_contains_facet(ret.as_ref())
             }
             Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
                 .iter()
-                .any(|(_, field_ty)| self.ty_contains_lens(field_ty)),
-            Ty::Enum(_, args) => args.iter().any(|arg| self.ty_contains_lens(arg)),
+                .any(|(_, field_ty)| self.ty_contains_facet(field_ty)),
+            Ty::Enum(_, args) => args.iter().any(|arg| self.ty_contains_facet(arg)),
             Ty::Result(ok, err) => {
-                self.ty_contains_lens(ok.as_ref()) || self.ty_contains_lens(err.as_ref())
+                self.ty_contains_facet(ok.as_ref()) || self.ty_contains_facet(err.as_ref())
             }
             Ty::Int
             | Ty::Float
@@ -2208,8 +2208,8 @@ impl Checker {
         }
     }
 
-    fn resolve_typed_lens_path(&self, path: TypedLensPath) -> TypedLensPath {
-        TypedLensPath {
+    fn resolve_typed_facet_path(&self, path: TypedFacetPath) -> TypedFacetPath {
+        TypedFacetPath {
             source_ty: self.resolve_ty(&path.source_ty),
             focus_ty: self.resolve_ty(&path.focus_ty),
             path_kind: path.path_kind,
@@ -2406,42 +2406,42 @@ impl Checker {
             TypedInner::ProcessContextHandler { process_name, slot } => {
                 TypedInner::ProcessContextHandler { process_name, slot }
             }
-            TypedInner::LensPath(path) => TypedInner::LensPath(self.resolve_typed_lens_path(path)),
-            TypedInner::PendingLensPath(path) => TypedInner::PendingLensPath(PendingLensPath {
+            TypedInner::FacetPath(path) => TypedInner::FacetPath(self.resolve_typed_facet_path(path)),
+            TypedInner::PendingFacetPath(path) => TypedInner::PendingFacetPath(PendingFacetPath {
                 source_ty_hint: path.source_ty_hint.map(|ty| self.resolve_ty(&ty)),
                 segments: path.segments,
             }),
-            TypedInner::LensView {
+            TypedInner::FacetView {
                 source,
                 path,
                 source_is_result,
-            } => TypedInner::LensView {
+            } => TypedInner::FacetView {
                 source: Box::new(self.resolve_typed_node(*source)),
-                path: self.resolve_typed_lens_path(path),
+                path: self.resolve_typed_facet_path(path),
                 source_is_result,
             },
-            TypedInner::LensSet {
+            TypedInner::FacetSet {
                 source,
                 path,
                 value,
                 source_is_result,
                 mode,
-            } => TypedInner::LensSet {
+            } => TypedInner::FacetSet {
                 source: Box::new(self.resolve_typed_node(*source)),
-                path: self.resolve_typed_lens_path(path),
+                path: self.resolve_typed_facet_path(path),
                 value: Box::new(self.resolve_typed_node(*value)),
                 source_is_result,
                 mode,
             },
-            TypedInner::LensOver {
+            TypedInner::FacetOver {
                 source,
                 path,
                 update_fun,
                 source_is_result,
                 mode,
-            } => TypedInner::LensOver {
+            } => TypedInner::FacetOver {
                 source: Box::new(self.resolve_typed_node(*source)),
-                path: self.resolve_typed_lens_path(path),
+                path: self.resolve_typed_facet_path(path),
                 update_fun: Box::new(self.resolve_typed_node(*update_fun)),
                 source_is_result,
                 mode,

@@ -1,5 +1,5 @@
 use scar::typed::{
-    OperatorTraitOp, TraitCallOrigin, TypedInner, TypedLensPathKind, TypedLensSegment, TypedNode,
+    OperatorTraitOp, TraitCallOrigin, TypedInner, TypedFacetPathKind, TypedFacetSegment, TypedNode,
     TypedProgram,
 };
 use scar::types::Ty;
@@ -124,9 +124,9 @@ age = user.age"#,
     );
 
     let typed = typecheck(resolved).expect("typecheck should succeed");
-    let lens_view = typed.iter().find_map(|node| {
+    let facet_view = typed.iter().find_map(|node| {
         if let TypedInner::Bind(_, rhs) = &node.node {
-            if let TypedInner::LensView {
+            if let TypedInner::FacetView {
                 path,
                 source_is_result,
                 ..
@@ -138,12 +138,12 @@ age = user.age"#,
         None
     });
 
-    let (path, source_is_result) = lens_view.expect("expected bind rhs to be LensView");
+    let (path, source_is_result) = facet_view.expect("expected bind rhs to be FacetView");
     assert!(!source_is_result);
     assert!(!path.may_fail);
     assert_eq!(path.segments.len(), 1);
     match &path.segments[0] {
-        TypedLensSegment::Field { field_index, .. } => assert_eq!(*field_index, 1),
+        TypedFacetSegment::Field { field_index, .. } => assert_eq!(*field_index, 1),
         other => panic!("expected field segment, got {other:?}"),
     }
 }
@@ -352,7 +352,7 @@ fn tuple_bind_pattern_typechecks() {
 }
 
 #[test]
-fn lens_view_on_plain_value_returns_plain_focus() {
+fn facet_view_on_plain_value_returns_plain_focus() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
 user = User("alice")
@@ -360,11 +360,11 @@ user.name"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
-    assert!(matches!(last.node, TypedInner::LensView { .. }));
+    assert!(matches!(last.node, TypedInner::FacetView { .. }));
 }
 
 #[test]
-fn lens_view_on_result_value_returns_result_focus() {
+fn facet_view_on_result_value_returns_result_focus() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
 result_user: Result<User> = Ok(User("alice"))
@@ -377,11 +377,11 @@ result_user.name"#,
             if matches!(ok.as_ref(), scar::types::Ty::Str)
                 && matches!(err.as_ref(), scar::types::Ty::Error)
     ));
-    assert!(matches!(last.node, TypedInner::LensView { .. }));
+    assert!(matches!(last.node, TypedInner::FacetView { .. }));
 }
 
 #[test]
-fn lens_variant_selector_returns_result_and_requires_pascal_case() {
+fn facet_variant_selector_returns_result_and_requires_pascal_case() {
     let typed = typecheck_with_builtin_prelude(
         r#"defenum Expr {
   Add(Int, Int),
@@ -422,10 +422,10 @@ expr = Expr::Add(1, 2)
 Facet::preview(Expr.Add / Tuple._0, expr)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
-    let TypedInner::LensView { path, .. } = &last.node else {
+    let TypedInner::FacetView { path, .. } = &last.node else {
         panic!("expected Facet::preview to lower as a view");
     };
-    assert_eq!(path.path_kind, TypedLensPathKind::Variant);
+    assert_eq!(path.path_kind, TypedFacetPathKind::Variant);
     assert!(matches!(
         &last.ty,
         scar::types::Ty::Result(ok, err)
@@ -452,10 +452,10 @@ fn facet_preview_accepts_option_variant() {
 Facet::preview(Option.Some, value)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
-    let TypedInner::LensView { path, .. } = &last.node else {
+    let TypedInner::FacetView { path, .. } = &last.node else {
         panic!("expected Facet::preview to lower as a view");
     };
-    assert_eq!(path.path_kind, TypedLensPathKind::Variant);
+    assert_eq!(path.path_kind, TypedFacetPathKind::Variant);
     assert!(matches!(
         &last.ty,
         scar::types::Ty::Result(ok, err)
@@ -465,23 +465,18 @@ Facet::preview(Option.Some, value)"#,
 }
 
 #[test]
-fn lens_surface_is_removed_after_facet_rename() {
-    let err = resolve_with_builtin_prelude_result(
+fn facet_surface_resolves_after_facet_rename() {
+    let resolved = resolve_with_builtin_prelude_result(
         r#"defrecord User(name: String)
 user = User("alice")
-Lens::view(User.name, user)"#,
+Facet::view(User.name, user)"#,
     )
-    .expect_err("Lens surface should be removed");
-    assert!(
-        err.message.contains("Undefined variable")
-            || err.message.contains("Undefined function")
-            || err.message.contains("Unknown")
-            || err.message.contains("No docs")
-    );
+    .expect("Facet surface should remain available");
+    assert!(!resolved.is_empty());
 }
 
 #[test]
-fn lens_compose_typecheck_success_and_mismatch() {
+fn facet_compose_typecheck_success_and_mismatch() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
@@ -504,7 +499,7 @@ Facet::compose(Profile.name, User.profile)"#,
 }
 
 #[test]
-fn lens_slash_compose_typecheck_success_and_mismatch() {
+fn facet_slash_compose_typecheck_success_and_mismatch() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
@@ -527,7 +522,7 @@ Profile.name / User.profile"#,
 }
 
 #[test]
-fn lens_set_returns_result_source() {
+fn facet_set_returns_result_source() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
 user = User("alice")
@@ -540,11 +535,11 @@ Facet::set(User.name, user, "bob")"#,
             if matches!(ok.as_ref(), scar::types::Ty::Record(name, _) if name == "User")
                 && matches!(err.as_ref(), scar::types::Ty::Error)
     ));
-    assert!(matches!(last.node, TypedInner::LensSet { .. }));
+    assert!(matches!(last.node, TypedInner::FacetSet { .. }));
 }
 
 #[test]
-fn lens_over_requires_unary_result_callable() {
+fn facet_over_requires_unary_result_callable() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
 user = User("alice")
@@ -557,7 +552,7 @@ Facet::over(User.name, user, {|name| Ok(name)})"#,
             if matches!(ok.as_ref(), scar::types::Ty::Record(name, _) if name == "User")
                 && matches!(err.as_ref(), scar::types::Ty::Error)
     ));
-    assert!(matches!(last.node, TypedInner::LensOver { .. }));
+    assert!(matches!(last.node, TypedInner::FacetOver { .. }));
 
     let err = typecheck_with_rules(
         r#"defrecord User(name: String)
@@ -584,7 +579,7 @@ same: Result<Int, NoneError> = boxed.value"#,
 }
 
 #[test]
-fn lens_set_accepts_plain_value_for_result_focus() {
+fn facet_set_accepts_plain_value_for_result_focus() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(score: Result<Int>)
 user = User(Err(NoneError))
@@ -600,18 +595,18 @@ Facet::set(User.score, user, 3)"#,
 }
 
 #[test]
-fn lens_over_accepts_success_updater_for_result_focus() {
+fn facet_over_accepts_success_updater_for_result_focus() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(score: Result<Int>)
 user = User(Ok(1))
 Facet::over(User.score, user, {|score| Ok(score + 1)})"#,
     );
     let last = typed.last().expect("typed program should not be empty");
-    assert!(matches!(last.node, TypedInner::LensOver { .. }));
+    assert!(matches!(last.node, TypedInner::FacetOver { .. }));
 }
 
 #[test]
-fn lens_over_rejects_result_container_updater_for_result_focus() {
+fn facet_over_rejects_result_container_updater_for_result_focus() {
     let err = typecheck_with_rules(
         r#"defrecord User(score: Result<Int>)
 user = User(Ok(1))
@@ -625,14 +620,14 @@ Facet::over(User.score, user, {|score| Ok(Ok(score))})"#,
 }
 
 #[test]
-fn lens_over_result_requires_result_container_updater() {
+fn facet_over_result_requires_result_container_updater() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(score: Result<Int>)
 user = User(Ok(1))
 Facet::over_result(User.score, user, {|score| Ok(score)})"#,
     );
     let last = typed.last().expect("typed program should not be empty");
-    assert!(matches!(last.node, TypedInner::LensOver { .. }));
+    assert!(matches!(last.node, TypedInner::FacetOver { .. }));
 
     let err = typecheck_with_rules(
         r#"defrecord User(score: Result<Int>)
@@ -647,7 +642,7 @@ Facet::over_result(User.score, user, {|score| Ok(1)})"#,
 }
 
 #[test]
-fn readonly_lens_view_succeeds_and_preserves_path_metadata() {
+fn readonly_facet_view_succeeds_and_preserves_path_metadata() {
     let typed = typecheck_with_builtin_prelude(
         r#"defstruct Profile {
   name: String,
@@ -673,12 +668,12 @@ user = User(Profile("alice"))
 Facet::view(User.profile.name, user)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
-    let TypedInner::LensView { path, .. } = &last.node else {
-        panic!("expected LensView");
+    let TypedInner::FacetView { path, .. } = &last.node else {
+        panic!("expected FacetView");
     };
     assert!(matches!(last.ty, scar::types::Ty::Str));
     match &path.segments[0] {
-        TypedLensSegment::Field {
+        TypedFacetSegment::Field {
             readonly,
             container_type_name,
             ..
@@ -752,7 +747,7 @@ impl User {
 }
 
 #[test]
-fn readonly_struct_root_blocks_mutating_lens_even_for_owner() {
+fn readonly_struct_root_blocks_mutating_facet_even_for_owner() {
     let err = typecheck_with_rules(
         r#"@readonly
 defstruct Profile {
@@ -769,7 +764,7 @@ profile = Profile("alice")
 Facet::over(Profile.name, profile, {|name| Ok(name)})"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("readonly root should reject mutating lens");
+    .expect_err("readonly root should reject mutating facet");
     assert!(err.message.contains("readonly type Profile"));
 
     let err = typecheck_with_rules(
@@ -794,7 +789,7 @@ impl Profile {
 }
 
 #[test]
-fn lens_standalone_tuple_root_is_rejected() {
+fn facet_standalone_tuple_root_is_rejected() {
     let err = resolve_with_builtin_prelude_result(
         r#"pair = (1, "one")
 Facet::view(_0, pair)"#,
@@ -804,43 +799,43 @@ Facet::view(_0, pair)"#,
 }
 
 #[test]
-fn lens_bindings_can_be_reused_by_lens_intrinsics() {
+fn facet_bindings_can_be_reused_by_facet_intrinsics() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
 user = User("alice")
-lens = User.name
-Facet::view(lens, user)"#,
+facet = User.name
+Facet::view(facet, user)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
-    assert!(matches!(last.node, TypedInner::LensView { .. }));
+    assert!(matches!(last.node, TypedInner::FacetView { .. }));
 }
 
 #[test]
-fn lens_tuple_type_root_view_works_with_expected_context() {
+fn facet_tuple_type_root_view_works_with_expected_context() {
     let typed = typecheck_with_builtin_prelude(
         r#"pair = ("alice", 42)
 Facet::view(Tuple._0, pair)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
-    assert!(matches!(last.node, TypedInner::LensView { .. }));
+    assert!(matches!(last.node, TypedInner::FacetView { .. }));
 }
 
 #[test]
-fn deferred_tuple_lens_binding_can_be_reused_by_lens_intrinsics() {
+fn deferred_tuple_facet_binding_can_be_reused_by_facet_intrinsics() {
     let typed = typecheck_with_builtin_prelude(
         r#"pair = ("alice", 42)
-lens = Tuple._1
-Facet::view(lens, pair)"#,
+facet = Tuple._1
+Facet::view(facet, pair)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Int));
-    assert!(matches!(last.node, TypedInner::LensView { .. }));
+    assert!(matches!(last.node, TypedInner::FacetView { .. }));
 }
 
 #[test]
-fn deferred_tuple_lens_binding_can_compose_before_consumption() {
+fn deferred_tuple_facet_binding_can_compose_before_consumption() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
 pair = (Profile("alice"), 42)
@@ -850,11 +845,11 @@ Facet::view(path, pair)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
-    assert!(matches!(last.node, TypedInner::LensView { .. }));
+    assert!(matches!(last.node, TypedInner::FacetView { .. }));
 }
 
 #[test]
-fn lens_tuple_type_root_compose_works_as_inner_path() {
+fn facet_tuple_type_root_compose_works_as_inner_path() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(pair: (String, Int))
 user = User(("alice", 42))
@@ -865,7 +860,7 @@ Facet::view(Facet::compose(User.pair, Tuple._0), user)"#,
 }
 
 #[test]
-fn lens_tuple_type_root_slash_compose_works_as_inner_path() {
+fn facet_tuple_type_root_slash_compose_works_as_inner_path() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(pair: (String, Int))
 user = User(("alice", 42))
@@ -876,7 +871,7 @@ Facet::view(User.pair / Tuple._0, user)"#,
 }
 
 #[test]
-fn lens_const_slash_compose_allows_lens_consts() {
+fn facet_const_slash_compose_allows_facet_consts() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
@@ -891,13 +886,13 @@ Facet::view(FULL_NAME, user)"#,
 }
 
 #[test]
-fn lens_const_slash_compose_rejects_non_lens_const_refs() {
+fn facet_const_slash_compose_rejects_non_facet_const_refs() {
     let err = typecheck_with_rules(
         r#"const VALUE = 1
 const BAD = VALUE / VALUE"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("non-lens const refs should fail");
+    .expect_err("non-facet const refs should fail");
     assert!(err
         .message
         .contains("const value must be a primitive literal or a facet path"));
@@ -915,33 +910,48 @@ fn slash_operator_rejects_numeric_division_and_points_to_safe_div() {
 }
 
 #[test]
-fn lens_tuple_type_root_without_context_can_bind_as_deferred_path() {
-    let typed = typecheck_with_builtin_prelude("lens = Tuple._0");
+fn facet_tuple_type_root_without_context_can_bind_as_deferred_path() {
+    let typed = typecheck_with_builtin_prelude("facet = Tuple._0");
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Unit));
 }
 
 #[test]
-fn lens_capture_is_rejected_for_scope_local_model() {
-    let err = typecheck_with_rules(
+fn facet_view_inside_closure_is_allowed_for_same_scope_consumption() {
+    let typed = typecheck_with_rules(
         r#"defrecord User(name: String)
-lens = User.name
-getter = {|user| Facet::view(lens, user)}
+facet = User.name
+getter = {|user| Facet::view(facet, user)}
 getter(User("alice"))"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("capturing Facet value should fail");
-    assert!(err.message.contains("cannot be captured by closures"));
+    .expect("closure-local Facet::view should typecheck");
+    let last = typed.last().expect("typed program should not be empty");
+    assert!(matches!(last.ty, scar::types::Ty::Str));
 }
 
 #[test]
-fn lens_values_cannot_be_embedded_in_runtime_containers() {
+fn facet_capture_shorthand_builds_read_closure() {
+    let typed = typecheck_with_rules(
+        r#"defrecord User(name: String)
+facet = User.name
+getter = &facet
+getter(User("alice"))"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("&facet shorthand should typecheck");
+    let last = typed.last().expect("typed program should not be empty");
+    assert!(matches!(last.ty, scar::types::Ty::Str));
+}
+
+#[test]
+fn facet_values_cannot_be_embedded_in_runtime_containers() {
     let tuple_err = typecheck_with_rules(
         r#"defrecord User(name: String)
 (User.name, 1)"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("tuple literal should reject lens");
+    .expect_err("tuple literal should reject facet");
     assert!(tuple_err
         .message
         .contains("Tuple literal cannot contain Facet values"));
@@ -951,7 +961,7 @@ fn lens_values_cannot_be_embedded_in_runtime_containers() {
 [User.name, User.name]"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("list literal should reject lens");
+    .expect_err("list literal should reject facet");
     assert!(list_err
         .message
         .contains("List literal cannot contain Facet values"));
@@ -961,20 +971,20 @@ fn lens_values_cannot_be_embedded_in_runtime_containers() {
 Ok(User.name)"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("result constructors should reject lens");
+    .expect_err("result constructors should reject facet");
     assert!(ok_err
         .message
         .contains("Result constructors cannot contain Facet values"));
 }
 
 #[test]
-fn nested_lens_types_are_rejected_in_function_signatures() {
+fn nested_facet_types_are_rejected_in_function_signatures() {
     let param_err = typecheck_with_rules(
         r#"defrecord User(name: String)
 def bad(values: List<Facet<User, String>>) -> Unit { () }"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("nested lens in parameter type should fail");
+    .expect_err("nested facet in parameter type should fail");
     assert!(param_err
         .message
         .contains("cannot appear in function parameter types"));
@@ -984,7 +994,7 @@ def bad(values: List<Facet<User, String>>) -> Unit { () }"#,
 def bad() -> List<Facet<User, String>> { [] }"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("nested lens in return type should fail");
+    .expect_err("nested facet in return type should fail");
     assert!(ret_err
         .message
         .contains("cannot appear in function return types"));
@@ -1007,7 +1017,7 @@ user.password"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
-    assert!(matches!(last.node, TypedInner::LensView { .. }));
+    assert!(matches!(last.node, TypedInner::FacetView { .. }));
 
     let err = typecheck_with_rules(
         r#"defstruct User {
@@ -1027,8 +1037,8 @@ User.password"#,
 }
 
 #[test]
-fn private_value_access_inside_closure_is_rejected_outside_impl() {
-    let err = typecheck_with_rules(
+fn private_value_access_inside_closure_is_allowed() {
+    let typed = typecheck_with_rules(
         r#"defstruct User {
   name: String,
   private password: String,
@@ -1042,10 +1052,9 @@ user = User("alice", "s3cr3t")
 {|| user.password}"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("private value access inside closure should fail");
-    assert!(err
-        .message
-        .contains("cannot be accessed from closures outside impl"));
+    .expect("private value access inside closure should typecheck");
+    let last = typed.last().expect("typed program should not be empty");
+    assert!(matches!(last.ty, scar::types::Ty::Func(_, _)));
 }
 
 #[test]
@@ -1092,8 +1101,8 @@ reader()"#,
 }
 
 #[test]
-fn private_value_access_inside_param_closure_is_rejected_outside_impl() {
-    let err = typecheck_with_rules(
+fn private_value_access_inside_param_closure_is_allowed() {
+    let typed = typecheck_with_rules(
         r#"defstruct User {
   name: String,
   private password: String,
@@ -1108,16 +1117,13 @@ user = User("alice", "s3cr3t")
 reader(user)"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("private value access inside closure parameter should fail");
-    assert!(
-        err.message
-            .contains("cannot be accessed from closures outside impl")
-            || err.message.contains("Field 'User.password' is private")
-    );
+    .expect("private value access inside parameter closure should typecheck");
+    let last = typed.last().expect("typed program should not be empty");
+    assert!(matches!(last.ty, scar::types::Ty::Str));
 }
 
 #[test]
-fn private_capability_root_is_rejected_in_lens_view_call() {
+fn private_capability_root_is_rejected_in_facet_view_call() {
     let err = typecheck_with_rules(
         r#"defstruct User {
   name: String,
@@ -1137,12 +1143,12 @@ Facet::view(User.password, user)"#,
 }
 
 #[test]
-fn lens_scope_local_value_can_flow_to_closure_after_view() {
+fn facet_scope_local_value_can_flow_to_closure_after_view() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
 user = User("alice")
-lens = User.name
-name = Facet::view(lens, user)
+facet = User.name
+name = Facet::view(facet, user)
 reader = {|| name}
 reader()"#,
     );
@@ -1151,7 +1157,7 @@ reader()"#,
 }
 
 #[test]
-fn lens_runtime_transport_restrictions_remain() {
+fn facet_runtime_transport_restrictions_remain() {
     let arg_err = typecheck_with_rules(
         r#"defrecord User(name: String)
 print(to_string(User.name))"#,
@@ -1177,8 +1183,8 @@ def bad() -> Facet<User, String> {
 def consume(value: String) -> String {
   value
 }
-lens = User.name
-consume(lens)"#,
+facet = User.name
+consume(facet)"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("passing Facet binding as runtime function argument should fail");
@@ -3191,12 +3197,12 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             TypedInner::SupervisorWorkers { init, size, .. } => {
                 has_pending_trait_call(init) || has_pending_trait_call(size)
             }
-            TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => false,
-            TypedInner::LensView { source, .. } => has_pending_trait_call(source),
-            TypedInner::LensSet { source, value, .. } => {
+            TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_) => false,
+            TypedInner::FacetView { source, .. } => has_pending_trait_call(source),
+            TypedInner::FacetSet { source, value, .. } => {
                 has_pending_trait_call(source) || has_pending_trait_call(value)
             }
-            TypedInner::LensOver {
+            TypedInner::FacetOver {
                 source, update_fun, ..
             } => has_pending_trait_call(source) || has_pending_trait_call(update_fun),
             TypedInner::BinOp(_, left, right)

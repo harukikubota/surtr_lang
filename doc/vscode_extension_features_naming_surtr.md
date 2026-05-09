@@ -195,7 +195,7 @@ VSCode 側でも span をそのまま diagnostics に流せると価値が高い
 ### Surtr で有効
 - `Ok` / `Err` の型
 - 演算子の desugar 結果の簡易表示
-- lens / path 参照の型
+- facet / path 参照の型
 
 ---
 

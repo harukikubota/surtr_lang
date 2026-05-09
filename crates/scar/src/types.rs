@@ -27,7 +27,7 @@ pub enum Ty {
     /// declarations. User code cannot name or transport Lazy values directly.
     Lazy(Box<Ty>),
 
-    /// Compiler-managed lens path capability: `Facet<S, A>`
+    /// Compiler-managed facet path capability: `Facet<S, A>`
     Facet(Box<Ty>, Box<Ty>),
 
     /// Process identifier capability: `PID<ProcessName>`

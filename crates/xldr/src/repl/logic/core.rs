@@ -9,7 +9,7 @@ use eldr::builtin::inspect_value;
 use eldr::value::{TypeKind, Value};
 use forge::bytecode::populate_error_template_lines;
 use scar::typed::{
-    TraitCallOrigin, TypedInner, TypedLensOverMode, TypedLensPath, TypedLensSegment, TypedNode,
+    TraitCallOrigin, TypedInner, TypedFacetOverMode, TypedFacetPath, TypedFacetSegment, TypedNode,
 };
 use scar::types::Ty;
 use sigil::error::ResolveError;
@@ -1090,7 +1090,7 @@ impl ReplEngine {
         ]
     }
 
-    fn lens_help_lines() -> Vec<String> {
+    fn facet_help_lines() -> Vec<String> {
         vec![
             "Usage: :facet <binding|expr>".to_string(),
             "Examples: :facet path, :facet Tuple._1, :facet BitWidth.Any".to_string(),
@@ -1108,7 +1108,7 @@ impl ReplEngine {
             "sig" => Self::sig_help_lines(),
             "info" => Self::info_help_lines(),
             "type" => Self::type_help_lines(),
-            "facet" => Self::lens_help_lines(),
+            "facet" => Self::facet_help_lines(),
             other => {
                 let mut rendered = vec![format!("No help found for :{}", other)];
                 rendered.push("Type :help for available REPL commands.".to_string());
@@ -2556,7 +2556,7 @@ impl ReplEngine {
             return Self::plain(vec![format!("No binding found for {}", trimmed)]);
         };
 
-        if binding.lens_info.is_some() {
+        if binding.facet_info.is_some() {
             return Self::styled(vec![
                 binding_name.to_string(),
                 format!("type: {}", crate::surface_rendered_name(binding.ty.as_str())),
@@ -2599,7 +2599,7 @@ impl ReplEngine {
         }
     }
 
-    fn render_lens_info(info: &forge::ReplLensInfo) -> Vec<String> {
+    fn render_facet_info(info: &forge::ReplFacetInfo) -> Vec<String> {
         let mut lines = vec![
             "## FacetPath".to_string(),
             format!("type: {}", crate::surface_rendered_name(&info.ty)),
@@ -2620,9 +2620,9 @@ impl ReplEngine {
 
         let mut previous_terminal = None::<String>;
         for (index, segment) in info.segments.iter().enumerate() {
-            let terminal = Self::lens_segment_terminal_name(&segment.label);
+            let terminal = Self::facet_segment_terminal_name(&segment.label);
             let local_path =
-                Self::render_lens_local_hop(segment, previous_terminal.as_deref(), &terminal);
+                Self::render_facet_local_hop(segment, previous_terminal.as_deref(), &terminal);
             lines.push(format!("hop {}: {}", index + 1, local_path));
             lines.push(format!(
                 "relation: {} -> {}",
@@ -2651,12 +2651,12 @@ impl ReplEngine {
         lines
     }
 
-    fn lens_segment_terminal_name(label: &str) -> String {
+    fn facet_segment_terminal_name(label: &str) -> String {
         label.rsplit('.').next().unwrap_or(label).to_string()
     }
 
-    fn render_lens_local_hop(
-        segment: &forge::ReplLensSegmentInfo,
+    fn render_facet_local_hop(
+        segment: &forge::ReplFacetSegmentInfo,
         previous_terminal: Option<&str>,
         terminal: &str,
     ) -> String {
@@ -2672,20 +2672,20 @@ impl ReplEngine {
         segment.label.clone()
     }
 
-    fn handle_lens(&mut self, query: &str) -> ReplResult {
+    fn handle_facet(&mut self, query: &str) -> ReplResult {
         let trimmed = query.trim();
         if trimmed.is_empty() {
-            return Self::plain(Self::lens_help_lines());
+            return Self::plain(Self::facet_help_lines());
         }
         if let Some(binding) = self.binding_info(trimmed) {
-            if let Some(lens_info) = &binding.lens_info {
-                return Self::styled(Self::render_lens_info(lens_info));
+            if let Some(facet_info) = &binding.facet_info {
+                return Self::styled(Self::render_facet_info(facet_info));
             }
         }
-        self.handle_lens_expression(trimmed)
+        self.handle_facet_expression(trimmed)
     }
 
-    fn handle_lens_expression(&mut self, source_query: &str) -> ReplResult {
+    fn handle_facet_expression(&mut self, source_query: &str) -> ReplResult {
         let original_pending = self.pending.clone();
         let original_source = self
             .sources
@@ -2700,7 +2700,7 @@ impl ReplEngine {
         self.sources
             .update_source(self.repl_source_id, query_source.clone());
 
-        let result = self.handle_lens_expression_inner(source_query, &query_source);
+        let result = self.handle_facet_expression_inner(source_query, &query_source);
 
         self.sigil_session.rollback(sigil_cp);
         self.scar_session.rollback(scar_cp);
@@ -2712,7 +2712,7 @@ impl ReplEngine {
         result
     }
 
-    fn handle_lens_expression_inner(
+    fn handle_facet_expression_inner(
         &mut self,
         source_query: &str,
         query_source: &str,
@@ -2791,15 +2791,15 @@ impl ReplEngine {
         };
 
         let Some(root) = typed.first() else {
-            return Self::plain(Self::lens_help_lines());
+            return Self::plain(Self::facet_help_lines());
         };
-        let Some(info) = Self::lens_info_for_typed_node(root) else {
+        let Some(info) = Self::facet_info_for_typed_node(root) else {
             return Self::plain(vec![format!(
                 "`{source_query}` is not a FacetPath binding or expression."
             )]);
         };
 
-        Self::styled(Self::render_lens_info(&info))
+        Self::styled(Self::render_facet_info(&info))
     }
 
     fn handle_info_symbol(&self, source_query: &str, symbol: &str) -> ReplResult {
@@ -2882,16 +2882,16 @@ impl ReplEngine {
         };
         lines.push(format!("kind: {kind}"));
         lines.push("origin: repl".to_string());
-        if binding.lens_info.is_some() {
+        if binding.facet_info.is_some() {
             lines.push(format!("type: {}", crate::surface_rendered_name(&binding.ty)));
             lines.push(format!(
                 "identity: {}",
                 self.render_type_identity(binding, None)
             ));
-            if let Some(lens_info) = &binding.lens_info {
+            if let Some(facet_info) = &binding.facet_info {
                 lines.push(format!(
                     "full path: {}",
-                    crate::surface_rendered_name(&lens_info.full_path)
+                    crate::surface_rendered_name(&facet_info.full_path)
                 ));
             }
         } else if let Some(value) = self.vm.get_local(binding.slot_id) {
@@ -3214,27 +3214,27 @@ impl ReplEngine {
         match &typed.node {
             TypedInner::FieldAccess(source, idx) => format!(
                 "Facet::view({}, {})",
-                Self::tuple_lens_segment(*idx),
+                Self::tuple_facet_segment(*idx),
                 Self::typed_source_expr_name(source)
                     .unwrap_or_else(|| Self::field_access_source(expr))
             ),
-            TypedInner::LensView { source, path, .. } => format!(
+            TypedInner::FacetView { source, path, .. } => format!(
                 "Facet::view({}, {})",
-                Self::render_typed_lens_path(path),
+                Self::render_typed_facet_path(path),
                 Self::typed_source_expr_name(source).unwrap_or("<source>".to_string())
             ),
-            TypedInner::LensSet {
+            TypedInner::FacetSet {
                 source,
                 path,
                 value,
                 ..
             } => format!(
                 "Facet::set({}, {}, {})",
-                Self::render_typed_lens_path(path),
+                Self::render_typed_facet_path(path),
                 Self::typed_source_expr_name(source).unwrap_or("<source>".to_string()),
                 Self::typed_source_expr_name(value).unwrap_or("value".to_string())
             ),
-            TypedInner::LensOver {
+            TypedInner::FacetOver {
                 source,
                 path,
                 update_fun,
@@ -3242,16 +3242,16 @@ impl ReplEngine {
                 ..
             } => format!(
                 "{}({}, {}, {})",
-                if matches!(mode, TypedLensOverMode::FocusResult) {
+                if matches!(mode, TypedFacetOverMode::FocusResult) {
                     "Facet::over_result"
                 } else {
                     "Facet::over"
                 },
-                Self::render_typed_lens_path(path),
+                Self::render_typed_facet_path(path),
                 Self::typed_source_expr_name(source).unwrap_or("<source>".to_string()),
                 Self::typed_source_expr_name(update_fun).unwrap_or("<update>".to_string())
             ),
-            TypedInner::LensPath(_path) => {
+            TypedInner::FacetPath(_path) => {
                 let rendered = match expr {
                     Ast::BinOp(_, BinOp::Slash, left, right) => format!(
                         "Facet::compose({}, {})",
@@ -3262,7 +3262,7 @@ impl ReplEngine {
                 };
                 format!("{}: {}", rendered, Self::ty_to_string(&typed.ty))
             }
-            TypedInner::PendingLensPath(path) => {
+            TypedInner::PendingFacetPath(path) => {
                 let _ = path;
                 let rendered = match expr {
                     Ast::BinOp(_, BinOp::Slash, left, right) => format!(
@@ -3423,8 +3423,8 @@ impl ReplEngine {
                 Self::typed_source_expr_name(source)?,
                 idx
             )),
-            TypedInner::LensPath(path) => Some(Self::render_typed_lens_path(path)),
-            TypedInner::PendingLensPath(path) => Some(path.segments.iter().enumerate().fold(
+            TypedInner::FacetPath(path) => Some(Self::render_typed_facet_path(path)),
+            TypedInner::PendingFacetPath(path) => Some(path.segments.iter().enumerate().fold(
                 String::new(),
                 |mut acc, (index, segment)| {
                     if index == 0 && segment.starts_with('_') {
@@ -3461,24 +3461,24 @@ impl ReplEngine {
         }
     }
 
-    fn render_typed_lens_path(path: &TypedLensPath) -> String {
+    fn render_typed_facet_path(path: &TypedFacetPath) -> String {
         let mut rendered = String::new();
         for segment in &path.segments {
             match segment {
-                TypedLensSegment::Tuple { field_index, .. } => {
+                TypedFacetSegment::Tuple { field_index, .. } => {
                     if rendered.is_empty() {
                         rendered.push_str("Tuple");
                     }
                     rendered.push_str(&format!("._{field_index}"));
                 }
-                TypedLensSegment::Field { field_name, .. } => {
+                TypedFacetSegment::Field { field_name, .. } => {
                     if rendered.is_empty() {
                         rendered.push_str(&Self::ty_to_string(&path.source_ty));
                     }
                     rendered.push('.');
                     rendered.push_str(field_name);
                 }
-                TypedLensSegment::Variant { variant_name, .. } => {
+                TypedFacetSegment::Variant { variant_name, .. } => {
                     if rendered.is_empty() {
                         rendered.push_str(&Self::ty_to_string(&path.source_ty));
                     }
@@ -3494,19 +3494,19 @@ impl ReplEngine {
         }
     }
 
-    fn lens_segment_label(segment: &TypedLensSegment) -> String {
+    fn facet_segment_label(segment: &TypedFacetSegment) -> String {
         match segment {
-            TypedLensSegment::Field { field_name, .. } => field_name.clone(),
-            TypedLensSegment::Tuple { field_index, .. } => format!("_{field_index}"),
-            TypedLensSegment::Variant { variant_name, .. } => variant_name.clone(),
+            TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
+            TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
+            TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
         }
     }
 
-    fn lens_info_from_path(
-        path: &TypedLensPath,
+    fn facet_info_from_path(
+        path: &TypedFacetPath,
         ty: &Ty,
         source_is_result: bool,
-    ) -> forge::ReplLensInfo {
+    ) -> forge::ReplFacetInfo {
         let mut current_source = path.source_ty.clone();
         let mut segments = Vec::with_capacity(path.segments.len());
         let mut stop_points = Vec::new();
@@ -3516,9 +3516,9 @@ impl ReplEngine {
         }
         let mut prefix = String::new();
         for segment in &path.segments {
-            let label = Self::lens_segment_label(segment);
+            let label = Self::facet_segment_label(segment);
             let (kind, fallible, reason) = match segment {
-                TypedLensSegment::Field {
+                TypedFacetSegment::Field {
                     field_index,
                     field_name,
                     ..
@@ -3534,7 +3534,7 @@ impl ReplEngine {
                         prefix.push('.');
                     }
                     prefix.push_str(field_name);
-                    segments.push(forge::ReplLensSegmentInfo {
+                    segments.push(forge::ReplFacetSegmentInfo {
                         label: prefix.clone(),
                         kind: "field".to_string(),
                         source_ty: Self::ty_to_string(&current_source),
@@ -3545,7 +3545,7 @@ impl ReplEngine {
                     current_source = focus_ty;
                     ("field", false, "field access")
                 }
-                TypedLensSegment::Tuple { field_index, .. } => {
+                TypedFacetSegment::Tuple { field_index, .. } => {
                     let focus_ty = match &current_source {
                         Ty::Tuple(items) => items
                             .get(*field_index as usize)
@@ -3557,7 +3557,7 @@ impl ReplEngine {
                         prefix.push_str("Tuple");
                     }
                     prefix.push_str(&format!("._{field_index}"));
-                    segments.push(forge::ReplLensSegmentInfo {
+                    segments.push(forge::ReplFacetSegmentInfo {
                         label: prefix.clone(),
                         kind: "tuple".to_string(),
                         source_ty: Self::ty_to_string(&current_source),
@@ -3568,7 +3568,7 @@ impl ReplEngine {
                     current_source = focus_ty;
                     ("tuple", false, "tuple index access")
                 }
-                TypedLensSegment::Variant { variant_name, .. } => {
+                TypedFacetSegment::Variant { variant_name, .. } => {
                     if !prefix.is_empty() {
                         prefix.push('.');
                     }
@@ -3576,7 +3576,7 @@ impl ReplEngine {
                     let focus_ty = path.focus_ty.clone();
                     path_is_fallible = true;
                     stop_points.push(format!("{prefix} - variant mismatch returns Result"));
-                    segments.push(forge::ReplLensSegmentInfo {
+                    segments.push(forge::ReplFacetSegmentInfo {
                         label: prefix.clone(),
                         kind: "variant".to_string(),
                         source_ty: Self::ty_to_string(&current_source),
@@ -3590,7 +3590,7 @@ impl ReplEngine {
             };
             let _ = (kind, fallible, reason, label);
         }
-        forge::ReplLensInfo {
+        forge::ReplFacetInfo {
             ty: Self::ty_to_string(ty),
             path_kind: path.path_kind.as_str().to_string(),
             view_result_ty: if source_is_result || path_is_fallible {
@@ -3598,16 +3598,16 @@ impl ReplEngine {
             } else {
                 Self::ty_to_string(&path.focus_ty)
             },
-            full_path: Self::render_typed_lens_path(path),
+            full_path: Self::render_typed_facet_path(path),
             segments,
             stop_points,
         }
     }
 
-    fn lens_info_for_typed_node(node: &TypedNode) -> Option<forge::ReplLensInfo> {
+    fn facet_info_for_typed_node(node: &TypedNode) -> Option<forge::ReplFacetInfo> {
         match &node.node {
-            TypedInner::LensPath(path) => Some(Self::lens_info_from_path(path, &node.ty, false)),
-            TypedInner::PendingLensPath(path) => {
+            TypedInner::FacetPath(path) => Some(Self::facet_info_from_path(path, &node.ty, false)),
+            TypedInner::PendingFacetPath(path) => {
                 let full_path = if path.segments.is_empty() {
                     "<facet>".to_string()
                 } else {
@@ -3625,7 +3625,7 @@ impl ReplEngine {
                     }
                     rendered
                 };
-                Some(forge::ReplLensInfo {
+                Some(forge::ReplFacetInfo {
                     ty: Self::ty_to_string(&node.ty),
                     path_kind: "structural".to_string(),
                     view_result_ty: "_".to_string(),
@@ -3633,7 +3633,7 @@ impl ReplEngine {
                     segments: path
                         .segments
                         .iter()
-                        .map(|segment| forge::ReplLensSegmentInfo {
+                        .map(|segment| forge::ReplFacetSegmentInfo {
                             label: if segment.starts_with('_') {
                                 format!("Tuple.{segment}")
                             } else {
@@ -3653,11 +3653,11 @@ impl ReplEngine {
                     stop_points: Vec::new(),
                 })
             }
-            TypedInner::LensView {
+            TypedInner::FacetView {
                 path,
                 source_is_result,
                 ..
-            } => Some(Self::lens_info_from_path(
+            } => Some(Self::facet_info_from_path(
                 path,
                 &Ty::Facet(
                     Box::new(path.source_ty.clone()),
@@ -3669,7 +3669,7 @@ impl ReplEngine {
         }
     }
 
-    fn tuple_lens_segment(index: u32) -> String {
+    fn tuple_facet_segment(index: u32) -> String {
         format!("Tuple._{index}")
     }
 
@@ -4870,7 +4870,7 @@ impl ReplEngine {
     }
 
     fn render_type_identity(&self, binding: &forge::BindingInfo, value: Option<&Value>) -> String {
-        if binding.lens_info.is_some() {
+        if binding.facet_info.is_some() {
             return "TypeIdentity::FacetPath".to_string();
         }
         if let Some(kind) = binding.callable_kind {
@@ -4974,7 +4974,7 @@ impl ReplEngine {
                         return self.handle_type(&symbol);
                     }
                     ReplCommand::Facet { query } => {
-                        return self.handle_lens(&query);
+                        return self.handle_facet(&query);
                     }
                     ReplCommand::Error { mode } => {
                         return self.handle_error_mode(mode.as_deref());
@@ -6972,5 +6972,50 @@ mod tests {
             .expect_err("live phase should reject runtime boot plan growth");
 
         assert!(err.message.contains("runtime_boot_plan"), "{}", err.message);
+    }
+
+    #[test]
+    fn repl_singleton_cast_accepts_explicit_pid_argument() {
+        let mut engine = ReplEngine::from_script_source(
+            "ticker_preload.srt",
+            r#"
+defgenserver Ticker {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+
+  @cast
+  def tick(state: Int) -> Result<CastResult<Int>> {
+    Ok(CastResult::Next(state + 1))
+  }
+}
+
+supervisor_init {
+  Ticker {}
+}
+"#,
+        )
+        .expect("preloaded singleton process should initialize");
+
+        let bind = engine.handle_line("p = Ticker::pid()");
+        assert!(!bind.should_exit, "{}", ReplEngine::repl_result_text(&bind));
+
+        let tick = engine.handle_line("Ticker::tick(p)");
+        assert!(!tick.should_exit, "{}", ReplEngine::repl_result_text(&tick));
+        assert!(
+            !matches!(tick.output, ReplOutput::EvalError { .. } | ReplOutput::Diagnostic { .. }),
+            "{}",
+            ReplEngine::repl_result_text(&tick)
+        );
     }
 }

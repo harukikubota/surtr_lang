@@ -146,10 +146,10 @@ impl Checker {
                             span: span.clone(),
                             node: TypedInner::Lit(lit.clone()),
                         },
-                        StoredConstValue::LensPath(path) => TypedNode {
+                        StoredConstValue::FacetPath(path) => TypedNode {
                             ty: const_meta.ty.clone(),
                             span: span.clone(),
-                            node: TypedInner::LensPath(path.clone()),
+                            node: TypedInner::FacetPath(path.clone()),
                         },
                     });
                 }
@@ -162,9 +162,9 @@ impl Checker {
                         _ => self.resolve_ty(&stored_ty),
                     };
                     if matches!(ty, Ty::Facet(_, _)) {
-                        if let Some(path) = self.lens_bindings.get(&id.unique_id).cloned() {
+                        if let Some(path) = self.facet_bindings.get(&id.unique_id).cloned() {
                             return Ok(match path {
-                                StoredLensPath::Concrete(path) => {
+                                StoredFacetPath::Concrete(path) => {
                                     let source_ty = self.resolve_ty(&path.source_ty);
                                     let focus_ty = self.resolve_ty(&path.focus_ty);
                                     TypedNode {
@@ -173,7 +173,7 @@ impl Checker {
                                             Box::new(focus_ty.clone()),
                                         ),
                                         span: span.clone(),
-                                        node: TypedInner::LensPath(TypedLensPath {
+                                        node: TypedInner::FacetPath(TypedFacetPath {
                                             source_ty,
                                             focus_ty,
                                             path_kind: path.path_kind,
@@ -183,10 +183,10 @@ impl Checker {
                                         }),
                                     }
                                 }
-                                StoredLensPath::Pending(path) => TypedNode {
+                                StoredFacetPath::Pending(path) => TypedNode {
                                     ty,
                                     span: span.clone(),
-                                    node: TypedInner::PendingLensPath(path),
+                                    node: TypedInner::PendingFacetPath(path),
                                 },
                             });
                         }
@@ -294,8 +294,8 @@ impl Checker {
                 } else {
                     self.check_node(rhs)?
                 };
-                let lens_path = if matches!(typed_rhs.ty, Ty::Facet(_, _)) {
-                    Some(self.stored_lens_path_from_node(typed_rhs.clone(), span)?)
+                let facet_path = if matches!(typed_rhs.ty, Ty::Facet(_, _)) {
+                    Some(self.stored_facet_path_from_node(typed_rhs.clone(), span)?)
                 } else {
                     None
                 };
@@ -310,10 +310,10 @@ impl Checker {
                 self.ensure_self_rebinding_types(&typed_pat, span)?;
 
                 self.bind_typed_pattern(&typed_pat, &self.resolve_ty(&pat_ty));
-                if let Some(path) = &lens_path {
-                    self.bind_lens_pattern_bindings(&typed_pat, path, span)?;
+                if let Some(path) = &facet_path {
+                    self.bind_facet_pattern_bindings(&typed_pat, path, span)?;
                 } else {
-                    self.clear_lens_pattern_bindings(&typed_pat);
+                    self.clear_facet_pattern_bindings(&typed_pat);
                 }
                 self.normalize_env_bindings();
 
@@ -481,13 +481,13 @@ impl Checker {
         }
     }
 
-    fn stored_lens_path_from_node(
+    fn stored_facet_path_from_node(
         &self,
         typed: TypedNode,
         span: &Span,
-    ) -> Result<StoredLensPath, TypeError> {
+    ) -> Result<StoredFacetPath, TypeError> {
         match typed.node {
-            TypedInner::LensPath(path) => Ok(StoredLensPath::Concrete(TypedLensPath {
+            TypedInner::FacetPath(path) => Ok(StoredFacetPath::Concrete(TypedFacetPath {
                 source_ty: self.resolve_ty(&path.source_ty),
                 focus_ty: self.resolve_ty(&path.focus_ty),
                 path_kind: path.path_kind,
@@ -495,7 +495,7 @@ impl Checker {
                 source_readonly_root: path.source_readonly_root,
                 segments: path.segments,
             })),
-            TypedInner::PendingLensPath(path) => Ok(StoredLensPath::Pending(path)),
+            TypedInner::PendingFacetPath(path) => Ok(StoredFacetPath::Pending(path)),
             _ => Err(TypeError {
                 message:
                     "Facet values are compile-time only in Stage1 and cannot be stored or passed around"
@@ -506,53 +506,53 @@ impl Checker {
         }
     }
 
-    fn bind_lens_pattern_bindings(
+    fn bind_facet_pattern_bindings(
         &mut self,
         pattern: &TypedPattern,
-        path: &StoredLensPath,
+        path: &StoredFacetPath,
         span: &Span,
     ) -> Result<(), TypeError> {
         match pattern {
             TypedPattern::Var(_, id) => {
-                self.lens_bindings.insert(id.unique_id, path.clone());
+                self.facet_bindings.insert(id.unique_id, path.clone());
                 Ok(())
             }
             TypedPattern::As(_, inner, alias) => {
-                self.bind_lens_pattern_bindings(inner, path, span)?;
-                self.lens_bindings.insert(alias.unique_id, path.clone());
+                self.bind_facet_pattern_bindings(inner, path, span)?;
+                self.facet_bindings.insert(alias.unique_id, path.clone());
                 Ok(())
             }
             TypedPattern::Wildcard(_) => Ok(()),
             _ => Err(TypeError {
                 message: "Facet values can only be bound to variables or `_` patterns".into(),
                 span: span.clone(),
-                hint: Some("Use `lens = User.name` or `_ = User.name`.".into()),
+                hint: Some("Use `facet = User.name` or `_ = User.name`.".into()),
             }),
         }
     }
 
-    fn clear_lens_pattern_bindings(&mut self, pattern: &TypedPattern) {
+    fn clear_facet_pattern_bindings(&mut self, pattern: &TypedPattern) {
         match pattern {
             TypedPattern::Var(_, id) => {
-                self.lens_bindings.remove(&id.unique_id);
+                self.facet_bindings.remove(&id.unique_id);
             }
             TypedPattern::As(_, inner, alias) => {
-                self.clear_lens_pattern_bindings(inner);
-                self.lens_bindings.remove(&alias.unique_id);
+                self.clear_facet_pattern_bindings(inner);
+                self.facet_bindings.remove(&alias.unique_id);
             }
             TypedPattern::ListCons(_, head, tail) => {
-                self.clear_lens_pattern_bindings(head);
-                self.clear_lens_pattern_bindings(tail);
+                self.clear_facet_pattern_bindings(head);
+                self.clear_facet_pattern_bindings(tail);
             }
             TypedPattern::Tuple(_, items) => {
                 for item in items {
-                    self.clear_lens_pattern_bindings(item);
+                    self.clear_facet_pattern_bindings(item);
                 }
             }
-            TypedPattern::ResultOk(_, inner) => self.clear_lens_pattern_bindings(inner),
+            TypedPattern::ResultOk(_, inner) => self.clear_facet_pattern_bindings(inner),
             TypedPattern::Extractor { items, .. } => {
                 for item in items {
-                    self.clear_lens_pattern_bindings(item);
+                    self.clear_facet_pattern_bindings(item);
                 }
             }
             TypedPattern::Wildcard(_)
@@ -1531,7 +1531,7 @@ impl Checker {
                 ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        self.ensure_no_runtime_lens_args(&typed_args, span, "Trait method call")?;
+        self.ensure_no_runtime_facet_args(&typed_args, span, "Trait method call")?;
 
         for (idx, (expected, arg)) in param_tys.iter().zip(&typed_args).enumerate() {
             if !self.types_compatible(expected, &arg.ty) {
@@ -1721,7 +1721,7 @@ impl Checker {
                 ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
             })
             .collect::<Result<Vec<_>, _>>()?;
-        self.ensure_no_runtime_lens_args(&typed_args, span, op_name)?;
+        self.ensure_no_runtime_facet_args(&typed_args, span, op_name)?;
 
         for (expected, arg) in params.iter().skip(1).zip(&typed_args) {
             if !matches!(self.resolve_ty(expected), Ty::Hole)
@@ -2912,7 +2912,7 @@ impl Checker {
                 } else {
                     self.check_node_with_expected(expr, Some(expected_ty))?
                 };
-                self.ensure_no_runtime_lens_value(&typed, "Function call arguments")?;
+                self.ensure_no_runtime_facet_value(&typed, "Function call arguments")?;
                 if !matches!(self.resolve_ty(expected_ty), Ty::Hole)
                     && !self.types_compatible(expected_ty, &typed.ty)
                 {
@@ -2948,7 +2948,7 @@ impl Checker {
             } else {
                 self.check_node_with_expected(expr, Some(expected_ty))?
             };
-            self.ensure_no_runtime_lens_value(&typed, "Function call arguments")?;
+            self.ensure_no_runtime_facet_value(&typed, "Function call arguments")?;
             if !matches!(self.resolve_ty(expected_ty), Ty::Hole)
                 && !self.types_compatible(expected_ty, &typed.ty)
             {
@@ -2964,7 +2964,7 @@ impl Checker {
         Ok(typed_args)
     }
 
-    fn lens_intrinsic_kind(&self, func: &Resolved) -> Option<&'static str> {
+    fn facet_intrinsic_kind(&self, func: &Resolved) -> Option<&'static str> {
         let Resolved::Var(_, id) = func else {
             return None;
         };
@@ -2982,30 +2982,30 @@ impl Checker {
         None
     }
 
-    fn lens_segment_name(segment: &TypedLensSegment) -> String {
+    fn facet_segment_name(segment: &TypedFacetSegment) -> String {
         match segment {
-            TypedLensSegment::Field { field_name, .. } => field_name.clone(),
-            TypedLensSegment::Tuple { field_index, .. } => format!("_{field_index}"),
-            TypedLensSegment::Variant { variant_name, .. } => variant_name.clone(),
+            TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
+            TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
+            TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
         }
     }
 
-    fn pending_lens_node(&mut self, span: &Span, path: PendingLensPath) -> TypedNode {
+    fn pending_facet_node(&mut self, span: &Span, path: PendingFacetPath) -> TypedNode {
         let source_tv = self.env.fresh_tyvar();
         let focus_tv = self.env.fresh_tyvar();
         TypedNode {
             ty: Ty::Facet(Box::new(source_tv), Box::new(focus_tv)),
             span: span.clone(),
-            node: TypedInner::PendingLensPath(path),
+            node: TypedInner::PendingFacetPath(path),
         }
     }
 
-    fn specialize_pending_lens_path(
+    fn specialize_pending_facet_path(
         &mut self,
-        path: PendingLensPath,
+        path: PendingFacetPath,
         span: &Span,
         expected_source: Option<&Ty>,
-    ) -> Result<TypedLensPath, TypeError> {
+    ) -> Result<TypedFacetPath, TypeError> {
         let mut current_source = if let Some(source_ty_hint) = path.source_ty_hint.clone() {
             if let Some(expected_source) = expected_source {
                 if !self.types_compatible(&source_ty_hint, expected_source) {
@@ -3040,7 +3040,7 @@ impl Checker {
         let mut may_fail = false;
         let mut segments = Vec::with_capacity(path.segments.len());
         for segment_name in path.segments {
-            let (segment, focus_ty, segment_may_fail) = self.resolve_lens_segment_for_source_ty(
+            let (segment, focus_ty, segment_may_fail) = self.resolve_facet_segment_for_source_ty(
                 &current_source,
                 &segment_name,
                 span,
@@ -3051,22 +3051,22 @@ impl Checker {
             may_fail |= segment_may_fail;
         }
 
-        Ok(TypedLensPath {
+        Ok(TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: current_source,
-            path_kind: TypedLensPathKind::from_may_fail(may_fail),
+            path_kind: TypedFacetPathKind::from_may_fail(may_fail),
             may_fail,
             source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments,
         })
     }
 
-    fn resolve_lens_path_from_node(
+    fn resolve_facet_path_from_node(
         &mut self,
         typed: TypedNode,
         span: &Span,
         expected_source: Option<&Ty>,
-    ) -> Result<TypedLensPath, TypeError> {
+    ) -> Result<TypedFacetPath, TypeError> {
         if !matches!(typed.ty, Ty::Facet(_, _)) {
             return Err(TypeError {
                 message: format!("Expected Facet<...> value, got {}", self.ty_name(&typed.ty)),
@@ -3075,7 +3075,7 @@ impl Checker {
             });
         }
         match typed.node {
-            TypedInner::LensPath(path) => Ok(TypedLensPath {
+            TypedInner::FacetPath(path) => Ok(TypedFacetPath {
                 source_ty: self.resolve_ty(&path.source_ty),
                 focus_ty: self.resolve_ty(&path.focus_ty),
                 path_kind: path.path_kind,
@@ -3083,8 +3083,8 @@ impl Checker {
                 source_readonly_root: path.source_readonly_root,
                 segments: path.segments,
             }),
-            TypedInner::PendingLensPath(path) => {
-                self.specialize_pending_lens_path(path, span, expected_source)
+            TypedInner::PendingFacetPath(path) => {
+                self.specialize_pending_facet_path(path, span, expected_source)
             }
             _ => Err(TypeError {
                 message:
@@ -3096,10 +3096,10 @@ impl Checker {
         }
     }
 
-    fn compose_lens_paths(
+    fn compose_facet_paths(
         &mut self,
         span: &Span,
-        left_path: TypedLensPath,
+        left_path: TypedFacetPath,
         right_expr: &Resolved,
         operator_name: &str,
     ) -> Result<TypedNode, TypeError> {
@@ -3110,7 +3110,7 @@ impl Checker {
         );
         let right = self.check_node_with_expected(right_expr, Some(&expected_right_ty))?;
         let right_path =
-            self.resolve_lens_path_from_node(right, span, Some(&left_path.focus_ty))?;
+            self.resolve_facet_path_from_node(right, span, Some(&left_path.focus_ty))?;
 
         if !self.types_compatible(&left_path.focus_ty, &right_path.source_ty) {
             return Err(TypeError {
@@ -3129,15 +3129,15 @@ impl Checker {
         let focus_ty = self.resolve_ty(&right_path.focus_ty);
         let mut segments = left_path.segments;
         segments.extend(right_path.segments);
-        let path = TypedLensPath {
+        let path = TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
-            path_kind: if left_path.path_kind == TypedLensPathKind::Variant
-                || right_path.path_kind == TypedLensPathKind::Variant
+            path_kind: if left_path.path_kind == TypedFacetPathKind::Variant
+                || right_path.path_kind == TypedFacetPathKind::Variant
             {
-                TypedLensPathKind::Variant
+                TypedFacetPathKind::Variant
             } else {
-                TypedLensPathKind::Structural
+                TypedFacetPathKind::Structural
             },
             may_fail: left_path.may_fail || right_path.may_fail,
             source_readonly_root: left_path.source_readonly_root,
@@ -3146,27 +3146,27 @@ impl Checker {
         Ok(TypedNode {
             ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
             span: span.clone(),
-            node: TypedInner::LensPath(path),
+            node: TypedInner::FacetPath(path),
         })
     }
 
-    fn compose_pending_lens_paths(
+    fn compose_pending_facet_paths(
         &mut self,
         span: &Span,
-        mut left_path: PendingLensPath,
+        mut left_path: PendingFacetPath,
         right_expr: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let right = self.check_node(right_expr)?;
         match right.node {
-            TypedInner::LensPath(path) => {
+            TypedInner::FacetPath(path) => {
                 left_path
                     .segments
-                    .extend(path.segments.iter().map(Self::lens_segment_name));
-                Ok(self.pending_lens_node(span, left_path))
+                    .extend(path.segments.iter().map(Self::facet_segment_name));
+                Ok(self.pending_facet_node(span, left_path))
             }
-            TypedInner::PendingLensPath(path) => {
+            TypedInner::PendingFacetPath(path) => {
                 left_path.segments.extend(path.segments);
-                Ok(self.pending_lens_node(span, left_path))
+                Ok(self.pending_facet_node(span, left_path))
             }
             _ => Err(TypeError {
                 message:
@@ -3178,7 +3178,7 @@ impl Checker {
         }
     }
 
-    fn check_lens_compose_intrinsic(
+    fn check_facet_compose_intrinsic(
         &mut self,
         span: &Span,
         args: &[ResolvedRecordLitArg],
@@ -3210,11 +3210,11 @@ impl Checker {
 
         let left = self.check_node(left_expr)?;
         match left.node {
-            TypedInner::LensPath(path) => {
-                self.compose_lens_paths(span, path, right_expr, "Facet::compose")
+            TypedInner::FacetPath(path) => {
+                self.compose_facet_paths(span, path, right_expr, "Facet::compose")
             }
-            TypedInner::PendingLensPath(path) => {
-                self.compose_pending_lens_paths(span, path, right_expr)
+            TypedInner::PendingFacetPath(path) => {
+                self.compose_pending_facet_paths(span, path, right_expr)
             }
             _ => Err(TypeError {
                 message: format!("Expected Facet<...> value, got {}", self.ty_name(&left.ty)),
@@ -3224,7 +3224,7 @@ impl Checker {
         }
     }
 
-    fn check_lens_source_value(
+    fn check_facet_source_value(
         &mut self,
         op_name: &str,
         source_expr: &Resolved,
@@ -3246,26 +3246,26 @@ impl Checker {
         Ok((typed_source, source_is_result, source_value_ty))
     }
 
-    fn check_lens_path_argument(
+    fn check_facet_path_argument(
         &mut self,
         span: &Span,
         op_name: &str,
         path_expr: &Resolved,
         source_value_ty: &Ty,
         source_input_ty: &Ty,
-    ) -> Result<TypedLensPath, TypeError> {
+    ) -> Result<TypedFacetPath, TypeError> {
         let expected_focus_ty = self.env.fresh_tyvar();
         let expected_path_ty = Ty::Facet(
             Box::new(self.resolve_ty(source_value_ty)),
             Box::new(expected_focus_ty),
         );
         let path_node = self.check_node_with_expected(path_expr, Some(&expected_path_ty))?;
-        let path = self.resolve_lens_path_from_node(path_node, span, Some(source_value_ty))?;
+        let path = self.resolve_facet_path_from_node(path_node, span, Some(source_value_ty))?;
 
         if !self.types_compatible(&path.source_ty, source_value_ty) {
             return Err(TypeError {
                 message: format!(
-                    "{} source type mismatch: lens expects {}, got {}",
+                    "{} source type mismatch: facet expects {}, got {}",
                     op_name,
                     self.ty_name(&path.source_ty),
                     self.ty_name(source_input_ty)
@@ -3278,7 +3278,7 @@ impl Checker {
         Ok(path)
     }
 
-    fn check_lens_view_intrinsic(
+    fn check_facet_view_intrinsic(
         &mut self,
         span: &Span,
         args: &[ResolvedRecordLitArg],
@@ -3309,8 +3309,8 @@ impl Checker {
         };
 
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_lens_source_value("Facet::view", source_expr)?;
-        let path = self.check_lens_path_argument(
+            self.check_facet_source_value("Facet::view", source_expr)?;
+        let path = self.check_facet_path_argument(
             span,
             "Facet::view",
             path_expr,
@@ -3328,7 +3328,7 @@ impl Checker {
         Ok(TypedNode {
             ty: out_ty,
             span: span.clone(),
-            node: TypedInner::LensView {
+            node: TypedInner::FacetView {
                 source: Box::new(typed_source),
                 path,
                 source_is_result,
@@ -3336,7 +3336,7 @@ impl Checker {
         })
     }
 
-    fn check_lens_preview_intrinsic(
+    fn check_facet_preview_intrinsic(
         &mut self,
         span: &Span,
         args: &[ResolvedRecordLitArg],
@@ -3367,15 +3367,15 @@ impl Checker {
         };
 
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_lens_source_value("Facet::preview", source_expr)?;
-        let path = self.check_lens_path_argument(
+            self.check_facet_source_value("Facet::preview", source_expr)?;
+        let path = self.check_facet_path_argument(
             span,
             "Facet::preview",
             path_expr,
             &source_value_ty,
             &typed_source.ty,
         )?;
-        if path.path_kind != TypedLensPathKind::Variant {
+        if path.path_kind != TypedFacetPathKind::Variant {
             return Err(TypeError {
                 message: "Facet::preview requires a variant Facet".into(),
                 span: span.clone(),
@@ -3387,7 +3387,7 @@ impl Checker {
         Ok(TypedNode {
             ty: Ty::Result(Box::new(focus_ty), Box::new(Ty::Error)),
             span: span.clone(),
-            node: TypedInner::LensView {
+            node: TypedInner::FacetView {
                 source: Box::new(typed_source),
                 path,
                 source_is_result,
@@ -3395,7 +3395,7 @@ impl Checker {
         })
     }
 
-    fn check_lens_set_intrinsic(
+    fn check_facet_set_intrinsic(
         &mut self,
         span: &Span,
         args: &[ResolvedRecordLitArg],
@@ -3429,23 +3429,23 @@ impl Checker {
         };
 
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_lens_source_value("Facet::set", source_expr)?;
-        let path = self.check_lens_path_argument(
+            self.check_facet_source_value("Facet::set", source_expr)?;
+        let path = self.check_facet_path_argument(
             span,
             "Facet::set",
             path_expr,
             &source_value_ty,
             &typed_source.ty,
         )?;
-        self.check_mutating_lens_path_permissions("Facet::set", &path, span)?;
+        self.check_mutating_facet_path_permissions("Facet::set", &path, span)?;
 
         let resolved_focus_ty = self.resolve_ty(&path.focus_ty);
         let (typed_value, mode) = if let Ty::Result(ok, _) = &resolved_focus_ty {
             let typed_value = self.check_node(value_expr)?;
             if self.types_compatible(&path.focus_ty, &typed_value.ty) {
-                (typed_value, TypedLensSetMode::Exact)
+                (typed_value, TypedFacetSetMode::Exact)
             } else if self.types_compatible(ok.as_ref(), &typed_value.ty) {
-                (typed_value, TypedLensSetMode::WrapPlainResult)
+                (typed_value, TypedFacetSetMode::WrapPlainResult)
             } else {
                 return Err(TypeError {
                     message: format!(
@@ -3471,7 +3471,7 @@ impl Checker {
                     hint: None,
                 });
             }
-            (typed_value, TypedLensSetMode::Exact)
+            (typed_value, TypedFacetSetMode::Exact)
         };
 
         Ok(TypedNode {
@@ -3480,7 +3480,7 @@ impl Checker {
                 Box::new(Ty::Error),
             ),
             span: span.clone(),
-            node: TypedInner::LensSet {
+            node: TypedInner::FacetSet {
                 source: Box::new(typed_source),
                 path,
                 value: Box::new(typed_value),
@@ -3490,7 +3490,7 @@ impl Checker {
         })
     }
 
-    fn check_lens_over_intrinsic(
+    fn check_facet_over_intrinsic(
         &mut self,
         span: &Span,
         args: &[ResolvedRecordLitArg],
@@ -3524,18 +3524,18 @@ impl Checker {
         };
 
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_lens_source_value("Facet::over", source_expr)?;
-        let path = self.check_lens_path_argument(
+            self.check_facet_source_value("Facet::over", source_expr)?;
+        let path = self.check_facet_path_argument(
             span,
             "Facet::over",
             path_expr,
             &source_value_ty,
             &typed_source.ty,
         )?;
-        self.check_mutating_lens_path_permissions("Facet::over", &path, span)?;
+        self.check_mutating_facet_path_permissions("Facet::over", &path, span)?;
 
         let typed_update = self.check_node(update_expr)?;
-        let mode = self.check_lens_over_callable(
+        let mode = self.check_facet_over_callable(
             "Facet::over",
             span,
             &path.focus_ty,
@@ -3549,7 +3549,7 @@ impl Checker {
                 Box::new(Ty::Error),
             ),
             span: span.clone(),
-            node: TypedInner::LensOver {
+            node: TypedInner::FacetOver {
                 source: Box::new(typed_source),
                 path,
                 update_fun: Box::new(typed_update),
@@ -3559,7 +3559,7 @@ impl Checker {
         })
     }
 
-    fn check_lens_over_result_intrinsic(
+    fn check_facet_over_result_intrinsic(
         &mut self,
         span: &Span,
         args: &[ResolvedRecordLitArg],
@@ -3596,15 +3596,15 @@ impl Checker {
         };
 
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_lens_source_value("Facet::over_result", source_expr)?;
-        let path = self.check_lens_path_argument(
+            self.check_facet_source_value("Facet::over_result", source_expr)?;
+        let path = self.check_facet_path_argument(
             span,
             "Facet::over_result",
             path_expr,
             &source_value_ty,
             &typed_source.ty,
         )?;
-        self.check_mutating_lens_path_permissions("Facet::over_result", &path, span)?;
+        self.check_mutating_facet_path_permissions("Facet::over_result", &path, span)?;
 
         if !matches!(self.resolve_ty(&path.focus_ty), Ty::Result(_, _)) {
             return Err(TypeError {
@@ -3618,7 +3618,7 @@ impl Checker {
         }
 
         let typed_update = self.check_node(update_expr)?;
-        let mode = self.check_lens_over_callable(
+        let mode = self.check_facet_over_callable(
             "Facet::over_result",
             span,
             &path.focus_ty,
@@ -3632,7 +3632,7 @@ impl Checker {
                 Box::new(Ty::Error),
             ),
             span: span.clone(),
-            node: TypedInner::LensOver {
+            node: TypedInner::FacetOver {
                 source: Box::new(typed_source),
                 path,
                 update_fun: Box::new(typed_update),
@@ -3642,14 +3642,14 @@ impl Checker {
         })
     }
 
-    fn check_lens_over_callable(
+    fn check_facet_over_callable(
         &mut self,
         op_name: &str,
         span: &Span,
         focus_ty: &Ty,
         typed_update: &TypedNode,
         require_result_focus: bool,
-    ) -> Result<TypedLensOverMode, TypeError> {
+    ) -> Result<TypedFacetOverMode, TypeError> {
         let (in_ty, out_ty) = self.unary_function_parts(&typed_update.ty, op_name, span)?;
         let resolved_focus_ty = self.resolve_ty(focus_ty);
         let value_focus_ty = match &resolved_focus_ty {
@@ -3658,19 +3658,19 @@ impl Checker {
         };
 
         let mode = if require_result_focus {
-            TypedLensOverMode::FocusResult
+            TypedFacetOverMode::FocusResult
         } else if let Some(value_focus_ty) = &value_focus_ty {
             if self.types_compatible(value_focus_ty, &in_ty) {
-                TypedLensOverMode::FocusValue
+                TypedFacetOverMode::FocusValue
             } else {
-                TypedLensOverMode::FocusResult
+                TypedFacetOverMode::FocusResult
             }
         } else {
-            TypedLensOverMode::FocusValue
+            TypedFacetOverMode::FocusValue
         };
 
         let expected_input_ty = match (&mode, &value_focus_ty) {
-            (TypedLensOverMode::FocusValue, Some(value_focus_ty)) => value_focus_ty,
+            (TypedFacetOverMode::FocusValue, Some(value_focus_ty)) => value_focus_ty,
             _ => &resolved_focus_ty,
         };
         if !self.types_compatible(expected_input_ty, &in_ty) {
@@ -3699,7 +3699,7 @@ impl Checker {
             }
         };
         let expected_output_ty = match (&mode, &value_focus_ty) {
-            (TypedLensOverMode::FocusValue, Some(value_focus_ty)) => value_focus_ty,
+            (TypedFacetOverMode::FocusValue, Some(value_focus_ty)) => value_focus_ty,
             _ => &resolved_focus_ty,
         };
         if !self.types_compatible(expected_output_ty, &out_ok) {
@@ -3734,10 +3734,10 @@ impl Checker {
         }
     }
 
-    fn check_mutating_lens_path_permissions(
+    fn check_mutating_facet_path_permissions(
         &self,
-        lens_name: &str,
-        path: &TypedLensPath,
+        facet_name: &str,
+        path: &TypedFacetPath,
         span: &Span,
     ) -> Result<(), TypeError> {
         if path.source_readonly_root {
@@ -3746,7 +3746,7 @@ impl Checker {
             return Err(TypeError {
                 message: format!(
                     "{} cannot mutably traverse readonly type {}",
-                    lens_name, type_name
+                    facet_name, type_name
                 ),
                 span: span.clone(),
                 hint: Some(
@@ -3758,7 +3758,7 @@ impl Checker {
         for (index, segment) in path.segments.iter().enumerate() {
             let is_final = index + 1 == path.segments.len();
             match segment {
-                TypedLensSegment::Field {
+                TypedFacetSegment::Field {
                     field_name,
                     container_type_name,
                     readonly,
@@ -3786,7 +3786,7 @@ impl Checker {
                             return Err(TypeError {
                                 message: format!(
                                     "{} cannot mutably traverse readonly field {}.{}; only the owner can replace the property itself",
-                                    lens_name, container_type_name, field_name
+                                    facet_name, container_type_name, field_name
                                 ),
                                 span: span.clone(),
                                 hint: Some(hint),
@@ -3801,7 +3801,7 @@ impl Checker {
                         return Err(TypeError {
                             message: format!(
                                 "{} cannot mutably traverse readonly type {}",
-                                lens_name, type_name
+                                facet_name, type_name
                             ),
                             span: span.clone(),
                             hint: Some(
@@ -3811,12 +3811,12 @@ impl Checker {
                         });
                     }
                 }
-                TypedLensSegment::Tuple {
+                TypedFacetSegment::Tuple {
                     focus_readonly_root,
                     focus_type_name,
                     ..
                 }
-                | TypedLensSegment::Variant {
+                | TypedFacetSegment::Variant {
                     focus_readonly_root,
                     focus_type_name,
                     ..
@@ -3825,7 +3825,7 @@ impl Checker {
                         return Err(TypeError {
                             message: format!(
                                 "{} cannot mutably traverse readonly type {}",
-                                lens_name,
+                                facet_name,
                                 focus_type_name.as_deref().unwrap_or("<anonymous>")
                             ),
                             span: span.clone(),
@@ -3841,30 +3841,30 @@ impl Checker {
         Ok(())
     }
 
-    fn try_check_lens_intrinsic_app(
+    fn try_check_facet_intrinsic_app(
         &mut self,
         span: &Span,
         func: &Resolved,
         args: &[ResolvedRecordLitArg],
     ) -> Result<Option<TypedNode>, TypeError> {
-        match self.lens_intrinsic_kind(func) {
-            Some("view") => Ok(Some(self.check_lens_view_intrinsic(span, args)?)),
-            Some("preview") => Ok(Some(self.check_lens_preview_intrinsic(span, args)?)),
-            Some("compose") => Ok(Some(self.check_lens_compose_intrinsic(span, args)?)),
-            Some("set") => Ok(Some(self.check_lens_set_intrinsic(span, args)?)),
-            Some("over") => Ok(Some(self.check_lens_over_intrinsic(span, args)?)),
-            Some("over_result") => Ok(Some(self.check_lens_over_result_intrinsic(span, args)?)),
+        match self.facet_intrinsic_kind(func) {
+            Some("view") => Ok(Some(self.check_facet_view_intrinsic(span, args)?)),
+            Some("preview") => Ok(Some(self.check_facet_preview_intrinsic(span, args)?)),
+            Some("compose") => Ok(Some(self.check_facet_compose_intrinsic(span, args)?)),
+            Some("set") => Ok(Some(self.check_facet_set_intrinsic(span, args)?)),
+            Some("over") => Ok(Some(self.check_facet_over_intrinsic(span, args)?)),
+            Some("over_result") => Ok(Some(self.check_facet_over_result_intrinsic(span, args)?)),
             _ => Ok(None),
         }
     }
 
-    fn ensure_no_runtime_lens_args(
+    fn ensure_no_runtime_facet_args(
         &self,
         args: &[TypedNode],
         span: &Span,
         callee: &str,
     ) -> Result<(), TypeError> {
-        if args.iter().any(|arg| self.ty_contains_lens(&arg.ty)) {
+        if args.iter().any(|arg| self.ty_contains_facet(&arg.ty)) {
             return Err(TypeError {
                 message: format!(
                     "{} cannot accept Facet values in Stage1 (Facet is compile-time only)",
@@ -3877,12 +3877,12 @@ impl Checker {
         Ok(())
     }
 
-    fn ensure_no_runtime_lens_value(
+    fn ensure_no_runtime_facet_value(
         &self,
         value: &TypedNode,
         context: &str,
     ) -> Result<(), TypeError> {
-        if self.ty_contains_lens(&value.ty) {
+        if self.ty_contains_facet(&value.ty) {
             return Err(TypeError {
                 message: format!(
                     "{} cannot contain Facet values in Stage1 (Facet is compile-time only)",
@@ -3923,7 +3923,7 @@ impl Checker {
             return Ok(typed);
         }
 
-        if let Some(typed) = self.try_check_lens_intrinsic_app(span, func, args)? {
+        if let Some(typed) = self.try_check_facet_intrinsic_app(span, func, args)? {
             return Ok(typed);
         }
 
@@ -3990,7 +3990,7 @@ impl Checker {
                         });
                     }
                 }
-                self.ensure_no_runtime_lens_args(&typed_args, span, name)?;
+                self.ensure_no_runtime_facet_args(&typed_args, span, name)?;
 
                 if name == "__process_self" {
                     let Some(process_name) = self.current_process_name() else {
@@ -4090,7 +4090,7 @@ impl Checker {
                     args,
                     callable_hint.as_deref(),
                 )?;
-                self.ensure_no_runtime_lens_args(&typed_args, span, "Function call")?;
+                self.ensure_no_runtime_facet_args(&typed_args, span, "Function call")?;
 
                 Ok(TypedNode {
                     ty: self.resolve_ty(ret),
@@ -4149,7 +4149,7 @@ impl Checker {
                         });
                     }
                 }
-                self.ensure_no_runtime_lens_args(&typed_args, span, "Function call")?;
+                self.ensure_no_runtime_facet_args(&typed_args, span, "Function call")?;
 
                 Ok(TypedNode {
                     ty: self.resolve_ty(ret),
@@ -4781,7 +4781,7 @@ impl Checker {
         let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
         let saved_in_extractor_body = self.in_extractor_body;
         let saved_closure_depth = self.closure_depth;
-        let saved_lens_bindings = self.lens_bindings.clone();
+        let saved_facet_bindings = self.facet_bindings.clone();
 
         self.env.push_var_scope();
         self.closure_depth = self.closure_depth.saturating_add(1);
@@ -4849,16 +4849,6 @@ impl Checker {
 
             for capture in captures {
                 if let Some(ty) = self.env.lookup_var(capture.unique_id).cloned() {
-                    if matches!(ty, Ty::Facet(_, _)) {
-                        return Err(TypeError {
-                            message: "Facet values are scope-local compile-time capabilities and cannot be captured by closures".into(),
-                            span: capture.span.clone(),
-                            hint: Some(
-                                "Consume the Facet in the current scope with Facet::view/set/over before creating the closure."
-                                    .into(),
-                            ),
-                        });
-                    }
                     let resolved_ty = self.resolve_ty(&ty);
                     self.env.bind_var(capture.unique_id, resolved_ty);
                 }
@@ -4931,7 +4921,7 @@ impl Checker {
         self.current_impl_struct_target = saved_current_impl_struct_target;
         self.in_extractor_body = saved_in_extractor_body;
         self.closure_depth = saved_closure_depth;
-        self.lens_bindings = saved_lens_bindings;
+        self.facet_bindings = saved_facet_bindings;
         result
     }
 
@@ -4951,6 +4941,57 @@ impl Checker {
 
         let typed_target = self.check_node(target)?;
         let target_ty = self.resolve_ty(&typed_target.ty);
+        if let Ty::Facet(source_ty, focus_ty) = &target_ty {
+            let view_id = self.runtime_helper_id("Facet::view", span)?;
+            let param_uid = Self::next_synthetic_range_uid();
+            let param_name = "__facet_capture_arg".to_string();
+            let param_id = ResolvedId {
+                name: param_name.clone(),
+                qualified_name: None,
+                unique_id: param_uid,
+                compiler_generated: true,
+                span: span.clone(),
+            };
+            let captured_facet = match target {
+                Resolved::Var(_, id) => id.clone(),
+                _ => {
+                    return Err(TypeError {
+                        message: "Facet capture shorthand currently requires a facet binding".into(),
+                        span: span.clone(),
+                        hint: Some("Bind the facet first, then capture it with `&facet`.".into()),
+                    })
+                }
+            };
+            let body = Resolved::App(
+                span.clone(),
+                Box::new(Resolved::Var(span.clone(), view_id)),
+                vec![
+                    ResolvedRecordLitArg::Positional(target.clone()),
+                    ResolvedRecordLitArg::Positional(Resolved::Var(
+                        span.clone(),
+                        param_id.clone(),
+                    )),
+                ],
+            );
+            let synthetic = Resolved::Closure(
+                span.clone(),
+                vec![ResolvedClosureParam {
+                    id: param_id,
+                    ty: None,
+                }],
+                vec![captured_facet],
+                Box::new(body),
+            );
+            let expected = Ty::Func(
+                vec![self.resolve_ty(source_ty.as_ref())],
+                Box::new(Ty::Result(
+                    Box::new(self.resolve_ty(focus_ty.as_ref())),
+                    Box::new(Ty::Error),
+                )),
+            );
+            return self.check_node_with_expected(&synthetic, Some(&expected))
+                .or_else(|_| self.check_node(&synthetic));
+        }
         let (params, ret) = match &target_ty {
             Ty::BuiltinFunc { params, ret, .. } => (params.clone(), ret.as_ref().clone()),
             Ty::UserFunc { params, ret, .. } => (params.clone(), ret.as_ref().clone()),
@@ -5253,9 +5294,9 @@ impl Checker {
         let typed_left = self.check_node(left)?;
         if matches!(typed_left.ty, Ty::Facet(_, _)) {
             return match typed_left.node {
-                TypedInner::LensPath(path) => self.compose_lens_paths(span, path, right, "`/`"),
-                TypedInner::PendingLensPath(path) => {
-                    self.compose_pending_lens_paths(span, path, right)
+                TypedInner::FacetPath(path) => self.compose_facet_paths(span, path, right, "`/`"),
+                TypedInner::PendingFacetPath(path) => {
+                    self.compose_pending_facet_paths(span, path, right)
                 }
                 _ => Err(TypeError {
                     message: format!(
@@ -5345,8 +5386,8 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let typed_head = self.check_node(head)?;
         let typed_tail = self.check_node(tail)?;
-        self.ensure_no_runtime_lens_value(&typed_head, "List construction")?;
-        self.ensure_no_runtime_lens_value(&typed_tail, "List construction")?;
+        self.ensure_no_runtime_facet_value(&typed_head, "List construction")?;
+        self.ensure_no_runtime_facet_value(&typed_tail, "List construction")?;
         let tail_elem_ty = match &typed_tail.ty {
             Ty::List(inner) => inner.as_ref().clone(),
             other => {
@@ -5392,7 +5433,7 @@ impl Checker {
             .map(|e| self.check_node(e))
             .collect::<Result<Vec<_>, _>>()?;
         for typed in &typed_elems {
-            self.ensure_no_runtime_lens_value(typed, "List literal")?;
+            self.ensure_no_runtime_facet_value(typed, "List literal")?;
         }
 
         let elem_ty = typed_elems[0].ty.clone();
@@ -5425,8 +5466,8 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let typed_start = self.check_node(start)?;
         let typed_stop = self.check_node(stop)?;
-        self.ensure_no_runtime_lens_value(&typed_start, "Range literal")?;
-        self.ensure_no_runtime_lens_value(&typed_stop, "Range literal")?;
+        self.ensure_no_runtime_facet_value(&typed_start, "Range literal")?;
+        self.ensure_no_runtime_facet_value(&typed_stop, "Range literal")?;
 
         let start_ty = self.resolve_ty(&typed_start.ty);
         let stop_ty = self.resolve_ty(&typed_stop.ty);
@@ -5677,7 +5718,7 @@ impl Checker {
             .map(|elem| self.check_node(elem))
             .collect::<Result<Vec<_>, _>>()?;
         for typed in &typed_elems {
-            self.ensure_no_runtime_lens_value(typed, "Tuple literal")?;
+            self.ensure_no_runtime_facet_value(typed, "Tuple literal")?;
         }
         let item_tys = typed_elems.iter().map(|elem| elem.ty.clone()).collect();
 
@@ -5701,7 +5742,7 @@ impl Checker {
                 }
                 ResolvedInterpolatedPart::Expr(expr) => {
                     let typed_expr = self.check_node(expr)?;
-                    self.ensure_no_runtime_lens_value(&typed_expr, "String interpolation")?;
+                    self.ensure_no_runtime_facet_value(&typed_expr, "String interpolation")?;
                     if matches!(typed_expr.ty, Ty::Result(_, _)) {
                         return Err(TypeError {
                             message: "Interpolation does not allow Result type".into(),
@@ -6005,13 +6046,13 @@ impl Checker {
         Ok(typed_value)
     }
 
-    fn resolve_lens_segment_for_source_ty(
+    fn resolve_facet_segment_for_source_ty(
         &mut self,
         source_ty: &Ty,
         field: &str,
         span: &Span,
         for_capability: bool,
-    ) -> Result<(TypedLensSegment, Ty, bool), TypeError> {
+    ) -> Result<(TypedFacetSegment, Ty, bool), TypeError> {
         match self.resolve_ty(source_ty) {
             Ty::Tuple(items) => {
                 let index = field
@@ -6037,7 +6078,7 @@ impl Checker {
                     hint: Some(Self::tuple_index_hint(items.len())),
                 })?;
                 Ok((
-                    TypedLensSegment::Tuple {
+                    TypedFacetSegment::Tuple {
                         field_index: index as u32,
                         tuple_len: items.len() as u32,
                         focus_readonly_root: self.ty_is_readonly_root(&field_ty),
@@ -6063,19 +6104,6 @@ impl Checker {
                             )),
                         });
                     }
-                    if !for_capability && outside_impl && self.closure_depth > 0 {
-                        return Err(TypeError {
-                            message: format!(
-                                "Field '{}.{}' is private and cannot be accessed from closures outside impl {}",
-                                display_name, field, display_name
-                            ),
-                            span: span.clone(),
-                            hint: Some(format!(
-                                "Read {}.{} in the current scope first, then capture the plain value.",
-                                display_name, field
-                            )),
-                        });
-                    }
                 }
                 let (field_index, field_ty) = fields
                     .iter()
@@ -6088,7 +6116,7 @@ impl Checker {
                         hint: None,
                     })?;
                 Ok((
-                    TypedLensSegment::Field {
+                    TypedFacetSegment::Field {
                         field_name: field.to_string(),
                         field_index,
                         container_field_count: fields.len() as u32,
@@ -6145,7 +6173,7 @@ impl Checker {
                     _ => Ty::Tuple(variant.payload.clone()),
                 };
                 Ok((
-                    TypedLensSegment::Variant {
+                    TypedFacetSegment::Variant {
                         enum_name,
                         variant_name: variant.short_name,
                         variant_tag: variant.tag,
@@ -6181,7 +6209,7 @@ impl Checker {
         }
     }
 
-    fn try_check_tuple_type_root_lens_path(
+    fn try_check_tuple_type_root_facet_path(
         &mut self,
         span: &Span,
         expr: &Resolved,
@@ -6199,9 +6227,9 @@ impl Checker {
         };
 
         let Some(expected_ty) = expected else {
-            return Ok(Some(self.pending_lens_node(
+            return Ok(Some(self.pending_facet_node(
                 span,
-                PendingLensPath {
+                PendingFacetPath {
                     source_ty_hint: None,
                     segments: vec![field.to_string()],
                 },
@@ -6268,13 +6296,13 @@ impl Checker {
         }
 
         let source_ty = Ty::Tuple(tuple_items);
-        let path = TypedLensPath {
+        let path = TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
-            path_kind: TypedLensPathKind::Structural,
+            path_kind: TypedFacetPathKind::Structural,
             may_fail: false,
             source_readonly_root: self.ty_is_readonly_root(&source_ty),
-            segments: vec![TypedLensSegment::Tuple {
+            segments: vec![TypedFacetSegment::Tuple {
                 field_index: index as u32,
                 tuple_len: match &source_ty {
                     Ty::Tuple(items) => items.len() as u32,
@@ -6289,7 +6317,7 @@ impl Checker {
         Ok(Some(TypedNode {
             ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
             span: span.clone(),
-            node: TypedInner::LensPath(path),
+            node: TypedInner::FacetPath(path),
         }))
     }
 
@@ -6301,27 +6329,27 @@ impl Checker {
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
         if let Some(tuple_root_path) =
-            self.try_check_tuple_type_root_lens_path(span, expr, field, expected)?
+            self.try_check_tuple_type_root_facet_path(span, expr, field, expected)?
         {
             return Ok(tuple_root_path);
         }
         let typed_expr = self.check_node(expr)?;
 
         if matches!(typed_expr.ty, Ty::Facet(_, _)) {
-            let path = self.resolve_lens_path_from_node(typed_expr, span, None)?;
+            let path = self.resolve_facet_path_from_node(typed_expr, span, None)?;
             let (segment, focus_ty, may_fail) =
-                self.resolve_lens_segment_for_source_ty(&path.focus_ty, field, span, true)?;
+                self.resolve_facet_segment_for_source_ty(&path.focus_ty, field, span, true)?;
             let source_ty = self.resolve_ty(&path.source_ty);
             let focus_ty = self.resolve_ty(&focus_ty);
             let mut segments = path.segments;
             segments.push(segment);
-            let combined = TypedLensPath {
+            let combined = TypedFacetPath {
                 source_ty: source_ty.clone(),
                 focus_ty: focus_ty.clone(),
-                path_kind: if path.path_kind == TypedLensPathKind::Variant || may_fail {
-                    TypedLensPathKind::Variant
+                path_kind: if path.path_kind == TypedFacetPathKind::Variant || may_fail {
+                    TypedFacetPathKind::Variant
                 } else {
-                    TypedLensPathKind::Structural
+                    TypedFacetPathKind::Structural
                 },
                 may_fail: path.may_fail || may_fail,
                 source_readonly_root: path.source_readonly_root,
@@ -6330,7 +6358,7 @@ impl Checker {
             return Ok(TypedNode {
                 ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
                 span: span.clone(),
-                node: TypedInner::LensPath(combined),
+                node: TypedInner::FacetPath(combined),
             });
         }
 
@@ -6338,12 +6366,12 @@ impl Checker {
             if self.env.is_type_constructor_id(id.unique_id) {
                 let source_ty = self.resolve_ty(&typed_expr.ty);
                 let (segment, focus_ty, may_fail) =
-                    self.resolve_lens_segment_for_source_ty(&source_ty, field, span, true)?;
+                    self.resolve_facet_segment_for_source_ty(&source_ty, field, span, true)?;
                 let focus_ty = self.resolve_ty(&focus_ty);
-                let path = TypedLensPath {
+                let path = TypedFacetPath {
                     source_ty: source_ty.clone(),
                     focus_ty: focus_ty.clone(),
-                    path_kind: TypedLensPathKind::from_may_fail(may_fail),
+                    path_kind: TypedFacetPathKind::from_may_fail(may_fail),
                     may_fail,
                     source_readonly_root: self.ty_is_readonly_root(&source_ty),
                     segments: vec![segment],
@@ -6351,7 +6379,7 @@ impl Checker {
                 return Ok(TypedNode {
                     ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
                     span: span.clone(),
-                    node: TypedInner::LensPath(path),
+                    node: TypedInner::FacetPath(path),
                 });
             }
         }
@@ -6361,12 +6389,12 @@ impl Checker {
             other => (false, other),
         };
         let (segment, focus_ty, may_fail) =
-            self.resolve_lens_segment_for_source_ty(&source_focus_ty, field, span, false)?;
+            self.resolve_facet_segment_for_source_ty(&source_focus_ty, field, span, false)?;
         let focus_ty = self.resolve_ty(&focus_ty);
-        let path = TypedLensPath {
+        let path = TypedFacetPath {
             source_ty: source_focus_ty,
             focus_ty: focus_ty.clone(),
-            path_kind: TypedLensPathKind::from_may_fail(may_fail),
+            path_kind: TypedFacetPathKind::from_may_fail(may_fail),
             may_fail,
             source_readonly_root: false,
             segments: vec![segment],
@@ -6380,7 +6408,7 @@ impl Checker {
         Ok(TypedNode {
             ty: out_ty,
             span: span.clone(),
-            node: TypedInner::LensView {
+            node: TypedInner::FacetView {
                 source: Box::new(typed_expr),
                 path,
                 source_is_result,
@@ -6482,7 +6510,7 @@ mod tests {
 
     use super::*;
     use crate::env::TypeKind;
-    use crate::typed::{TypedLensPath, TypedLensPathKind, TypedLensSegment};
+    use crate::typed::{TypedFacetPath, TypedFacetPathKind, TypedFacetSegment};
 
     fn test_span() -> Span {
         Span { start: 0, end: 0 }
@@ -6520,8 +6548,8 @@ mod tests {
         readonly: bool,
         focus_readonly_root: bool,
         focus_type_name: Option<&str>,
-    ) -> TypedLensSegment {
-        TypedLensSegment::Field {
+    ) -> TypedFacetSegment {
+        TypedFacetSegment::Field {
             field_name: field_name.into(),
             field_index,
             container_field_count: 1,
@@ -6533,7 +6561,7 @@ mod tests {
     }
 
     #[test]
-    fn mutating_lens_rejects_deep_traversal_through_readonly_field_even_for_owner() {
+    fn mutating_facet_rejects_deep_traversal_through_readonly_field_even_for_owner() {
         let mut checker = Checker::new(TypecheckContext::default());
         setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[], false);
         setup_type(
@@ -6548,7 +6576,7 @@ mod tests {
         );
         checker.current_impl_struct_target = Some("User".into());
 
-        let path = TypedLensPath {
+        let path = TypedFacetPath {
             source_ty: Ty::Struct(
                 "User".into(),
                 vec![(
@@ -6557,7 +6585,7 @@ mod tests {
                 )],
             ),
             focus_ty: Ty::Str,
-            path_kind: TypedLensPathKind::Structural,
+            path_kind: TypedFacetPathKind::Structural,
             may_fail: false,
             source_readonly_root: false,
             segments: vec![
@@ -6567,14 +6595,14 @@ mod tests {
         };
 
         let err = checker
-            .check_mutating_lens_path_permissions("Facet::set", &path, &test_span())
+            .check_mutating_facet_path_permissions("Facet::set", &path, &test_span())
             .expect_err("deep traversal through readonly field should fail");
         assert!(err.message.contains("readonly field User.profile"));
         assert!(err.message.contains("replace the property itself"));
     }
 
     #[test]
-    fn mutating_lens_allows_owner_to_replace_readonly_field_itself() {
+    fn mutating_facet_allows_owner_to_replace_readonly_field_itself() {
         let mut checker = Checker::new(TypecheckContext::default());
         setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[], false);
         setup_type(
@@ -6589,7 +6617,7 @@ mod tests {
         );
         checker.current_impl_struct_target = Some("User".into());
 
-        let path = TypedLensPath {
+        let path = TypedFacetPath {
             source_ty: Ty::Struct(
                 "User".into(),
                 vec![(
@@ -6598,7 +6626,7 @@ mod tests {
                 )],
             ),
             focus_ty: Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
-            path_kind: TypedLensPathKind::Structural,
+            path_kind: TypedFacetPathKind::Structural,
             may_fail: false,
             source_readonly_root: false,
             segments: vec![field_segment(
@@ -6612,12 +6640,12 @@ mod tests {
         };
 
         checker
-            .check_mutating_lens_path_permissions("Facet::set", &path, &test_span())
+            .check_mutating_facet_path_permissions("Facet::set", &path, &test_span())
             .expect("owner replacement of readonly field should succeed");
     }
 
     #[test]
-    fn mutating_lens_rejects_readonly_root_and_nested_readonly_type_boundaries() {
+    fn mutating_facet_rejects_readonly_root_and_nested_readonly_type_boundaries() {
         let mut checker = Checker::new(TypecheckContext::default());
         setup_type(&mut checker, "Profile", vec![("name", Ty::Str)], &[], true);
         setup_type(
@@ -6632,10 +6660,10 @@ mod tests {
         );
         checker.current_impl_struct_target = Some("Profile".into());
 
-        let readonly_root_path = TypedLensPath {
+        let readonly_root_path = TypedFacetPath {
             source_ty: Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
             focus_ty: Ty::Str,
-            path_kind: TypedLensPathKind::Structural,
+            path_kind: TypedFacetPathKind::Structural,
             may_fail: false,
             source_readonly_root: true,
             segments: vec![field_segment(
@@ -6648,11 +6676,11 @@ mod tests {
             )],
         };
         let err = checker
-            .check_mutating_lens_path_permissions("Facet::over", &readonly_root_path, &test_span())
+            .check_mutating_facet_path_permissions("Facet::over", &readonly_root_path, &test_span())
             .expect_err("readonly root should fail");
         assert!(err.message.contains("readonly type Profile"));
 
-        let nested_readonly_path = TypedLensPath {
+        let nested_readonly_path = TypedFacetPath {
             source_ty: Ty::Struct(
                 "User".into(),
                 vec![(
@@ -6661,7 +6689,7 @@ mod tests {
                 )],
             ),
             focus_ty: Ty::Str,
-            path_kind: TypedLensPathKind::Structural,
+            path_kind: TypedFacetPathKind::Structural,
             may_fail: false,
             source_readonly_root: false,
             segments: vec![
@@ -6670,7 +6698,7 @@ mod tests {
             ],
         };
         let err = checker
-            .check_mutating_lens_path_permissions(
+            .check_mutating_facet_path_permissions(
                 "Facet::over_result",
                 &nested_readonly_path,
                 &test_span(),

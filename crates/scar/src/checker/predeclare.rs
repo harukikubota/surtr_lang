@@ -49,7 +49,7 @@ impl Checker {
             Resolved::Var(_, id) => self
                 .consts
                 .get(&id.unique_id)
-                .is_none_or(|meta| matches!(meta.kind, ConstKind::LensPath)),
+                .is_none_or(|meta| matches!(meta.kind, ConstKind::FacetPath)),
             Resolved::FieldAccess(_, inner, _) => self.const_surface_is_allowed(inner),
             Resolved::BinOp(_, BinOp::Slash, left, right) => {
                 self.const_surface_is_allowed(left) && self.const_surface_is_allowed(right)
@@ -86,9 +86,9 @@ impl Checker {
                     ConstKind::PrimitiveLiteral,
                     StoredConstValue::Literal(lit.clone()),
                 ),
-                TypedInner::LensPath(path) => (
-                    ConstKind::LensPath,
-                    StoredConstValue::LensPath(path.clone()),
+                TypedInner::FacetPath(path) => (
+                    ConstKind::FacetPath,
+                    StoredConstValue::FacetPath(path.clone()),
                 ),
                 _ => {
                     return Err(TypeError {

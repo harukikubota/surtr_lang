@@ -646,13 +646,13 @@ impl Checker {
             TypedInner::ProcessContextHandler { process_name, slot } => {
                 TypedInner::ProcessContextHandler { process_name, slot }
             }
-            TypedInner::LensPath(path) => TypedInner::LensPath(path),
-            TypedInner::PendingLensPath(path) => TypedInner::PendingLensPath(path),
-            TypedInner::LensView {
+            TypedInner::FacetPath(path) => TypedInner::FacetPath(path),
+            TypedInner::PendingFacetPath(path) => TypedInner::PendingFacetPath(path),
+            TypedInner::FacetView {
                 source,
                 path,
                 source_is_result,
-            } => TypedInner::LensView {
+            } => TypedInner::FacetView {
                 source: Box::new(self.rewrite_specializations_in_node(
                     *source,
                     defs_by_fun_idx,
@@ -664,13 +664,13 @@ impl Checker {
                 path,
                 source_is_result,
             },
-            TypedInner::LensSet {
+            TypedInner::FacetSet {
                 source,
                 path,
                 value,
                 source_is_result,
                 mode,
-            } => TypedInner::LensSet {
+            } => TypedInner::FacetSet {
                 source: Box::new(self.rewrite_specializations_in_node(
                     *source,
                     defs_by_fun_idx,
@@ -691,13 +691,13 @@ impl Checker {
                 source_is_result,
                 mode,
             },
-            TypedInner::LensOver {
+            TypedInner::FacetOver {
                 source,
                 path,
                 update_fun,
                 source_is_result,
                 mode,
-            } => TypedInner::LensOver {
+            } => TypedInner::FacetOver {
                 source: Box::new(self.rewrite_specializations_in_node(
                     *source,
                     defs_by_fun_idx,
@@ -1179,21 +1179,21 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(init, ordered, seen);
                 self.collect_bound_tyvars_in_node(size, ordered, seen);
             }
-            TypedInner::LensPath(path) => {
+            TypedInner::FacetPath(path) => {
                 self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
             }
-            TypedInner::PendingLensPath(path) => {
+            TypedInner::PendingFacetPath(path) => {
                 if let Some(source_ty_hint) = &path.source_ty_hint {
                     self.collect_bound_tyvars_in_ty(source_ty_hint, ordered, seen);
                 }
             }
-            TypedInner::LensView { source, path, .. } => {
+            TypedInner::FacetView { source, path, .. } => {
                 self.collect_bound_tyvars_in_node(source, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
             }
-            TypedInner::LensSet {
+            TypedInner::FacetSet {
                 source,
                 path,
                 value,
@@ -1204,7 +1204,7 @@ impl Checker {
                 self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
                 self.collect_bound_tyvars_in_node(value, ordered, seen);
             }
-            TypedInner::LensOver {
+            TypedInner::FacetOver {
                 source,
                 path,
                 update_fun,
@@ -1482,7 +1482,7 @@ impl Checker {
             TypedInner::ProcessContextHandler { process_name, slot } => {
                 TypedInner::ProcessContextHandler { process_name, slot }
             }
-            TypedInner::LensPath(path) => TypedInner::LensPath(TypedLensPath {
+            TypedInner::FacetPath(path) => TypedInner::FacetPath(TypedFacetPath {
                 source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                 focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
                 path_kind: path.path_kind,
@@ -1490,19 +1490,19 @@ impl Checker {
                 source_readonly_root: path.source_readonly_root,
                 segments: path.segments,
             }),
-            TypedInner::PendingLensPath(path) => TypedInner::PendingLensPath(PendingLensPath {
+            TypedInner::PendingFacetPath(path) => TypedInner::PendingFacetPath(PendingFacetPath {
                 source_ty_hint: path
                     .source_ty_hint
                     .map(|ty| self.substitute_ty_with_mapping(&ty, mapping)),
                 segments: path.segments,
             }),
-            TypedInner::LensView {
+            TypedInner::FacetView {
                 source,
                 path,
                 source_is_result,
-            } => TypedInner::LensView {
+            } => TypedInner::FacetView {
                 source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
-                path: TypedLensPath {
+                path: TypedFacetPath {
                     source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                     focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
                     path_kind: path.path_kind,
@@ -1512,15 +1512,15 @@ impl Checker {
                 },
                 source_is_result,
             },
-            TypedInner::LensSet {
+            TypedInner::FacetSet {
                 source,
                 path,
                 value,
                 source_is_result,
                 mode,
-            } => TypedInner::LensSet {
+            } => TypedInner::FacetSet {
                 source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
-                path: TypedLensPath {
+                path: TypedFacetPath {
                     source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                     focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
                     path_kind: path.path_kind,
@@ -1532,15 +1532,15 @@ impl Checker {
                 source_is_result,
                 mode,
             },
-            TypedInner::LensOver {
+            TypedInner::FacetOver {
                 source,
                 path,
                 update_fun,
                 source_is_result,
                 mode,
-            } => TypedInner::LensOver {
+            } => TypedInner::FacetOver {
                 source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
-                path: TypedLensPath {
+                path: TypedFacetPath {
                     source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                     focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
                     path_kind: path.path_kind,
@@ -1997,13 +1997,13 @@ impl Checker {
                     || Self::typed_node_has_pending_trait_call(size)
             }
             TypedInner::ProcessContextHandler { .. } => false,
-            TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => false,
-            TypedInner::LensView { source, .. } => Self::typed_node_has_pending_trait_call(source),
-            TypedInner::LensSet { source, value, .. } => {
+            TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_) => false,
+            TypedInner::FacetView { source, .. } => Self::typed_node_has_pending_trait_call(source),
+            TypedInner::FacetSet { source, value, .. } => {
                 Self::typed_node_has_pending_trait_call(source)
                     || Self::typed_node_has_pending_trait_call(value)
             }
-            TypedInner::LensOver {
+            TypedInner::FacetOver {
                 source, update_fun, ..
             } => {
                 Self::typed_node_has_pending_trait_call(source)

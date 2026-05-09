@@ -39,8 +39,8 @@ input line
 | command head parser | `:doc`, `:sig`, `:info` などの command 名を切り出す |
 | command payload parser | command ごとの raw payload を取得する |
 | command query parser | payload を command query token に分類する |
-| semantic resolver | scope / binding / type / impl / lens 情報と照合する |
-| command renderer | doc / sig / info / type / lens 表示へ落とす |
+| semantic resolver | scope / binding / type / impl / facet 情報と照合する |
+| command renderer | doc / sig / info / type / facet 表示へ落とす |
 
 query parser は Surtr 式 parser ではない。
 
@@ -56,7 +56,7 @@ query parser は Surtr 式 parser ではない。
 | `:sig` | 関数、constructor、extractor、enum variant surface、impl specialization の signature を表示する | `SigTarget` |
 | `:info` | 定義、binding、dispatch、operator query の解決情報を表示する | `InfoTarget` |
 | `:type` | REPL binding の型と TypeIdentity を表示する | `TypeTarget` |
-| `:facet` | FacetPath の型遷移、停止点、fallible segment を表示する | `LensTarget` |
+| `:facet` | FacetPath の型遷移、停止点、fallible segment を表示する | `FacetTarget` |
 | `:v` | history value または binding value を表示する | `HistoryIndex` / `BindingKey` |
 | `:help` | command help を表示する | `Topic?` |
 | `:error` | error 表示モードを確認・変更する | `full` / `summary` |
@@ -933,10 +933,10 @@ Try:
 - Result を返しうる segment
 - 最終的な Facet 型
 
-### 9.2 LensTarget
+### 9.2 FacetTarget
 
 ```text
-LensTarget
+FacetTarget
   = FacetPathRef
   | ForcedBindingKey where binding is FacetPath / Facet
 ```
@@ -946,7 +946,7 @@ LensTarget
 ```text
 :facet User.address.name
 :facet Tuple._1
-:facet $address_name_lens
+:facet $address_name_facet
 ```
 
 無効例:
@@ -1474,12 +1474,12 @@ Examples:
 ```text
 Usage:
   :facet <FacetPath>
-  :facet $<lens-binding>
+  :facet $<facet-binding>
 
 Examples:
   :facet User.address.name
   :facet Tuple._1
-  :facet $address_name_lens
+  :facet $address_name_facet
 ```
 
 ---
@@ -1499,7 +1499,7 @@ command query parser は Surtr 式 parser ではない。
 - typed call dispatch
 - typed operator dispatch
 - capture query
-- lens path lookup
+- facet path lookup
 
 評価・実行・任意式の型推論は行わない。
 
@@ -1513,7 +1513,7 @@ CommandQuery
   | ExtractorLookup(ExtractorQuery)
   | TypedCallDispatch(TypedCallQuery)
   | TypedOperatorDispatch(TypedOperatorQuery)
-  | LensLookup(LensQuery)
+  | FacetLookup(FacetQuery)
 ```
 
 ```text
@@ -1588,7 +1588,7 @@ PipePlaceholder
 5. constructor / extractor pattern を見る
 6. typed call pattern を見る
 7. capture query を見る
-8. lens path を見る
+8. facet path を見る
 9. symbol / qualified ref として扱う
 10. semantic resolver に渡す
 ```
@@ -1661,7 +1661,7 @@ ResolvedQueryRequest
   | Sig(SigQuery)
   | Info(InfoQuery)
   | Type(TypeQuery)
-  | Facet(LensQuery)
+  | Facet(FacetQuery)
 ```
 
 resolver が見る情報:
@@ -1675,7 +1675,7 @@ resolver が見る情報:
 - impl table
 - constructor / extractor metadata
 - enum definitions
-- lens metadata
+- facet metadata
 
 ## A.8 diagnostic span
 

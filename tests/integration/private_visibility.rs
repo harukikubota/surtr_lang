@@ -107,13 +107,6 @@ fn private_visibility_compile_error_fixtures_pass() {
                 == &repo_root().join("tests/compile_errors/modules/private_field_access_forbidden")
                 || case_dir
                     == &repo_root()
-                        .join("tests/compile_errors/modules/private_field_closure_escape_forbidden")
-                || case_dir
-                    == &repo_root().join(
-                        "tests/compile_errors/modules/private_field_param_closure_escape_forbidden",
-                    )
-                || case_dir
-                    == &repo_root()
                         .join("tests/compile_errors/modules/private_field_type_root_bind_forbidden")
                 || case_dir
                     == &repo_root()
@@ -126,7 +119,7 @@ fn private_visibility_compile_error_fixtures_pass() {
 
     assert_eq!(
         cases.len(),
-        6,
+        4,
         "private visibility compile fixtures should exist"
     );
 

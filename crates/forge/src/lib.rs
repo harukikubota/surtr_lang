@@ -6,8 +6,8 @@ pub mod registry;
 
 pub use codegen::{
     codegen, codegen_typed_program, compose_bytecode_with_chunk, BindingInfo, ChunkMeta,
-    ForgeCheckpoint, ForgeSession, ReplCallableDisplay, ReplCallableKind, ReplLensInfo,
-    ReplLensSegmentInfo, ReplTypeKind, TypeDefDisplay,
+    ForgeCheckpoint, ForgeSession, ReplCallableDisplay, ReplCallableKind, ReplFacetInfo,
+    ReplFacetSegmentInfo, ReplTypeKind, TypeDefDisplay,
 };
 
 #[cfg(test)]
@@ -696,7 +696,7 @@ largest = Numeric::max(1.5, 2.5)"#,
     }
 
     #[test]
-    fn lens_set_and_over_are_lowered_without_runtime_builtin_calls() {
+    fn facet_set_and_over_are_lowered_without_runtime_builtin_calls() {
         let bytecode = codegen_source(
             r#"defrecord User(name: String)
 user = User("alice")
@@ -704,8 +704,8 @@ user2 = Facet::set(User.name, user, "bob")
 user3 = Facet::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
         );
 
-        let lens_set_id = builtin_id_by_name("set").expect("set builtin metadata must exist");
-        let lens_over_id = builtin_id_by_name("over").expect("over builtin metadata must exist");
+        let facet_set_id = builtin_id_by_name("set").expect("set builtin metadata must exist");
+        let facet_over_id = builtin_id_by_name("over").expect("over builtin metadata must exist");
 
         assert!(!bytecode.opcodes.iter().any(|op| {
             matches!(
@@ -713,7 +713,7 @@ user3 = Facet::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
                 Opcode::CallBuiltin {
                     builtin_id,
                     ..
-                } if *builtin_id == lens_set_id || *builtin_id == lens_over_id
+                } if *builtin_id == facet_set_id || *builtin_id == facet_over_id
             )
         }));
         assert!(bytecode
@@ -723,17 +723,17 @@ user3 = Facet::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
     }
 
     #[test]
-    fn lens_bindings_are_erased_and_only_viewed_values_are_captured() {
+    fn facet_bindings_are_erased_and_only_viewed_values_are_captured() {
         let bytecode = codegen_source(
             r#"defrecord User(name: String)
-lens = User.name
-name = Facet::view(lens, User("alice"))
+facet = User.name
+name = Facet::view(facet, User("alice"))
 getter = {|| name}
 result = getter()"#,
         );
 
-        let lens_view_id = builtin_id_by_name("view").expect("view builtin metadata must exist");
-        let lens_compose_id =
+        let facet_view_id = builtin_id_by_name("view").expect("view builtin metadata must exist");
+        let facet_compose_id =
             builtin_id_by_name("compose").expect("compose builtin metadata must exist");
 
         assert!(!bytecode.opcodes.iter().any(|op| {
@@ -742,7 +742,7 @@ result = getter()"#,
                 Opcode::CallBuiltin {
                     builtin_id,
                     ..
-                } if *builtin_id == lens_view_id || *builtin_id == lens_compose_id
+                } if *builtin_id == facet_view_id || *builtin_id == facet_compose_id
             )
         }));
         assert!(bytecode
@@ -752,7 +752,7 @@ result = getter()"#,
     }
 
     #[test]
-    fn lens_variant_mismatch_detail_includes_segment_context() {
+    fn facet_variant_mismatch_detail_includes_segment_context() {
         let bytecode = codegen_source(
             r#"defenum Expr {
   Add(Int, Int),

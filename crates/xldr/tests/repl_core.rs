@@ -521,11 +521,11 @@ fn core_commands_do_not_require_a_cli_process() {
 }
 
 #[test]
-fn core_reuses_deferred_tuple_lens_bindings_between_inputs() {
+fn core_reuses_deferred_tuple_facet_bindings_between_inputs() {
     let mut engine = engine();
 
-    let lens = engine.handle_line("a = Tuple._1");
-    assert!(rendered_text(&lens).contains("a: Facet<_, _> = Tuple._1"));
+    let facet = engine.handle_line("a = Tuple._1");
+    assert!(rendered_text(&facet).contains("a: Facet<_, _> = Tuple._1"));
 
     let pair = engine.handle_line("pair = (\"alice\", 2)");
     assert!(rendered_text(&pair).contains("pair: (String, Int) = (\"alice\", 2)"));
@@ -548,14 +548,14 @@ fn core_static_impl_methods_keep_runtime_arity_in_sync() {
 }
 
 #[test]
-fn core_renders_top_level_lens_compose_expressions_without_codegen_leak() {
+fn core_renders_top_level_facet_compose_expressions_without_codegen_leak() {
     let mut engine = engine();
 
-    let tuple_lens = engine.handle_line("a = Tuple._1");
-    assert!(rendered_text(&tuple_lens).contains("a: Facet<_, _> = Tuple._1"));
+    let tuple_facet = engine.handle_line("a = Tuple._1");
+    assert!(rendered_text(&tuple_facet).contains("a: Facet<_, _> = Tuple._1"));
 
-    let enum_lens = engine.handle_line("ep = IntBase.Oct");
-    assert!(rendered_text(&enum_lens).contains("ep: Facet<IntBase, Unit> = IntBase.Oct"));
+    let enum_facet = engine.handle_line("ep = IntBase.Oct");
+    assert!(rendered_text(&enum_facet).contains("ep: Facet<IntBase, Unit> = IntBase.Oct"));
 
     let slash = engine.handle_line("a / ep");
     let slash = rendered_text(&slash);
@@ -1825,7 +1825,7 @@ fn core_doc_typed_call_supports_qualified_inherent_impl_methods() {
 }
 
 #[test]
-fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
+fn core_sig_supports_tuple_field_sugar_and_facet_expression_queries() {
     let mut engine = engine();
 
     let pair = engine.handle_line("pair = (\"alice\", 2)");

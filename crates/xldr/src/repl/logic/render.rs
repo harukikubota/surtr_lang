@@ -32,12 +32,12 @@ pub fn format_result_lines(
                 .bindings
                 .iter()
                 .filter_map(|b| {
-                    if let Some(lens_info) = &b.lens_info {
+                    if let Some(facet_info) = &b.facet_info {
                         return Some(format!(
                             "{}: {} = {}",
                             b.name,
                             crate::surface_rendered_name(&b.ty),
-                            crate::surface_rendered_name(&lens_info.full_path)
+                            crate::surface_rendered_name(&facet_info.full_path)
                         ));
                     }
 
@@ -62,8 +62,8 @@ pub fn format_result_lines(
                 })
                 .collect();
         }
-        if let Some(lens_info) = &meta.result_lens_info {
-            return vec![format!("{} = {}", lens_info.ty, lens_info.full_path)];
+        if let Some(facet_info) = &meta.result_facet_info {
+            return vec![format!("{} = {}", facet_info.ty, facet_info.full_path)];
         }
         if !meta.type_defs.is_empty() {
             return meta.type_defs.iter().map(|t| t.name.clone()).collect();

@@ -1,4 +1,4 @@
-defmod LensSchema {
+defmod FacetSchema {
   def demo_fixture() -> ((Config, Result<String>), (String, Int), BitWidth) {
     (
       (Config::new("App"), Ok("ally")),

@@ -1,3 +1,0 @@
-reader = {|user: User| user.password}
-user = User("alice", "s3cr3t")
-print(reader(user))

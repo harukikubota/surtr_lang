@@ -36,7 +36,7 @@
 ### 1-3. state
 - [ ] process-owned State は public API に出現しないか
 - [ ] process-owned State は owner process 外から構築できないか
-- [ ] process-owned State は owner process 外から lens root にできないか
+- [ ] process-owned State は owner process 外から facet root にできないか
 - [ ] `@init`, `@call`, `@cast`, `@get`, `@set` の state 型が常に一致するか
 
 ### 1-4. spec
@@ -219,7 +219,7 @@ shared-memory の lock race より、runtime table と lifecycle 更新の race 
 
 ### 8-2. process-owned state
 - [ ] `@process_state` が public API に漏れないか
-- [ ] `State` 型に対する lens root が外へ出ていないか
+- [ ] `State` 型に対する facet root が外へ出ていないか
 - [ ] snapshot / view が通常型として分離されているか
 
 ### 8-3. singleton 利用検査

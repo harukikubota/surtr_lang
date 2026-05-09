@@ -216,6 +216,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> Result<(), i32> {
     let mut stdout = io::stdout();
     let mut buffer = String::new();
     let mut cursor_chars = 0usize;
+    let mut history = TerminalHistory::default();
     let mut last_background_progress = Instant::now();
 
     redraw_terminal_prompt(&mut stdout, &engine.prompt(), &buffer, cursor_chars).map_err(|_| 1)?;
@@ -255,12 +256,13 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> Result<(), i32> {
             continue;
         };
 
-        match handle_terminal_key(&mut buffer, &mut cursor_chars, key) {
+        match handle_terminal_key(&mut history, &mut buffer, &mut cursor_chars, key) {
             TerminalAction::Continue => {
                 redraw_terminal_prompt(&mut stdout, &engine.prompt(), &buffer, cursor_chars)
                     .map_err(|_| 1)?;
             }
             TerminalAction::Submit(line) => {
+                history.record(&line);
                 let submitted = submitted_terminal_line(&engine.prompt(), &line);
                 write_crlf(&mut stdout, &submitted).map_err(|_| 1)?;
                 let result =
@@ -355,6 +357,7 @@ fn run_plain_repl(engine: &mut ReplEngine) -> Result<(), i32> {
 }
 
 #[cfg(feature = "line-editor")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum TerminalAction {
     Continue,
     Submit(String),
@@ -363,7 +366,62 @@ enum TerminalAction {
 }
 
 #[cfg(feature = "line-editor")]
+#[derive(Debug, Default)]
+struct TerminalHistory {
+    entries: Vec<String>,
+    position: Option<usize>,
+    draft: Option<String>,
+}
+
+#[cfg(feature = "line-editor")]
+impl TerminalHistory {
+    fn record(&mut self, line: &str) {
+        if line.is_empty() {
+            return;
+        }
+        if self.entries.last().is_some_and(|last| last == line) {
+            self.position = None;
+            self.draft = None;
+            return;
+        }
+        self.entries.push(line.to_string());
+        self.position = None;
+        self.draft = None;
+    }
+
+    fn move_prev(&mut self, current: &str) -> Option<String> {
+        if self.entries.is_empty() {
+            return None;
+        }
+
+        let next_position = match self.position {
+            Some(0) => 0,
+            Some(position) => position.saturating_sub(1),
+            None => {
+                self.draft = Some(current.to_string());
+                self.entries.len().saturating_sub(1)
+            }
+        };
+        self.position = Some(next_position);
+        self.entries.get(next_position).cloned()
+    }
+
+    fn move_next(&mut self) -> Option<String> {
+        let position = self.position?;
+        if position + 1 < self.entries.len() {
+            let next_position = position + 1;
+            self.position = Some(next_position);
+            return self.entries.get(next_position).cloned();
+        }
+
+        self.position = None;
+        Some(self.draft.take().unwrap_or_default())
+    }
+}
+
+#[cfg(feature = "line-editor")]
 fn handle_terminal_key(
+    history: &mut TerminalHistory,
     buffer: &mut String,
     cursor_chars: &mut usize,
     key: KeyEvent,
@@ -420,6 +478,24 @@ fn handle_terminal_key(
         KeyCode::End => {
             *cursor_chars = buffer.chars().count();
             TerminalAction::Continue
+        }
+        KeyCode::Up => {
+            if let Some(previous) = history.move_prev(buffer) {
+                *buffer = previous;
+                *cursor_chars = buffer.chars().count();
+                TerminalAction::Continue
+            } else {
+                TerminalAction::Noop
+            }
+        }
+        KeyCode::Down => {
+            if let Some(next) = history.move_next() {
+                *buffer = next;
+                *cursor_chars = buffer.chars().count();
+                TerminalAction::Continue
+            } else {
+                TerminalAction::Noop
+            }
         }
         _ => TerminalAction::Noop,
     }
@@ -526,11 +602,100 @@ fn print_result(result: &ReplResult, color: bool) {
 
 #[cfg(all(test, feature = "line-editor"))]
 mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
     #[test]
     fn submitted_terminal_line_keeps_prompt_and_input_together() {
         assert_eq!(
             super::submitted_terminal_line("xldr(1)> ", "1"),
             "xldr(1)> 1"
         );
+    }
+
+    #[test]
+    fn terminal_history_walks_back_and_forward_and_restores_draft() {
+        let mut history = super::TerminalHistory::default();
+        history.record("first");
+        history.record("second");
+
+        let mut buffer = "draft".to_string();
+        let mut cursor_chars = buffer.chars().count();
+
+        assert_eq!(
+            super::handle_terminal_key(
+                &mut history,
+                &mut buffer,
+                &mut cursor_chars,
+                KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            ),
+            super::TerminalAction::Continue
+        );
+        assert_eq!(buffer, "second");
+        assert_eq!(cursor_chars, "second".chars().count());
+
+        assert_eq!(
+            super::handle_terminal_key(
+                &mut history,
+                &mut buffer,
+                &mut cursor_chars,
+                KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+            ),
+            super::TerminalAction::Continue
+        );
+        assert_eq!(buffer, "first");
+
+        assert_eq!(
+            super::handle_terminal_key(
+                &mut history,
+                &mut buffer,
+                &mut cursor_chars,
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            ),
+            super::TerminalAction::Continue
+        );
+        assert_eq!(buffer, "second");
+
+        assert_eq!(
+            super::handle_terminal_key(
+                &mut history,
+                &mut buffer,
+                &mut cursor_chars,
+                KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+            ),
+            super::TerminalAction::Continue
+        );
+        assert_eq!(buffer, "draft");
+        assert_eq!(cursor_chars, "draft".chars().count());
+    }
+
+    #[test]
+    fn terminal_history_ignores_empty_and_adjacent_duplicates() {
+        let mut history = super::TerminalHistory::default();
+        history.record("");
+        history.record("repeat");
+        history.record("repeat");
+        history.record("next");
+
+        assert_eq!(history.entries, vec!["repeat".to_string(), "next".to_string()]);
+    }
+
+    #[test]
+    fn terminal_history_recall_places_cursor_at_end_of_line() {
+        let mut history = super::TerminalHistory::default();
+        history.record("value");
+
+        let mut buffer = String::new();
+        let mut cursor_chars = 0usize;
+
+        let action = super::handle_terminal_key(
+            &mut history,
+            &mut buffer,
+            &mut cursor_chars,
+            KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+        );
+
+        assert_eq!(action, super::TerminalAction::Continue);
+        assert_eq!(buffer, "value");
+        assert_eq!(cursor_chars, "value".chars().count());
     }
 }

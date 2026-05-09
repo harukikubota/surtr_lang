@@ -48,7 +48,7 @@ test("Config") {
   }
 
   describe("facet integration") {
-    it("updates the entrypoint through a root lens") {
+    it("updates the entrypoint through a root facet") {
       updated =? Facet::set(Config.entrypoint, Config::new("Facet"), "Facet::main")
       assert_eq("Facet::main", updated.entrypoint)
     }

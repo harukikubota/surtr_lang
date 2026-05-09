@@ -157,8 +157,8 @@ fn collect_missing_singleton_calls(
         | TypedInner::Var(_)
         | TypedInner::ListNil
         | TypedInner::ProcessContextHandler { .. }
-        | TypedInner::LensPath(_)
-        | TypedInner::PendingLensPath(_)
+        | TypedInner::FacetPath(_)
+        | TypedInner::PendingFacetPath(_)
         | TypedInner::EnumDef(_, _)
         | TypedInner::TraitDef(_, _)
         | TypedInner::TraitImplDef(_, _)
@@ -407,14 +407,14 @@ fn collect_missing_singleton_calls(
                 );
             }
         }
-        TypedInner::LensView { source, .. } => collect_missing_singleton_calls(
+        TypedInner::FacetView { source, .. } => collect_missing_singleton_calls(
             source,
             surface_to_process,
             available_singletons,
             available_supervisors,
             first_missing,
         ),
-        TypedInner::LensSet { source, value, .. } => {
+        TypedInner::FacetSet { source, value, .. } => {
             collect_missing_singleton_calls(
                 source,
                 surface_to_process,
@@ -430,7 +430,7 @@ fn collect_missing_singleton_calls(
                 first_missing,
             );
         }
-        TypedInner::LensOver {
+        TypedInner::FacetOver {
             source, update_fun, ..
         } => {
             collect_missing_singleton_calls(
@@ -1366,7 +1366,7 @@ pub struct BindingInfo {
     pub callable_kind: Option<ReplCallableKind>,
     pub callable_display: Option<ReplCallableDisplay>,
     pub callable_captures: Vec<String>,
-    pub lens_info: Option<ReplLensInfo>,
+    pub facet_info: Option<ReplFacetInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1382,7 +1382,7 @@ pub enum ReplCallableDisplay {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReplLensSegmentInfo {
+pub struct ReplFacetSegmentInfo {
     pub label: String,
     pub kind: String,
     pub source_ty: String,
@@ -1392,12 +1392,12 @@ pub struct ReplLensSegmentInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReplLensInfo {
+pub struct ReplFacetInfo {
     pub ty: String,
     pub path_kind: String,
     pub view_result_ty: String,
     pub full_path: String,
-    pub segments: Vec<ReplLensSegmentInfo>,
+    pub segments: Vec<ReplFacetSegmentInfo>,
     pub stop_points: Vec<String>,
 }
 
@@ -1411,7 +1411,7 @@ pub struct TypeDefDisplay {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChunkMeta {
     pub bindings: Vec<BindingInfo>,
-    pub result_lens_info: Option<ReplLensInfo>,
+    pub result_facet_info: Option<ReplFacetInfo>,
     pub type_defs: Vec<TypeDefDisplay>,
     pub function_defs: Vec<String>,
     pub docs: Vec<DocEntry>,
@@ -1959,14 +1959,14 @@ fn collect_chunk_meta(typed: &[TypedNode], slot_map: &HashMap<u32, u32>) -> Chun
 
     ChunkMeta {
         bindings,
-        result_lens_info: top_level_result_lens_info(typed),
+        result_facet_info: top_level_result_facet_info(typed),
         type_defs,
         function_defs,
         docs: Vec::new(),
     }
 }
 
-fn top_level_result_lens_info(typed: &[TypedNode]) -> Option<ReplLensInfo> {
+fn top_level_result_facet_info(typed: &[TypedNode]) -> Option<ReplFacetInfo> {
     typed
         .iter()
         .rev()
@@ -1976,22 +1976,22 @@ fn top_level_result_lens_info(typed: &[TypedNode]) -> Option<ReplLensInfo> {
                 TypedInner::Def(..) | TypedInner::ExtractorDef(..) | TypedInner::DeferrorDef(..)
             )
         })
-        .and_then(lens_info_for_node)
+        .and_then(facet_info_for_node)
 }
 
-fn lens_segment_label(segment: &TypedLensSegment) -> String {
+fn facet_segment_label(segment: &TypedFacetSegment) -> String {
     match segment {
-        TypedLensSegment::Field { field_name, .. } => field_name.clone(),
-        TypedLensSegment::Tuple { field_index, .. } => format!("_{field_index}"),
-        TypedLensSegment::Variant { variant_name, .. } => variant_name.clone(),
+        TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
+        TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
+        TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
     }
 }
 
-fn lens_path_full_path(path: &TypedLensPath) -> String {
+fn facet_path_full_path(path: &TypedFacetPath) -> String {
     let mut rendered = String::new();
     for segment in &path.segments {
         match segment {
-            TypedLensSegment::Tuple { field_index, .. } => {
+            TypedFacetSegment::Tuple { field_index, .. } => {
                 if rendered.is_empty() {
                     rendered.push_str("Tuple");
                 }
@@ -2004,7 +2004,7 @@ fn lens_path_full_path(path: &TypedLensPath) -> String {
                 if !rendered.is_empty() {
                     rendered.push('.');
                 }
-                rendered.push_str(&lens_segment_label(other));
+                rendered.push_str(&facet_segment_label(other));
             }
         }
     }
@@ -2015,28 +2015,28 @@ fn lens_path_full_path(path: &TypedLensPath) -> String {
     }
 }
 
-fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
+fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
     match &node.node {
-        TypedInner::LensPath(path) => {
+        TypedInner::FacetPath(path) => {
             let mut current_source = path.source_ty.clone();
             let mut segments = Vec::with_capacity(path.segments.len());
             let mut stop_points = Vec::new();
             let mut path_is_fallible = false;
             let mut prefix = String::new();
             for segment in &path.segments {
-                let label = lens_segment_label(segment);
+                let label = facet_segment_label(segment);
                 let focus_ty = match segment {
-                    TypedLensSegment::Field { .. } | TypedLensSegment::Tuple { .. } => {
+                    TypedFacetSegment::Field { .. } | TypedFacetSegment::Tuple { .. } => {
                         match &current_source {
                             Ty::Tuple(items) => match segment {
-                                TypedLensSegment::Tuple { field_index, .. } => items
+                                TypedFacetSegment::Tuple { field_index, .. } => items
                                     .get(*field_index as usize)
                                     .cloned()
                                     .unwrap_or(Ty::Unit),
                                 _ => Ty::Unit,
                             },
                             Ty::Struct(_, fields) | Ty::Record(_, fields) => match segment {
-                                TypedLensSegment::Field { field_index, .. } => fields
+                                TypedFacetSegment::Field { field_index, .. } => fields
                                     .get(*field_index as usize)
                                     .map(|(_, ty)| ty.clone())
                                     .unwrap_or(Ty::Unit),
@@ -2045,7 +2045,7 @@ fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
                             _ => Ty::Unit,
                         }
                     }
-                    TypedLensSegment::Variant {
+                    TypedFacetSegment::Variant {
                         payload_arity,
                         variant_name,
                         ..
@@ -2062,11 +2062,11 @@ fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
                         }
                     }
                 };
-                if !prefix.is_empty() && !matches!(segment, TypedLensSegment::Tuple { .. }) {
+                if !prefix.is_empty() && !matches!(segment, TypedFacetSegment::Tuple { .. }) {
                     prefix.push('.');
                 }
                 match segment {
-                    TypedLensSegment::Tuple { field_index, .. } => {
+                    TypedFacetSegment::Tuple { field_index, .. } => {
                         if prefix.is_empty() {
                             prefix.push_str("Tuple");
                         }
@@ -2075,14 +2075,14 @@ fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
                     _ => prefix.push_str(&label),
                 }
                 let (kind, fallible, reason) = match segment {
-                    TypedLensSegment::Field { .. } => ("field", false, "field access"),
-                    TypedLensSegment::Tuple { .. } => ("tuple", false, "tuple index access"),
-                    TypedLensSegment::Variant { .. } => {
+                    TypedFacetSegment::Field { .. } => ("field", false, "field access"),
+                    TypedFacetSegment::Tuple { .. } => ("tuple", false, "tuple index access"),
+                    TypedFacetSegment::Variant { .. } => {
                         path_is_fallible = true;
                         ("variant", true, "variant mismatch returns Result")
                     }
                 };
-                segments.push(ReplLensSegmentInfo {
+                segments.push(ReplFacetSegmentInfo {
                     label: prefix.clone(),
                     kind: kind.to_string(),
                     source_ty: ty_to_string(&current_source),
@@ -2092,7 +2092,7 @@ fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
                 });
                 current_source = focus_ty;
             }
-            Some(ReplLensInfo {
+            Some(ReplFacetInfo {
                 ty: ty_to_string(&node.ty),
                 path_kind: path.path_kind.as_str().to_string(),
                 view_result_ty: if path_is_fallible {
@@ -2100,12 +2100,12 @@ fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
                 } else {
                     ty_to_string(&path.focus_ty)
                 },
-                full_path: lens_path_full_path(path),
+                full_path: facet_path_full_path(path),
                 segments,
                 stop_points,
             })
         }
-        TypedInner::PendingLensPath(path) => Some(ReplLensInfo {
+        TypedInner::PendingFacetPath(path) => Some(ReplFacetInfo {
             ty: ty_to_string(&node.ty),
             path_kind: "structural".to_string(),
             view_result_ty: "_".to_string(),
@@ -2129,7 +2129,7 @@ fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
             segments: path
                 .segments
                 .iter()
-                .map(|segment| ReplLensSegmentInfo {
+                .map(|segment| ReplFacetSegmentInfo {
                     label: if segment.starts_with('_') {
                         format!("Tuple.{segment}")
                     } else {
@@ -2172,7 +2172,7 @@ fn collect_stmt_meta(
                 callable_kind_for_node(rhs),
                 callable_display_for_node(rhs),
                 &callable_capture_names(rhs),
-                lens_info_for_node(rhs),
+                facet_info_for_node(rhs),
             );
         }
         TypedInner::StructDef(_, name, field_names, _, _) => {
@@ -2235,7 +2235,7 @@ fn collect_pattern_binding_infos(
     callable_kind: Option<ReplCallableKind>,
     callable_display: Option<ReplCallableDisplay>,
     callable_captures: &[String],
-    lens_info: Option<ReplLensInfo>,
+    facet_info: Option<ReplFacetInfo>,
 ) {
     match pat {
         TypedPattern::Var(ty, id) => {
@@ -2247,7 +2247,7 @@ fn collect_pattern_binding_infos(
                     callable_kind,
                     callable_display: callable_display.clone(),
                     callable_captures: callable_captures.to_vec(),
-                    lens_info: lens_info.clone(),
+                    facet_info: facet_info.clone(),
                 });
             }
         }
@@ -2260,7 +2260,7 @@ fn collect_pattern_binding_infos(
                     callable_kind,
                     callable_display: callable_display.clone(),
                     callable_captures: callable_captures.to_vec(),
-                    lens_info: lens_info.clone(),
+                    facet_info: facet_info.clone(),
                 });
             }
             collect_pattern_binding_infos(
@@ -2270,7 +2270,7 @@ fn collect_pattern_binding_infos(
                 callable_kind,
                 callable_display,
                 callable_captures,
-                lens_info,
+                facet_info,
             );
         }
         TypedPattern::Wildcard(_)
@@ -2288,7 +2288,7 @@ fn collect_pattern_binding_infos(
                     callable_kind,
                     callable_display.clone(),
                     callable_captures,
-                    lens_info.clone(),
+                    facet_info.clone(),
                 );
             }
         }
@@ -2300,7 +2300,7 @@ fn collect_pattern_binding_infos(
                 callable_kind,
                 callable_display.clone(),
                 callable_captures,
-                lens_info.clone(),
+                facet_info.clone(),
             );
             collect_pattern_binding_infos(
                 tail,
@@ -2309,7 +2309,7 @@ fn collect_pattern_binding_infos(
                 callable_kind,
                 callable_display,
                 callable_captures,
-                lens_info,
+                facet_info,
             );
         }
         TypedPattern::ResultOk(_, inner) => {
@@ -2320,7 +2320,7 @@ fn collect_pattern_binding_infos(
                 callable_kind,
                 callable_display,
                 callable_captures,
-                lens_info,
+                facet_info,
             );
         }
         TypedPattern::Extractor { items, .. } => {
@@ -2332,7 +2332,7 @@ fn collect_pattern_binding_infos(
                     callable_kind,
                     callable_display.clone(),
                     callable_captures,
-                    lens_info.clone(),
+                    facet_info.clone(),
                 );
             }
         }
@@ -2548,14 +2548,14 @@ struct PendingInjectCall {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum LensUpdateLeaf {
+enum FacetUpdateLeaf {
     Set {
         value_slot: u32,
         wrap_plain_result: bool,
     },
     Over {
         update_fun_slot: u32,
-        mode: TypedLensOverMode,
+        mode: TypedFacetOverMode,
         focus_is_result: bool,
     },
 }
@@ -3125,7 +3125,7 @@ impl Codegen {
             if self.top_level_returns_result
                 && matches!(
                     stmt.node,
-                    TypedInner::LensPath(_) | TypedInner::PendingLensPath(_)
+                    TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_)
                 )
             {
                 // REPL chunks may end with a FacetPath expression so the session can
@@ -3374,7 +3374,7 @@ impl Codegen {
 
             TypedInner::Bind(pat, rhs) => {
                 if matches!(rhs.ty, Ty::Facet(_, _)) {
-                    self.reserve_pattern_slots_for_lens_bind(pat);
+                    self.reserve_pattern_slots_for_facet_bind(pat);
                     let unit_idx = self.add_constant(Constant::Unit);
                     self.emit(Opcode::LoadConst(unit_idx));
                     return Ok(());
@@ -3695,7 +3695,7 @@ impl Codegen {
                 });
             }
 
-            TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => {
+            TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_) => {
                 return Err(CodegenError {
                     message:
                         "Facet path value leaked to codegen; Facet is compile-time only in Stage1"
@@ -3704,30 +3704,30 @@ impl Codegen {
                 });
             }
 
-            TypedInner::LensView {
+            TypedInner::FacetView {
                 source,
                 path,
                 source_is_result,
             } => {
-                self.emit_lens_view(node, source, path, *source_is_result)?;
+                self.emit_facet_view(node, source, path, *source_is_result)?;
             }
-            TypedInner::LensSet {
+            TypedInner::FacetSet {
                 source,
                 path,
                 value,
                 source_is_result,
                 mode,
             } => {
-                self.emit_lens_set(node, source, path, value, *source_is_result, *mode)?;
+                self.emit_facet_set(node, source, path, value, *source_is_result, *mode)?;
             }
-            TypedInner::LensOver {
+            TypedInner::FacetOver {
                 source,
                 path,
                 update_fun,
                 source_is_result,
                 mode,
             } => {
-                self.emit_lens_over(node, source, path, update_fun, *source_is_result, *mode)?;
+                self.emit_facet_over(node, source, path, update_fun, *source_is_result, *mode)?;
             }
 
             TypedInner::StructLit(tag, fields) => {
@@ -3882,11 +3882,11 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_lens_view(
+    fn emit_facet_view(
         &mut self,
         node: &TypedNode,
         source: &TypedNode,
-        path: &TypedLensPath,
+        path: &TypedFacetPath,
         source_is_result: bool,
     ) -> Result<(), CodegenError> {
         let returns_result = matches!(node.ty, Ty::Result(_, _));
@@ -3917,7 +3917,7 @@ impl Codegen {
             self.state.next_slot += 1;
             self.emit(Opcode::StoreLocal(current_slot));
 
-            self.emit_lens_segments_from_local(current_slot, path, &node.span, Some(end_label))?;
+            self.emit_facet_segments_from_local(current_slot, path, &node.span, Some(end_label))?;
 
             let ok_tag = self.add_constant(Constant::Tag(0));
             self.emit(Opcode::LoadConst(ok_tag));
@@ -3935,7 +3935,7 @@ impl Codegen {
 
         if returns_result {
             let end_label = self.fresh_label();
-            self.emit_lens_segments_from_local(current_slot, path, &node.span, Some(end_label))?;
+            self.emit_facet_segments_from_local(current_slot, path, &node.span, Some(end_label))?;
 
             let ok_tag = self.add_constant(Constant::Tag(0));
             self.emit(Opcode::LoadConst(ok_tag));
@@ -3944,21 +3944,21 @@ impl Codegen {
 
             self.patch_label(end_label);
         } else {
-            self.emit_lens_segments_from_local(current_slot, path, &node.span, None)?;
+            self.emit_facet_segments_from_local(current_slot, path, &node.span, None)?;
             self.emit(Opcode::LoadLocal(current_slot));
         }
 
         Ok(())
     }
 
-    fn emit_lens_set(
+    fn emit_facet_set(
         &mut self,
         node: &TypedNode,
         source: &TypedNode,
-        path: &TypedLensPath,
+        path: &TypedFacetPath,
         value: &TypedNode,
         source_is_result: bool,
-        mode: TypedLensSetMode,
+        mode: TypedFacetSetMode,
     ) -> Result<(), CodegenError> {
         self.emit_node(source)?;
         let source_slot = self.state.next_slot;
@@ -3970,26 +3970,26 @@ impl Codegen {
         self.state.next_slot += 1;
         self.emit(Opcode::StoreLocal(value_slot));
 
-        self.emit_lens_update_from_source_slot(
+        self.emit_facet_update_from_source_slot(
             node,
             source_slot,
             path,
             source_is_result,
-            LensUpdateLeaf::Set {
+            FacetUpdateLeaf::Set {
                 value_slot,
-                wrap_plain_result: matches!(mode, TypedLensSetMode::WrapPlainResult),
+                wrap_plain_result: matches!(mode, TypedFacetSetMode::WrapPlainResult),
             },
         )
     }
 
-    fn emit_lens_over(
+    fn emit_facet_over(
         &mut self,
         node: &TypedNode,
         source: &TypedNode,
-        path: &TypedLensPath,
+        path: &TypedFacetPath,
         update_fun: &TypedNode,
         source_is_result: bool,
-        mode: TypedLensOverMode,
+        mode: TypedFacetOverMode,
     ) -> Result<(), CodegenError> {
         self.emit_node(source)?;
         let source_slot = self.state.next_slot;
@@ -4001,12 +4001,12 @@ impl Codegen {
         self.state.next_slot += 1;
         self.emit(Opcode::StoreLocal(update_fun_slot));
 
-        self.emit_lens_update_from_source_slot(
+        self.emit_facet_update_from_source_slot(
             node,
             source_slot,
             path,
             source_is_result,
-            LensUpdateLeaf::Over {
+            FacetUpdateLeaf::Over {
                 update_fun_slot,
                 mode,
                 focus_is_result: matches!(path.focus_ty, Ty::Result(_, _)),
@@ -4014,13 +4014,13 @@ impl Codegen {
         )
     }
 
-    fn emit_lens_update_from_source_slot(
+    fn emit_facet_update_from_source_slot(
         &mut self,
         node: &TypedNode,
         source_slot: u32,
-        path: &TypedLensPath,
+        path: &TypedFacetPath,
         source_is_result: bool,
-        leaf: LensUpdateLeaf,
+        leaf: FacetUpdateLeaf,
     ) -> Result<(), CodegenError> {
         if !matches!(node.ty, Ty::Result(_, _)) {
             return Err(CodegenError {
@@ -4053,7 +4053,7 @@ impl Codegen {
             source_slot
         };
 
-        self.emit_lens_update_at_path(root_slot, path, 0, leaf, &node.span, end_label)?;
+        self.emit_facet_update_at_path(root_slot, path, 0, leaf, &node.span, end_label)?;
 
         let ok_tag = self.add_constant(Constant::Tag(0));
         self.emit(Opcode::LoadConst(ok_tag));
@@ -4064,21 +4064,21 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_lens_update_at_path(
+    fn emit_facet_update_at_path(
         &mut self,
         current_slot: u32,
-        path: &TypedLensPath,
+        path: &TypedFacetPath,
         segment_idx: usize,
-        leaf: LensUpdateLeaf,
+        leaf: FacetUpdateLeaf,
         span: &Span,
         failure_end: Label,
     ) -> Result<(), CodegenError> {
         if segment_idx == path.segments.len() {
-            return self.emit_lens_leaf_update(current_slot, leaf, span, failure_end);
+            return self.emit_facet_leaf_update(current_slot, leaf, span, failure_end);
         }
 
         match &path.segments[segment_idx] {
-            TypedLensSegment::Field {
+            TypedFacetSegment::Field {
                 field_index,
                 container_field_count,
                 ..
@@ -4091,7 +4091,7 @@ impl Codegen {
                 });
                 self.emit(Opcode::StoreLocal(focus_slot));
 
-                self.emit_lens_update_at_path(
+                self.emit_facet_update_at_path(
                     focus_slot,
                     path,
                     segment_idx + 1,
@@ -4115,7 +4115,7 @@ impl Codegen {
                 });
                 self.emit(Opcode::StoreLocal(current_slot));
             }
-            TypedLensSegment::Tuple {
+            TypedFacetSegment::Tuple {
                 field_index,
                 tuple_len,
                 ..
@@ -4128,7 +4128,7 @@ impl Codegen {
                 });
                 self.emit(Opcode::StoreLocal(focus_slot));
 
-                self.emit_lens_update_at_path(
+                self.emit_facet_update_at_path(
                     focus_slot,
                     path,
                     segment_idx + 1,
@@ -4148,7 +4148,7 @@ impl Codegen {
                 self.emit(Opcode::TupleNew { len: *tuple_len });
                 self.emit(Opcode::StoreLocal(current_slot));
             }
-            TypedLensSegment::Variant {
+            TypedFacetSegment::Variant {
                 enum_name,
                 variant_name,
                 variant_tag,
@@ -4190,7 +4190,7 @@ impl Codegen {
                     }
                 }
 
-                self.emit_lens_update_at_path(
+                self.emit_facet_update_at_path(
                     focus_slot,
                     path,
                     segment_idx + 1,
@@ -4226,7 +4226,7 @@ impl Codegen {
                 let detail = format!(
                     "Variant mismatch at segment {} ({}) in facet path: expected variant {}::{}, but got a different variant",
                     segment_idx + 1,
-                    Self::lens_segment_display(&path.segments[segment_idx]),
+                    Self::facet_segment_display(&path.segments[segment_idx]),
                     enum_name,
                     variant_name
                 );
@@ -4239,15 +4239,15 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_lens_leaf_update(
+    fn emit_facet_leaf_update(
         &mut self,
         current_slot: u32,
-        leaf: LensUpdateLeaf,
+        leaf: FacetUpdateLeaf,
         span: &Span,
         failure_end: Label,
     ) -> Result<(), CodegenError> {
         match leaf {
-            LensUpdateLeaf::Set {
+            FacetUpdateLeaf::Set {
                 value_slot,
                 wrap_plain_result,
             } => {
@@ -4261,12 +4261,12 @@ impl Codegen {
                 }
                 self.emit(Opcode::StoreLocal(current_slot));
             }
-            LensUpdateLeaf::Over {
+            FacetUpdateLeaf::Over {
                 update_fun_slot,
                 mode,
                 focus_is_result,
             } => match (mode, focus_is_result) {
-                (TypedLensOverMode::FocusValue, true) => {
+                (TypedFacetOverMode::FocusValue, true) => {
                     self.emit(Opcode::LoadLocal(current_slot));
                     self.emit(Opcode::GetTag);
                     let err_tag = self.add_constant(Constant::Tag(1));
@@ -4343,30 +4343,30 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_lens_segments_from_local(
+    fn emit_facet_segments_from_local(
         &mut self,
         current_slot: u32,
-        path: &TypedLensPath,
+        path: &TypedFacetPath,
         span: &Span,
         mismatch_end: Option<Label>,
     ) -> Result<(), CodegenError> {
         for (segment_idx, segment) in path.segments.iter().enumerate() {
             match segment {
-                TypedLensSegment::Field { field_index, .. } => {
+                TypedFacetSegment::Field { field_index, .. } => {
                     self.emit(Opcode::LoadLocal(current_slot));
                     self.emit(Opcode::GetField {
                         field_index: *field_index,
                     });
                     self.emit(Opcode::StoreLocal(current_slot));
                 }
-                TypedLensSegment::Tuple { field_index, .. } => {
+                TypedFacetSegment::Tuple { field_index, .. } => {
                     self.emit(Opcode::LoadLocal(current_slot));
                     self.emit(Opcode::GetTupleField {
                         field_index: *field_index,
                     });
                     self.emit(Opcode::StoreLocal(current_slot));
                 }
-                TypedLensSegment::Variant {
+                TypedFacetSegment::Variant {
                     enum_name,
                     variant_name,
                     variant_tag,
@@ -4376,7 +4376,7 @@ impl Codegen {
                     let Some(end_label) = mismatch_end else {
                         return Err(CodegenError {
                             message:
-                                "Internal invariant broken: variant lens segment in plain context"
+                                "Internal invariant broken: variant facet segment in plain context"
                                     .into(),
                             span: span.clone(),
                         });
@@ -4399,7 +4399,7 @@ impl Codegen {
                     let detail = format!(
                         "Variant mismatch at segment {} ({}) in facet path: expected variant {}::{}, but got a different variant",
                         segment_idx + 1,
-                        Self::lens_segment_display(segment),
+                        Self::facet_segment_display(segment),
                         enum_name,
                         variant_name
                     );
@@ -4438,11 +4438,11 @@ impl Codegen {
         }
     }
 
-    fn lens_segment_display(segment: &TypedLensSegment) -> String {
+    fn facet_segment_display(segment: &TypedFacetSegment) -> String {
         match segment {
-            TypedLensSegment::Field { field_name, .. } => format!(".{}", field_name),
-            TypedLensSegment::Tuple { field_index, .. } => format!("._{}", field_index),
-            TypedLensSegment::Variant { variant_name, .. } => format!(".{}", variant_name),
+            TypedFacetSegment::Field { field_name, .. } => format!(".{}", field_name),
+            TypedFacetSegment::Tuple { field_index, .. } => format!("._{}", field_index),
+            TypedFacetSegment::Variant { variant_name, .. } => format!(".{}", variant_name),
         }
     }
 
@@ -5332,14 +5332,14 @@ impl Codegen {
         self.emit_pattern_bind_from_local(current_pat, current_slot)
     }
 
-    fn reserve_pattern_slots_for_lens_bind(&mut self, pat: &TypedPattern) {
+    fn reserve_pattern_slots_for_facet_bind(&mut self, pat: &TypedPattern) {
         match pat {
             TypedPattern::Var(_, id) => {
                 self.alloc_slot(id.unique_id);
             }
             TypedPattern::As(_, inner, alias) => {
                 self.alloc_slot(alias.unique_id);
-                self.reserve_pattern_slots_for_lens_bind(inner);
+                self.reserve_pattern_slots_for_facet_bind(inner);
             }
             TypedPattern::Wildcard(_) => {}
             _ => {}

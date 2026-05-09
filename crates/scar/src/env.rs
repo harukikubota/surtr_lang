@@ -116,7 +116,7 @@ pub struct TypeEnv {
     pub enum_variant_tags: HashMap<u32, EnumVariantInfo>,
     /// enum type name -> variants
     pub enum_variants_by_enum: HashMap<Symbol, Vec<EnumVariantInfo>>,
-    /// type declaration bindings usable as type-root lens path heads.
+    /// type declaration bindings usable as type-root facet path heads.
     pub type_constructor_ids: HashSet<u32>,
     var_scope_frames: Vec<VarScopeFrame>,
 }

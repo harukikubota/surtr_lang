@@ -1,6 +1,6 @@
-include "./schema/lens_schema.srt"
+include "./schema/facet_schema.srt"
 
-import LensSchema::{bump, demo_fixture, pending_fixture, rename};
+import FacetSchema::{bump, demo_fixture, pending_fixture, rename};
 import Test;
 
 test("Facet") {
