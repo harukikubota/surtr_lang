@@ -738,7 +738,7 @@ supervisor_init {
             "--script",
             script_path.to_str().expect("script path must be utf-8"),
         ],
-        ":doc MyServer::pid\n:sig MyServer::pid\nserver = MyServer::pid()\n:type server\n:info server\n:quit\n",
+        ":doc MyServer::pid\n:sig MyServer::pid\n:sig MyServer\nserver = MyServer::pid()\n:sig $server\n:type server\n:info server\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -754,6 +754,17 @@ supervisor_init {
         "{stdout}"
     );
     assert!(stdout.contains("MyServer::pid() -> PID<MyServer>"), "{stdout}");
+    assert!(stdout.contains("GenServer MyServer"), "{stdout}");
+    assert!(
+        stdout.contains("@init init() -> Result<PID<MyServer>>"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("@pid pid() -> PID<MyServer>"), "{stdout}");
+    assert!(
+        stdout.contains("@call size(pid: PID<MyServer>) -> Result<Int, Error>"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("PID<MyServer> messaging"), "{stdout}");
     assert!(stdout.contains("server: PID<MyServer>"), "{stdout}");
     assert!(stdout.contains("type: PID<MyServer>"), "{stdout}");
     assert!(stdout.contains("kind: process pid"), "{stdout}");

@@ -181,10 +181,11 @@ struct PreloadedChunkState {
     script_preload_docs: Vec<DocEntry>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct ReplProcessMetadata {
     kind: spire::ast::ProcessKind,
     instance: spire::ast::ProcessInstance,
+    handler_specs: Vec<spire::ast::ProcessRuntimeHandlerSpec>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1566,6 +1567,16 @@ impl ReplEngine {
         (metadata.instance == spire::ast::ProcessInstance::Singleton).then_some((symbol, metadata))
     }
 
+    fn process_metadata_for_owner<'a>(
+        &self,
+        symbol: &'a str,
+    ) -> Option<(&'a str, &ReplProcessMetadata)> {
+        if Self::is_qualified_symbol(symbol) {
+            return None;
+        }
+        Some((symbol, self.lookup_process_metadata(symbol)?))
+    }
+
     fn pid_type_from_value(value: &Value) -> Option<String> {
         match value {
             Value::Pid(pid) => Some(format!("PID<{}>", crate::surface_rendered_name(&pid.process_name))),
@@ -1710,6 +1721,125 @@ impl ReplEngine {
             format!("instance: {:?}", metadata.instance),
             format!("runtime kind: {:?}", metadata.kind),
         ]
+    }
+
+    fn process_kind_heading(kind: spire::ast::ProcessKind) -> &'static str {
+        match kind {
+            spire::ast::ProcessKind::Agent => "Agent",
+            spire::ast::ProcessKind::GenServer => "GenServer",
+            spire::ast::ProcessKind::Supervisor => "Supervisor",
+            spire::ast::ProcessKind::RuntimeSupervisor => "RuntimeSupervisor",
+            spire::ast::ProcessKind::DynamicSupervisor => "DynamicSupervisor",
+            spire::ast::ProcessKind::Task => "Task",
+        }
+    }
+
+    fn process_handler_label(kind: spire::ast::ProcessRuntimeHandlerKind) -> &'static str {
+        match kind {
+            spire::ast::ProcessRuntimeHandlerKind::Init => "@init",
+            spire::ast::ProcessRuntimeHandlerKind::Get => "@get",
+            spire::ast::ProcessRuntimeHandlerKind::Set => "@set",
+            spire::ast::ProcessRuntimeHandlerKind::Call => "@call",
+            spire::ast::ProcessRuntimeHandlerKind::Cast => "@cast",
+        }
+    }
+
+    fn render_process_surface_signature(&self, owner: &str, method: &str) -> Option<String> {
+        let symbol = format!("{owner}::{method}");
+        let (qualified_name, signature) = self
+            .find_signature(&symbol)
+            .or_else(|| self.concrete_process_alias_signature(&symbol))?;
+        let rendered = Self::render_signature_with_qualified_name(&qualified_name, signature);
+        let owner_prefix = format!("{}::", crate::surface_rendered_name(owner));
+        Some(
+            rendered
+                .strip_prefix(&owner_prefix)
+                .unwrap_or(&rendered)
+                .to_string(),
+        )
+    }
+
+    fn prepend_pid_param_to_signature(signature: &str, owner: &str) -> Option<String> {
+        let (head, tail) = signature.split_once('(')?;
+        let (params, rest) = tail.rsplit_once(')')?;
+        let pid_param = format!("pid: PID<{}>", crate::surface_rendered_name(owner));
+        let params = params.trim();
+        let new_params = if params.is_empty() {
+            pid_param
+        } else {
+            format!("{pid_param}, {params}")
+        };
+        Some(format!("{head}({new_params}){rest}"))
+    }
+
+    fn render_process_message_signature(
+        &self,
+        owner: &str,
+        metadata: &ReplProcessMetadata,
+        method: &str,
+    ) -> Option<String> {
+        let signature = self.render_process_surface_signature(owner, method)?;
+        if metadata.instance == spire::ast::ProcessInstance::Singleton {
+            return Self::prepend_pid_param_to_signature(&signature, owner);
+        }
+        Some(signature)
+    }
+
+    fn render_process_init_summary_signature(&self, owner: &str, method: &str) -> Option<String> {
+        let signature = self.render_process_surface_signature(owner, method)?;
+        let pid_return = format!("PID<{}>", crate::surface_rendered_name(owner));
+        let result_return = format!("Result<{pid_return}>");
+        Some(signature.replace(&format!("-> {pid_return}"), &format!("-> {result_return}")))
+    }
+
+    fn process_owner_sig_summary_lines(
+        &self,
+        owner: &str,
+        metadata: &ReplProcessMetadata,
+    ) -> Option<Vec<String>> {
+        let owner = crate::surface_rendered_name(owner);
+        let mut lines = vec![format!("{} {}", Self::process_kind_heading(metadata.kind), owner)];
+
+        let init_spec = metadata
+            .handler_specs
+            .iter()
+            .find(|spec| spec.kind == spire::ast::ProcessRuntimeHandlerKind::Init)?;
+        if let Some(init_sig) = self.render_process_init_summary_signature(&owner, &init_spec.name)
+        {
+            lines.push(format!("{} {}", Self::process_handler_label(init_spec.kind), init_sig));
+        }
+        if metadata.instance == spire::ast::ProcessInstance::Singleton {
+            if let Some(pid_sig) = self.render_process_surface_signature(&owner, "pid") {
+                lines.push(format!("@pid {pid_sig}"));
+            }
+        }
+        for spec in &metadata.handler_specs {
+            if spec.kind == spire::ast::ProcessRuntimeHandlerKind::Init {
+                continue;
+            }
+            if let Some(sig) = self.render_process_message_signature(&owner, metadata, &spec.name) {
+                lines.push(format!("{} {}", Self::process_handler_label(spec.kind), sig));
+            }
+        }
+        Some(lines)
+    }
+
+    fn process_pid_binding_sig_summary_lines(
+        &self,
+        owner: &str,
+        metadata: &ReplProcessMetadata,
+    ) -> Option<Vec<String>> {
+        let owner = crate::surface_rendered_name(owner);
+        let mut lines = vec![format!("PID<{owner}> messaging")];
+        for spec in &metadata.handler_specs {
+            if spec.kind == spire::ast::ProcessRuntimeHandlerKind::Init {
+                continue;
+            }
+            if let Some(sig) = self.render_process_message_signature(&owner, metadata, &spec.name) {
+                lines.push(format!("{} {}", Self::process_handler_label(spec.kind), sig));
+            }
+        }
+        (lines.len() > 1).then_some(lines)
     }
 
     fn method_trait_alias(symbol: &str) -> Option<&'static str> {
@@ -2306,9 +2436,23 @@ impl ReplEngine {
             return Self::plain(Self::sig_help_lines());
         }
         if let Some(binding_name) = trimmed.strip_prefix('$') {
-            let Some(_binding) = self.binding_info(binding_name) else {
+            let Some(binding) = self.binding_info(binding_name) else {
                 return Self::plain(vec![format!("No binding found for {}", trimmed)]);
             };
+            if let Some(value) = self.vm.get_local(binding.slot_id) {
+                if let Some((owner, metadata)) = self.process_metadata_for_pid_value(&value) {
+                    if let Some(lines) =
+                        self.process_pid_binding_sig_summary_lines(owner, metadata)
+                    {
+                        return Self::styled(lines);
+                    }
+                }
+            }
+            if let Some((owner, metadata)) = self.process_metadata_for_pid_type(binding.ty.as_str()) {
+                if let Some(lines) = self.process_pid_binding_sig_summary_lines(owner, metadata) {
+                    return Self::styled(lines);
+                }
+            }
             if let Some(rendered) = self.binding_callable_sig_summary(binding_name) {
                 return Self::styled(vec![rendered]);
             }
@@ -2330,6 +2474,13 @@ impl ReplEngine {
                 }
                 if let Some(message) = self.enum_sig_extra_input_message_for_symbol(&symbol) {
                     return Self::plain(vec![message]);
+                }
+                if let Some((owner, metadata)) =
+                    self.process_metadata_for_owner(symbol.source.as_str())
+                {
+                    if let Some(lines) = self.process_owner_sig_summary_lines(owner, metadata) {
+                        return Self::styled(lines);
+                    }
                 }
                 if let Some(lines) = self.sig_type_owner_summary_lines(&symbol) {
                     return Self::styled(lines);
@@ -5663,6 +5814,7 @@ fn collect_process_metadata(
                     ReplProcessMetadata {
                         kind: spec.kind,
                         instance: spec.instance,
+                        handler_specs: spec.handler_specs.clone(),
                     },
                 );
             }

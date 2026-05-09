@@ -1315,6 +1315,61 @@ fn core_process_public_surface_respects_annotations() {
 }
 
 #[test]
+fn core_process_sig_owner_summary_includes_init_pid_and_messages() {
+    let mut engine = process_engine();
+
+    let owner_sig = signature_text(&engine.handle_line(":sig MyServer"));
+    assert!(owner_sig.contains("GenServer MyServer"), "{owner_sig}");
+    assert!(
+        owner_sig.contains("@init init() -> Result<PID<MyServer>>"),
+        "{owner_sig}"
+    );
+    assert!(owner_sig.contains("@pid pid() -> PID<MyServer>"), "{owner_sig}");
+    assert!(
+        owner_sig.contains("@call size(pid: PID<MyServer>) -> Result<Int, Error>"),
+        "{owner_sig}"
+    );
+}
+
+#[test]
+fn core_process_sig_worker_owner_summary_includes_init_and_messages() {
+    let mut engine = process_engine();
+
+    let owner_sig = signature_text(&engine.handle_line(":sig MyWorker"));
+    assert!(owner_sig.contains("Agent MyWorker"), "{owner_sig}");
+    assert!(
+        owner_sig.contains("@init init(seed: Int) -> Result<PID<MyWorker>, Error>"),
+        "{owner_sig}"
+    );
+    assert!(
+        owner_sig.contains("@get read(pid: PID<MyWorker>) -> Result<Int, Error>"),
+        "{owner_sig}"
+    );
+    assert!(
+        owner_sig.contains("@set write(pid: PID<MyWorker>, next: Int) -> Result<Unit, Error>"),
+        "{owner_sig}"
+    );
+    assert!(!owner_sig.contains("@pid"), "{owner_sig}");
+}
+
+#[test]
+fn core_process_sig_pid_binding_lists_available_messages() {
+    let mut engine = process_engine();
+
+    let bind = engine.handle_line("server = MyServer::pid()");
+    assert!(rendered_text(&bind).contains("server: PID<MyServer>"));
+
+    let pid_sig = signature_text(&engine.handle_line(":sig $server"));
+    assert!(pid_sig.contains("PID<MyServer> messaging"), "{pid_sig}");
+    assert!(
+        pid_sig.contains("@call size(pid: PID<MyServer>) -> Result<Int, Error>"),
+        "{pid_sig}"
+    );
+    assert!(!pid_sig.contains("@init"), "{pid_sig}");
+    assert!(!pid_sig.contains("@pid"), "{pid_sig}");
+}
+
+#[test]
 fn core_process_type_and_info_support_singletons_and_worker_pids() {
     let mut engine = process_engine();
 
