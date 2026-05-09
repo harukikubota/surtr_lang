@@ -471,6 +471,7 @@ Handler 契約:
 
 | handler | 内部 signature | 外部 surface |
 |---|---|---|
+| singleton `pid` | hidden lower helper | `Type::pid() -> PID<Type>` |
 | `@init` Eager | `(...) -> Result<State>` | なし |
 | `@init` Lazy | `(...) -> Result<ProcessInit<State>>` | なし |
 | `@call` | `(State, Input...) -> Result<CallResult<Reply, State>>` | `Type::name(...Input) -> Result<Reply>` |
@@ -479,8 +480,9 @@ Handler 契約:
 import / 可視性ルール:
 
 - `@call` / `@cast` により公開された concrete 関数名は、通常の module 関数と同じ規則で `import` できる
+- singleton `Type::pid` により公開された concrete 関数名も、通常の module 関数と同じ規則で `import` できる
 - annotation なし `def` は内部 helper であり、`defp` 相当として `import` できない
-- compiler-managed hidden surface (`GenServer::pid`, `GenServer::spawn`, common owner helper, hidden lower 名) は `import` 対象外であり、user code から直接参照できない
+- compiler-managed hidden surface (`Agent::pid`, `GenServer::pid`, `GenServer::spawn`, common owner helper, hidden lower 名) は `import` 対象外であり、user code から直接参照できない
 
 Singleton GenServer は PID なし call を推奨する。explicit PID API は残す。
 
@@ -748,6 +750,12 @@ singleton は compiler / BootPlan / Exit rule により常に存在する前提�
 ```surtr
 Env::pid() -> PID<Env>
 ```
+
+singleton public surface は hidden lower helper とは分けて扱う。
+
+- `Agent::pid` / `GenServer::pid` は compiler-managed lower helper であり、user code から直接 import / call しない
+- `Counter::pid()` / `QueueServer::pid()` のような concrete singleton `pid()` は public surface であり、通常の process owner API と同様に query / import / call できる
+- singleton public API は、PID を省略した direct sugar と explicit PID-first form の両方を許す generated surface では両方の呼び出し方を持ってよい
 
 singleton が存在しない場合は business error ではなく、VM / supervisor / BootPlan の不整合である。
 

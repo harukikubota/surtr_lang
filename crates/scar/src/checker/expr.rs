@@ -3919,6 +3919,9 @@ impl Checker {
         if let Some(typed) = self.try_check_worker_message_template_app(span, func, args)? {
             return Ok(typed);
         }
+        if let Some(typed) = self.try_check_singleton_explicit_pid_app(span, func, args)? {
+            return Ok(typed);
+        }
 
         if let Some(typed) = self.try_check_lens_intrinsic_app(span, func, args)? {
             return Ok(typed);
@@ -4515,6 +4518,88 @@ impl Checker {
             ty: Ty::Func(vec![Ty::Pid(process_name)], ret),
             span: span.clone(),
             node: TypedInner::InjectCall(Box::new(typed_func), typed_args),
+        }))
+    }
+
+    fn try_check_singleton_explicit_pid_app(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<Option<TypedNode>, TypeError> {
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Ok(None);
+        }
+        let Resolved::Var(_, id) = func else {
+            return Ok(None);
+        };
+        let qualified = id.qualified_name.as_deref().unwrap_or(&id.name);
+        let Some((process_name, method_name)) = qualified.rsplit_once("::") else {
+            return Ok(None);
+        };
+        if method_name == "pid" {
+            return Ok(None);
+        }
+        let Some(process_name) = self
+            .process_specs
+            .iter()
+            .find(|spec| {
+                Self::surface_name(&spec.process_name) == Self::surface_name(process_name)
+                    && spec.spec.instance == spire::ast::ProcessInstance::Singleton
+            })
+            .map(|spec| spec.process_name.clone())
+        else {
+            return Ok(None);
+        };
+
+        let typed_func = self.check_node(func)?;
+        let func_ty = self.resolve_ty(&typed_func.ty);
+        let (params, ret) = match &func_ty {
+            Ty::UserFunc { params, ret, .. } => (params.as_slice(), ret.clone()),
+            Ty::BuiltinFunc { params, ret, .. } => (params.as_slice(), ret.clone()),
+            _ => return Ok(None),
+        };
+        if args.len() != params.len() + 1 {
+            return Ok(None);
+        }
+
+        let pid_ty = Ty::Pid(process_name.clone());
+        let typed_pid = match &args[0] {
+            ResolvedRecordLitArg::Positional(expr) => self.check_node_with_expected(expr, Some(&pid_ty))?,
+            ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+        };
+        if !self.types_compatible(&pid_ty, &typed_pid.ty) {
+            return Ok(None);
+        }
+
+        let typed_args: Vec<TypedNode> = args[1..]
+            .iter()
+            .zip(params.iter())
+            .map(|(arg, expected)| match arg {
+                ResolvedRecordLitArg::Positional(expr) => {
+                    self.check_node_with_expected(expr, Some(expected))
+                }
+                ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (expected, actual) in params.iter().zip(typed_args.iter()) {
+            if !self.types_compatible(expected, &actual.ty) {
+                return Ok(None);
+            }
+        }
+
+        let rewritten_call = TypedNode {
+            ty: (*ret).clone(),
+            span: span.clone(),
+            node: TypedInner::App(Box::new(typed_func), typed_args),
+        };
+        Ok(Some(TypedNode {
+            ty: (*ret).clone(),
+            span: span.clone(),
+            node: TypedInner::Block(vec![typed_pid, rewritten_call]),
         }))
     }
 

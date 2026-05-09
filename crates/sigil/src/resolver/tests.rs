@@ -3918,6 +3918,62 @@ print(inspect(worker))"#,
 }
 
 #[test]
+fn test_singleton_agent_pid_surface_is_visible_to_user_code() {
+    let module_stages = vec![vec![staged_process_module(parse_module_ast(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        "Counter",
+    ))]];
+
+    resolve_user_with_modules("pid = Counter::pid()", &module_stages)
+        .expect("singleton agent pid surface should resolve");
+}
+
+#[test]
+fn test_singleton_agent_pid_surface_can_be_imported() {
+    let module_stages = vec![vec![staged_process_module(parse_module_ast(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        "Counter",
+    ))]];
+
+    resolve_user_with_modules(
+        r#"import Counter::pid
+handle = pid()"#,
+        &module_stages,
+    )
+    .expect("singleton agent pid surface should be importable");
+}
+
+#[test]
 fn test_singleton_process_init_surface_is_not_importable() {
     let module_stages = vec![vec![staged_process_module(parse_module_ast(
         r#"defagent Counter {
@@ -4055,6 +4111,96 @@ print(inspect(pid))"#,
         &module_stages,
     )
     .expect("worker genserver init route should be importable");
+}
+
+#[test]
+fn test_singleton_genserver_pid_surface_is_visible_to_user_code() {
+    let module_stages = vec![vec![
+        staged_module(
+            "ProcessTypes",
+            parse_module_ast(
+                r#"defenum CallResult<$Reply, $State> {
+  Reply($Reply, $State),
+  ReplyLater($State, (-> Result<$Reply>)),
+  Stop(StopReply<$Reply>),
+}
+
+defenum StopReply<$Reply> {
+  Normal($Reply),
+  Error(Error),
+}"#,
+                "ProcessTypes",
+            ),
+        ),
+        staged_process_module(parse_module_ast(
+            r#"defgenserver QueueServer {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def size(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}"#,
+            "QueueServer",
+        )),
+    ]];
+
+    resolve_user_with_modules("pid = QueueServer::pid()", &module_stages)
+        .expect("singleton genserver pid surface should resolve");
+}
+
+#[test]
+fn test_singleton_genserver_pid_surface_can_be_imported() {
+    let module_stages = vec![vec![
+        staged_module(
+            "ProcessTypes",
+            parse_module_ast(
+                r#"defenum CallResult<$Reply, $State> {
+  Reply($Reply, $State),
+  ReplyLater($State, (-> Result<$Reply>)),
+  Stop(StopReply<$Reply>),
+}
+
+defenum StopReply<$Reply> {
+  Normal($Reply),
+  Error(Error),
+}"#,
+                "ProcessTypes",
+            ),
+        ),
+        staged_process_module(parse_module_ast(
+            r#"defgenserver QueueServer {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def size(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}"#,
+            "QueueServer",
+        )),
+    ]];
+
+    resolve_user_with_modules(
+        r#"import QueueServer::pid
+handle = pid()"#,
+        &module_stages,
+    )
+    .expect("singleton genserver pid surface should be importable");
 }
 
 #[test]

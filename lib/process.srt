@@ -327,6 +327,9 @@ defmod GenServer {
   Ordinary code cannot call this function directly. Use the generated owner
   helper from `defgenserver` instead.
 
+  REPL note: `GenServer::pid` is the hidden lower doc source, while
+  `QueueServer::pid()` is the public singleton surface.
+
   ## Regular Surface
   xldr(1)> QueueServer::pid()
   <pid>
@@ -409,6 +412,9 @@ defmod Agent {
 
   Ordinary code cannot call this function directly. Use the generated owner
   helper from `defagent` instead.
+
+  REPL note: `Agent::pid` is the hidden lower doc source, while
+  `Counter::pid()` is the public singleton surface.
 
   ## Regular Surface
   xldr(1)> Counter::pid()

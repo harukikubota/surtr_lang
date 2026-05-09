@@ -743,7 +743,10 @@ fn core_type_command_looks_up_visible_bindings_only() {
     for invalid in [":type if", ":type String::is_empty()"] {
         let result = engine.handle_line(invalid);
         let text = rendered_text(&result);
-        assert!(text.contains("Usage: :type <binding>"), "{text}");
+        assert!(
+            text.contains("Usage: :type <binding|singleton-owner> or :type $<binding>"),
+            "{text}"
+        );
     }
 }
 
@@ -1236,6 +1239,37 @@ fn core_process_doc_and_sig_support_hidden_and_concrete_surfaces() {
         concrete_sig.contains("MySup::status() -> Result<SupervisorStatus, Error>"),
         "{concrete_sig}"
     );
+
+    let hidden_pid_doc = doc_text(&engine.handle_line(":doc Agent::pid"));
+    assert!(hidden_pid_doc.contains("Agent::pid"), "{hidden_pid_doc}");
+    assert!(
+        hidden_pid_doc.contains("Compiler-managed lower target for Agent singleton PID lookup."),
+        "{hidden_pid_doc}"
+    );
+
+    let concrete_pid_doc = doc_text(&engine.handle_line(":doc MyServer::pid"));
+    assert!(concrete_pid_doc.contains("MyServer::pid"), "{concrete_pid_doc}");
+    assert!(
+        concrete_pid_doc
+            .contains("Compiler-managed lower target for GenServer singleton PID lookup."),
+        "{concrete_pid_doc}"
+    );
+    assert!(
+        !concrete_pid_doc.contains("GenServer::pid(owner:"),
+        "{concrete_pid_doc}"
+    );
+
+    let hidden_pid_sig = signature_text(&engine.handle_line(":sig GenServer::pid"));
+    assert!(
+        hidden_pid_sig.contains("GenServer::pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>"),
+        "{hidden_pid_sig}"
+    );
+
+    let concrete_pid_sig = signature_text(&engine.handle_line(":sig MyServer::pid"));
+    assert!(
+        concrete_pid_sig.contains("MyServer::pid() -> PID<MyServer>"),
+        "{concrete_pid_sig}"
+    );
 }
 
 #[test]
@@ -1325,6 +1359,22 @@ fn core_process_type_and_info_support_singletons_and_worker_pids() {
     assert!(worker_info.contains("runtime kind:"), "{worker_info}");
     assert!(!worker_info.contains("process:"), "{worker_info}");
     assert!(!worker_info.contains("<pid>"), "{worker_info}");
+
+    let singleton_pid_binding = rendered_text(&engine.handle_line("server = MyServer::pid()"));
+    assert!(
+        singleton_pid_binding.contains("server: PID<MyServer>"),
+        "{singleton_pid_binding}"
+    );
+
+    let singleton_pid_info = rendered_text(&engine.handle_line(":info server"));
+    assert!(
+        singleton_pid_info.contains("kind: process pid"),
+        "{singleton_pid_info}"
+    );
+    assert!(
+        singleton_pid_info.contains("defined: PID<MyServer>"),
+        "{singleton_pid_info}"
+    );
 }
 
 #[test]

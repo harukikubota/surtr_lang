@@ -676,7 +676,7 @@ fn build_pid_wrapper(span: &Span, lower_module: &str, agent_name: &str) -> Ast {
             span.clone(),
             vec![process_pid_call(span, lower_module, agent_name)],
         )),
-        process_route_attrs(false, false),
+        process_route_attrs(true, true),
     )
 }
 
@@ -4232,6 +4232,7 @@ impl Parser<'_> {
                 &span, &name, &init_name, &init_def,
             )?);
         } else {
+            body.push(build_pid_wrapper(&span, "GenServer", &name));
             body.push(build_singleton_init_route_wrapper(
                 &span,
                 "GenServer",

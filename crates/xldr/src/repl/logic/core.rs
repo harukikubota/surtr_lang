@@ -1057,7 +1057,7 @@ impl ReplEngine {
         vec![
             "Usage: :doc <symbol|query>".to_string(),
             "Also: :doc $<binding>".to_string(),
-            "Examples: :doc print, :doc Closure, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::spawn, :doc User(), :doc gt(Int, Int), :doc $formatter"
+            "Examples: :doc print, :doc Closure, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User(), :doc gt(Int, Int), :doc $formatter"
                 .to_string(),
         ]
     }
@@ -1066,7 +1066,7 @@ impl ReplEngine {
         vec![
             "Usage: :sig <function|query>".to_string(),
             "Also: :sig $<binding>".to_string(),
-            "Examples: :sig print, :sig User, :sig GenServer::spawn, :sig MyServer::spawn, :sig gt(Int, Int), :sig ret |>= up, :sig $formatter"
+            "Examples: :sig print, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig gt(Int, Int), :sig ret |>= up, :sig $formatter"
                 .to_string(),
         ]
     }
@@ -1648,13 +1648,42 @@ impl ReplEngine {
         let entry = self.docs.iter().find(|entry| {
             entry.kind == DocKind::Function && entry.qualified_name == hidden_symbol
         })?;
-        let signature = self.find_signature(symbol).map(|(_, signature)| signature);
+        let signature = self
+            .find_signature(symbol)
+            .or_else(|| self.concrete_process_alias_signature(symbol))
+            .map(|(_, signature)| signature);
         Some(Self::doc_output_with_symbol_and_signature(
             entry,
             symbol.to_string(),
             signature,
             Vec::new(),
         ))
+    }
+
+    fn concrete_process_alias_signature(&self, symbol: &str) -> Option<(String, String)> {
+        self.process_hidden_doc_alias(symbol)?;
+        if let Some((owner, metadata)) = symbol.rsplit_once("::").and_then(|(owner, method)| {
+            (method == "pid").then_some((owner, self.lookup_process_metadata(owner)?))
+        }) {
+            if metadata.instance == spire::ast::ProcessInstance::Singleton {
+                let owner = crate::surface_rendered_name(owner);
+                return Some((
+                    symbol.to_string(),
+                    format!("{symbol}() -> PID<{owner}>"),
+                ));
+            }
+        }
+        self.vm
+            .function_entries()
+            .iter()
+            .rev()
+            .filter_map(|entry| {
+                let qualified_name = entry.qualified_name.as_ref()?;
+                let signature = entry.signature.as_ref()?;
+                (crate::surface_path_name(qualified_name) == crate::surface_path_name(symbol))
+                    .then(|| (qualified_name.clone(), signature.clone()))
+            })
+            .next()
     }
 
     fn process_owner_type_lines(
@@ -2305,7 +2334,10 @@ impl ReplEngine {
                 if let Some(lines) = self.sig_type_owner_summary_lines(&symbol) {
                     return Self::styled(lines);
                 }
-                match self.find_signature(&symbol) {
+                match self
+                    .find_signature(&symbol)
+                    .or_else(|| self.concrete_process_alias_signature(&symbol))
+                {
                     Some((qualified_name, signature)) => {
                         let rendered =
                             Self::render_signature_with_qualified_name(&qualified_name, signature);
@@ -2359,7 +2391,7 @@ impl ReplEngine {
                     start: ":type ".chars().count(),
                     end: format!(":type {trimmed}").chars().count(),
                 },
-                Some("Usage: :type <binding> or :type $<binding>".to_string()),
+                Some("Usage: :type <binding|singleton-owner> or :type $<binding>".to_string()),
                 Vec::new(),
             );
         }

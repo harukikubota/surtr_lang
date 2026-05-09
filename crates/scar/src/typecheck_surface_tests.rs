@@ -3562,6 +3562,141 @@ fn process_self_typechecks_inside_process_handler() {
 }
 
 #[test]
+fn singleton_agent_pid_surface_returns_concrete_pid() {
+    let mut stages = std_module_stages();
+    stages.push(vec![staged_process_module(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+    )]);
+    let declaration_index =
+        sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
+    let user_ast = spire::parse_with_context("pid = Counter::pid()", spire::ParserContext::project(0))
+        .expect("script should parse");
+    let resolved = sigil::resolve_staged_program_with_state(
+        &stages,
+        user_ast,
+        &declaration_index,
+        Some("__Script::fixture".to_string()),
+    )
+    .expect("resolve should succeed");
+    let typed = crate::typecheck_staged_program(resolved).expect("typecheck should succeed");
+    let rhs = typed
+        .nodes
+        .last()
+        .and_then(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+            _ => None,
+        })
+        .expect("expected pid binding");
+    match &rhs.ty {
+        Ty::Pid(symbol) => assert!(symbol == "Counter" || symbol == "Global::Counter"),
+        other => panic!("expected PID<Counter>, got {other:?}"),
+    }
+}
+
+#[test]
+fn singleton_genserver_pid_surface_returns_concrete_pid() {
+    let mut stages = std_module_stages();
+    stages.push(vec![staged_process_module(
+        r#"defgenserver QueueServer {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def size(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}"#,
+    )]);
+    let declaration_index =
+        sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
+    let user_ast =
+        spire::parse_with_context("pid = QueueServer::pid()", spire::ParserContext::project(0))
+            .expect("script should parse");
+    let resolved = sigil::resolve_staged_program_with_state(
+        &stages,
+        user_ast,
+        &declaration_index,
+        Some("__Script::fixture".to_string()),
+    )
+    .expect("resolve should succeed");
+    let typed = crate::typecheck_staged_program(resolved).expect("typecheck should succeed");
+    let rhs = typed
+        .nodes
+        .last()
+        .and_then(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+            _ => None,
+        })
+        .expect("expected pid binding");
+    match &rhs.ty {
+        Ty::Pid(symbol) => assert!(symbol == "QueueServer" || symbol == "Global::QueueServer"),
+        other => panic!("expected PID<QueueServer>, got {other:?}"),
+    }
+}
+
+#[test]
+fn singleton_agent_explicit_pid_call_typechecks() {
+    let mut stages = std_module_stages();
+    stages.push(vec![staged_process_module(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+    )]);
+    let declaration_index =
+        sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
+    let user_ast = spire::parse_with_context(
+        r#"pid = Counter::pid()
+value =? Counter::get(pid, "count")
+done =? Counter::set(pid, 1)"#,
+        spire::ParserContext::project(0),
+    )
+    .expect("script should parse");
+    let resolved = sigil::resolve_staged_program_with_state(
+        &stages,
+        user_ast,
+        &declaration_index,
+        Some("__Script::fixture".to_string()),
+    )
+    .expect("resolve should succeed");
+    crate::typecheck_staged_program(resolved)
+        .expect("singleton explicit pid-first agent surface should typecheck");
+}
+
+#[test]
 fn genserver_additional_call_handler_typechecks_as_process_context() {
     let mut stages = std_module_stages();
     stages.push(vec![staged_process_module(

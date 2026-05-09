@@ -704,6 +704,64 @@ supervisor_init {
 }
 
 #[test]
+fn repl_process_pid_queries_cover_hidden_and_concrete_singleton_surfaces() {
+    let temp = unique_temp_dir("repl-process-pid-query");
+    let script_path = temp.join("process_pid_query.srt");
+    fs::write(
+        &script_path,
+        r#"
+defgenserver MyServer {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(1) }
+
+  @call
+  def size(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}
+
+supervisor_init {
+  MyServer {}
+}
+"#,
+    )
+    .expect("failed to write process preload script");
+
+    let output = run_repl_session_with_args(
+        &[
+            "--script",
+            script_path.to_str().expect("script path must be utf-8"),
+        ],
+        ":doc MyServer::pid\n:sig MyServer::pid\nserver = MyServer::pid()\n:type server\n:info server\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("MyServer::pid"), "{stdout}");
+    assert!(
+        stdout.contains("Compiler-managed lower target for GenServer singleton PID lookup."),
+        "{stdout}"
+    );
+    assert!(stdout.contains("MyServer::pid() -> PID<MyServer>"), "{stdout}");
+    assert!(stdout.contains("server: PID<MyServer>"), "{stdout}");
+    assert!(stdout.contains("type: PID<MyServer>"), "{stdout}");
+    assert!(stdout.contains("kind: process pid"), "{stdout}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn repl_module_and_script_preload_flags_share_one_compile_unit() {
     let temp = unique_temp_dir("repl-module-script-preload");
     let module_path = temp.join("helper.srt");
