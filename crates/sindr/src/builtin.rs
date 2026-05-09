@@ -255,6 +255,11 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Facet<$S, $A>, Facet<$A, $B>) -> Facet<$S, $B>",
     },
     BuiltinMeta {
+        name: "replace",
+        arity: 3,
+        sig_str: "(Facet<$S, $A>, $S, $A) -> $S",
+    },
+    BuiltinMeta {
         name: "set",
         arity: 3,
         sig_str: "(Facet<$S, $A>, $S, $A) -> Result<$S>",

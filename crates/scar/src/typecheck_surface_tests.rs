@@ -539,6 +539,87 @@ Facet::set(User.name, user, "bob")"#,
 }
 
 #[test]
+fn facet_replace_returns_plain_source() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord User(name: String)
+user = User("alice")
+Facet::replace(User.name, user, "bob")"#,
+    );
+    let last = typed.last().expect("typed program should not be empty");
+    assert!(matches!(
+        &last.ty,
+        scar::types::Ty::Record(name, _) if name == "User"
+    ));
+    assert!(matches!(last.node, TypedInner::FacetSet { .. }));
+}
+
+#[test]
+fn facet_replace_rejects_result_source_and_variant_path() {
+    let result_source_err = typecheck_with_rules(
+        r#"defrecord User(name: String)
+user = Ok(User("alice"))
+Facet::replace(User.name, user, "bob")"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("Result source should fail for Facet::replace");
+    assert!(result_source_err
+        .message
+        .contains("Facet::replace requires a plain source value"));
+
+    let variant_path_err = typecheck_with_rules(
+        r#"defenum Expr {
+  Add(Int, Int),
+  Halt,
+}
+expr = Expr::Add(1, 2)
+Facet::replace(Expr.Add / Tuple._0, expr, 7)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("variant path should fail for Facet::replace");
+    assert!(variant_path_err
+        .message
+        .contains("Facet::replace requires a structural Facet path"));
+}
+
+#[test]
+fn facet_replace_supports_same_type_tuple_update_inside_annotated_closure() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"def first(f: (Int -> Int)) -> ((Int, Boolean) -> (Int, Boolean)) {
+  {|pair: (Int, Boolean)| Facet::replace(Tuple._0, pair, f(pair._0))}
+}"#,
+    );
+    assert!(!typed.is_empty());
+}
+
+#[test]
+fn facet_replace_unannotated_closure_still_lacks_tuple_context_from_expected_return() {
+    let err = typecheck_with_rules(
+        r#"def first(f: (Int -> Int)) -> ((Int, Boolean) -> (Int, Boolean)) {
+  {|pair| Facet::replace(Tuple._0, pair, f(pair._0))}
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("unannotated closure should still expose tuple context gap");
+    assert!(err
+        .message
+        .contains("Tuple._0 requires tuple source context"));
+}
+
+#[test]
+fn facet_replace_rejects_type_changing_tuple_update() {
+    let err = typecheck_with_rules(
+        r#"def first(f: (Int -> String)) -> ((Int, Boolean) -> (String, Boolean)) {
+  {|pair: (Int, Boolean)| Facet::replace(Tuple._0, pair, f(pair._0))}
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("type-changing tuple update should fail for Facet::replace");
+    assert!(err
+        .message
+        .contains("Facet::replace value type mismatch: expected Int, got String"));
+}
+
+#[test]
 fn facet_over_requires_unary_result_callable() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)

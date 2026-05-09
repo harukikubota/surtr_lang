@@ -3410,6 +3410,7 @@ impl Checker {
                 "Facet::view" => Some("view"),
                 "Facet::preview" => Some("preview"),
                 "Facet::compose" => Some("compose"),
+                "Facet::replace" => Some("replace"),
                 "Facet::set" => Some("set"),
                 "Facet::over" => Some("over"),
                 "Facet::over_result" => Some("over_result"),
@@ -3927,6 +3928,90 @@ impl Checker {
         })
     }
 
+    fn check_facet_replace_intrinsic(
+        &mut self,
+        span: &Span,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        if args.len() != 3 {
+            return Err(TypeError {
+                message: format!("Facet::replace expects 3 argument(s), got {}", args.len()),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: "Facet::replace does not accept named arguments".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let ResolvedRecordLitArg::Positional(path_expr) = &args[0] else {
+            unreachable!("validated argument form above")
+        };
+        let ResolvedRecordLitArg::Positional(source_expr) = &args[1] else {
+            unreachable!("validated argument form above")
+        };
+        let ResolvedRecordLitArg::Positional(value_expr) = &args[2] else {
+            unreachable!("validated argument form above")
+        };
+
+        let (typed_source, source_is_result, source_value_ty) =
+            self.check_facet_source_value("Facet::replace", source_expr)?;
+        if source_is_result {
+            return Err(TypeError {
+                message: "Facet::replace requires a plain source value".into(),
+                span: typed_source.span.clone(),
+                hint: Some("Use Facet::set when the source is already Result<T>.".into()),
+            });
+        }
+        let path = self.check_facet_path_argument(
+            span,
+            "Facet::replace",
+            path_expr,
+            &source_value_ty,
+            &typed_source.ty,
+        )?;
+        if path.path_kind != TypedFacetPathKind::Structural {
+            return Err(TypeError {
+                message: "Facet::replace requires a structural Facet path".into(),
+                span: span.clone(),
+                hint: Some("Use Facet::set for variant-sensitive updates.".into()),
+            });
+        }
+        self.check_mutating_facet_path_permissions("Facet::replace", &path, span)?;
+
+        let typed_value = self.check_node_with_expected(value_expr, Some(&path.focus_ty))?;
+        if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "Facet::replace value type mismatch: expected {}, got {}",
+                    self.ty_name(&path.focus_ty),
+                    self.ty_name(&typed_value.ty)
+                ),
+                span: typed_value.span.clone(),
+                hint: None,
+            });
+        }
+
+        Ok(TypedNode {
+            ty: self.resolve_ty(&source_value_ty),
+            span: span.clone(),
+            node: TypedInner::FacetSet {
+                source: Box::new(typed_source),
+                path,
+                value: Box::new(typed_value),
+                source_is_result,
+                mode: TypedFacetSetMode::Exact,
+            },
+        })
+    }
+
     fn check_facet_over_intrinsic(
         &mut self,
         span: &Span,
@@ -4290,6 +4375,7 @@ impl Checker {
             Some("view") => Ok(Some(self.check_facet_view_intrinsic(span, args)?)),
             Some("preview") => Ok(Some(self.check_facet_preview_intrinsic(span, args)?)),
             Some("compose") => Ok(Some(self.check_facet_compose_intrinsic(span, args)?)),
+            Some("replace") => Ok(Some(self.check_facet_replace_intrinsic(span, args)?)),
             Some("set") => Ok(Some(self.check_facet_set_intrinsic(span, args)?)),
             Some("over") => Ok(Some(self.check_facet_over_intrinsic(span, args)?)),
             Some("over_result") => Ok(Some(self.check_facet_over_result_intrinsic(span, args)?)),

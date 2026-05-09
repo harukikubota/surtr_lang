@@ -4025,9 +4025,11 @@ impl Codegen {
         source_is_result: bool,
         leaf: FacetUpdateLeaf,
     ) -> Result<(), CodegenError> {
-        if !matches!(node.ty, Ty::Result(_, _)) {
+        let returns_result = matches!(node.ty, Ty::Result(_, _));
+        if source_is_result && !returns_result {
             return Err(CodegenError {
-                message: "Internal invariant broken: Facet::set/over must return Result".into(),
+                message: "Internal invariant broken: plain facet update cannot start from Result source"
+                    .into(),
                 span: node.span.clone(),
             });
         }
@@ -4058,10 +4060,14 @@ impl Codegen {
 
         self.emit_facet_update_at_path(root_slot, path, 0, leaf, &node.span, end_label)?;
 
-        let ok_tag = self.add_constant(Constant::Tag(0));
-        self.emit(Opcode::LoadConst(ok_tag));
-        self.emit(Opcode::LoadLocal(root_slot));
-        self.emit(Opcode::StructNew { field_count: 1 });
+        if returns_result {
+            let ok_tag = self.add_constant(Constant::Tag(0));
+            self.emit(Opcode::LoadConst(ok_tag));
+            self.emit(Opcode::LoadLocal(root_slot));
+            self.emit(Opcode::StructNew { field_count: 1 });
+        } else {
+            self.emit(Opcode::LoadLocal(root_slot));
+        }
 
         self.patch_label(end_label);
         Ok(())

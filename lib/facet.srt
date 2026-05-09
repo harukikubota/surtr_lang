@@ -2,7 +2,7 @@
 Standard `Facet` type declaration.
 `Facet<S, A>` is a compiler-managed path capability from source `S` to focus `A`.
 Facet values are same-scope capabilities: bind them locally when useful, then
-consume them in that same scope via `Facet::view/set/over/over_result/preview`.
+consume them in that same scope via `Facet::view/replace/set/over/over_result/preview`.
 
 Use `Facet` when you want to describe "where" inside a value the compiler should
 look or update.
@@ -102,6 +102,29 @@ impl Facet {
   and `Err(error)` propagates unchanged.
   """
   @builtin def preview(facet: Facet<$S, $A>, source: $S) -> Result<$A>
+
+  @doc """
+  Replace the focus at `facet` in plain `source` with `value`.
+  Returns the updated source directly, without wrapping it in `Result`.
+
+  `replace` is the non-fallible companion to `set`.
+  It is available only when both of these hold:
+
+  - `source` is a plain value, not `Result<$S>`
+  - `facet` is structural-only (field / tuple path, no variant selector)
+
+  The same readonly restrictions as `set` apply here.
+
+  Use `set` instead when the update should compose through `Result` context or
+  variant matching.
+
+  ## REPL
+  xldr(1)> pair = ("alice", 42)
+  > pair: (String, Int) = ("alice", 42)
+  xldr(2)> Facet::replace(Tuple._1, pair, 99)
+  ("alice", 99)
+  """
+  @builtin def replace(facet: Facet<$S, $A>, source: $S, value: $A) -> $S
 
   @doc """
   Replace the focus at `facet` in `source` with `value`.

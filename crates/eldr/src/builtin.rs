@@ -209,6 +209,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_facet_compose,
     },
     BuiltinImpl {
+        name: "replace",
+        func: builtin_facet_replace,
+    },
+    BuiltinImpl {
         name: "set",
         func: builtin_facet_set,
     },
@@ -1842,6 +1846,12 @@ fn builtin_facet_preview(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, Runti
 fn builtin_facet_compose(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Facet::compose should be lowered in Forge (runtime builtin call indicates lowering bug)",
+    ))
+}
+
+fn builtin_facet_replace(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Facet::replace should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
