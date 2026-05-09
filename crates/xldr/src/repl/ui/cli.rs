@@ -182,6 +182,11 @@ pub fn cli_command(options: ReplOptions) -> Result<(), i32> {
         })?,
     };
 
+    let color = styled::color_enabled_from_env();
+    for result in engine.take_startup_results() {
+        print_result(&result, color);
+    }
+
     if io::stdin().is_terminal() {
         run_terminal_repl(&mut engine)?;
     } else {

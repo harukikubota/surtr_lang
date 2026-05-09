@@ -228,6 +228,7 @@ pub struct ReplEngine {
     docs: Vec<DocEntry>,
     process_metadata: BTreeMap<String, ReplProcessMetadata>,
     auto_import_modules: BTreeSet<String>,
+    startup_results: Vec<ReplResult>,
     error_display_mode: ErrorDisplayMode,
 }
 
@@ -260,6 +261,7 @@ impl ReplEngine {
             vm,
             pending: String::new(),
             next_line: 1,
+            startup_results: Vec::new(),
             results: Vec::new(),
             result_metas: Vec::new(),
             symbols: ["Ok", "Err"]
@@ -336,6 +338,7 @@ impl ReplEngine {
             docs,
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
+            startup_results: Vec::new(),
             error_display_mode: ErrorDisplayMode::Full,
         };
         // Set up sigil / scar scope for stdlib without re-executing bytecode.
@@ -437,6 +440,7 @@ impl ReplEngine {
             docs: state.docs,
             process_metadata: state.process_metadata,
             auto_import_modules: state.auto_import_modules,
+            startup_results: Vec::new(),
             error_display_mode: ErrorDisplayMode::Full,
         })
         .map(|mut engine| {
@@ -458,7 +462,9 @@ impl ReplEngine {
                     ReplOutput::EvalSuccess { .. }
                     | ReplOutput::PlainText { .. }
                     | ReplOutput::StyledDoc { .. }
-                    | ReplOutput::StatusMessage(_) => {}
+                    | ReplOutput::StatusMessage(_) => {
+                        engine.startup_results.push(result);
+                    }
                     ReplOutput::EvalError { rendered, .. } => {
                         return Err(ReplLoadError::Runtime {
                             file_name: "<repl-preload>".to_string(),
@@ -484,6 +490,10 @@ impl ReplEngine {
             engine.vm.enable_repl_host_io_buffering();
             Ok(engine)
         })
+    }
+
+    pub fn take_startup_results(&mut self) -> Vec<ReplResult> {
+        std::mem::take(&mut self.startup_results)
     }
 
     fn bootstrap_std_modules(&mut self) -> Result<(), LoadError> {
@@ -814,7 +824,7 @@ impl ReplEngine {
         let entries = self
             .declaration_index
             .values()
-            .filter(|entry| entry.module_path == module_name)
+            .filter(|entry| crate::surface_path_name(&entry.module_path) == module_name)
             .cloned()
             .collect::<Vec<_>>();
 
@@ -859,11 +869,17 @@ impl ReplEngine {
         imported_symbols: &mut Vec<String>,
     ) -> Result<(), ResolveError> {
         let fq_name = format!("{}::{}", module_name, name);
-        let Some(entry) = self.declaration_index.get(&fq_name) else {
+        let Some(entry) = self.declaration_index.get(&fq_name).or_else(|| {
+            self.declaration_index.values().find(|entry| {
+                crate::surface_path_name(&entry.fq_name) == fq_name
+                    || (crate::surface_path_name(&entry.module_path) == module_name
+                        && entry.name == name)
+            })
+        }) else {
             let module_exists = self
                 .declaration_index
                 .values()
-                .any(|entry| entry.module_path == module_name);
+                .any(|entry| crate::surface_path_name(&entry.module_path) == module_name);
             return Err(ResolveError {
                 message: if module_exists {
                     format!("Unknown import member: {}", fq_name)
@@ -1201,40 +1217,45 @@ impl ReplEngine {
         let canonical = self
             .visible_helper_trait_alias(symbol)
             .unwrap_or_else(|| Self::canonical_symbol(symbol).to_string());
+        let preferred_kind = Self::definition_doc_kind(&canonical);
         let matches = if let Some(matches) = self.type_owner_doc_entries(&canonical) {
             matches
-        } else if canonical != symbol || Self::definition_doc_kind(&canonical).is_some() {
-            let preferred_kind = Self::definition_doc_kind(&canonical);
+        } else {
             let visible = self.visible_doc_entries(&canonical, preferred_kind.clone());
             if visible.is_empty() {
-                self.script_preload_doc_entries(&canonical, preferred_kind)
+                if canonical != symbol || preferred_kind.is_some() {
+                    self.script_preload_doc_entries(&canonical, preferred_kind)
+                } else if let Some(decl) = self.visible_declaration(symbol) {
+                    let expected_signature = self.declaration_signature(decl);
+                    let mut matches = self
+                        .docs
+                        .iter()
+                        .filter(|entry| {
+                            crate::surface_path_name(&entry.qualified_name)
+                                == crate::surface_path_name(&decl.fq_name)
+                        })
+                        .filter(|entry| {
+                            expected_signature.as_ref().is_none_or(|signature| {
+                                entry
+                                    .signature
+                                    .as_ref()
+                                    .is_some_and(|entry_sig| entry_sig == signature)
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    matches.dedup_by(|a, b| {
+                        a.qualified_name == b.qualified_name
+                            && a.kind == b.kind
+                            && a.signature == b.signature
+                            && a.doc == b.doc
+                    });
+                    matches
+                } else {
+                    self.script_preload_doc_entries(symbol, None)
+                }
             } else {
                 visible
             }
-        } else if let Some(decl) = self.visible_declaration(symbol) {
-            let expected_signature = self.declaration_signature(decl);
-            let mut matches = self
-                .docs
-                .iter()
-                .filter(|entry| entry.qualified_name == decl.fq_name)
-                .filter(|entry| {
-                    expected_signature.as_ref().is_none_or(|signature| {
-                        entry
-                            .signature
-                            .as_ref()
-                            .is_some_and(|entry_sig| entry_sig == signature)
-                    })
-                })
-                .collect::<Vec<_>>();
-            matches.dedup_by(|a, b| {
-                a.qualified_name == b.qualified_name
-                    && a.kind == b.kind
-                    && a.signature == b.signature
-                    && a.doc == b.doc
-            });
-            matches
-        } else {
-            self.script_preload_doc_entries(symbol, None)
         };
 
         match matches.as_slice() {
@@ -1286,7 +1307,11 @@ impl ReplEngine {
         let mut matches = self
             .docs
             .iter()
-            .filter(|entry| entry.kind == DocKind::Type && entry.qualified_name == decl.fq_name)
+            .filter(|entry| {
+                entry.kind == DocKind::Type
+                    && crate::surface_path_name(&entry.qualified_name)
+                        == crate::surface_path_name(&decl.fq_name)
+            })
             .collect::<Vec<_>>();
         matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
         matches.dedup_by(|a, b| {
@@ -1389,6 +1414,8 @@ impl ReplEngine {
     }
 
     fn symbol_matches(qualified_name: &str, symbol: &str) -> bool {
+        let qualified_name = crate::surface_path_name(qualified_name);
+        let symbol = crate::surface_path_name(symbol);
         qualified_name == symbol
             || qualified_name
                 .rsplit("::")
@@ -1443,26 +1470,44 @@ impl ReplEngine {
         if !Self::symbol_matches(&entry.qualified_name, symbol) {
             return false;
         }
+        if entry.kind == DocKind::Module {
+            return crate::surface_path_name(&entry.qualified_name)
+                == crate::surface_path_name(symbol);
+        }
         if Self::is_qualified_symbol(symbol) {
-            return entry.qualified_name == symbol
-                && self
-                    .declaration_index
-                    .get(symbol)
-                    .is_none_or(Self::declaration_is_public_surface);
+            let Some(decl) = self.qualified_declaration(symbol) else {
+                return crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(symbol);
+            };
+            return crate::surface_path_name(&entry.qualified_name)
+                == crate::surface_path_name(&decl.fq_name)
+                && Self::declaration_is_public_surface(decl);
         }
         self.visible_uid_matches(symbol, &entry.qualified_name)
             || (entry.module_path.starts_with("__Script::")
                 && self.sigil_session.lookup_uid(symbol).is_some())
     }
 
+    fn qualified_declaration<'a>(&'a self, symbol: &str) -> Option<&'a sigil::DeclarationEntry> {
+        self.declaration_index.get(symbol).or_else(|| {
+            self.declaration_index
+                .values()
+                .find(|entry| crate::surface_path_name(&entry.fq_name) == symbol)
+        })
+    }
+
     fn visible_uid_matches(&self, visible_name: &str, qualified_name: &str) -> bool {
-        match (
-            self.sigil_session.lookup_uid(visible_name),
-            self.sigil_session.lookup_uid(qualified_name),
-        ) {
-            (Some(visible_uid), Some(qualified_uid)) => visible_uid == qualified_uid,
-            _ => false,
-        }
+        let Some(visible_uid) = self.sigil_session.lookup_uid(visible_name) else {
+            return false;
+        };
+        self.qualified_declaration(qualified_name)
+            .and_then(|entry| self.sigil_session.lookup_uid(&entry.fq_name))
+            .or_else(|| self.sigil_session.lookup_uid(qualified_name))
+            .or_else(|| {
+                self.sigil_session
+                    .lookup_uid(crate::surface_path_name(qualified_name))
+            })
+            .is_some_and(|qualified_uid| visible_uid == qualified_uid)
     }
 
     fn tuple_doc_output() -> ReplOutput {
@@ -1481,21 +1526,23 @@ impl ReplEngine {
     fn undocumented_doc_output(&self, symbol: &str) -> Option<ReplOutput> {
         let decl = self.visible_declaration(symbol)?;
         let signature = self.declaration_signature(decl);
+        let display_fq_name = crate::surface_path_name(&decl.fq_name);
+        let display_name = crate::surface_path_name(&decl.name);
         let source_snippet = if let Some(signature) = &signature {
             format!(
                 "`{}` resolves in the current scope, but it does not have an `@doc` entry yet.\nAdd `@doc` immediately before the declaration.\nExample:\n@doc \"\"\"\nDescribe `{}` here.\n\"\"\"\n{}",
-                decl.fq_name, decl.name, signature
+                display_fq_name, display_name, signature
             )
         } else {
             format!(
                 "`{}` resolves in the current scope, but it does not have an `@doc` entry yet.\nAdd `@doc` at the declaration site.\nExample:\n@doc \"\"\"\nDescribe `{}` here.\n\"\"\"",
-                decl.fq_name, decl.name
+                display_fq_name, display_name
             )
         };
         Some(ReplOutput::DocResolved {
-            symbol: decl.fq_name.clone(),
+            symbol: display_fq_name.to_string(),
             signature,
-            summary: Some(format!("`{}` is currently undocumented.", decl.name)),
+            summary: Some(format!("`{}` is currently undocumented.", display_name)),
             source_snippet: Some(source_snippet),
             details: vec!["status: undocumented".to_string()],
         })
@@ -1514,7 +1561,7 @@ impl ReplEngine {
         ty: &'a str,
     ) -> Option<(&'a str, &ReplProcessMetadata)> {
         let process_name = Self::parse_pid_type_name(ty)?;
-        Some((process_name, self.process_metadata.get(process_name)?))
+        Some((process_name, self.lookup_process_metadata(process_name)?))
     }
 
     fn process_metadata_for_singleton_owner<'a>(
@@ -1524,13 +1571,13 @@ impl ReplEngine {
         if Self::is_qualified_symbol(symbol) {
             return None;
         }
-        let metadata = self.process_metadata.get(symbol)?;
+        let metadata = self.lookup_process_metadata(symbol)?;
         (metadata.instance == spire::ast::ProcessInstance::Singleton).then_some((symbol, metadata))
     }
 
     fn pid_type_from_value(value: &Value) -> Option<String> {
         match value {
-            Value::Pid(pid) => Some(format!("PID<{}>", pid.process_name)),
+            Value::Pid(pid) => Some(format!("PID<{}>", crate::surface_rendered_name(&pid.process_name))),
             _ => None,
         }
     }
@@ -1544,13 +1591,22 @@ impl ReplEngine {
         };
         Some((
             pid.process_name.as_str(),
-            self.process_metadata.get(&pid.process_name)?,
+            self.lookup_process_metadata(&pid.process_name)?,
         ))
+    }
+
+    fn lookup_process_metadata(&self, name: &str) -> Option<&ReplProcessMetadata> {
+        self.process_metadata.get(name).or_else(|| {
+            self.process_metadata
+                .iter()
+                .find(|(key, _)| crate::surface_path_name(key) == crate::surface_path_name(name))
+                .map(|(_, metadata)| metadata)
+        })
     }
 
     fn process_hidden_doc_alias(&self, symbol: &str) -> Option<String> {
         let (owner, method) = symbol.rsplit_once("::")?;
-        let metadata = self.process_metadata.get(owner)?;
+        let metadata = self.lookup_process_metadata(owner)?;
         let hidden_owner = match (metadata.kind, method) {
             (spire::ast::ProcessKind::Agent, "pid") => "Agent",
             (spire::ast::ProcessKind::Agent, "spawn")
@@ -1617,16 +1673,17 @@ impl ReplEngine {
     ) -> Vec<String> {
         vec![
             owner.to_string(),
-            format!("type: PID<{owner}>"),
+            format!("type: PID<{}>", crate::surface_rendered_name(owner)),
             "identity: TypeIdentity::Type".to_string(),
         ]
     }
 
     fn process_owner_info_lines(&self, owner: &str, metadata: &ReplProcessMetadata) -> Vec<String> {
+        let owner = crate::surface_rendered_name(owner);
         vec![
-            owner.to_string(),
+            owner.clone(),
             "kind: process singleton".to_string(),
-            format!("origin: {}", Self::origin_for_name(owner)),
+            format!("origin: {}", Self::origin_for_name(&owner)),
             format!("defined: PID<{owner}>"),
             format!("type: PID<{owner}>"),
             "identity: TypeIdentity::Type".to_string(),
@@ -1657,7 +1714,7 @@ impl ReplEngine {
 
     fn visible_declaration<'a>(&'a self, symbol: &str) -> Option<&'a sigil::DeclarationEntry> {
         if Self::is_qualified_symbol(symbol) {
-            let entry = self.declaration_index.get(symbol)?;
+            let entry = self.qualified_declaration(symbol)?;
             return Self::declaration_is_public_surface(entry).then_some(entry);
         }
         let visible_uid = self.sigil_session.lookup_uid(symbol)?;
@@ -1675,7 +1732,7 @@ impl ReplEngine {
 
     fn private_declaration<'a>(&'a self, symbol: &str) -> Option<&'a sigil::DeclarationEntry> {
         if Self::is_qualified_symbol(symbol) {
-            let entry = self.declaration_index.get(symbol)?;
+            let entry = self.qualified_declaration(symbol)?;
             return (!Self::declaration_is_public_surface(entry)).then_some(entry);
         }
         let visible_uid = self.sigil_session.lookup_uid(symbol)?;
@@ -1695,7 +1752,7 @@ impl ReplEngine {
         Self::plain(vec![
             format!(
                 "`{}` is private and cannot be queried with `:doc`.",
-                entry.fq_name
+                crate::surface_path_name(&entry.fq_name)
             ),
             "Add `@doc` only to public declarations.".to_string(),
         ])
@@ -1706,7 +1763,7 @@ impl ReplEngine {
         Self::plain(vec![
             format!(
                 "`{}` is private and cannot be queried with `:sig`.",
-                entry.fq_name
+                crate::surface_path_name(&entry.fq_name)
             ),
             "Only public declarations are visible to REPL signature lookup.".to_string(),
         ])
@@ -1715,11 +1772,22 @@ impl ReplEngine {
 
     fn declaration_signature(&self, decl: &sigil::DeclarationEntry) -> Option<String> {
         match decl.kind {
-            sigil::DeclarationKind::Struct => Some(crate::format_struct_signature(&decl.name)),
-            sigil::DeclarationKind::Record => Some(crate::format_record_signature(&decl.name)),
-            sigil::DeclarationKind::Deferror => Some(format!("deferror {}", decl.name)),
-            sigil::DeclarationKind::Enum => Some(format!("defenum {}", decl.name)),
-            sigil::DeclarationKind::BuiltinType => Some(format!("type {}", decl.name)),
+            sigil::DeclarationKind::Struct => {
+                Some(crate::format_struct_signature(crate::surface_path_name(&decl.name)))
+            }
+            sigil::DeclarationKind::Record => {
+                Some(crate::format_record_signature(crate::surface_path_name(&decl.name)))
+            }
+            sigil::DeclarationKind::Deferror => Some(format!(
+                "deferror {}",
+                crate::surface_path_name(&decl.name)
+            )),
+            sigil::DeclarationKind::Enum => {
+                Some(format!("defenum {}", crate::surface_path_name(&decl.name)))
+            }
+            sigil::DeclarationKind::BuiltinType => {
+                Some(format!("type {}", crate::surface_path_name(&decl.name)))
+            }
             _ => self
                 .find_signature(&decl.fq_name)
                 .map(|(_, signature)| signature),
@@ -1738,7 +1806,7 @@ impl ReplEngine {
             .find(|line| !line.is_empty())
             .map(ToString::to_string);
         ReplOutput::DocResolved {
-            symbol: entry.qualified_name.clone(),
+            symbol: crate::surface_path_name(&entry.qualified_name).to_string(),
             signature: Self::display_signature_for_doc_entry(entry),
             summary,
             source_snippet: Some(entry.doc.clone()),
@@ -1752,7 +1820,10 @@ impl ReplEngine {
             "Bootstrap::cond" => {
                 Some("cond { cond1 => expr1, ..., True => exprN } -> $A".to_string())
             }
-            _ => entry.signature.clone(),
+            _ => entry
+                .signature
+                .clone()
+                .map(|signature| crate::surface_rendered_name(&signature)),
         }
     }
 
@@ -1810,7 +1881,7 @@ impl ReplEngine {
         match kind {
             forge::ReplCallableKind::Capture => {
                 let mut details = vec![format!("binding: {symbol}")];
-                details.push(format!("type: {}", binding.ty));
+                details.push(format!("type: {}", crate::surface_rendered_name(&binding.ty)));
                 if let Value::Callable(callable) = value {
                     let capture_count = callable.lexical_captures.len();
                     if capture_count == 0 {
@@ -1833,8 +1904,9 @@ impl ReplEngine {
         symbol: &str,
         binding: &forge::BindingInfo,
     ) -> Vec<String> {
-        let mut details = vec![format!("type: {}", binding.ty)];
-        if let Some(example) = Self::closure_binding_example(symbol, &binding.ty) {
+        let rendered_ty = crate::surface_rendered_name(&binding.ty);
+        let mut details = vec![format!("type: {rendered_ty}")];
+        if let Some(example) = Self::closure_binding_example(symbol, &rendered_ty) {
             details.push(format!("example: {example}"));
         }
         details
@@ -1906,7 +1978,7 @@ impl ReplEngine {
         rendered.extend(
             entries
                 .iter()
-                .map(|entry| format!("  {}", entry.qualified_name)),
+                .map(|entry| format!("  {}", crate::surface_path_name(&entry.qualified_name))),
         );
         rendered.push(
             "Use a qualified name or add type annotations, for example `:doc gt(3, 2)`."
@@ -2037,7 +2109,10 @@ impl ReplEngine {
                 .docs
                 .iter()
                 .filter(|entry| entry.kind == DocKind::Function)
-                .filter(|entry| entry.qualified_name == qualified_name)
+                .filter(|entry| {
+                    crate::surface_path_name(&entry.qualified_name)
+                        == crate::surface_path_name(&qualified_name)
+                })
                 .filter(|entry| {
                     entry.signature.as_deref().is_none_or(|sig| {
                         arg_types.is_empty() || self.signature_accepts_arg_types(sig, &arg_types)
@@ -2060,7 +2135,10 @@ impl ReplEngine {
             .docs
             .iter()
             .filter(|entry| entry.kind == DocKind::Function)
-            .filter(|entry| entry.qualified_name == qualified_name)
+            .filter(|entry| {
+                crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(&qualified_name)
+            })
             .filter(|entry| {
                 entry
                     .signature
@@ -2113,8 +2191,7 @@ impl ReplEngine {
         let qualified_lookup = Self::is_qualified_symbol(&canonical);
         if qualified_lookup
             && self
-                .declaration_index
-                .get(&canonical)
+                .qualified_declaration(&canonical)
                 .is_some_and(|entry| !Self::declaration_is_public_surface(entry))
         {
             return None;
@@ -2136,7 +2213,9 @@ impl ReplEngine {
                         return None;
                     }
                     if qualified_lookup {
-                        if qualified_name != &canonical {
+                        if crate::surface_path_name(qualified_name)
+                            != crate::surface_path_name(&canonical)
+                        {
                             return None;
                         }
                     } else if let Some(uid) = visible_uid {
@@ -2158,7 +2237,11 @@ impl ReplEngine {
             .docs
             .iter()
             .rev()
-            .find(|entry| qualified_lookup && entry.qualified_name == canonical)
+            .find(|entry| {
+                qualified_lookup
+                    && crate::surface_path_name(&entry.qualified_name)
+                        == crate::surface_path_name(&canonical)
+            })
         {
             if let Some(signature) = entry.signature.clone() {
                 return Some((entry.qualified_name.clone(), signature));
@@ -2170,7 +2253,8 @@ impl ReplEngine {
                 return false;
             }
             if qualified_lookup {
-                entry.qualified_name == canonical
+                crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(&canonical)
             } else if let Some(uid) = visible_uid {
                 self.sigil_session.lookup_uid(&entry.qualified_name) == Some(uid)
             } else {
@@ -2186,6 +2270,8 @@ impl ReplEngine {
     }
 
     fn render_signature_with_qualified_name(qualified_name: &str, signature: String) -> String {
+        let qualified_name = crate::surface_path_name(qualified_name);
+        let signature = crate::surface_rendered_name(&signature);
         if let Some((module, tail)) = qualified_name.rsplit_once("::") {
             if signature == tail || signature.starts_with(&format!("{tail}(")) {
                 return format!("{module}::{signature}");
@@ -2299,7 +2385,7 @@ impl ReplEngine {
         if binding.lens_info.is_some() {
             return Self::styled(vec![
                 binding_name.to_string(),
-                format!("type: {}", binding.ty.as_str()),
+                format!("type: {}", crate::surface_rendered_name(binding.ty.as_str())),
                 format!("identity: {}", self.render_type_identity(binding, None)),
             ]);
         }
@@ -2308,8 +2394,8 @@ impl ReplEngine {
             return Self::plain(vec![format!("Binding `{}` has no current value.", trimmed)]);
         };
 
-        let rendered_ty =
-            Self::pid_type_from_value(&value).unwrap_or_else(|| binding.ty.as_str().to_string());
+        let rendered_ty = Self::pid_type_from_value(&value)
+            .unwrap_or_else(|| crate::surface_rendered_name(binding.ty.as_str()));
 
         Self::styled(vec![
             binding_name.to_string(),
@@ -2342,7 +2428,7 @@ impl ReplEngine {
     fn render_lens_info(info: &forge::ReplLensInfo) -> Vec<String> {
         let mut lines = vec![
             "## FacetPath".to_string(),
-            format!("type: {}", info.ty),
+            format!("type: {}", crate::surface_rendered_name(&info.ty)),
             format!("kind: {}", info.path_kind),
             "view API: Facet::view".to_string(),
             format!(
@@ -2353,8 +2439,8 @@ impl ReplEngine {
                     "unavailable"
                 }
             ),
-            format!("view result: {}", info.view_result_ty),
-            format!("full path: {}", info.full_path),
+            format!("view result: {}", crate::surface_rendered_name(&info.view_result_ty)),
+            format!("full path: {}", crate::surface_rendered_name(&info.full_path)),
             "## Flow".to_string(),
         ];
 
@@ -2366,9 +2452,13 @@ impl ReplEngine {
             lines.push(format!("hop {}: {}", index + 1, local_path));
             lines.push(format!(
                 "relation: {} -> {}",
-                segment.source_ty, segment.focus_ty
+                crate::surface_rendered_name(&segment.source_ty),
+                crate::surface_rendered_name(&segment.focus_ty)
             ));
-            lines.push(format!("cumulative: {}", segment.label));
+            lines.push(format!(
+                "cumulative: {}",
+                crate::surface_rendered_name(&segment.label)
+            ));
             lines.push(format!(
                 "fallible: {}",
                 if segment.fallible { "yes" } else { "no" }
@@ -2582,15 +2672,15 @@ impl ReplEngine {
     fn render_info_binding(&self, symbol: &str, binding: &forge::BindingInfo) -> ReplResult {
         if let Some(value) = self.vm.get_local(binding.slot_id) {
             if let Some((process_name, metadata)) = self.process_metadata_for_pid_value(&value) {
-                let rendered_ty =
-                    Self::pid_type_from_value(&value).unwrap_or_else(|| binding.ty.clone());
+                let rendered_ty = Self::pid_type_from_value(&value)
+                    .unwrap_or_else(|| crate::surface_rendered_name(&binding.ty));
                 return Self::styled(vec![
                     symbol.to_string(),
                     "kind: process pid".to_string(),
                     "origin: repl".to_string(),
                     format!("type: {rendered_ty}"),
                     "identity: TypeIdentity::Type".to_string(),
-                    format!("defined: PID<{process_name}>"),
+                    format!("defined: PID<{}>", crate::surface_rendered_name(process_name)),
                     format!("instance: {:?}", metadata.instance),
                     format!("runtime kind: {:?}", metadata.kind),
                 ]);
@@ -2602,9 +2692,9 @@ impl ReplEngine {
                 symbol.to_string(),
                 "kind: process pid".to_string(),
                 "origin: repl".to_string(),
-                format!("type: {}", binding.ty),
+                format!("type: {}", crate::surface_rendered_name(&binding.ty)),
                 "identity: TypeIdentity::Type".to_string(),
-                format!("defined: {}", binding.ty),
+                format!("defined: {}", crate::surface_rendered_name(&binding.ty)),
                 format!("instance: {:?}", metadata.instance),
                 format!("runtime kind: {:?}", metadata.kind),
             ]);
@@ -2619,16 +2709,19 @@ impl ReplEngine {
         lines.push(format!("kind: {kind}"));
         lines.push("origin: repl".to_string());
         if binding.lens_info.is_some() {
-            lines.push(format!("type: {}", binding.ty));
+            lines.push(format!("type: {}", crate::surface_rendered_name(&binding.ty)));
             lines.push(format!(
                 "identity: {}",
                 self.render_type_identity(binding, None)
             ));
             if let Some(lens_info) = &binding.lens_info {
-                lines.push(format!("full path: {}", lens_info.full_path));
+                lines.push(format!(
+                    "full path: {}",
+                    crate::surface_rendered_name(&lens_info.full_path)
+                ));
             }
         } else if let Some(value) = self.vm.get_local(binding.slot_id) {
-            lines.push(format!("type: {}", binding.ty));
+            lines.push(format!("type: {}", crate::surface_rendered_name(&binding.ty)));
             lines.push(format!(
                 "identity: {}",
                 self.render_type_identity(binding, Some(&value))
@@ -3421,7 +3514,7 @@ impl ReplEngine {
             Ty::List(inner) => format!("List<{}>", Self::ty_to_string(inner)),
             Ty::Lazy(inner) => format!("Lazy<{}>", Self::ty_to_string(inner)),
             Ty::TypeRef(inner) => format!("TypeRef<{}>", Self::ty_to_string(inner)),
-            Ty::Pid(name) => format!("PID<{}>", name),
+            Ty::Pid(name) => format!("PID<{}>", crate::surface_rendered_name(name)),
             Ty::Facet(source, focus) => {
                 format!(
                     "Facet<{}, {}>",
@@ -3444,7 +3537,22 @@ impl ReplEngine {
                     Self::ty_to_string(err)
                 )
             }
-            Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name, _) => name.clone(),
+            Ty::Struct(name, _) | Ty::Record(name, _) => {
+                crate::surface_path_name(name).to_string()
+            }
+            Ty::Enum(name, args) => {
+                let name = crate::surface_path_name(name);
+                if args.is_empty() {
+                    name.to_string()
+                } else {
+                    let args = args
+                        .iter()
+                        .map(Self::ty_to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{name}<{args}>")
+                }
+            }
             Ty::Error => "Error".into(),
             Ty::Var(_) => "_".into(),
             Ty::Func(params, ret) => {
@@ -3566,7 +3674,8 @@ impl ReplEngine {
         (decl.kind == sigil::DeclarationKind::Enum).then(|| {
             format!(
                 "Enum signatures are only available for bare type owners: use `:sig {}` instead of `:sig {}`.",
-                decl.fq_name, source
+                crate::surface_path_name(&decl.fq_name),
+                source
             )
         })
     }
@@ -3590,7 +3699,10 @@ impl ReplEngine {
             .docs
             .iter()
             .filter(|entry| entry.kind == DocKind::Function)
-            .filter(|entry| entry.qualified_name == qualified_name)
+            .filter(|entry| {
+                crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(&qualified_name)
+            })
             .filter_map(|entry| {
                 entry.signature.clone().map(|signature| {
                     Self::render_signature_with_qualified_name(&entry.qualified_name, signature)
@@ -3614,7 +3726,10 @@ impl ReplEngine {
                         .map(|(name, ty)| format!("{name}: {}", Self::ty_to_string(ty)))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    vec![format!("{}::new({params}) -> Self", decl.fq_name)]
+                    vec![format!(
+                        "{}::new({params}) -> Self",
+                        crate::surface_path_name(&decl.fq_name)
+                    )]
                 });
         }
 
@@ -3626,7 +3741,11 @@ impl ReplEngine {
             .docs
             .iter()
             .rev()
-            .find(|entry| entry.kind == DocKind::Type && entry.qualified_name == decl.fq_name);
+            .find(|entry| {
+                entry.kind == DocKind::Type
+                    && crate::surface_path_name(&entry.qualified_name)
+                        == crate::surface_path_name(&decl.fq_name)
+            });
         if let Some(entry) = entry {
             if let Some(signature) = entry.signature.as_deref() {
                 if let Some((_owner_surface, variants_src)) =
@@ -3650,7 +3769,11 @@ impl ReplEngine {
                     .iter()
                     .map(|variant| {
                         if variant.payload.is_empty() {
-                            format!("* {}::{}", decl.fq_name, variant.short_name)
+                            format!(
+                                "* {}::{}",
+                                crate::surface_path_name(&decl.fq_name),
+                                variant.short_name
+                            )
                         } else {
                             let payload = variant
                                 .payload
@@ -3658,7 +3781,11 @@ impl ReplEngine {
                                 .map(Self::ty_to_string)
                                 .collect::<Vec<_>>()
                                 .join(", ");
-                            format!("* {}::{}({payload})", decl.fq_name, variant.short_name)
+                            format!(
+                                "* {}::{}({payload})",
+                                crate::surface_path_name(&decl.fq_name),
+                                variant.short_name
+                            )
                         }
                     })
                     .collect::<Vec<_>>();
@@ -3707,8 +3834,9 @@ impl ReplEngine {
     }
 
     fn render_enum_variant_listing(owner_fq: &str, variant: &str) -> String {
+        let owner_fq = crate::surface_path_name(owner_fq);
         if let Some((name, payload)) = variant.split_once('(') {
-            let payload = payload.trim_end_matches(')').trim();
+            let payload = crate::surface_rendered_name(payload.trim_end_matches(')').trim());
             format!("* {}::{}({payload})", owner_fq, name.trim())
         } else {
             format!("* {}::{}", owner_fq, variant.trim())
@@ -4508,7 +4636,7 @@ impl ReplEngine {
             .flatten()
             .flat_map(|meta| meta.bindings.iter().rev())
             .find(|binding| binding.name == name)
-            .map(|binding| binding.ty.clone())
+            .map(|binding| crate::surface_rendered_name(&binding.ty))
     }
 
     fn binding_info(&self, name: &str) -> Option<&forge::BindingInfo> {
@@ -5870,7 +5998,11 @@ fn apply_preload_imports(
             continue;
         };
         let module_name = path.segments.join("::");
-        if auto_import_modules.contains(&module_name) || auto_import_traits.contains(&module_name) {
+        let canonical_module_name =
+            preload_import_module_name(declaration_index, auto_import_modules, &module_name);
+        if auto_import_modules.contains(&canonical_module_name)
+            || auto_import_traits.contains(&module_name)
+        {
             return Err(ReplLoadError::Load(LoadError::BootstrapFailed {
                 phase: "resolve".into(),
                 file_name: "<repl-preload>".into(),
@@ -5884,7 +6016,8 @@ fn apply_preload_imports(
         match spec {
             ImportSpec::All => {
                 for entry in declaration_index.values().filter(|entry| {
-                    entry.module_path == module_name && entry.stage_index < current_stage_index
+                    entry.module_path == canonical_module_name
+                        && entry.stage_index < current_stage_index
                 }) {
                     let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| {
                         ReplLoadError::Load(LoadError::BootstrapFailed {
@@ -5901,12 +6034,12 @@ fn apply_preload_imports(
                 }
             }
             ImportSpec::Single(name) => {
-                let fq_name = format!("{}::{}", module_name, name);
+                let fq_name = format!("{}::{}", canonical_module_name, name);
                 let entry = declaration_index.get(&fq_name).ok_or_else(|| {
                     ReplLoadError::Load(LoadError::BootstrapFailed {
                         phase: "resolve".into(),
                         file_name: "<repl-preload>".into(),
-                        message: format!("Unknown import member: {}", fq_name),
+                        message: format!("Unknown import member: {}::{}", module_name, name),
                     })
                 })?;
                 let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| {
@@ -5924,12 +6057,12 @@ fn apply_preload_imports(
             }
             ImportSpec::List(names) => {
                 for name in names {
-                    let fq_name = format!("{}::{}", module_name, name);
+                    let fq_name = format!("{}::{}", canonical_module_name, name);
                     let entry = declaration_index.get(&fq_name).ok_or_else(|| {
                         ReplLoadError::Load(LoadError::BootstrapFailed {
                             phase: "resolve".into(),
                             file_name: "<repl-preload>".into(),
-                            message: format!("Unknown import member: {}", fq_name),
+                            message: format!("Unknown import member: {}::{}", module_name, name),
                         })
                     })?;
                     let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| {
@@ -5950,6 +6083,33 @@ fn apply_preload_imports(
     }
 
     Ok(imported_symbols)
+}
+
+fn preload_import_module_name(
+    declaration_index: &sigil::DeclarationIndex,
+    auto_import_modules: &BTreeSet<String>,
+    module_name: &str,
+) -> String {
+    if auto_import_modules.contains(module_name)
+        || declaration_index
+            .values()
+            .any(|entry| entry.module_path == module_name)
+    {
+        return module_name.to_string();
+    }
+    if module_name.contains("::") {
+        return module_name.to_string();
+    }
+    let canonical_name = format!("Global::{module_name}");
+    if auto_import_modules.contains(&canonical_name)
+        || declaration_index
+            .values()
+            .any(|entry| entry.module_path == canonical_name)
+    {
+        canonical_name
+    } else {
+        module_name.to_string()
+    }
 }
 
 fn apply_preload_visible_names(user_ast: &[Ast], mut visible: Vec<String>) -> Vec<String> {
@@ -6325,6 +6485,7 @@ mod tests {
             vm,
             pending: String::new(),
             next_line: 1,
+            startup_results: Vec::new(),
             results: Vec::new(),
             result_metas: Vec::new(),
             symbols: ["Ok", "Err"]

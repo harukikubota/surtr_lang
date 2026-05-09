@@ -547,6 +547,41 @@ def greet() -> String { "hello" }
 }
 
 #[test]
+fn repl_script_preload_flag_prints_preload_runtime_output_before_prompt() {
+    let temp = unique_temp_dir("repl-script-preload-output");
+    let source_path = temp.join("preload_output.srt");
+    fs::write(
+        &source_path,
+        r#"
+print("boot message")
+value = 42
+"#,
+    )
+    .expect("failed to write preload script");
+
+    let output = run_repl_session_with_args(
+        &[
+            "--quiet",
+            "--script",
+            source_path.to_str().expect("source path must be utf-8"),
+        ],
+        ":quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("boot message"), "{stdout}");
+    assert!(stdout.contains("value: Int = 42"), "{stdout}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn repl_script_preload_flag_resolves_include_and_keeps_preloaded_binding() {
     let temp = unique_temp_dir("repl-script-preload-include");
     let module_path = temp.join("m.srt");
