@@ -205,6 +205,26 @@ defmod Kernel {
   }
 
   @doc """
+  Lift a binary callable through a key function.
+
+  `on(f, key)` turns a callable like `f: ($B, $B -> $C)` into
+  `($A, $A -> $C)` by applying `key` to both inputs before calling `f`.
+
+  This is useful for keyed comparisons and grouping logic.
+
+  ## REPL
+  xldr(1)> by_len = on({|left, right| compare(left, right)}, &String::len)
+  > by_len: (String, String -> Ordering)
+  xldr(2)> by_len("a", "abcd")
+  Ordering::Less
+  """
+  def on(f: ($B, $B -> $C), key: ($A -> $B)) -> ($A, $A -> $C) {
+    {|left, right|
+      f(key(left), key(right))
+    }
+  }
+
+  @doc """
   Return `value` unchanged.
 
   This is the smallest possible identity helper and is mainly useful when a

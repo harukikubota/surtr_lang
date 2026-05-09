@@ -13,6 +13,25 @@ enum FuncLiteralBodyKind {
 }
 
 impl Parser<'_> {
+    fn kernel_on_path(span: Span) -> Ast {
+        Ast::Path(
+            span.clone(),
+            AstPath {
+                span,
+                segments: vec!["Kernel".into(), "on".into()],
+            },
+        )
+    }
+
+    fn is_kernel_on_path(path: &AstPath) -> bool {
+        matches!(path.segments.as_slice(), [module, name] if module == "Kernel" && name == "on")
+    }
+
+    fn is_low_precedence_on_target(kind: &FuncLiteralBodyKind) -> bool {
+        matches!(kind, FuncLiteralBodyKind::Name(name) if name == "on")
+            || matches!(kind, FuncLiteralBodyKind::Path(path) if Self::is_kernel_on_path(path))
+    }
+
     fn parse_func_literal_body(body: &str, span: Span) -> Result<FuncLiteralBodyKind, ParseError> {
         if Self::expr_binop_from_func_literal(body).is_some()
             || Self::logical_binop_from_func_literal(body).is_some()
@@ -65,7 +84,33 @@ impl Parser<'_> {
     }
 
     pub(super) fn parse_expr(&mut self) -> Result<Ast, ParseError> {
-        self.parse_flow_expr()
+        self.parse_on_expr()
+    }
+
+    pub(super) fn parse_on_expr(&mut self) -> Result<Ast, ParseError> {
+        let mut left = self.parse_flow_expr()?;
+
+        loop {
+            let Some(Token::FuncLiteral(body)) = self.peek_n(0).cloned() else {
+                break;
+            };
+            let func_span = self.peek_span();
+            let func_kind = Self::parse_func_literal_body(&body, func_span.clone())?;
+            if !Self::is_low_precedence_on_target(&func_kind) {
+                break;
+            }
+
+            self.advance();
+            let right = self.parse_flow_expr()?;
+            let func = match func_kind {
+                FuncLiteralBodyKind::Name(_) => Self::kernel_on_path(func_span),
+                FuncLiteralBodyKind::Path(path) => Ast::Path(path.span.clone(), path),
+                FuncLiteralBodyKind::Operator(_) => unreachable!("validated low-precedence target"),
+            };
+            left = Self::lower_func_literal_call(left, func, right);
+        }
+
+        Ok(left)
     }
 
     pub(super) fn parse_flow_expr(&mut self) -> Result<Ast, ParseError> {
@@ -265,6 +310,7 @@ impl Parser<'_> {
                 if Self::logical_binop_from_func_literal(op_body).is_some())
                 || matches!(func_kind, FuncLiteralBodyKind::Name(ref name)
                     if Self::logical_func_literal_name(name))
+                || Self::is_low_precedence_on_target(&func_kind)
             {
                 break;
             }

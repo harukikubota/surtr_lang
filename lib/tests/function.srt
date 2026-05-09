@@ -3,6 +3,10 @@ include "./schema/function_schema.srt"
 import FunctionSchema::{double, inc, show_int};
 import Test;
 
+def on(_left: String, _right: String) -> Ordering {
+  Ordering::Greater
+}
+
 test("Function") {
   describe("plain composition laws") {
     # ghci> let f = (+ 1)
@@ -45,6 +49,23 @@ test("Function") {
       right = Composable::compose(&inc, &id)
       assert_eq(inc(4), left(4))
       assert_eq(inc(4), right(4))
+    }
+  }
+
+  describe("on helper") {
+    it("call form lifts a comparison through a key function") {
+      by_len = Kernel::on({|left, right| compare(left, right)}, &String::len)
+      sorted = List::sort_by(["a", "abcd", "xy"], by_len)
+      assert_eq(["a", "xy", "abcd"], sorted)
+    }
+
+    it("ordinary call form still follows shadowing") {
+      assert_eq(Ordering::Greater, on("a", "b"))
+    }
+
+    it("infix form resolves to Kernel::on even when shadowed") {
+      sorted = List::sort_by(["a", "abcd", "xy"], &compare `on` &String::len)
+      assert_eq(["a", "xy", "abcd"], sorted)
     }
   }
 }

@@ -1,5 +1,5 @@
 use scar::typed::{
-    OperatorTraitOp, TraitCallOrigin, TypedInner, TypedFacetPathKind, TypedFacetSegment, TypedNode,
+    OperatorTraitOp, TraitCallOrigin, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode,
     TypedProgram,
 };
 use scar::types::Ty;
@@ -1040,7 +1040,9 @@ user.password"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("private value access should fail outside impl");
-    assert!(value_err.message.contains("Field 'User.password' is private"));
+    assert!(value_err
+        .message
+        .contains("Field 'User.password' is private"));
 
     let capability_err = typecheck_with_rules(
         r#"defstruct User {
@@ -1056,7 +1058,9 @@ User.password"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("private capability root should fail");
-    assert!(capability_err.message.contains("Field 'User.password' is private"));
+    assert!(capability_err
+        .message
+        .contains("Field 'User.password' is private"));
 }
 
 #[test]
@@ -2215,6 +2219,47 @@ plain = inc(1) >> inc(1)"#,
     let hint = err.hint.as_deref().expect("compose function-value hint");
     assert!(hint.contains("Call target signature:"));
     assert!(hint.contains("result type Int is not a function value"));
+}
+
+#[test]
+fn closure_trait_helper_binding_requires_concrete_callable_boundary() {
+    let resolved = resolve_with_builtin_prelude(r#"cmp = {|left, right| compare(left, right)}"#);
+    let err = typecheck(resolved).expect_err("unresolved closure helper binding must fail");
+    assert!(err
+        .message
+        .contains("Trait helper `compare` could not be concretized for this callable binding"));
+}
+
+#[test]
+fn closure_trait_helper_binding_accepts_binding_annotation() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"cmp: (Int, Int -> Ordering) = {|left, right| compare(left, right)}"#,
+    );
+    typecheck(resolved).expect("binding annotation should concretize compare helper");
+}
+
+#[test]
+fn closure_trait_helper_binding_accepts_parameter_annotations() {
+    let resolved =
+        resolve_with_builtin_prelude(r#"cmp = {|left: Int, right: Int| compare(left, right)}"#);
+    typecheck(resolved).expect("parameter annotations should concretize compare helper");
+}
+
+#[test]
+fn on_call_concretizes_closure_trait_helper_from_key_function() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"sorted = List::sort_by(["a", "abcd", "xy"], {|left, right| compare(left, right)} `on` &String::len)"#,
+    );
+    typecheck(resolved).expect("on should concretize compare helper from the key callable");
+}
+
+#[test]
+fn on_call_concretizes_trait_helper_capture_from_key_function() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"sorted = List::sort_by(["a", "abcd", "xy"], &compare `on` &String::len)"#,
+    );
+    typecheck(resolved)
+        .expect("on should concretize captured compare helper from the key callable");
 }
 
 #[test]
@@ -3568,8 +3613,9 @@ fn singleton_agent_pid_surface_returns_concrete_pid() {
     )]);
     let declaration_index =
         sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
-    let user_ast = spire::parse_with_context("pid = Counter::pid()", spire::ParserContext::project(0))
-        .expect("script should parse");
+    let user_ast =
+        spire::parse_with_context("pid = Counter::pid()", spire::ParserContext::project(0))
+            .expect("script should parse");
     let resolved = sigil::resolve_staged_program_with_state(
         &stages,
         user_ast,
@@ -3792,9 +3838,9 @@ fn process_meta_state_mismatch_is_rejected() {
     let err =
         crate::typecheck_staged_program(resolved).expect_err("meta.state mismatch should fail");
 
-    assert!(err
-        .message
-        .contains("@get handler `Counter::get` first parameter must match process state type `Int`"));
+    assert!(err.message.contains(
+        "@get handler `Counter::get` first parameter must match process state type `Int`"
+    ));
 }
 
 #[test]

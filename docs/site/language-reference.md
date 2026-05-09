@@ -365,9 +365,12 @@ value: Int =? parse_int("1")
   `FnCapture(module: M, name: f, signature: sig)` 形式で表示する
 - `Result` と `List` を `|*>`, `|>=`, `>*`, `>=>` で混在させない
 - `|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度・左結合
-- 結合優先度は `Bind < Apply=Compose < Logical < Expr`
+- unqualified infix `` `on` `` と `` `Kernel::on` `` は flow より低優先度
+- 結合優先度は `Bind < StdOn < Apply=Compose < Logical < Expr`
 - `Expr` クラスの `+`, `-`, `*`, `++` は同列・左結合
 - comparison 系 (`==`, `!=`, `<`, `>`, `<=`, `>=`) は `Logical` クラス
+- ``left `on` right`` は scope に見えている `on` ではなく、常に `Kernel::on(left, right)` として解釈される
+- ``left `Other::on` right`` はその qualified path を使い、通常の `Expr` クラスに留まる
 
 ## 5. パターン
 
@@ -422,6 +425,7 @@ private field と property access を含む構造体全体の契約は `./struct
 | `ensure` | `($A, ($A -> Boolean), Error) -> Result<$A>` |
 | `and` | `(Boolean, Boolean) -> Boolean` |
 | `or` | `(Boolean, Boolean) -> Boolean` |
+| `on` | `(($B, $B -> $C), ($A -> $B) -> ($A, $A -> $C))` |
 | `eq` | `($A, $A) -> Boolean` |
 | `neq` | `($A, $A) -> Boolean` |
 | `lt` | `($A, $A) -> Boolean` |
