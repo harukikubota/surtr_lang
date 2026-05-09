@@ -420,6 +420,35 @@ impl TerminalHistory {
 }
 
 #[cfg(feature = "line-editor")]
+fn move_cursor_left(cursor_chars: &mut usize) {
+    *cursor_chars = cursor_chars.saturating_sub(1);
+}
+
+#[cfg(feature = "line-editor")]
+fn move_cursor_right(buffer: &str, cursor_chars: &mut usize) {
+    *cursor_chars = (*cursor_chars + 1).min(buffer.chars().count());
+}
+
+#[cfg(feature = "line-editor")]
+fn delete_left(buffer: &mut String, cursor_chars: &mut usize) {
+    if *cursor_chars > 0 {
+        let end = byte_index_for_char_position(buffer, *cursor_chars);
+        let start = byte_index_for_char_position(buffer, *cursor_chars - 1);
+        buffer.replace_range(start..end, "");
+        *cursor_chars -= 1;
+    }
+}
+
+#[cfg(feature = "line-editor")]
+fn delete_right(buffer: &mut String, cursor_chars: usize) {
+    if cursor_chars < buffer.chars().count() {
+        let start = byte_index_for_char_position(buffer, cursor_chars);
+        let end = byte_index_for_char_position(buffer, cursor_chars + 1);
+        buffer.replace_range(start..end, "");
+    }
+}
+
+#[cfg(feature = "line-editor")]
 fn handle_terminal_key(
     history: &mut TerminalHistory,
     buffer: &mut String,
@@ -430,6 +459,48 @@ fn handle_terminal_key(
         return match key.code {
             KeyCode::Char('c') => TerminalAction::Exit,
             KeyCode::Char('d') if buffer.is_empty() => TerminalAction::Exit,
+            KeyCode::Char('a') => {
+                *cursor_chars = 0;
+                TerminalAction::Continue
+            }
+            KeyCode::Char('b') => {
+                move_cursor_left(cursor_chars);
+                TerminalAction::Continue
+            }
+            KeyCode::Char('d') => {
+                delete_right(buffer, *cursor_chars);
+                TerminalAction::Continue
+            }
+            KeyCode::Char('e') => {
+                *cursor_chars = buffer.chars().count();
+                TerminalAction::Continue
+            }
+            KeyCode::Char('f') => {
+                move_cursor_right(buffer, cursor_chars);
+                TerminalAction::Continue
+            }
+            KeyCode::Char('h') => {
+                delete_left(buffer, cursor_chars);
+                TerminalAction::Continue
+            }
+            KeyCode::Char('n') => {
+                if let Some(next) = history.move_next() {
+                    *buffer = next;
+                    *cursor_chars = buffer.chars().count();
+                    TerminalAction::Continue
+                } else {
+                    TerminalAction::Noop
+                }
+            }
+            KeyCode::Char('p') => {
+                if let Some(previous) = history.move_prev(buffer) {
+                    *buffer = previous;
+                    *cursor_chars = buffer.chars().count();
+                    TerminalAction::Continue
+                } else {
+                    TerminalAction::Noop
+                }
+            }
             _ => TerminalAction::Noop,
         };
     }
@@ -447,28 +518,19 @@ fn handle_terminal_key(
             TerminalAction::Continue
         }
         KeyCode::Backspace => {
-            if *cursor_chars > 0 {
-                let end = byte_index_for_char_position(buffer, *cursor_chars);
-                let start = byte_index_for_char_position(buffer, *cursor_chars - 1);
-                buffer.replace_range(start..end, "");
-                *cursor_chars -= 1;
-            }
+            delete_left(buffer, cursor_chars);
             TerminalAction::Continue
         }
         KeyCode::Delete => {
-            if *cursor_chars < buffer.chars().count() {
-                let start = byte_index_for_char_position(buffer, *cursor_chars);
-                let end = byte_index_for_char_position(buffer, *cursor_chars + 1);
-                buffer.replace_range(start..end, "");
-            }
+            delete_right(buffer, *cursor_chars);
             TerminalAction::Continue
         }
         KeyCode::Left => {
-            *cursor_chars = cursor_chars.saturating_sub(1);
+            move_cursor_left(cursor_chars);
             TerminalAction::Continue
         }
         KeyCode::Right => {
-            *cursor_chars = (*cursor_chars + 1).min(buffer.chars().count());
+            move_cursor_right(buffer, cursor_chars);
             TerminalAction::Continue
         }
         KeyCode::Home => {
@@ -700,5 +762,96 @@ mod tests {
         assert_eq!(action, super::TerminalAction::Continue);
         assert_eq!(buffer, "value");
         assert_eq!(cursor_chars, "value".chars().count());
+    }
+
+    #[test]
+    fn terminal_control_navigation_matches_arrow_navigation() {
+        let mut history = super::TerminalHistory::default();
+        history.record("first");
+        history.record("second");
+
+        let mut buffer = "abcd".to_string();
+        let mut cursor_chars = 2usize;
+
+        let action = super::handle_terminal_key(
+            &mut history,
+            &mut buffer,
+            &mut cursor_chars,
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(action, super::TerminalAction::Continue);
+        assert_eq!(cursor_chars, 1);
+
+        let action = super::handle_terminal_key(
+            &mut history,
+            &mut buffer,
+            &mut cursor_chars,
+            KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(action, super::TerminalAction::Continue);
+        assert_eq!(cursor_chars, 2);
+
+        let action = super::handle_terminal_key(
+            &mut history,
+            &mut buffer,
+            &mut cursor_chars,
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(action, super::TerminalAction::Continue);
+        assert_eq!(cursor_chars, 0);
+
+        let action = super::handle_terminal_key(
+            &mut history,
+            &mut buffer,
+            &mut cursor_chars,
+            KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(action, super::TerminalAction::Continue);
+        assert_eq!(cursor_chars, buffer.chars().count());
+
+        let action = super::handle_terminal_key(
+            &mut history,
+            &mut buffer,
+            &mut cursor_chars,
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(action, super::TerminalAction::Continue);
+        assert_eq!(buffer, "second");
+
+        let action = super::handle_terminal_key(
+            &mut history,
+            &mut buffer,
+            &mut cursor_chars,
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(action, super::TerminalAction::Continue);
+        assert_eq!(buffer, "abcd");
+    }
+
+    #[test]
+    fn terminal_control_delete_matches_backspace_and_delete() {
+        let mut history = super::TerminalHistory::default();
+        let mut buffer = "abcd".to_string();
+        let mut cursor_chars = 2usize;
+
+        let action = super::handle_terminal_key(
+            &mut history,
+            &mut buffer,
+            &mut cursor_chars,
+            KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(action, super::TerminalAction::Continue);
+        assert_eq!(buffer, "acd");
+        assert_eq!(cursor_chars, 1);
+
+        let action = super::handle_terminal_key(
+            &mut history,
+            &mut buffer,
+            &mut cursor_chars,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(action, super::TerminalAction::Continue);
+        assert_eq!(buffer, "ad");
+        assert_eq!(cursor_chars, 1);
     }
 }
