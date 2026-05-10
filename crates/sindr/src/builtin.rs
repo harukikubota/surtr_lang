@@ -255,7 +255,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Facet<$S, $A>, Facet<$A, $B>) -> Facet<$S, $B>",
     },
     BuiltinMeta {
-        name: "replace",
+        name: "__facet_replace",
         arity: 3,
         sig_str: "(Facet<$S, $A>, $S, $A) -> $S",
     },
@@ -345,7 +345,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Regex, String) -> List<String>",
     },
     BuiltinMeta {
-        name: "replace",
+        name: "__regex_replace",
         arity: 3,
         sig_str: "(Regex, String, String) -> String",
     },
@@ -873,6 +873,7 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
     match qualified_name {
         Some("IO::get") => "io_get",
         Some("IO::get_line") => "io_get_line",
+        Some("Facet::replace") => "__facet_replace",
         Some("Process::self") => "__process_self",
         Some("Process::sleep") => "__process_sleep",
         Some("Agent::pid") => "__process_pid",
@@ -904,6 +905,7 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
         Some("Task::await") => "__task_await",
         Some("Task::launch") => "__task_launch",
         Some("Task::cast") => "__task_cast",
+        Some("Regex::replace") => "__regex_replace",
         _ => declared_name,
     }
 }
@@ -941,7 +943,8 @@ pub fn builtin_uid(builtin_id: u16) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name, builtin_uid, BUILTIN_METAS,
+        builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name, builtin_meta_for_decl,
+        builtin_runtime_name, builtin_uid, BUILTIN_METAS,
     };
 
     #[test]
@@ -957,6 +960,30 @@ mod tests {
     fn builtin_lookup_returns_none_for_unknown_values() {
         assert!(builtin_meta_by_id(u16::MAX).is_none());
         assert!(builtin_meta_by_name("__missing__").is_none());
+    }
+
+    #[test]
+    fn qualified_replace_builtins_resolve_to_distinct_runtime_names() {
+        assert_eq!(
+            builtin_runtime_name("replace", Some("Facet::replace")),
+            "__facet_replace"
+        );
+        assert_eq!(
+            builtin_runtime_name("replace", Some("Regex::replace")),
+            "__regex_replace"
+        );
+        assert_eq!(
+            builtin_meta_for_decl("replace", Some("Facet::replace"))
+                .expect("facet replace builtin metadata")
+                .sig_str,
+            "(Facet<$S, $A>, $S, $A) -> $S"
+        );
+        assert_eq!(
+            builtin_meta_for_decl("replace", Some("Regex::replace"))
+                .expect("regex replace builtin metadata")
+                .sig_str,
+            "(Regex, String, String) -> String"
+        );
     }
 
     #[test]

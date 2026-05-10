@@ -209,7 +209,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_facet_compose,
     },
     BuiltinImpl {
-        name: "replace",
+        name: "__facet_replace",
         func: builtin_facet_replace,
     },
     BuiltinImpl {
@@ -281,7 +281,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_regex_split,
     },
     BuiltinImpl {
-        name: "replace",
+        name: "__regex_replace",
         func: builtin_regex_replace,
     },
     BuiltinImpl {
