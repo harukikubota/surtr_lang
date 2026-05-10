@@ -463,7 +463,10 @@ print(to_string(add_uncurried(3, 4)))"#,
 }
 
 fn kernel_callable_helpers_are_removed_from_qualified_surface() {
-    assert_compile_error("print(to_string(Kernel::id(1)))", "Undefined function Kernel::id/1");
+    assert_compile_error(
+        "print(to_string(Kernel::id(1)))",
+        "Undefined function Kernel::id/1",
+    );
 }
 
 fn func_literal_infix_invocation_works() {

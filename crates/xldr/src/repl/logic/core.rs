@@ -5029,10 +5029,7 @@ impl ReplEngine {
         lines.extend(self.import_records.iter().map(|record| {
             format!(
                 "{} | {} | {} | {}",
-                record.line,
-                record.src,
-                record.item,
-                record.via
+                record.line, record.src, record.item, record.via
             )
         }));
         if lines.len() == 1 {
@@ -5057,7 +5054,11 @@ impl ReplEngine {
     fn parse_history_selector(&self, selector: &str) -> Result<Vec<usize>, String> {
         let selector = selector.trim();
         if selector.is_empty() {
-            return Ok(self.history_entries.iter().map(|entry| entry.line).collect());
+            return Ok(self
+                .history_entries
+                .iter()
+                .map(|entry| entry.line)
+                .collect());
         }
         if let Some((start, end)) = selector.split_once("..") {
             let start = start
@@ -5104,7 +5105,11 @@ impl ReplEngine {
                     );
                 }
             },
-            None => self.history_entries.iter().map(|entry| entry.line).collect(),
+            None => self
+                .history_entries
+                .iter()
+                .map(|entry| entry.line)
+                .collect(),
         };
 
         let mut lines = vec!["line | input".to_string()];
@@ -5134,16 +5139,19 @@ impl ReplEngine {
 
     fn rebuild_for_reload(&self, keep_session_defs: bool) -> Result<Self, ReplResult> {
         let mut engine = match &self.reload_seed {
-            ReplReloadSeed::Empty => ReplEngine::new().map_err(|error| {
-                Self::plain(vec![format!("reload failed: {}", error)])
-            })?,
+            ReplReloadSeed::Empty => ReplEngine::new()
+                .map_err(|error| Self::plain(vec![format!("reload failed: {}", error)]))?,
             ReplReloadSeed::ProjectModuleStages(module_input_stages) => {
                 ReplEngine::from_project_module_stages(module_input_stages)
                     .map_err(|error| Self::plain(vec![format!("reload failed: {}", error)]))?
             }
             ReplReloadSeed::Sources { module, script } => ReplEngine::from_preload_sources(
-                module.as_ref().map(|(file_name, source)| (file_name.as_str(), source.as_str())),
-                script.as_ref().map(|(file_name, source)| (file_name.as_str(), source.as_str())),
+                module
+                    .as_ref()
+                    .map(|(file_name, source)| (file_name.as_str(), source.as_str())),
+                script
+                    .as_ref()
+                    .map(|(file_name, source)| (file_name.as_str(), source.as_str())),
             )
             .map_err(|error| Self::plain(vec![format!("reload failed: {}", error)]))?,
         };

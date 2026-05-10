@@ -433,7 +433,10 @@ fn repl_supports_session_listing_and_reload_commands() {
     assert!(stdout.contains("keep/0"), "{stdout}");
     assert!(stdout.contains("line | input"), "{stdout}");
     assert!(stdout.contains("seed = 41"), "{stdout}");
-    assert!(stdout.contains("clear is not available in this host"), "{stdout}");
+    assert!(
+        stdout.contains("clear is not available in this host"),
+        "{stdout}"
+    );
     assert!(stdout.contains("reload complete: all"), "{stdout}");
     assert!(stdout.contains("42"), "{stdout}");
     assert!(stderr.contains("Undefined variable: seed"), "{stderr}");
