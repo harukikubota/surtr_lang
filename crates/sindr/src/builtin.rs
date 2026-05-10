@@ -55,6 +55,21 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(String) -> Int",
     },
     BuiltinMeta {
+        name: "string_contains",
+        arity: 2,
+        sig_str: "(String, String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "string_starts_with",
+        arity: 2,
+        sig_str: "(String, String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "string_ends_with",
+        arity: 2,
+        sig_str: "(String, String) -> Boolean",
+    },
+    BuiltinMeta {
         name: "eprint",
         arity: 1,
         sig_str: "(Error) -> Unit",
@@ -1049,6 +1064,9 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
         Some("Shell::cd") => "shell_cd",
         Some("Shell::exec") => "shell_exec",
         Some("String::len") => "string_len",
+        Some("String::contains") => "string_contains",
+        Some("String::starts_with") => "string_starts_with",
+        Some("String::ends_with") => "string_ends_with",
         Some("Json::parse") => "json_parse",
         Some("Json::stringify") => "json_stringify",
         Some("Facet::replace") => "__facet_replace",
@@ -1188,6 +1206,23 @@ mod tests {
                 .sig_str,
             "(String) -> Int"
         );
+    }
+
+    #[test]
+    fn qualified_string_predicate_builtins_resolve_to_runtime_names() {
+        let cases = [
+            ("contains", "String::contains", "string_contains"),
+            ("starts_with", "String::starts_with", "string_starts_with"),
+            ("ends_with", "String::ends_with", "string_ends_with"),
+        ];
+
+        for (declared, qualified, runtime) in cases {
+            assert_eq!(builtin_runtime_name(declared, Some(qualified)), runtime);
+            assert!(
+                builtin_meta_for_decl(declared, Some(qualified)).is_some(),
+                "{qualified} should have builtin metadata"
+            );
+        }
     }
 
     #[test]

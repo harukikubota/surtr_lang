@@ -711,6 +711,42 @@ right = Int::bit_xor(6, 3)"#,
     }
 
     #[test]
+    fn direct_string_predicate_builtin_calls_lower_to_specialized_opcodes() {
+        let bytecode = codegen_source(
+            r#"has = String::contains("surtr", "urt")
+starts = String::starts_with("surtr", "sur")
+ends = String::ends_with("surtr", "tr")"#,
+        );
+
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::StringContains)));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::StringStartsWith)));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::StringEndsWith)));
+
+        for name in ["string_contains", "string_starts_with", "string_ends_with"] {
+            let builtin_id = builtin_id_by_name(name)
+                .unwrap_or_else(|| panic!("{name} builtin metadata must exist"));
+            assert!(!bytecode.opcodes.iter().any(|op| {
+                matches!(
+                    op,
+                    Opcode::CallBuiltin {
+                        builtin_id: id,
+                        ..
+                    } if *id == builtin_id
+                )
+            }));
+        }
+    }
+
+    #[test]
     fn int_bit_index_helpers_stay_as_builtin_calls() {
         let bytecode = codegen_source(
             r#"tested = Int::test_bit(5, 0)

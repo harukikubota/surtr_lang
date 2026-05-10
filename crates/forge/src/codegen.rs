@@ -2918,6 +2918,9 @@ impl Codegen {
             "string_len" if arity == 1 => Some(Opcode::StringLen),
             "len" if arity == 1 => Some(Opcode::ListLen),
             "safe_mod" if arity == 2 => Some(Opcode::SafeModInt),
+            "string_contains" if arity == 2 => Some(Opcode::StringContains),
+            "string_starts_with" if arity == 2 => Some(Opcode::StringStartsWith),
+            "string_ends_with" if arity == 2 => Some(Opcode::StringEndsWith),
             _ => None,
         }
     }

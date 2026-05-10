@@ -54,6 +54,18 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_string_len,
     },
     BuiltinImpl {
+        name: "string_contains",
+        func: builtin_string_contains,
+    },
+    BuiltinImpl {
+        name: "string_starts_with",
+        func: builtin_string_starts_with,
+    },
+    BuiltinImpl {
+        name: "string_ends_with",
+        func: builtin_string_ends_with,
+    },
+    BuiltinImpl {
         name: "eprint",
         func: builtin_eprint,
     },
@@ -1506,6 +1518,30 @@ fn builtin_string_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeEr
         ));
     };
     Ok(Value::Int(value.chars().count().into()))
+}
+
+fn expect_string_pair(args: &[Value], name: &str) -> Result<(String, String), RuntimeError> {
+    let (Value::Str(left), Value::Str(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(format!(
+            "{name} expects (String, String)"
+        )));
+    };
+    Ok((left.clone(), right.clone()))
+}
+
+fn builtin_string_contains(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (value, needle) = expect_string_pair(&args, "string_contains")?;
+    Ok(Value::Bool(value.contains(&needle)))
+}
+
+fn builtin_string_starts_with(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (value, prefix) = expect_string_pair(&args, "string_starts_with")?;
+    Ok(Value::Bool(value.starts_with(&prefix)))
+}
+
+fn builtin_string_ends_with(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (value, suffix) = expect_string_pair(&args, "string_ends_with")?;
+    Ok(Value::Bool(value.ends_with(&suffix)))
 }
 
 fn builtin_gen_make(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

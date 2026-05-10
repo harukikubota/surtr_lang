@@ -5052,6 +5052,21 @@ impl VM {
                 let value = self.pop_str()?;
                 self.stack.push(Value::Int(value.chars().count().into()));
             }
+            Opcode::StringContains => {
+                let needle = self.pop_str()?;
+                let value = self.pop_str()?;
+                self.stack.push(Value::Bool(value.contains(&needle)));
+            }
+            Opcode::StringStartsWith => {
+                let prefix = self.pop_str()?;
+                let value = self.pop_str()?;
+                self.stack.push(Value::Bool(value.starts_with(&prefix)));
+            }
+            Opcode::StringEndsWith => {
+                let suffix = self.pop_str()?;
+                let value = self.pop_str()?;
+                self.stack.push(Value::Bool(value.ends_with(&suffix)));
+            }
             Opcode::StringIsEmpty => {
                 let value = self.pop_str()?;
                 self.stack.push(Value::Bool(value.is_empty()));
@@ -6714,6 +6729,39 @@ mod tests {
             },
             other => panic!("expected Err result, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn string_predicates_execute_as_one_opcode() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::StringContains,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(2),
+            Opcode::StringStartsWith,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(3),
+            Opcode::StringEndsWith,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![
+            Constant::Str("surtr".into()),
+            Constant::Str("urt".into()),
+            Constant::Str("sur".into()),
+            Constant::Str("tr".into()),
+        ];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        for _ in 0..9 {
+            assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        }
+
+        assert_eq!(
+            ctx.stack,
+            vec![Value::Bool(true), Value::Bool(true), Value::Bool(true)]
+        );
     }
 
     #[test]
