@@ -32,6 +32,7 @@
 - `--format viewer-json`
 - `--entry <name>`
 - `--opcode-histogram`
+- `--peephole-candidates`
 
 ---
 
@@ -153,6 +154,13 @@ runtime error 表示に以下を追加する。
 `dump --format json` の出力に static opcode histogram を追加する。
 これは実行回数ではなく、bytecode 上の命令内訳である。
 
+### 3.9 `--peephole-candidates`
+
+`dump --format json` の出力に、既存または次候補の peephole 最適化に一致する
+opcode window を追加する。各候補は `pc` / `function` / `source` /
+`opcode_window` を持つ。主用途は VM 命令圧縮の次手を選ぶための静的レポートであり、
+実行意味には影響しない。
+
 ---
 
 ## 4. 実装境界
@@ -194,6 +202,7 @@ runtime error 表示に以下を追加する。
 - `run` option parser の正常系 / 異常系
 - `--vm-dump` の success / failure 保存条件
 - `dump --opcode-histogram` の JSON 形状
+- `dump --peephole-candidates` の JSON 形状
 - VM stats の opcode 集計
 - call trace の件数と kind
 - runtime error verbose の出力形

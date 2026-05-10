@@ -376,6 +376,70 @@ fn run_vm_dump_writes_json_on_success_when_always_enabled() {
 }
 
 #[test]
+fn run_vm_stats_writes_observation_to_stderr_without_polluting_stdout() {
+    let temp = unique_temp_dir("surtr_vm_stats");
+    let source_path = temp.join("sample.srt");
+    write_source(&source_path, "print(to_string(1 + 2))\n");
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--vm-stats",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("VM stats:"), "{stderr}");
+    assert!(stderr.contains("executed_opcodes:"), "{stderr}");
+    assert!(stderr.contains("LoadConst"), "{stderr}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_trace_opcode_filter_writes_matching_trace_to_stderr() {
+    let temp = unique_temp_dir("surtr_trace_opcode_filter");
+    let source_path = temp.join("sample.srt");
+    write_source(&source_path, "print(to_string(1 + 2))\n");
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--trace-opcode",
+            "--trace-filter",
+            "LoadConst",
+            "--trace-limit",
+            "2",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("op pc="), "{stderr}");
+    assert!(stderr.contains("LoadConst"), "{stderr}");
+    assert!(!stderr.contains("AddInt"), "{stderr}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn run_vm_dump_includes_process_runtime_tables_for_agents() {
     let temp = unique_temp_dir("surtr_vm_dump_process_runtime");
     let eldr_path = temp.join("sample.eldr");

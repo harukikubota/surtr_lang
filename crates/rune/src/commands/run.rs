@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -23,12 +24,37 @@ struct VmDumpOptions {
     mode: VmDumpMode,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RunObservationOptions {
+    vm_stats: bool,
+    trace_opcodes: bool,
+    trace_calls: bool,
+    trace_limit: Option<usize>,
+    trace_filter: BTreeSet<String>,
+}
+
+impl RunObservationOptions {
+    fn enabled(&self) -> bool {
+        self.vm_stats || self.trace_opcodes || self.trace_calls
+    }
+
+    fn to_vm_options(&self) -> eldr::vm::VmObservationOptions {
+        eldr::vm::VmObservationOptions {
+            trace_opcodes: self.trace_opcodes,
+            trace_calls: self.trace_calls,
+            trace_limit: self.trace_limit,
+            trace_filter: self.trace_filter.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RunOptions {
     pub(crate) file_path: String,
     pub(crate) entry: Option<String>,
     pub(crate) cli_args: Vec<String>,
     vm_dump: Option<VmDumpOptions>,
+    observation: RunObservationOptions,
 }
 
 pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
@@ -46,6 +72,7 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
     let mut cli_args = Vec::new();
     let mut vm_dump_path = None;
     let mut vm_dump_mode = VmDumpMode::Error;
+    let mut observation = RunObservationOptions::default();
     let mut i = 1usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -98,6 +125,37 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
                     }
                 };
             }
+            "--vm-stats" => {
+                observation.vm_stats = true;
+            }
+            "--trace-opcode" => {
+                observation.trace_opcodes = true;
+            }
+            "--trace-call" => {
+                observation.trace_calls = true;
+            }
+            "--trace-limit" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err(RuneError::usage("run: missing value for --trace-limit"));
+                }
+                let limit = args[i].parse::<usize>().map_err(|_| {
+                    RuneError::message(1, format!("run: invalid --trace-limit value '{}'", args[i]))
+                })?;
+                observation.trace_limit = Some(limit);
+            }
+            "--trace-filter" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err(RuneError::usage("run: missing value for --trace-filter"));
+                }
+                observation.trace_filter = args[i]
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty())
+                    .map(|item| item.to_ascii_lowercase())
+                    .collect();
+            }
             other => {
                 return Err(RuneError::usage(format!("run: unknown option '{}'", other)));
             }
@@ -120,6 +178,7 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
             path,
             mode: vm_dump_mode,
         }),
+        observation,
     })
 }
 
@@ -136,6 +195,7 @@ fn run_command(options: RunOptions, env: ExecutionEnv) -> RuneResult<()> {
             env,
             &options.cli_args,
             options.vm_dump.as_ref(),
+            &options.observation,
         )
     } else {
         run_source_file(
@@ -144,6 +204,7 @@ fn run_command(options: RunOptions, env: ExecutionEnv) -> RuneResult<()> {
             &options.cli_args,
             env,
             options.vm_dump.as_ref(),
+            &options.observation,
         )
     }
 }
@@ -154,6 +215,7 @@ fn run_source_file(
     cli_args: &[String],
     env: ExecutionEnv,
     vm_dump: Option<&VmDumpOptions>,
+    observation: &RunObservationOptions,
 ) -> RuneResult<()> {
     let source = fs::read_to_string(file_path)
         .map_err(|e| RuneError::message(1, format!("Error reading {}: {}", file_path, e)))?;
@@ -196,6 +258,7 @@ fn run_source_file(
             ))
         }),
         vm_dump,
+        observation,
     )
 }
 
@@ -204,6 +267,7 @@ fn run_eldr_file(
     env: ExecutionEnv,
     cli_args: &[String],
     vm_dump: Option<&VmDumpOptions>,
+    observation: &RunObservationOptions,
 ) -> RuneResult<()> {
     let bytes = fs::read(file_path)
         .map_err(|e| RuneError::message(1, format!("Error reading {}: {}", file_path, e)))?;
@@ -231,6 +295,7 @@ fn run_eldr_file(
         source_context,
         runtime_sources,
         vm_dump,
+        observation,
     )
 }
 
@@ -280,13 +345,16 @@ fn execute_bytecode(
     source_context: Option<(String, String)>,
     runtime_sources: Option<(diagnostics::SourceRegistry, diagnostics::SourceId)>,
     vm_dump: Option<&VmDumpOptions>,
+    observation_options: &RunObservationOptions,
 ) -> RuneResult<()> {
     let mut vm = match source_context {
         Some((source, file_path)) => eldr::VM::new(bytecode).with_source(source, file_path),
         None => eldr::VM::new(bytecode),
     }
     .with_cli_args(cli_args.to_vec());
-    if vm_dump.is_some() {
+    if observation_options.enabled() {
+        vm.enable_observation(observation_options.to_vm_options());
+    } else if vm_dump.is_some() {
         vm.enable_observation(eldr::vm::VmObservationOptions::default());
     }
     if let Err(e) = vm.run() {
@@ -311,6 +379,7 @@ fn execute_bytecode(
                 xldr::ErrorDisplayMode::Full,
             ),
         }
+        emit_observation_if_requested(&vm, observation_options);
         write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::RuntimeError { error: &e })?;
         return Err(RuneError::silent(1));
     }
@@ -337,23 +406,60 @@ fn execute_bytecode(
                 xldr::ErrorDisplayMode::Full,
             ),
         }
+        emit_observation_if_requested(&vm, observation_options);
         write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::RuntimeError { error: &e })?;
         return Err(RuneError::silent(1));
     }
 
     if matches!(env, ExecutionEnv::Run) && report_final_result_error_if_any(&vm) {
+        emit_observation_if_requested(&vm, observation_options);
         write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::ResultErr)?;
         return Err(RuneError::silent(1));
     }
 
     match vm.exit_code() {
         0 => {
+            emit_observation_if_requested(&vm, observation_options);
             write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::Success)?;
             Ok(())
         }
         code => {
+            emit_observation_if_requested(&vm, observation_options);
             write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::ExitCode)?;
             Err(RuneError::silent(code))
+        }
+    }
+}
+
+fn emit_observation_if_requested(vm: &eldr::VM, options: &RunObservationOptions) {
+    if !options.enabled() {
+        return;
+    }
+    let observation = vm.observation().unwrap_or_default();
+    if options.vm_stats {
+        eprintln!("VM stats:");
+        eprintln!("  executed_opcodes: {}", observation.stats.executed_opcodes);
+        eprintln!("  builtin_calls: {}", observation.stats.builtin_calls);
+        eprintln!("  function_calls: {}", observation.stats.function_calls);
+        eprintln!("  closure_calls: {}", observation.stats.closure_calls);
+        eprintln!("  return_count: {}", observation.stats.return_count);
+        eprintln!(
+            "  tail_calls_optimized: {}",
+            observation.stats.tail_calls_optimized
+        );
+        eprintln!("  max_stack_depth: {}", observation.stats.max_stack_depth);
+        eprintln!("  max_frame_depth: {}", observation.stats.max_frame_depth);
+        eprintln!("  per_opcode:");
+        for (kind, count) in &observation.stats.per_opcode {
+            eprintln!("    {kind}: {count}");
+        }
+    }
+    if options.trace_opcodes || options.trace_calls {
+        for line in &observation.trace_lines {
+            eprintln!("{line}");
+        }
+        if observation.dropped_trace_events > 0 {
+            eprintln!("dropped_trace_events: {}", observation.dropped_trace_events);
         }
     }
 }
