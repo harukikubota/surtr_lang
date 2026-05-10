@@ -23,21 +23,6 @@
   - macro 導入時に `unit/spire` / `unit/sigil` で段階境界テストを追加する。
   - 展開後 IR の決定性比較を回帰基準にする。
 
-### OI-009 List runtime 表現の簡素化
-
-- 背景:
-  - `cons cell + handle` と `len` O(1) の runtime 契約は固定済みで、現行実装もそれに沿っている。
-  - ただし `ListNode` が単一バリアント enum のまま残っており、`tail_handle()` の不変条件も読み取りにくい。
-- 未確定点:
-  - `ListNode` を struct に寄せるか、将来拡張余地を優先して enum のままにするか
-  - `ListHandle` の非空条件を型 / コメント / helper のどこで明示するか
-- 受け入れ条件:
-  - 非空リストの不変条件がコードから読み取りやすくなる。
-  - `head_value()` / `tail_handle()` の挙動と API は変えない。
-- テスト方針:
-  - 空 / 1 要素 / 複数要素の `head_value()` / `tail_handle()` を `unit/sindr` で固定する。
-  - 必要なら `len` 更新と handle 連結の不変条件テストを追加する。
-
 ### OI-010 `RichError` 表示形式の仕様化
 
 - 背景:

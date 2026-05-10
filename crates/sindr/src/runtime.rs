@@ -199,6 +199,10 @@ pub struct HashMapHandle {
 pub type ListRef = Option<Rc<ListNode>>;
 
 /// Shared runtime handle for persistent cons-list values.
+///
+/// Invariant:
+/// - `len == 0` if and only if `head == None`
+/// - `len > 0` if and only if `head` points at the first cons cell
 #[derive(Debug, Clone, PartialEq)]
 pub struct ListHandle {
     pub head: ListRef,
@@ -207,8 +211,9 @@ pub struct ListHandle {
 
 /// Persistent list node for O(1) cons/uncons sharing.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ListNode {
-    Cons(Value, ListRef),
+pub struct ListNode {
+    pub value: Value,
+    pub next: ListRef,
 }
 
 /// Callable runtime value.
@@ -553,7 +558,10 @@ impl ListHandle {
 
     pub fn cons(head: Value, tail: &ListHandle) -> Self {
         Self {
-            head: Some(Rc::new(ListNode::Cons(head, tail.head.clone()))),
+            head: Some(Rc::new(ListNode {
+                value: head,
+                next: tail.head.clone(),
+            })),
             len: tail.len + 1,
         }
     }
@@ -570,25 +578,19 @@ impl ListHandle {
         self.len == 0
     }
 
+    fn non_empty_head(&self) -> Option<&Rc<ListNode>> {
+        self.head.as_ref()
+    }
+
     pub fn head_value(&self) -> Option<Value> {
-        match &self.head {
-            Some(node) => match node.as_ref() {
-                ListNode::Cons(value, _) => Some(value.clone()),
-            },
-            None => None,
-        }
+        self.non_empty_head().map(|node| node.value.clone())
     }
 
     pub fn tail_handle(&self) -> Option<Self> {
-        match &self.head {
-            Some(node) => match node.as_ref() {
-                ListNode::Cons(_, next) => Some(Self {
-                    head: next.clone(),
-                    len: self.len.saturating_sub(1),
-                }),
-            },
-            None => None,
-        }
+        self.non_empty_head().map(|node| Self {
+            head: node.next.clone(),
+            len: self.len.saturating_sub(1),
+        })
     }
 
     pub fn iter(&self) -> ListIter {
@@ -607,12 +609,8 @@ impl Iterator for ListIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         let current = self.next.clone()?;
-        match current.as_ref() {
-            ListNode::Cons(value, next) => {
-                self.next = next.clone();
-                Some(value.clone())
-            }
-        }
+        self.next = current.next.clone();
+        Some(current.value.clone())
     }
 }
 
@@ -992,6 +990,55 @@ mod tests {
         let list = ListHandle::empty();
         assert_eq!(list.head_value(), None);
         assert_eq!(list.tail_handle(), None);
+    }
+
+    #[test]
+    fn single_item_list_head_and_tail_preserve_non_empty_contract() {
+        let list = ListHandle::from_items(vec![Value::Int(int(7))]);
+
+        assert_eq!(list.len, 1);
+        assert_eq!(list.head_value(), Some(Value::Int(int(7))));
+
+        let tail = list.tail_handle().expect("single-item list has empty tail");
+        assert_eq!(tail.len, 0);
+        assert_eq!(tail.head_value(), None);
+        assert!(tail.is_empty());
+    }
+
+    #[test]
+    fn multi_item_list_head_and_tail_walk_shared_chain() {
+        let list = ListHandle::from_items(vec![
+            Value::Int(int(1)),
+            Value::Int(int(2)),
+            Value::Int(int(3)),
+        ]);
+
+        assert_eq!(list.len, 3);
+        assert_eq!(list.head_value(), Some(Value::Int(int(1))));
+
+        let tail = list.tail_handle().expect("non-empty list has tail handle");
+        assert_eq!(tail.len, 2);
+        assert_eq!(tail.head_value(), Some(Value::Int(int(2))));
+
+        let tail_tail = tail.tail_handle().expect("tail stays non-empty");
+        assert_eq!(tail_tail.len, 1);
+        assert_eq!(tail_tail.head_value(), Some(Value::Int(int(3))));
+    }
+
+    #[test]
+    fn cons_and_tail_update_len_without_mutating_shared_tail() {
+        let tail = ListHandle::from_items(vec![Value::Int(int(2)), Value::Int(int(3))]);
+        let list = ListHandle::cons(Value::Int(int(1)), &tail);
+
+        assert_eq!(list.len, 3);
+        assert_eq!(list.head_value(), Some(Value::Int(int(1))));
+
+        let derived_tail = list.tail_handle().expect("cons list has tail");
+        assert_eq!(derived_tail.len, 2);
+        assert_eq!(derived_tail.head_value(), Some(Value::Int(int(2))));
+
+        assert_eq!(tail.len, 2);
+        assert_eq!(tail.head_value(), Some(Value::Int(int(2))));
     }
 
     #[test]
