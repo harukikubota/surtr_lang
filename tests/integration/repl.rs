@@ -146,8 +146,40 @@ fn repl_fails_fast_when_additional_stdlib_bootstrap_fails() {
     );
 
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.status.code(), Some(1));
     assert!(stderr.contains("bootstrap failed during parse"));
     assert!(stderr.contains("lib/bad.srt"));
+}
+
+#[test]
+fn repl_preload_diagnostic_stays_on_stderr_and_exits_non_zero() {
+    let dir = unique_temp_dir("repl-preload-diagnostic");
+    let script_path = dir.join("bad.srt");
+    fs::write(&script_path, "defmod Broken { }\n").expect("failed to write bad preload script");
+
+    let output = run_repl_session_with_args(
+        &[
+            "--quiet",
+            "--script",
+            script_path.to_string_lossy().as_ref(),
+        ],
+        "",
+    );
+    assert!(
+        !output.status.success(),
+        "repl preload should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("ParseError"), "{stderr}");
+    assert!(
+        stderr.contains("defmod is not allowed at script top-level"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("bad.srt"), "{stderr}");
 }
 
 #[test]

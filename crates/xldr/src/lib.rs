@@ -1,3 +1,4 @@
+mod command_error;
 pub mod error_display;
 mod loader;
 pub mod repl;
@@ -9,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+pub use command_error::{CommandDiagnostic, CommandError, CommandResult};
 pub use error_display::ErrorDisplayMode;
 pub use loader::{
     collect_additional_default_std_module_inputs, collect_lib_module_inputs,

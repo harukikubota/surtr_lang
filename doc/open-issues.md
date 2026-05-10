@@ -23,21 +23,6 @@
   - macro 導入時に `unit/spire` / `unit/sigil` で段階境界テストを追加する。
   - 展開後 IR の決定性比較を回帰基準にする。
 
-### OI-007 Rune / Xldr の CLI エラー契約統一
-
-- 背景:
-  - `rune` は `RuneError` ベースだが、`xldr::cli_command` と `xldr::tui::run_command` は依然として `Result<(), i32>` を返している。
-  - 現状でも動作はしているが、REPL / TUI 系の失敗経路だけ typed diagnostic から外れている。
-- 未確定点:
-  - `xldr` 側に共通エラー型を持たせるか、`rune` 側 adapter を正式境界とするか
-  - usage / diagnostic / exit code をどこまで同一契約で扱うか
-- 受け入れ条件:
-  - CLI / REPL / TUI の失敗経路が同じ契約で説明できる。
-  - stderr 出力責務と exit code 責務の境界が crate 間で明文化される。
-- テスト方針:
-  - `rune` integration で失敗時の exit code とメッセージ形状を固定する。
-  - `unit/xldr` または `unit/rune` で adapter / 変換経路を確認する。
-
 ### OI-009 List runtime 表現の簡素化
 
 - 背景:

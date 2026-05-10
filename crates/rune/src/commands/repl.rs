@@ -52,7 +52,7 @@ fn parse_repl_options(args: &[String]) -> RuneResult<xldr::ReplOptions> {
 }
 
 fn repl_command(options: xldr::ReplOptions, _env: ExecutionEnv) -> RuneResult<()> {
-    xldr::cli_command(options).map_err(RuneError::silent)
+    xldr::cli_command(options).map_err(RuneError::from_xldr_command_error)
 }
 
 #[cfg(test)]

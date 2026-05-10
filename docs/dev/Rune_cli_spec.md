@@ -58,6 +58,10 @@
 - file path fallback 後の option validation は通常の `run` command と同じ規則を使う
 - path が存在しない場合、CLI は fallback せず usage error を返す
 - `.eldr` file を path fallback で受け取った場合も `run` command と同じ入力種別判定を使う
+- `Rune` は `main` で `RuneError::emit()` と exit code を一元処理する唯一の CLI 境界とする
+- `xldr` の `cli_command` / `tui::run_command` は typed command error を返し、最終 stderr 出力や process exit を行わない
+- `repl` / `tui` の startup failure は `xldr` で typed error を構築し、`Rune` が `RuneError` へ adapter 変換して human diagnostic / plain message / exit code を確定する
+- interactive session 開始後の REPL chunk evaluation error は従来どおり session output として扱い、この節の CLI startup failure 契約とは分けて考える
 
 ---
 
@@ -66,3 +70,5 @@
 - `Rune` 単体テストでは、実在 file path を与えた dispatch が `run` 経路へ入ることを固定する
 - CLI integration では shebang 付き script を直接実行した結果が `surtr run` と一致することを固定する
 - shebang 行の parse 無害性は lexer / parser の既存 comment 契約で担保する
+- `repl` / `tui` integration では startup failure 時の stderr 形状と exit code を固定する
+- `unit/rune` または `unit/xldr` では command error から `RuneError` への変換経路を固定する

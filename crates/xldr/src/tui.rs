@@ -3,6 +3,8 @@
 
 #[cfg(feature = "tui")]
 pub use crate::repl::ui::tui::{run_command, TuiOptions};
+#[cfg(not(feature = "tui"))]
+use crate::{CommandError, CommandResult};
 
 #[cfg(not(feature = "tui"))]
 #[derive(Debug, Default)]
@@ -12,7 +14,9 @@ pub struct TuiOptions {
 }
 
 #[cfg(not(feature = "tui"))]
-pub fn run_command(_options: TuiOptions) -> Result<(), i32> {
-    eprintln!("tui: disabled in this build (rebuild with xldr 'tui' feature)");
-    Err(2)
+pub fn run_command(_options: TuiOptions) -> CommandResult<()> {
+    Err(CommandError::message(
+        2,
+        "tui: disabled in this build (rebuild with xldr 'tui' feature)",
+    ))
 }

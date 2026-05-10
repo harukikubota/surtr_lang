@@ -21,3 +21,5 @@ mod run_eldr;
 mod run_srt;
 #[path = "test_command.rs"]
 mod test_command;
+#[path = "tui.rs"]
+mod tui;

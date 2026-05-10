@@ -24,6 +24,7 @@ use rustyline::{Context, Helper};
 
 use crate::repl::logic::core::{xldr_version, ReplEngine};
 use crate::repl::logic::{present_for_cli, styled, ReplResult};
+use crate::{CommandError, CommandResult};
 
 #[cfg(feature = "line-editor")]
 const TERMINAL_POLL_QUANTUM: Duration = Duration::from_millis(25);
@@ -165,7 +166,7 @@ impl Completer for ReplHelper {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 /// Text-mode REPL entry point.
-pub fn cli_command(options: ReplOptions) -> Result<(), i32> {
+pub fn cli_command(options: ReplOptions) -> CommandResult<()> {
     if options.version {
         println!("xldr {}", xldr_version());
         return Ok(());
@@ -175,28 +176,20 @@ pub fn cli_command(options: ReplOptions) -> Result<(), i32> {
         print_banner(options.banner);
     }
 
-    let mut engine = match (&options.module_path, &options.script_path) {
-        (Some(module_path), Some(script_path)) => {
-            ReplEngine::from_preload_files(Some(module_path), Some(script_path)).map_err(|e| {
-                e.emit();
-                1
-            })?
-        }
-        (Some(module_path), None) => ReplEngine::from_preload_files(Some(module_path), None)
-            .map_err(|e| {
-                e.emit();
-                1
+    let mut engine =
+        match (&options.module_path, &options.script_path) {
+            (Some(module_path), Some(script_path)) => {
+                ReplEngine::from_preload_files(Some(module_path), Some(script_path))
+                    .map_err(CommandError::from)?
+            }
+            (Some(module_path), None) => ReplEngine::from_preload_files(Some(module_path), None)
+                .map_err(CommandError::from)?,
+            (None, Some(script_path)) => ReplEngine::from_preload_files(None, Some(script_path))
+                .map_err(CommandError::from)?,
+            (None, None) => ReplEngine::new().map_err(|e| {
+                CommandError::message(1, format!("Error initializing source loader: {}", e))
             })?,
-        (None, Some(script_path)) => ReplEngine::from_preload_files(None, Some(script_path))
-            .map_err(|e| {
-                e.emit();
-                1
-            })?,
-        (None, None) => ReplEngine::new().map_err(|e| {
-            eprintln!("Error initializing source loader: {}", e);
-            1
-        })?,
-    };
+        };
 
     let color = styled::color_enabled_from_env();
     for result in engine.take_startup_results() {
@@ -213,7 +206,7 @@ pub fn cli_command(options: ReplOptions) -> Result<(), i32> {
 }
 
 #[cfg(feature = "line-editor")]
-fn run_terminal_repl(engine: &mut ReplEngine) -> Result<(), i32> {
+fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
     struct RawModeGuard;
 
     impl Drop for RawModeGuard {
@@ -222,10 +215,8 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> Result<(), i32> {
         }
     }
 
-    enable_raw_mode().map_err(|err| {
-        eprintln!("Error enabling raw mode: {}", err);
-        1
-    })?;
+    enable_raw_mode()
+        .map_err(|err| CommandError::message(1, format!("Error enabling raw mode: {}", err)))?;
     let _raw_mode_guard = RawModeGuard;
 
     let color = styled::color_enabled_from_env();
@@ -235,7 +226,8 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> Result<(), i32> {
     let mut history = TerminalHistory::default();
     let mut last_background_progress = Instant::now();
 
-    redraw_terminal_prompt(&mut stdout, &engine.prompt(), &buffer, cursor_chars).map_err(|_| 1)?;
+    redraw_terminal_prompt(&mut stdout, &engine.prompt(), &buffer, cursor_chars)
+        .map_err(|_| CommandError::message(1, "repl: failed to redraw prompt"))?;
 
     loop {
         let elapsed = last_background_progress.elapsed();
@@ -249,25 +241,21 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> Result<(), i32> {
             &buffer,
             cursor_chars,
         )
-        .map_err(|_| 1)?;
+        .map_err(|_| CommandError::message(1, "repl: failed to print terminal result"))?;
 
         let wait = engine
             .next_background_deadline_delay()
             .map(|delay| delay.min(TERMINAL_POLL_QUANTUM))
             .unwrap_or(TERMINAL_POLL_QUANTUM);
-        let ready = event::poll(wait).map_err(|err| {
-            eprintln!("Error polling input: {}", err);
-            1
-        })?;
+        let ready = event::poll(wait)
+            .map_err(|err| CommandError::message(1, format!("Error polling input: {}", err)))?;
 
         if !ready {
             continue;
         }
 
-        let Event::Key(key) = event::read().map_err(|err| {
-            eprintln!("Error reading input: {}", err);
-            1
-        })?
+        let Event::Key(key) = event::read()
+            .map_err(|err| CommandError::message(1, format!("Error reading input: {}", err)))?
         else {
             continue;
         };
@@ -275,23 +263,26 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> Result<(), i32> {
         match handle_terminal_key(&mut history, &mut buffer, &mut cursor_chars, key) {
             TerminalAction::Continue => {
                 redraw_terminal_prompt(&mut stdout, &engine.prompt(), &buffer, cursor_chars)
-                    .map_err(|_| 1)?;
+                    .map_err(|_| CommandError::message(1, "repl: failed to redraw prompt"))?;
             }
             TerminalAction::Submit(line) => {
                 history.record(&line);
                 let submitted = submitted_terminal_line(&engine.prompt(), &line);
-                write_crlf(&mut stdout, &submitted).map_err(|_| 1)?;
-                let result =
-                    with_suspended_raw_mode(|| engine.handle_line(&line)).map_err(|_| 1)?;
+                write_crlf(&mut stdout, &submitted)
+                    .map_err(|_| CommandError::message(1, "repl: failed to write input line"))?;
+                let result = with_suspended_raw_mode(|| engine.handle_line(&line))
+                    .map_err(|_| CommandError::message(1, "repl: failed to suspend raw mode"))?;
                 print_terminal_result(&mut stdout, engine, &result, color, &buffer, cursor_chars)
-                    .map_err(|_| 1)?;
+                    .map_err(|_| CommandError::message(1, "repl: failed to print terminal result"))?;
                 last_background_progress = Instant::now();
                 if result.should_exit {
                     return Ok(());
                 }
             }
             TerminalAction::Exit => {
-                write_crlf(&mut stdout, "^C").map_err(|_| 1)?;
+                write_crlf(&mut stdout, "^C").map_err(|_| {
+                    CommandError::message(1, "repl: failed to write interrupt line")
+                })?;
                 return Ok(());
             }
             TerminalAction::Noop => {}
@@ -300,11 +291,11 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> Result<(), i32> {
 }
 
 #[cfg(not(feature = "line-editor"))]
-fn run_terminal_repl(engine: &mut ReplEngine) -> Result<(), i32> {
+fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
     run_plain_repl(engine)
 }
 
-fn run_plain_repl(engine: &mut ReplEngine) -> Result<(), i32> {
+fn run_plain_repl(engine: &mut ReplEngine) -> CommandResult<()> {
     let (tx, rx) = mpsc::channel::<Result<String, io::Error>>();
     std::thread::spawn(move || {
         let stdin = io::stdin();
@@ -334,7 +325,7 @@ fn run_plain_repl(engine: &mut ReplEngine) -> Result<(), i32> {
         print_result(&background, styled::color_enabled_from_env());
         print!("{}", engine.prompt());
         if io::stdout().flush().is_err() {
-            return Err(1);
+            return Err(CommandError::message(1, "repl: failed to flush prompt"));
         }
 
         loop {
@@ -355,15 +346,17 @@ fn run_plain_repl(engine: &mut ReplEngine) -> Result<(), i32> {
                     break;
                 }
                 Ok(Err(err)) => {
-                    eprintln!("Error reading input: {}", err);
-                    return Err(1);
+                    return Err(CommandError::message(
+                        1,
+                        format!("Error reading input: {}", err),
+                    ));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     let result = engine.pump_background_to_next_deadline();
                     print_result(&result, styled::color_enabled_from_env());
                     print!("{}", engine.prompt());
                     if io::stdout().flush().is_err() {
-                        return Err(1);
+                        return Err(CommandError::message(1, "repl: failed to flush prompt"));
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
@@ -675,6 +668,26 @@ fn print_result(result: &ReplResult, color: bool) {
     }
     for line in &result.stderr {
         eprintln!("{line}");
+    }
+}
+
+#[cfg(test)]
+mod command_error_tests {
+    use super::ReplOptions;
+
+    #[test]
+    fn preload_diagnostic_builds_typed_command_error() {
+        let error = crate::cli_command(ReplOptions {
+            quiet: true,
+            banner: super::BannerMode::Light,
+            version: false,
+            script_path: Some("/definitely/missing-script.srt".to_string()),
+            module_path: None,
+        })
+        .expect_err("missing preload script must fail");
+
+        assert_eq!(error.exit_code(), 1);
+        assert!(matches!(error, crate::CommandError::Message { .. }));
     }
 }
 

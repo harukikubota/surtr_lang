@@ -100,6 +100,23 @@ impl RuneError {
         }
     }
 
+    pub(crate) fn from_xldr_command_error(error: xldr::CommandError) -> Self {
+        match error {
+            xldr::CommandError::Usage { message } => Self::usage(message),
+            xldr::CommandError::Message { exit_code, message } => Self::message(exit_code, message),
+            xldr::CommandError::Diagnostic {
+                exit_code,
+                diagnostic,
+            } => Self::diagnostic(
+                exit_code,
+                &diagnostic.sources,
+                diagnostic.source_id,
+                diagnostic.phase,
+                diagnostic.spec,
+            ),
+        }
+    }
+
     pub(crate) fn diagnostic(
         exit_code: i32,
         sources: &SourceRegistry,
@@ -225,5 +242,44 @@ impl RuneError {
                 )
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod adapter_tests {
+    use super::RuneError;
+
+    #[test]
+    fn xldr_message_error_maps_to_rune_message() {
+        let err = RuneError::from_xldr_command_error(xldr::CommandError::message(
+            7,
+            "tui: terminal init failed",
+        ));
+
+        assert_eq!(err.exit_code(), 7);
+        assert_eq!(err.summary(), "tui: terminal init failed");
+    }
+
+    #[test]
+    fn xldr_diagnostic_error_maps_to_rune_diagnostic() {
+        let mut sources = diagnostics::SourceRegistry::new();
+        let source_id = sources.register("bad.srt", "defmod Broken { }\n");
+        let err = RuneError::from_xldr_command_error(xldr::CommandError::diagnostic(
+            1,
+            &sources,
+            source_id,
+            "parse",
+            diagnostics::simple_error(
+                "ParseError",
+                "This top-level declaration is not allowed in script source",
+                spire::ast::Span { start: 0, end: 6 },
+                None,
+            ),
+        ));
+
+        assert_eq!(err.exit_code(), 1);
+        assert!(err.summary().contains(
+            "ParseError at bad.srt:1:1: This top-level declaration is not allowed in script source"
+        ));
     }
 }

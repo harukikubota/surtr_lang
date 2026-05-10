@@ -97,6 +97,7 @@ pub enum ReplLoadError {
         message: String,
     },
     Diagnostic {
+        phase: String,
         sources: SourceRegistry,
         source_id: SourceId,
         spec: DiagnosticSpec,
@@ -115,6 +116,7 @@ impl ReplLoadError {
                 eprintln!("repl: cannot read {}: {}", file_name, message);
             }
             Self::Diagnostic {
+                phase: _,
                 sources,
                 source_id,
                 spec,
@@ -5990,6 +5992,7 @@ fn compile_repl_preload_from_module_stages(
         sigil::precollect_declaration_index(&module_stage_asts).map_err(|e| {
             let spec = diagnostics::simple_error("ResolveError", &e.message, e.span, None);
             ReplLoadError::Diagnostic {
+                phase: "resolve".to_string(),
                 sources: compile_sources.sources.clone(),
                 source_id: compile_sources.builtin_source_id,
                 spec,
@@ -6063,6 +6066,7 @@ fn compile_repl_preload_from_module_stages(
             },
         )
         .map_err(|e| ReplLoadError::Diagnostic {
+            phase: "typecheck".to_string(),
             sources: compile_sources.sources.clone(),
             source_id: diagnostic_source_id(&compile_sources, &e.span),
             spec: diagnostics::type_error_spec_by_id(
@@ -6080,6 +6084,7 @@ fn compile_repl_preload_from_module_stages(
     let (mut chunk, meta) = forge_session
         .codegen_chunk_typed_program(typed)
         .map_err(|e| ReplLoadError::Diagnostic {
+            phase: "codegen".to_string(),
             sources: compile_sources.sources.clone(),
             source_id: diagnostic_source_id(&compile_sources, &e.span),
             spec: diagnostics::simple_error(
@@ -6201,6 +6206,7 @@ fn parse_preload_sources(
         snapshot.default_stage_count,
     )
     .map_err(|e| ReplLoadError::Diagnostic {
+        phase: "parse".to_string(),
         sources: compile_sources.sources.clone(),
         source_id: e.source_id,
         spec: diagnostics::parse_error_spec(
@@ -6223,6 +6229,7 @@ fn parse_preload_sources(
             .with_rules(derive_parse_rules(SourceKind::Script)),
     )
     .map_err(|e| ReplLoadError::Diagnostic {
+        phase: "parse".to_string(),
         sources: compile_sources.sources.clone(),
         source_id: compile_sources.user_source_id,
         spec: diagnostics::parse_error_spec(user_source, e.message(), e.span().clone()),
@@ -6527,6 +6534,7 @@ fn preload_script_diagnostic(
     let mut sources = SourceRegistry::new();
     let source_id = sources.register(file_name, source.to_string());
     ReplLoadError::Diagnostic {
+        phase: "parse".to_string(),
         sources,
         source_id,
         spec,
@@ -6540,6 +6548,7 @@ fn preload_resolve_error(
     let source_id = diagnostic_source_id(compile_sources, &error.span);
     let source = compile_sources.sources.source(source_id).unwrap_or("");
     ReplLoadError::Diagnostic {
+        phase: "resolve".to_string(),
         sources: compile_sources.sources.clone(),
         source_id,
         spec: diagnostics::resolve_error_spec(

@@ -11,5 +11,5 @@ pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
 }
 
 fn tui_command(options: xldr::tui::TuiOptions, _env: ExecutionEnv) -> RuneResult<()> {
-    xldr::tui::run_command(options).map_err(RuneError::silent)
+    xldr::tui::run_command(options).map_err(RuneError::from_xldr_command_error)
 }
