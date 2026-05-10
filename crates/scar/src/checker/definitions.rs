@@ -896,7 +896,9 @@ impl Checker {
         let target_name = self
             .trait_target_name(&target_ty)
             .ok_or_else(|| TypeError {
-                message: "trait impl target must be a concrete named type, tuple type, or function type".into(),
+                message:
+                    "trait impl target must be a concrete named type, tuple type, or function type"
+                        .into(),
                 span: Self::ast_ty_span(target_ast_ty).clone(),
                 hint: None,
             })?;
@@ -1050,7 +1052,9 @@ impl Checker {
         let target_name = self
             .trait_target_name(&target_ty)
             .ok_or_else(|| TypeError {
-                message: "trait impl target must be a concrete named type, tuple type, or function type".into(),
+                message:
+                    "trait impl target must be a concrete named type, tuple type, or function type"
+                        .into(),
                 span: Self::ast_ty_span(target_ast_ty).clone(),
                 hint: None,
             })?;

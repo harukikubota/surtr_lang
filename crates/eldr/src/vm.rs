@@ -129,7 +129,10 @@ impl VmFileMode {
     }
 
     fn can_write(self) -> bool {
-        matches!(self, Self::Write | Self::Append | Self::ReadWrite | Self::ReadAppend)
+        matches!(
+            self,
+            Self::Write | Self::Append | Self::ReadWrite | Self::ReadAppend
+        )
     }
 }
 
@@ -6598,7 +6601,11 @@ mod tests {
             .expect("file handle should open");
         assert_eq!(vm.open_file_count(), 1);
         vm.run().expect("halt-only bytecode should run");
-        assert_eq!(vm.open_file_count(), 0, "run should shutdown file resources");
+        assert_eq!(
+            vm.open_file_count(),
+            0,
+            "run should shutdown file resources"
+        );
         assert!(
             matches!(vm.flush_file_resource(handle.id), Err(VmFileError::Closed)),
             "run shutdown should close the handle"

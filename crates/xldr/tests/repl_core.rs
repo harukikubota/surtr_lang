@@ -944,9 +944,7 @@ fn core_reload_and_clear_commands_preserve_only_requested_state() {
 
     let cleared = rendered_text(&engine.handle_line(":clear"));
     assert!(
-        cleared.contains("clear")
-            || cleared.contains("Clear")
-            || cleared.contains("not available"),
+        cleared.contains("clear") || cleared.contains("Clear") || cleared.contains("not available"),
         "{cleared}"
     );
     let after_clear = rendered_text(&engine.handle_line("seed"));

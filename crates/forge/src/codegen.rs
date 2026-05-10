@@ -4028,8 +4028,9 @@ impl Codegen {
         let returns_result = matches!(node.ty, Ty::Result(_, _));
         if source_is_result && !returns_result {
             return Err(CodegenError {
-                message: "Internal invariant broken: plain facet update cannot start from Result source"
-                    .into(),
+                message:
+                    "Internal invariant broken: plain facet update cannot start from Result source"
+                        .into(),
                 span: node.span.clone(),
             });
         }

@@ -3327,7 +3327,9 @@ fn test_facet_capture_shorthand_parses_field_access_chain() {
     let ast = parse("Facet::set(~user.profile.name, \"bob\")").unwrap();
     match &ast[0] {
         Ast::App(_, callee, args) => {
-            assert!(matches!(callee.as_ref(), Ast::Path(_, path) if path.segments == vec!["Facet", "set"]));
+            assert!(
+                matches!(callee.as_ref(), Ast::Path(_, path) if path.segments == vec!["Facet", "set"])
+            );
             assert!(matches!(
                 &args[0],
                 RecordLitArg::Positional(Ast::FacetCapture(_, inner))
