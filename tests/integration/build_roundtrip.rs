@@ -135,6 +135,80 @@ fn dump_outputs_valid_json_for_jq() {
 }
 
 #[test]
+fn dump_opcode_histogram_adds_static_opcode_counts() {
+    let temp = unique_temp_dir("surtr_dump_opcode_histogram");
+    let source_path = temp.join("histogram_sample.srt");
+
+    write_source(&source_path, "print(to_string(1 + 2))\n");
+    let dump = surtr_command()
+        .args([
+            "dump",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--format",
+            "json",
+            "--opcode-histogram",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    assert!(json["opcode_histogram"]["LoadConst"].as_u64().unwrap_or(0) > 0);
+    assert!(
+        json["opcode_histogram"]["CallBuiltin"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0
+    );
+    assert!(
+        json["optimization_summary"]["apply_compose"]["direct_calls"]
+            .as_u64()
+            .is_some()
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn dump_peephole_candidates_lists_branch_fusion_opportunities() {
+    let fixture = repo_root().join("tests/spec/stdmod/result_helpers.srt");
+    let dump = surtr_command()
+        .args([
+            "dump",
+            fixture.to_str().expect("fixture path must be utf-8"),
+            "--format",
+            "json",
+            "--peephole-candidates",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    assert!(
+        json["peephole_candidates"]["summary"]["branch_fusion"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "expected branch-fusion candidates in result_helpers dump: {json}"
+    );
+    let first = &json["peephole_candidates"]["items"][0];
+    assert!(first["pc"].as_u64().is_some());
+    assert!(first["function"].is_string() || first["function"].is_null());
+    assert!(first["opcode_window"].as_array().is_some());
+}
+
+#[test]
 fn dump_outputs_runtime_process_specs_for_agent_modules() {
     let fixture = module_spec_fixtures()
         .into_iter()
