@@ -148,6 +148,9 @@ pub enum Resolved {
     /// Field access: `expr.field`
     FieldAccess(Span, Box<Resolved>, Symbol),
 
+    /// Inferred field/facet capture: `_.field` / `_.field.subfield`
+    InferredFacetCapture(Span, Vec<Symbol>),
+
     /// Compiler-managed Facet shorthand capture: `~source.path`
     FacetCapture(Span, Box<Resolved>),
 

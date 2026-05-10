@@ -51,6 +51,7 @@ impl Checker {
                 .get(&id.unique_id)
                 .is_none_or(|meta| matches!(meta.kind, ConstKind::FacetPath)),
             Resolved::FieldAccess(_, inner, _) => self.const_surface_is_allowed(inner),
+            Resolved::InferredFacetCapture(_, _) => false,
             Resolved::BinOp(_, BinOp::Slash, left, right) => {
                 self.const_surface_is_allowed(left) && self.const_surface_is_allowed(right)
             }

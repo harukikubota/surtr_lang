@@ -1140,6 +1140,27 @@ impl Resolver {
         Ok(self.make_closure_from_call(&span, params, target, rewritten_args))
     }
 
+    fn inferred_facet_capture_segments(expr: &Ast) -> Option<Vec<String>> {
+        let mut segments = Vec::new();
+        let mut current = expr;
+        loop {
+            match current {
+                Ast::FieldAccess(_, inner, field) => {
+                    segments.push(field.clone());
+                    current = inner.as_ref();
+                }
+                Ast::Grouped(_, inner) => {
+                    current = inner.as_ref();
+                }
+                Ast::Var(_, name) if name == "_" => {
+                    segments.reverse();
+                    return (!segments.is_empty()).then_some(segments);
+                }
+                _ => return None,
+            }
+        }
+    }
+
     fn pipe_slot_span(expr: &Ast) -> Option<Span> {
         match expr {
             Ast::Var(span, name) if name == "_1" => Some(span.clone()),
@@ -2080,6 +2101,10 @@ impl Resolver {
             )),
 
             Ast::FieldAccess(span, expr, field) => {
+                let original = Ast::FieldAccess(span.clone(), expr.clone(), field.clone());
+                if let Some(segments) = Self::inferred_facet_capture_segments(&original) {
+                    return Ok(Resolved::InferredFacetCapture(span, segments));
+                }
                 if matches!(expr.as_ref(), Ast::Var(_, name) if name == "ctx") {
                     return Ok(Resolved::ProcessContextHandler(span, field));
                 }

@@ -1532,7 +1532,7 @@ impl Parser<'_> {
                 },
             ));
         }
-        let (target, mut end) = match self.peek().clone() {
+        let (mut target, mut end) = match self.peek().clone() {
             Token::Ident(_) => {
                 let (name, name_span) = self.expect_ident()?;
                 let mut path_segments = vec![name.clone()];
@@ -1592,6 +1592,31 @@ impl Parser<'_> {
                 ))
             }
         };
+
+        while matches!(self.peek(), Token::Dot) {
+            self.advance();
+            let (field, field_span) = match self.peek().clone() {
+                Token::Ident(field) => {
+                    let span = self.advance().span.clone();
+                    (field, span)
+                }
+                _ => {
+                    return Err(ParseError::syntax(
+                        "Expected field name after '.'. Tuple access uses ._0, ._1, ...",
+                        self.peek_span(),
+                    ));
+                }
+            };
+            end = field_span.end;
+            target = Ast::FieldAccess(
+                Span {
+                    start: target.span().start,
+                    end,
+                },
+                Box::new(target),
+                field,
+            );
+        }
 
         let mut parsed_args = Vec::new();
         if matches!(self.peek(), Token::LParen) {

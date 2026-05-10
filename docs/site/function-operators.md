@@ -90,6 +90,7 @@ print(to_string(4 |> {|x| x * 10}))
 Ok(1) |*> add(2)
 ["a", "b"] |*> String::trim()
 users |*> &User::get_name
+users |*> _.name
 ```
 
 型の読み方:
@@ -104,7 +105,11 @@ users |*> &User::get_name
 ```surtr
 scores = [1, 2, 3] |*> add(10)
 labels = [1, 2, 3] |*> {|n| "#" ++ to_string(n)}
+names = users |*> _.name
 ```
+
+`_.path` は LHS の文脈から source 型を推論する field / Facet capture です。
+明示したい場合は `&User.name` のように type-root path を capture できます。
 
 ## `|>=` 文脈 bind
 
