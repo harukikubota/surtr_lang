@@ -4,12 +4,923 @@ use scar::typed::{
 };
 use scar::types::Ty;
 use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
 
-use crate::test_support::*;
+mod support;
+
+use support::*;
 
 const PROCESS_MODULE_SOURCE: &str = include_str!("../../../lib/process.srt");
 
+const SURFACE_WORKER_COUNT: usize = 8;
+
+const SURFACE_CASES: &[(&str, fn())] = &[
+    (
+        "process_stdlib_no_longer_declares_task_hidden_lower_helpers",
+        process_stdlib_no_longer_declares_task_hidden_lower_helpers as fn(),
+    ),
+    (
+        "process_stdlib_declares_common_process_family_modules",
+        process_stdlib_declares_common_process_family_modules as fn(),
+    ),
+    (
+        "process_module_only_declares_public_runtime_helpers",
+        process_module_only_declares_public_runtime_helpers as fn(),
+    ),
+    (
+        "process_stdlib_declares_agent_lower_surface_with_regular_surface_docs",
+        process_stdlib_declares_agent_lower_surface_with_regular_surface_docs as fn(),
+    ),
+    (
+        "field_access_is_resolved_to_numeric_index",
+        field_access_is_resolved_to_numeric_index as fn(),
+    ),
+    (
+        "match_bool_requires_exhaustive_arms",
+        match_bool_requires_exhaustive_arms as fn(),
+    ),
+    (
+        "safebind_total_pattern_accepts_plain_rhs",
+        safebind_total_pattern_accepts_plain_rhs as fn(),
+    ),
+    (
+        "dbg_special_form_typechecks_to_unit",
+        dbg_special_form_typechecks_to_unit as fn(),
+    ),
+    (
+        "safebind_function_requires_result_return_type",
+        safebind_function_requires_result_return_type as fn(),
+    ),
+    (
+        "safebind_top_ok_pattern_requires_nested_result_rhs",
+        safebind_top_ok_pattern_requires_nested_result_rhs as fn(),
+    ),
+    (
+        "safebind_top_ok_pattern_accepts_nested_result_rhs",
+        safebind_top_ok_pattern_accepts_nested_result_rhs as fn(),
+    ),
+    (
+        "safebind_list_pattern_accepts_plain_list_rhs",
+        safebind_list_pattern_accepts_plain_list_rhs as fn(),
+    ),
+    (
+        "safebind_string_pattern_accepts_plain_string_rhs",
+        safebind_string_pattern_accepts_plain_string_rhs as fn(),
+    ),
+    (
+        "int_range_literal_typechecks_to_list_int",
+        int_range_literal_typechecks_to_list_int as fn(),
+    ),
+    (
+        "string_range_literal_typechecks_to_result_list_string",
+        string_range_literal_typechecks_to_result_list_string as fn(),
+    ),
+    (
+        "match_string_requires_empty_and_uncons_arms_for_exhaustiveness",
+        match_string_requires_empty_and_uncons_arms_for_exhaustiveness as fn(),
+    ),
+    (
+        "match_string_accepts_empty_and_uncons_arms",
+        match_string_accepts_empty_and_uncons_arms as fn(),
+    ),
+    (
+        "safebind_list_pattern_accepts_nested_constructor_literals",
+        safebind_list_pattern_accepts_nested_constructor_literals as fn(),
+    ),
+    (
+        "tuple_literal_and_field_access_typecheck",
+        tuple_literal_and_field_access_typecheck as fn(),
+    ),
+    (
+        "tuple_bind_pattern_typechecks",
+        tuple_bind_pattern_typechecks as fn(),
+    ),
+    (
+        "facet_view_on_plain_value_returns_plain_focus",
+        facet_view_on_plain_value_returns_plain_focus as fn(),
+    ),
+    (
+        "facet_view_on_result_value_returns_result_focus",
+        facet_view_on_result_value_returns_result_focus as fn(),
+    ),
+    (
+        "facet_variant_selector_returns_result_and_requires_pascal_case",
+        facet_variant_selector_returns_result_and_requires_pascal_case as fn(),
+    ),
+    (
+        "facet_preview_requires_variant_path_and_records_path_kind",
+        facet_preview_requires_variant_path_and_records_path_kind as fn(),
+    ),
+    (
+        "facet_preview_accepts_option_variant",
+        facet_preview_accepts_option_variant as fn(),
+    ),
+    (
+        "facet_surface_resolves_after_facet_rename",
+        facet_surface_resolves_after_facet_rename as fn(),
+    ),
+    (
+        "facet_compose_typecheck_success_and_mismatch",
+        facet_compose_typecheck_success_and_mismatch as fn(),
+    ),
+    (
+        "facet_slash_compose_typecheck_success_and_mismatch",
+        facet_slash_compose_typecheck_success_and_mismatch as fn(),
+    ),
+    (
+        "facet_set_returns_result_source",
+        facet_set_returns_result_source as fn(),
+    ),
+    (
+        "facet_replace_returns_plain_source",
+        facet_replace_returns_plain_source as fn(),
+    ),
+    (
+        "facet_replace_rejects_result_source_and_variant_path",
+        facet_replace_rejects_result_source_and_variant_path as fn(),
+    ),
+    (
+        "facet_replace_supports_same_type_tuple_update_inside_annotated_closure",
+        facet_replace_supports_same_type_tuple_update_inside_annotated_closure as fn(),
+    ),
+    (
+        "facet_replace_unannotated_closure_still_lacks_tuple_context_from_expected_return",
+        facet_replace_unannotated_closure_still_lacks_tuple_context_from_expected_return as fn(),
+    ),
+    (
+        "facet_replace_rejects_type_changing_tuple_update",
+        facet_replace_rejects_type_changing_tuple_update as fn(),
+    ),
+    (
+        "facet_over_requires_unary_result_callable",
+        facet_over_requires_unary_result_callable as fn(),
+    ),
+    (
+        "optional_type_annotation_matches_result_none_error",
+        optional_type_annotation_matches_result_none_error as fn(),
+    ),
+    (
+        "facet_set_accepts_plain_value_for_result_focus",
+        facet_set_accepts_plain_value_for_result_focus as fn(),
+    ),
+    (
+        "facet_shorthand_view_and_mutation_forms_typecheck",
+        facet_shorthand_view_and_mutation_forms_typecheck as fn(),
+    ),
+    (
+        "facet_shorthand_reuses_existing_facet_api_errors",
+        facet_shorthand_reuses_existing_facet_api_errors as fn(),
+    ),
+    (
+        "facet_shorthand_misuse_is_rejected_outside_facet_api",
+        facet_shorthand_misuse_is_rejected_outside_facet_api as fn(),
+    ),
+    (
+        "facet_over_accepts_success_updater_for_result_focus",
+        facet_over_accepts_success_updater_for_result_focus as fn(),
+    ),
+    (
+        "facet_over_rejects_result_container_updater_for_result_focus",
+        facet_over_rejects_result_container_updater_for_result_focus as fn(),
+    ),
+    (
+        "facet_over_result_requires_result_container_updater",
+        facet_over_result_requires_result_container_updater as fn(),
+    ),
+    (
+        "readonly_facet_view_succeeds_and_preserves_path_metadata",
+        readonly_facet_view_succeeds_and_preserves_path_metadata as fn(),
+    ),
+    (
+        "readonly_field_blocks_deep_mutation_but_owner_can_replace_property",
+        readonly_field_blocks_deep_mutation_but_owner_can_replace_property as fn(),
+    ),
+    (
+        "readonly_struct_root_blocks_mutating_facet_even_for_owner",
+        readonly_struct_root_blocks_mutating_facet_even_for_owner as fn(),
+    ),
+    (
+        "facet_standalone_tuple_root_is_rejected",
+        facet_standalone_tuple_root_is_rejected as fn(),
+    ),
+    (
+        "facet_bindings_can_be_reused_by_facet_intrinsics",
+        facet_bindings_can_be_reused_by_facet_intrinsics as fn(),
+    ),
+    (
+        "facet_tuple_type_root_view_works_with_expected_context",
+        facet_tuple_type_root_view_works_with_expected_context as fn(),
+    ),
+    (
+        "deferred_tuple_facet_binding_can_be_reused_by_facet_intrinsics",
+        deferred_tuple_facet_binding_can_be_reused_by_facet_intrinsics as fn(),
+    ),
+    (
+        "deferred_tuple_facet_binding_can_compose_before_consumption",
+        deferred_tuple_facet_binding_can_compose_before_consumption as fn(),
+    ),
+    (
+        "facet_tuple_type_root_compose_works_as_inner_path",
+        facet_tuple_type_root_compose_works_as_inner_path as fn(),
+    ),
+    (
+        "facet_tuple_type_root_slash_compose_works_as_inner_path",
+        facet_tuple_type_root_slash_compose_works_as_inner_path as fn(),
+    ),
+    (
+        "facet_const_slash_compose_allows_facet_consts",
+        facet_const_slash_compose_allows_facet_consts as fn(),
+    ),
+    (
+        "facet_const_slash_compose_rejects_non_facet_const_refs",
+        facet_const_slash_compose_rejects_non_facet_const_refs as fn(),
+    ),
+    (
+        "slash_operator_rejects_numeric_division_and_points_to_safe_div",
+        slash_operator_rejects_numeric_division_and_points_to_safe_div as fn(),
+    ),
+    (
+        "facet_tuple_type_root_without_context_can_bind_as_deferred_path",
+        facet_tuple_type_root_without_context_can_bind_as_deferred_path as fn(),
+    ),
+    (
+        "facet_view_inside_closure_is_allowed_for_same_scope_consumption",
+        facet_view_inside_closure_is_allowed_for_same_scope_consumption as fn(),
+    ),
+    (
+        "facet_capture_shorthand_builds_read_closure",
+        facet_capture_shorthand_builds_read_closure as fn(),
+    ),
+    (
+        "facet_values_cannot_be_embedded_in_runtime_containers",
+        facet_values_cannot_be_embedded_in_runtime_containers as fn(),
+    ),
+    (
+        "nested_facet_types_are_rejected_in_function_signatures",
+        nested_facet_types_are_rejected_in_function_signatures as fn(),
+    ),
+    (
+        "private_field_access_is_allowed_inside_owner_impl_only",
+        private_field_access_is_allowed_inside_owner_impl_only as fn(),
+    ),
+    (
+        "private_field_access_outside_owner_impl_is_rejected_for_value_and_capability_roots",
+        private_field_access_outside_owner_impl_is_rejected_for_value_and_capability_roots
+            as fn(),
+    ),
+    (
+        "private_field_access_inside_closure_is_rejected_outside_owner_impl",
+        private_field_access_inside_closure_is_rejected_outside_owner_impl as fn(),
+    ),
+    (
+        "private_field_access_inside_param_closure_is_rejected_outside_owner_impl",
+        private_field_access_inside_param_closure_is_rejected_outside_owner_impl as fn(),
+    ),
+    (
+        "private_capability_root_is_rejected_in_facet_view_call",
+        private_capability_root_is_rejected_in_facet_view_call as fn(),
+    ),
+    (
+        "facet_scope_local_value_can_flow_to_closure_after_view",
+        facet_scope_local_value_can_flow_to_closure_after_view as fn(),
+    ),
+    (
+        "facet_runtime_transport_restrictions_remain",
+        facet_runtime_transport_restrictions_remain as fn(),
+    ),
+    (
+        "extractor_single_value_match_result_contract_typechecks",
+        extractor_single_value_match_result_contract_typechecks as fn(),
+    ),
+    (
+        "struct_matchblock_head_uses_attached_deconstruct_method",
+        struct_matchblock_head_uses_attached_deconstruct_method as fn(),
+    ),
+    (
+        "struct_matchblock_head_requires_attached_deconstruct_method",
+        struct_matchblock_head_requires_attached_deconstruct_method as fn(),
+    ),
+    (
+        "enum_impl_extractor_can_be_used_in_matchblock",
+        enum_impl_extractor_can_be_used_in_matchblock as fn(),
+    ),
+    (
+        "forward_struct_type_annotation_and_literal_are_allowed",
+        forward_struct_type_annotation_and_literal_are_allowed as fn(),
+    ),
+    (
+        "forward_deferror_value_can_flow_into_err",
+        forward_deferror_value_can_flow_into_err as fn(),
+    ),
+    (
+        "zero_arg_deferror_value_can_flow_into_error_parameter",
+        zero_arg_deferror_value_can_flow_into_error_parameter as fn(),
+    ),
+    (
+        "recover_kind_constructor_marker_typechecks",
+        recover_kind_constructor_marker_typechecks as fn(),
+    ),
+    (
+        "forward_reference_type_tags_are_deterministic_across_runs",
+        forward_reference_type_tags_are_deterministic_across_runs as fn(),
+    ),
+    (
+        "user_function_calls_typecheck_inside_script_module_scope",
+        user_function_calls_typecheck_inside_script_module_scope as fn(),
+    ),
+    (
+        "namespaced_type_and_trait_impl_typecheck_inside_script_module_scope",
+        namespaced_type_and_trait_impl_typecheck_inside_script_module_scope as fn(),
+    ),
+    (
+        "tuple_trait_impl_typechecks_inside_script_module_scope",
+        tuple_trait_impl_typechecks_inside_script_module_scope as fn(),
+    ),
+    (
+        "concrete_tuple_trait_impl_typechecks_inside_script_module_scope",
+        concrete_tuple_trait_impl_typechecks_inside_script_module_scope as fn(),
+    ),
+    (
+        "generic_user_function_calls_typecheck_inside_script_module_scope",
+        generic_user_function_calls_typecheck_inside_script_module_scope as fn(),
+    ),
+    (
+        "named_args_user_function_calls_typecheck_inside_script_module_scope",
+        named_args_user_function_calls_typecheck_inside_script_module_scope as fn(),
+    ),
+    (
+        "canonical_builtin_type_name_hole_is_reserved_for_structs",
+        canonical_builtin_type_name_hole_is_reserved_for_structs as fn(),
+    ),
+    (
+        "canonical_builtin_type_name_hole_is_reserved_for_enums",
+        canonical_builtin_type_name_hole_is_reserved_for_enums as fn(),
+    ),
+    (
+        "canonical_builtin_type_name_hole_is_reserved_for_errors",
+        canonical_builtin_type_name_hole_is_reserved_for_errors as fn(),
+    ),
+    (
+        "canonical_builtin_type_name_closure_is_reserved_for_structs",
+        canonical_builtin_type_name_closure_is_reserved_for_structs as fn(),
+    ),
+    (
+        "canonical_builtin_type_name_match_arms_is_reserved_for_structs",
+        canonical_builtin_type_name_match_arms_is_reserved_for_structs as fn(),
+    ),
+    (
+        "canonical_builtin_type_name_cond_clauses_is_reserved_for_enums",
+        canonical_builtin_type_name_cond_clauses_is_reserved_for_enums as fn(),
+    ),
+    (
+        "match_arms_type_is_forbidden_in_ordinary_user_signatures",
+        match_arms_type_is_forbidden_in_ordinary_user_signatures as fn(),
+    ),
+    (
+        "match_arms_type_is_forbidden_in_return_types",
+        match_arms_type_is_forbidden_in_return_types as fn(),
+    ),
+    (
+        "cond_clauses_type_is_forbidden_in_ordinary_user_signatures",
+        cond_clauses_type_is_forbidden_in_ordinary_user_signatures as fn(),
+    ),
+    (
+        "cond_clauses_type_is_forbidden_in_return_types",
+        cond_clauses_type_is_forbidden_in_return_types as fn(),
+    ),
+    (
+        "trailing_block_calls_typecheck_inside_script_module_scope",
+        trailing_block_calls_typecheck_inside_script_module_scope as fn(),
+    ),
+    (
+        "set_exit_code_is_allowed_in_script_rules",
+        set_exit_code_is_allowed_in_script_rules as fn(),
+    ),
+    (
+        "set_exit_code_is_forbidden_in_repl_chunk_rules",
+        set_exit_code_is_forbidden_in_repl_chunk_rules as fn(),
+    ),
+    (
+        "set_exit_code_entry_only_policy_allows_only_entrypoint_function",
+        set_exit_code_entry_only_policy_allows_only_entrypoint_function as fn(),
+    ),
+    (
+        "assert_special_form_typechecks_to_result_unit",
+        assert_special_form_typechecks_to_result_unit as fn(),
+    ),
+    (
+        "bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid",
+        bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid as fn(),
+    ),
+    (
+        "bitwidth_zero_arg_variant_typechecks_with_builtin_prelude",
+        bitwidth_zero_arg_variant_typechecks_with_builtin_prelude as fn(),
+    ),
+    (
+        "ensure_special_form_typechecks_to_result_value",
+        ensure_special_form_typechecks_to_result_value as fn(),
+    ),
+    (
+        "and_special_form_typechecks_to_boolean_if",
+        and_special_form_typechecks_to_boolean_if as fn(),
+    ),
+    (
+        "eq_helper_typechecks_as_trait_call",
+        eq_helper_typechecks_as_trait_call as fn(),
+    ),
+    (
+        "lt_helper_typechecks_as_trait_call",
+        lt_helper_typechecks_as_trait_call as fn(),
+    ),
+    (
+        "concat_helper_typechecks_as_trait_call",
+        concat_helper_typechecks_as_trait_call as fn(),
+    ),
+    (
+        "to_string_helper_typechecks_as_trait_call",
+        to_string_helper_typechecks_as_trait_call as fn(),
+    ),
+    (
+        "ensure_rejects_call_expression_predicate",
+        ensure_rejects_call_expression_predicate as fn(),
+    ),
+    (
+        "assert_rejects_non_concrete_error_expression",
+        assert_rejects_non_concrete_error_expression as fn(),
+    ),
+    (
+        "kernel_and_contract_rejects_eager_signature",
+        kernel_and_contract_rejects_eager_signature as fn(),
+    ),
+    (
+        "special_form_builtin_decl_must_live_under_kernel",
+        special_form_builtin_decl_must_live_under_kernel as fn(),
+    ),
+    (
+        "kernel_does_not_allow_removed_concat_builtin",
+        kernel_does_not_allow_removed_concat_builtin as fn(),
+    ),
+    (
+        "if_auto_forces_zero_arg_closure_once_for_branch_type",
+        if_auto_forces_zero_arg_closure_once_for_branch_type as fn(),
+    ),
+    (
+        "if_nested_closure_is_not_deep_forced",
+        if_nested_closure_is_not_deep_forced as fn(),
+    ),
+    (
+        "user_lazy_annotation_is_rejected",
+        user_lazy_annotation_is_rejected as fn(),
+    ),
+    (
+        "assert_accepts_lazy_error_branch",
+        assert_accepts_lazy_error_branch as fn(),
+    ),
+    (
+        "ensure_accepts_lazy_error_branch",
+        ensure_accepts_lazy_error_branch as fn(),
+    ),
+    (
+        "assert_accepts_existing_error_value",
+        assert_accepts_existing_error_value as fn(),
+    ),
+    (
+        "ensure_accepts_existing_error_value",
+        ensure_accepts_existing_error_value as fn(),
+    ),
+    (
+        "generic_annotation_list_int_is_accepted",
+        generic_annotation_list_int_is_accepted as fn(),
+    ),
+    (
+        "generic_def_signature_instantiates_per_call_site",
+        generic_def_signature_instantiates_per_call_site as fn(),
+    ),
+    (
+        "generic_defenum_constructor_and_match_typecheck",
+        generic_defenum_constructor_and_match_typecheck as fn(),
+    ),
+    (
+        "closure_param_annotation_without_expected_type_constrains_calls",
+        closure_param_annotation_without_expected_type_constrains_calls as fn(),
+    ),
+    (
+        "closure_application_mismatch_reports_callable_type_signature",
+        closure_application_mismatch_reports_callable_type_signature as fn(),
+    ),
+    (
+        "builtin_function_arity_reports_call_target_signature",
+        builtin_function_arity_reports_call_target_signature as fn(),
+    ),
+    (
+        "builtin_function_mismatch_reports_call_target_signature",
+        builtin_function_mismatch_reports_call_target_signature as fn(),
+    ),
+    (
+        "capture_application_mismatch_reports_callable_type_signature",
+        capture_application_mismatch_reports_callable_type_signature as fn(),
+    ),
+    (
+        "script_callable_signature_omits_file_path_segments",
+        script_callable_signature_omits_file_path_segments as fn(),
+    ),
+    (
+        "compose_mismatch_reports_left_and_right_callable_types",
+        compose_mismatch_reports_left_and_right_callable_types as fn(),
+    ),
+    (
+        "compose_accepts_calls_returning_function_values",
+        compose_accepts_calls_returning_function_values as fn(),
+    ),
+    (
+        "compose_rejects_non_function_call_results_after_typechecking_call",
+        compose_rejects_non_function_call_results_after_typechecking_call as fn(),
+    ),
+    (
+        "closure_trait_helper_binding_requires_concrete_callable_boundary",
+        closure_trait_helper_binding_requires_concrete_callable_boundary as fn(),
+    ),
+    (
+        "closure_trait_helper_binding_accepts_binding_annotation",
+        closure_trait_helper_binding_accepts_binding_annotation as fn(),
+    ),
+    (
+        "closure_trait_helper_binding_accepts_parameter_annotations",
+        closure_trait_helper_binding_accepts_parameter_annotations as fn(),
+    ),
+    (
+        "on_call_concretizes_closure_trait_helper_from_key_function",
+        on_call_concretizes_closure_trait_helper_from_key_function as fn(),
+    ),
+    (
+        "on_call_concretizes_trait_helper_capture_from_key_function",
+        on_call_concretizes_trait_helper_capture_from_key_function as fn(),
+    ),
+    (
+        "pipe_plain_apply_over_result_reports_whole_lhs_mismatch",
+        pipe_plain_apply_over_result_reports_whole_lhs_mismatch as fn(),
+    ),
+    (
+        "context_bind_rejects_plain_rhs_return",
+        context_bind_rejects_plain_rhs_return as fn(),
+    ),
+    (
+        "context_map_keeps_result_for_later_bind",
+        context_map_keeps_result_for_later_bind as fn(),
+    ),
+    (
+        "context_map_and_bind_lower_to_operator_trait_calls",
+        context_map_and_bind_lower_to_operator_trait_calls as fn(),
+    ),
+    (
+        "explicit_functor_call_has_explicit_origin",
+        explicit_functor_call_has_explicit_origin as fn(),
+    ),
+    (
+        "flow_apply_and_compose_operators_lower_to_trait_calls",
+        flow_apply_and_compose_operators_lower_to_trait_calls as fn(),
+    ),
+    (
+        "user_defined_container_can_use_context_operators_via_traits",
+        user_defined_container_can_use_context_operators_via_traits as fn(),
+    ),
+    (
+        "result_match_wildcard_self_after_ok_can_change_ok_payload_type",
+        result_match_wildcard_self_after_ok_can_change_ok_payload_type as fn(),
+    ),
+    (
+        "result_match_wildcard_self_after_ok_can_keep_err_for_bind_shape",
+        result_match_wildcard_self_after_ok_can_keep_err_for_bind_shape as fn(),
+    ),
+    (
+        "result_match_wildcard_self_requires_err_proven_branch",
+        result_match_wildcard_self_requires_err_proven_branch as fn(),
+    ),
+    (
+        "closure_param_annotation_must_match_expected_signature",
+        closure_param_annotation_must_match_expected_signature as fn(),
+    ),
+    (
+        "local_binding_annotation_can_reference_outer_generic_type_param",
+        local_binding_annotation_can_reference_outer_generic_type_param as fn(),
+    ),
+    (
+        "closure_param_annotation_can_reference_outer_generic_type_param",
+        closure_param_annotation_can_reference_outer_generic_type_param as fn(),
+    ),
+    (
+        "generic_first_can_inline_tuple_rebuild_with_closure_param_annotation",
+        generic_first_can_inline_tuple_rebuild_with_closure_param_annotation as fn(),
+    ),
+    (
+        "sibling_closures_keep_substitution_state_local",
+        sibling_closures_keep_substitution_state_local as fn(),
+    ),
+    (
+        "cyclic_type_definition_is_rejected",
+        cyclic_type_definition_is_rejected as fn(),
+    ),
+    (
+        "enum_cycle_is_allowed_when_not_shared_by_all_variants",
+        enum_cycle_is_allowed_when_not_shared_by_all_variants as fn(),
+    ),
+    (
+        "enum_cycle_is_rejected_when_shared_by_all_variants",
+        enum_cycle_is_rejected_when_shared_by_all_variants as fn(),
+    ),
+    (
+        "enum_field_access_is_rejected",
+        enum_field_access_is_rejected as fn(),
+    ),
+    (
+        "match_binding_pattern_is_treated_as_exhaustive",
+        match_binding_pattern_is_treated_as_exhaustive as fn(),
+    ),
+    (
+        "match_tuple_binding_pattern_is_treated_as_exhaustive",
+        match_tuple_binding_pattern_is_treated_as_exhaustive as fn(),
+    ),
+    (
+        "match_guard_must_be_boolean",
+        match_guard_must_be_boolean as fn(),
+    ),
+    (
+        "guarded_match_arm_does_not_satisfy_exhaustiveness",
+        guarded_match_arm_does_not_satisfy_exhaustiveness as fn(),
+    ),
+    (
+        "struct_literal_rejects_extra_fields",
+        struct_literal_rejects_extra_fields as fn(),
+    ),
+    (
+        "constructor_named_args_reject_duplicate_fields",
+        constructor_named_args_reject_duplicate_fields as fn(),
+    ),
+    (
+        "struct_literal_field_shorthand_typechecks",
+        struct_literal_field_shorthand_typechecks as fn(),
+    ),
+    (
+        "struct_literal_field_shorthand_mixed_with_explicit_typechecks",
+        struct_literal_field_shorthand_mixed_with_explicit_typechecks as fn(),
+    ),
+    (
+        "struct_literal_field_shorthand_rejects_duplicate_fields",
+        struct_literal_field_shorthand_rejects_duplicate_fields as fn(),
+    ),
+    ("struct_requires_impl_new", struct_requires_impl_new as fn()),
+    (
+        "struct_new_accepts_result_self_return_type",
+        struct_new_accepts_result_self_return_type as fn(),
+    ),
+    (
+        "struct_new_rejects_non_self_return_type",
+        struct_new_rejects_non_self_return_type as fn(),
+    ),
+    (
+        "struct_new_rejects_result_non_self_payload",
+        struct_new_rejects_result_non_self_payload as fn(),
+    ),
+    (
+        "struct_constructor_call_accepts_result_return_type",
+        struct_constructor_call_accepts_result_return_type as fn(),
+    ),
+    (
+        "struct_literal_is_rejected_outside_impl_body",
+        struct_literal_is_rejected_outside_impl_body as fn(),
+    ),
+    (
+        "user_function_call_rejects_mixed_named_and_positional_args",
+        user_function_call_rejects_mixed_named_and_positional_args as fn(),
+    ),
+    (
+        "impl_self_rebinding_allows_self_type",
+        impl_self_rebinding_allows_self_type as fn(),
+    ),
+    (
+        "impl_self_rebinding_rejects_non_self_type",
+        impl_self_rebinding_rejects_non_self_type as fn(),
+    ),
+    (
+        "deferror_show_type_mismatch_points_to_show_expression_span",
+        deferror_show_type_mismatch_points_to_show_expression_span as fn(),
+    ),
+    (
+        "operator_and_numeric_trait_calls_typecheck_with_static_dispatch",
+        operator_and_numeric_trait_calls_typecheck_with_static_dispatch as fn(),
+    ),
+    (
+        "duration_operator_traits_dispatch_to_surtr_impls",
+        duration_operator_traits_dispatch_to_surtr_impls as fn(),
+    ),
+    (
+        "bounded_add_generics_specialize_without_pending_trait_calls",
+        bounded_add_generics_specialize_without_pending_trait_calls as fn(),
+    ),
+    (
+        "scar_session_preserves_trait_registry_across_chunks",
+        scar_session_preserves_trait_registry_across_chunks as fn(),
+    ),
+    (
+        "add_trait_mismatch_lists_available_implementations",
+        add_trait_mismatch_lists_available_implementations as fn(),
+    ),
+    (
+        "add_trait_missing_receiver_lists_available_implementations",
+        add_trait_missing_receiver_lists_available_implementations as fn(),
+    ),
+    (
+        "add_operator_missing_impl_lists_available_implementations_in_hint",
+        add_operator_missing_impl_lists_available_implementations_in_hint as fn(),
+    ),
+    (
+        "bind_operator_missing_impl_lists_available_implementations_in_hint",
+        bind_operator_missing_impl_lists_available_implementations_in_hint as fn(),
+    ),
+    (
+        "from_helper_typechecks_as_generic_trait_call",
+        from_helper_typechecks_as_generic_trait_call as fn(),
+    ),
+    (
+        "try_from_helper_typechecks_as_generic_trait_call",
+        try_from_helper_typechecks_as_generic_trait_call as fn(),
+    ),
+    (
+        "encode_helper_typechecks_as_generic_trait_call",
+        encode_helper_typechecks_as_generic_trait_call as fn(),
+    ),
+    (
+        "decode_helper_typechecks_format_and_target_witnesses",
+        decode_helper_typechecks_format_and_target_witnesses as fn(),
+    ),
+    (
+        "from_helper_suggests_try_from_when_only_fallible_impl_exists",
+        from_helper_suggests_try_from_when_only_fallible_impl_exists as fn(),
+    ),
+    (
+        "try_from_helper_suggests_from_when_only_infallible_impl_exists",
+        try_from_helper_suggests_from_when_only_infallible_impl_exists as fn(),
+    ),
+    (
+        "from_and_try_from_impls_are_mutually_exclusive",
+        from_and_try_from_impls_are_mutually_exclusive as fn(),
+    ),
+    (
+        "process_sleep_accepts_duration_literal",
+        process_sleep_accepts_duration_literal as fn(),
+    ),
+    (
+        "process_self_is_rejected_outside_process_context",
+        process_self_is_rejected_outside_process_context as fn(),
+    ),
+    (
+        "process_self_typechecks_inside_process_handler",
+        process_self_typechecks_inside_process_handler as fn(),
+    ),
+    (
+        "singleton_agent_pid_surface_returns_concrete_pid",
+        singleton_agent_pid_surface_returns_concrete_pid as fn(),
+    ),
+    (
+        "singleton_genserver_pid_surface_returns_concrete_pid",
+        singleton_genserver_pid_surface_returns_concrete_pid as fn(),
+    ),
+    (
+        "singleton_agent_explicit_pid_call_typechecks",
+        singleton_agent_explicit_pid_call_typechecks as fn(),
+    ),
+    (
+        "genserver_additional_call_handler_typechecks_as_process_context",
+        genserver_additional_call_handler_typechecks_as_process_context as fn(),
+    ),
+    (
+        "genserver_call_handler_accepts_call_result_contract",
+        genserver_call_handler_accepts_call_result_contract as fn(),
+    ),
+    (
+        "process_meta_state_mismatch_is_rejected",
+        process_meta_state_mismatch_is_rejected as fn(),
+    ),
+    (
+        "user_defined_process_state_can_appear_in_public_signatures",
+        user_defined_process_state_can_appear_in_public_signatures as fn(),
+    ),
+    (
+        "typecheck_staged_program_keeps_process_specs",
+        typecheck_staged_program_keeps_process_specs as fn(),
+    ),
+    (
+        "dynsup_spawn_accepts_worker_init_route_reference",
+        dynsup_spawn_accepts_worker_init_route_reference as fn(),
+    ),
+    (
+        "custom_supervisor_spawn_accepts_worker_init_route_reference",
+        custom_supervisor_spawn_accepts_worker_init_route_reference as fn(),
+    ),
+    (
+        "supervisor_spawn_rejects_plain_closure_argument",
+        supervisor_spawn_rejects_plain_closure_argument as fn(),
+    ),
+    (
+        "supervisor_spawn_rejects_non_worker_callable",
+        supervisor_spawn_rejects_non_worker_callable as fn(),
+    ),
+    (
+        "supervisor_adopt_accepts_worker_pid",
+        supervisor_adopt_accepts_worker_pid as fn(),
+    ),
+    (
+        "supervisor_adopt_rejects_non_pid_argument",
+        supervisor_adopt_rejects_non_pid_argument as fn(),
+    ),
+    (
+        "supervisor_adopt_rejects_when_policy_disallows_it",
+        supervisor_adopt_rejects_when_policy_disallows_it as fn(),
+    ),
+    (
+        "supervisor_status_returns_supervisor_status",
+        supervisor_status_returns_supervisor_status as fn(),
+    ),
+    (
+        "supervisor_workers_returns_workers_handle",
+        supervisor_workers_returns_workers_handle as fn(),
+    ),
+    (
+        "workers_submit_accepts_worker_message_template",
+        workers_submit_accepts_worker_message_template as fn(),
+    ),
+    (
+        "workers_broadcast_accepts_worker_message_template",
+        workers_broadcast_accepts_worker_message_template as fn(),
+    ),
+    (
+        "task_await_accepts_task_handle",
+        task_await_accepts_task_handle as fn(),
+    ),
+    (
+        "workers_reserve_can_flow_into_worker_call",
+        workers_reserve_can_flow_into_worker_call as fn(),
+    ),
+];
+
 #[test]
+fn typecheck_surface_suite() {
+    run_surface_cases_parallel();
+}
+
+fn run_surface_cases_parallel() {
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+
+    let next_case = AtomicUsize::new(0);
+    let failed = AtomicBool::new(false);
+    let failures = Mutex::new(Vec::new());
+
+    std::thread::scope(|scope| {
+        for _ in 0..SURFACE_WORKER_COUNT {
+            scope.spawn(|| loop {
+                if failed.load(Ordering::Relaxed) {
+                    break;
+                }
+                let idx = next_case.fetch_add(1, Ordering::Relaxed);
+                let Some((name, case)) = SURFACE_CASES.get(idx) else {
+                    break;
+                };
+                if let Err(payload) = std::panic::catch_unwind(*case) {
+                    failed.store(true, Ordering::Relaxed);
+                    failures.lock().expect("failure lock").push(format!(
+                        "{name}: {}",
+                        panic_payload_message(payload.as_ref())
+                    ));
+                    break;
+                }
+            });
+        }
+    });
+
+    std::panic::set_hook(previous_hook);
+
+    let failures = failures.into_inner().expect("failure lock");
+    if !failures.is_empty() {
+        panic!(
+            "{} scar surface case(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+}
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_owned()
+    }
+}
+
 fn process_stdlib_no_longer_declares_task_hidden_lower_helpers() {
     for hidden_name in [
         "__task_call",
@@ -32,7 +943,6 @@ fn process_stdlib_no_longer_declares_task_hidden_lower_helpers() {
     }
 }
 
-#[test]
 fn process_stdlib_declares_common_process_family_modules() {
     for module_name in ["defmod Supervisor", "defmod GenServer", "defmod Agent"] {
         assert!(
@@ -42,7 +952,6 @@ fn process_stdlib_declares_common_process_family_modules() {
     }
 }
 
-#[test]
 fn process_module_only_declares_public_runtime_helpers() {
     let process_start = PROCESS_MODULE_SOURCE
         .find("defmod Process")
@@ -72,7 +981,6 @@ fn process_module_only_declares_public_runtime_helpers() {
     }
 }
 
-#[test]
 fn process_stdlib_declares_agent_lower_surface_with_regular_surface_docs() {
     let agent_start = PROCESS_MODULE_SOURCE
         .find("defmod Agent")
@@ -105,7 +1013,6 @@ fn process_stdlib_declares_agent_lower_surface_with_regular_surface_docs() {
     );
 }
 
-#[test]
 fn field_access_is_resolved_to_numeric_index() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct User {
@@ -148,7 +1055,6 @@ age = user.age"#,
     }
 }
 
-#[test]
 fn match_bool_requires_exhaustive_arms() {
     let resolved = resolve_with_builtin_prelude(
         r#"flag = True
@@ -161,7 +1067,6 @@ print(match flag {
     assert!(err.message.contains("Non-exhaustive match. Missing: False"));
 }
 
-#[test]
 fn safebind_total_pattern_accepts_plain_rhs() {
     let resolved = resolve_with_builtin_prelude("num =? 10");
     let typed = typecheck(resolved).expect("typecheck should succeed");
@@ -171,7 +1076,6 @@ fn safebind_total_pattern_accepts_plain_rhs() {
     ));
 }
 
-#[test]
 fn dbg_special_form_typechecks_to_unit() {
     let resolved = resolve_with_builtin_prelude("x = dbg!(1, \"ok\")");
     let typed = typecheck(resolved).expect("typecheck should succeed");
@@ -187,7 +1091,6 @@ fn dbg_special_form_typechecks_to_unit() {
     assert!(matches!(rhs.node, TypedInner::Dbg(_)));
 }
 
-#[test]
 fn safebind_function_requires_result_return_type() {
     let resolved = resolve_with_builtin_prelude(
         r#"def bad() -> Int {
@@ -202,7 +1105,6 @@ fn safebind_function_requires_result_return_type() {
         .contains("can only be used in functions returning Result"));
 }
 
-#[test]
 fn safebind_top_ok_pattern_requires_nested_result_rhs() {
     let resolved = resolve_with_builtin_prelude(
         r#"value: Result<Int> = Ok(1)
@@ -212,7 +1114,6 @@ Ok(num) =? value"#,
     assert!(err.message.contains("`Ok(...)` pattern requires Result"));
 }
 
-#[test]
 fn safebind_top_ok_pattern_accepts_nested_result_rhs() {
     let resolved = resolve_with_builtin_prelude(
         r#"value: Result<Result<Int>> = Ok(Ok(1))
@@ -225,7 +1126,6 @@ Ok(num) =? value"#,
     ));
 }
 
-#[test]
 fn safebind_list_pattern_accepts_plain_list_rhs() {
     let resolved = resolve_with_builtin_prelude(
         r#"value = [1, 2, 3]
@@ -238,7 +1138,6 @@ fn safebind_list_pattern_accepts_plain_list_rhs() {
     ));
 }
 
-#[test]
 fn safebind_string_pattern_accepts_plain_string_rhs() {
     let resolved = resolve_with_builtin_prelude(
         r#"value = "source"
@@ -251,7 +1150,6 @@ fn safebind_string_pattern_accepts_plain_string_rhs() {
     ));
 }
 
-#[test]
 fn int_range_literal_typechecks_to_list_int() {
     let resolved = resolve_with_builtin_prelude("nums = [1..3]");
     let typed = typecheck(resolved).expect("typecheck should succeed");
@@ -265,7 +1163,6 @@ fn int_range_literal_typechecks_to_list_int() {
     assert_eq!(rhs.ty, Ty::List(Box::new(Ty::Int)));
 }
 
-#[test]
 fn string_range_literal_typechecks_to_result_list_string() {
     let resolved = resolve_with_builtin_prelude(r#"chars = ["a".."c"]"#);
     let typed = typecheck(resolved).expect("typecheck should succeed");
@@ -282,7 +1179,6 @@ fn string_range_literal_typechecks_to_result_list_string() {
     );
 }
 
-#[test]
 fn match_string_requires_empty_and_uncons_arms_for_exhaustiveness() {
     let resolved = resolve_with_builtin_prelude(
         r#"value = "x"
@@ -295,7 +1191,6 @@ print(match value {
     assert!(err.message.contains("Non-exhaustive match. Missing: []"));
 }
 
-#[test]
 fn match_string_accepts_empty_and_uncons_arms() {
     let resolved = resolve_with_builtin_prelude(
         r#"value = "x"
@@ -308,7 +1203,6 @@ print(match value {
     assert!(!typed.is_empty());
 }
 
-#[test]
 fn safebind_list_pattern_accepts_nested_constructor_literals() {
     let resolved = resolve_with_builtin_prelude(
         r#"lr = [Ok(1), Ok(2), Ok(3)]
@@ -321,7 +1215,6 @@ fn safebind_list_pattern_accepts_nested_constructor_literals() {
     ));
 }
 
-#[test]
 fn tuple_literal_and_field_access_typecheck() {
     let resolved = resolve_with_builtin_prelude(
         r#"pair = (1, "two")
@@ -338,7 +1231,6 @@ second = pair._1"#,
     );
 }
 
-#[test]
 fn tuple_bind_pattern_typechecks() {
     let resolved = resolve_with_builtin_prelude(
         r#"pair = (1, "two")
@@ -351,7 +1243,6 @@ fn tuple_bind_pattern_typechecks() {
     ));
 }
 
-#[test]
 fn facet_view_on_plain_value_returns_plain_focus() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
@@ -363,7 +1254,6 @@ user.name"#,
     assert!(matches!(last.node, TypedInner::FacetView { .. }));
 }
 
-#[test]
 fn facet_view_on_result_value_returns_result_focus() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
@@ -380,7 +1270,6 @@ result_user.name"#,
     assert!(matches!(last.node, TypedInner::FacetView { .. }));
 }
 
-#[test]
 fn facet_variant_selector_returns_result_and_requires_pascal_case() {
     let typed = typecheck_with_builtin_prelude(
         r#"defenum Expr {
@@ -411,7 +1300,6 @@ expr.add"#,
     assert!(err.message.contains("No variant selector 'add'"));
 }
 
-#[test]
 fn facet_preview_requires_variant_path_and_records_path_kind() {
     let typed = typecheck_with_builtin_prelude(
         r#"defenum Expr {
@@ -445,7 +1333,6 @@ Facet::preview(User.name, user)"#,
         .contains("Facet::preview requires a variant Facet"));
 }
 
-#[test]
 fn facet_preview_accepts_option_variant() {
     let typed = typecheck_with_builtin_prelude(
         r#"value: Option<Int> = Option::Some(1)
@@ -464,7 +1351,6 @@ Facet::preview(Option.Some, value)"#,
     ));
 }
 
-#[test]
 fn facet_surface_resolves_after_facet_rename() {
     let resolved = resolve_with_builtin_prelude_result(
         r#"defrecord User(name: String)
@@ -475,7 +1361,6 @@ Facet::view(User.name, user)"#,
     assert!(!resolved.is_empty());
 }
 
-#[test]
 fn facet_compose_typecheck_success_and_mismatch() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
@@ -498,7 +1383,6 @@ Facet::compose(Profile.name, User.profile)"#,
     assert!(err.message.contains("Facet::compose source/focus mismatch"));
 }
 
-#[test]
 fn facet_slash_compose_typecheck_success_and_mismatch() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
@@ -521,7 +1405,6 @@ Profile.name / User.profile"#,
     assert!(err.message.contains("source/focus mismatch"));
 }
 
-#[test]
 fn facet_set_returns_result_source() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
@@ -538,7 +1421,6 @@ Facet::set(User.name, user, "bob")"#,
     assert!(matches!(last.node, TypedInner::FacetSet { .. }));
 }
 
-#[test]
 fn facet_replace_returns_plain_source() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
@@ -553,7 +1435,6 @@ Facet::replace(User.name, user, "bob")"#,
     assert!(matches!(last.node, TypedInner::FacetSet { .. }));
 }
 
-#[test]
 fn facet_replace_rejects_result_source_and_variant_path() {
     let result_source_err = typecheck_with_rules(
         r#"defrecord User(name: String)
@@ -581,7 +1462,6 @@ Facet::replace(Expr.Add / Tuple._0, expr, 7)"#,
         .contains("Facet::replace requires a structural Facet path"));
 }
 
-#[test]
 fn facet_replace_supports_same_type_tuple_update_inside_annotated_closure() {
     let typed = typecheck_with_builtin_prelude(
         r#"def first(f: (Int -> Int)) -> ((Int, Boolean) -> (Int, Boolean)) {
@@ -591,7 +1471,6 @@ fn facet_replace_supports_same_type_tuple_update_inside_annotated_closure() {
     assert!(!typed.is_empty());
 }
 
-#[test]
 fn facet_replace_unannotated_closure_still_lacks_tuple_context_from_expected_return() {
     let err = typecheck_with_rules(
         r#"def first(f: (Int -> Int)) -> ((Int, Boolean) -> (Int, Boolean)) {
@@ -605,7 +1484,6 @@ fn facet_replace_unannotated_closure_still_lacks_tuple_context_from_expected_ret
         .contains("Tuple._0 requires tuple source context"));
 }
 
-#[test]
 fn facet_replace_rejects_type_changing_tuple_update() {
     let err = typecheck_with_rules(
         r#"def first(f: (Int -> String)) -> ((Int, Boolean) -> (String, Boolean)) {
@@ -619,7 +1497,6 @@ fn facet_replace_rejects_type_changing_tuple_update() {
         .contains("Facet::replace value type mismatch: expected Int, got String"));
 }
 
-#[test]
 fn facet_over_requires_unary_result_callable() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
@@ -647,7 +1524,6 @@ Facet::over(User.name, user, {|name| name})"#,
         .contains("Facet::over update function must return Result"));
 }
 
-#[test]
 fn optional_type_annotation_matches_result_none_error() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Boxed(
@@ -659,7 +1535,6 @@ same: Result<Int, NoneError> = boxed.value"#,
     assert!(!typed.is_empty());
 }
 
-#[test]
 fn facet_set_accepts_plain_value_for_result_focus() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(score: Result<Int>)
@@ -675,7 +1550,6 @@ Facet::set(User.score, user, 3)"#,
     ));
 }
 
-#[test]
 fn facet_shorthand_view_and_mutation_forms_typecheck() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String, score: Result<Int>)
@@ -690,7 +1564,6 @@ Facet::over_result(~bumped.score, {|score| Ok(score)})"#,
     assert!(matches!(last.node, TypedInner::FacetOver { .. }));
 }
 
-#[test]
 fn facet_shorthand_reuses_existing_facet_api_errors() {
     let preview_err = typecheck_with_rules(
         r#"defrecord User(name: String)
@@ -715,7 +1588,6 @@ Facet::replace(~result_user.name, "bob")"#,
         .contains("Facet::replace requires a plain source value"));
 }
 
-#[test]
 fn facet_shorthand_misuse_is_rejected_outside_facet_api() {
     let bind_err = typecheck_with_rules(
         r#"defrecord User(name: String)
@@ -740,7 +1612,6 @@ Facet::view(~user)"#,
         .contains("requires a field or tuple path"));
 }
 
-#[test]
 fn facet_over_accepts_success_updater_for_result_focus() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(score: Result<Int>)
@@ -751,7 +1622,6 @@ Facet::over(User.score, user, {|score| Ok(score + 1)})"#,
     assert!(matches!(last.node, TypedInner::FacetOver { .. }));
 }
 
-#[test]
 fn facet_over_rejects_result_container_updater_for_result_focus() {
     let err = typecheck_with_rules(
         r#"defrecord User(score: Result<Int>)
@@ -765,7 +1635,6 @@ Facet::over(User.score, user, {|score| Ok(Ok(score))})"#,
         .contains("Facet::over update function output mismatch"));
 }
 
-#[test]
 fn facet_over_result_requires_result_container_updater() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(score: Result<Int>)
@@ -787,7 +1656,6 @@ Facet::over_result(User.score, user, {|score| Ok(1)})"#,
         .contains("Facet::over_result update function output mismatch"));
 }
 
-#[test]
 fn readonly_facet_view_succeeds_and_preserves_path_metadata() {
     let typed = typecheck_with_builtin_prelude(
         r#"defstruct Profile {
@@ -831,7 +1699,6 @@ Facet::view(User.profile.name, user)"#,
     }
 }
 
-#[test]
 fn readonly_field_blocks_deep_mutation_but_owner_can_replace_property() {
     let err = typecheck_with_rules(
         r#"defstruct Profile {
@@ -892,7 +1759,6 @@ impl User {
     ));
 }
 
-#[test]
 fn readonly_struct_root_blocks_mutating_facet_even_for_owner() {
     let err = typecheck_with_rules(
         r#"@readonly
@@ -934,7 +1800,6 @@ impl Profile {
     assert!(err.message.contains("readonly type Profile"));
 }
 
-#[test]
 fn facet_standalone_tuple_root_is_rejected() {
     let err = resolve_with_builtin_prelude_result(
         r#"pair = (1, "one")
@@ -944,7 +1809,6 @@ Facet::view(_0, pair)"#,
     assert!(err.message.contains("Undefined variable: _0"));
 }
 
-#[test]
 fn facet_bindings_can_be_reused_by_facet_intrinsics() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
@@ -957,7 +1821,6 @@ Facet::view(facet, user)"#,
     assert!(matches!(last.node, TypedInner::FacetView { .. }));
 }
 
-#[test]
 fn facet_tuple_type_root_view_works_with_expected_context() {
     let typed = typecheck_with_builtin_prelude(
         r#"pair = ("alice", 42)
@@ -968,7 +1831,6 @@ Facet::view(Tuple._0, pair)"#,
     assert!(matches!(last.node, TypedInner::FacetView { .. }));
 }
 
-#[test]
 fn deferred_tuple_facet_binding_can_be_reused_by_facet_intrinsics() {
     let typed = typecheck_with_builtin_prelude(
         r#"pair = ("alice", 42)
@@ -980,7 +1842,6 @@ Facet::view(facet, pair)"#,
     assert!(matches!(last.node, TypedInner::FacetView { .. }));
 }
 
-#[test]
 fn deferred_tuple_facet_binding_can_compose_before_consumption() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
@@ -994,7 +1855,6 @@ Facet::view(path, pair)"#,
     assert!(matches!(last.node, TypedInner::FacetView { .. }));
 }
 
-#[test]
 fn facet_tuple_type_root_compose_works_as_inner_path() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(pair: (String, Int))
@@ -1005,7 +1865,6 @@ Facet::view(Facet::compose(User.pair, Tuple._0), user)"#,
     assert!(matches!(last.ty, scar::types::Ty::Str));
 }
 
-#[test]
 fn facet_tuple_type_root_slash_compose_works_as_inner_path() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(pair: (String, Int))
@@ -1016,7 +1875,6 @@ Facet::view(User.pair / Tuple._0, user)"#,
     assert!(matches!(last.ty, scar::types::Ty::Str));
 }
 
-#[test]
 fn facet_const_slash_compose_allows_facet_consts() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
@@ -1031,7 +1889,6 @@ Facet::view(FULL_NAME, user)"#,
     assert!(matches!(last.ty, scar::types::Ty::Str));
 }
 
-#[test]
 fn facet_const_slash_compose_rejects_non_facet_const_refs() {
     let err = typecheck_with_rules(
         r#"const VALUE = 1
@@ -1044,7 +1901,6 @@ const BAD = VALUE / VALUE"#,
         .contains("const value must be a primitive literal or a facet path"));
 }
 
-#[test]
 fn slash_operator_rejects_numeric_division_and_points_to_safe_div() {
     let err = typecheck_with_rules(r#"print(to_string(10 / 3))"#, RuntimeSourcePolicy::script())
         .expect_err("numeric infix slash should fail");
@@ -1055,14 +1911,12 @@ fn slash_operator_rejects_numeric_division_and_points_to_safe_div() {
         .is_some_and(|hint| hint.contains("safe_div")));
 }
 
-#[test]
 fn facet_tuple_type_root_without_context_can_bind_as_deferred_path() {
     let typed = typecheck_with_builtin_prelude("facet = Tuple._0");
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Unit));
 }
 
-#[test]
 fn facet_view_inside_closure_is_allowed_for_same_scope_consumption() {
     let typed = typecheck_with_rules(
         r#"defrecord User(name: String)
@@ -1076,7 +1930,6 @@ getter(User("alice"))"#,
     assert!(matches!(last.ty, scar::types::Ty::Str));
 }
 
-#[test]
 fn facet_capture_shorthand_builds_read_closure() {
     let typed = typecheck_with_rules(
         r#"defrecord User(name: String)
@@ -1090,7 +1943,6 @@ getter(User("alice"))"#,
     assert!(matches!(last.ty, scar::types::Ty::Str));
 }
 
-#[test]
 fn facet_values_cannot_be_embedded_in_runtime_containers() {
     let tuple_err = typecheck_with_rules(
         r#"defrecord User(name: String)
@@ -1123,7 +1975,6 @@ Ok(User.name)"#,
         .contains("Result constructors cannot contain Facet values"));
 }
 
-#[test]
 fn nested_facet_types_are_rejected_in_function_signatures() {
     let param_err = typecheck_with_rules(
         r#"defrecord User(name: String)
@@ -1146,7 +1997,6 @@ def bad() -> List<Facet<User, String>> { [] }"#,
         .contains("cannot appear in function return types"));
 }
 
-#[test]
 fn private_field_access_is_allowed_inside_owner_impl_only() {
     let typed = typecheck_with_builtin_prelude(
         r#"defstruct User {
@@ -1169,7 +2019,6 @@ User::read_password(user)"#,
     assert!(matches!(last.ty, scar::types::Ty::Str));
 }
 
-#[test]
 fn private_field_access_outside_owner_impl_is_rejected_for_value_and_capability_roots() {
     let value_err = typecheck_with_rules(
         r#"defstruct User {
@@ -1209,7 +2058,6 @@ User.password"#,
         .contains("Field 'User.password' is private"));
 }
 
-#[test]
 fn private_field_access_inside_closure_is_rejected_outside_owner_impl() {
     let err = typecheck_with_rules(
         r#"defstruct User {
@@ -1229,7 +2077,6 @@ user = User("alice", "s3cr3t")
     assert!(err.message.contains("Field 'User.password' is private"));
 }
 
-#[test]
 fn private_field_access_inside_param_closure_is_rejected_outside_owner_impl() {
     let err = typecheck_with_rules(
         r#"defstruct User {
@@ -1250,7 +2097,6 @@ reader(user)"#,
     assert!(err.message.contains("Field 'User.password' is private"));
 }
 
-#[test]
 fn private_capability_root_is_rejected_in_facet_view_call() {
     let err = typecheck_with_rules(
         r#"defstruct User {
@@ -1270,7 +2116,6 @@ Facet::view(User.password, user)"#,
     assert!(err.message.contains("Field 'User.password' is private"));
 }
 
-#[test]
 fn facet_scope_local_value_can_flow_to_closure_after_view() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
@@ -1284,7 +2129,6 @@ reader()"#,
     assert!(matches!(last.ty, scar::types::Ty::Str));
 }
 
-#[test]
 fn facet_runtime_transport_restrictions_remain() {
     let arg_err = typecheck_with_rules(
         r#"defrecord User(name: String)
@@ -1323,7 +2167,6 @@ consume(facet)"#,
     );
 }
 
-#[test]
 fn extractor_single_value_match_result_contract_typechecks() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct Single {
@@ -1349,7 +2192,6 @@ print(match value {
     assert!(!typed.is_empty());
 }
 
-#[test]
 fn struct_matchblock_head_uses_attached_deconstruct_method() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct User {
@@ -1374,7 +2216,6 @@ print(match user {
     assert!(!typed.is_empty());
 }
 
-#[test]
 fn struct_matchblock_head_requires_attached_deconstruct_method() {
     let err = resolve_with_builtin_prelude_result(
         r#"defstruct User {
@@ -1397,7 +2238,6 @@ print(match user {
     ));
 }
 
-#[test]
 fn enum_impl_extractor_can_be_used_in_matchblock() {
     let resolved = resolve_with_builtin_prelude(
         r#"defenum Light {
@@ -1422,7 +2262,6 @@ print(match light {
     assert!(!typed.is_empty());
 }
 
-#[test]
 fn forward_struct_type_annotation_and_literal_are_allowed() {
     let resolved = resolve_with_builtin_prelude(
         r#"user: User = User("alice", 30)
@@ -1442,7 +2281,6 @@ User { name: name, age: age }
         .any(|node| matches!(node.node, TypedInner::StructDef(_, _, _, _, _))));
 }
 
-#[test]
 fn forward_deferror_value_can_flow_into_err() {
     let resolved = resolve_with_builtin_prelude(
         r#"ret: Result<Int> = Err(NotFound)
@@ -1456,7 +2294,6 @@ deferror NotFound {
         .any(|node| matches!(node.node, TypedInner::DeferrorDef(_, _, _, _, _))));
 }
 
-#[test]
 fn zero_arg_deferror_value_can_flow_into_error_parameter() {
     let resolved = resolve_with_builtin_prelude(
         r#"wrapped = Result::cause(Err(NoneError), NotFound)
@@ -1470,7 +2307,6 @@ deferror NotFound {
         .any(|node| matches!(node.node, TypedInner::Bind(_, _))));
 }
 
-#[test]
 fn recover_kind_constructor_marker_typechecks() {
     let resolved = resolve_with_builtin_prelude(
         r#"value = Result::recover_kind(Err(NotFound("runtime")), NotFound("marker"), {|err| Ok(1)})
@@ -1484,7 +2320,6 @@ deferror NotFound(detail: String) {
         .any(|node| matches!(node.node, TypedInner::Bind(_, _))));
 }
 
-#[test]
 fn forward_reference_type_tags_are_deterministic_across_runs() {
     let source = r#"user: User = User("alice", 30)
 pair = Pair(first: 1, second: "two")
@@ -1525,7 +2360,6 @@ deferror NotFound(code: String) {
     assert_eq!(collect_type_tags(&first), collect_type_tags(&second));
 }
 
-#[test]
 fn user_function_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         "def add1(x: Int) -> Int { x + 1 }\nprint(to_string(add1(41)))",
@@ -1538,7 +2372,6 @@ fn user_function_calls_typecheck_inside_script_module_scope() {
     );
 }
 
-#[test]
 fn namespaced_type_and_trait_impl_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"namespace Auth {
@@ -1566,7 +2399,6 @@ print(to_string(value))"#,
     );
 }
 
-#[test]
 fn tuple_trait_impl_typechecks_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"deftrait PairTrait {
@@ -1587,7 +2419,6 @@ impl PairTrait for ($A, $B) {
     );
 }
 
-#[test]
 fn concrete_tuple_trait_impl_typechecks_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"deftrait PairTrait {
@@ -1608,7 +2439,6 @@ impl PairTrait for (Int, String) {
     );
 }
 
-#[test]
 fn generic_user_function_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def id(x: $A) -> $A { x }
@@ -1626,7 +2456,6 @@ print(id("ok"))"#,
     );
 }
 
-#[test]
 fn named_args_user_function_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def add(x: Int, y: Int) -> Int { x + y }
@@ -1645,7 +2474,6 @@ print(to_string(add3(z: 3, y: 2, x: 1)))"#,
     );
 }
 
-#[test]
 fn canonical_builtin_type_name_hole_is_reserved_for_structs() {
     let err = typecheck_module_source_result(
         r#"defstruct Hole {
@@ -1659,7 +2487,6 @@ fn canonical_builtin_type_name_hole_is_reserved_for_structs() {
     );
 }
 
-#[test]
 fn canonical_builtin_type_name_hole_is_reserved_for_enums() {
     let err = typecheck_module_source_result(
         r#"defenum Hole {
@@ -1673,7 +2500,6 @@ fn canonical_builtin_type_name_hole_is_reserved_for_enums() {
     );
 }
 
-#[test]
 fn canonical_builtin_type_name_hole_is_reserved_for_errors() {
     let err = typecheck_module_source_result(
         r#"deferror Hole {
@@ -1687,7 +2513,6 @@ fn canonical_builtin_type_name_hole_is_reserved_for_errors() {
     );
 }
 
-#[test]
 fn canonical_builtin_type_name_closure_is_reserved_for_structs() {
     let err = typecheck_module_source_result(
         r#"defstruct Closure {
@@ -1701,7 +2526,6 @@ fn canonical_builtin_type_name_closure_is_reserved_for_structs() {
     );
 }
 
-#[test]
 fn canonical_builtin_type_name_match_arms_is_reserved_for_structs() {
     let err = typecheck_module_source_result(
         r#"defstruct MatchArms {
@@ -1715,7 +2539,6 @@ fn canonical_builtin_type_name_match_arms_is_reserved_for_structs() {
     );
 }
 
-#[test]
 fn canonical_builtin_type_name_cond_clauses_is_reserved_for_enums() {
     let err = typecheck_module_source_result(
         r#"defenum CondClauses {
@@ -1729,7 +2552,6 @@ fn canonical_builtin_type_name_cond_clauses_is_reserved_for_enums() {
     );
 }
 
-#[test]
 fn match_arms_type_is_forbidden_in_ordinary_user_signatures() {
     let err = typecheck_with_rules(
         r#"def bad(arms: MatchArms<Int, String>) -> String {
@@ -1745,7 +2567,6 @@ fn match_arms_type_is_forbidden_in_ordinary_user_signatures() {
     );
 }
 
-#[test]
 fn match_arms_type_is_forbidden_in_return_types() {
     let err = typecheck_with_rules(
         r#"def bad() -> MatchArms<Int, String> {
@@ -1761,7 +2582,6 @@ fn match_arms_type_is_forbidden_in_return_types() {
     );
 }
 
-#[test]
 fn cond_clauses_type_is_forbidden_in_ordinary_user_signatures() {
     let err = typecheck_with_rules(
         r#"def bad(clauses: CondClauses<String>) -> String {
@@ -1777,7 +2597,6 @@ fn cond_clauses_type_is_forbidden_in_ordinary_user_signatures() {
     );
 }
 
-#[test]
 fn cond_clauses_type_is_forbidden_in_return_types() {
     let err = typecheck_with_rules(
         r#"def bad() -> CondClauses<String> {
@@ -1793,7 +2612,6 @@ fn cond_clauses_type_is_forbidden_in_return_types() {
     );
 }
 
-#[test]
 fn trailing_block_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def take(flag: Boolean, value: (-> Int)) -> Int {
@@ -1815,7 +2633,6 @@ print(to_string(v))"#,
     );
 }
 
-#[test]
 fn set_exit_code_is_allowed_in_script_rules() {
     let typed =
         typecheck_with_rules("set_exit_code(9)", RuntimeSourcePolicy::script()).expect("must pass");
@@ -1825,14 +2642,12 @@ fn set_exit_code_is_allowed_in_script_rules() {
     ));
 }
 
-#[test]
 fn set_exit_code_is_forbidden_in_repl_chunk_rules() {
     let err = typecheck_with_rules("set_exit_code(9)", RuntimeSourcePolicy::repl_chunk())
         .expect_err("must fail");
     assert!(err.message.contains("forbidden by source policy"));
 }
 
-#[test]
 fn set_exit_code_entry_only_policy_allows_only_entrypoint_function() {
     let entrypoint = EntryPoint::qualified("main");
     let rules = RuntimeSourcePolicy::module()
@@ -1862,7 +2677,6 @@ fn set_exit_code_entry_only_policy_allows_only_entrypoint_function() {
     assert!(err.message.contains("only allowed inside entrypoint"));
 }
 
-#[test]
 fn assert_special_form_typechecks_to_result_unit() {
     let typed = typecheck_with_builtin_prelude("guard = assert(True, NoneError())");
     let bind = typed.last().expect("binding should exist");
@@ -1880,7 +2694,6 @@ fn assert_special_form_typechecks_to_result_unit() {
     }
 }
 
-#[test]
 fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
     let resolved = resolve_program_with_builtin_prelude("width = BitWidth::W8");
 
@@ -1956,7 +2769,6 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
     );
 }
 
-#[test]
 fn bitwidth_zero_arg_variant_typechecks_with_builtin_prelude() {
     let typed = typecheck_with_builtin_prelude("width = BitWidth::W8");
     assert!(matches!(
@@ -1965,7 +2777,6 @@ fn bitwidth_zero_arg_variant_typechecks_with_builtin_prelude() {
     ));
 }
 
-#[test]
 fn ensure_special_form_typechecks_to_result_value() {
     let typed = typecheck_with_builtin_prelude(
         r#"def is_even(n: Int) -> Boolean { Int::is_even(n) }
@@ -1980,7 +2791,6 @@ guard = ensure(4, &is_even, NoneError())"#,
     }
 }
 
-#[test]
 fn and_special_form_typechecks_to_boolean_if() {
     let typed = typecheck_with_builtin_prelude("flag = and(True, False)");
     let bind = typed.last().expect("binding should exist");
@@ -1993,7 +2803,6 @@ fn and_special_form_typechecks_to_boolean_if() {
     }
 }
 
-#[test]
 fn eq_helper_typechecks_as_trait_call() {
     let typed = typecheck_with_builtin_prelude("flag = eq(1, 1)");
     let bind = typed.last().expect("binding should exist");
@@ -2009,7 +2818,6 @@ fn eq_helper_typechecks_as_trait_call() {
     }
 }
 
-#[test]
 fn lt_helper_typechecks_as_trait_call() {
     let typed = typecheck_with_builtin_prelude("flag = lt(1, 2)");
     let bind = typed.last().expect("binding should exist");
@@ -2025,7 +2833,6 @@ fn lt_helper_typechecks_as_trait_call() {
     }
 }
 
-#[test]
 fn concat_helper_typechecks_as_trait_call() {
     let typed = typecheck_with_builtin_prelude(r#"value = concat("a", "b")"#);
     let bind = typed.last().expect("binding should exist");
@@ -2041,7 +2848,6 @@ fn concat_helper_typechecks_as_trait_call() {
     }
 }
 
-#[test]
 fn to_string_helper_typechecks_as_trait_call() {
     let typed = typecheck_with_builtin_prelude("text = to_string(42)");
     let bind = typed.last().expect("binding should exist");
@@ -2057,7 +2863,6 @@ fn to_string_helper_typechecks_as_trait_call() {
     }
 }
 
-#[test]
 fn ensure_rejects_call_expression_predicate() {
     let err = typecheck_with_rules(
         r#"def is_even() -> (Int -> Boolean) { {|n| Int::is_even(n) } }
@@ -2068,7 +2873,6 @@ guard = ensure(4, is_even(), NoneError)"#,
     assert!(err.message.contains("ensure requires a closure or capture"));
 }
 
-#[test]
 fn assert_rejects_non_concrete_error_expression() {
     let err = typecheck_with_rules(
         r#"def bad_code() -> Int { 1 }
@@ -2081,7 +2885,6 @@ guard = assert(False, bad_code())"#,
         .contains("assert error branch must evaluate to Error, got Int"));
 }
 
-#[test]
 fn kernel_and_contract_rejects_eager_signature() {
     let err = typecheck_std_modules_with_overrides(&[(
         "Kernel",
@@ -2095,7 +2898,6 @@ fn kernel_and_contract_rejects_eager_signature() {
         .contains("@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean"));
 }
 
-#[test]
 fn special_form_builtin_decl_must_live_under_kernel() {
     let err = typecheck_std_modules_with_overrides(&[(
         "Boolean",
@@ -2115,7 +2917,6 @@ if(value, False, True)
         .contains("Special-form declaration `and` is only allowed in std module `Kernel`."));
 }
 
-#[test]
 fn kernel_does_not_allow_removed_concat_builtin() {
     let module_stages = std_module_stages_with_overrides(&[(
         "Kernel",
@@ -2130,7 +2931,6 @@ fn kernel_does_not_allow_removed_concat_builtin() {
     assert!(err.message.contains("Unknown builtin declaration: concat"));
 }
 
-#[test]
 fn if_auto_forces_zero_arg_closure_once_for_branch_type() {
     let typed = typecheck_with_builtin_prelude("value = if(True, {|| 1}, 2)");
     let bind = typed.last().expect("binding should exist");
@@ -2140,7 +2940,6 @@ fn if_auto_forces_zero_arg_closure_once_for_branch_type() {
     }
 }
 
-#[test]
 fn if_nested_closure_is_not_deep_forced() {
     let err = typecheck_with_rules(
         "value = if(True, {|| {|| 1}}, 2)",
@@ -2152,7 +2951,6 @@ fn if_nested_closure_is_not_deep_forced() {
         .contains("if branches have different types: (-> Int) and Int"));
 }
 
-#[test]
 fn user_lazy_annotation_is_rejected() {
     let err = typecheck_with_rules("x: Lazy<Int> = 1", RuntimeSourcePolicy::script())
         .expect_err("user lazy annotations must fail");
@@ -2161,7 +2959,6 @@ fn user_lazy_annotation_is_rejected() {
         .contains("Lazy<T> is reserved for std-module special-form declarations"));
 }
 
-#[test]
 fn assert_accepts_lazy_error_branch() {
     let typed = typecheck_with_rules(
         r#"deferror SomeError(detail: String) { detail }
@@ -2176,7 +2973,6 @@ guard = assert(False, {|| SomeError("boom") })"#,
     }
 }
 
-#[test]
 fn ensure_accepts_lazy_error_branch() {
     let typed = typecheck_with_rules(
         r#"deferror SomeError(detail: String) { detail }
@@ -2192,7 +2988,6 @@ guard = ensure(-1, &is_positive, {|| SomeError("boom") })"#,
     }
 }
 
-#[test]
 fn assert_accepts_existing_error_value() {
     let typed = typecheck_with_rules(
         r#"guard = match Err(NoneError) {
@@ -2209,7 +3004,6 @@ fn assert_accepts_existing_error_value() {
     }
 }
 
-#[test]
 fn ensure_accepts_existing_error_value() {
     let typed = typecheck_with_rules(
         r#"def is_positive(value: Int) -> Boolean { value > 0 }
@@ -2227,7 +3021,6 @@ guard = match Err(NoneError) {
     }
 }
 
-#[test]
 fn generic_annotation_list_int_is_accepted() {
     let typed = typecheck_with_builtin_prelude("nums: List<Int> = [1, 2, 3]");
     assert!(matches!(
@@ -2236,7 +3029,6 @@ fn generic_annotation_list_int_is_accepted() {
     ));
 }
 
-#[test]
 fn generic_def_signature_instantiates_per_call_site() {
     let typed = typecheck_with_builtin_prelude(
         r#"def id(x: $A) -> $A { x }
@@ -2251,7 +3043,6 @@ right: String = id("ok")"#,
         .all(|node| matches!(node.node, TypedInner::Bind(_, _) | TypedInner::Def(..))));
 }
 
-#[test]
 fn generic_defenum_constructor_and_match_typecheck() {
     let typed = typecheck_with_builtin_prelude(
         r#"defenum StepSignal<$A> {
@@ -2274,7 +3065,6 @@ value = match step {
     ));
 }
 
-#[test]
 fn closure_param_annotation_without_expected_type_constrains_calls() {
     let resolved = resolve_with_builtin_prelude(
         r#"id = {|value: Int| value}
@@ -2284,7 +3074,6 @@ answer = id("oops")"#,
     assert!(err.message.contains("expected Int, got String"));
 }
 
-#[test]
 fn closure_application_mismatch_reports_callable_type_signature() {
     let resolved = resolve_with_builtin_prelude(
         r#"inc = {|n: Int| n + 1}
@@ -2296,7 +3085,6 @@ answer = inc("oops")"#,
     assert!(hint.contains("Callable type signature: (Int -> Int)"));
 }
 
-#[test]
 fn builtin_function_arity_reports_call_target_signature() {
     let resolved = resolve_with_builtin_prelude("value = print()");
     let err = typecheck(resolved).expect_err("builtin arity mismatch should fail");
@@ -2307,7 +3095,6 @@ fn builtin_function_arity_reports_call_target_signature() {
     );
 }
 
-#[test]
 fn builtin_function_mismatch_reports_call_target_signature() {
     let resolved = resolve_with_builtin_prelude("value = print(1)");
     let err = typecheck(resolved).expect_err("builtin type mismatch should fail");
@@ -2318,7 +3105,6 @@ fn builtin_function_mismatch_reports_call_target_signature() {
     );
 }
 
-#[test]
 fn capture_application_mismatch_reports_callable_type_signature() {
     let resolved = resolve_with_builtin_prelude_in_script_module(
         r#"def add(x: Int, y: Int) -> Int {
@@ -2336,7 +3122,6 @@ bad = &add(&1, "oops")"#,
     assert!(hint.contains("Callable definition signature: add(x: Int, y: Int) -> Int"));
 }
 
-#[test]
 fn script_callable_signature_omits_file_path_segments() {
     let resolved = resolve_with_builtin_prelude_in_module(
         r#"def add_one(x: Int) -> Int {
@@ -2356,7 +3141,6 @@ result = add_one("oops")"#,
     assert!(hint.contains("Callable definition span: 0.."));
 }
 
-#[test]
 fn compose_mismatch_reports_left_and_right_callable_types() {
     let resolved = resolve_with_builtin_prelude(
         r#"def text(x: Int) -> String {
@@ -2377,7 +3161,6 @@ bad = &text >> &inc"#,
     assert!(hint.contains("RHS: (Int -> Int)"));
 }
 
-#[test]
 fn compose_accepts_calls_returning_function_values() {
     let resolved = resolve_with_builtin_prelude(
         r#"def make_inc() -> (Int -> Int) {
@@ -2393,7 +3176,6 @@ plain = make_inc() >> make_double()"#,
     typecheck(resolved).expect("compose should accept function-returning calls");
 }
 
-#[test]
 fn compose_rejects_non_function_call_results_after_typechecking_call() {
     let resolved = resolve_with_builtin_prelude(
         r#"def inc(x: Int) -> Int {
@@ -2409,7 +3191,6 @@ plain = inc(1) >> inc(1)"#,
     assert!(hint.contains("result type Int is not a function value"));
 }
 
-#[test]
 fn closure_trait_helper_binding_requires_concrete_callable_boundary() {
     let resolved = resolve_with_builtin_prelude(r#"cmp = {|left, right| compare(left, right)}"#);
     let err = typecheck(resolved).expect_err("unresolved closure helper binding must fail");
@@ -2418,7 +3199,6 @@ fn closure_trait_helper_binding_requires_concrete_callable_boundary() {
         .contains("Trait helper `compare` could not be concretized for this callable binding"));
 }
 
-#[test]
 fn closure_trait_helper_binding_accepts_binding_annotation() {
     let resolved = resolve_with_builtin_prelude(
         r#"cmp: (Int, Int -> Ordering) = {|left, right| compare(left, right)}"#,
@@ -2426,14 +3206,12 @@ fn closure_trait_helper_binding_accepts_binding_annotation() {
     typecheck(resolved).expect("binding annotation should concretize compare helper");
 }
 
-#[test]
 fn closure_trait_helper_binding_accepts_parameter_annotations() {
     let resolved =
         resolve_with_builtin_prelude(r#"cmp = {|left: Int, right: Int| compare(left, right)}"#);
     typecheck(resolved).expect("parameter annotations should concretize compare helper");
 }
 
-#[test]
 fn on_call_concretizes_closure_trait_helper_from_key_function() {
     let resolved = resolve_with_builtin_prelude(
         r#"sorted = List::sort_by(["a", "abcd", "xy"], {|left, right| compare(left, right)} `on` &String::len)"#,
@@ -2441,7 +3219,6 @@ fn on_call_concretizes_closure_trait_helper_from_key_function() {
     typecheck(resolved).expect("on should concretize compare helper from the key callable");
 }
 
-#[test]
 fn on_call_concretizes_trait_helper_capture_from_key_function() {
     let resolved = resolve_with_builtin_prelude(
         r#"sorted = List::sort_by(["a", "abcd", "xy"], &compare `on` &String::len)"#,
@@ -2450,7 +3227,6 @@ fn on_call_concretizes_trait_helper_capture_from_key_function() {
         .expect("on should concretize captured compare helper from the key callable");
 }
 
-#[test]
 fn pipe_plain_apply_over_result_reports_whole_lhs_mismatch() {
     let resolved = resolve_with_builtin_prelude(
         r#"def parse(x: Int) -> Result<Int> {
@@ -2472,7 +3248,6 @@ bad = parse(1) |> &inc"#,
     assert!(!hint.contains("`|*>`"));
 }
 
-#[test]
 fn context_bind_rejects_plain_rhs_return() {
     let resolved = resolve_with_builtin_prelude(
         r#"def parse(x: Int) -> Result<Int> {
@@ -2495,7 +3270,6 @@ bad = parse(1) |>= &inc"#,
     assert!(hint.contains("Use `|*>`"));
 }
 
-#[test]
 fn context_map_keeps_result_for_later_bind() {
     let typed = typecheck_with_builtin_prelude(
         r#"def parse(x: Int) -> Result<Int> {
@@ -2515,7 +3289,6 @@ ok = parse(1) |*> &inc |>= &stringify"#,
     assert_eq!(typed.last().map(|node| &node.ty), Some(&Ty::Unit));
 }
 
-#[test]
 fn context_map_and_bind_lower_to_operator_trait_calls() {
     let typed = typecheck_with_builtin_prelude(
         r#"def parse(x: Int) -> Result<Int> {
@@ -2597,7 +3370,6 @@ bound = parse(1) |>= &stringify"#,
     ));
 }
 
-#[test]
 fn explicit_functor_call_has_explicit_origin() {
     let typed = typecheck_with_builtin_prelude(
         r#"def inc(x: Int) -> Int {
@@ -2627,7 +3399,6 @@ mapped = Functor::map(Ok(1), &inc)"#,
     }
 }
 
-#[test]
 fn flow_apply_and_compose_operators_lower_to_trait_calls() {
     let typed = typecheck_with_builtin_prelude(
         r#"def inc(x: Int) -> Int {
@@ -2763,7 +3534,6 @@ kleisli_option = &maybe_parse >=> &maybe_show"#,
     }));
 }
 
-#[test]
 fn user_defined_container_can_use_context_operators_via_traits() {
     let typed = typecheck_with_builtin_prelude(
         r#"defenum Boxed<$T> {
@@ -2809,7 +3579,6 @@ bound = Boxed::Box(1) |>= &stringify"#,
     assert_eq!(boxed_results, 2);
 }
 
-#[test]
 fn result_match_wildcard_self_after_ok_can_change_ok_payload_type() {
     let resolved = resolve_with_builtin_prelude(
         r#"def remap(value: Result<Int>) -> Result<String> {
@@ -2826,7 +3595,6 @@ fn result_match_wildcard_self_after_ok_can_change_ok_payload_type() {
         .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
 }
 
-#[test]
 fn result_match_wildcard_self_after_ok_can_keep_err_for_bind_shape() {
     let resolved = resolve_with_builtin_prelude(
         r#"def bind_like(value: Result<Int>) -> Result<String> {
@@ -2843,7 +3611,6 @@ fn result_match_wildcard_self_after_ok_can_keep_err_for_bind_shape() {
         .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
 }
 
-#[test]
 fn result_match_wildcard_self_requires_err_proven_branch() {
     let resolved = resolve_with_builtin_prelude(
         r#"def bad(value: Result<Int>) -> Result<String> {
@@ -2866,7 +3633,6 @@ fn result_match_wildcard_self_requires_err_proven_branch() {
     );
 }
 
-#[test]
 fn closure_param_annotation_must_match_expected_signature() {
     let resolved = resolve_with_builtin_prelude(r#"id: (String -> String) = {|value: Int| value}"#);
     let err = typecheck(resolved).expect_err("mismatched expected signature must fail");
@@ -2875,7 +3641,6 @@ fn closure_param_annotation_must_match_expected_signature() {
         .contains("closure parameter `value` expected String, got Int"));
 }
 
-#[test]
 fn local_binding_annotation_can_reference_outer_generic_type_param() {
     let typed = typecheck_with_builtin_prelude(
         r#"def id(x: $A) -> $A {
@@ -2888,7 +3653,6 @@ fn local_binding_annotation_can_reference_outer_generic_type_param() {
         .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
 }
 
-#[test]
 fn closure_param_annotation_can_reference_outer_generic_type_param() {
     let typed = typecheck_with_builtin_prelude(
         r#"def keep(x: $A) -> $A {
@@ -2901,7 +3665,6 @@ fn closure_param_annotation_can_reference_outer_generic_type_param() {
         .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
 }
 
-#[test]
 fn generic_first_can_inline_tuple_rebuild_with_closure_param_annotation() {
     let typed = typecheck_with_builtin_prelude(
         r#"def first(f: ($A -> $C)) -> (($A, $B) -> ($C, $B)) {
@@ -2916,7 +3679,6 @@ fn generic_first_can_inline_tuple_rebuild_with_closure_param_annotation() {
         .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
 }
 
-#[test]
 fn sibling_closures_keep_substitution_state_local() {
     let typed = typecheck_with_builtin_prelude(
         r#"int_id: (Int -> Int) = {|value| value}
@@ -2932,7 +3694,6 @@ right: String = str_id("ok")"#,
         .all(|node| matches!(node.node, TypedInner::Bind(_, _))));
 }
 
-#[test]
 fn cyclic_type_definition_is_rejected() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct Node {
@@ -2943,7 +3704,6 @@ fn cyclic_type_definition_is_rejected() {
     assert!(err.message.contains("Cyclic type definition detected"));
 }
 
-#[test]
 fn enum_cycle_is_allowed_when_not_shared_by_all_variants() {
     let resolved = resolve_with_builtin_prelude(
         r#"defenum Loop {
@@ -2958,7 +3718,6 @@ value: Loop = Loop::End"#,
         .any(|node| matches!(node.node, TypedInner::EnumDef(_, _))));
 }
 
-#[test]
 fn enum_cycle_is_rejected_when_shared_by_all_variants() {
     let resolved = resolve_with_builtin_prelude(
         r#"defenum Loop {
@@ -2970,7 +3729,6 @@ fn enum_cycle_is_rejected_when_shared_by_all_variants() {
     assert!(err.message.contains("Cyclic type definition detected"));
 }
 
-#[test]
 fn enum_field_access_is_rejected() {
     let resolved = resolve_with_builtin_prelude(
         r#"defenum Direction {
@@ -2986,7 +3744,6 @@ x = up.idx"#,
         .contains("No variant selector 'idx' on Direction"));
 }
 
-#[test]
 fn match_binding_pattern_is_treated_as_exhaustive() {
     let resolved = resolve_with_builtin_prelude(
         r#"flag = True
@@ -3001,7 +3758,6 @@ answer = match flag {
     ));
 }
 
-#[test]
 fn match_tuple_binding_pattern_is_treated_as_exhaustive() {
     let resolved = resolve_with_builtin_prelude(
         r#"pair = (1, "two")
@@ -3016,7 +3772,6 @@ answer = match pair {
     ));
 }
 
-#[test]
 fn match_guard_must_be_boolean() {
     let resolved = resolve_with_builtin_prelude(
         r#"answer = match 1 {
@@ -3028,7 +3783,6 @@ fn match_guard_must_be_boolean() {
     assert!(err.message.contains("match guard must be Boolean, got Int"));
 }
 
-#[test]
 fn guarded_match_arm_does_not_satisfy_exhaustiveness() {
     let resolved = resolve_with_builtin_prelude(
         r#"answer = match True {
@@ -3041,7 +3795,6 @@ fn guarded_match_arm_does_not_satisfy_exhaustiveness() {
         .contains("Non-exhaustive match. Missing: True, False"));
 }
 
-#[test]
 fn struct_literal_rejects_extra_fields() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct User {
@@ -3059,7 +3812,6 @@ user = User("alice", 20)"#,
     assert!(err.message.contains("Unknown field 'extra' in User"));
 }
 
-#[test]
 fn constructor_named_args_reject_duplicate_fields() {
     let resolved = resolve_with_builtin_prelude(
         r#"defrecord Pair(first: Int, second: String)
@@ -3069,7 +3821,6 @@ pair = Pair(first: 1, first: 2)"#,
     assert!(err.message.contains("Duplicate field 'first' in Pair"));
 }
 
-#[test]
 fn struct_literal_field_shorthand_typechecks() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct User {
@@ -3086,7 +3837,6 @@ user = User("alice", 20)"#,
     typecheck(resolved).expect("struct shorthand should typecheck");
 }
 
-#[test]
 fn struct_literal_field_shorthand_mixed_with_explicit_typechecks() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct User {
@@ -3106,7 +3856,6 @@ User { name, age: next_age }
     typecheck(resolved).expect("mixed struct shorthand should typecheck");
 }
 
-#[test]
 fn struct_literal_field_shorthand_rejects_duplicate_fields() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct User {
@@ -3122,7 +3871,6 @@ User { name, name: name }
     assert!(err.message.contains("Duplicate field 'name' in User"));
 }
 
-#[test]
 fn struct_requires_impl_new() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct User {
@@ -3134,7 +3882,6 @@ user = User("alice")"#,
     assert!(err.message.contains("must define `new` in its impl block"));
 }
 
-#[test]
 fn struct_new_accepts_result_self_return_type() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct Duration {
@@ -3163,7 +3910,6 @@ value: Result<Duration> = Duration(10)"#,
     ));
 }
 
-#[test]
 fn struct_new_rejects_non_self_return_type() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct User {
@@ -3181,7 +3927,6 @@ impl User {
         .contains("`new` must return Self or Result<Self, E>"));
 }
 
-#[test]
 fn struct_new_rejects_result_non_self_payload() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct User {
@@ -3199,7 +3944,6 @@ impl User {
         .contains("`new` must return Self or Result<Self, E>"));
 }
 
-#[test]
 fn struct_constructor_call_accepts_result_return_type() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct Duration {
@@ -3228,7 +3972,6 @@ dur = Duration(10)"#,
     ));
 }
 
-#[test]
 fn struct_literal_is_rejected_outside_impl_body() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct User {
@@ -3247,7 +3990,6 @@ user = User { name: "alice" }"#,
         .contains("Struct literal `User` is only allowed inside"));
 }
 
-#[test]
 fn user_function_call_rejects_mixed_named_and_positional_args() {
     let resolved = resolve_with_builtin_prelude(
         r#"def add3(x: Int, y: Int, z: Int) -> Int { x + y + z }
@@ -3259,7 +4001,6 @@ value = add3(1, y: 2, z: 3)"#,
         .contains("Cannot mix positional and named arguments"));
 }
 
-#[test]
 fn impl_self_rebinding_allows_self_type() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct User {
@@ -3283,7 +4024,6 @@ print(to_string(User::keep(user).name))"#,
     let _typed = typecheck(resolved).expect("self rebinding with Self should pass");
 }
 
-#[test]
 fn impl_self_rebinding_rejects_non_self_type() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct User {
@@ -3305,7 +4045,6 @@ self
     assert!(err.message.contains("`self` rebinding requires Self type"));
 }
 
-#[test]
 fn deferror_show_type_mismatch_points_to_show_expression_span() {
     let source = r#"deferror NotFound(code: String) {
   123
@@ -3319,7 +4058,6 @@ fn deferror_show_type_mismatch_points_to_show_expression_span() {
     assert_eq!(err.span.start, literal_start);
 }
 
-#[test]
 fn operator_and_numeric_trait_calls_typecheck_with_static_dispatch() {
     let typed = typecheck_with_builtin_prelude(
         r#"sum = 1 + 2
@@ -3381,7 +4119,6 @@ largest = Numeric::max(1.5, 2.5)"#,
         }));
 }
 
-#[test]
 fn duration_operator_traits_dispatch_to_surtr_impls() {
     let typed = typecheck_with_builtin_prelude(
         r#"sum = 10ms + 20ms
@@ -3424,7 +4161,6 @@ less = 10ms < 20ms"#,
     }
 }
 
-#[test]
 fn bounded_add_generics_specialize_without_pending_trait_calls() {
     fn has_pending_trait_call(node: &TypedNode) -> bool {
         match &node.node {
@@ -3535,7 +4271,6 @@ b = double(1.5)"#,
     assert!(!typed.iter().any(has_pending_trait_call));
 }
 
-#[test]
 fn scar_session_preserves_trait_registry_across_chunks() {
     let mut session = session_from_cached_std_prelude();
     let user_resolved = resolve_with_builtin_prelude("value = 1 + 2");
@@ -3561,7 +4296,6 @@ fn scar_session_preserves_trait_registry_across_chunks() {
     }));
 }
 
-#[test]
 fn add_trait_mismatch_lists_available_implementations() {
     let resolved = resolve_with_builtin_prelude("value = Add::add(1, False)");
     let err = typecheck(resolved).expect_err("mismatched add trait call must fail");
@@ -3573,7 +4307,6 @@ fn add_trait_mismatch_lists_available_implementations() {
     assert!(hint.contains("Add is implemented for: Duration, Float, Int"));
 }
 
-#[test]
 fn add_trait_missing_receiver_lists_available_implementations() {
     let resolved = resolve_with_builtin_prelude("value = Add::add(False, True)");
     let err = typecheck(resolved).expect_err("invalid add receiver must fail");
@@ -3585,7 +4318,6 @@ fn add_trait_missing_receiver_lists_available_implementations() {
     assert!(hint.contains("Add is implemented for: Duration, Float, Int"));
 }
 
-#[test]
 fn add_operator_missing_impl_lists_available_implementations_in_hint() {
     let resolved = resolve_with_builtin_prelude("value = False + True");
     let err = typecheck(resolved).expect_err("invalid add operator must fail");
@@ -3596,7 +4328,6 @@ fn add_operator_missing_impl_lists_available_implementations_in_hint() {
     assert!(hint.contains("Add is implemented for: Duration, Float, Int"));
 }
 
-#[test]
 fn bind_operator_missing_impl_lists_available_implementations_in_hint() {
     let resolved = resolve_with_builtin_prelude("value = 1 |>= {|x| Ok(x)}");
     let err = typecheck(resolved).expect_err("plain lhs bind must fail");
@@ -3610,7 +4341,6 @@ fn bind_operator_missing_impl_lists_available_implementations_in_hint() {
     assert!(hint.contains("Result<$A>"));
 }
 
-#[test]
 fn from_helper_typechecks_as_generic_trait_call() {
     let typed = typecheck_with_builtin_prelude(r#"value = from(42, String)"#);
     let rhs = typed
@@ -3644,7 +4374,6 @@ fn from_helper_typechecks_as_generic_trait_call() {
     }
 }
 
-#[test]
 fn try_from_helper_typechecks_as_generic_trait_call() {
     let typed = typecheck_with_builtin_prelude(r#"value = try_from("42", Int)"#);
     let rhs = typed
@@ -3678,7 +4407,6 @@ fn try_from_helper_typechecks_as_generic_trait_call() {
     }
 }
 
-#[test]
 fn encode_helper_typechecks_as_generic_trait_call() {
     let typed = typecheck_with_builtin_prelude(r#"value = encode("hello", JsonFormat)"#);
     let rhs = typed
@@ -3712,7 +4440,6 @@ fn encode_helper_typechecks_as_generic_trait_call() {
     }
 }
 
-#[test]
 fn decode_helper_typechecks_format_and_target_witnesses() {
     let typed = typecheck_with_builtin_prelude(r#"value = decode("null", JsonFormat, JsonValue)"#);
     let rhs = typed
@@ -3747,7 +4474,6 @@ fn decode_helper_typechecks_format_and_target_witnesses() {
     }
 }
 
-#[test]
 fn from_helper_suggests_try_from_when_only_fallible_impl_exists() {
     let resolved = resolve_with_builtin_prelude(r#"value = from("42", Int)"#);
     let err = typecheck(resolved).expect_err("from on fallible conversion must fail");
@@ -3757,7 +4483,6 @@ fn from_helper_suggests_try_from_when_only_fallible_impl_exists() {
     assert!(err.message.contains("Use try_from(value, Int)."));
 }
 
-#[test]
 fn try_from_helper_suggests_from_when_only_infallible_impl_exists() {
     let resolved = resolve_with_builtin_prelude(r#"value = try_from(42, String)"#);
     let err = typecheck(resolved).expect_err("try_from on infallible conversion must fail");
@@ -3767,7 +4492,6 @@ fn try_from_helper_suggests_from_when_only_infallible_impl_exists() {
     assert!(err.message.contains("Use from(value, String)."));
 }
 
-#[test]
 fn from_and_try_from_impls_are_mutually_exclusive() {
     let overrides = [
         (
@@ -3836,7 +4560,6 @@ self != rhs
         .contains("From and TryFrom cannot both be implemented for String -> Int"));
 }
 
-#[test]
 fn process_sleep_accepts_duration_literal() {
     let typed = typecheck_with_builtin_prelude(r#"value = Process::sleep(100ms)"#);
     let rhs = typed
@@ -3849,14 +4572,12 @@ fn process_sleep_accepts_duration_literal() {
     assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
 }
 
-#[test]
 fn process_self_is_rejected_outside_process_context() {
     let resolved = resolve_with_builtin_prelude(r#"pid = Process::self()"#);
     let err = typecheck(resolved).expect_err("Process::self outside process must fail");
     assert!(err.message.contains("Process::self"));
 }
 
-#[test]
 fn process_self_typechecks_inside_process_handler() {
     let mut stages = std_module_stages();
     stages.push(vec![staged_process_module(
@@ -3884,11 +4605,10 @@ fn process_self_typechecks_inside_process_handler() {
     let resolved =
         sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
             .expect("resolve should succeed");
-    crate::typecheck_staged_program(resolved)
+    scar::typecheck_staged_program(resolved)
         .expect("Process::self should typecheck inside process handler");
 }
 
-#[test]
 fn singleton_agent_pid_surface_returns_concrete_pid() {
     let mut stages = std_module_stages();
     stages.push(vec![staged_process_module(
@@ -3921,7 +4641,7 @@ fn singleton_agent_pid_surface_returns_concrete_pid() {
         Some("__Script::fixture".to_string()),
     )
     .expect("resolve should succeed");
-    let typed = crate::typecheck_staged_program(resolved).expect("typecheck should succeed");
+    let typed = scar::typecheck_staged_program(resolved).expect("typecheck should succeed");
     let rhs = typed
         .nodes
         .last()
@@ -3936,7 +4656,6 @@ fn singleton_agent_pid_surface_returns_concrete_pid() {
     }
 }
 
-#[test]
 fn singleton_genserver_pid_surface_returns_concrete_pid() {
     let mut stages = std_module_stages();
     stages.push(vec![staged_process_module(
@@ -3968,7 +4687,7 @@ fn singleton_genserver_pid_surface_returns_concrete_pid() {
         Some("__Script::fixture".to_string()),
     )
     .expect("resolve should succeed");
-    let typed = crate::typecheck_staged_program(resolved).expect("typecheck should succeed");
+    let typed = scar::typecheck_staged_program(resolved).expect("typecheck should succeed");
     let rhs = typed
         .nodes
         .last()
@@ -3983,7 +4702,6 @@ fn singleton_genserver_pid_surface_returns_concrete_pid() {
     }
 }
 
-#[test]
 fn singleton_agent_explicit_pid_call_typechecks() {
     let mut stages = std_module_stages();
     stages.push(vec![staged_process_module(
@@ -4020,11 +4738,10 @@ done =? Counter::set(pid, 1)"#,
         Some("__Script::fixture".to_string()),
     )
     .expect("resolve should succeed");
-    crate::typecheck_staged_program(resolved)
+    scar::typecheck_staged_program(resolved)
         .expect("singleton explicit pid-first agent surface should typecheck");
 }
 
-#[test]
 fn genserver_additional_call_handler_typechecks_as_process_context() {
     let mut stages = std_module_stages();
     stages.push(vec![staged_process_module(
@@ -4072,11 +4789,10 @@ done = Logger::log("hello")"#,
         Some("__Script::fixture".to_string()),
     )
     .expect("resolve should succeed");
-    crate::typecheck_staged_program(resolved)
+    scar::typecheck_staged_program(resolved)
         .expect("additional @call handler should have process context access");
 }
 
-#[test]
 fn genserver_call_handler_accepts_call_result_contract() {
     let mut stages = std_module_stages();
     stages.push(vec![staged_process_module(
@@ -4106,11 +4822,10 @@ fn genserver_call_handler_accepts_call_result_contract() {
     let resolved =
         sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
             .expect("resolve should succeed");
-    crate::typecheck_staged_program(resolved)
+    scar::typecheck_staged_program(resolved)
         .expect("CallResult/CastResult handlers should typecheck");
 }
 
-#[test]
 fn process_meta_state_mismatch_is_rejected() {
     let mut stages = std_module_stages();
     stages.push(vec![staged_process_module(
@@ -4134,14 +4849,13 @@ fn process_meta_state_mismatch_is_rejected() {
         sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
             .expect("resolve should succeed");
     let err =
-        crate::typecheck_staged_program(resolved).expect_err("meta.state mismatch should fail");
+        scar::typecheck_staged_program(resolved).expect_err("meta.state mismatch should fail");
 
     assert!(err.message.contains(
         "@get handler `Counter::get` first parameter must match process state type `Int`"
     ));
 }
 
-#[test]
 fn user_defined_process_state_can_appear_in_public_signatures() {
     let user_ast = spire::parse_with_context(
         r#"defstruct CounterState {
@@ -4212,11 +4926,10 @@ defmod Helper {
         sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
             .expect("resolve should succeed");
 
-    crate::typecheck_staged_program(resolved)
+    scar::typecheck_staged_program(resolved)
         .expect("user-defined process state should be allowed in public signatures");
 }
 
-#[test]
 fn typecheck_staged_program_keeps_process_specs() {
     let ast = spire::parse_with_context(
         r#"defagent Counter {
@@ -4261,7 +4974,7 @@ fn typecheck_staged_program_keeps_process_specs() {
         sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
             .expect("resolve should succeed");
     let typed: TypedProgram =
-        crate::typecheck_staged_program(resolved).expect("typecheck should succeed");
+        scar::typecheck_staged_program(resolved).expect("typecheck should succeed");
 
     assert_eq!(typed.process_specs.len(), 2);
     let spec = typed
@@ -4364,10 +5077,9 @@ fn typecheck_supervisor_spawn_fixture(
         Some("__Script::fixture".to_string()),
     )
     .expect("resolve should succeed");
-    crate::typecheck_staged_program(resolved)
+    scar::typecheck_staged_program(resolved)
 }
 
-#[test]
 fn dynsup_spawn_accepts_worker_init_route_reference() {
     let typed =
         typecheck_supervisor_spawn_fixture(r#"pid = DynamicSupervisor::spawn(MyWorker::init(1))"#)
@@ -4375,28 +5087,24 @@ fn dynsup_spawn_accepts_worker_init_route_reference() {
     assert!(!typed.nodes.is_empty());
 }
 
-#[test]
 fn custom_supervisor_spawn_accepts_worker_init_route_reference() {
     let typed = typecheck_supervisor_spawn_fixture(r#"pid = MySup::spawn(MyWorker::init(1))"#)
         .expect("custom supervisor spawn should typecheck");
     assert!(!typed.nodes.is_empty());
 }
 
-#[test]
 fn supervisor_spawn_rejects_plain_closure_argument() {
     let err = typecheck_supervisor_spawn_fixture(r#"pid = MySup::spawn({|| Ok(1)})"#)
         .expect_err("plain closure should be rejected");
     assert!(err.message.contains("worker init"));
 }
 
-#[test]
 fn supervisor_spawn_rejects_non_worker_callable() {
     let err = typecheck_supervisor_spawn_fixture(r#"pid = MySup::spawn(MySup::status())"#)
         .expect_err("non-worker callable should be rejected");
     assert!(err.message.contains("worker init"));
 }
 
-#[test]
 fn supervisor_adopt_accepts_worker_pid() {
     let typed = typecheck_supervisor_spawn_fixture(
         r#"pid =? MySup::spawn(MyWorker::init(1))
@@ -4406,14 +5114,12 @@ _ =? MySup::adopt(pid)"#,
     assert!(!typed.nodes.is_empty());
 }
 
-#[test]
 fn supervisor_adopt_rejects_non_pid_argument() {
     let err = typecheck_supervisor_spawn_fixture(r#"_ =? MySup::adopt(1)"#)
         .expect_err("adopt should reject non pid");
     assert!(err.message.contains("PID"));
 }
 
-#[test]
 fn supervisor_adopt_rejects_when_policy_disallows_it() {
     let err = typecheck_supervisor_spawn_fixture(
         r#"pid =? MySup::spawn(MyWorker::init(1))
@@ -4423,14 +5129,12 @@ _ =? LockedSup::adopt(pid)"#,
     assert!(err.message.contains("allow_adopt"));
 }
 
-#[test]
 fn supervisor_status_returns_supervisor_status() {
     let typed = typecheck_supervisor_spawn_fixture(r#"status =? MySup::status()"#)
         .expect("status should typecheck");
     assert!(!typed.nodes.is_empty());
 }
 
-#[test]
 fn supervisor_workers_returns_workers_handle() {
     let typed =
         typecheck_supervisor_spawn_fixture(r#"workers =? MySup::workers(MyWorker::init(1), 2)"#)
@@ -4438,7 +5142,6 @@ fn supervisor_workers_returns_workers_handle() {
     assert!(!typed.nodes.is_empty());
 }
 
-#[test]
 fn workers_submit_accepts_worker_message_template() {
     let typed = typecheck_supervisor_spawn_fixture(
         r#"workers =? MySup::workers(MyWorker::init(1), 2)
@@ -4448,7 +5151,6 @@ _ =? Workers::submit(workers, MyWorker::set(3))"#,
     assert!(!typed.nodes.is_empty());
 }
 
-#[test]
 fn workers_broadcast_accepts_worker_message_template() {
     let typed = typecheck_supervisor_spawn_fixture(
         r#"workers =? MySup::workers(MyWorker::init(1), 2)
@@ -4458,7 +5160,6 @@ values = Workers::broadcast(workers, MyWorker::get("jobs"))"#,
     assert!(!typed.nodes.is_empty());
 }
 
-#[test]
 fn task_await_accepts_task_handle() {
     let typed = typecheck_with_builtin_prelude(
         r#"task = Task::async({|| Ok("ready")})
@@ -4467,7 +5168,6 @@ value =? Task::await(task)"#,
     assert!(!typed.is_empty());
 }
 
-#[test]
 fn workers_reserve_can_flow_into_worker_call() {
     let typed = typecheck_supervisor_spawn_fixture(
         r#"workers =? MySup::workers(MyWorker::init(1), 2)

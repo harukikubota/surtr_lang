@@ -259,7 +259,7 @@ fn parse_std_module_stage(
 }
 
 pub(crate) fn std_module_stages() -> Vec<Vec<sigil::StagedModuleAst>> {
-    std_module_stages_with_overrides(&[])
+    cached_std_prelude().module_stages.clone()
 }
 
 struct CachedStdPrelude {
@@ -273,7 +273,7 @@ fn cached_std_prelude() -> &'static CachedStdPrelude {
     static CACHE: OnceLock<CachedStdPrelude> = OnceLock::new();
 
     CACHE.get_or_init(|| {
-        let module_stages = std_module_stages();
+        let module_stages = build_std_module_stages(&[]);
         let declaration_index = sigil::precollect_declaration_index(&module_stages)
             .expect("std modules should precollect");
         let std_resolved =
@@ -388,6 +388,10 @@ fn parse_user_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
 pub(crate) fn std_module_stages_with_overrides(
     overrides: &[(&str, &str)],
 ) -> Vec<Vec<sigil::StagedModuleAst>> {
+    build_std_module_stages(overrides)
+}
+
+fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedModuleAst>> {
     vec![
         parse_std_module_stage(BUILTIN_PRELUDE_SOURCE, "Bootstrap"),
         [
