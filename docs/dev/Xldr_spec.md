@@ -170,10 +170,22 @@ REPL 実装は次の 3 層に分ける。
 | `:facet <facet-target>` | FacetPath 定義または `$facet_binding` の canonical path、segment 一覧、停止点を表示する。値 access 式や一般の callable / plain value は受けず、Facet query surface は command query 専用の制限された対象に限る。 |
 | `:error [full|summary]` | エラー表示モードを切り替える（省略時は現在値表示） |
 | `:save <path>` | 現在の REPL session を `.eldr` に保存する |
+| `:vars` | visible な top-level value binding の索引を表示する。値自体は出さず、`line` / `name` / `type` に相当する簡易一覧を返す。preload script 由来の binding も同じ行番号体系に含める。 |
+| `:imported` | 現在の REPL compile unit に効いている import 面を表示する。`src` / `item` / `via` に相当する簡易一覧を返し、`@autoimport` と `import Ty` は module 名だけ、`import Ty::fun` と `import Ty::{a, b}` は member 名まで表示する。 |
+| `:defs` | visible な top-level `def` の索引を表示する。REPL 対話入力、`--script` preload、script preload の `include` 由来で REPL compile unit から見える定義を、`line` / `name` / `arity` に相当する簡易一覧で返す。 |
+| `:history [selector]` | REPL 履歴を一覧表示する。`selector` は省略、単一行 `N`、列挙 `N1, N2, .., Nn`、範囲 `N..M` を受ける。`N > M` の reverse range と範囲外 index は command 全体を error にする。 |
+| `:reload [all|defs]` | preload 条件と top-level `def` から session を再構築する。`all` は起動時 preload に加えて REPL 中の top-level `def` も再投入し、`defs` は起動時 preload だけで再構築する。どちらも value binding は破棄する。 |
+| `:clear` | セッション状態を変えずに画面表示だけをクリアする。TTY または host 制約で clear が使えない場合は短い非対応メッセージを返す。 |
 
 REPL command query は Surtr 式 parser ではなく、command query parser と semantic resolver の組で扱う。
 
 - `:v <N>` は visible binding table を引き直さず、評価時に commit された値を履歴から再表示する。後続の同名再束縛は過去行の再表示結果を変えない
+- `:history` は履歴一覧 command であり、結果再表示は `:v <N>` の責務として分離する
+- `:vars` / `:defs` / `:imported` / `:history` は罫線付き table ではなく、既存 command と同じ温度感の簡易一覧または `label: value` 行で表示する
+- `:defs` は REPL 擬似モジュールだけでなく script preload の擬似モジュール経路も含め、REPL session に登録された visible top-level definition metadata を集約して列挙する
+- `:reload` の既定値は `all` とし、起動時 preload に加えて REPL 中の top-level `def` も再投入して session を再構築する
+- `:reload defs` は REPL 中の top-level `def` を再投入せず、起動時引数で確定した preload 条件だけで再構築する
+- `:reload` は両モードとも value binding を破棄する
 
 - 共通引数 surface は `ConcreteTypeKey | BindingKey | ForcedBindingKey | CaptureQuery` に限定する
 - `ConcreteTypeKey` は `Int`, `Result<Int>`, `(Int -> String)` のような具象型のみを受け、`$T`, `List<$T>`, `impl Numeric` は受けない
@@ -198,8 +210,7 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 
 | コマンド | 説明 |
 |---|---|
-| `:env` | 現在の束縛一覧を表示する |
-| `:reset` | セッションを初期化する |
+| `:env` | 設定や mode のような session environment を表示・変更する（`vars` とは分離する） |
 | `:step [expr]` | ステッパーを起動する |
 
 ### 5.3 不明コマンド
@@ -215,6 +226,7 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - TTY モードでは行編集、履歴、補完を提供する
 - 補完対象は REPL コマンドと現在スコープで見えるシンボルである
 - 補完候補は入力済み接頭辞に基づいて抽出する
+- preload script の入力行も REPL 履歴の一部として扱い、`vars` と `history` は同じ行番号体系を共有する
 
 候補一覧表示の改善や型文脈つき補完は `doc/open-issues.md` の将来課題として扱う。
 
