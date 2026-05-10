@@ -367,7 +367,7 @@ impl ReplEngine {
                 symbols.insert(name.clone());
             }
         }
-        for entry in vm.bytecode().type_registry.entries.iter() {
+        for entry in vm.bytecode().type_registry.entries().iter() {
             symbols.insert(entry.name.clone());
         }
 
@@ -6137,7 +6137,7 @@ fn compile_repl_preload_from_module_stages(
             }
         }
     }
-    for entry in vm.bytecode().type_registry.entries.iter() {
+    for entry in vm.bytecode().type_registry.entries().iter() {
         symbols.insert(entry.name.clone());
         if let Some(short) = entry.name.rsplit("::").next() {
             symbols.insert(short.to_string());
@@ -7412,7 +7412,7 @@ mod tests {
             .vm
             .bytecode()
             .type_registry
-            .entries
+            .entries()
             .iter()
             .map(|entry| entry.tag)
             .max()

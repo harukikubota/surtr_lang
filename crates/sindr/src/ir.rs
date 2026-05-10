@@ -1753,6 +1753,39 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_rebuilds_type_registry_lookup_index() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.type_registry = TypeRegistry::from_entries(vec![
+            TypeEntry {
+                tag: 10,
+                name: "Global::User".to_string(),
+                kind: TypeKind::Struct,
+                field_names: vec!["name".to_string(), "age".to_string()],
+                private_flags: vec![false, false],
+            },
+            TypeEntry {
+                tag: 42,
+                name: "Global::Profile".to_string(),
+                kind: TypeKind::Record,
+                field_names: vec!["id".to_string()],
+                private_flags: vec![false],
+            },
+        ]);
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.type_registry.entries(), bytecode.type_registry.entries());
+        assert_eq!(
+            decoded
+                .type_registry
+                .lookup(42)
+                .map(|entry| entry.name.as_str()),
+            Some("Global::Profile")
+        );
+    }
+
+    #[test]
     fn process_spec_roundtrip_uses_v2_shape_without_legacy_boot_registry_lazy_fields() {
         let mut bytecode = sample_bytecode(None);
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {

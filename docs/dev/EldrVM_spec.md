@@ -293,6 +293,7 @@ Opcode は以下のカテゴリを持つ。
 
 - `tag -> 型名/フィールド名` の逆引きを提供
 - 表示 (`to_string`) と診断表示で参照される
+- 実装は deterministic な entry 列を保持したまま、内部 index により O(1) 相当 lookup を行ってよい
 - `Ok=0`, `Err=1` は予約 tag
 - runtime tag は user-visible `Int` に乗せ替えない
 

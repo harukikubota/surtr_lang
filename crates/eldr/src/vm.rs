@@ -1897,15 +1897,7 @@ impl VM {
         let child_count = self.unique_live_supervisor_child_count(&supervisor_name);
         let shutdown_timeout =
             self.supervisor_shutdown_timeout_value(policy.shutdown_timeout_ms)?;
-        let Some(tag) = self
-            .type_registry()
-            .entries
-            .iter()
-            .find(|entry| {
-                entry.name == "SupervisorStatus" || entry.name == "Global::SupervisorStatus"
-            })
-            .map(|entry| entry.tag)
-        else {
+        let Some(tag) = self.type_registry().tag_by_name("SupervisorStatus") else {
             return Err(RuntimeError::new("SupervisorStatus type is not registered"));
         };
         Ok(ok_vm_result(Value::Tagged {
@@ -3014,7 +3006,7 @@ impl VM {
             dbg_template_base,
         )?;
         self.bytecode.constants.extend(constants);
-        self.bytecode.type_registry.entries.extend(type_entries);
+        self.bytecode.type_registry.extend(type_entries);
         self.bytecode.error_templates.extend(error_templates);
         self.bytecode.dbg_templates.extend(dbg_templates);
         self.extend_docs_unique(docs);
@@ -3142,7 +3134,7 @@ impl VM {
             process_runtime: self.process_runtime.clone(),
             opcode_len: self.bytecode.opcodes.len(),
             constant_len: self.bytecode.constants.len(),
-            type_entry_len: self.bytecode.type_registry.entries.len(),
+            type_entry_len: self.bytecode.type_registry.entries().len(),
             error_template_len: self.bytecode.error_templates.len(),
             function_len: self.bytecode.functions.len(),
             doc_len: self.bytecode.docs.len(),
@@ -3184,10 +3176,7 @@ impl VM {
 
         self.bytecode.opcodes.truncate(checkpoint.opcode_len);
         self.bytecode.constants.truncate(checkpoint.constant_len);
-        self.bytecode
-            .type_registry
-            .entries
-            .truncate(checkpoint.type_entry_len);
+        self.bytecode.type_registry.truncate(checkpoint.type_entry_len);
         self.bytecode
             .error_templates
             .truncate(checkpoint.error_template_len);
@@ -4074,7 +4063,7 @@ impl VM {
     }
 
     fn verify_program(bytecode: &Bytecode) -> Result<(), RuntimeError> {
-        Self::verify_type_registry_entries(&bytecode.type_registry.entries, None)?;
+        Self::verify_type_registry_entries(bytecode.type_registry.entries(), None)?;
         Self::verify_source_map_entries(bytecode.source_map.as_ref(), bytecode.opcodes.len(), "")?;
 
         let halt_pos = if let Some(pos) = bytecode
@@ -4150,7 +4139,7 @@ impl VM {
     fn verify_chunk(&self, chunk: &BytecodeChunk) -> Result<(), RuntimeError> {
         Self::verify_type_registry_entries(
             &chunk.type_entries,
-            Some(&self.bytecode.type_registry.entries),
+            Some(self.bytecode.type_registry.entries()),
         )?;
         Self::verify_source_map_entries(chunk.source_map.as_ref(), chunk.opcodes.len(), "chunk")?;
 

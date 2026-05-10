@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -24,24 +24,58 @@ pub struct TypeEntry {
 }
 
 /// Registry of all user-defined types in a compiled program.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TypeRegistry {
-    pub entries: Vec<TypeEntry>,
+    entries: Vec<TypeEntry>,
+    tag_to_index: HashMap<RuntimeTag, usize>,
 }
 
 impl TypeRegistry {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            tag_to_index: HashMap::new(),
         }
     }
 
+    pub fn from_entries(entries: Vec<TypeEntry>) -> Self {
+        let mut registry = Self::new();
+        registry.extend(entries);
+        registry
+    }
+
     pub fn register(&mut self, entry: TypeEntry) {
+        self.tag_to_index.insert(entry.tag, self.entries.len());
         self.entries.push(entry);
     }
 
+    pub fn extend<I>(&mut self, entries: I)
+    where
+        I: IntoIterator<Item = TypeEntry>,
+    {
+        for entry in entries {
+            self.register(entry);
+        }
+    }
+
+    pub fn entries(&self) -> &[TypeEntry] {
+        &self.entries
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.entries.truncate(len);
+        self.tag_to_index = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| (entry.tag, idx))
+            .collect();
+    }
+
     pub fn lookup(&self, tag: RuntimeTag) -> Option<&TypeEntry> {
-        self.entries.iter().find(|entry| entry.tag == tag)
+        self.tag_to_index
+            .get(&tag)
+            .and_then(|idx| self.entries.get(*idx))
     }
 
     pub fn lookup_by_name(&self, qualified_name: &str) -> Option<&TypeEntry> {
@@ -54,6 +88,31 @@ impl TypeRegistry {
 
     pub fn tag_by_name(&self, qualified_name: &str) -> Option<RuntimeTag> {
         self.lookup_by_name(qualified_name).map(|entry| entry.tag)
+    }
+}
+
+impl Default for TypeRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Serialize for TypeRegistry {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.entries.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TypeRegistry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let entries = Vec::<TypeEntry>::deserialize(deserializer)?;
+        Ok(Self::from_entries(entries))
     }
 }
 
@@ -866,6 +925,65 @@ mod tests {
         assert_eq!(
             value.to_display_string(&registry),
             "HashMap(\"line\\nfeed\" => 1, \"path\\\\to\" => 2, \"say\\\"hi\" => 3, \"tab\\tchar\" => 4)"
+        );
+    }
+
+    #[test]
+    fn type_registry_lookup_supports_sparse_tags() {
+        let registry = TypeRegistry::from_entries(vec![
+            TypeEntry {
+                tag: 10,
+                name: "Global::User".into(),
+                kind: TypeKind::Struct,
+                field_names: vec!["name".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 42,
+                name: "Global::Profile".into(),
+                kind: TypeKind::Struct,
+                field_names: vec!["id".into()],
+                private_flags: vec![false],
+            },
+        ]);
+
+        assert_eq!(
+            registry.lookup(10).map(|entry| entry.name.as_str()),
+            Some("Global::User")
+        );
+        assert_eq!(
+            registry.lookup(42).map(|entry| entry.name.as_str()),
+            Some("Global::Profile")
+        );
+        assert_eq!(registry.lookup(11), None);
+    }
+
+    #[test]
+    fn type_registry_extend_preserves_existing_and_new_lookups() {
+        let mut registry = TypeRegistry::from_entries(vec![TypeEntry {
+            tag: 10,
+            name: "Global::User".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["name".into()],
+            private_flags: vec![false],
+        }]);
+
+        registry.extend(vec![TypeEntry {
+            tag: 42,
+            name: "Global::Profile".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["id".into()],
+            private_flags: vec![false],
+        }]);
+
+        assert_eq!(registry.entries().len(), 2);
+        assert_eq!(
+            registry.lookup(10).map(|entry| entry.name.as_str()),
+            Some("Global::User")
+        );
+        assert_eq!(
+            registry.lookup(42).map(|entry| entry.name.as_str()),
+            Some("Global::Profile")
         );
     }
 

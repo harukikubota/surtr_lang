@@ -185,7 +185,7 @@ fn build_dump_json(
             "opcode_count": inspected.bytecode.opcodes.len(),
             "constant_count": inspected.bytecode.constants.len(),
             "function_count": inspected.bytecode.functions.len(),
-            "type_entry_count": inspected.bytecode.type_registry.entries.len(),
+            "type_entry_count": inspected.bytecode.type_registry.entries().len(),
             "error_template_count": inspected.bytecode.error_templates.len(),
             "num_locals": inspected.bytecode.num_locals,
             "doc_count": inspected.bytecode.docs.len(),

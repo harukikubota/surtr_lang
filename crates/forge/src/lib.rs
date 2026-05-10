@@ -582,16 +582,16 @@ print("ok")"#,
         );
 
         assert_eq!(
-            bytecode.type_registry.entries.len(),
-            baseline.type_registry.entries.len() + 2
+            bytecode.type_registry.entries().len(),
+            baseline.type_registry.entries().len() + 2
         );
 
-        let user = &bytecode.type_registry.entries[baseline.type_registry.entries.len()];
+        let user = &bytecode.type_registry.entries()[baseline.type_registry.entries().len()];
         assert!(user.tag >= 2);
         assert_eq!(user.name, "Global::User");
         assert_eq!(user.kind, TypeKind::Struct);
 
-        let point = &bytecode.type_registry.entries[baseline.type_registry.entries.len() + 1];
+        let point = &bytecode.type_registry.entries()[baseline.type_registry.entries().len() + 1];
         assert_eq!(point.tag, user.tag + 1);
         assert_eq!(point.name, "Global::Point");
         assert_eq!(point.kind, TypeKind::Record);

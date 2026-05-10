@@ -358,7 +358,7 @@ mod tests {
             .expect("bootstrap mode should allow structural chunk");
         assert!(
             vm.type_registry()
-                .entries
+                .entries()
                 .iter()
                 .any(|entry| entry.tag == 99),
             "bootstrap type entry should be committed"

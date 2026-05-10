@@ -598,7 +598,7 @@ pub fn compose_bytecode_with_chunk(
 
     base.opcodes = opcodes;
     base.constants.extend(chunk.constants);
-    base.type_registry.entries.extend(chunk.type_entries);
+    base.type_registry.extend(chunk.type_entries);
     base.error_templates.extend(chunk.error_templates);
     base.dbg_templates.extend(chunk.dbg_templates);
     base.num_locals = base.num_locals.saturating_add(chunk.new_locals);
@@ -1611,7 +1611,7 @@ impl ForgeSession {
         let new_constants = after.constants[before.constants.len()..].to_vec();
         let new_locals = after.next_slot.saturating_sub(before.next_slot) as usize;
         let type_entries =
-            after.type_registry.entries[before.type_registry.entries.len()..].to_vec();
+            after.type_registry.entries()[before.type_registry.entries().len()..].to_vec();
         let error_templates = after.error_templates[before.error_templates.len()..].to_vec();
         let dbg_templates = after.dbg_templates[before.dbg_templates.len()..].to_vec();
         let meta = collect_chunk_meta(&typed_for_meta, &after.slot_map);

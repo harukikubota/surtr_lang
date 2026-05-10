@@ -38,21 +38,6 @@
   - `rune` integration で失敗時の exit code とメッセージ形状を固定する。
   - `unit/xldr` または `unit/rune` で adapter / 変換経路を確認する。
 
-### OI-008 `TypeRegistry::lookup` の参照コスト最適化
-
-- 背景:
-  - `TypeRegistry::lookup` は現状でも正しく動くが、`entries.iter().find(...)` の線形探索である。
-  - 表示系や nested value の増加時に、lookup コストの説明が実装依存のまま残っている。
-- 未確定点:
-  - 追加 index を持つか、tag と配列位置を一致させる設計に寄せるか
-  - serialize 形と決定性を崩さずに O(1) 相当 lookup を導入する方法
-- 受け入れ条件:
-  - lookup の高速化方針が決定性と表示契約を壊さない。
-  - 表示結果と runtime tag の外部観測が変わらない。
-- テスト方針:
-  - 既存 display 系テストを維持し、内部 index 導入後も同じ表示になることを確認する。
-  - `unit/sindr` に lookup 整合テストを追加する。
-
 ### OI-009 List runtime 表現の簡素化
 
 - 背景:
