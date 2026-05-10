@@ -21,66 +21,6 @@
   - 追加する場合も Facet の同一スコープ使用規約と名前解決規則が崩れない。
   - 現行 V1 の global const namespace と互換性を保てる。
 
-### OI-001 宣言インデックス収集の責務境界
-
-- 背景:
-  - `sigil::precollect_declaration_index` と staged resolve は既に存在し、前方参照の基盤として動作している。
-  - 一方で、将来の複数ファイル並列処理に必要な「宣言だけを安価に収集する段階」の責務境界は、まだ正本で固定していない。
-- 未確定点:
-  - 宣言収集で保持すべき最小情報をどこまで広げるか
-  - `unique_id` / `tag` の決定順を declaration index 単体でどこまで固定するか
-- 受け入れ条件:
-  - 本体解析前でも依存解決と決定性維持に必要な情報が欠けない。
-  - declaration index の責務と、通常 resolve / typecheck の責務が文書上で分離される。
-- テスト方針:
-  - `unit/sigil` で declaration index が本体解決なしに安定して取れることを固定する。
-  - `integration` で入力順を入れ替えても index と後続の決定結果が変わらないことを確認する。
-
-### OI-002 依存グラフと再試行キューの明文化
-
-- 背景:
-  - 現在は staged resolve / predeclare により段階的に解決できているが、依存ノードと再試行条件の public contract はまだない。
-  - 将来の macro、specialization、複数 compile unit 導入時に、再評価粒度が曖昧なままだと性能と決定性の説明が崩れる。
-- 未確定点:
-  - 再試行単位を定義単位のまま維持するか、より細かく分割するか
-  - macro や追加 type feature 導入後の queue 優先順位をどう扱うか
-- 受け入れ条件:
-  - 依存解決イベント発生時に、無関係ノードを再評価しない方針が説明できる。
-  - staged compile の進行順が docs と実装で矛盾しない。
-- テスト方針:
-  - `unit/sigil` / `unit/scar` で依存解決後に必要ノードだけ再試行されるケースを固定する。
-  - `integration` で依存の深さが異なる入力を混在させても不要再試行が増えないことを確認する。
-
-### OI-003 fixpoint 終了条件と診断集約
-
-- 背景:
-  - fixpoint failure の考え方自体はあるが、進捗ゼロ判定時にどの失敗集合を返すかはまだ仕様として固まっていない。
-  - staged resolve / typecheck が増えるほど、停止理由の説明責務が重くなる。
-- 未確定点:
-  - 進捗定義を Pending 集合の減少だけで十分とみなすか
-  - 進捗ゼロ時に複数の失敗候補をどう集約して表示するか
-- 受け入れ条件:
-  - 同一入力に対して fixpoint failure の件数と主診断が決定的である。
-  - 成功 / fixpoint failure の停止理由を利用者に説明できる。
-- テスト方針:
-  - `compile_errors` に fixpoint failure 専用ケースを置き、`phase` と主文言を固定する。
-  - `integration` で同一入力の複数回実行結果がぶれないことを確認する。
-
-### OI-004 循環依存ポリシーの許可境界
-
-- 背景:
-  - `defenum` は実装済みで、型循環検出も `scar` 側に存在する。
-  - ただし、どの循環を禁止し、どの循環を将来許可しうるかの境界はまだ正本で狭くしか定義していない。
-- 未確定点:
-  - 関数循環、型循環、混合循環のうち将来許可する余地がある範囲
-  - 禁止時にどこまで最小 cycle 表示を責務に含めるか
-- 受け入れ条件:
-  - 構文カテゴリごとの許可 / 禁止境界が明文化される。
-  - 禁止ケースで決定的な cycle 診断が返る。
-- テスト方針:
-  - `spec` に許可する循環ケースを追加する場合はその成立条件を固定する。
-  - `compile_errors` に禁止循環ケースを置き、cycle 表示の主文言を固定する。
-
 ### OI-005 マクロ展開段階と通常解決段階の分離
 
 - 背景:
@@ -361,18 +301,22 @@
 
 ### OI-022 Supervisor policy の公開深度
 
+- 状態:
+  - 2026-05-10 に `shutdown_timeout` の `SupervisorStatus` 露出は解決。
+  - `SupervisorStatus.shutdown_timeout: Option<Duration>` とし、未指定は `Option::None`、定義または `supervisor_init` override 指定時は `Option::Some(duration)` を返す。
+  - `supervisor_init` の supervisor policy override は bytecode merge 後も `RuntimeBootPlan.supervisor_overrides` に保持する。
 - 背景:
   - `defsupervisor` では `strategy`, `max_restarts`, `max_seconds`, `child_restart_default`, `allow_adopt`、必要なら `shutdown_timeout` を policy 値として扱う方針である。
-  - ただし `shutdown_timeout` を含む policy の user-facing surface、status 表示、override 深度はまだ十分固定されていない。
+  - `shutdown_timeout` を含む policy の user-facing surface、status 表示、override 深度のうち、status 表示と boot-time override 反映は baseline として固定した。
 - 未確定点:
-  - `shutdown_timeout` を初期フェーズから正式 surface に含めるか
-  - supervisor `status()` や observability で policy 値をどこまで露出するか
-  - boot-time override をどの policy まで許可するか
+  - `child_restart_default` と `shutdown_timeout` 以外の restart semantics を runtime status / observability でどこまで露出するか
+  - boot-time override を将来どの policy まで広げるか
 - 受け入れ条件:
   - compiler-managed supervisor surface と runtime status 表示が同じ policy 集合を前提にできる。
   - policy を追加・露出しても restart semantics の未確定部分を先に固定しなくて済む。
 - テスト方針:
-  - surface 化する policy は `spec/modules/process_supervisor_user_surface` と compile error fixture で固定する。
+  - `shutdown_timeout` の surface は `spec/modules/process_supervisor_user_surface` と `unit/eldr` で固定済み。
+  - 今後 surface 化する policy は `spec/modules/process_supervisor_user_surface` と compile error fixture で固定する。
   - observability へ露出する場合は dump / REPL 表示の形状を integration で固定する。
 
 ### OI-023 Task.Supervisor / Task-DynamicSupervisor link / worker lazy init

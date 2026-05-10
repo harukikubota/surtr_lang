@@ -567,6 +567,12 @@ ImageWorkerSupervisor::status()
 ImageWorkerSupervisor::workers(MyWorker::init(args), 4)
 ```
 
+`status()` は `SupervisorStatus` を返し、policy 表示として `strategy`、
+`max_restarts`、`max_seconds`、`allow_adopt`、`shutdown_timeout` を含める。
+`shutdown_timeout` は `Option<Duration>` とし、未指定時は `Option::None`、
+定義または `supervisor_init` override で指定された場合は
+`Option::Some(duration)` を返す。
+
 `adopt / handoff` は runtime が原子的に処理する。PID は維持する。
 
 ### 3.11.1 Workers surface

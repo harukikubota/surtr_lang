@@ -616,6 +616,7 @@ fn extend_runtime_boot_plan(base: &mut RuntimeBootPlan, chunk: RuntimeBootPlan) 
     base.singletons.extend(chunk.singletons);
     base.standard_overrides.extend(chunk.standard_overrides);
     base.handler_overrides.extend(chunk.handler_overrides);
+    base.supervisor_overrides.extend(chunk.supervisor_overrides);
 }
 
 fn build_runtime_boot_plan(
