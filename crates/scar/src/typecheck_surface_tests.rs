@@ -1567,6 +1567,48 @@ print(to_string(value))"#,
 }
 
 #[test]
+fn tuple_trait_impl_typechecks_inside_script_module_scope() {
+    let typed = typecheck_with_builtin_prelude_in_script_module(
+        r#"deftrait PairTrait {
+  def keep(self: Self) -> Self
+}
+
+impl PairTrait for ($A, $B) {
+  def keep(self: Self) -> Self {
+    self
+  }
+}"#,
+    );
+    assert!(
+        typed
+            .iter()
+            .any(|node| matches!(node.node, TypedInner::TraitImplDef(_, _))),
+        "expected tuple trait impl to survive typechecking"
+    );
+}
+
+#[test]
+fn concrete_tuple_trait_impl_typechecks_inside_script_module_scope() {
+    let typed = typecheck_with_builtin_prelude_in_script_module(
+        r#"deftrait PairTrait {
+  def keep(self: Self) -> Self
+}
+
+impl PairTrait for (Int, String) {
+  def keep(self: Self) -> Self {
+    self
+  }
+}"#,
+    );
+    assert!(
+        typed
+            .iter()
+            .any(|node| matches!(node.node, TypedInner::TraitImplDef(_, _))),
+        "expected concrete tuple trait impl to survive typechecking"
+    );
+}
+
+#[test]
 fn generic_user_function_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def id(x: $A) -> $A { x }

@@ -1,0 +1,134 @@
+@doc """
+Standard tuple comparison helpers.
+Surtr provides lexicographic `Compare` implementations for tuple arities 2
+through 8.
+Tuples with 9 or more elements are not covered by the standard library in this
+version. Define your own `impl Compare for (...)` or nest tuples to stay within
+the provided arity range.
+"""
+
+impl Compare for (impl Compare, impl Compare) {
+  def compare(self: Self, rhs: Self) -> Ordering {
+    match Compare::compare(self._0, rhs._0) {
+      Ordering::Equal => Compare::compare(self._1, rhs._1),
+      ordering => ordering,
+    }
+  }
+}
+
+impl Compare for (impl Compare, impl Compare, impl Compare) {
+  def compare(self: Self, rhs: Self) -> Ordering {
+    match Compare::compare(self._0, rhs._0) {
+      Ordering::Equal => match Compare::compare(self._1, rhs._1) {
+        Ordering::Equal => Compare::compare(self._2, rhs._2),
+        ordering => ordering,
+      },
+      ordering => ordering,
+    }
+  }
+}
+
+impl Compare for (impl Compare, impl Compare, impl Compare, impl Compare) {
+  def compare(self: Self, rhs: Self) -> Ordering {
+    match Compare::compare(self._0, rhs._0) {
+      Ordering::Equal => match Compare::compare(self._1, rhs._1) {
+        Ordering::Equal => match Compare::compare(self._2, rhs._2) {
+          Ordering::Equal => Compare::compare(self._3, rhs._3),
+          ordering => ordering,
+        },
+        ordering => ordering,
+      },
+      ordering => ordering,
+    }
+  }
+}
+
+impl Compare for (impl Compare, impl Compare, impl Compare, impl Compare, impl Compare) {
+  def compare(self: Self, rhs: Self) -> Ordering {
+    match Compare::compare(self._0, rhs._0) {
+      Ordering::Equal => match Compare::compare(self._1, rhs._1) {
+        Ordering::Equal => match Compare::compare(self._2, rhs._2) {
+          Ordering::Equal => match Compare::compare(self._3, rhs._3) {
+            Ordering::Equal => Compare::compare(self._4, rhs._4),
+            ordering => ordering,
+          },
+          ordering => ordering,
+        },
+        ordering => ordering,
+      },
+      ordering => ordering,
+    }
+  }
+}
+
+impl Compare for (impl Compare, impl Compare, impl Compare, impl Compare, impl Compare, impl Compare) {
+  def compare(self: Self, rhs: Self) -> Ordering {
+    match Compare::compare(self._0, rhs._0) {
+      Ordering::Equal => match Compare::compare(self._1, rhs._1) {
+        Ordering::Equal => match Compare::compare(self._2, rhs._2) {
+          Ordering::Equal => match Compare::compare(self._3, rhs._3) {
+            Ordering::Equal => match Compare::compare(self._4, rhs._4) {
+              Ordering::Equal => Compare::compare(self._5, rhs._5),
+              ordering => ordering,
+            },
+            ordering => ordering,
+          },
+          ordering => ordering,
+        },
+        ordering => ordering,
+      },
+      ordering => ordering,
+    }
+  }
+}
+
+impl Compare for (impl Compare, impl Compare, impl Compare, impl Compare, impl Compare, impl Compare, impl Compare) {
+  def compare(self: Self, rhs: Self) -> Ordering {
+    match Compare::compare(self._0, rhs._0) {
+      Ordering::Equal => match Compare::compare(self._1, rhs._1) {
+        Ordering::Equal => match Compare::compare(self._2, rhs._2) {
+          Ordering::Equal => match Compare::compare(self._3, rhs._3) {
+            Ordering::Equal => match Compare::compare(self._4, rhs._4) {
+              Ordering::Equal => match Compare::compare(self._5, rhs._5) {
+                Ordering::Equal => Compare::compare(self._6, rhs._6),
+                ordering => ordering,
+              },
+              ordering => ordering,
+            },
+            ordering => ordering,
+          },
+          ordering => ordering,
+        },
+        ordering => ordering,
+      },
+      ordering => ordering,
+    }
+  }
+}
+
+impl Compare for (impl Compare, impl Compare, impl Compare, impl Compare, impl Compare, impl Compare, impl Compare, impl Compare) {
+  def compare(self: Self, rhs: Self) -> Ordering {
+    match Compare::compare(self._0, rhs._0) {
+      Ordering::Equal => match Compare::compare(self._1, rhs._1) {
+        Ordering::Equal => match Compare::compare(self._2, rhs._2) {
+          Ordering::Equal => match Compare::compare(self._3, rhs._3) {
+            Ordering::Equal => match Compare::compare(self._4, rhs._4) {
+              Ordering::Equal => match Compare::compare(self._5, rhs._5) {
+                Ordering::Equal => match Compare::compare(self._6, rhs._6) {
+                  Ordering::Equal => Compare::compare(self._7, rhs._7),
+                  ordering => ordering,
+                },
+                ordering => ordering,
+              },
+              ordering => ordering,
+            },
+            ordering => ordering,
+          },
+          ordering => ordering,
+        },
+        ordering => ordering,
+      },
+      ordering => ordering,
+    }
+  }
+}

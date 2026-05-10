@@ -248,6 +248,57 @@ impl Checker {
                         })?,
                     other => other,
                 };
+                let dispatch = match dispatch {
+                    TraitDispatch::Static(TraitDispatchTarget::UserFunction { name, fun_idx })
+                        if needs_specialization.contains(&fun_idx) =>
+                    {
+                        let original_def =
+                            defs_by_fun_idx.get(&fun_idx).ok_or_else(|| TypeError {
+                                message: format!(
+                                    "Missing generic definition for fun_idx {}",
+                                    fun_idx
+                                ),
+                                span: span.clone(),
+                                hint: None,
+                            })?;
+                        let bound_tyvars = bound_tyvars_by_fun_idx
+                            .get(&fun_idx)
+                            .cloned()
+                            .unwrap_or_default();
+                        let mapping =
+                            self.infer_specialization_mapping(original_def, &args, &bound_tyvars)?;
+                        if mapping.len() == bound_tyvars.len()
+                            && bound_tyvars.iter().all(|var| {
+                                mapping.get(var).is_some_and(|ty| !matches!(ty, Ty::Var(_)))
+                            })
+                        {
+                            let concrete_tys = bound_tyvars
+                                .iter()
+                                .filter_map(|var| mapping.get(var).cloned())
+                                .collect::<Vec<_>>();
+                            let specialized_fun_idx = self.ensure_specialized_def(
+                                fun_idx,
+                                &concrete_tys,
+                                &mapping,
+                                defs_by_fun_idx,
+                                bound_tyvars_by_fun_idx,
+                                needs_specialization,
+                                specialization_fun_idxs,
+                                generated_defs,
+                            )?;
+                            TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+                                name,
+                                fun_idx: specialized_fun_idx,
+                            })
+                        } else {
+                            TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+                                name,
+                                fun_idx,
+                            })
+                        }
+                    }
+                    other => other,
+                };
                 TypedInner::TraitCall {
                     trait_name,
                     method_name,

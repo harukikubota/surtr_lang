@@ -88,6 +88,11 @@ const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
         "Ordering",
     ),
     (
+        "types/tuple.srt",
+        include_str!("../../../lib/types/tuple.srt"),
+        "Tuple",
+    ),
+    (
         "traits/operator/ord.srt",
         include_str!("../../../lib/traits/operator/ord.srt"),
         "Ord",
@@ -954,6 +959,7 @@ mod tests {
                 "Numeric",
                 "Show",
                 "Ordering",
+                "Tuple",
                 "Ord",
                 "From",
                 "TryFrom",
@@ -1101,6 +1107,7 @@ mod tests {
                 "Numeric",
                 "Show",
                 "Ordering",
+                "Tuple",
                 "Ord",
                 "From",
                 "TryFrom",

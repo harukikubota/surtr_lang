@@ -1230,7 +1230,7 @@ impl Checker {
         }
     }
 
-    fn argument_type_mismatch_message(&self, expected: &Ty, actual: &Ty) -> String {
+    fn argument_type_mismatch_message(&mut self, expected: &Ty, actual: &Ty) -> String {
         if let Some(message) = self.bound_mismatch_message(expected, actual) {
             return message;
         }
@@ -1241,7 +1241,7 @@ impl Checker {
         )
     }
 
-    fn bound_mismatch_message(&self, expected: &Ty, actual: &Ty) -> Option<String> {
+    fn bound_mismatch_message(&mut self, expected: &Ty, actual: &Ty) -> Option<String> {
         match (self.resolve_ty(expected), self.resolve_ty(actual)) {
             (Ty::Var(var), actual_ty) => {
                 let bounds = self.tyvar_bound_names(var);

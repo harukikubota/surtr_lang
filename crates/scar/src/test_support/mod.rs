@@ -50,6 +50,7 @@ impl RegexCaptures {}
 impl RegexMatch {}"#;
 const BOOLEAN_MODULE_SOURCE: &str = include_str!("../../../../lib/types/boolean.srt");
 const ORDERING_MODULE_SOURCE: &str = include_str!("../../../../lib/types/ordering.srt");
+const TUPLE_MODULE_SOURCE: &str = include_str!("../../../../lib/types/tuple.srt");
 const ERROR_MODULE_SOURCE: &str = include_str!("../../../../lib/types/error.srt");
 const LIST_MODULE_SOURCE: &str = include_str!("../../../../lib/types/list.srt");
 const OPTION_MODULE_SOURCE: &str = include_str!("../../../../lib/types/option.srt");
@@ -427,6 +428,7 @@ pub(crate) fn std_module_stages_with_overrides(
                 "Ordering",
                 pick_override("Ordering", ORDERING_MODULE_SOURCE, overrides),
             ),
+            ("Tuple", pick_override("Tuple", TUPLE_MODULE_SOURCE, overrides)),
             ("Ord", pick_override("Ord", ORD_MODULE_SOURCE, overrides)),
             ("From", pick_override("From", FROM_MODULE_SOURCE, overrides)),
             (

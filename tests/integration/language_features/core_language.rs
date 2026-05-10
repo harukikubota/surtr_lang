@@ -423,6 +423,19 @@ print(to_string(by_len("ab", "c")))
 name_score = both(&String::len, {|text: String| text ++ "!"})
 print(inspect(name_score("abc")))
 
+users = [
+  (2, 9, 10),
+  (1, 9, 30),
+  (1, 5, 20),
+  (1, 5, 10),
+]
+by_user = &compare `Function::on` both3(
+{|user: (Int, Int, Int)| user._0},
+{|user: (Int, Int, Int)| user._1},
+{|user: (Int, Int, Int)| user._2}
+)
+print(inspect(List::sort_by(users, by_user)))
+
 show_first = first({|num: Int| to_string(num)})
 len_second = second(&String::len)
 print(inspect(dup(7)))
@@ -439,6 +452,7 @@ print(to_string(add_uncurried(3, 4)))"#,
             "8",
             "Ordering::Greater",
             "(3, \"abc!\")",
+            "[(1, 5, 10), (1, 5, 20), (1, 9, 30), (2, 9, 10)]",
             "(7, 7)",
             "(\"10\", \"ok\")",
             "(10, 4)",

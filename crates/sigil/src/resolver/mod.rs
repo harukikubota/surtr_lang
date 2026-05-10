@@ -30,8 +30,8 @@ pub use self::declarations::{
 pub use self::session::{SigilCheckpoint, SigilSession};
 
 use self::declarations::{
-    assign_declaration_uids, collect_stage_impl_target_resolutions, declaration_uid_kind_map,
-    trait_impl_method_qualified_name, trait_method_qualified_name,
+    assign_declaration_uids, ast_ty_key, collect_stage_impl_target_resolutions,
+    declaration_uid_kind_map, trait_impl_method_qualified_name, trait_method_qualified_name,
 };
 use self::expr::validate_trait_impl_pairs_in_nodes;
 use self::imports::{build_global_scope, build_module_scope};

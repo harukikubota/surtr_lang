@@ -1135,14 +1135,13 @@ impl Checker {
             AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
             }
-            AstTy::ImplTrait(span, trait_name) => Err(TypeError {
-                message: format!(
-                    "`impl {}` is not supported inside trait method signatures",
-                    trait_name
-                ),
-                span: span.clone(),
-                hint: None,
-            }),
+            AstTy::ImplTrait(_, trait_name) => {
+                let fresh = self.env.fresh_tyvar();
+                if let Ty::Var(var) = fresh {
+                    self.register_tyvar_bound(var, trait_name);
+                }
+                Ok(fresh)
+            }
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 return Err(self.type_ref_not_allowed_error(span));
             }
@@ -1889,7 +1888,7 @@ impl Checker {
         result
     }
 
-    pub(super) fn ty_satisfies_bounds(&self, ty: &Ty, bounds: &[String]) -> bool {
+    pub(super) fn ty_satisfies_bounds(&mut self, ty: &Ty, bounds: &[String]) -> bool {
         if bounds.is_empty() {
             return true;
         }

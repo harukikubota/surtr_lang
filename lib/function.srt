@@ -110,6 +110,53 @@ defmod Function {
   }
 
   @doc """
+  Build one callable that applies three projections to the same input.
+
+  ## REPL
+  xldr(1)> triple = both3(&String::len, {|text: String| text ++ "!"}, {|text: String| text ++ "?"})
+  xldr(2)> triple("abc")
+  (3, "abc!", "abc?")
+  """
+  def both3(f: ($A -> $B), g: ($A -> $C), h: ($A -> $D)) -> ($A -> ($B, $C, $D)) {
+    {|value| (f(value), g(value), h(value)) }
+  }
+
+  @doc """
+  Build one callable that applies four projections to the same input.
+  """
+  def both4(f: ($A -> $B), g: ($A -> $C), h: ($A -> $D), i: ($A -> $E)) -> ($A -> ($B, $C, $D, $E)) {
+    {|value| (f(value), g(value), h(value), i(value)) }
+  }
+
+  @doc """
+  Build one callable that applies five projections to the same input.
+  """
+  def both5(f: ($A -> $B), g: ($A -> $C), h: ($A -> $D), i: ($A -> $E), j: ($A -> $F)) -> ($A -> ($B, $C, $D, $E, $F)) {
+    {|value| (f(value), g(value), h(value), i(value), j(value)) }
+  }
+
+  @doc """
+  Build one callable that applies six projections to the same input.
+  """
+  def both6(f: ($A -> $B), g: ($A -> $C), h: ($A -> $D), i: ($A -> $E), j: ($A -> $F), k: ($A -> $G)) -> ($A -> ($B, $C, $D, $E, $F, $G)) {
+    {|value| (f(value), g(value), h(value), i(value), j(value), k(value)) }
+  }
+
+  @doc """
+  Build one callable that applies seven projections to the same input.
+  """
+  def both7(f: ($A -> $B), g: ($A -> $C), h: ($A -> $D), i: ($A -> $E), j: ($A -> $F), k: ($A -> $G), l: ($A -> $H)) -> ($A -> ($B, $C, $D, $E, $F, $G, $H)) {
+    {|value| (f(value), g(value), h(value), i(value), j(value), k(value), l(value)) }
+  }
+
+  @doc """
+  Build one callable that applies eight projections to the same input.
+  """
+  def both8(f: ($A -> $B), g: ($A -> $C), h: ($A -> $D), i: ($A -> $E), j: ($A -> $F), k: ($A -> $G), l: ($A -> $H), m: ($A -> $I)) -> ($A -> ($B, $C, $D, $E, $F, $G, $H, $I)) {
+    {|value| (f(value), g(value), h(value), i(value), j(value), k(value), l(value), m(value)) }
+  }
+
+  @doc """
   Duplicate one value into a pair.
 
   ## REPL

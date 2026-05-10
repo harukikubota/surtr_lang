@@ -2266,34 +2266,7 @@ impl Resolver {
                     span: span.clone(),
                 };
                 let resolved_target_ty = self.resolve_type_annotation(target_ty)?;
-                let target_key = match &resolved_target_ty {
-                    AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => name.clone(),
-                    AstTy::Generic(_, name, args) => format!(
-                        "{}<{}>",
-                        name,
-                        args.iter()
-                            .map(Self::ast_ty_symbol_key)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                    AstTy::Tuple(_, items) => format!(
-                        "({})",
-                        items
-                            .iter()
-                            .map(Self::ast_ty_symbol_key)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                    AstTy::Func(_, params, ret) => format!(
-                        "({} -> {})",
-                        params
-                            .iter()
-                            .map(Self::ast_ty_symbol_key)
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        Self::ast_ty_symbol_key(ret)
-                    ),
-                };
+                let target_key = ast_ty_key(&resolved_target_ty);
                 let mut resolved_methods = Vec::new();
                 for method in methods {
                     let (
@@ -2927,36 +2900,6 @@ impl Resolver {
             .map(|(_, qualified_name)| qualified_name)
     }
 
-    fn ast_ty_symbol_key(ty: &AstTy) -> String {
-        match ty {
-            AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => name.clone(),
-            AstTy::Generic(_, name, args) => format!(
-                "{}<{}>",
-                name,
-                args.iter()
-                    .map(Self::ast_ty_symbol_key)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            AstTy::Tuple(_, items) => format!(
-                "({})",
-                items
-                    .iter()
-                    .map(Self::ast_ty_symbol_key)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            AstTy::Func(_, params, ret) => format!(
-                "({} -> {})",
-                params
-                    .iter()
-                    .map(Self::ast_ty_symbol_key)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                Self::ast_ty_symbol_key(ret)
-            ),
-        }
-    }
 }
 
 pub(super) fn validate_trait_impl_pairs_in_nodes(
@@ -2974,7 +2917,7 @@ pub(super) fn validate_trait_impl_pairs_in_nodes(
         let pair_key = format!(
             "{} for {}",
             trait_name,
-            Resolver::ast_ty_symbol_key(target_ty)
+            ast_ty_key(target_ty)
         );
         if let Some(first_span) = seen_pairs.get(&pair_key) {
             return Err(ResolveError {

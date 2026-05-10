@@ -913,11 +913,9 @@ impl Checker {
         target_ast_ty: &AstTy,
     ) -> Result<(Vec<Ty>, Ty, Vec<u32>), TypeError> {
         let mut tyvars = HashMap::new();
-        let placeholder_self = self.env.fresh_tyvar();
-        let target_ty = self.resolve_trait_signature_ast_ty_in_context(
+        let target_ty = self.resolve_signature_ast_ty_in_context(
             target_ast_ty,
             TypeSyntaxContext::General,
-            &placeholder_self,
             &mut tyvars,
         )?;
         let trait_arg_tys = trait_args
@@ -1066,6 +1064,7 @@ impl Checker {
             Ty::Result(_, _) => Some("Result".into()),
             Ty::List(_) => Some("List".into()),
             Ty::Facet(_, _) => Some("Facet".into()),
+            Ty::Tuple(items) if items.len() >= 2 => Some(format!("Tuple{}", items.len())),
             Ty::Func(_, _) => Some("Function".into()),
             Ty::Struct(name, _) | Ty::Record(name, _) => Some(name),
             Ty::Enum(name, _) => Some(name),
@@ -1073,12 +1072,31 @@ impl Checker {
         }
     }
 
-    pub(super) fn trait_impl_exists(&self, trait_name: &str, ty: &Ty) -> bool {
+    pub(super) fn trait_impl_exists(&mut self, trait_name: &str, ty: &Ty) -> bool {
         if self.trait_target_name(ty).is_some_and(|target_name| {
             self.trait_impls
                 .contains_key(&(trait_name.into(), target_name))
         }) {
             return true;
+        }
+        if !trait_name.contains('<') {
+            let receiver_ty = self.resolve_ty(ty);
+            for impl_key in self.trait_impl_candidate_keys(trait_name) {
+                let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
+                    continue;
+                };
+                if !impl_info.trait_arg_tys.is_empty() {
+                    continue;
+                }
+                let mut fresh = HashMap::new();
+                let impl_target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+                let before = self.substitutions.clone();
+                let target_matches = self.types_compatible(&impl_target, &receiver_ty);
+                self.substitutions = before;
+                if target_matches {
+                    return true;
+                }
+            }
         }
         self.compiler_trait_impl_exists(trait_name, ty)
     }
@@ -1403,9 +1421,9 @@ impl Checker {
             let (trait_arg_tys, target_ty, type_param_vars) =
                 self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
             let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
-                message: "trait impl target must be a concrete named type or function type".into(),
+                message: "trait impl target must be a concrete named type, tuple type, or function type".into(),
                 span: Self::ast_ty_span(target_ast_ty).clone(),
-                hint: Some("Use `impl Trait for Int` / `impl Trait for Float` / `impl Trait for UserType` / `impl Trait for ($A -> $B)`.".into()),
+                hint: Some("Use `impl Trait for Int` / `impl Trait for UserType` / `impl Trait for (Int, String)` / `impl Trait for ($A -> $B)`.".into()),
             })?;
 
             let mut method_map = HashMap::new();

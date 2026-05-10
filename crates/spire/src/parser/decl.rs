@@ -2115,8 +2115,9 @@ impl Parser<'_> {
             AstTy::Named(_, name) => Ok(name.clone()),
             AstTy::Generic(_, name, _) => Ok(name.clone()),
             AstTy::Func(_, _, _) => Ok("Function".to_string()),
+            AstTy::Tuple(_, items) if items.len() >= 2 => Ok(format!("Tuple{}", items.len())),
             _ => Err(ParseError::syntax(
-                "trait impl target must be a concrete named type or function type in V1",
+                "trait impl target must be a concrete named type, tuple type, or function type in V1",
                 ast_ty_span(ty).clone(),
             )),
         }

@@ -140,7 +140,7 @@ pub(super) fn trait_instance_key(trait_name: &str, trait_args: &[AstTy]) -> Stri
     }
 }
 
-fn ast_ty_key(ty: &AstTy) -> String {
+pub(super) fn ast_ty_key(ty: &AstTy) -> String {
     match ty {
         AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => name.clone(),
         AstTy::Generic(_, name, args) => format!(
@@ -148,6 +148,7 @@ fn ast_ty_key(ty: &AstTy) -> String {
             name,
             args.iter().map(ast_ty_key).collect::<Vec<_>>().join(", ")
         ),
+        AstTy::Tuple(_, items) if items.len() >= 2 => format!("Tuple{}", items.len()),
         AstTy::Tuple(_, items) => format!(
             "({})",
             items.iter().map(ast_ty_key).collect::<Vec<_>>().join(", ")
