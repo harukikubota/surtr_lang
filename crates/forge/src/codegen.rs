@@ -2817,6 +2817,7 @@ struct PendingCompose {
     fun_idx: u32,
     flavor: ComposeFlavor,
     span: Span,
+    direct_targets: Option<(DirectCallableTarget, DirectCallableTarget)>,
 }
 
 #[derive(Debug, Clone)]
@@ -2839,6 +2840,12 @@ enum FacetUpdateLeaf {
         mode: TypedFacetOverMode,
         focus_is_result: bool,
     },
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DirectCallableTarget {
+    Builtin(u16),
+    User(u32),
 }
 
 struct Codegen {
@@ -2950,6 +2957,63 @@ impl Codegen {
         Ok(())
     }
 
+    fn direct_callable_target_for_ref(
+        &self,
+        node: &TypedNode,
+    ) -> Result<Option<DirectCallableTarget>, CodegenError> {
+        match (&node.node, &node.ty) {
+            (TypedInner::Var(_), Ty::BuiltinFunc { name, .. }) => {
+                let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
+                    message: format!("Unknown builtin: {}", name),
+                    span: node.span.clone(),
+                })?;
+                Ok(Some(DirectCallableTarget::Builtin(builtin_id)))
+            }
+            (TypedInner::Var(_), Ty::UserFunc { fun_idx, .. }) => {
+                Ok(Some(DirectCallableTarget::User(*fun_idx)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn direct_callable_target_for_capture(
+        &self,
+        node: &TypedNode,
+    ) -> Result<Option<DirectCallableTarget>, CodegenError> {
+        match &node.node {
+            TypedInner::Capture(target, args) if args.is_empty() => {
+                self.direct_callable_target_for_ref(target)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn emit_direct_callable_ref(&mut self, target: DirectCallableTarget) {
+        match target {
+            DirectCallableTarget::Builtin(builtin_id) => {
+                self.emit(Opcode::LoadBuiltinRef(builtin_id))
+            }
+            DirectCallableTarget::User(fun_idx) => self.emit(Opcode::LoadFunctionRef(fun_idx)),
+        }
+    }
+
+    fn emit_direct_call(&mut self, target: DirectCallableTarget, arity: u8, span: &Span) {
+        match target {
+            DirectCallableTarget::Builtin(builtin_id) => self.emit(Opcode::CallBuiltin {
+                builtin_id,
+                arity,
+                span_start: span.start as u32,
+                span_end: span.end as u32,
+            }),
+            DirectCallableTarget::User(fun_idx) => self.emit(Opcode::Call {
+                fun_idx,
+                arity,
+                span_start: span.start as u32,
+                span_end: span.end as u32,
+            }),
+        }
+    }
+
     fn emit_closure_function(
         &mut self,
         fun_idx: u32,
@@ -3038,45 +3102,59 @@ impl Codegen {
         fun_idx: u32,
         flavor: &ComposeFlavor,
         span: &Span,
+        direct_targets: Option<(DirectCallableTarget, DirectCallableTarget)>,
     ) -> Result<(), CodegenError> {
         let saved_slot_map = self.state.slot_map.clone();
         let saved_next_slot = self.state.next_slot;
 
         self.state.slot_map = HashMap::new();
-        self.state.next_slot = 3;
-
-        let lhs_slot = 0u32;
-        let rhs_slot = 1u32;
-        let input_slot = 2u32;
+        let (lhs_slot, rhs_slot, input_slot, arity) = if direct_targets.is_some() {
+            self.state.next_slot = 1;
+            (None, None, 0u32, 1u8)
+        } else {
+            self.state.next_slot = 3;
+            (Some(0u32), Some(1u32), 2u32, 3u8)
+        };
         let entry_pc = self.current_pos() as u32;
         let prev_in_function = self.in_function;
         self.in_function = true;
 
         match flavor {
             ComposeFlavor::Plain => {
-                self.emit(Opcode::LoadLocal(rhs_slot));
-                self.emit(Opcode::LoadLocal(lhs_slot));
                 self.emit(Opcode::LoadLocal(input_slot));
-                self.emit(Opcode::CallClosure {
-                    arity: 1,
-                    span_start: span.start as u32,
-                    span_end: span.end as u32,
-                });
-                self.emit(Opcode::CallClosure {
-                    arity: 1,
-                    span_start: span.start as u32,
-                    span_end: span.end as u32,
-                });
+                if let Some((lhs, rhs)) = direct_targets {
+                    self.emit_direct_call(lhs, 1, span);
+                    self.emit_direct_call(rhs, 1, span);
+                } else {
+                    self.emit(Opcode::LoadLocal(rhs_slot.expect("captured rhs slot")));
+                    self.emit(Opcode::LoadLocal(lhs_slot.expect("captured lhs slot")));
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::CallClosure {
+                        arity: 1,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
+                    self.emit(Opcode::CallClosure {
+                        arity: 1,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
+                }
                 self.emit(Opcode::Return);
             }
             ComposeFlavor::ResultMap | ComposeFlavor::ResultBind => {
-                self.emit(Opcode::LoadLocal(lhs_slot));
                 self.emit(Opcode::LoadLocal(input_slot));
-                self.emit(Opcode::CallClosure {
-                    arity: 1,
-                    span_start: span.start as u32,
-                    span_end: span.end as u32,
-                });
+                if let Some((lhs, _)) = direct_targets {
+                    self.emit_direct_call(lhs, 1, span);
+                } else {
+                    self.emit(Opcode::LoadLocal(lhs_slot.expect("captured lhs slot")));
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::CallClosure {
+                        arity: 1,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
+                }
                 let result_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::StoreLocal(result_slot));
@@ -3097,40 +3175,58 @@ impl Codegen {
                     ComposeFlavor::ResultMap => {
                         let ok_tag = self.add_constant(Constant::Tag(0));
                         self.emit(Opcode::LoadConst(ok_tag));
-                        self.emit(Opcode::LoadLocal(rhs_slot));
-                        self.emit(Opcode::LoadLocal(result_slot));
-                        self.emit(Opcode::GetField { field_index: 0 });
-                        self.emit(Opcode::CallClosure {
-                            arity: 1,
-                            span_start: span.start as u32,
-                            span_end: span.end as u32,
-                        });
+                        if let Some((_, rhs)) = direct_targets {
+                            self.emit(Opcode::LoadLocal(result_slot));
+                            self.emit(Opcode::GetField { field_index: 0 });
+                            self.emit_direct_call(rhs, 1, span);
+                        } else {
+                            self.emit(Opcode::LoadLocal(rhs_slot.expect("captured rhs slot")));
+                            self.emit(Opcode::LoadLocal(result_slot));
+                            self.emit(Opcode::GetField { field_index: 0 });
+                            self.emit(Opcode::CallClosure {
+                                arity: 1,
+                                span_start: span.start as u32,
+                                span_end: span.end as u32,
+                            });
+                        }
                         self.emit(Opcode::StructNew { field_count: 1 });
                         self.emit(Opcode::Return);
                     }
                     ComposeFlavor::ResultBind => {
-                        self.emit(Opcode::LoadLocal(rhs_slot));
-                        self.emit(Opcode::LoadLocal(result_slot));
-                        self.emit(Opcode::GetField { field_index: 0 });
-                        self.emit(Opcode::CallClosure {
-                            arity: 1,
-                            span_start: span.start as u32,
-                            span_end: span.end as u32,
-                        });
+                        if let Some((_, rhs)) = direct_targets {
+                            self.emit(Opcode::LoadLocal(result_slot));
+                            self.emit(Opcode::GetField { field_index: 0 });
+                            self.emit_direct_call(rhs, 1, span);
+                        } else {
+                            self.emit(Opcode::LoadLocal(rhs_slot.expect("captured rhs slot")));
+                            self.emit(Opcode::LoadLocal(result_slot));
+                            self.emit(Opcode::GetField { field_index: 0 });
+                            self.emit(Opcode::CallClosure {
+                                arity: 1,
+                                span_start: span.start as u32,
+                                span_end: span.end as u32,
+                            });
+                        }
                         self.emit(Opcode::Return);
                     }
                     _ => unreachable!(),
                 }
             }
             ComposeFlavor::ListMap { helper } | ComposeFlavor::ListBind { helper } => {
-                self.emit(Opcode::LoadLocal(lhs_slot));
                 self.emit(Opcode::LoadLocal(input_slot));
-                self.emit(Opcode::CallClosure {
-                    arity: 1,
-                    span_start: span.start as u32,
-                    span_end: span.end as u32,
-                });
-                self.emit(Opcode::LoadLocal(rhs_slot));
+                if let Some((lhs, rhs)) = direct_targets {
+                    self.emit_direct_call(lhs, 1, span);
+                    self.emit_direct_callable_ref(rhs);
+                } else {
+                    self.emit(Opcode::LoadLocal(lhs_slot.expect("captured lhs slot")));
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::CallClosure {
+                        arity: 1,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
+                    self.emit(Opcode::LoadLocal(rhs_slot.expect("captured rhs slot")));
+                }
                 match helper {
                     ListHelperRef::Builtin(builtin_id) => self.emit(Opcode::CallBuiltin {
                         builtin_id: *builtin_id,
@@ -3154,7 +3250,7 @@ impl Codegen {
             fun_idx,
             entry_pc,
             num_locals: self.state.next_slot,
-            arity: 3,
+            arity,
             qualified_name: None,
             signature: None,
             end_pc: 0,
@@ -3252,7 +3348,12 @@ impl Codegen {
             if !self.pending_composes.is_empty() {
                 let pending = std::mem::take(&mut self.pending_composes);
                 for compose in pending {
-                    self.emit_compose_function(compose.fun_idx, &compose.flavor, &compose.span)?;
+                    self.emit_compose_function(
+                        compose.fun_idx,
+                        &compose.flavor,
+                        &compose.span,
+                        compose.direct_targets,
+                    )?;
                 }
             }
             if !self.pending_inject_calls.is_empty() {
@@ -3930,6 +4031,21 @@ impl Codegen {
             }
 
             TypedInner::Pipe(left, right) => {
+                if let Some(target) = self.direct_callable_target_for_capture(right)? {
+                    self.emit_node(left)?;
+                    self.emit_direct_call(target, 1, &node.span);
+                    return Ok(());
+                }
+                if let TypedInner::InjectCall(func, args) = &right.node {
+                    if let Some(target) = self.direct_callable_target_for_ref(func)? {
+                        self.emit_node(left)?;
+                        for arg in args {
+                            self.emit_node(arg)?;
+                        }
+                        self.emit_direct_call(target, (args.len() + 1) as u8, &node.span);
+                        return Ok(());
+                    }
+                }
                 self.emit_callable_ref(right)?;
                 self.emit_node(left)?;
                 self.emit(Opcode::CallClosure {
@@ -3941,15 +4057,25 @@ impl Codegen {
 
             TypedInner::Compose(flavor, left, right) => {
                 let fun_idx = self.reserve_fun_idx();
+                let direct_targets = match (
+                    self.direct_callable_target_for_capture(left)?,
+                    self.direct_callable_target_for_capture(right)?,
+                ) {
+                    (Some(left), Some(right)) => Some((left, right)),
+                    _ => None,
+                };
                 self.pending_composes.push(PendingCompose {
                     fun_idx,
                     flavor: flavor.clone(),
                     span: node.span.clone(),
+                    direct_targets,
                 });
                 self.emit(Opcode::LoadFunctionRef(fun_idx));
-                self.emit_callable_ref(left)?;
-                self.emit_callable_ref(right)?;
-                self.emit(Opcode::CaptureClosure(2));
+                if direct_targets.is_none() {
+                    self.emit_callable_ref(left)?;
+                    self.emit_callable_ref(right)?;
+                    self.emit(Opcode::CaptureClosure(2));
+                }
             }
 
             TypedInner::ListNil => self.emit(Opcode::ListNil),
@@ -4147,7 +4273,9 @@ impl Codegen {
                     let slot = self.alloc_slot(capture.unique_id);
                     self.emit(Opcode::LoadLocal(slot));
                 }
-                self.emit(Opcode::CaptureClosure(filtered_captures.len() as u8));
+                if !filtered_captures.is_empty() {
+                    self.emit(Opcode::CaptureClosure(filtered_captures.len() as u8));
+                }
             }
 
             TypedInner::Capture(target, args) => {

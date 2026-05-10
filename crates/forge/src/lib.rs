@@ -19,7 +19,8 @@ mod tests {
     use crate::opcode::Opcode;
     use crate::registry::TypeKind;
     use scar::typed::{
-        TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode, TypedPattern,
+        ComposeFlavor, TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode,
+        TypedPattern,
     };
     use scar::types::Ty;
     use sigil::resolved::ResolvedId;
@@ -358,6 +359,140 @@ mod tests {
         }
     }
 
+    fn fun_param(name: &str, unique_id: u32, ty: Ty) -> TypedFunParam {
+        TypedFunParam {
+            id: resolved_id(name, unique_id),
+            ty,
+        }
+    }
+
+    fn local_var(name: &str, unique_id: u32, ty: Ty) -> TypedNode {
+        TypedNode {
+            ty,
+            span: test_span(),
+            node: TypedInner::Var(resolved_id(name, unique_id)),
+        }
+    }
+
+    fn user_func_var(
+        name: &str,
+        unique_id: u32,
+        fun_idx: u32,
+        params: Vec<Ty>,
+        ret: Ty,
+    ) -> TypedNode {
+        TypedNode {
+            ty: Ty::UserFunc {
+                fun_idx,
+                type_params: Vec::new(),
+                params,
+                ret: Box::new(ret),
+            },
+            span: test_span(),
+            node: TypedInner::Var(resolved_id(name, unique_id)),
+        }
+    }
+
+    fn builtin_func_var(name: &str, unique_id: u32, params: Vec<Ty>, ret: Ty) -> TypedNode {
+        TypedNode {
+            ty: Ty::BuiltinFunc {
+                name: name.to_string(),
+                params,
+                ret: Box::new(ret),
+            },
+            span: test_span(),
+            node: TypedInner::Var(resolved_id(name, unique_id)),
+        }
+    }
+
+    fn user_capture(
+        name: &str,
+        unique_id: u32,
+        fun_idx: u32,
+        params: Vec<Ty>,
+        ret: Ty,
+    ) -> TypedNode {
+        TypedNode {
+            ty: Ty::Func(params.clone(), Box::new(ret.clone())),
+            span: test_span(),
+            node: TypedInner::Capture(
+                Box::new(user_func_var(name, unique_id, fun_idx, params, ret)),
+                Vec::new(),
+            ),
+        }
+    }
+
+    fn builtin_capture(name: &str, unique_id: u32, params: Vec<Ty>, ret: Ty) -> TypedNode {
+        TypedNode {
+            ty: Ty::Func(params.clone(), Box::new(ret.clone())),
+            span: test_span(),
+            node: TypedInner::Capture(
+                Box::new(builtin_func_var(name, unique_id, params, ret)),
+                Vec::new(),
+            ),
+        }
+    }
+
+    fn identity_def(name: &str, fun_idx: u32, fun_uid: u32, param_uid: u32, ty: Ty) -> TypedNode {
+        let param = fun_param("value", param_uid, ty.clone());
+        TypedNode {
+            ty: Ty::Unit,
+            span: test_span(),
+            node: TypedInner::Def(
+                fun_idx,
+                resolved_id(name, fun_uid),
+                Vec::new(),
+                vec![param.clone()],
+                ty.clone(),
+                Box::new(local_var("value", param.id.unique_id, ty)),
+                Visibility::Public,
+            ),
+        }
+    }
+
+    fn binary_first_def(name: &str, fun_idx: u32, fun_uid: u32) -> TypedNode {
+        let left = fun_param("left", fun_uid + 1, Ty::Int);
+        let right = fun_param("right", fun_uid + 2, Ty::Int);
+        TypedNode {
+            ty: Ty::Unit,
+            span: test_span(),
+            node: TypedInner::Def(
+                fun_idx,
+                resolved_id(name, fun_uid),
+                Vec::new(),
+                vec![left.clone(), right],
+                Ty::Int,
+                Box::new(local_var("left", left.id.unique_id, Ty::Int)),
+                Visibility::Public,
+            ),
+        }
+    }
+
+    fn top_level_opcodes(bytecode: &sindr::ir::Bytecode) -> Vec<&Opcode> {
+        bytecode
+            .opcodes
+            .iter()
+            .take_while(|opcode| !matches!(opcode, Opcode::Halt))
+            .collect()
+    }
+
+    fn function_body_opcodes<'a>(
+        bytecode: &'a sindr::ir::Bytecode,
+        fun_idx: u32,
+    ) -> Vec<&'a Opcode> {
+        let entry_pc = bytecode.functions[fun_idx as usize].entry_pc as usize;
+        let end_pc = bytecode
+            .functions
+            .iter()
+            .filter_map(|entry| {
+                let pc = entry.entry_pc as usize;
+                (pc > entry_pc).then_some(pc)
+            })
+            .min()
+            .unwrap_or(bytecode.opcodes.len());
+        bytecode.opcodes[entry_pc..end_pc].iter().collect()
+    }
+
     fn int_lit(value: i64) -> TypedNode {
         TypedNode {
             ty: Ty::Int,
@@ -536,6 +671,186 @@ print(to_string(add(1, 2)))"#,
         for (idx, entry) in bytecode.functions.iter().enumerate() {
             assert_eq!(entry.fun_idx as usize, idx);
         }
+    }
+
+    #[test]
+    fn zero_capture_closure_literal_omits_capture_closure_zero() {
+        let bytecode = codegen_source(
+            r#"add1: (Int -> Int) = {|x| x + 1}
+print(to_string(add1(2)))"#,
+        );
+
+        assert!(!bytecode
+            .opcodes
+            .windows(2)
+            .any(|ops| matches!(ops, [Opcode::LoadFunctionRef(_), Opcode::CaptureClosure(0)])));
+    }
+
+    #[test]
+    fn capturing_closure_literal_still_emits_capture_closure() {
+        let bytecode = codegen_source(
+            r#"base = 10
+add_base: (Int -> Int) = {|x| x + base}
+print(to_string(add_base(2)))"#,
+        );
+
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::CaptureClosure(count) if *count > 0)));
+    }
+
+    #[test]
+    fn pipe_direct_user_capture_lowers_to_call_without_callclosure() {
+        let bytecode = codegen_typed(vec![
+            identity_def("id_int", 0, 10, 11, Ty::Int),
+            TypedNode {
+                ty: Ty::Int,
+                span: test_span(),
+                node: TypedInner::Pipe(
+                    Box::new(int_lit(7)),
+                    Box::new(user_capture("id_int", 12, 0, vec![Ty::Int], Ty::Int)),
+                ),
+            },
+        ]);
+        let top_level = top_level_opcodes(&bytecode);
+
+        assert!(top_level.iter().any(|op| matches!(
+            op,
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 1,
+                ..
+            }
+        )));
+        assert!(!top_level
+            .iter()
+            .any(|op| matches!(op, Opcode::CallClosure { .. })));
+    }
+
+    #[test]
+    fn pipe_direct_builtin_capture_lowers_to_callbuiltin_without_callclosure() {
+        let builtin_id = builtin_id_by_name("to_string").expect("to_string builtin exists");
+        let bytecode = codegen_typed(vec![TypedNode {
+            ty: Ty::Str,
+            span: test_span(),
+            node: TypedInner::Pipe(
+                Box::new(int_lit(7)),
+                Box::new(builtin_capture("to_string", 12, vec![Ty::Int], Ty::Str)),
+            ),
+        }]);
+        let top_level = top_level_opcodes(&bytecode);
+
+        assert!(top_level.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id: id,
+                    arity: 1,
+                    ..
+                } if *id == builtin_id
+            )
+        }));
+        assert!(!top_level
+            .iter()
+            .any(|op| matches!(op, Opcode::CallClosure { .. })));
+    }
+
+    #[test]
+    fn pipe_direct_injected_user_call_lowers_without_partial_wrapper() {
+        let bytecode = codegen_typed(vec![
+            binary_first_def("first_int", 0, 20),
+            TypedNode {
+                ty: Ty::Int,
+                span: test_span(),
+                node: TypedInner::Pipe(
+                    Box::new(int_lit(7)),
+                    Box::new(TypedNode {
+                        ty: Ty::Func(vec![Ty::Int], Box::new(Ty::Int)),
+                        span: test_span(),
+                        node: TypedInner::InjectCall(
+                            Box::new(user_func_var(
+                                "first_int",
+                                23,
+                                0,
+                                vec![Ty::Int, Ty::Int],
+                                Ty::Int,
+                            )),
+                            vec![int_lit(9)],
+                        ),
+                    }),
+                ),
+            },
+        ]);
+        let top_level = top_level_opcodes(&bytecode);
+
+        assert!(top_level.iter().any(|op| matches!(
+            op,
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 2,
+                ..
+            }
+        )));
+        assert!(!bytecode
+            .functions
+            .iter()
+            .any(|entry| entry.flags.partial_apply_wrapper));
+        assert!(!top_level
+            .iter()
+            .any(|op| matches!(op, Opcode::CallClosure { .. } | Opcode::CaptureClosure(_))));
+    }
+
+    #[test]
+    fn direct_compose_wrapper_embeds_user_calls_without_captured_callables() {
+        let bytecode = codegen_typed(vec![
+            identity_def("left_int", 0, 30, 31, Ty::Int),
+            identity_def("right_int", 1, 32, 33, Ty::Int),
+            TypedNode {
+                ty: Ty::Func(vec![Ty::Int], Box::new(Ty::Int)),
+                span: test_span(),
+                node: TypedInner::Compose(
+                    ComposeFlavor::Plain,
+                    Box::new(user_capture("left_int", 34, 0, vec![Ty::Int], Ty::Int)),
+                    Box::new(user_capture("right_int", 35, 1, vec![Ty::Int], Ty::Int)),
+                ),
+            },
+        ]);
+        let compose_entry = bytecode
+            .functions
+            .iter()
+            .find(|entry| {
+                entry.flags.generated
+                    && !entry.flags.closure
+                    && entry.qualified_name.is_none()
+                    && entry.arity == 1
+            })
+            .expect("direct compose wrapper should take only the input");
+        let compose_body = function_body_opcodes(&bytecode, compose_entry.fun_idx);
+        let top_level = top_level_opcodes(&bytecode);
+
+        assert!(compose_body.iter().any(|op| matches!(
+            op,
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 1,
+                ..
+            }
+        )));
+        assert!(compose_body.iter().any(|op| matches!(
+            op,
+            Opcode::Call {
+                fun_idx: 1,
+                arity: 1,
+                ..
+            }
+        )));
+        assert!(!compose_body
+            .iter()
+            .any(|op| matches!(op, Opcode::CallClosure { .. })));
+        assert!(!top_level
+            .iter()
+            .any(|op| matches!(op, Opcode::CaptureClosure(2))));
     }
 
     #[test]
