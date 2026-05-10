@@ -800,6 +800,16 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 2,
         sig_str: "(String, String) -> String",
     },
+    BuiltinMeta {
+        name: "json_parse",
+        arity: 1,
+        sig_str: "(String) -> Result<JsonValue, JsonParseError>",
+    },
+    BuiltinMeta {
+        name: "json_stringify",
+        arity: 1,
+        sig_str: "(JsonValue) -> Result<String, JsonEncodeError>",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from standard definition sources.
@@ -931,6 +941,8 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
         Some("File::read_chunk") => "file_read_chunk",
         Some("File::write_chunk") => "file_write_chunk",
         Some("File::flush") => "file_flush",
+        Some("Json::parse") => "json_parse",
+        Some("Json::stringify") => "json_stringify",
         Some("Facet::replace") => "__facet_replace",
         Some("Process::self") => "__process_self",
         Some("Process::sleep") => "__process_sleep",
@@ -1041,6 +1053,18 @@ mod tests {
                 .expect("regex replace builtin metadata")
                 .sig_str,
             "(Regex, String, String) -> String"
+        );
+    }
+
+    #[test]
+    fn qualified_json_builtins_resolve_to_runtime_names() {
+        assert_eq!(
+            builtin_runtime_name("parse", Some("Json::parse")),
+            "json_parse"
+        );
+        assert_eq!(
+            builtin_runtime_name("stringify", Some("Json::stringify")),
+            "json_stringify"
         );
     }
 

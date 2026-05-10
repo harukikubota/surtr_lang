@@ -43,6 +43,18 @@ impl TypeRegistry {
     pub fn lookup(&self, tag: RuntimeTag) -> Option<&TypeEntry> {
         self.entries.iter().find(|entry| entry.tag == tag)
     }
+
+    pub fn lookup_by_name(&self, qualified_name: &str) -> Option<&TypeEntry> {
+        self.entries.iter().find(|entry| {
+            entry.name == qualified_name
+                || entry.name.strip_prefix("Global::") == Some(qualified_name)
+                || qualified_name.strip_prefix("Global::") == Some(entry.name.as_str())
+        })
+    }
+
+    pub fn tag_by_name(&self, qualified_name: &str) -> Option<RuntimeTag> {
+        self.lookup_by_name(qualified_name).map(|entry| entry.tag)
+    }
 }
 
 /// Runtime value in the Surtr VM.

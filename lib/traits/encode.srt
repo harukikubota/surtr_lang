@@ -1,0 +1,18 @@
+@doc """
+Standard `Encode` trait declaration.
+`Encode<$Format>` converts `Self` into text for a concrete format marker such
+as `JsonFormat`.
+The `format: TypeRef<$Format>` parameter is a signature-level witness slot and
+is not meant to be observed at runtime.
+Because `encode(...)` is part of the shared format conversion surface, this
+trait is auto-imported when the standard prelude is loaded.
+
+## REPL
+xldr(1)> encode("hello", JsonFormat)
+Ok("\"hello\"")
+"""
+@autoimport
+deftrait Encode<$Format> {
+  # Convert the value into text for the requested format.
+  def encode(self: Self, format: TypeRef<$Format>) -> Result<String, Error>
+}

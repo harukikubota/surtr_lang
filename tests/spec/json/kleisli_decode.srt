@@ -1,0 +1,13 @@
+defrecord JsonSpecKleisliConfig(name: String)
+
+impl Decode<JsonFormat, JsonSpecKleisliConfig> for JsonValue {
+  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<JsonSpecKleisliConfig>) -> Result<JsonSpecKleisliConfig, Error> {
+    name_json =? Json::get(self, "name")
+    name =? Json::as_string(name_json)
+    Ok(JsonSpecKleisliConfig(name))
+  }
+}
+
+parse_config = &Json::parse >=> {|json: JsonValue| decode(json, JsonFormat, JsonSpecKleisliConfig)}
+cfg =? parse_config("{\"name\":\"surtr\"}")
+print(cfg.name)

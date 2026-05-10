@@ -1,0 +1,180 @@
+@doc """
+Marker type for JSON Encode/Decode.
+This enum has one value-level variant only so it remains a normal source type
+while serving as a TypeRef marker at call sites.
+"""
+defenum JsonFormat {
+  Marker,
+}
+
+@doc """
+JSON abstract syntax tree used by the standard library.
+`Object` stores values in `HashMap<JsonValue>`, so keys are always `String`
+and visible ordering follows the `HashMap` deterministic key order.
+"""
+defenum JsonValue {
+  Null,
+  Bool(Boolean),
+  Int(Int),
+  Float(Float),
+  String(String),
+  Array(List<JsonValue>),
+  Object(HashMap<JsonValue>),
+}
+
+deferror JsonParseError(line: Int, column: Int, detail: String) {
+  "json parse error at #{line}:#{column}: #{detail}"
+}
+
+deferror JsonDecodeError(path: String, expected: String, got: String) {
+  "json decode error at #{path}: expected #{expected}, got #{got}"
+}
+
+deferror JsonEncodeError(detail: String) {
+  "json encode error: #{detail}"
+}
+
+defmod Json {
+  @doc """
+  Parse JSON text into `JsonValue`.
+  Integer literals become `JsonValue::Int(Int)`.
+  Decimal or exponent literals become `JsonValue::Float(Float)`.
+  Malformed user JSON returns `Err(JsonParseError(...))`.
+  """
+  @builtin def parse(text: String) -> Result<JsonValue, JsonParseError>
+
+  @doc """
+  Convert `JsonValue` into JSON text.
+  Object key order is deterministic and follows `HashMap::entries`.
+  Values that cannot be represented by JSON return `Err(JsonEncodeError(...))`.
+  """
+  @builtin def stringify(value: JsonValue) -> Result<String, JsonEncodeError>
+
+  def get(value: JsonValue, key: String) -> Result<JsonValue, JsonDecodeError> {
+    match value {
+      JsonValue::Object(map) => Result::map_err(HashMap::get(map, key), JsonDecodeError("$." ++ key, "field", "missing")),
+      other => Err(JsonDecodeError("$." ++ key, "object", kind(other))),
+    }
+  }
+
+  def at(value: JsonValue, index: Int) -> Result<JsonValue, JsonDecodeError> {
+    match value {
+      JsonValue::Array(values) => Result::map_err(List::at(values, index), JsonDecodeError("$[#{index}]", "array index", "missing")),
+      other => Err(JsonDecodeError("$[#{index}]", "array", kind(other))),
+    }
+  }
+
+  def kind(value: JsonValue) -> String {
+    match value {
+      JsonValue::Null => "null",
+      JsonValue::Bool(_) => "boolean",
+      JsonValue::Int(_) => "int",
+      JsonValue::Float(_) => "float",
+      JsonValue::String(_) => "string",
+      JsonValue::Array(_) => "array",
+      JsonValue::Object(_) => "object",
+    }
+  }
+
+  def as_string(value: JsonValue) -> Result<String, JsonDecodeError> {
+    match value {
+      JsonValue::String(text) => Ok(text),
+      other => Err(JsonDecodeError("$", "string", kind(other))),
+    }
+  }
+
+  def as_int(value: JsonValue) -> Result<Int, JsonDecodeError> {
+    match value {
+      JsonValue::Int(n) => Ok(n),
+      other => Err(JsonDecodeError("$", "int", kind(other))),
+    }
+  }
+
+  def as_float(value: JsonValue) -> Result<Float, JsonDecodeError> {
+    match value {
+      JsonValue::Float(n) => Ok(n),
+      other => Err(JsonDecodeError("$", "float", kind(other))),
+    }
+  }
+
+  def as_bool(value: JsonValue) -> Result<Boolean, JsonDecodeError> {
+    match value {
+      JsonValue::Bool(value) => Ok(value),
+      other => Err(JsonDecodeError("$", "boolean", kind(other))),
+    }
+  }
+
+  def as_array(value: JsonValue) -> Result<List<JsonValue>, JsonDecodeError> {
+    match value {
+      JsonValue::Array(values) => Ok(values),
+      other => Err(JsonDecodeError("$", "array", kind(other))),
+    }
+  }
+
+  def as_object(value: JsonValue) -> Result<HashMap<JsonValue>, JsonDecodeError> {
+    match value {
+      JsonValue::Object(map) => Ok(map),
+      other => Err(JsonDecodeError("$", "object", kind(other))),
+    }
+  }
+}
+
+impl Decode<JsonFormat, JsonValue> for String {
+  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+    Json::parse(self)
+  }
+}
+
+impl Decode<JsonFormat, String> for JsonValue {
+  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<String>) -> Result<String, Error> {
+    Json::as_string(self)
+  }
+}
+
+impl Decode<JsonFormat, Int> for JsonValue {
+  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<Int>) -> Result<Int, Error> {
+    Json::as_int(self)
+  }
+}
+
+impl Decode<JsonFormat, Float> for JsonValue {
+  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<Float>) -> Result<Float, Error> {
+    Json::as_float(self)
+  }
+}
+
+impl Decode<JsonFormat, Boolean> for JsonValue {
+  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<Boolean>) -> Result<Boolean, Error> {
+    Json::as_bool(self)
+  }
+}
+
+impl Encode<JsonFormat> for JsonValue {
+  def encode(self: Self, format: TypeRef<JsonFormat>) -> Result<String, Error> {
+    Json::stringify(self)
+  }
+}
+
+impl Encode<JsonFormat> for String {
+  def encode(self: Self, format: TypeRef<JsonFormat>) -> Result<String, Error> {
+    Json::stringify(JsonValue::String(self))
+  }
+}
+
+impl Encode<JsonFormat> for Int {
+  def encode(self: Self, format: TypeRef<JsonFormat>) -> Result<String, Error> {
+    Json::stringify(JsonValue::Int(self))
+  }
+}
+
+impl Encode<JsonFormat> for Float {
+  def encode(self: Self, format: TypeRef<JsonFormat>) -> Result<String, Error> {
+    Json::stringify(JsonValue::Float(self))
+  }
+}
+
+impl Encode<JsonFormat> for Boolean {
+  def encode(self: Self, format: TypeRef<JsonFormat>) -> Result<String, Error> {
+    Json::stringify(JsonValue::Bool(self))
+  }
+}

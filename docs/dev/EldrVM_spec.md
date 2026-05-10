@@ -275,9 +275,21 @@ Opcode は以下のカテゴリを持つ。
 - random 系は `CallBuiltin` で実装し、Opcode は追加しない。`RandomGenerator` は opaque な seedable state として保持し、半開区間が空の場合は `InvalidRandomRange` を `Result` の `Err` として返す
 - `Float` の厳密契約は `doc/float.md` を参照する
 
-組込み宣言の読み込み順序は compile 側で `Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Facet, Float, Config, Project, Random, IO, StyledDoc] -> [Test] -> ユーザ拡張` に固定される。同一 stage 内の import は file 読み込み順に依存せず compile 側で解決され、later stage 参照は compile error になる。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
+### 7.1 Json builtins
 
-### 7.1 TypeRegistry
+- `Json::parse` は `json_parse` builtin に解決され、`CallBuiltin` で実行される
+- `Json::stringify` は `json_stringify` builtin に解決され、`CallBuiltin` で実行される
+- Json 用 opcode は追加しない
+- Eldr は `serde_json` を使って text JSON と Rust `serde_json::Value` を相互変換する
+- Surtr runtime value への変換では `TypeRegistry` から `JsonValue` variant tag を名前で解決し、tag 番号をハードコードしない
+- `Object` は `HashMapHandle` に変換する。duplicate key は JSON parser 側の後勝ち値を採用する
+- `json_stringify` は `HashMapHandle` の deterministic key order を使って object を出力する
+- malformed JSON は `Err(JsonParseError(line, column, detail))` を返し、`RuntimeError` にしない
+- `JsonValue` 以外の値が `json_stringify` に渡った場合は `Err(JsonEncodeError(detail))` を返す。`TypeRegistry` 不整合や variant arity 不整合は VM 内部不整合として `RuntimeError` でよい
+
+組込み宣言の読み込み順序は compile 側で `Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Tuple, Ord, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Option, Generator, HashMap, Result, Duration, Process, Facet, Float, Json, Config, Project, Random, File, IO, StyledDoc] -> [Test] -> ユーザ拡張` に固定される。同一 stage 内の import は file 読み込み順に依存せず compile 側で解決され、later stage 参照は compile error になる。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
+
+### 7.2 TypeRegistry
 
 - `tag -> 型名/フィールド名` の逆引きを提供
 - 表示 (`to_string`) と診断表示で参照される

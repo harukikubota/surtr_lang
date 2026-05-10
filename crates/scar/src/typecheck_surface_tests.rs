@@ -3679,6 +3679,75 @@ fn try_from_helper_typechecks_as_generic_trait_call() {
 }
 
 #[test]
+fn encode_helper_typechecks_as_generic_trait_call() {
+    let typed = typecheck_with_builtin_prelude(r#"value = encode("hello", JsonFormat)"#);
+    let rhs = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+            _ => None,
+        })
+        .expect("bind rhs should exist");
+    match &rhs.node {
+        TypedInner::TraitCall {
+            trait_name,
+            method_name,
+            receiver_ty,
+            dispatch:
+                scar::typed::TraitDispatch::Static(scar::typed::TraitDispatchTarget::UserFunction {
+                    name,
+                    ..
+                }),
+            args,
+            ..
+        } => {
+            assert_eq!(trait_name, "Encode<JsonFormat>");
+            assert_eq!(method_name, "encode");
+            assert_eq!(name, "Encode<JsonFormat>::String::encode");
+            assert_eq!(receiver_ty, &scar::types::Ty::Str);
+            assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
+            assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
+        }
+        other => panic!("expected trait call, got {:?}", other),
+    }
+}
+
+#[test]
+fn decode_helper_typechecks_format_and_target_witnesses() {
+    let typed = typecheck_with_builtin_prelude(r#"value = decode("null", JsonFormat, JsonValue)"#);
+    let rhs = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+            _ => None,
+        })
+        .expect("bind rhs should exist");
+    match &rhs.node {
+        TypedInner::TraitCall {
+            trait_name,
+            method_name,
+            receiver_ty,
+            dispatch:
+                scar::typed::TraitDispatch::Static(scar::typed::TraitDispatchTarget::UserFunction {
+                    name,
+                    ..
+                }),
+            args,
+            ..
+        } => {
+            assert_eq!(trait_name, "Decode<JsonFormat, JsonValue>");
+            assert_eq!(method_name, "decode");
+            assert_eq!(name, "Decode<JsonFormat, JsonValue>::String::decode");
+            assert_eq!(receiver_ty, &scar::types::Ty::Str);
+            assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
+            assert!(matches!(args[2].ty, scar::types::Ty::TypeRef(_)));
+            assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
+        }
+        other => panic!("expected trait call, got {:?}", other),
+    }
+}
+
+#[test]
 fn from_helper_suggests_try_from_when_only_fallible_impl_exists() {
     let resolved = resolve_with_builtin_prelude(r#"value = from("42", Int)"#);
     let err = typecheck(resolved).expect_err("from on fallible conversion must fail");

@@ -46,6 +46,8 @@ mod tests {
     const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/concat.srt");
     const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/traits/from.srt");
     const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../lib/traits/try_from.srt");
+    const ENCODE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/encode.srt");
+    const DECODE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/decode.srt");
     const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/functor.srt");
     const CHAINABLE_MODULE_SOURCE: &str =
         include_str!("../../../lib/traits/operator/chainable.srt");
@@ -73,6 +75,7 @@ mod tests {
     const OPTION_MODULE_SOURCE: &str = include_str!("../../../lib/types/option.srt");
     const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/facet.srt");
     const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/types/float.srt");
+    const JSON_MODULE_SOURCE: &str = include_str!("../../../lib/types/json.srt");
     const RANDOM_MODULE_SOURCE: &str = include_str!("../../../lib/Random.srt");
     const STYLED_DOC_MODULE_SOURCE: &str = include_str!("../../../lib/styled_doc.srt");
     const TEST_MODULE_SOURCE: &str = include_str!("../../../lib/test.srt");
@@ -210,6 +213,8 @@ mod tests {
                 ("Ord", ORD_MODULE_SOURCE),
                 ("From", FROM_MODULE_SOURCE),
                 ("TryFrom", TRY_FROM_MODULE_SOURCE),
+                ("Encode", ENCODE_MODULE_SOURCE),
+                ("Decode", DECODE_MODULE_SOURCE),
                 ("Functor", FUNCTOR_MODULE_SOURCE),
                 ("Chainable", CHAINABLE_MODULE_SOURCE),
                 ("PipeApply", PIPE_APPLY_MODULE_SOURCE),
@@ -231,6 +236,7 @@ mod tests {
                 ("Option", OPTION_MODULE_SOURCE),
                 ("Facet", LENS_MODULE_SOURCE),
                 ("Float", FLOAT_MODULE_SOURCE),
+                ("Json", JSON_MODULE_SOURCE),
                 ("Random", RANDOM_MODULE_SOURCE),
                 ("StyledDoc", STYLED_DOC_MODULE_SOURCE),
             ]

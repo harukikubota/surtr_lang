@@ -28,6 +28,8 @@ const ORD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/or
 const CONCAT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/concat.srt");
 const FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/from.srt");
 const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/try_from.srt");
+const ENCODE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/encode.srt");
+const DECODE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/decode.srt");
 const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/functor.srt");
 const CHAINABLE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/chainable.srt");
 const PIPE_APPLY_MODULE_SOURCE: &str =
@@ -57,14 +59,13 @@ const OPTION_MODULE_SOURCE: &str = include_str!("../../../../lib/types/option.sr
 const GENERATOR_MODULE_SOURCE: &str = r#"@builtin type Generator<$State, $Item>
 
 impl Generator {}"#;
-const HASH_MAP_MODULE_SOURCE: &str = r#"@builtin type HashMap<$V>
-
-impl HashMap {}"#;
+const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../../lib/types/hash_map.srt");
 const RESULT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/result.srt");
 const DURATION_MODULE_SOURCE: &str = include_str!("../../../../lib/types/duration.srt");
 const PROCESS_MODULE_SOURCE: &str = include_str!("../../../../lib/process.srt");
 const FACET_MODULE_SOURCE: &str = include_str!("../../../../lib/facet.srt");
 const FLOAT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/float.srt");
+const JSON_MODULE_SOURCE: &str = include_str!("../../../../lib/types/json.srt");
 const RANDOM_MODULE_SOURCE: &str = include_str!("../../../../lib/Random.srt");
 const FILE_MODULE_SOURCE: &str = include_str!("../../../../lib/file.srt");
 
@@ -428,12 +429,23 @@ pub(crate) fn std_module_stages_with_overrides(
                 "Ordering",
                 pick_override("Ordering", ORDERING_MODULE_SOURCE, overrides),
             ),
-            ("Tuple", pick_override("Tuple", TUPLE_MODULE_SOURCE, overrides)),
+            (
+                "Tuple",
+                pick_override("Tuple", TUPLE_MODULE_SOURCE, overrides),
+            ),
             ("Ord", pick_override("Ord", ORD_MODULE_SOURCE, overrides)),
             ("From", pick_override("From", FROM_MODULE_SOURCE, overrides)),
             (
                 "TryFrom",
                 pick_override("TryFrom", TRY_FROM_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Encode",
+                pick_override("Encode", ENCODE_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Decode",
+                pick_override("Decode", DECODE_MODULE_SOURCE, overrides),
             ),
             (
                 "Functor",
@@ -517,6 +529,7 @@ pub(crate) fn std_module_stages_with_overrides(
                 "Float",
                 pick_override("Float", FLOAT_MODULE_SOURCE, overrides),
             ),
+            ("Json", pick_override("Json", JSON_MODULE_SOURCE, overrides)),
             (
                 "Random",
                 pick_override("Random", RANDOM_MODULE_SOURCE, overrides),
