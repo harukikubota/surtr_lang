@@ -211,7 +211,7 @@ fn collect_missing_singleton_calls(
         TypedInner::SupervisorWorkers {
             supervisor_process,
             init,
-            size,
+            strategy,
             ..
         } => {
             if !available_supervisors.contains(supervisor_process.as_str()) {
@@ -227,7 +227,7 @@ fn collect_missing_singleton_calls(
                 first_missing,
             );
             collect_missing_singleton_calls(
-                size,
+                strategy,
                 surface_to_process,
                 available_singletons,
                 available_supervisors,
@@ -3477,14 +3477,14 @@ impl Codegen {
                 supervisor_process,
                 worker_process,
                 init,
-                size,
+                strategy,
             } => {
                 let supervisor_idx = self.add_constant(Constant::Str(supervisor_process.clone()));
                 self.emit(Opcode::LoadConst(supervisor_idx));
                 let worker_idx = self.add_constant(Constant::Str(worker_process.clone()));
                 self.emit(Opcode::LoadConst(worker_idx));
                 self.emit_node(init)?;
-                self.emit_node(size)?;
+                self.emit_node(strategy)?;
                 let builtin_id =
                     Self::builtin_id("__supervisor_workers").ok_or_else(|| CodegenError {
                         message: "Unknown builtin: __supervisor_workers".into(),

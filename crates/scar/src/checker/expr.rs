@@ -159,9 +159,9 @@ impl Checker {
             | TypedInner::Closure(_, _, body) => self.first_pending_trait_helper(body),
             TypedInner::SupervisorSpawn { init, .. } => self.first_pending_trait_helper(init),
             TypedInner::SupervisorAdopt { pid, .. } => self.first_pending_trait_helper(pid),
-            TypedInner::SupervisorWorkers { init, size, .. } => self
+            TypedInner::SupervisorWorkers { init, strategy, .. } => self
                 .first_pending_trait_helper(init)
-                .or_else(|| self.first_pending_trait_helper(size)),
+                .or_else(|| self.first_pending_trait_helper(strategy)),
             TypedInner::FacetView { source, .. } => self.first_pending_trait_helper(source),
             TypedInner::FacetSet { source, value, .. } => self
                 .first_pending_trait_helper(source)
@@ -387,12 +387,12 @@ impl Checker {
                 supervisor_process,
                 worker_process,
                 init,
-                size,
+                strategy,
             } => TypedInner::SupervisorWorkers {
                 supervisor_process,
                 worker_process,
                 init: Box::new(self.concretize_pending_trait_calls(*init)?),
-                size: Box::new(self.concretize_pending_trait_calls(*size)?),
+                strategy: Box::new(self.concretize_pending_trait_calls(*strategy)?),
             },
             TypedInner::FacetView {
                 source,
@@ -5086,9 +5086,15 @@ impl Checker {
                 ),
             });
         }
+        if self.in_compiler_generated_supervisor_wrapper(&supervisor_process, "spawn") {
+            return Ok(None);
+        }
         let ResolvedRecordLitArg::Positional(worker_init) = &args[0] else {
             unreachable!("validated named arguments above")
         };
+        if matches!(worker_init, Resolved::Var(_, _)) {
+            return Ok(None);
+        }
         let (worker_process, typed_init) = self.synthesize_supervisor_worker_init(worker_init)?;
         match self.resolve_ty(&typed_init.ty) {
             Ty::Func(params, _) if params.is_empty() => {}
@@ -5278,13 +5284,27 @@ impl Checker {
                     args.len()
                 ),
                 span: span.clone(),
-                hint: Some("Pass a worker init route and worker count.".into()),
+                hint: Some("Pass a worker init route and WorkerStrategy.".into()),
+            });
+        }
+        if self.in_compiler_generated_supervisor_wrapper(&supervisor_process, "workers") {
+            return Ok(None);
+        }
+        if !self.supervisor_workers_allowed_in_current_context() {
+            return Err(TypeError {
+                message: "supervisor workers can only be called from Singleton GenServer @init"
+                    .into(),
+                span: span.clone(),
+                hint: Some(
+                    "Create worker sets in the pool Singleton GenServer @init and keep the handle in state."
+                        .into(),
+                ),
             });
         }
         let ResolvedRecordLitArg::Positional(worker_init) = &args[0] else {
             unreachable!("validated named arguments above")
         };
-        let ResolvedRecordLitArg::Positional(size_expr) = &args[1] else {
+        let ResolvedRecordLitArg::Positional(strategy_expr) = &args[1] else {
             unreachable!("validated named arguments above")
         };
         let (worker_process, typed_init) = self.synthesize_supervisor_worker_init(worker_init)?;
@@ -5304,14 +5324,23 @@ impl Checker {
                 });
             }
         }
-        let typed_size = self.check_node_with_expected(size_expr, Some(&Ty::Int))?;
-        if !self.types_compatible(&Ty::Int, &typed_size.ty) {
+        let strategy_ty = self
+            .env
+            .lookup_type_def("WorkerStrategy")
+            .map(|def| Ty::Struct(def.name.clone(), def.fields.clone()))
+            .ok_or_else(|| TypeError {
+                message: "WorkerStrategy type is not available".into(),
+                span: span.clone(),
+                hint: None,
+            })?;
+        let typed_strategy = self.check_node_with_expected(strategy_expr, Some(&strategy_ty))?;
+        if !self.types_compatible(&strategy_ty, &typed_strategy.ty) {
             return Err(TypeError {
                 message: format!(
-                    "supervisor workers expects Int as worker count, got {}",
-                    self.ty_name(&typed_size.ty)
+                    "supervisor workers expects WorkerStrategy as worker strategy, got {}",
+                    self.ty_name(&typed_strategy.ty)
                 ),
-                span: typed_size.span.clone(),
+                span: typed_strategy.span.clone(),
                 hint: None,
             });
         }
@@ -5328,9 +5357,39 @@ impl Checker {
                 supervisor_process,
                 worker_process,
                 init: Box::new(typed_init),
-                size: Box::new(typed_size),
+                strategy: Box::new(typed_strategy),
             },
         }))
+    }
+
+    fn supervisor_workers_allowed_in_current_context(&self) -> bool {
+        let Some(spec) = self.current_process_spec() else {
+            return false;
+        };
+        if spec.spec.kind != spire::ast::ProcessKind::GenServer
+            || spec.spec.instance != spire::ast::ProcessInstance::Singleton
+        {
+            return false;
+        }
+        let Some(symbol) = self.current_function_symbol.as_deref() else {
+            return false;
+        };
+        let Some((_, handler)) = symbol.rsplit_once("::") else {
+            return false;
+        };
+        handler == "__agent_init"
+    }
+
+    fn in_compiler_generated_supervisor_wrapper(
+        &self,
+        supervisor_process: &str,
+        method: &str,
+    ) -> bool {
+        let Some(symbol) = self.current_function_symbol.as_deref() else {
+            return false;
+        };
+        let expected = format!("{}::{method}", Self::surface_name(supervisor_process));
+        Self::surface_name(symbol) == expected
     }
 
     fn try_check_worker_message_template_app(

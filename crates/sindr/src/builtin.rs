@@ -608,7 +608,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "__supervisor_workers",
         arity: 3,
-        sig_str: "($Supervisor, (-> Result<$State>), Int) -> Result<Workers<$Process>>",
+        sig_str: "($Supervisor, (-> Result<$State>), WorkerStrategy) -> Result<Workers<$Process>>",
     },
     BuiltinMeta {
         name: "__process_state",

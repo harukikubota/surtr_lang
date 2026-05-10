@@ -156,23 +156,6 @@
   - `unit/xldr` / `integration/repl` / `rune` integration で process-aware な表示と失敗形状を固定する。
   - `integration/build_roundtrip` / `run_eldr` / viewer 系テストで runtime metadata の可視化形状を固定する。
 
-### OI-020 Worker pool membership / scale / reconcile 意味論
-
-- 背景:
-  - 現行仕様で確定しているのは、`Workers<$Worker>` が runtime-managed closed membership を持つことと、Singleton GenServer pool state に置く使い方までである。
-  - `Workers::broadcast` は `List<Result<T>>` を返し、timeout / error は worker ごとの結果へ閉じ込める方向が baseline になった。
-  - ただし pool の増減、補充、再同期、worker 異常終了後の再構成方針はまだ固定していない。
-- 未確定点:
-  - target worker 数を runtime が維持するか、user code が reconcile loop を持つか
-  - membership 変更を supervisor policy とどう連携させるか
-  - busy / idle / dead worker を pool surface でどこまで観測できるようにするか
-- 受け入れ条件:
-  - pool size 変化と worker 再構成の責務境界が docs と runtime 実装で説明できる。
-  - `Workers<$Worker>` の closed-set 契約と supervisor ownership が矛盾しない。
-- テスト方針:
-  - 方針確定後に worker exit / pool refill / scale up/down の spec fixture を追加する。
-  - observability を増やす場合は `status` / dump / snapshot 出力の形状を固定する。
-
 ### OI-021 Supervisor hierarchy の柔軟化
 
 - 背景:

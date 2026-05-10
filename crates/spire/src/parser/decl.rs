@@ -796,8 +796,8 @@ fn build_supervisor_workers_wrapper(span: &Span, supervisor_name: &str) -> Ast {
                 span: span.clone(),
             },
             FunParam {
-                name: "size".to_string(),
-                ty: AstTy::Named(span.clone(), "Int".to_string()),
+                name: "strategy".to_string(),
+                ty: AstTy::Named(span.clone(), "WorkerStrategy".to_string()),
                 span: span.clone(),
             },
         ],
@@ -818,7 +818,7 @@ fn build_supervisor_workers_wrapper(span: &Span, supervisor_name: &str) -> Ast {
                 vec![
                     string_lit(span, supervisor_name),
                     var(span, "worker_init"),
-                    var(span, "size"),
+                    var(span, "strategy"),
                 ],
             )],
         )),

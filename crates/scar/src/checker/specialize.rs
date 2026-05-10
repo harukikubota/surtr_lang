@@ -103,7 +103,7 @@ impl Checker {
                 supervisor_process,
                 worker_process,
                 init,
-                size,
+                strategy,
             } => TypedInner::SupervisorWorkers {
                 supervisor_process,
                 worker_process,
@@ -115,8 +115,8 @@ impl Checker {
                     specialization_fun_idxs,
                     generated_defs,
                 )?),
-                size: Box::new(self.rewrite_specializations_in_node(
-                    *size,
+                strategy: Box::new(self.rewrite_specializations_in_node(
+                    *strategy,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
@@ -1226,9 +1226,9 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(pid, ordered, seen);
             }
             TypedInner::SupervisorStatus { .. } => {}
-            TypedInner::SupervisorWorkers { init, size, .. } => {
+            TypedInner::SupervisorWorkers { init, strategy, .. } => {
                 self.collect_bound_tyvars_in_node(init, ordered, seen);
-                self.collect_bound_tyvars_in_node(size, ordered, seen);
+                self.collect_bound_tyvars_in_node(strategy, ordered, seen);
             }
             TypedInner::FacetPath(path) => {
                 self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
@@ -1382,12 +1382,12 @@ impl Checker {
                 supervisor_process,
                 worker_process,
                 init,
-                size,
+                strategy,
             } => TypedInner::SupervisorWorkers {
                 supervisor_process,
                 worker_process,
                 init: Box::new(self.substitute_typed_node_with_mapping(*init, mapping)),
-                size: Box::new(self.substitute_typed_node_with_mapping(*size, mapping)),
+                strategy: Box::new(self.substitute_typed_node_with_mapping(*strategy, mapping)),
             },
             TypedInner::App(func, args) => TypedInner::App(
                 Box::new(self.substitute_typed_node_with_mapping(*func, mapping)),
@@ -2043,9 +2043,9 @@ impl Checker {
             }
             TypedInner::SupervisorAdopt { pid, .. } => Self::typed_node_has_pending_trait_call(pid),
             TypedInner::SupervisorStatus { .. } => false,
-            TypedInner::SupervisorWorkers { init, size, .. } => {
+            TypedInner::SupervisorWorkers { init, strategy, .. } => {
                 Self::typed_node_has_pending_trait_call(init)
-                    || Self::typed_node_has_pending_trait_call(size)
+                    || Self::typed_node_has_pending_trait_call(strategy)
             }
             TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_) => false,

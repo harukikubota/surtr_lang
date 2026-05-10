@@ -564,7 +564,7 @@ custom supervisor surface も同じ形に揃える。
 ImageWorkerSupervisor::spawn(MyWorker::init(args))
 ImageWorkerSupervisor::adopt(pid)
 ImageWorkerSupervisor::status()
-ImageWorkerSupervisor::workers(MyWorker::init(args), 4)
+ImageWorkerSupervisor::workers(MyWorker::init(args), WorkerStrategy::fixed(4))
 ```
 
 `status()` は `SupervisorStatus` を返し、policy 表示として `strategy`、
@@ -583,12 +583,21 @@ ImageWorkerSupervisor::workers(MyWorker::init(args), 4)
 - user code は worker 集合を直接組み立てない
 - `Workers` API は worker message template だけを受ける
 - `reserve` は `WorkerLease<$Worker>` を返し、裸の PID 抽出 API は出さない
-- `Sup::workers(...)` は Singleton GenServer の `@init` で worker pool state を作る経路として使う
+- `WorkerScale` / `WorkerStrategy` は pure Surtr data であり、通常の struct / enum として任意の module や helper で生成してよい
+- v1 の executable scale は `WorkerScale::Fix(n)` のみである
+- `WorkerStrategy::default()` は `init=1, min=1, max=1, scale=Fix(1)` を返す
+- `WorkerStrategy::fixed(size)` は `init=size, min=size, max=size, scale=Fix(size)` を返す
+- `Sup::workers(init, strategy)` は Singleton GenServer の `@init` で worker pool state を作る経路としてだけ使う
+- `Sup::workers(..., 2)` の旧 `Int` surface は廃止する
 - `Workers<$Worker>` は Singleton GenServer の state として保持する。state そのものを `Workers<$Worker>` にしてよいし、user-defined state struct の field に含めてもよい
 - public surface は `Workers::submit` / `Workers::reserve` / `Workers::broadcast` / `Workers::size` に限る
 - `Workers::submit` / `Workers::reserve` / `Workers::broadcast` / `Workers::size` は Singleton GenServer の `@call` / `@cast` / 同じ `defgenserver` 内 helper から使う
-- `snapshot` / `idle_count` / `busy_count` / `drain` / `set_target` は public `Workers` API ではない。pool 固有の観測や再構成は wrapper helper または worker pool membership / scale / reconcile の別仕様で扱う
+- `snapshot` / `idle_count` / `busy_count` / `drain` / `set_target` は public `Workers` API ではない。pool 固有の観測は VM dump / process runtime snapshot で扱い、post-init に strategy を runtime へ渡す public API は持たない
 - timeout は `submit_timeout` のような別 public API ではなく、`Workers::*` 呼び出しに付く `@timeout(...)` modifier を使う
+
+runtime は `WorkerStrategy` を worker set state に保持し、`Fix(n)` について `init == n` かつ `0 <= min <= n <= max` を検証する。条件を満たさない場合、`Sup::workers` は `Err(InvalidWorkerStrategy)` を返す。
+
+worker exit 時、runtime は dead PID を membership から除去する。`Workers<$Worker>` handle 自体は削除せず、supervisor policy 配下で target 数まで worker を refill する。したがって user code は closed-set handle を保持し続け、reconcile loop や target 更新 API を持たない。
 
 正規系は WorkerPool 役の Singleton GenServer に閉じる。state がそのまま `Workers<$Worker>` の場合:
 
@@ -601,7 +610,7 @@ defgenserver ImagePool {
 
   @init
   def init() -> Result<Workers<ImageWorker>> {
-    ImageWorkerSupervisor::workers(ImageWorker::init(0), 2)
+    ImageWorkerSupervisor::workers(ImageWorker::init(0), WorkerStrategy::fixed(2))
   }
 
   def assign_reserved(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Unit> {
@@ -654,7 +663,10 @@ defgenserver ImagePool {
 
   @init
   def init() -> Result<ImagePoolState> {
-    workers =? ImageWorkerSupervisor::workers(ImageWorker::init(0), 2)
+    workers =? ImageWorkerSupervisor::workers(
+      ImageWorker::init(0),
+      WorkerStrategy::fixed(2),
+    )
     Ok(ImagePoolState::new(workers, 0))
   }
 
@@ -672,6 +684,23 @@ defgenserver ImagePool {
 ```
 
 generated supervisor owner helper は compiler が compiler-managed `Supervisor::*` owner module を経由して hidden `__supervisor_*` runtime lower へ接続する。user code では常に `MySupervisor::spawn(...)` / `MySupervisor::workers(...)` のような process owner API を使う。
+
+process runtime snapshot / VM dump は worker set の観測情報を `worker_sets` として出す。
+
+```json
+{
+  "id": 0,
+  "worker_process": "ImageWorker",
+  "supervisor": "ImageWorkerSupervisor",
+  "target": 2,
+  "min": 2,
+  "max": 2,
+  "member_pids": [3, 4],
+  "live_count": 2
+}
+```
+
+`member_pids` は closed membership 内の現在の PID 列、`live_count` は runtime process table 上で live と見なせる member 数である。busy / idle などの詳細状態は v1 public surface には含めない。
 
 ### 3.12 Worker lifecycle
 

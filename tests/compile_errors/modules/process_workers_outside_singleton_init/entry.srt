@@ -1,0 +1,36 @@
+defagent MyWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> {
+    Ok(seed)
+  }
+
+  @get
+  def value(state: Int) -> Result<Int> {
+    Ok(state)
+  }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> {
+    Ok(next)
+  }
+}
+
+defsupervisor MySup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+
+def make_workers() -> Result<Workers<MyWorker>> {
+  MySup::workers(MyWorker::init(1), WorkerStrategy::fixed(1))
+}

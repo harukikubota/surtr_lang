@@ -538,6 +538,16 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
                     "target": context.target,
                 })),
             })).collect::<Vec<_>>(),
+            "worker_sets": process_runtime.worker_sets.iter().map(|worker_set| json!({
+                "id": worker_set.id,
+                "worker_process": worker_set.worker_process,
+                "supervisor": worker_set.supervisor,
+                "target": worker_set.target,
+                "min": worker_set.min,
+                "max": worker_set.max,
+                "member_pids": worker_set.member_pids,
+                "live_count": worker_set.live_count,
+            })).collect::<Vec<_>>(),
             "waiting": process_runtime.waiting,
             "replies": process_runtime.replies,
             "deadlines": process_runtime.deadlines.iter().map(|deadline| json!({

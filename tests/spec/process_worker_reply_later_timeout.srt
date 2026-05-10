@@ -35,6 +35,35 @@ defsupervisor MySup {
   }
 }
 
-workers =? MySup::workers(MyWorker::init(1), 1)
-print(inspect(Workers::broadcast(workers, MyWorker::delayed())))
-print(inspect(Workers::broadcast(workers, MyWorker::value())))
+defgenserver MyPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Workers<MyWorker>
+  }
+
+  @init
+  def init() -> Result<Workers<MyWorker>> {
+    MySup::workers(MyWorker::init(1), WorkerStrategy::fixed(1))
+  }
+
+  @call
+  def delayed(workers: Workers<MyWorker>) -> Result<CallResult<List<Result<Int>>, Workers<MyWorker>>> {
+    Ok(CallResult::Reply(Workers::broadcast(workers, MyWorker::delayed()), workers))
+  }
+
+  @call
+  def value(workers: Workers<MyWorker>) -> Result<CallResult<List<Result<Int>>, Workers<MyWorker>>> {
+    Ok(CallResult::Reply(Workers::broadcast(workers, MyWorker::value()), workers))
+  }
+}
+
+supervisor_init {
+  MySup {}
+  singleton MyPool {}
+}
+
+delayed =? MyPool::delayed()
+print(inspect(delayed))
+value =? MyPool::value()
+print(inspect(value))

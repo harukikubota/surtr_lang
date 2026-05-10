@@ -4,7 +4,7 @@ use sindr::ir::{
     RuntimeHandlerTarget, RuntimeInitPolicy, RuntimeProcessInstance, RuntimeProcessSpec,
     RuntimeProcessSpecTable, RuntimeSupervisorPolicy, SourceMap,
 };
-use sindr::primitives::{int, SurtrInt};
+use sindr::primitives::{int, SurtrInt, ToPrimitive};
 use sindr::runtime::{
     Callable, CallableMetadata, CallableOrigin, CallableTarget, FileHandleValue, ListHandle,
     Location, PidHandle, RichError, TypeRegistry, Value, WorkerLeaseHandle, WorkersHandle,
@@ -273,10 +273,23 @@ pub struct VmProcessRuntimeSnapshot {
     pub specs: Vec<VmProcessSpecSnapshot>,
     pub singleton_slots: BTreeMap<String, u64>,
     pub processes: Vec<VmProcessInstanceSnapshot>,
+    pub worker_sets: Vec<VmWorkerSetSnapshot>,
     pub waiting: BTreeMap<u64, String>,
     pub replies: BTreeMap<u64, u64>,
     pub deadlines: Vec<VmDeadlineSnapshot>,
     pub futures: Vec<VmFutureSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmWorkerSetSnapshot {
+    pub id: u64,
+    pub worker_process: String,
+    pub supervisor: String,
+    pub target: i64,
+    pub min: i64,
+    pub max: i64,
+    pub member_pids: Vec<u64>,
+    pub live_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -379,12 +392,36 @@ struct ProcessRuntime {
     worker_sets: BTreeMap<u64, WorkerSetState>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct WorkerSetState {
-    _worker_process: String,
-    _supervisor_name: String,
+    supervisor_name: String,
+    worker_process: String,
+    init_callable: Callable,
+    strategy: WorkerStrategyState,
+    target: i64,
     members: Vec<u64>,
     next_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkerStrategyState {
+    init: i64,
+    min: i64,
+    max: i64,
+    scale: WorkerScaleState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WorkerScaleState {
+    Fix(i64),
+}
+
+impl WorkerStrategyState {
+    fn target(&self) -> i64 {
+        match self.scale {
+            WorkerScaleState::Fix(size) => size,
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -1963,16 +2000,29 @@ impl VM {
         supervisor_name: String,
         worker_name: String,
         init: Callable,
-        size: i64,
+        strategy_value: Value,
     ) -> Result<Value, RuntimeError> {
-        if size < 0 {
+        let strategy = match self.decode_worker_strategy(&strategy_value) {
+            Ok(strategy) => strategy,
+            Err(message) => {
+                return Ok(err_vm_result(
+                    self.process_error("InvalidWorkerStrategy", &message),
+                ));
+            }
+        };
+        let target = strategy.target();
+        if strategy.init != target
+            || strategy.min < 0
+            || strategy.min > target
+            || target > strategy.max
+        {
             return Ok(err_vm_result(self.process_error(
-                "InvalidWorkerCount",
-                "worker count must be non-negative",
+                "InvalidWorkerStrategy",
+                "worker strategy must satisfy init == Fix(n) and 0 <= min <= n <= max",
             )));
         }
         let mut members = Vec::new();
-        for _ in 0..size {
+        for _ in 0..target {
             let spawned = self.supervisor_spawn(
                 supervisor_name.clone(),
                 Some(worker_name.clone()),
@@ -1989,8 +2039,11 @@ impl VM {
         self.process_runtime.worker_sets.insert(
             workers_id,
             WorkerSetState {
-                _worker_process: worker_name.clone(),
-                _supervisor_name: supervisor_name,
+                supervisor_name,
+                worker_process: worker_name.clone(),
+                init_callable: init,
+                strategy,
+                target,
                 members,
                 next_index: 0,
             },
@@ -1999,6 +2052,80 @@ impl VM {
             id: workers_id,
             process_name: worker_name,
         })))
+    }
+
+    fn decode_worker_strategy(&self, value: &Value) -> Result<WorkerStrategyState, String> {
+        let Value::Tagged { tag, fields } = value else {
+            return Err("worker strategy must be a WorkerStrategy value".into());
+        };
+        let Some(entry) = self.type_registry().lookup(*tag) else {
+            return Err("worker strategy has unknown runtime tag".into());
+        };
+        if !Self::runtime_type_named(&entry.name, "WorkerStrategy") {
+            return Err("worker strategy must be a WorkerStrategy value".into());
+        }
+        let init = Self::worker_strategy_int_field(entry, fields, "init")?;
+        let min = Self::worker_strategy_int_field(entry, fields, "min")?;
+        let max = Self::worker_strategy_int_field(entry, fields, "max")?;
+        let scale_value = Self::worker_strategy_field(entry, fields, "scale")
+            .ok_or_else(|| "worker strategy missing scale".to_string())?;
+        let scale = self.decode_worker_scale(scale_value)?;
+        Ok(WorkerStrategyState {
+            init,
+            min,
+            max,
+            scale,
+        })
+    }
+
+    fn decode_worker_scale(&self, value: &Value) -> Result<WorkerScaleState, String> {
+        let Value::Tagged { tag, fields } = value else {
+            return Err("worker scale must be WorkerScale::Fix".into());
+        };
+        let Some(entry) = self.type_registry().lookup(*tag) else {
+            return Err("worker scale has unknown runtime tag".into());
+        };
+        if !Self::runtime_type_named(&entry.name, "WorkerScale::Fix") {
+            return Err("worker scale must be WorkerScale::Fix".into());
+        }
+        let Some(Value::Int(size)) = fields.get(1) else {
+            return Err("WorkerScale::Fix must contain an Int size".into());
+        };
+        let Some(size) = size.to_i64() else {
+            return Err("WorkerScale::Fix size must be representable as i64".into());
+        };
+        Ok(WorkerScaleState::Fix(size))
+    }
+
+    fn worker_strategy_int_field(
+        entry: &sindr::runtime::TypeEntry,
+        fields: &[Value],
+        name: &str,
+    ) -> Result<i64, String> {
+        let Some(Value::Int(value)) = Self::worker_strategy_field(entry, fields, name) else {
+            return Err(format!("worker strategy missing Int field `{name}`"));
+        };
+        value
+            .to_i64()
+            .ok_or_else(|| format!("worker strategy field `{name}` must be representable as i64"))
+    }
+
+    fn worker_strategy_field<'a>(
+        entry: &sindr::runtime::TypeEntry,
+        fields: &'a [Value],
+        name: &str,
+    ) -> Option<&'a Value> {
+        let index = entry.field_names.iter().position(|field| field == name)?;
+        fields.get(index)
+    }
+
+    fn runtime_type_named(actual: &str, expected: &str) -> bool {
+        let actual = actual.strip_prefix("Global::").unwrap_or(actual);
+        actual == expected
+            || actual
+                .strip_suffix(expected)
+                .map(|prefix| prefix.ends_with("::"))
+                .unwrap_or(false)
     }
 
     pub(crate) fn process_state(&mut self, pid: &PidHandle) -> Result<Value, RuntimeError> {
@@ -2163,18 +2290,58 @@ impl VM {
     }
 
     fn remove_worker_from_sets(&mut self, pid: u64) {
-        let mut empty_ids = Vec::new();
+        let mut refill_ids = Vec::new();
         for (workers_id, state) in &mut self.process_runtime.worker_sets {
+            let before = state.members.len();
             state.members.retain(|member| *member != pid);
-            if state.next_index > state.members.len() {
+            if state.next_index >= state.members.len() {
                 state.next_index = 0;
             }
-            if state.members.is_empty() {
-                empty_ids.push(*workers_id);
+            if state.members.len() != before && state.members.len() < state.target as usize {
+                refill_ids.push(*workers_id);
             }
         }
-        for workers_id in empty_ids {
-            self.process_runtime.worker_sets.remove(&workers_id);
+        for workers_id in refill_ids {
+            let _ = self.refill_worker_set(workers_id);
+        }
+    }
+
+    fn refill_worker_set(&mut self, workers_id: u64) -> Result<(), RuntimeError> {
+        loop {
+            let Some((supervisor_name, worker_process, init_callable, target, current_len)) = self
+                .process_runtime
+                .worker_sets
+                .get(&workers_id)
+                .map(|state| {
+                    (
+                        state.supervisor_name.clone(),
+                        state.worker_process.clone(),
+                        state.init_callable.clone(),
+                        state.target,
+                        state.members.len(),
+                    )
+                })
+            else {
+                return Ok(());
+            };
+            if current_len >= target as usize {
+                return Ok(());
+            }
+            let spawned = self.supervisor_spawn(
+                supervisor_name,
+                Some(worker_process.clone()),
+                init_callable,
+            )?;
+            let pid = match self.pid_handle_like_from_result(spawned) {
+                Ok(pid) => pid,
+                Err(_) => return Ok(()),
+            };
+            let Some(state) = self.process_runtime.worker_sets.get_mut(&workers_id) else {
+                return Ok(());
+            };
+            if !state.members.contains(&pid.id) {
+                state.members.push(pid.id);
+            }
         }
     }
 
@@ -2859,6 +3026,41 @@ impl VM {
                     }
                 })
                 .collect();
+        let worker_sets = self
+            .process_runtime
+            .worker_sets
+            .iter()
+            .map(|(id, state)| {
+                let live_count = state
+                    .members
+                    .iter()
+                    .filter(|pid| {
+                        self.process_runtime
+                            .processes
+                            .get(pid)
+                            .map(|process| {
+                                matches!(
+                                    process.status,
+                                    ProcessStatus::Runnable
+                                        | ProcessStatus::Waiting(_)
+                                        | ProcessStatus::Restarting
+                                )
+                            })
+                            .unwrap_or(false)
+                    })
+                    .count();
+                VmWorkerSetSnapshot {
+                    id: *id,
+                    worker_process: state.worker_process.clone(),
+                    supervisor: state.supervisor_name.clone(),
+                    target: state.target,
+                    min: state.strategy.min,
+                    max: state.strategy.max,
+                    member_pids: state.members.clone(),
+                    live_count,
+                }
+            })
+            .collect();
         let waiting = self
             .process_runtime
             .waiting_table
@@ -2906,6 +3108,7 @@ impl VM {
             specs,
             singleton_slots: self.process_runtime.singleton_by_name.clone(),
             processes,
+            worker_sets,
             waiting,
             replies,
             deadlines,
@@ -3176,7 +3379,9 @@ impl VM {
 
         self.bytecode.opcodes.truncate(checkpoint.opcode_len);
         self.bytecode.constants.truncate(checkpoint.constant_len);
-        self.bytecode.type_registry.truncate(checkpoint.type_entry_len);
+        self.bytecode
+            .type_registry
+            .truncate(checkpoint.type_entry_len);
         self.bytecode
             .error_templates
             .truncate(checkpoint.error_template_len);
