@@ -50,6 +50,11 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Int, Int) -> Result<Int, ZeroDivisionError>",
     },
     BuiltinMeta {
+        name: "string_len",
+        arity: 1,
+        sig_str: "(String) -> Int",
+    },
+    BuiltinMeta {
         name: "eprint",
         arity: 1,
         sig_str: "(Error) -> Unit",
@@ -1043,6 +1048,7 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
         Some("Shell::pwd") => "shell_pwd",
         Some("Shell::cd") => "shell_cd",
         Some("Shell::exec") => "shell_exec",
+        Some("String::len") => "string_len",
         Some("Json::parse") => "json_parse",
         Some("Json::stringify") => "json_stringify",
         Some("Facet::replace") => "__facet_replace",
@@ -1167,6 +1173,20 @@ mod tests {
         assert_eq!(
             builtin_runtime_name("stringify", Some("Json::stringify")),
             "json_stringify"
+        );
+    }
+
+    #[test]
+    fn qualified_string_len_builtin_resolves_to_runtime_name() {
+        assert_eq!(
+            builtin_runtime_name("len", Some("String::len")),
+            "string_len"
+        );
+        assert_eq!(
+            builtin_meta_for_decl("len", Some("String::len"))
+                .expect("string len builtin metadata")
+                .sig_str,
+            "(String) -> Int"
         );
     }
 

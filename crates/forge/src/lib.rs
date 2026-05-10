@@ -646,6 +646,28 @@ right = Int::bit_xor(6, 3)"#,
     }
 
     #[test]
+    fn direct_string_len_builtin_call_lowers_to_specialized_opcode() {
+        let bytecode = codegen_source(r#"size = String::len("あb")"#);
+
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::StringLen)));
+
+        let string_len_id =
+            builtin_id_by_name("string_len").expect("string_len builtin metadata must exist");
+        assert!(!bytecode.opcodes.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    ..
+                } if *builtin_id == string_len_id
+            )
+        }));
+    }
+
+    #[test]
     fn int_bit_index_helpers_stay_as_builtin_calls() {
         let bytecode = codegen_source(
             r#"tested = Int::test_bit(5, 0)

@@ -50,6 +50,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_safe_mod,
     },
     BuiltinImpl {
+        name: "string_len",
+        func: builtin_string_len,
+    },
+    BuiltinImpl {
         name: "eprint",
         func: builtin_eprint,
     },
@@ -1493,6 +1497,15 @@ fn builtin_list_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
         return Err(RuntimeError::new("len expects List as first argument"));
     };
     Ok(Value::Int(list.len.into()))
+}
+
+fn builtin_string_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(value) = &args[0] else {
+        return Err(RuntimeError::new(
+            "string_len expects String as first argument",
+        ));
+    };
+    Ok(Value::Int(value.chars().count().into()))
 }
 
 fn builtin_gen_make(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

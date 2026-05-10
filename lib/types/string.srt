@@ -228,12 +228,7 @@ impl String {
   xldr(1)> String::len("hello")
   5
   """
-  def len(value: String) -> Int {
-    match value {
-      "" => 0,
-      [_, ..tail] => 1 + len(tail),
-    }
-  }
+  @builtin def len(value: String) -> Int
 
   @doc """
   Wrap `value` with `prefix` and `suffix`.

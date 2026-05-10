@@ -5037,6 +5037,10 @@ impl VM {
                 let a = self.pop_str()?;
                 self.stack.push(Value::Str(a + &b));
             }
+            Opcode::StringLen => {
+                let value = self.pop_str()?;
+                self.stack.push(Value::Int(value.chars().count().into()));
+            }
             Opcode::StringIsEmpty => {
                 let value = self.pop_str()?;
                 self.stack.push(Value::Bool(value.is_empty()));
@@ -6597,6 +6601,27 @@ mod tests {
 
         assert_eq!(ctx.pc, 1);
         assert_eq!(ctx.stack, vec![Value::Bool(true)]);
+    }
+
+    #[test]
+    fn string_len_executes_as_one_opcode() {
+        let mut bytecode =
+            base_bytecode(vec![Opcode::LoadConst(0), Opcode::StringLen, Opcode::Halt]);
+        bytecode.constants = vec![Constant::Str("あb".into())];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected load const to continue, got {other:?}"),
+        }
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected string len to continue, got {other:?}"),
+        }
+
+        assert_eq!(ctx.pc, 2);
+        assert_eq!(ctx.stack, vec![Value::Int(int(2))]);
     }
 
     #[test]

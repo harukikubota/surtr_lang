@@ -155,6 +155,7 @@ pub enum Opcode {
         local_idx: u32,
         tag_const_idx: u32,
     },
+    StringLen,
 }
 
 impl Opcode {
@@ -168,6 +169,7 @@ impl Opcode {
             Self::StoreConstLocal { .. } => "StoreConstLocal",
             Self::CopyLocal { .. } => "CopyLocal",
             Self::EqLocalTag { .. } => "EqLocalTag",
+            Self::StringLen => "StringLen",
             Self::AddInt => "AddInt",
             Self::SubInt => "SubInt",
             Self::MulInt => "MulInt",
@@ -1796,6 +1798,17 @@ mod tests {
             },
             Opcode::Halt,
         ];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_string_len_opcode() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![Opcode::StringLen, Opcode::Halt];
 
         let bytes = bytecode.encode().expect("encode should succeed");
         let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
