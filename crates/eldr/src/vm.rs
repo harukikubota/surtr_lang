@@ -33,6 +33,12 @@ pub struct VmCapturedIo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeOutputEvent {
+    StdOut(String),
+    StdErr(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VmTestEvent {
     pub path: Vec<String>,
     pub detail: Option<String>,
@@ -387,6 +393,8 @@ struct ProcessRuntime {
     reply_table: BTreeMap<CorrelationId, FutureId>,
     waiting_table: BTreeMap<u64, ProcessWaitReason>,
     deadline_queue: VecDeque<DeadlineEntry>,
+    run_queue: VecDeque<u64>,
+    output_events: VecDeque<RuntimeOutputEvent>,
     detached_tasks: BTreeMap<u64, DetachedTask>,
     root_supervisor: RootSupervisorState,
     worker_sets: BTreeMap<u64, WorkerSetState>,
@@ -431,7 +439,7 @@ struct ProcessInstance {
     spec_id: u32,
     status: ProcessStatus,
     mailbox: VecDeque<ProcessMailboxMessage>,
-    execution_context: Option<ProcessExecutionContext>,
+    execution_context: Option<ExecutionContext>,
     state_value: Option<Value>,
     owner: Option<u64>,
     lifecycle_sink: Option<LifecycleSink>,
@@ -478,12 +486,14 @@ enum ProcessMailboxMessage {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-struct ProcessExecutionContext {
+struct ExecutionContext {
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
     pc: usize,
     target: ExecutionTarget,
 }
+
+type ProcessExecutionContext = ExecutionContext;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -547,6 +557,44 @@ enum StepOutcome {
         resume: ProcessExecutionContext,
     },
     RuntimeError(RuntimeError),
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Budget {
+    max_reductions: u64,
+    reductions: u64,
+}
+
+#[allow(dead_code)]
+impl Budget {
+    fn new(max_reductions: u64) -> Self {
+        Self {
+            max_reductions,
+            reductions: 0,
+        }
+    }
+
+    fn consume(&mut self, cost: u64) {
+        self.reductions = self.reductions.saturating_add(cost);
+    }
+
+    fn expired(&self) -> bool {
+        self.reductions >= self.max_reductions
+    }
+
+    fn reductions(&self) -> u64 {
+        self.reductions
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+enum ProcessRunOutcome {
+    QuantumExpired,
+    Halted(Value),
+    Pending(FutureId),
+    Failed(RuntimeError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1228,6 +1276,9 @@ impl VM {
     }
 
     pub(crate) fn emit_stdout_line(&mut self, line: String) {
+        self.process_runtime
+            .output_events
+            .push_back(RuntimeOutputEvent::StdOut(format!("{line}\n")));
         match self.io_policy.stdout {
             IoMode::Passthrough => self.emit_host_stdout_line(line),
             IoMode::Capture => {
@@ -1247,6 +1298,11 @@ impl VM {
     }
 
     pub(crate) fn emit_stdout_text(&mut self, text: String) -> io::Result<()> {
+        if !text.is_empty() {
+            self.process_runtime
+                .output_events
+                .push_back(RuntimeOutputEvent::StdOut(text.clone()));
+        }
         match self.io_policy.stdout {
             IoMode::Passthrough => self.emit_host_stdout_text(text),
             IoMode::Capture => {
@@ -1272,6 +1328,9 @@ impl VM {
     }
 
     pub(crate) fn emit_stderr_line(&mut self, line: String) {
+        self.process_runtime
+            .output_events
+            .push_back(RuntimeOutputEvent::StdErr(format!("{line}\n")));
         match self.io_policy.stderr {
             IoMode::Passthrough => self.emit_host_stderr_line(line),
             IoMode::Capture => {
@@ -1291,6 +1350,11 @@ impl VM {
     }
 
     pub(crate) fn emit_stderr_text(&mut self, text: String) -> io::Result<()> {
+        if !text.is_empty() {
+            self.process_runtime
+                .output_events
+                .push_back(RuntimeOutputEvent::StdErr(text.clone()));
+        }
         match self.io_policy.stderr {
             IoMode::Passthrough => self.emit_host_stderr_text(text),
             IoMode::Capture => {
@@ -3645,56 +3709,153 @@ impl VM {
         }
     }
 
-    fn run_until_outcome(&mut self, mut pc: usize, target: ExecutionTarget) -> StepOutcome {
-        loop {
-            if pc >= self.bytecode.opcodes.len() {
-                return StepOutcome::RuntimeError(RuntimeError::new("PC out of bounds"));
+    fn step_context(&mut self, context: &mut ExecutionContext) -> StepOutcome {
+        self.restore_execution_context(context.clone());
+        let target = context.target.clone();
+        let outcome = self.step_active_context(target);
+        match &outcome {
+            StepOutcome::Pending { resume, .. } => {
+                *context = resume.clone();
             }
-            self.resolve_ready_pending_stack_values();
-            self.pc = pc;
-            let current_pc = pc;
-            let op = self.bytecode.opcodes[current_pc].clone();
-            self.observe_opcode_step(current_pc, &op);
-            let mut next_pc = current_pc + 1;
-            let control = match self.execute_opcode(op.clone(), &mut next_pc) {
-                Ok(control) => control,
-                Err(err) => {
-                    return StepOutcome::RuntimeError(
-                        self.enrich_runtime_error(err, current_pc, &op),
-                    );
-                }
-            };
-            self.observe_current_depths();
+            _ => {
+                *context = self.capture_execution_context(self.pc, context.target.clone());
+            }
+        }
+        outcome
+    }
 
-            match control {
-                OpcodeControl::Continue => {
-                    pc = next_pc;
-                    self.pc = pc;
-                    match self.complete_execution_target(&target) {
-                        Ok(Some(value)) => return StepOutcome::Halt(value),
-                        Ok(None) => {}
-                        Err(err) => {
-                            return StepOutcome::RuntimeError(
-                                self.enrich_runtime_error(err, current_pc, &op),
-                            );
-                        }
+    fn step_active_context(&mut self, target: ExecutionTarget) -> StepOutcome {
+        let pc = self.pc;
+        if pc >= self.bytecode.opcodes.len() {
+            return StepOutcome::RuntimeError(RuntimeError::new("PC out of bounds"));
+        }
+        self.resolve_ready_pending_stack_values();
+        let current_pc = pc;
+        let op = self.bytecode.opcodes[current_pc].clone();
+        self.observe_opcode_step(current_pc, &op);
+        let mut next_pc = current_pc + 1;
+        let control = match self.execute_opcode(op.clone(), &mut next_pc) {
+            Ok(control) => control,
+            Err(err) => {
+                return StepOutcome::RuntimeError(self.enrich_runtime_error(err, current_pc, &op));
+            }
+        };
+        self.observe_current_depths();
+
+        match control {
+            OpcodeControl::Continue => {
+                self.pc = next_pc;
+                match self.complete_execution_target(&target) {
+                    Ok(Some(value)) => StepOutcome::Halt(value),
+                    Ok(None) => StepOutcome::Continue,
+                    Err(err) => {
+                        StepOutcome::RuntimeError(self.enrich_runtime_error(err, current_pc, &op))
                     }
                 }
-                OpcodeControl::Halt => {
-                    self.pc = next_pc;
-                    return StepOutcome::Halt(self.stack.last().cloned().unwrap_or(Value::Unit));
+            }
+            OpcodeControl::Halt => {
+                self.pc = next_pc;
+                StepOutcome::Halt(self.stack.last().cloned().unwrap_or(Value::Unit))
+            }
+            OpcodeControl::Pending {
+                future_id,
+                resume_pc,
+            } => StepOutcome::Pending {
+                future_id,
+                resume: self.capture_execution_context(resume_pc, target),
+            },
+        }
+    }
+
+    fn run_until_outcome(&mut self, pc: usize, target: ExecutionTarget) -> StepOutcome {
+        let mut context = self.capture_execution_context(pc, target);
+        loop {
+            match self.step_context(&mut context) {
+                StepOutcome::Continue => {}
+                other => return other,
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    fn run_quantum(
+        &mut self,
+        context: &mut ExecutionContext,
+        budget: &mut Budget,
+    ) -> ProcessRunOutcome {
+        loop {
+            if budget.expired() {
+                return ProcessRunOutcome::QuantumExpired;
+            }
+            match self.step_context(context) {
+                StepOutcome::Continue => {
+                    budget.consume(1);
+                    if budget.expired() {
+                        return ProcessRunOutcome::QuantumExpired;
+                    }
                 }
-                OpcodeControl::Pending {
-                    future_id,
-                    resume_pc,
-                } => {
-                    return StepOutcome::Pending {
-                        future_id,
-                        resume: self.capture_execution_context(resume_pc, target),
-                    };
+                StepOutcome::Halt(value) => return ProcessRunOutcome::Halted(value),
+                StepOutcome::Pending { future_id, .. } => {
+                    budget.consume(1);
+                    return ProcessRunOutcome::Pending(future_id);
+                }
+                StepOutcome::RuntimeError(err) => {
+                    budget.consume(1);
+                    return ProcessRunOutcome::Failed(err);
                 }
             }
         }
+    }
+
+    #[allow(dead_code)]
+    fn scheduler_tick(
+        &mut self,
+        max_reductions: u64,
+    ) -> Result<Option<ProcessRunOutcome>, RuntimeError> {
+        let Some(pid) = self.process_runtime.run_queue.pop_front() else {
+            return Ok(None);
+        };
+        let mut context = self
+            .process_runtime
+            .processes
+            .get_mut(&pid)
+            .and_then(|process| process.execution_context.take())
+            .ok_or_else(|| {
+                RuntimeError::new(format!("process {pid} has no execution context to run"))
+            })?;
+        let mut budget = Budget::new(max_reductions);
+        let outcome = self.run_quantum(&mut context, &mut budget);
+
+        match &outcome {
+            ProcessRunOutcome::QuantumExpired => {
+                if let Some(process) = self.process_runtime.processes.get_mut(&pid) {
+                    process.status = ProcessStatus::Runnable;
+                    process.execution_context = Some(context);
+                }
+                self.process_runtime.enqueue_runnable(pid);
+            }
+            ProcessRunOutcome::Halted(_) => {
+                if let Some(process) = self.process_runtime.processes.get_mut(&pid) {
+                    process.status = ProcessStatus::Completed;
+                    process.execution_context = Some(context);
+                }
+            }
+            ProcessRunOutcome::Pending(future_id) => {
+                if let Some(process) = self.process_runtime.processes.get_mut(&pid) {
+                    process.execution_context = Some(context);
+                }
+                self.process_runtime
+                    .mark_process_waiting(pid, ProcessWaitReason::Future(*future_id));
+            }
+            ProcessRunOutcome::Failed(_) => {
+                if let Some(process) = self.process_runtime.processes.get_mut(&pid) {
+                    process.status = ProcessStatus::Failed;
+                    process.execution_context = Some(context);
+                }
+            }
+        }
+
+        Ok(Some(outcome))
     }
 
     #[allow(dead_code)]
@@ -5632,6 +5793,12 @@ impl ProcessRuntime {
         runtime
     }
 
+    fn enqueue_runnable(&mut self, pid: u64) {
+        if !self.run_queue.contains(&pid) {
+            self.run_queue.push_back(pid);
+        }
+    }
+
     fn register_spec_table(&mut self, spec_table: &RuntimeProcessSpecTable) {
         self.specs_by_id = spec_table.entries.clone();
         self.spec_id_by_name = spec_table
@@ -5839,8 +6006,14 @@ impl ProcessRuntime {
         let waiters = std::mem::take(&mut future.waiters);
         for waiter in &waiters {
             self.waiting_table.remove(waiter);
-            if let Some(process) = self.processes.get_mut(waiter) {
+            let should_enqueue = if let Some(process) = self.processes.get_mut(waiter) {
                 process.status = ProcessStatus::Runnable;
+                true
+            } else {
+                false
+            };
+            if should_enqueue {
+                self.enqueue_runnable(*waiter);
             }
         }
         waiters
@@ -6013,8 +6186,9 @@ fn split_qualified_name_owned(qualified_name: &str) -> (Option<String>, Option<S
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_vm_result, ok_vm_result, ProcessWaitReason, StepOutcome, TaskMode, VmFileError,
-        VmFileMode, VmObservationOptions, VM,
+        decode_vm_result, ok_vm_result, Budget, CallFrame, ExecutionContext, ExecutionTarget,
+        ProcessRunOutcome, ProcessStatus, ProcessWaitReason, RuntimeOutputEvent, StepOutcome,
+        TaskMode, VmFileError, VmFileMode, VmObservationOptions, VM,
     };
     use sindr::ir::{
         BootEntrySource, Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode,
@@ -6184,6 +6358,435 @@ mod tests {
             allow_adopt: true,
             shutdown_timeout_ms: None,
         }
+    }
+
+    fn root_frame(num_locals: usize) -> CallFrame {
+        CallFrame {
+            return_pc: 0,
+            stack_base: 0,
+            call_site: None,
+            locals: vec![Value::Unit; num_locals],
+        }
+    }
+
+    fn top_level_context(pc: usize, num_locals: usize) -> ExecutionContext {
+        ExecutionContext {
+            stack: Vec::new(),
+            frames: vec![root_frame(num_locals)],
+            pc,
+            target: ExecutionTarget::TopLevel,
+        }
+    }
+
+    fn test_process_bytecode(process_name: &str, opcodes: Vec<Opcode>) -> Bytecode {
+        let mut bytecode = base_bytecode(opcodes);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![test_runtime_process_spec(
+                0,
+                process_name,
+                RuntimeProcessKind::Agent,
+                RuntimeProcessInstance::Worker,
+                false,
+                0,
+                0,
+                None,
+            )],
+        };
+        bytecode
+    }
+
+    #[test]
+    fn step_context_executes_one_opcode() {
+        let mut bytecode = base_bytecode(vec![Opcode::LoadConst(0), Opcode::Halt]);
+        bytecode.constants = vec![Constant::Int(int(7))];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected one opcode to continue, got {other:?}"),
+        }
+
+        assert_eq!(ctx.pc, 1);
+        assert_eq!(ctx.stack, vec![Value::Int(int(7))]);
+        assert_eq!(vm.pc, 1);
+    }
+
+    #[test]
+    fn step_context_halts_on_halt() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let mut ctx = top_level_context(0, 0);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Halt(Value::Unit) => {}
+            other => panic!("expected halt unit, got {other:?}"),
+        }
+
+        assert_eq!(ctx.pc, 1);
+    }
+
+    #[test]
+    fn step_context_preserves_runtime_error_context() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::LoadLocal(9), Opcode::Halt]));
+        let mut ctx = top_level_context(0, 0);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::RuntimeError(err) => {
+                assert_eq!(err.context.pc, Some(0));
+                assert!(err
+                    .context
+                    .opcode
+                    .as_deref()
+                    .is_some_and(|opcode| opcode.contains("LoadLocal")));
+            }
+            other => panic!("expected runtime error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn execution_context_round_trips_pending_future_resume() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt, Opcode::LoadLocal(0), Opcode::Return]);
+        bytecode.functions = vec![function_entry(0, 1, 1, 1, Some("Main::await_value"))];
+        let mut vm = VM::new(bytecode);
+        let future_id = vm.process_runtime.allocate_future(None, None, false);
+        let callable = Callable {
+            target: CallableTarget::Function(0),
+            lexical_captures: Vec::new(),
+            metadata: CallableMetadata::default(),
+        };
+
+        let resume = match vm.invoke_callable_step(callable, vec![Value::PendingFuture(future_id)])
+        {
+            StepOutcome::Pending { resume, .. } => resume,
+            other => panic!("expected pending outcome, got {other:?}"),
+        };
+        assert_eq!(resume.pc, 1);
+
+        vm.process_runtime
+            .resolve_future(future_id, Value::Int(int(99)));
+        match vm.resume_execution(resume) {
+            StepOutcome::Halt(Value::Int(value)) => assert_eq!(value, int(99)),
+            other => panic!("expected resumed value, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_quantum_expires_on_tail_recursive_loop() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Halt,
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 0,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::Return,
+        ]);
+        bytecode.functions = vec![function_entry(0, 1, 0, 0, Some("Main::loop"))];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = ExecutionContext {
+            stack: Vec::new(),
+            frames: vec![
+                root_frame(0),
+                CallFrame {
+                    return_pc: usize::MAX,
+                    stack_base: 0,
+                    call_site: None,
+                    locals: Vec::new(),
+                },
+            ],
+            pc: 1,
+            target: ExecutionTarget::FrameDepth(1),
+        };
+        let mut budget = Budget::new(3);
+
+        match vm.run_quantum(&mut ctx, &mut budget) {
+            ProcessRunOutcome::QuantumExpired => {}
+            other => panic!("expected quantum expiry, got {other:?}"),
+        }
+
+        assert_eq!(budget.reductions(), 3);
+        assert_eq!(ctx.pc, 1);
+    }
+
+    #[test]
+    fn run_quantum_resume_continues_after_expiry() {
+        let mut bytecode = base_bytecode(vec![Opcode::LoadConst(0), Opcode::Halt]);
+        bytecode.constants = vec![Constant::Int(int(42))];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+        let mut first_budget = Budget::new(1);
+
+        assert!(matches!(
+            vm.run_quantum(&mut ctx, &mut first_budget),
+            ProcessRunOutcome::QuantumExpired
+        ));
+        assert_eq!(ctx.pc, 1);
+        assert_eq!(ctx.stack, vec![Value::Int(int(42))]);
+
+        let mut second_budget = Budget::new(1);
+        match vm.run_quantum(&mut ctx, &mut second_budget) {
+            ProcessRunOutcome::Halted(Value::Int(value)) => assert_eq!(value, int(42)),
+            other => panic!("expected halt with stack top, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scheduler_requeues_quantum_expired_process() {
+        let bytecode = test_process_bytecode("Worker", vec![Opcode::Jump(0), Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process_instance("Worker".into(), Some(Value::Unit), None, None)
+            .expect("process allocation should succeed");
+        vm.process_runtime
+            .processes
+            .get_mut(&pid)
+            .unwrap()
+            .execution_context = Some(top_level_context(0, 0));
+        vm.process_runtime.enqueue_runnable(pid);
+
+        assert!(matches!(
+            vm.scheduler_tick(1).expect("scheduler tick should run"),
+            Some(ProcessRunOutcome::QuantumExpired)
+        ));
+        assert_eq!(vm.process_runtime.run_queue.front(), Some(&pid));
+        assert!(matches!(
+            vm.process_runtime.processes.get(&pid).unwrap().status,
+            ProcessStatus::Runnable
+        ));
+    }
+
+    #[test]
+    fn scheduler_marks_sleeping_process_waiting_without_blocking_host() {
+        let mut bytecode = test_process_bytecode(
+            "Sleeper",
+            vec![
+                Opcode::LoadConst(0),
+                Opcode::LoadConst(1),
+                Opcode::StructNew { field_count: 1 },
+                Opcode::CallBuiltin {
+                    builtin_id: builtin_id("__process_sleep"),
+                    arity: 1,
+                    span_start: 0,
+                    span_end: 0,
+                },
+                Opcode::Halt,
+            ],
+        );
+        let duration_tag = 0;
+        bytecode.type_registry.register(TypeEntry {
+            tag: duration_tag,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: Vec::new(),
+        });
+        bytecode.constants = vec![Constant::Tag(duration_tag), Constant::Int(int(10))];
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process_instance("Sleeper".into(), Some(Value::Unit), None, None)
+            .expect("process allocation should succeed");
+        vm.process_runtime
+            .processes
+            .get_mut(&pid)
+            .unwrap()
+            .execution_context = Some(top_level_context(0, 0));
+        vm.process_runtime.enqueue_runnable(pid);
+
+        match vm.scheduler_tick(4).expect("scheduler tick should run") {
+            Some(ProcessRunOutcome::Pending(future_id)) => {
+                assert!(vm.process_runtime.futures.contains_key(&future_id));
+            }
+            other => panic!("expected sleeping process pending future, got {other:?}"),
+        }
+        assert!(matches!(
+            vm.process_runtime.processes.get(&pid).unwrap().status,
+            ProcessStatus::Waiting(ProcessWaitReason::Future(_))
+        ));
+        assert!(vm.process_runtime.run_queue.is_empty());
+    }
+
+    #[test]
+    fn due_timer_requeues_sleeping_process_without_host_sleep() {
+        let mut bytecode = test_process_bytecode(
+            "Sleeper",
+            vec![
+                Opcode::LoadConst(0),
+                Opcode::LoadConst(1),
+                Opcode::StructNew { field_count: 1 },
+                Opcode::CallBuiltin {
+                    builtin_id: builtin_id("__process_sleep"),
+                    arity: 1,
+                    span_start: 0,
+                    span_end: 0,
+                },
+                Opcode::Halt,
+            ],
+        );
+        bytecode.type_registry.register(TypeEntry {
+            tag: 0,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: Vec::new(),
+        });
+        bytecode.constants = vec![Constant::Tag(0), Constant::Int(int(10))];
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process_instance("Sleeper".into(), Some(Value::Unit), None, None)
+            .expect("process allocation should succeed");
+        vm.process_runtime
+            .processes
+            .get_mut(&pid)
+            .unwrap()
+            .execution_context = Some(top_level_context(0, 0));
+        vm.process_runtime.enqueue_runnable(pid);
+
+        assert!(matches!(
+            vm.scheduler_tick(4).expect("scheduler tick should run"),
+            Some(ProcessRunOutcome::Pending(_))
+        ));
+        let expired = vm.expire_process_deadlines(10);
+
+        assert_eq!(expired.len(), 1);
+        assert_eq!(vm.process_runtime.run_queue.front(), Some(&pid));
+        assert!(matches!(
+            vm.process_runtime.processes.get(&pid).unwrap().status,
+            ProcessStatus::Runnable
+        ));
+    }
+
+    #[test]
+    fn scheduler_preserves_stack_and_frames_per_process() {
+        let mut bytecode = test_process_bytecode(
+            "Worker",
+            vec![Opcode::LoadConst(0), Opcode::LoadConst(1), Opcode::Halt],
+        );
+        bytecode.constants = vec![Constant::Int(int(1)), Constant::Int(int(2))];
+        let mut vm = VM::new(bytecode);
+        let first = vm
+            .allocate_process_instance("Worker".into(), Some(Value::Unit), None, None)
+            .expect("first process allocation should succeed");
+        let second = vm
+            .allocate_process_instance("Worker".into(), Some(Value::Unit), None, None)
+            .expect("second process allocation should succeed");
+        vm.process_runtime
+            .processes
+            .get_mut(&first)
+            .unwrap()
+            .execution_context = Some(top_level_context(0, 0));
+        vm.process_runtime
+            .processes
+            .get_mut(&second)
+            .unwrap()
+            .execution_context = Some(top_level_context(1, 0));
+        vm.process_runtime.enqueue_runnable(first);
+        vm.process_runtime.enqueue_runnable(second);
+
+        assert!(matches!(
+            vm.scheduler_tick(1).expect("first tick should run"),
+            Some(ProcessRunOutcome::QuantumExpired)
+        ));
+        assert!(matches!(
+            vm.scheduler_tick(1).expect("second tick should run"),
+            Some(ProcessRunOutcome::QuantumExpired)
+        ));
+
+        let first_stack = &vm
+            .process_runtime
+            .processes
+            .get(&first)
+            .unwrap()
+            .execution_context
+            .as_ref()
+            .unwrap()
+            .stack;
+        let second_stack = &vm
+            .process_runtime
+            .processes
+            .get(&second)
+            .unwrap()
+            .execution_context
+            .as_ref()
+            .unwrap()
+            .stack;
+        assert_eq!(first_stack, &vec![Value::Int(int(1))]);
+        assert_eq!(second_stack, &vec![Value::Int(int(2))]);
+    }
+
+    #[test]
+    fn print_enqueues_runtime_output_event_and_preserves_capture() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt])).with_output_capture();
+
+        vm.emit_stdout_line("hello".into());
+
+        assert_eq!(vm.captured_stdout(), Some(["hello".to_string()].as_slice()));
+        assert_eq!(
+            vm.process_runtime.output_events.pop_front(),
+            Some(RuntimeOutputEvent::StdOut("hello\n".into()))
+        );
+    }
+
+    #[test]
+    fn supervisor_overrides_survive_context_split() {
+        let mut bytecode = base_bytecode(vec![Opcode::LoadConst(0), Opcode::Halt]);
+        bytecode.constants = vec![Constant::Int(int(1))];
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![supervisor_spec(0, "MySup")],
+        };
+        bytecode
+            .runtime_boot_plan
+            .supervisor_overrides
+            .push(RuntimeSupervisorOverrideEntry {
+                process_name: "MySup".into(),
+                policy: RuntimeSupervisorPolicy {
+                    allow_adopt: false,
+                    max_restarts: 77,
+                    ..allow_adopt_policy()
+                },
+            });
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+
+        let policy = vm
+            .process_runtime
+            .root_supervisor
+            .effective_supervisors
+            .get("MySup")
+            .expect("supervisor override should remain runtime-global");
+        assert!(!policy.allow_adopt);
+        assert_eq!(policy.max_restarts, 77);
+    }
+
+    #[test]
+    fn dynamic_supervisor_policy_remains_available_without_singleton_boot() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![supervisor_spec(0, "Global::DynamicSupervisor")],
+        };
+        bytecode
+            .runtime_boot_plan
+            .supervisor_overrides
+            .push(RuntimeSupervisorOverrideEntry {
+                process_name: "DynamicSupervisor".into(),
+                policy: RuntimeSupervisorPolicy {
+                    max_restarts: 33,
+                    ..allow_adopt_policy()
+                },
+            });
+        let vm = VM::new(bytecode);
+
+        assert_eq!(
+            vm.process_runtime
+                .root_supervisor
+                .effective_supervisors
+                .get("DynamicSupervisor")
+                .map(|policy| policy.max_restarts),
+            Some(33)
+        );
+        assert!(vm.process_runtime.singleton_by_name.is_empty());
     }
 
     fn supervisor_spec(process_id: u32, process_name: &str) -> RuntimeProcessSpec {

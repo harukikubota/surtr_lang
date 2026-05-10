@@ -141,6 +141,24 @@ call timeout は Ready 待ち時間を含む。
 Rust tests と Pure Surtr `Test` DSL は、この handler backend を差し替えて同じ
 buffer semantics を観測できなければならない。
 
+### 3.8 Step / ExecutionContext / quantum
+
+VM の互換 entrypoint は引き続き `VM::run()` / `InteractiveVm::push_chunk()` だが、
+内部実行は `ExecutionContext` を介した step 単位に分ける。
+
+- `ExecutionContext` は `pc`、operand stack、call frames、実行 target を持つ。
+- `VM` は bytecode、constant/function/type table、boot plan、process runtime、
+  I/O、observer、file resource を所有し続ける。
+- `step_context(ctx)` は `ctx.pc` の opcode 1 個、またはそれに相当する小さな VM 実行単位だけを進める。
+- `run_until_outcome` は `step_context` の loop として扱い、既存の batch / REPL 契約を保つ。
+- `run_quantum(ctx, budget)` は reduction budget が切れた時点で scheduler 境界へ戻る。
+- 初期 cost は opcode 1 個につき 1 reduction とする。tail-call frame reuse も `Call` opcode の step として 1 reduction を消費する。
+- `StepOutcome::Pending` は future id と resume 用 `ExecutionContext` を保持する。
+
+この段階では user-facing `yield`、新 opcode、bytecode format 変更、builtin continuation
+は導入しない。重い builtin はまだ分割不能な 1 step として扱い、後続フェーズで
+continuation / dirty worker へ移行する。
+
 ---
 
 ## 4. Value モデル
@@ -371,7 +389,7 @@ call opcode / error template / function span を使って source 対応を補完
 
 ## 9. 将来拡張
 
-- `VM::step()` / `VMSnapshot`
+- public `VM::step()` / `VMSnapshot`
 - Bytecode verifier
 - 値表現最適化（clone 削減、共有構造）
 

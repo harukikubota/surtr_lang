@@ -1392,12 +1392,29 @@ enum WaitReason {
 ```rust
 enum StepOutcome {
     Continue,
-    Return(Value),
-    Pending(WaitReason),
-    Halt,
+    Halt(Value),
+    Pending {
+        future_id: FutureId,
+        resume: ExecutionContext,
+    },
     RuntimeError(RuntimeError),
 }
 ```
+
+Scheduler 境界では `run_quantum` が `StepOutcome` を次へ正規化する。
+
+```rust
+enum ProcessRunOutcome {
+    QuantumExpired,
+    Halted(Value),
+    Pending(FutureId),
+    Failed(RuntimeError),
+}
+```
+
+初期フェーズの `Pending` は既存 future/deadline table を使う。`WaitReason::Timer`
+などの意味づけは process runtime 側の table / status に保持し、VM engine は
+surface DSL や supervisor boot state を `ExecutionContext` へ持ち込まない。
 
 ### 4.14 Lazy Ready 前 call の扱い
 
@@ -1436,10 +1453,14 @@ VM は少なくとも次の queue / table を持つ。
 | runnable queue | 実行可能 process を保持 |
 | deadline queue | timer / timeout deadline を保持 |
 | waiting table | reply / init ready / task completion 待ちを保持 |
+| execution context | process ごとの `pc` / stack / call frames を保持 |
 | singleton slot | singleton process の current PID を保持 |
 | process table | PID から process instance を引く |
 | spec table | RuntimeProcessId から immutable spec を引く |
 | handler target registry | handler target identity から shared sink / builtin handler を引く |
+
+`RuntimeBootPlan`、`effective_supervisors`、singleton slot、`DynamicSupervisor` の既定 policy は
+runtime global state であり、process-local `ExecutionContext` には入れない。
 
 ---
 

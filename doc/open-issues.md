@@ -244,10 +244,11 @@
   - 期待型なしクロージャをどこまで多相的に扱うかを、let-generalization なしの baseline と矛盾しない範囲で再検討する。
   - 退避ケース:
     - `id = {|value| value}` が最初の呼び出しで単相化され、後続の別型呼び出しで `Argument type mismatch` になるケース
-- runtime fuel budget
-  - 非停止プログラムに step / fuel budget を導入するか、CLI / REPL / library execution のどこで設定するかを決める。
+- runtime fuel budget surface
+  - VM 内部の step / reduction budget と process quantum は baseline 化済み。
+  - CLI / REPL / library execution から fuel budget を user-visible に設定する surface は未確定。
   - 退避ケース:
-    - 再帰関数 `loop()` を budget 超過として安定停止させる契約
+    - 再帰関数 `loop()` を CLI / REPL 設定の budget 超過として安定停止させる契約
   - 現状の正本テストは `lib/tests/*.srt` 側へ分離している。
 - FuncLiteral surface の将来拡張
   - backtick capture / qualified path / operator capture は実装済み前提とし、それを超える surface 追加だけを reopen 対象にする。
