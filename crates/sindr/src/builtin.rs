@@ -395,6 +395,51 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(String) -> Result<String, InputError>",
     },
     BuiltinMeta {
+        name: "file_read",
+        arity: 1,
+        sig_str: "(String) -> Result<String>",
+    },
+    BuiltinMeta {
+        name: "file_write",
+        arity: 2,
+        sig_str: "(String, String) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "file_append",
+        arity: 2,
+        sig_str: "(String, String) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "file_exists",
+        arity: 1,
+        sig_str: "(String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "file_delete",
+        arity: 1,
+        sig_str: "(String) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "file_with_open",
+        arity: 3,
+        sig_str: "(String, FileMode, (FileHandle -> Result<$A>)) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "file_read_chunk",
+        arity: 2,
+        sig_str: "(FileHandle, Int) -> Result<String>",
+    },
+    BuiltinMeta {
+        name: "file_write_chunk",
+        arity: 2,
+        sig_str: "(FileHandle, String) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "file_flush",
+        arity: 1,
+        sig_str: "(FileHandle) -> Result<Unit>",
+    },
+    BuiltinMeta {
         name: "seed",
         arity: 1,
         sig_str: "(Int) -> RandomGenerator",
@@ -815,6 +860,10 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         params: &[],
     },
     BuiltinTypeMeta {
+        name: TypeName::FileHandle.as_str(),
+        params: &[],
+    },
+    BuiltinTypeMeta {
         name: TypeName::List.as_str(),
         params: &["$A"],
     },
@@ -873,6 +922,15 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
     match qualified_name {
         Some("IO::get") => "io_get",
         Some("IO::get_line") => "io_get_line",
+        Some("File::read") => "file_read",
+        Some("File::write") => "file_write",
+        Some("File::append") => "file_append",
+        Some("File::exists") => "file_exists",
+        Some("File::delete") => "file_delete",
+        Some("File::with_open") => "file_with_open",
+        Some("File::read_chunk") => "file_read_chunk",
+        Some("File::write_chunk") => "file_write_chunk",
+        Some("File::flush") => "file_flush",
         Some("Facet::replace") => "__facet_replace",
         Some("Process::self") => "__process_self",
         Some("Process::sleep") => "__process_sleep",

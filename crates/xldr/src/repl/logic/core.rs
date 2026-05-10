@@ -7400,8 +7400,18 @@ mod tests {
         let mut chunk = interactive_test_chunk();
         chunk.const_base = engine.vm.bytecode().constants.len() as u32;
         chunk.error_template_base = engine.vm.bytecode().error_templates.len() as u32;
+        let next_tag = engine
+            .vm
+            .bytecode()
+            .type_registry
+            .entries
+            .iter()
+            .map(|entry| entry.tag)
+            .max()
+            .unwrap_or(1)
+            + 1;
         chunk.type_entries.push(TypeEntry {
-            tag: 99,
+            tag: next_tag,
             name: "Extra".into(),
             kind: TypeKind::Struct,
             field_names: Vec::new(),

@@ -1,15 +1,16 @@
 use crate::error::RuntimeError;
 use crate::value::Value;
-use crate::vm::{TaskMode, VM};
+use crate::vm::{TaskMode, VM, VmFileError, VmFileMode};
 use num_bigint::{BigInt, BigUint, Sign};
 use regex::Regex;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
-    Callable, HashMapHandle, ListHandle, Location, RandomGeneratorHandle, RegexCapturesHandle,
-    RegexHandle, RegexMatchHandle, RichError,
+    Callable, FileHandleValue, HashMapHandle, ListHandle, Location, RandomGeneratorHandle,
+    RegexCapturesHandle, RegexHandle, RegexMatchHandle, RichError,
 };
 use std::collections::HashMap;
+use std::fs;
 use std::io::{self, IsTerminal, Read};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -319,6 +320,42 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "io_get_line",
         func: builtin_io_get_line,
+    },
+    BuiltinImpl {
+        name: "file_read",
+        func: builtin_file_read,
+    },
+    BuiltinImpl {
+        name: "file_write",
+        func: builtin_file_write,
+    },
+    BuiltinImpl {
+        name: "file_append",
+        func: builtin_file_append,
+    },
+    BuiltinImpl {
+        name: "file_exists",
+        func: builtin_file_exists,
+    },
+    BuiltinImpl {
+        name: "file_delete",
+        func: builtin_file_delete,
+    },
+    BuiltinImpl {
+        name: "file_with_open",
+        func: builtin_file_with_open,
+    },
+    BuiltinImpl {
+        name: "file_read_chunk",
+        func: builtin_file_read_chunk,
+    },
+    BuiltinImpl {
+        name: "file_write_chunk",
+        func: builtin_file_write_chunk,
+    },
+    BuiltinImpl {
+        name: "file_flush",
+        func: builtin_file_flush,
     },
     BuiltinImpl {
         name: "seed",
@@ -2143,6 +2180,104 @@ fn builtin_io_get_line(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeEr
     })
 }
 
+fn builtin_file_read(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_string_arg(&args[0], "file_read", "path")?;
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(ok_result(Value::Str(text))),
+        Err(err) => Ok(file_path_error_result(vm, path, err)),
+    }
+}
+
+fn builtin_file_write(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_string_arg(&args[0], "file_write", "path")?;
+    let text = decode_string_arg(&args[1], "file_write", "text")?;
+    match fs::write(path, text) {
+        Ok(()) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(file_path_error_result(vm, path, err)),
+    }
+}
+
+fn builtin_file_append(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_string_arg(&args[0], "file_append", "path")?;
+    let text = decode_string_arg(&args[1], "file_append", "text")?;
+    let handle = match vm.open_file_resource(path, VmFileMode::Append) {
+        Ok(handle) => handle,
+        Err(err) => return Ok(file_handle_error_result(vm, Some(path), err)),
+    };
+    let write_result = vm.write_file_chunk(handle.id, text);
+    let close_result = vm.close_file_resource(handle.id);
+    match (write_result, close_result) {
+        (Ok(()), Ok(())) => Ok(ok_result(Value::Unit)),
+        (Err(err), _) => Ok(file_handle_error_result(vm, Some(path), err)),
+        (Ok(()), Err(err)) => Ok(file_handle_error_result(vm, Some(path), err)),
+    }
+}
+
+fn builtin_file_exists(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_string_arg(&args[0], "file_exists", "path")?;
+    Ok(Value::Bool(std::path::Path::new(path).exists()))
+}
+
+fn builtin_file_delete(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_string_arg(&args[0], "file_delete", "path")?;
+    match fs::remove_file(path) {
+        Ok(()) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(file_path_error_result(vm, path, err)),
+    }
+}
+
+fn builtin_file_with_open(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_string_arg(&args[0], "file_with_open", "path")?;
+    let mode = decode_file_mode(vm, &args[1], "file_with_open", "mode")?;
+    let body = decode_callable_arg(&args[2], "file_with_open", "body")?;
+    let handle = match vm.open_file_resource(path, mode) {
+        Ok(handle) => handle,
+        Err(err) => return Ok(file_handle_error_result(vm, Some(path), err)),
+    };
+
+    let call_result = vm.invoke_callable_sync(body, vec![Value::FileHandle(handle.clone())]);
+    let flush_result = vm.flush_file_resource(handle.id);
+    let close_result = vm.close_file_resource(handle.id);
+
+    if let Err(err) = flush_result {
+        return Ok(file_handle_error_result(vm, Some(path), err));
+    }
+    if let Err(err) = close_result {
+        return Ok(file_handle_error_result(vm, Some(path), err));
+    }
+
+    match call_result {
+        Ok(value) => Ok(value),
+        Err(err) => Err(err),
+    }
+}
+
+fn builtin_file_read_chunk(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let handle = decode_file_handle_arg(&args[0], "file_read_chunk", "file")?;
+    let max_chars = decode_non_negative_int_arg(&args[1], "file_read_chunk", "max_chars")?;
+    match vm.read_file_chunk(handle.id, max_chars) {
+        Ok(text) => Ok(ok_result(Value::Str(text))),
+        Err(err) => Ok(file_handle_error_result(vm, None, err)),
+    }
+}
+
+fn builtin_file_write_chunk(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let handle = decode_file_handle_arg(&args[0], "file_write_chunk", "file")?;
+    let text = decode_string_arg(&args[1], "file_write_chunk", "text")?;
+    match vm.write_file_chunk(handle.id, text) {
+        Ok(()) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(file_handle_error_result(vm, None, err)),
+    }
+}
+
+fn builtin_file_flush(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let handle = decode_file_handle_arg(&args[0], "file_flush", "file")?;
+    match vm.flush_file_resource(handle.id) {
+        Ok(()) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(file_handle_error_result(vm, None, err)),
+    }
+}
+
 fn builtin_random_seed(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let Value::Int(seed) = &args[0] else {
         return Err(RuntimeError::new("seed expects Int as seed"));
@@ -2801,6 +2936,94 @@ fn decode_string_arg<'a>(
     }
 }
 
+fn decode_file_handle_arg(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<FileHandleValue, RuntimeError> {
+    match value {
+        Value::FileHandle(handle) => Ok(handle.clone()),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects FileHandle as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn decode_non_negative_int_arg(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<usize, RuntimeError> {
+    match value {
+        Value::Int(num) => {
+            if num < &int(0) {
+                return Err(RuntimeError::new(format!(
+                    "{builtin_name} expects non-negative Int as {arg_name}, got {num}"
+                )));
+            }
+            num.to_usize().ok_or_else(|| {
+                RuntimeError::new(format!(
+                    "{builtin_name} Int argument {arg_name} is out of range for usize: {num}"
+                ))
+            })
+        }
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects Int as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn decode_callable_arg(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<Callable, RuntimeError> {
+    match value {
+        Value::Callable(callable) => Ok(callable.clone()),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects callable value as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn decode_file_mode(
+    vm: &VM,
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<VmFileMode, RuntimeError> {
+    let Value::Tagged { tag, .. } = value else {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} expects FileMode as {arg_name}, got {:?}",
+            value
+        )));
+    };
+    let Some(entry) = vm.type_registry().lookup(*tag) else {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} observed unknown FileMode tag {tag}"
+        )));
+    };
+    match entry
+        .name
+        .rsplit("::")
+        .next()
+        .unwrap_or(entry.name.as_str())
+    {
+        "Read" => Ok(VmFileMode::Read),
+        "Write" => Ok(VmFileMode::Write),
+        "Append" => Ok(VmFileMode::Append),
+        "ReadWrite" => Ok(VmFileMode::ReadWrite),
+        "ReadAppend" => Ok(VmFileMode::ReadAppend),
+        _ => Err(RuntimeError::new(format!(
+            "{builtin_name} expects FileMode as {arg_name}, got {}",
+            entry.name
+        ))),
+    }
+}
+
 fn compile_cached_regex(pattern: &str, builtin_name: &str) -> Result<Regex, RuntimeError> {
     Regex::new(pattern).map_err(|err| {
         RuntimeError::new(format!(
@@ -2997,6 +3220,41 @@ fn decode_unit_result_arg(
     }
 }
 
+fn file_path_error_result(vm: &VM, path: &str, err: io::Error) -> Value {
+    let kind = match err.kind() {
+        io::ErrorKind::NotFound => "FileNotFound",
+        io::ErrorKind::PermissionDenied => "FilePermissionDenied",
+        io::ErrorKind::AlreadyExists => "FileAlreadyExists",
+        io::ErrorKind::InvalidInput => "FileInvalidPath",
+        io::ErrorKind::InvalidData => "FileEncodingError",
+        _ => "FileIoError",
+    };
+    let message = match kind {
+        "FileNotFound" => format!("file not found: {path}"),
+        "FilePermissionDenied" => format!("permission denied: {path}"),
+        "FileAlreadyExists" => format!("file already exists: {path}"),
+        "FileInvalidPath" => format!("invalid path: {path}"),
+        "FileEncodingError" => format!("invalid UTF-8 while reading {path}: {err}"),
+        _ => format!("file I/O failed for {path}: {err}"),
+    };
+    err_result(vm, kind, &message)
+}
+
+fn file_handle_error_result(vm: &VM, path: Option<&str>, err: VmFileError) -> Value {
+    match err {
+        VmFileError::Closed => err_result(vm, "FileClosed", "file is already closed"),
+        VmFileError::Io(io_err) => {
+            if let Some(path) = path {
+                file_path_error_result(vm, path, io_err)
+            } else {
+                err_result(vm, "FileIoError", &format!("file I/O failed: {io_err}"))
+            }
+        }
+        VmFileError::Encoding(message) => err_result(vm, "FileEncodingError", &message),
+        VmFileError::Message(message) => err_result(vm, "FileIoError", &message),
+    }
+}
+
 fn err_result(vm: &VM, kind: &str, message: &str) -> Value {
     let location = vm.runtime_error_location().unwrap_or_else(|| Location {
         file: vm.source_file().unwrap_or("<runtime>").to_string(),
@@ -3022,15 +3280,17 @@ fn none_result(vm: &VM) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{call_builtin, err_result_from_rich_error, inspect_value, BUILTIN_IMPLS};
+    use super::{call_builtin, err_result_from_rich_error, inspect_value, ok_result, BUILTIN_IMPLS};
     use crate::vm::VM;
     use sindr::builtin::{builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name};
-    use sindr::ir::{Bytecode, DocEntry, DocKind, FunctionEntry, FunctionFlags};
+    use sindr::ir::{Bytecode, Constant, DocEntry, DocKind, FunctionEntry, FunctionFlags, Opcode};
     use sindr::primitives::int;
     use sindr::runtime::{
         Callable, CallableMetadata, CallableOrigin, CallableTarget, HashMapHandle, ListHandle,
         Location, RichError, TypeEntry, TypeKind, TypeRegistry, Value,
     };
+    use std::fs;
+    use std::path::PathBuf;
 
     fn test_vm() -> VM {
         let mut registry = TypeRegistry::new();
@@ -3083,6 +3343,15 @@ mod tests {
 
     fn builtin_id(name: &str) -> u16 {
         builtin_id_by_name(name).unwrap_or_else(|| panic!("missing builtin metadata for {name}"))
+    }
+
+    fn sandbox_dir(prefix: &str) -> PathBuf {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("tmp/sandbox")
+            .join(format!("{prefix}-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("sandbox dir should be creatable");
+        dir
     }
 
     #[test]
@@ -3194,6 +3463,7 @@ mod tests {
             include_str!("../../../lib/types/string.srt"),
             include_str!("../../../lib/types/regex.srt"),
             include_str!("../../../lib/Random.srt"),
+            include_str!("../../../lib/file.srt"),
         ];
 
         // Collect all lines across the std-module files that currently declare
@@ -4023,6 +4293,193 @@ mod tests {
             },
             other => panic!("expected Err result, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn file_read_write_append_exists_and_delete_work() {
+        let dir = sandbox_dir("builtin-file");
+        let path = dir.join("sample.txt");
+        let path_text = path.to_string_lossy().into_owned();
+        let mut vm = test_vm();
+
+        let write = call_builtin(
+            &mut vm,
+            builtin_id("file_write"),
+            vec![Value::Str(path_text.clone()), Value::Str("alpha".into())],
+        )
+        .expect("file_write should run");
+        assert_eq!(write, ok_result(Value::Unit));
+
+        let read = call_builtin(
+            &mut vm,
+            builtin_id("file_read"),
+            vec![Value::Str(path_text.clone())],
+        )
+        .expect("file_read should run");
+        assert_eq!(read, ok_result(Value::Str("alpha".into())));
+
+        let append = call_builtin(
+            &mut vm,
+            builtin_id("file_append"),
+            vec![Value::Str(path_text.clone()), Value::Str("beta".into())],
+        )
+        .expect("file_append should run");
+        assert_eq!(append, ok_result(Value::Unit));
+        assert_eq!(
+            fs::read_to_string(&path).expect("appended file should be readable"),
+            "alphabeta"
+        );
+
+        let exists = call_builtin(
+            &mut vm,
+            builtin_id("file_exists"),
+            vec![Value::Str(path_text.clone())],
+        )
+        .expect("file_exists should run");
+        assert_eq!(exists, Value::Bool(true));
+
+        let delete = call_builtin(
+            &mut vm,
+            builtin_id("file_delete"),
+            vec![Value::Str(path_text.clone())],
+        )
+        .expect("file_delete should run");
+        assert_eq!(delete, ok_result(Value::Unit));
+        assert!(!path.exists(), "file_delete should remove the target file");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn file_with_open_closes_handle_after_ok_callback() {
+        let dir = sandbox_dir("builtin-file-with-open-ok");
+        let path = dir.join("ok.txt");
+        let path_text = path.to_string_lossy().into_owned();
+        let mut registry = TypeRegistry::new();
+        registry.register(TypeEntry {
+            tag: 10,
+            name: "Write".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: vec![],
+            private_flags: vec![],
+        });
+        let mut vm = VM::new(Bytecode {
+            opcodes: vec![
+                Opcode::LoadConst(0),
+                Opcode::LoadConst(1),
+                Opcode::StructNew { field_count: 1 },
+                Opcode::Return,
+            ],
+            constants: vec![Constant::Tag(0), Constant::Unit],
+            type_registry: registry,
+            functions: vec![FunctionEntry {
+                fun_idx: 0,
+                entry_pc: 0,
+                num_locals: 1,
+                arity: 1,
+                qualified_name: Some("Test::ok".into()),
+                signature: None,
+                end_pc: 0,
+                span_start: 0,
+                span_end: 0,
+                flags: Default::default(),
+            }],
+            ..Bytecode::default()
+        })
+        .with_error_capture();
+
+        let result = call_builtin(
+            &mut vm,
+            builtin_id("file_with_open"),
+            vec![
+                Value::Str(path_text.clone()),
+                Value::Tagged {
+                    tag: 10,
+                    fields: Vec::new(),
+                },
+                Value::Callable(Callable {
+                    target: CallableTarget::Function(0),
+                    lexical_captures: Vec::new(),
+                    metadata: CallableMetadata::default(),
+                }),
+            ],
+        )
+        .expect("file_with_open should run");
+        assert_eq!(result, ok_result(Value::Unit));
+        assert_eq!(vm.open_file_count(), 0, "with_open should close handles");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn file_with_open_closes_handle_after_err_callback() {
+        let dir = sandbox_dir("builtin-file-with-open-err");
+        let path = dir.join("err.txt");
+        let path_text = path.to_string_lossy().into_owned();
+        let mut registry = TypeRegistry::new();
+        registry.register(TypeEntry {
+            tag: 11,
+            name: "Read".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: vec![],
+            private_flags: vec![],
+        });
+        let mut vm = VM::new(Bytecode {
+            opcodes: vec![
+                Opcode::LoadConst(0),
+                Opcode::MakeErrorLiteral {
+                    kind_const_idx: 1,
+                    message_const_idx: 2,
+                },
+                Opcode::StructNew { field_count: 1 },
+                Opcode::Return,
+            ],
+            constants: vec![
+                Constant::Tag(1),
+                Constant::Str("FileIoError".into()),
+                Constant::Str("boom".into()),
+            ],
+            type_registry: registry,
+            functions: vec![FunctionEntry {
+                fun_idx: 0,
+                entry_pc: 0,
+                num_locals: 1,
+                arity: 1,
+                qualified_name: Some("Test::err".into()),
+                signature: None,
+                end_pc: 0,
+                span_start: 0,
+                span_end: 0,
+                flags: Default::default(),
+            }],
+            ..Bytecode::default()
+        })
+        .with_error_capture();
+
+        let result = call_builtin(
+            &mut vm,
+            builtin_id("file_with_open"),
+            vec![
+                Value::Str(path_text.clone()),
+                Value::Tagged {
+                    tag: 11,
+                    fields: Vec::new(),
+                },
+                Value::Callable(Callable {
+                    target: CallableTarget::Function(0),
+                    lexical_captures: Vec::new(),
+                    metadata: CallableMetadata::default(),
+                }),
+            ],
+        )
+        .expect("file_with_open should run");
+        match result {
+            Value::Tagged { tag: 1, .. } => {}
+            other => panic!("expected Err result from callback, got {other:?}"),
+        }
+        assert_eq!(vm.open_file_count(), 0, "with_open should close handles on Err");
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

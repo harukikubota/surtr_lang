@@ -65,6 +65,7 @@ const PROCESS_MODULE_SOURCE: &str = include_str!("../../../../lib/process.srt");
 const FACET_MODULE_SOURCE: &str = include_str!("../../../../lib/facet.srt");
 const FLOAT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/float.srt");
 const RANDOM_MODULE_SOURCE: &str = include_str!("../../../../lib/Random.srt");
+const FILE_MODULE_SOURCE: &str = include_str!("../../../../lib/file.srt");
 
 pub(crate) fn typecheck(
     resolved: Vec<sigil::resolved::Resolved>,
@@ -518,6 +519,7 @@ pub(crate) fn std_module_stages_with_overrides(
                 "Random",
                 pick_override("Random", RANDOM_MODULE_SOURCE, overrides),
             ),
+            ("File", pick_override("File", FILE_MODULE_SOURCE, overrides)),
         ]
         .into_iter()
         .flat_map(|(name, source)| parse_std_module_stage(source, name))

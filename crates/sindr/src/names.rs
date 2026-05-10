@@ -39,6 +39,7 @@ pub enum TypeName {
     Hole,
     Facet,
     Pid,
+    FileHandle,
     Workers,
     WorkerLease,
     TaskHandle,
@@ -71,6 +72,7 @@ impl TypeName {
             Self::Hole => "Hole",
             Self::Facet => "Facet",
             Self::Pid => "PID",
+            Self::FileHandle => "FileHandle",
             Self::Workers => "Workers",
             Self::WorkerLease => "WorkerLease",
             Self::TaskHandle => "TaskHandle",
@@ -92,6 +94,7 @@ impl TypeName {
                 | Self::ProcessInit
                 | Self::Lazy
                 | Self::Pid
+                | Self::FileHandle
         )
     }
 }
@@ -122,6 +125,7 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "Hole" => Some(TypeName::Hole),
         "Facet" => Some(TypeName::Facet),
         "PID" => Some(TypeName::Pid),
+        "FileHandle" => Some(TypeName::FileHandle),
         "Workers" => Some(TypeName::Workers),
         "WorkerLease" => Some(TypeName::WorkerLease),
         "TaskHandle" => Some(TypeName::TaskHandle),

@@ -15,6 +15,7 @@ REPL は起動時に標準定義ソースと preload を読み切る OnceRead un
 - [構造体](./structs.md)
 - [Facet](./facet.md)
 - [Kernel](./kernel.md)
+- [File I/O](./file-io.md)
 - [Regex](./regex.md)
 - [パターンマッチ](./pattern-matching.md)
 - [関数コールと関数値](./callables.md)

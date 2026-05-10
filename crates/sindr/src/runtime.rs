@@ -65,6 +65,7 @@ pub enum Value {
     RegexMatch(RegexMatchHandle),
     RandomGenerator(RandomGeneratorHandle),
     Pid(PidHandle),
+    FileHandle(FileHandleValue),
     Workers(WorkersHandle),
     WorkerLease(WorkerLeaseHandle),
     TaskHandle(u64),
@@ -99,6 +100,11 @@ pub struct RandomGeneratorHandle {
 pub struct PidHandle {
     pub id: u64,
     pub process_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileHandleValue {
+    pub id: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -346,6 +352,7 @@ impl Value {
                 Self::surface_type_name(&handle.process_name),
                 handle.id
             ),
+            Value::FileHandle(handle) => format!("FileHandle#{}", handle.id),
             Value::Workers(handle) => format!("Workers<{}>#{}", handle.process_name, handle.id),
             Value::WorkerLease(handle) => {
                 format!("WorkerLease<{}>#{}", handle.pid.process_name, handle.pid.id)

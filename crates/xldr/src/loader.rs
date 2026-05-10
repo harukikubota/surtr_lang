@@ -218,6 +218,7 @@ const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
         include_str!("../../../lib/Random.srt"),
         "Random",
     ),
+    ("file.srt", include_str!("../../../lib/file.srt"), "File"),
     ("IO.srt", include_str!("../../../lib/IO.srt"), "IO"),
 ];
 const STYLED_DOC_FILE: &str = "styled_doc.srt";
@@ -980,6 +981,7 @@ mod tests {
                 "Config",
                 "Project",
                 "Random",
+                "File",
                 "IO",
                 "StyledDoc",
                 "Test",
@@ -1126,6 +1128,7 @@ mod tests {
                 "Config",
                 "Project",
                 "Random",
+                "File",
                 "IO",
                 "StyledDoc",
                 "Test",

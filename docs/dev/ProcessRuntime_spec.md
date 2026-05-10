@@ -978,6 +978,7 @@ OutHandler::write(pid: PID<OutHandler>, text: String) -> Result<()>
 - test mode では標準 stdout / stderr / stdin を buffer handler に差し替えられる
 - `supervisor_init` では buffer mode を選ぶだけにし、テストデータを init 引数として埋め込まない
 - `it` ごとに stdout / stderr / stdin buffer を分離できる
+- `File` module の host filesystem access はこの handler 差し替え機構には乗せず、process runtime とは独立した File v1 surface として current working directory 基準で扱う
 - Pure Surtr code から `capture_stdout()`、`assert_stdout_eq(...)`、`push_stdin(...)` のような補助 API を使える
 - Rust 側テストからも同じ buffer backend を観測できる
 

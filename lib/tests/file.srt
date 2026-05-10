@@ -1,0 +1,59 @@
+import File;
+import Test;
+
+defp sandbox_path(name: String) -> String {
+  "./tmp/sandbox/" ++ name
+}
+
+test("File") {
+  it("writes and reads text") {
+    path = sandbox_path("write_read.txt")
+    _ =? File::write(path, "alpha")
+    assert_ok_eq("alpha", File::read(path))
+  }
+
+  it("appends text") {
+    path = sandbox_path("append.txt")
+    _ =? File::write(path, "one")
+    _ =? File::append(path, "two")
+    assert_ok_eq("onetwo", File::read(path))
+  }
+
+  it("checks exists and delete") {
+    path = sandbox_path("delete.txt")
+    assert_false(File::exists(path))
+    _ =? File::write(path, "bye")
+    assert_true(File::exists(path))
+    _ =? File::delete(path)
+    assert_false(File::exists(path))
+  }
+
+  it("writes and flushes through with_open") {
+    path = sandbox_path("with_open_write.txt")
+    result = File::with_open(path, FileMode::Write, {|handle|
+      _ =? File::write_chunk(handle, "chunk-a")
+      _ =? File::flush(handle)
+      Ok(())
+    })
+    _ =? result
+    assert_ok_eq("chunk-a", File::read(path))
+  }
+
+  it("reads chunks until eof") {
+    path = sandbox_path("read_chunk.txt")
+    _ =? File::write(path, "abcdef")
+    result = File::with_open(path, FileMode::Read, {|handle|
+      first =? File::read_chunk(handle, 2)
+      second =? File::read_chunk(handle, 2)
+      third =? File::read_chunk(handle, 2)
+      fourth =? File::read_chunk(handle, 2)
+      Ok((first, second, third, fourth))
+    })
+    assert_ok_eq(("ab", "cd", "ef", ""), result)
+  }
+
+  it("reports missing path") {
+    path = sandbox_path("missing/nope.txt")
+    assert_err_contains("FileNotFound", File::read(path))
+  }
+}

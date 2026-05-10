@@ -22,6 +22,11 @@ Eldr は次を担わない。
 - 型検査（Scar）
 - コード生成（Forge）
 
+File v1 の host filesystem surface は `lib/file.srt` の `File` module を正本とし、
+VM はその lower 先 builtin を実行する。path は実行時の current working directory
+基準で解決し、存在しない path や open/read/write failure は `RuntimeError` ではなく
+user-facing `Result` の domain error として返す。
+
 ---
 
 ## 2. Bytecode 成果物

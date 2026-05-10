@@ -453,6 +453,10 @@ impl Checker {
                                 TypeName::RandomGenerator.as_str().into(),
                                 Vec::new(),
                             )),
+                            Some(TypeName::FileHandle) => Ok(Ty::Enum(
+                                TypeName::FileHandle.as_str().into(),
+                                Vec::new(),
+                            )),
                             Some(
                                 TypeName::List
                                 | TypeName::HashMap

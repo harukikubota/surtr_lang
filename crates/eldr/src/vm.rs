@@ -6,15 +6,16 @@ use sindr::ir::{
 };
 use sindr::primitives::{int, SurtrInt};
 use sindr::runtime::{
-    Callable, CallableMetadata, CallableOrigin, CallableTarget, ListHandle, Location, PidHandle,
-    RichError, TypeRegistry, Value, WorkerLeaseHandle, WorkersHandle,
+    Callable, CallableMetadata, CallableOrigin, CallableTarget, FileHandleValue, ListHandle,
+    Location, PidHandle, RichError, TypeRegistry, Value, WorkerLeaseHandle, WorkersHandle,
 };
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::fs::{File, OpenOptions};
 
 use crate::builtin::call_builtin;
 use crate::dbg_display::{render_dbg_report, DbgRenderArg};
 use crate::error::{RuntimeError, RuntimeErrorContext};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +110,55 @@ struct VmCheckpoint {
     process_spec_len: usize,
     source_map_len: Option<usize>,
     overwritten_functions: Vec<(usize, FunctionEntry)>,
+    open_file_ids: BTreeSet<u64>,
+    next_file_handle_id: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VmFileMode {
+    Read,
+    Write,
+    Append,
+    ReadWrite,
+    ReadAppend,
+}
+
+impl VmFileMode {
+    fn can_read(self) -> bool {
+        matches!(self, Self::Read | Self::ReadWrite | Self::ReadAppend)
+    }
+
+    fn can_write(self) -> bool {
+        matches!(self, Self::Write | Self::Append | Self::ReadWrite | Self::ReadAppend)
+    }
+}
+
+#[derive(Debug)]
+struct VmOpenFile {
+    path: String,
+    mode: VmFileMode,
+    file: File,
+}
+
+impl Clone for VmOpenFile {
+    fn clone(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            mode: self.mode,
+            file: self
+                .file
+                .try_clone()
+                .expect("open file handle should be clonable"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum VmFileError {
+    Closed,
+    Io(io::Error),
+    Encoding(String),
+    Message(String),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -659,6 +709,8 @@ pub struct VM {
     /// Cursor tracking for test-event I/O slices.
     test_stdout_cursor: usize,
     test_stderr_cursor: usize,
+    open_files: HashMap<u64, VmOpenFile>,
+    next_file_handle_id: u64,
     /// VM-owned process table for the initial actor/agent runtime.
     process_runtime: ProcessRuntime,
 }
@@ -694,6 +746,8 @@ impl VM {
             test_events: Vec::new(),
             test_stdout_cursor: 0,
             test_stderr_cursor: 0,
+            open_files: HashMap::new(),
+            next_file_handle_id: 1,
             process_runtime,
         }
     }
@@ -2816,7 +2870,7 @@ impl VM {
         self.test_events.clear();
         self.test_stdout_cursor = self.current_output_len();
         self.test_stderr_cursor = self.current_error_output_len();
-        match self.run_until_outcome(self.pc, ExecutionTarget::TopLevel) {
+        let result = match self.run_until_outcome(self.pc, ExecutionTarget::TopLevel) {
             StepOutcome::Halt(_) => {
                 self.last_result = Some(self.stack.last().cloned().unwrap_or(Value::Unit));
                 Ok(())
@@ -2831,7 +2885,9 @@ impl VM {
             },
             StepOutcome::RuntimeError(err) => Err(err),
             StepOutcome::Continue => Err(RuntimeError::new("top-level execution did not finish")),
-        }
+        };
+        self.shutdown_file_resources();
+        result
     }
 
     /// Execute an incremental bytecode chunk and return the final stack top.
@@ -3030,6 +3086,8 @@ impl VM {
                 .as_ref()
                 .map(|map| map.entries.len()),
             overwritten_functions,
+            open_file_ids: self.open_files.keys().copied().collect(),
+            next_file_handle_id: self.next_file_handle_id,
         }
     }
 
@@ -3052,6 +3110,8 @@ impl VM {
         self.test_stderr_cursor = checkpoint.test_stderr_cursor;
         self.stdin_input_cursor = checkpoint.stdin_input_cursor;
         self.process_runtime = checkpoint.process_runtime;
+        self.rollback_open_files(&checkpoint.open_file_ids);
+        self.next_file_handle_id = checkpoint.next_file_handle_id;
 
         self.bytecode.opcodes.truncate(checkpoint.opcode_len);
         self.bytecode.constants.truncate(checkpoint.constant_len);
@@ -3082,6 +3142,42 @@ impl VM {
             }
             None => self.bytecode.source_map = None,
         }
+    }
+
+    fn rollback_open_files(&mut self, keep_ids: &BTreeSet<u64>) {
+        let to_close = self
+            .open_files
+            .keys()
+            .copied()
+            .filter(|id| !keep_ids.contains(id))
+            .collect::<Vec<_>>();
+        for handle_id in to_close {
+            if let Err(err) = self.close_file_resource(handle_id) {
+                self.report_file_shutdown_error(handle_id, &err);
+            }
+        }
+    }
+
+    fn shutdown_file_resources(&mut self) {
+        let handle_ids = self.open_files.keys().copied().collect::<Vec<_>>();
+        for handle_id in handle_ids {
+            if let Err(err) = self.close_file_resource(handle_id) {
+                self.report_file_shutdown_error(handle_id, &err);
+            }
+        }
+    }
+
+    fn report_file_shutdown_error(&mut self, handle_id: u64, err: &VmFileError) {
+        let detail = match err {
+            VmFileError::Closed => format!("File shutdown skipped for closed handle #{handle_id}"),
+            VmFileError::Io(io_err) => {
+                format!("File shutdown failed for handle #{handle_id}: {io_err}")
+            }
+            VmFileError::Encoding(message) | VmFileError::Message(message) => {
+                format!("File shutdown failed for handle #{handle_id}: {message}")
+            }
+        };
+        let _ = self.emit_stderr_text(detail);
     }
 
     fn verify_loaded_bytecode(&self) -> Result<(), RuntimeError> {
@@ -3628,6 +3724,86 @@ impl VM {
             StepOutcome::RuntimeError(err) => Err(err),
             StepOutcome::Continue => Err(RuntimeError::new("callable execution did not finish")),
         }
+    }
+
+    pub(crate) fn open_file_resource(
+        &mut self,
+        path: &str,
+        mode: VmFileMode,
+    ) -> Result<FileHandleValue, VmFileError> {
+        let file = Self::open_file_for_mode(path, mode).map_err(VmFileError::Io)?;
+        let handle = FileHandleValue {
+            id: self.next_file_handle_id,
+        };
+        self.next_file_handle_id += 1;
+        self.open_files.insert(
+            handle.id,
+            VmOpenFile {
+                path: path.to_string(),
+                mode,
+                file,
+            },
+        );
+        Ok(handle)
+    }
+
+    pub(crate) fn read_file_chunk(
+        &mut self,
+        handle_id: u64,
+        max_chars: usize,
+    ) -> Result<String, VmFileError> {
+        let open_file = self
+            .open_files
+            .get_mut(&handle_id)
+            .ok_or(VmFileError::Closed)?;
+        if !open_file.mode.can_read() {
+            return Err(VmFileError::Message(format!(
+                "file handle for {} is not readable in {:?} mode",
+                open_file.path, open_file.mode
+            )));
+        }
+        Self::read_utf8_chunk(&mut open_file.file, max_chars)
+    }
+
+    pub(crate) fn write_file_chunk(
+        &mut self,
+        handle_id: u64,
+        text: &str,
+    ) -> Result<(), VmFileError> {
+        let open_file = self
+            .open_files
+            .get_mut(&handle_id)
+            .ok_or(VmFileError::Closed)?;
+        if !open_file.mode.can_write() {
+            return Err(VmFileError::Message(format!(
+                "file handle for {} is not writable in {:?} mode",
+                open_file.path, open_file.mode
+            )));
+        }
+        open_file
+            .file
+            .write_all(text.as_bytes())
+            .map_err(VmFileError::Io)
+    }
+
+    pub(crate) fn flush_file_resource(&mut self, handle_id: u64) -> Result<(), VmFileError> {
+        let open_file = self
+            .open_files
+            .get_mut(&handle_id)
+            .ok_or(VmFileError::Closed)?;
+        open_file.file.flush().map_err(VmFileError::Io)
+    }
+
+    pub(crate) fn close_file_resource(&mut self, handle_id: u64) -> Result<(), VmFileError> {
+        let Some(mut open_file) = self.open_files.remove(&handle_id) else {
+            return Err(VmFileError::Closed);
+        };
+        open_file.file.flush().map_err(VmFileError::Io)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open_file_count(&self) -> usize {
+        self.open_files.len()
     }
 
     pub(crate) fn await_task_handle(
@@ -5000,6 +5176,76 @@ impl VM {
             .ok_or_else(|| RuntimeError::new("Frame stack underflow"))
     }
 
+    fn open_file_for_mode(path: &str, mode: VmFileMode) -> io::Result<File> {
+        let mut options = OpenOptions::new();
+        match mode {
+            VmFileMode::Read => {
+                options.read(true);
+            }
+            VmFileMode::Write => {
+                options.write(true).create(true).truncate(true);
+            }
+            VmFileMode::Append => {
+                options.append(true).create(true);
+            }
+            VmFileMode::ReadWrite => {
+                options.read(true).write(true).create(true);
+            }
+            VmFileMode::ReadAppend => {
+                options.read(true).append(true).create(true);
+            }
+        }
+        options.open(path)
+    }
+
+    fn read_utf8_chunk(file: &mut File, max_chars: usize) -> Result<String, VmFileError> {
+        let mut out = String::new();
+        for _ in 0..max_chars {
+            let Some(ch) = Self::read_one_utf8_char(file)? else {
+                break;
+            };
+            out.push(ch);
+        }
+        Ok(out)
+    }
+
+    fn read_one_utf8_char(file: &mut File) -> Result<Option<char>, VmFileError> {
+        let mut first = [0u8; 1];
+        match file.read(&mut first) {
+            Ok(0) => return Ok(None),
+            Ok(_) => {}
+            Err(err) => return Err(VmFileError::Io(err)),
+        }
+
+        let width = Self::utf8_char_width(first[0]);
+        if width == 0 {
+            return Err(VmFileError::Encoding(
+                "invalid UTF-8 leading byte while reading file".into(),
+            ));
+        }
+
+        let mut bytes = vec![first[0]];
+        if width > 1 {
+            let mut rest = vec![0u8; width - 1];
+            file.read_exact(&mut rest).map_err(VmFileError::Io)?;
+            bytes.extend(rest);
+        }
+
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|err| VmFileError::Encoding(format!("invalid UTF-8 sequence: {err}")))?;
+        Ok(text.chars().next())
+    }
+
+    fn utf8_char_width(first: u8) -> usize {
+        match first {
+            0x00..=0x7f => 1,
+            0xc2..=0xdf => 2,
+            0xe0..=0xef => 3,
+            0xf0..=0xf4 => 4,
+            _ => 0,
+        }
+    }
+
     fn with_call_site<T>(
         &mut self,
         call_site: Option<(u32, u32)>,
@@ -5459,8 +5705,8 @@ fn split_qualified_name_owned(qualified_name: &str) -> (Option<String>, Option<S
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_vm_result, ok_vm_result, ProcessWaitReason, StepOutcome, TaskMode,
-        VmObservationOptions, VM,
+        decode_vm_result, ok_vm_result, ProcessWaitReason, StepOutcome, TaskMode, VmFileError,
+        VmFileMode, VmObservationOptions, VM,
     };
     use sindr::ir::{
         BootEntrySource, Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode,
@@ -5476,6 +5722,8 @@ mod tests {
         Callable, CallableMetadata, CallableTarget, PidHandle, TypeEntry, TypeKind, TypeRegistry,
         Value,
     };
+    use std::fs;
+    use std::path::PathBuf;
     fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
         Bytecode {
             opcodes,
@@ -5489,6 +5737,15 @@ mod tests {
             .iter()
             .position(|meta| meta.name == name)
             .unwrap_or_else(|| panic!("missing builtin `{name}`")) as u16
+    }
+
+    fn sandbox_dir(prefix: &str) -> PathBuf {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("tmp/sandbox")
+            .join(format!("{prefix}-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("sandbox dir should be creatable");
+        dir
     }
 
     fn test_runtime_process_spec(
@@ -6288,6 +6545,65 @@ mod tests {
             "UnknownHandlerTarget",
             "unknown OutHandler target `BogusOutHandler`",
         );
+    }
+
+    #[test]
+    fn rollback_to_checkpoint_closes_new_file_resources() {
+        let dir = sandbox_dir("vm-file-rollback");
+        let path = dir.join("rollback.txt");
+        let path_text = path.to_string_lossy().into_owned();
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let chunk = BytecodeChunk {
+            opcodes: Vec::new(),
+            source_map: None,
+            const_base: 0,
+            constants: Vec::new(),
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
+            functions: Vec::new(),
+            docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
+            runtime_boot_plan: RuntimeBootPlan::default(),
+        };
+        let checkpoint = vm.checkpoint_for_chunk(&chunk);
+        let handle = vm
+            .open_file_resource(&path_text, VmFileMode::Write)
+            .expect("file handle should open");
+        assert_eq!(vm.open_file_count(), 1);
+        vm.rollback_to_checkpoint(checkpoint);
+        assert_eq!(
+            vm.open_file_count(),
+            0,
+            "rollback should close new file handles"
+        );
+        assert!(
+            matches!(vm.flush_file_resource(handle.id), Err(VmFileError::Closed)),
+            "rolled back handle should be closed"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn run_shutdown_closes_remaining_file_resources() {
+        let dir = sandbox_dir("vm-file-run-shutdown");
+        let path = dir.join("run.txt");
+        let path_text = path.to_string_lossy().into_owned();
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let handle = vm
+            .open_file_resource(&path_text, VmFileMode::Write)
+            .expect("file handle should open");
+        assert_eq!(vm.open_file_count(), 1);
+        vm.run().expect("halt-only bytecode should run");
+        assert_eq!(vm.open_file_count(), 0, "run should shutdown file resources");
+        assert!(
+            matches!(vm.flush_file_resource(handle.id), Err(VmFileError::Closed)),
+            "run shutdown should close the handle"
+        );
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
