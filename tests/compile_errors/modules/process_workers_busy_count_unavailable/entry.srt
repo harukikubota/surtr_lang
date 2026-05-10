@@ -1,0 +1,3 @@
+import Workers::busy_count
+
+print(to_string(busy_count))

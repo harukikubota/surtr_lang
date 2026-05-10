@@ -49,6 +49,13 @@ defgenserver MyPool {
     Ok(CastResult::Next(workers))
   }
 
+  @cast
+  def reserve_set(workers: Workers<MyWorker>, next: Int) -> Result<CastResult<Workers<MyWorker>>> {
+    lease =? Workers::reserve(workers)
+    _ =? MyWorker::set(lease, next)
+    Ok(CastResult::Next(workers))
+  }
+
   @call
   def values(workers: Workers<MyWorker>) -> Result<CallResult<List<Result<Int>>, Workers<MyWorker>>> {
     Ok(CallResult::Reply(Workers::broadcast(workers, MyWorker::value()), workers))
@@ -68,4 +75,6 @@ supervisor_init {
 print(to_string(MyPool::count()))
 _ =? MyPool::submit(7)
 _ =? MyPool::submit(9)
+print(to_string(MyPool::values()))
+_ =? MyPool::reserve_set(11)
 print(to_string(MyPool::values()))

@@ -8,19 +8,6 @@
 ---
 
 ## Open Issues
-
-### OI-000 `const` の将来拡張境界
-
-- 背景:
-  - V1 の `const` は top-level / literal / Facet path alias に限定して導入した。
-- 未確定点:
-  - compile-time evaluable な純粋式まで広げるか
-  - associated consts を trait / impl に導入するか
-  - local / `defmod` / `impl` scope const を許可するか
-- 受け入れ条件:
-  - 追加する場合も Facet の同一スコープ使用規約と名前解決規則が崩れない。
-  - 現行 V1 の global const namespace と互換性を保てる。
-
 ### OI-005 マクロ展開段階と通常解決段階の分離
 
 - 背景:
@@ -35,26 +22,6 @@
 - テスト方針:
   - macro 導入時に `unit/spire` / `unit/sigil` で段階境界テストを追加する。
   - 展開後 IR の決定性比較を回帰基準にする。
-
-### OI-006 `defmod` の module path 導出正本
-
-- 状態:
-  - 2026-05-09 に解決。module path の正本は `spire` の parse + namespace lowering 後 AST に置き、`xldr::loader::derive_primary_module_path` の token 走査 fallback を廃止した。
-- 確定事項:
-  - qualified head（`defmod A::B`）と namespace-lowered head（`namespace A { defmod B { ... } }`）は同じ canonical module path `A::B` に正規化する。
-  - internal canonical owner/module path は常に 2 セグメントで、bare global owner は `Global::Name` に正規化する。
-  - `Global` は compiler-reserved root namespace であり、user code から `Global::Type` / `Global::Kernel` のように明示できない。
-  - namespace 名と owner 名は同じ一意表で管理し、`namespace A` と `defmod A` / `defstruct A` のような衝突を禁止する。
-- 受け入れ結果:
-  - module path 抽出は token 走査 fallback なしで成立する。
-  - コメントや空行に影響されず同じ module path を導出できる。
-  - `rune` / `xldr` は同じ canonicalization 規則を共有する。
-- テスト反映:
-  - `unit/spire` / `unit/xldr` で `defmod Kernel` / `defmod A::B` / `namespace A { defmod B { ... } }` の canonical path を固定した。
-  - loader / resolver 経路で `Global::...` internal canonical path と user-facing `Global` 省略表示の両方を確認した。
-- 仕様更新先:
-  - `doc/要件定義v9.md` 3.0, 4.2, 4.5
-  - `docs/dev/Xldr_spec.md` 3.2
 
 ### OI-007 Rune / Xldr の CLI エラー契約統一
 
@@ -248,23 +215,6 @@
   - `ReplyLater` の timeout 契約を固定する場合は process runtime の spec / runtime test を追加して、outer timeout と callback 側 deadline の優先順位を回帰基準にする。
   - `unit/xldr` / `integration/repl` / `rune` integration で process-aware な表示と失敗形状を固定する。
   - `integration/build_roundtrip` / `run_eldr` / viewer 系テストで runtime metadata の可視化形状を固定する。
-
-### OI-019 `Workers<$Worker>` 拡張 API 境界
-
-- 背景:
-  - `Workers<$Worker>` と `WorkerLease<$Worker>`、および `submit` / `broadcast` / `reserve` / `size` は現行 process runtime v2 の確定 surface である。
-  - timeout は `submit_timeout` のような別 public API ではなく、`Workers::*` 呼び出しに付く `@timeout(...)` modifier へ寄せる方針が baseline になった。
-  - 一方で設計メモには `snapshot`, `idle_count`, `busy_count`, `drain`, `set_target` などの候補 API が残っている。
-- 未確定点:
-  - 追加 API を `Workers` の public surface に含めるか、pool wrapper 側 helper に留めるか
-  - `snapshot` / `idle_count` / `busy_count` を観測 API として固定するか
-  - `drain` / `set_target` を runtime primitive として持つか
-- 受け入れ条件:
-  - `Workers<$Worker>` が opaque closed handle である前提を崩さない。
-  - pool 用 helper を増やしても `List<PID<_>>` 的な抽象漏れを起こさない。
-- テスト方針:
-  - surface 追加時は `spec/modules/process_workers_pool_surface` と `lib/process.srt` を同時に固定する。
-  - 不採用 API は `compile_errors` または parser/rewrite テストで誤用を防ぐ。
 
 ### OI-020 Worker pool membership / scale / reconcile 意味論
 

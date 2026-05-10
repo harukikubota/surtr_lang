@@ -1,0 +1,3 @@
+import Workers::drain
+
+print(to_string(drain))

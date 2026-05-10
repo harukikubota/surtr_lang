@@ -587,6 +587,8 @@ ImageWorkerSupervisor::workers(MyWorker::init(args), 4)
 - `Workers<$Worker>` は Singleton GenServer の state として保持する。state そのものを `Workers<$Worker>` にしてよいし、user-defined state struct の field に含めてもよい
 - public surface は `Workers::submit` / `Workers::reserve` / `Workers::broadcast` / `Workers::size` に限る
 - `Workers::submit` / `Workers::reserve` / `Workers::broadcast` / `Workers::size` は Singleton GenServer の `@call` / `@cast` / 同じ `defgenserver` 内 helper から使う
+- `snapshot` / `idle_count` / `busy_count` / `drain` / `set_target` は public `Workers` API ではない。pool 固有の観測や再構成は wrapper helper または worker pool membership / scale / reconcile の別仕様で扱う
+- timeout は `submit_timeout` のような別 public API ではなく、`Workers::*` 呼び出しに付く `@timeout(...)` modifier を使う
 
 正規系は WorkerPool 役の Singleton GenServer に閉じる。state がそのまま `Workers<$Worker>` の場合:
 

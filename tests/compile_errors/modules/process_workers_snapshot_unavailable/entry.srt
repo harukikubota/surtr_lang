@@ -1,0 +1,3 @@
+import Workers::snapshot
+
+print(to_string(snapshot))
