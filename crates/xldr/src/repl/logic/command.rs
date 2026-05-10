@@ -10,6 +10,12 @@ pub enum ReplCommand {
     Error { mode: Option<String> },
     ValueRecall { arg: String },
     Save { path: String },
+    Vars,
+    Imported,
+    Defs,
+    History { selector: Option<String> },
+    Reload { mode: Option<String> },
+    Clear,
     Unknown { raw: String },
 }
 
@@ -64,6 +70,24 @@ pub fn parse_repl_command(trimmed: &str) -> Option<ReplCommand> {
         "save" => ReplCommand::Save {
             path: rest.to_string(),
         },
+        "vars" => ReplCommand::Vars,
+        "imported" => ReplCommand::Imported,
+        "defs" => ReplCommand::Defs,
+        "history" => ReplCommand::History {
+            selector: if rest.is_empty() {
+                None
+            } else {
+                Some(rest.to_string())
+            },
+        },
+        "reload" => ReplCommand::Reload {
+            mode: if rest.is_empty() {
+                None
+            } else {
+                Some(rest.to_string())
+            },
+        },
+        "clear" => ReplCommand::Clear,
         other => ReplCommand::Unknown {
             raw: format!(
                 ":{}{}",
@@ -162,5 +186,61 @@ mod tests {
             parsed,
             ReplCommand::Facet { query } if query == "path"
         ));
+    }
+
+    #[test]
+    fn parse_vars_command() {
+        let parsed = parse_repl_command(":vars").expect("command should parse");
+        assert!(matches!(parsed, ReplCommand::Vars));
+    }
+
+    #[test]
+    fn parse_imported_command() {
+        let parsed = parse_repl_command(":imported").expect("command should parse");
+        assert!(matches!(parsed, ReplCommand::Imported));
+    }
+
+    #[test]
+    fn parse_defs_command() {
+        let parsed = parse_repl_command(":defs").expect("command should parse");
+        assert!(matches!(parsed, ReplCommand::Defs));
+    }
+
+    #[test]
+    fn parse_history_command_without_selector() {
+        let parsed = parse_repl_command(":history").expect("command should parse");
+        assert!(matches!(parsed, ReplCommand::History { selector: None }));
+    }
+
+    #[test]
+    fn parse_history_command_with_selector() {
+        let parsed = parse_repl_command(":history 1..3").expect("command should parse");
+        assert!(matches!(
+            parsed,
+            ReplCommand::History {
+                selector: Some(selector)
+            } if selector == "1..3"
+        ));
+    }
+
+    #[test]
+    fn parse_reload_command_without_mode() {
+        let parsed = parse_repl_command(":reload").expect("command should parse");
+        assert!(matches!(parsed, ReplCommand::Reload { mode: None }));
+    }
+
+    #[test]
+    fn parse_reload_command_with_mode() {
+        let parsed = parse_repl_command(":reload defs").expect("command should parse");
+        assert!(matches!(
+            parsed,
+            ReplCommand::Reload { mode: Some(mode) } if mode == "defs"
+        ));
+    }
+
+    #[test]
+    fn parse_clear_command() {
+        let parsed = parse_repl_command(":clear").expect("command should parse");
+        assert!(matches!(parsed, ReplCommand::Clear));
     }
 }

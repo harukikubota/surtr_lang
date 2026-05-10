@@ -179,6 +179,8 @@ struct PreloadedChunkState {
     auto_import_modules: BTreeSet<String>,
     script_runtime_inputs: Vec<String>,
     script_preload_docs: Vec<DocEntry>,
+    import_records: Vec<ReplImportRecord>,
+    def_records: Vec<ReplDefRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -210,6 +212,45 @@ struct ReplImportResult {
     success_labels: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+enum ReplReloadSeed {
+    #[default]
+    Empty,
+    ProjectModuleStages(Vec<Vec<crate::ModuleInput>>),
+    Sources {
+        module: Option<(String, String)>,
+        script: Option<(String, String)>,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct ReplHistoryEntry {
+    line: usize,
+    source: String,
+}
+
+#[derive(Debug, Clone)]
+struct ReplBindingRecord {
+    line: usize,
+    name: String,
+    ty: String,
+}
+
+#[derive(Debug, Clone)]
+struct ReplImportRecord {
+    line: usize,
+    src: String,
+    item: String,
+    via: String,
+}
+
+#[derive(Debug, Clone)]
+struct ReplDefRecord {
+    line: usize,
+    name: String,
+    arity: usize,
+}
+
 pub struct ReplEngine {
     sources: SourceRegistry,
     builtin_source_id: SourceId,
@@ -229,6 +270,12 @@ pub struct ReplEngine {
     docs: Vec<DocEntry>,
     process_metadata: BTreeMap<String, ReplProcessMetadata>,
     auto_import_modules: BTreeSet<String>,
+    reload_seed: ReplReloadSeed,
+    replay_inputs: Vec<String>,
+    history_entries: Vec<ReplHistoryEntry>,
+    binding_records: Vec<ReplBindingRecord>,
+    import_records: Vec<ReplImportRecord>,
+    def_records: Vec<ReplDefRecord>,
     startup_results: Vec<ReplResult>,
     error_display_mode: ErrorDisplayMode,
 }
@@ -273,6 +320,12 @@ impl ReplEngine {
             docs: Vec::new(),
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
+            reload_seed: ReplReloadSeed::Empty,
+            replay_inputs: Vec::new(),
+            history_entries: Vec::new(),
+            binding_records: Vec::new(),
+            import_records: Vec::new(),
+            def_records: Vec::new(),
             error_display_mode: ErrorDisplayMode::Full,
         };
         engine.bootstrap_std_modules()?;
@@ -339,6 +392,12 @@ impl ReplEngine {
             docs,
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
+            reload_seed: ReplReloadSeed::Empty,
+            replay_inputs: Vec::new(),
+            history_entries: Vec::new(),
+            binding_records: Vec::new(),
+            import_records: Vec::new(),
+            def_records: Vec::new(),
             startup_results: Vec::new(),
             error_display_mode: ErrorDisplayMode::Full,
         };
@@ -369,7 +428,9 @@ impl ReplEngine {
         module_input_stages: &[Vec<crate::ModuleInput>],
     ) -> Result<Self, ReplLoadError> {
         let state = compile_project_repl_chunk(module_input_stages)?;
-        Self::from_preloaded_state(state)
+        let mut engine = Self::from_preloaded_state(state)?;
+        engine.reload_seed = ReplReloadSeed::ProjectModuleStages(module_input_stages.to_vec());
+        Ok(engine)
     }
 
     pub fn from_preload_files(
@@ -412,7 +473,12 @@ impl ReplEngine {
         script: Option<(&str, &str)>,
     ) -> Result<Self, ReplLoadError> {
         let state = compile_preloaded_repl_chunk(module, script)?;
-        Self::from_preloaded_state(state)
+        let mut engine = Self::from_preloaded_state(state)?;
+        engine.reload_seed = ReplReloadSeed::Sources {
+            module: module.map(|(file_name, source)| (file_name.to_string(), source.to_string())),
+            script: script.map(|(file_name, source)| (file_name.to_string(), source.to_string())),
+        };
+        Ok(engine)
     }
 
     fn from_preloaded_state(state: PreloadedChunkState) -> Result<Self, ReplLoadError> {
@@ -441,6 +507,12 @@ impl ReplEngine {
             docs: state.docs,
             process_metadata: state.process_metadata,
             auto_import_modules: state.auto_import_modules,
+            reload_seed: ReplReloadSeed::Empty,
+            replay_inputs: Vec::new(),
+            history_entries: Vec::new(),
+            binding_records: Vec::new(),
+            import_records: state.import_records.clone(),
+            def_records: state.def_records.clone(),
             startup_results: Vec::new(),
             error_display_mode: ErrorDisplayMode::Full,
         })
@@ -1050,6 +1122,12 @@ impl ReplEngine {
             ":facet <binding|expr> Inspect a FacetPath and its API boundaries".to_string(),
             ":error [full|summary]  Show or change error display mode".to_string(),
             ":save <path.eldr>    Save the current session as .eldr".to_string(),
+            ":vars                List visible value bindings".to_string(),
+            ":imported            List imports active in the REPL scope".to_string(),
+            ":defs                List visible top-level REPL defs".to_string(),
+            ":history [selector]  Show committed REPL input history".to_string(),
+            ":reload [all|defs]   Rebuild the REPL session from preload and defs".to_string(),
+            ":clear               Clear the screen when the host supports it".to_string(),
             ":v <line>            Recall a previous result".to_string(),
         ]
     }
@@ -1099,6 +1177,13 @@ impl ReplEngine {
         ]
     }
 
+    fn history_help_lines() -> Vec<String> {
+        vec![
+            "Usage: :history [selector]".to_string(),
+            "Examples: :history, :history 3, :history 1, 3, 5, :history 2..4".to_string(),
+        ]
+    }
+
     fn handle_help(&self, topic: Option<&str>) -> Vec<String> {
         let Some(topic) = topic.map(str::trim).filter(|topic| !topic.is_empty()) else {
             return Self::help_lines();
@@ -1109,6 +1194,7 @@ impl ReplEngine {
             "info" => Self::info_help_lines(),
             "type" => Self::type_help_lines(),
             "facet" => Self::facet_help_lines(),
+            "history" => Self::history_help_lines(),
             other => {
                 let mut rendered = vec![format!("No help found for :{}", other)];
                 rendered.push("Type :help for available REPL commands.".to_string());
@@ -2762,7 +2848,7 @@ impl ReplEngine {
             }
         };
 
-        let resolved = match self.sigil_session.resolve(ast) {
+        let resolved = match self.sigil_session.resolve(ast.clone()) {
             Ok(r) => r,
             Err(e) => {
                 let spec =
@@ -3122,7 +3208,7 @@ impl ReplEngine {
         }
         .clone();
 
-        let resolved = match self.sigil_session.resolve(ast) {
+        let resolved = match self.sigil_session.resolve(ast.clone()) {
             Ok(r) => r,
             Err(e) => {
                 let spec =
@@ -4847,6 +4933,277 @@ impl ReplEngine {
             .find(|binding| binding.name == name)
     }
 
+    fn history_summary(source: &str) -> String {
+        source
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn is_replayable_stmt(stmt: &Ast) -> bool {
+        matches!(
+            stmt,
+            Ast::Import(_, _, _) | Ast::Def(..) | Ast::ExtractorDef(..)
+        )
+    }
+
+    fn chunk_is_replayable(ast: &[Ast]) -> bool {
+        !ast.is_empty() && ast.iter().all(Self::is_replayable_stmt)
+    }
+
+    fn collect_def_records(ast: &[Ast], line: usize) -> Vec<ReplDefRecord> {
+        ast.iter()
+            .filter_map(|stmt| match stmt {
+                Ast::Def(_, name, _, params, ..) => Some(ReplDefRecord {
+                    line,
+                    name: name.clone(),
+                    arity: params.len(),
+                }),
+                Ast::ExtractorDef(_, name, ..) => Some(ReplDefRecord {
+                    line,
+                    name: name.clone(),
+                    arity: 1,
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn collect_import_records(ast: &[Ast], line: usize) -> Vec<ReplImportRecord> {
+        let mut records = Vec::new();
+        for stmt in ast {
+            let Ast::Import(_, path, spec) = stmt else {
+                continue;
+            };
+            let module_name = path.segments.join("::");
+            match spec {
+                ImportSpec::All => records.push(ReplImportRecord {
+                    line,
+                    src: "kwd".to_string(),
+                    item: module_name,
+                    via: "import".to_string(),
+                }),
+                ImportSpec::Single(name) => records.push(ReplImportRecord {
+                    line,
+                    src: "kwd".to_string(),
+                    item: format!("{}::{}", module_name, name),
+                    via: "import".to_string(),
+                }),
+                ImportSpec::List(names) => {
+                    for name in names {
+                        records.push(ReplImportRecord {
+                            line,
+                            src: "kwd".to_string(),
+                            item: format!("{}::{}", module_name, name),
+                            via: "import".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        records
+    }
+
+    fn handle_vars(&self) -> ReplResult {
+        if self.binding_records.is_empty() {
+            return Self::plain(vec!["No visible value bindings.".to_string()]);
+        }
+        let mut lines = vec!["line | name | type".to_string()];
+        lines.extend(
+            self.binding_records
+                .iter()
+                .map(|binding| format!("{}: {}: {}", binding.line, binding.name, binding.ty)),
+        );
+        Self::plain(lines)
+    }
+
+    fn handle_imported(&self) -> ReplResult {
+        let mut lines = vec!["line | src | item | via".to_string()];
+        lines.extend(
+            self.auto_import_modules
+                .iter()
+                .map(|module| format!("0 | auto | {} | @autoimport", module)),
+        );
+        lines.extend(self.import_records.iter().map(|record| {
+            format!(
+                "{} | {} | {} | {}",
+                record.line,
+                record.src,
+                record.item,
+                record.via
+            )
+        }));
+        if lines.len() == 1 {
+            lines.push("No imports are active.".to_string());
+        }
+        Self::plain(lines)
+    }
+
+    fn handle_defs(&self) -> ReplResult {
+        if self.def_records.is_empty() {
+            return Self::plain(vec!["No visible top-level defs.".to_string()]);
+        }
+        let mut lines = vec!["line | name | arity".to_string()];
+        lines.extend(
+            self.def_records
+                .iter()
+                .map(|record| format!("{}: {}/{}", record.line, record.name, record.arity)),
+        );
+        Self::plain(lines)
+    }
+
+    fn parse_history_selector(&self, selector: &str) -> Result<Vec<usize>, String> {
+        let selector = selector.trim();
+        if selector.is_empty() {
+            return Ok(self.history_entries.iter().map(|entry| entry.line).collect());
+        }
+        if let Some((start, end)) = selector.split_once("..") {
+            let start = start
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| format!("Invalid history selector `{selector}`."))?;
+            let end = end
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| format!("Invalid history selector `{selector}`."))?;
+            if start > end {
+                return Err(format!("History range `{selector}` is reversed."));
+            }
+            return Ok((start..=end).collect());
+        }
+
+        selector
+            .split(',')
+            .map(|part| {
+                part.trim()
+                    .parse::<usize>()
+                    .map_err(|_| format!("Invalid history selector `{selector}`."))
+            })
+            .collect()
+    }
+
+    fn handle_history(&self, selector: Option<&str>) -> ReplResult {
+        if self.history_entries.is_empty() {
+            return Self::plain(vec!["No REPL history yet.".to_string()]);
+        }
+        let selected = match selector {
+            Some(selector) => match self.parse_history_selector(selector) {
+                Ok(lines) => lines,
+                Err(message) => {
+                    return self.repl_command_diagnostic(
+                        &format!(":history {}", selector.trim()),
+                        message,
+                        Span {
+                            start: ":history ".chars().count(),
+                            end: format!(":history {}", selector.trim()).chars().count(),
+                        },
+                        Some("Usage: :history [selector]".to_string()),
+                        Vec::new(),
+                    );
+                }
+            },
+            None => self.history_entries.iter().map(|entry| entry.line).collect(),
+        };
+
+        let mut lines = vec!["line | input".to_string()];
+        for line in selected {
+            let Some(entry) = self.history_entries.iter().find(|entry| entry.line == line) else {
+                return self.repl_command_diagnostic(
+                    &format!(":history {}", selector.unwrap_or_default().trim()),
+                    format!("History line {} is out of range.", line),
+                    Span {
+                        start: ":history ".chars().count(),
+                        end: format!(":history {}", selector.unwrap_or_default().trim())
+                            .chars()
+                            .count(),
+                    },
+                    Some("Usage: :history [selector]".to_string()),
+                    Vec::new(),
+                );
+            };
+            lines.push(format!(
+                "{}: {}",
+                entry.line,
+                Self::history_summary(&entry.source)
+            ));
+        }
+        Self::plain(lines)
+    }
+
+    fn rebuild_for_reload(&self, keep_session_defs: bool) -> Result<Self, ReplResult> {
+        let mut engine = match &self.reload_seed {
+            ReplReloadSeed::Empty => ReplEngine::new().map_err(|error| {
+                Self::plain(vec![format!("reload failed: {}", error)])
+            })?,
+            ReplReloadSeed::ProjectModuleStages(module_input_stages) => {
+                ReplEngine::from_project_module_stages(module_input_stages)
+                    .map_err(|error| Self::plain(vec![format!("reload failed: {}", error)]))?
+            }
+            ReplReloadSeed::Sources { module, script } => ReplEngine::from_preload_sources(
+                module.as_ref().map(|(file_name, source)| (file_name.as_str(), source.as_str())),
+                script.as_ref().map(|(file_name, source)| (file_name.as_str(), source.as_str())),
+            )
+            .map_err(|error| Self::plain(vec![format!("reload failed: {}", error)]))?,
+        };
+        engine.reload_seed = self.reload_seed.clone();
+        engine.error_display_mode = self.error_display_mode;
+        if keep_session_defs {
+            for input in &self.replay_inputs {
+                let result = engine.handle_line(input);
+                if result.should_exit {
+                    return Err(Self::plain(vec![
+                        "reload failed: replay requested REPL exit".to_string(),
+                    ]));
+                }
+                match result.output {
+                    ReplOutput::EvalSuccess { .. }
+                    | ReplOutput::PlainText { .. }
+                    | ReplOutput::StyledDoc { .. }
+                    | ReplOutput::StatusMessage(_) => {}
+                    ReplOutput::EvalError { .. } | ReplOutput::Diagnostic { .. } => {
+                        return Err(result);
+                    }
+                    ReplOutput::DocResolved { .. } | ReplOutput::EvalStarted { .. } => {}
+                }
+            }
+        }
+        Ok(engine)
+    }
+
+    fn handle_reload(&mut self, mode: Option<&str>) -> ReplResult {
+        let keep_session_defs = match mode.map(str::trim).filter(|mode| !mode.is_empty()) {
+            None | Some("all") => true,
+            Some("defs") => false,
+            Some(other) => {
+                return self.repl_command_diagnostic(
+                    &format!(":reload {}", other),
+                    format!("Invalid reload mode `{}`.", other),
+                    Span {
+                        start: ":reload ".chars().count(),
+                        end: format!(":reload {}", other).chars().count(),
+                    },
+                    Some("Usage: :reload [all|defs]".to_string()),
+                    Vec::new(),
+                );
+            }
+        };
+
+        let mode_name = if keep_session_defs { "all" } else { "defs" };
+        match self.rebuild_for_reload(keep_session_defs) {
+            Ok(engine) => {
+                *self = engine;
+                Self::plain(vec![format!("reload complete: {}", mode_name)])
+            }
+            Err(result) => result,
+        }
+    }
+
+    fn handle_clear(&self) -> ReplResult {
+        Self::plain(vec!["clear is not available in this host".to_string()])
+    }
+
     fn is_type_lookup_symbol(symbol: &str) -> bool {
         if symbol.is_empty() {
             return false;
@@ -5010,6 +5367,24 @@ impl ReplEngine {
                     ReplCommand::Save { path } => {
                         return self.handle_save(&path);
                     }
+                    ReplCommand::Vars => {
+                        return self.handle_vars();
+                    }
+                    ReplCommand::Imported => {
+                        return self.handle_imported();
+                    }
+                    ReplCommand::Defs => {
+                        return self.handle_defs();
+                    }
+                    ReplCommand::History { selector } => {
+                        return self.handle_history(selector.as_deref());
+                    }
+                    ReplCommand::Reload { mode } => {
+                        return self.handle_reload(mode.as_deref());
+                    }
+                    ReplCommand::Clear => {
+                        return self.handle_clear();
+                    }
                     ReplCommand::Unknown { raw } => {
                         return self.repl_command_diagnostic(
                             &raw,
@@ -5028,6 +5403,7 @@ impl ReplEngine {
 
         let idx = self.results.len();
         let source = line.to_string();
+        let committed_line = self.next_line;
 
         self.pending.push_str(line);
         self.pending.push('\n');
@@ -5058,6 +5434,10 @@ impl ReplEngine {
                     &spec,
                     self.error_display_mode,
                 );
+                self.history_entries.push(ReplHistoryEntry {
+                    line: committed_line,
+                    source: self.pending.clone(),
+                });
                 self.pending.clear();
                 self.bump_line(None, None);
                 return ReplResult::ok(ReplOutput::EvalError {
@@ -5097,6 +5477,10 @@ impl ReplEngine {
                     &spec,
                     self.error_display_mode,
                 );
+                self.history_entries.push(ReplHistoryEntry {
+                    line: committed_line,
+                    source: self.pending.clone(),
+                });
                 self.pending.clear();
                 self.bump_line(None, None);
                 return ReplResult::ok(ReplOutput::EvalError {
@@ -5108,7 +5492,7 @@ impl ReplEngine {
         };
 
         let docs = crate::collect_doc_entries(&[], &ast, Some(self.repl_module_path.as_str()));
-        let resolved = match self.sigil_session.resolve(ast) {
+        let resolved = match self.sigil_session.resolve(ast.clone()) {
             Ok(r) => r,
             Err(e) => {
                 self.sigil_session.rollback(sigil_cp);
@@ -5128,6 +5512,10 @@ impl ReplEngine {
                     &spec,
                     self.error_display_mode,
                 );
+                self.history_entries.push(ReplHistoryEntry {
+                    line: committed_line,
+                    source: self.pending.clone(),
+                });
                 self.pending.clear();
                 self.bump_line(None, None);
                 return ReplResult::ok(ReplOutput::EvalError {
@@ -5170,6 +5558,10 @@ impl ReplEngine {
                     &spec,
                     self.error_display_mode,
                 );
+                self.history_entries.push(ReplHistoryEntry {
+                    line: committed_line,
+                    source: self.pending.clone(),
+                });
                 self.pending.clear();
                 self.bump_line(None, None);
                 return ReplResult::ok(ReplOutput::EvalError {
@@ -5200,6 +5592,10 @@ impl ReplEngine {
                     &spec,
                     self.error_display_mode,
                 );
+                self.history_entries.push(ReplHistoryEntry {
+                    line: committed_line,
+                    source: self.pending.clone(),
+                });
                 self.pending.clear();
                 self.bump_line(None, None);
                 return ReplResult::ok(ReplOutput::EvalError {
@@ -5222,11 +5618,16 @@ impl ReplEngine {
 
         match self.execute_vm_chunk(chunk, ReplSessionPhase::Live) {
             Ok(execution) => {
+                let committed_source = self.pending.clone();
                 let value = eval::committed_chunk_value(execution);
                 self.sync_scar_fun_index_with_vm();
                 self.sync_repl_chunk_function_indices(&meta.function_defs, &chunk_functions);
                 if let Some(rendered) = self.report_main_result_error_if_any(&value) {
                     let (stdout, stderr) = self.take_repl_host_io_lines();
+                    self.history_entries.push(ReplHistoryEntry {
+                        line: committed_line,
+                        source: committed_source,
+                    });
                     self.bump_line(None, None);
                     self.pending.clear();
                     return ReplResult::ok(ReplOutput::EvalError {
@@ -5258,6 +5659,23 @@ impl ReplEngine {
                     self.symbols.insert(name.clone());
                 }
                 self.append_docs(docs);
+                self.history_entries.push(ReplHistoryEntry {
+                    line: committed_line,
+                    source: committed_source.clone(),
+                });
+                self.binding_records
+                    .extend(meta.bindings.iter().map(|binding| ReplBindingRecord {
+                        line: committed_line,
+                        name: binding.name.clone(),
+                        ty: crate::surface_rendered_name(&binding.ty),
+                    }));
+                self.import_records
+                    .extend(Self::collect_import_records(&ast, committed_line));
+                self.def_records
+                    .extend(Self::collect_def_records(&ast, committed_line));
+                if Self::chunk_is_replayable(&ast) {
+                    self.replay_inputs.push(committed_source);
+                }
                 let history_value = history_value_for_result(&self.vm, &value, &meta);
                 self.bump_line(Some(history_value), Some(meta.clone()));
                 self.pending.clear();
@@ -5270,6 +5688,7 @@ impl ReplEngine {
                 .with_stderr(stderr)
             }
             Err(e) => {
+                let committed_source = self.pending.clone();
                 let location = e
                     .context
                     .call_site
@@ -5290,6 +5709,10 @@ impl ReplEngine {
                     location,
                     self.error_display_mode,
                 );
+                self.history_entries.push(ReplHistoryEntry {
+                    line: committed_line,
+                    source: committed_source,
+                });
                 self.bump_line(None, None);
                 self.pending.clear();
                 ReplResult::exit(ReplOutput::EvalError {
@@ -5725,6 +6148,8 @@ fn compile_repl_preload_from_module_stages(
         .filter(|module| module.auto_import)
         .map(|module| module.module_path.clone())
         .collect();
+    let import_records = ReplEngine::collect_import_records(&user_ast, 0);
+    let def_records = ReplEngine::collect_def_records(&user_ast, 0);
 
     Ok(PreloadedChunkState {
         sources: repl_sources.sources,
@@ -5742,6 +6167,8 @@ fn compile_repl_preload_from_module_stages(
         auto_import_modules,
         script_runtime_inputs,
         script_preload_docs,
+        import_records,
+        def_records,
     })
 }
 
@@ -6706,6 +7133,12 @@ mod tests {
             docs: Vec::new(),
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
+            reload_seed: ReplReloadSeed::Empty,
+            replay_inputs: Vec::new(),
+            history_entries: Vec::new(),
+            binding_records: Vec::new(),
+            import_records: Vec::new(),
+            def_records: Vec::new(),
             error_display_mode: ErrorDisplayMode::Full,
         }
     }

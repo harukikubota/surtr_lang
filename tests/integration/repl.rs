@@ -414,6 +414,32 @@ fn repl_info_renders_styled_summary_for_queries() {
 }
 
 #[test]
+fn repl_supports_session_listing_and_reload_commands() {
+    let output = run_repl_session(
+        "seed = 41\ndef keep() -> Int { 42 }\n:vars\n:defs\n:history\n:clear\n:reload\nkeep()\nseed\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(stdout.contains("line | name | type"), "{stdout}");
+    assert!(stdout.contains("seed"), "{stdout}");
+    assert!(stdout.contains("line | name | arity"), "{stdout}");
+    assert!(stdout.contains("keep/0"), "{stdout}");
+    assert!(stdout.contains("line | input"), "{stdout}");
+    assert!(stdout.contains("seed = 41"), "{stdout}");
+    assert!(stdout.contains("clear is not available in this host"), "{stdout}");
+    assert!(stdout.contains("reload complete: all"), "{stdout}");
+    assert!(stdout.contains("42"), "{stdout}");
+    assert!(stderr.contains("Undefined variable: seed"), "{stderr}");
+}
+
+#[test]
 fn repl_sig_missing_symbol_prints_guidance() {
     let output = run_repl_session(":sig a\n:quit\n");
     assert!(

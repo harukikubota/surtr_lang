@@ -117,7 +117,7 @@ impl Completer for ReplHelper {
     ) -> Result<(usize, Vec<Pair>), ReadlineError> {
         const COMMANDS: &[&str] = &[
             ":help", ":h", ":quit", ":exit", ":doc", ":sig", ":info", ":type", ":facet", ":error",
-            ":save", ":v",
+            ":save", ":vars", ":imported", ":defs", ":history", ":reload", ":clear", ":v",
         ];
         let start = line[..pos]
             .rfind(char::is_whitespace)

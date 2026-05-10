@@ -795,12 +795,19 @@ fn core_help_and_error_commands_return_structured_command_output() {
     assert!(help_text.contains("REPL commands:"));
     assert!(help_text.contains(":save <path.eldr>"));
     assert!(help_text.contains(":info <query>"));
+    assert!(help_text.contains(":vars"));
+    assert!(help_text.contains(":history [selector]"));
+    assert!(help_text.contains(":reload [all|defs]"));
+    assert!(help_text.contains(":clear"));
 
     let sig_help = engine.handle_line(":h sig");
     assert!(rendered_text(&sig_help).contains("Usage: :sig <function|query>"));
 
     let info_help = engine.handle_line(":help info");
     assert!(rendered_text(&info_help).contains("Usage: :info <query>"));
+
+    let history_help = engine.handle_line(":help history");
+    assert!(rendered_text(&history_help).contains("Usage: :history [selector]"));
 
     let error_default = engine.handle_line(":error");
     assert!(rendered_text(&error_default).contains("error display mode: full"));
@@ -879,6 +886,98 @@ fn core_value_recall_uses_engine_history_and_prompt_index() {
     let recalled = engine.handle_line(":v 1");
     assert!(rendered_text(&recalled).contains("5"));
     assert_eq!(engine.prompt(), "xldr(3)> ");
+}
+
+#[test]
+fn core_session_listing_commands_render_current_state() {
+    let mut engine = ReplEngine::from_preload_sources(
+        Some((
+            "math.srt",
+            r#"
+defmod Math {
+  def add2(x: Int, y: Int) -> Int { x + y }
+}
+"#,
+        )),
+        Some((
+            "preload.srt",
+            r#"
+def greet() -> String { "hi" }
+import Math::add2
+"#,
+        )),
+    )
+    .expect("preload should bootstrap");
+
+    let _ = engine.handle_line("answer = add2(1, 2)");
+    let _ = engine.handle_line("def local_twice(x: Int) -> Int { add2(x, x) }");
+
+    let vars = rendered_text(&engine.handle_line(":vars"));
+    assert!(vars.contains("line"), "{vars}");
+    assert!(vars.contains("answer"), "{vars}");
+    assert!(vars.contains("Int"), "{vars}");
+
+    let imported = rendered_text(&engine.handle_line(":imported"));
+    assert!(imported.contains("auto"), "{imported}");
+    assert!(imported.contains("Math::add2"), "{imported}");
+
+    let defs = rendered_text(&engine.handle_line(":defs"));
+    assert!(defs.contains("greet"), "{defs}");
+    assert!(defs.contains("local_twice"), "{defs}");
+
+    let history = rendered_text(&engine.handle_line(":history"));
+    assert!(history.contains("line"), "{history}");
+    assert!(history.contains("answer = add2(1, 2)"), "{history}");
+    assert!(history.contains("def local_twice"), "{history}");
+
+    let selected = rendered_text(&engine.handle_line(":history 1, 2"));
+    assert!(selected.contains("1:"), "{selected}");
+    assert!(selected.contains("2:"), "{selected}");
+}
+
+#[test]
+fn core_reload_and_clear_commands_preserve_only_requested_state() {
+    let mut engine = engine();
+
+    let _ = engine.handle_line("seed = 41");
+    let _ = engine.handle_line("def keep() -> Int { 42 }");
+
+    let cleared = rendered_text(&engine.handle_line(":clear"));
+    assert!(
+        cleared.contains("clear")
+            || cleared.contains("Clear")
+            || cleared.contains("not available"),
+        "{cleared}"
+    );
+    let after_clear = rendered_text(&engine.handle_line("seed"));
+    assert!(after_clear.contains("41"), "{after_clear}");
+
+    let reloaded = rendered_text(&engine.handle_line(":reload"));
+    assert!(reloaded.contains("reload"), "{reloaded}");
+
+    let keep_after_reload = rendered_text(&engine.handle_line("keep()"));
+    assert!(keep_after_reload.contains("42"), "{keep_after_reload}");
+
+    let seed_after_reload = rendered_text(&engine.handle_line("seed"));
+    assert!(
+        seed_after_reload.contains("not found")
+            || seed_after_reload.contains("Unknown symbol")
+            || seed_after_reload.contains("Undefined variable"),
+        "{seed_after_reload}"
+    );
+
+    let _ = engine.handle_line("def drop_me() -> Int { 7 }");
+    let reload_defs = rendered_text(&engine.handle_line(":reload defs"));
+    assert!(reload_defs.contains("reload"), "{reload_defs}");
+
+    let dropped = rendered_text(&engine.handle_line("drop_me()"));
+    assert!(
+        dropped.contains("not found")
+            || dropped.contains("Unknown symbol")
+            || dropped.contains("Undefined variable")
+            || dropped.contains("Undefined function"),
+        "{dropped}"
+    );
 }
 
 #[test]
