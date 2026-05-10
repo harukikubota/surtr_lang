@@ -621,10 +621,14 @@ pub(super) fn declaration_uid_kind_map(
 
 /// Precollect global declaration index from staged module ASTs.
 ///
-/// The index key is fully-qualified name `ModulePath::Name`.
-/// Only declaration forms covered by Issue 6 are collected:
+/// The index key is the fully-qualified declaration name. This pass does not
+/// resolve declaration bodies; it records the stable metadata needed for
+/// staged visibility, imports, and deterministic `unique_id` assignment.
+///
+/// Collected declaration forms:
 /// `def`, `defextractor`, `@builtin def`, `@builtin defextractor`, `@builtin type`,
-/// `defstruct`, `defrecord`, `deferror`.
+/// `defstruct`, `defrecord`, `deferror`, `defenum`, `deftrait`, `impl`, and
+/// `impl Trait for Type` members.
 pub fn precollect_declaration_index(
     module_stages: &[Vec<StagedModuleAst>],
 ) -> Result<DeclarationIndex, ResolveError> {
