@@ -1,0 +1,13 @@
+import File;
+import Shell;
+
+root =? FS::path("./tmp/sandbox/fs_shell_example")
+_ =? FS::mkdir_all(root)
+note =? FS::join(root, "note.txt")
+_ =? File::write(note.raw, "hello from Surtr")
+
+snapshot =? FS::ls(root)
+print("entries: #{List::len(snapshot.entries)}")
+
+result =? Shell::exec("sh", ["-c", "printf shell-ok"])
+print("shell: #{result.stdout}")

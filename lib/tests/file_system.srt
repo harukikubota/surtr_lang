@@ -1,0 +1,45 @@
+import File;
+import Test;
+
+defp sandbox_root() -> Result<FilePath, Error> {
+  FS::path("./tmp/sandbox/file_system_lib_test")
+}
+
+test("FS") {
+  it("creates paths and lists snapshots") {
+    root =? sandbox_root()
+    _ =? FS::mkdir_all(root)
+    source =? FS::join(root, "alpha.srt")
+    _ =? File::write(source.raw, "alpha")
+
+    snapshot =? FS::ls(root)
+    assert_true(List::any(snapshot.entries, {|entry| entry.name == "alpha.srt" }))
+    assert_eq(Option::Some("srt"), FS::extension(source))
+
+    _ =? FS::rm(source)
+    Ok(())
+  }
+
+  it("moves and copies files") {
+    root =? sandbox_root()
+    _ =? FS::mkdir_all(root)
+    from =? FS::join(root, "move_from.txt")
+    moved =? FS::join(root, "move_to.txt")
+    copied =? FS::join(root, "copy_to.txt")
+
+    _ =? File::write(from.raw, "payload")
+    _ =? FS::mv(from, moved)
+    assert_ok_eq(True, FS::exists(moved))
+    _ =? FS::cp(moved, copied)
+    assert_ok_eq("payload", File::read(copied.raw))
+
+    _ =? FS::rm(moved)
+    _ =? FS::rm(copied)
+    Ok(())
+  }
+
+  it("rejects negative tree depth") {
+    root =? sandbox_root()
+    assert_err_contains("FileSystemInvalidDepth", FS::tree_depth(root, -1))
+  }
+}

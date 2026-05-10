@@ -8,6 +8,7 @@
 ## 仕様書
 
 - [EldrVM spec](./EldrVM_spec.md)
+- [FS / Shell spec](./FS_Shell_spec.md)
 - [Json / Encode / Decode spec](./Json_spec.md)
 - [Process runtime spec](./ProcessRuntime_spec.md)
 - [Rune observability](./Rune_observability.md)

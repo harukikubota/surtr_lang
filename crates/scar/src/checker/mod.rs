@@ -512,6 +512,14 @@ fn initialize_env() -> TypeEnv {
         crate::env::TypeKind::Struct,
         Vec::new(),
     );
+    for name in [
+        "Global::FilePath",
+        "Global::FileSystemEntry",
+        "Global::FileSystemSnapshot",
+        "Global::CommandResult",
+    ] {
+        env.predeclare_type_def(name.into(), crate::env::TypeKind::Struct, Vec::new());
+    }
 
     // Ok constructor: ($A) -> Result<$A, $E>
     let ok_a = env.fresh_tyvar();

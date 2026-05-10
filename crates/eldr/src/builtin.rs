@@ -12,6 +12,10 @@ use sindr::runtime::{
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, IsTerminal, Read};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -356,6 +360,74 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "file_flush",
         func: builtin_file_flush,
+    },
+    BuiltinImpl {
+        name: "filesystem_path",
+        func: builtin_filesystem_path,
+    },
+    BuiltinImpl {
+        name: "filesystem_join",
+        func: builtin_filesystem_join,
+    },
+    BuiltinImpl {
+        name: "filesystem_parent",
+        func: builtin_filesystem_parent,
+    },
+    BuiltinImpl {
+        name: "filesystem_name",
+        func: builtin_filesystem_name,
+    },
+    BuiltinImpl {
+        name: "filesystem_extension",
+        func: builtin_filesystem_extension,
+    },
+    BuiltinImpl {
+        name: "filesystem_exists",
+        func: builtin_filesystem_exists,
+    },
+    BuiltinImpl {
+        name: "filesystem_stat",
+        func: builtin_filesystem_stat,
+    },
+    BuiltinImpl {
+        name: "filesystem_ls",
+        func: builtin_filesystem_ls,
+    },
+    BuiltinImpl {
+        name: "filesystem_tree_depth",
+        func: builtin_filesystem_tree_depth,
+    },
+    BuiltinImpl {
+        name: "filesystem_mkdir",
+        func: builtin_filesystem_mkdir,
+    },
+    BuiltinImpl {
+        name: "filesystem_mkdir_all",
+        func: builtin_filesystem_mkdir_all,
+    },
+    BuiltinImpl {
+        name: "filesystem_rm",
+        func: builtin_filesystem_rm,
+    },
+    BuiltinImpl {
+        name: "filesystem_mv",
+        func: builtin_filesystem_mv,
+    },
+    BuiltinImpl {
+        name: "filesystem_cp",
+        func: builtin_filesystem_cp,
+    },
+    BuiltinImpl {
+        name: "shell_pwd",
+        func: builtin_shell_pwd,
+    },
+    BuiltinImpl {
+        name: "shell_cd",
+        func: builtin_shell_cd,
+    },
+    BuiltinImpl {
+        name: "shell_exec",
+        func: builtin_shell_exec,
     },
     BuiltinImpl {
         name: "seed",
@@ -2190,7 +2262,8 @@ fn builtin_io_get_line(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeEr
 
 fn builtin_file_read(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let path = decode_string_arg(&args[0], "file_read", "path")?;
-    match fs::read_to_string(path) {
+    let host_path = vm.resolve_host_path(path);
+    match fs::read_to_string(&host_path) {
         Ok(text) => Ok(ok_result(Value::Str(text))),
         Err(err) => Ok(file_path_error_result(vm, path, err)),
     }
@@ -2199,7 +2272,8 @@ fn builtin_file_read(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
 fn builtin_file_write(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let path = decode_string_arg(&args[0], "file_write", "path")?;
     let text = decode_string_arg(&args[1], "file_write", "text")?;
-    match fs::write(path, text) {
+    let host_path = vm.resolve_host_path(path);
+    match fs::write(&host_path, text) {
         Ok(()) => Ok(ok_result(Value::Unit)),
         Err(err) => Ok(file_path_error_result(vm, path, err)),
     }
@@ -2223,12 +2297,13 @@ fn builtin_file_append(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeEr
 
 fn builtin_file_exists(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let path = decode_string_arg(&args[0], "file_exists", "path")?;
-    Ok(Value::Bool(std::path::Path::new(path).exists()))
+    Ok(Value::Bool(_vm.resolve_host_path(path).exists()))
 }
 
 fn builtin_file_delete(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let path = decode_string_arg(&args[0], "file_delete", "path")?;
-    match fs::remove_file(path) {
+    let host_path = vm.resolve_host_path(path);
+    match fs::remove_file(&host_path) {
         Ok(()) => Ok(ok_result(Value::Unit)),
         Err(err) => Ok(file_path_error_result(vm, path, err)),
     }
@@ -2284,6 +2359,216 @@ fn builtin_file_flush(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErr
         Ok(()) => Ok(ok_result(Value::Unit)),
         Err(err) => Ok(file_handle_error_result(vm, None, err)),
     }
+}
+
+fn builtin_filesystem_path(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let raw = decode_string_arg(&args[0], "filesystem_path", "raw")?;
+    Ok(ok_result(filesystem_file_path(vm, raw)?))
+}
+
+fn builtin_filesystem_join(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let base = decode_file_path_arg(vm, &args[0], "filesystem_join", "base")?;
+    let child = decode_string_arg(&args[1], "filesystem_join", "child")?;
+    let joined = Path::new(base).join(child).to_string_lossy().into_owned();
+    Ok(ok_result(filesystem_file_path(vm, &joined)?))
+}
+
+fn builtin_filesystem_parent(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_parent", "path")?;
+    let Some(parent) = Path::new(path).parent() else {
+        return Ok(filesystem_error(vm, "FileSystemInvalidPath", path));
+    };
+    Ok(ok_result(filesystem_file_path(
+        vm,
+        &parent.to_string_lossy(),
+    )?))
+}
+
+fn builtin_filesystem_name(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_name", "path")?;
+    let Some(name) = Path::new(path).file_name().and_then(|name| name.to_str()) else {
+        return Ok(filesystem_error(vm, "FileSystemInvalidPath", path));
+    };
+    Ok(ok_result(Value::Str(name.to_string())))
+}
+
+fn builtin_filesystem_extension(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_extension", "path")?;
+    Ok(
+        match Path::new(path).extension().and_then(|ext| ext.to_str()) {
+            Some(ext) => option_some(vm, Value::Str(ext.to_string()))?,
+            None => option_none(vm)?,
+        },
+    )
+}
+
+fn builtin_filesystem_exists(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_exists", "path")?;
+    Ok(ok_result(Value::Bool(vm.resolve_host_path(path).exists())))
+}
+
+fn builtin_filesystem_stat(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_stat", "path")?;
+    match filesystem_entry(vm, path)? {
+        Ok(entry) => Ok(ok_result(entry)),
+        Err(err) => Ok(err),
+    }
+}
+
+fn builtin_filesystem_ls(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_ls", "path")?;
+    filesystem_snapshot(vm, path, Some(1))
+}
+
+fn builtin_filesystem_tree_depth(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_tree_depth", "path")?;
+    let depth = decode_int_i64_arg(&args[1], "filesystem_tree_depth", "depth")?;
+    if depth < 0 {
+        return Ok(filesystem_error_with_message(
+            vm,
+            "FileSystemInvalidDepth",
+            &format!("invalid filesystem tree depth: {depth}"),
+        ));
+    }
+    filesystem_snapshot(vm, path, Some(depth as usize))
+}
+
+fn builtin_filesystem_mkdir(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_mkdir", "path")?;
+    let host_path = vm.resolve_host_path(path);
+    match fs::create_dir(&host_path) {
+        Ok(()) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(filesystem_io_error(vm, path, err)),
+    }
+}
+
+fn builtin_filesystem_mkdir_all(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_mkdir_all", "path")?;
+    let host_path = vm.resolve_host_path(path);
+    match fs::create_dir_all(&host_path) {
+        Ok(()) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(filesystem_io_error(vm, path, err)),
+    }
+}
+
+fn builtin_filesystem_rm(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_rm", "path")?;
+    let host_path = vm.resolve_host_path(path);
+    let result = match fs::symlink_metadata(&host_path) {
+        Ok(meta) if meta.is_dir() => fs::remove_dir(&host_path),
+        Ok(_) => fs::remove_file(&host_path),
+        Err(err) => Err(err),
+    };
+    match result {
+        Ok(()) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(filesystem_io_error(vm, path, err)),
+    }
+}
+
+fn builtin_filesystem_mv(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let from = decode_file_path_arg(vm, &args[0], "filesystem_mv", "from")?;
+    let to = decode_file_path_arg(vm, &args[1], "filesystem_mv", "to")?;
+    match fs::rename(vm.resolve_host_path(from), vm.resolve_host_path(to)) {
+        Ok(()) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(filesystem_io_error(vm, from, err)),
+    }
+}
+
+fn builtin_filesystem_cp(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let from = decode_file_path_arg(vm, &args[0], "filesystem_cp", "from")?;
+    let to = decode_file_path_arg(vm, &args[1], "filesystem_cp", "to")?;
+    let from_host = vm.resolve_host_path(from);
+    if from_host.is_dir() {
+        return Ok(filesystem_error_with_message(
+            vm,
+            "FileSystemUnsupported",
+            "directory copy is not supported",
+        ));
+    }
+    match fs::copy(from_host, vm.resolve_host_path(to)) {
+        Ok(_) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(filesystem_io_error(vm, from, err)),
+    }
+}
+
+fn builtin_shell_pwd(vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let raw = vm.cwd().to_string_lossy().into_owned();
+    Ok(ok_result(filesystem_file_path(vm, &raw)?))
+}
+
+fn builtin_shell_cd(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "shell_cd", "path")?;
+    let host_path = vm.resolve_host_path(path);
+    if !host_path.is_dir() {
+        return Ok(shell_error_with_message(
+            vm,
+            "ShellWorkingDirectoryNotFound",
+            &format!("shell working directory not found: {path}"),
+        ));
+    }
+    let cwd = fs::canonicalize(&host_path).unwrap_or(host_path);
+    vm.set_cwd(cwd);
+    Ok(ok_result(Value::Unit))
+}
+
+fn builtin_shell_exec(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let command = decode_string_arg(&args[0], "shell_exec", "command")?;
+    let argv = decode_string_list_arg(&args[1], "shell_exec", "args")?;
+    let output = match Command::new(command)
+        .args(&argv)
+        .current_dir(vm.cwd())
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Ok(shell_error_with_message(
+                vm,
+                "ShellCommandNotFound",
+                &format!("shell command not found: {command}"),
+            ));
+        }
+        Err(err) => {
+            return Ok(shell_error_with_message(
+                vm,
+                "ShellSpawnFailed",
+                &format!("shell spawn failed for {command}: {err}"),
+            ));
+        }
+    };
+    let stdout = match String::from_utf8(output.stdout) {
+        Ok(text) => text,
+        Err(err) => {
+            return Ok(shell_error_with_message(
+                vm,
+                "ShellIoError",
+                &format!("shell stdout is not valid UTF-8: {err}"),
+            ));
+        }
+    };
+    let stderr = match String::from_utf8(output.stderr) {
+        Ok(text) => text,
+        Err(err) => {
+            return Ok(shell_error_with_message(
+                vm,
+                "ShellIoError",
+                &format!("shell stderr is not valid UTF-8: {err}"),
+            ));
+        }
+    };
+    let result = tagged_by_name(
+        vm,
+        "CommandResult",
+        vec![
+            Value::Str(command.to_string()),
+            Value::List(ListHandle::from_items(
+                argv.into_iter().map(Value::Str).collect(),
+            )),
+            Value::Int(int(output.status.code().unwrap_or(-1))),
+            Value::Str(stdout),
+            Value::Str(stderr),
+        ],
+    )?;
+    Ok(ok_result(result))
 }
 
 fn builtin_random_seed(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -2944,6 +3229,79 @@ fn decode_string_arg<'a>(
     }
 }
 
+fn decode_string_list_arg(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<Vec<String>, RuntimeError> {
+    let Value::List(list) = value else {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} expects List<String> as {arg_name}, got {:?}",
+            value
+        )));
+    };
+    list.iter()
+        .enumerate()
+        .map(|(idx, item)| match item {
+            Value::Str(text) => Ok(text),
+            other => Err(RuntimeError::new(format!(
+                "{builtin_name} expects String at {arg_name}[{idx}], got {:?}",
+                other
+            ))),
+        })
+        .collect()
+}
+
+fn decode_file_path_arg<'a>(
+    vm: &VM,
+    value: &'a Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<&'a str, RuntimeError> {
+    let Value::Tagged { tag, fields } = value else {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} expects FilePath as {arg_name}, got {:?}",
+            value
+        )));
+    };
+    let Some(entry) = vm.type_registry().lookup(*tag) else {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} observed unknown FilePath tag {tag}"
+        )));
+    };
+    if entry.name.strip_prefix("Global::").unwrap_or(&entry.name) != "FilePath" {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} expects FilePath as {arg_name}, got {}",
+            entry.name
+        )));
+    }
+    match fields.as_slice() {
+        [Value::Str(raw)] => Ok(raw),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects FilePath.raw String field for {arg_name}, got {} fields",
+            other.len()
+        ))),
+    }
+}
+
+fn decode_int_i64_arg(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<i64, RuntimeError> {
+    match value {
+        Value::Int(num) => num.to_i64().ok_or_else(|| {
+            RuntimeError::new(format!(
+                "{builtin_name} Int argument {arg_name} is out of range for i64: {num}"
+            ))
+        }),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects Int as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
 fn decode_file_handle_arg(
     value: &Value,
     builtin_name: &str,
@@ -3417,6 +3775,190 @@ fn ok_result(value: Value) -> Value {
     }
 }
 
+fn tagged_by_name(vm: &VM, name: &str, fields: Vec<Value>) -> Result<Value, RuntimeError> {
+    let tag = vm
+        .type_registry()
+        .tag_by_name(name)
+        .ok_or_else(|| RuntimeError::new(format!("missing runtime type {name}")))?;
+    Ok(Value::Tagged { tag, fields })
+}
+
+fn enum_variant_by_name(
+    vm: &VM,
+    name: &str,
+    discriminant: i64,
+    payload: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let mut fields = Vec::with_capacity(payload.len() + 1);
+    fields.push(Value::Int(int(discriminant)));
+    fields.extend(payload);
+    tagged_by_name(vm, name, fields)
+}
+
+fn option_none(vm: &VM) -> Result<Value, RuntimeError> {
+    enum_variant_by_name(vm, "Option::None", 0, Vec::new())
+}
+
+fn option_some(vm: &VM, value: Value) -> Result<Value, RuntimeError> {
+    enum_variant_by_name(vm, "Option::Some", 1, vec![value])
+}
+
+fn option_int(vm: &VM, value: Option<i128>) -> Result<Value, RuntimeError> {
+    match value {
+        Some(value) => option_some(vm, Value::Int(int(value))),
+        None => option_none(vm),
+    }
+}
+
+fn filesystem_file_path(vm: &VM, raw: &str) -> Result<Value, RuntimeError> {
+    tagged_by_name(vm, "FilePath", vec![Value::Str(raw.to_string())])
+}
+
+fn filesystem_permissions(vm: &VM, permissions: &fs::Permissions) -> Result<Value, RuntimeError> {
+    #[cfg(unix)]
+    let executable = permissions.mode() & 0o111 != 0;
+    #[cfg(not(unix))]
+    let executable = false;
+
+    tagged_by_name(
+        vm,
+        "FileSystemPermissions",
+        vec![Value::Bool(permissions.readonly()), Value::Bool(executable)],
+    )
+}
+
+fn system_time_epoch_ms(value: io::Result<SystemTime>) -> Option<i128> {
+    value
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as i128)
+}
+
+fn filesystem_metadata(vm: &VM, metadata: &fs::Metadata) -> Result<Value, RuntimeError> {
+    tagged_by_name(
+        vm,
+        "FileSystemMetadata",
+        vec![
+            option_int(vm, Some(metadata.len() as i128))?,
+            option_int(vm, system_time_epoch_ms(metadata.modified()))?,
+            option_int(vm, system_time_epoch_ms(metadata.accessed()))?,
+            option_int(vm, system_time_epoch_ms(metadata.created()))?,
+            option_some(vm, filesystem_permissions(vm, &metadata.permissions())?)?,
+        ],
+    )
+}
+
+fn filesystem_entry_kind(vm: &VM, metadata: &fs::Metadata) -> Result<Value, RuntimeError> {
+    let (name, discriminant) = if metadata.file_type().is_symlink() {
+        ("FileSystemEntryKind::Symlink", 2)
+    } else if metadata.is_file() {
+        ("FileSystemEntryKind::File", 0)
+    } else if metadata.is_dir() {
+        ("FileSystemEntryKind::Directory", 1)
+    } else {
+        ("FileSystemEntryKind::Other", 3)
+    };
+    enum_variant_by_name(vm, name, discriminant, Vec::new())
+}
+
+fn filesystem_entry(vm: &VM, raw_path: &str) -> Result<Result<Value, Value>, RuntimeError> {
+    let host_path = vm.resolve_host_path(raw_path);
+    let metadata = match fs::symlink_metadata(&host_path) {
+        Ok(metadata) => metadata,
+        Err(err) => return Ok(Err(filesystem_io_error(vm, raw_path, err))),
+    };
+    let name = Path::new(raw_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .or_else(|| {
+            host_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| raw_path.to_string());
+    Ok(Ok(tagged_by_name(
+        vm,
+        "FileSystemEntry",
+        vec![
+            filesystem_file_path(vm, raw_path)?,
+            Value::Str(name),
+            filesystem_entry_kind(vm, &metadata)?,
+            filesystem_metadata(vm, &metadata)?,
+        ],
+    )?))
+}
+
+fn filesystem_snapshot(
+    vm: &VM,
+    root_raw: &str,
+    max_depth: Option<usize>,
+) -> Result<Value, RuntimeError> {
+    let root_host = vm.resolve_host_path(root_raw);
+    if !root_host.is_dir() {
+        return Ok(filesystem_error(vm, "FileSystemNotDirectory", root_raw));
+    }
+
+    let mut paths = Vec::new();
+    collect_filesystem_entries(vm, root_raw, 1, max_depth.unwrap_or(1), &mut paths)?;
+    paths.sort();
+
+    let mut entries = Vec::with_capacity(paths.len());
+    for path in paths {
+        match filesystem_entry(vm, &path)? {
+            Ok(entry) => entries.push(entry),
+            Err(err) => return Ok(err),
+        }
+    }
+
+    Ok(ok_result(tagged_by_name(
+        vm,
+        "FileSystemSnapshot",
+        vec![
+            filesystem_file_path(vm, root_raw)?,
+            Value::List(ListHandle::from_items(entries)),
+        ],
+    )?))
+}
+
+fn collect_filesystem_entries(
+    vm: &VM,
+    raw_path: &str,
+    current_depth: usize,
+    max_depth: usize,
+    out: &mut Vec<String>,
+) -> Result<(), RuntimeError> {
+    if max_depth == 0 || current_depth > max_depth {
+        return Ok(());
+    }
+    let host_path = vm.resolve_host_path(raw_path);
+    let read_dir = match fs::read_dir(&host_path) {
+        Ok(read_dir) => read_dir,
+        Err(_) => return Ok(()),
+    };
+    let mut children = Vec::new();
+    for entry in read_dir {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let raw_child = Path::new(raw_path)
+            .join(entry.file_name())
+            .to_string_lossy()
+            .into_owned();
+        children.push(raw_child);
+    }
+    children.sort();
+    for child in children {
+        let is_dir = vm.resolve_host_path(&child).is_dir();
+        out.push(child.clone());
+        if is_dir {
+            collect_filesystem_entries(vm, &child, current_depth + 1, max_depth, out)?;
+        }
+    }
+    Ok(())
+}
+
 fn err_value(rich: RichError) -> Value {
     Value::Error(Box::new(rich))
 }
@@ -3506,6 +4048,45 @@ fn file_path_error_result(vm: &VM, path: &str, err: io::Error) -> Value {
         _ => format!("file I/O failed for {path}: {err}"),
     };
     err_result(vm, kind, &message)
+}
+
+fn filesystem_io_error(vm: &VM, path: &str, err: io::Error) -> Value {
+    let kind = match err.kind() {
+        io::ErrorKind::NotFound => "FileSystemNotFound",
+        io::ErrorKind::PermissionDenied => "FileSystemPermissionDenied",
+        io::ErrorKind::AlreadyExists => "FileSystemAlreadyExists",
+        io::ErrorKind::InvalidInput => "FileSystemInvalidPath",
+        _ => "FileSystemIoError",
+    };
+    let message = match kind {
+        "FileSystemNotFound" => format!("filesystem path not found: {path}"),
+        "FileSystemPermissionDenied" => format!("filesystem permission denied: {path}"),
+        "FileSystemAlreadyExists" => format!("filesystem path already exists: {path}"),
+        "FileSystemInvalidPath" => format!("invalid filesystem path: {path}"),
+        _ => format!("filesystem I/O failed for {path}: {err}"),
+    };
+    filesystem_error_with_message(vm, kind, &message)
+}
+
+fn filesystem_error(vm: &VM, kind: &str, path: &str) -> Value {
+    let message = match kind {
+        "FileSystemNotFound" => format!("filesystem path not found: {path}"),
+        "FileSystemAlreadyExists" => format!("filesystem path already exists: {path}"),
+        "FileSystemPermissionDenied" => format!("filesystem permission denied: {path}"),
+        "FileSystemNotDirectory" => format!("filesystem path is not a directory: {path}"),
+        "FileSystemIsDirectory" => format!("filesystem path is a directory: {path}"),
+        "FileSystemInvalidPath" => format!("invalid filesystem path: {path}"),
+        _ => path.to_string(),
+    };
+    filesystem_error_with_message(vm, kind, &message)
+}
+
+fn filesystem_error_with_message(vm: &VM, kind: &str, message: &str) -> Value {
+    err_result(vm, kind, message)
+}
+
+fn shell_error_with_message(vm: &VM, kind: &str, message: &str) -> Value {
+    err_result(vm, kind, message)
 }
 
 fn file_handle_error_result(vm: &VM, path: Option<&str>, err: VmFileError) -> Value {
@@ -3739,6 +4320,122 @@ mod tests {
         dir
     }
 
+    fn ok_payload(value: Value) -> Value {
+        match value {
+            Value::Tagged { tag: 0, fields } => fields
+                .into_iter()
+                .next()
+                .expect("Ok result should carry a payload"),
+            other => panic!("expected Ok result, got {:?}", other),
+        }
+    }
+
+    fn filesystem_vm() -> VM {
+        test_vm_with_types(vec![
+            TypeEntry {
+                tag: 20,
+                name: "Option::None".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec![],
+                private_flags: vec![],
+            },
+            TypeEntry {
+                tag: 21,
+                name: "Option::Some".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["value".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 30,
+                name: "FilePath".into(),
+                kind: TypeKind::Struct,
+                field_names: vec!["raw".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 31,
+                name: "FileSystemPermissions".into(),
+                kind: TypeKind::Struct,
+                field_names: vec!["read_only".into(), "executable".into()],
+                private_flags: vec![false, false],
+            },
+            TypeEntry {
+                tag: 32,
+                name: "FileSystemMetadata".into(),
+                kind: TypeKind::Struct,
+                field_names: vec![
+                    "size".into(),
+                    "modified_at_epoch_ms".into(),
+                    "accessed_at_epoch_ms".into(),
+                    "created_at_epoch_ms".into(),
+                    "permissions".into(),
+                ],
+                private_flags: vec![false, false, false, false, false],
+            },
+            TypeEntry {
+                tag: 33,
+                name: "FileSystemEntry".into(),
+                kind: TypeKind::Struct,
+                field_names: vec![
+                    "path".into(),
+                    "name".into(),
+                    "kind".into(),
+                    "metadata".into(),
+                ],
+                private_flags: vec![false, false, false, false],
+            },
+            TypeEntry {
+                tag: 34,
+                name: "FileSystemSnapshot".into(),
+                kind: TypeKind::Struct,
+                field_names: vec!["root".into(), "entries".into()],
+                private_flags: vec![false, false],
+            },
+            TypeEntry {
+                tag: 35,
+                name: "FileSystemEntryKind::File".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec![],
+                private_flags: vec![],
+            },
+            TypeEntry {
+                tag: 36,
+                name: "FileSystemEntryKind::Directory".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec![],
+                private_flags: vec![],
+            },
+            TypeEntry {
+                tag: 37,
+                name: "FileSystemEntryKind::Symlink".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec![],
+                private_flags: vec![],
+            },
+            TypeEntry {
+                tag: 38,
+                name: "FileSystemEntryKind::Other".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec![],
+                private_flags: vec![],
+            },
+            TypeEntry {
+                tag: 39,
+                name: "CommandResult".into(),
+                kind: TypeKind::Struct,
+                field_names: vec![
+                    "command".into(),
+                    "args".into(),
+                    "exit_code".into(),
+                    "stdout".into(),
+                    "stderr".into(),
+                ],
+                private_flags: vec![false, false, false, false, false],
+            },
+        ])
+    }
+
     #[test]
     fn builtin_impl_order_matches_metadata() {
         for (id, builtin) in BUILTIN_IMPLS.iter().enumerate() {
@@ -3888,6 +4585,8 @@ mod tests {
             include_str!("../../../lib/types/regex.srt"),
             include_str!("../../../lib/Random.srt"),
             include_str!("../../../lib/file.srt"),
+            include_str!("../../../lib/FileSystem.srt"),
+            include_str!("../../../lib/Shell.srt"),
         ];
 
         // Collect all lines across the std-module files that currently declare
@@ -4772,6 +5471,92 @@ mod tests {
         assert!(!path.exists(), "file_delete should remove the target file");
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn filesystem_path_join_name_parent_and_extension_work() {
+        let dir = sandbox_dir("builtin-filesystem-paths");
+        let base = dir.to_string_lossy().into_owned();
+        let mut vm = filesystem_vm();
+
+        let base_path = ok_payload(
+            call_builtin(
+                &mut vm,
+                builtin_id("filesystem_path"),
+                vec![Value::Str(base.clone())],
+            )
+            .expect("filesystem_path should run"),
+        );
+        let joined = ok_payload(
+            call_builtin(
+                &mut vm,
+                builtin_id("filesystem_join"),
+                vec![base_path.clone(), Value::Str("sample.srt".into())],
+            )
+            .expect("filesystem_join should run"),
+        );
+
+        assert_eq!(
+            ok_payload(
+                call_builtin(&mut vm, builtin_id("filesystem_name"), vec![joined.clone()],)
+                    .expect("filesystem_name should run"),
+            ),
+            Value::Str("sample.srt".into())
+        );
+        assert!(matches!(
+            call_builtin(
+                &mut vm,
+                builtin_id("filesystem_extension"),
+                vec![joined.clone()],
+            )
+            .expect("filesystem_extension should run"),
+            Value::Tagged { tag: 21, fields } if matches!(fields.as_slice(), [Value::Int(_), Value::Str(ext)] if ext == "srt")
+        ));
+        assert_eq!(
+            ok_payload(
+                call_builtin(&mut vm, builtin_id("filesystem_parent"), vec![joined])
+                    .expect("filesystem_parent should run")
+            ),
+            base_path
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn shell_exec_returns_ok_for_launched_nonzero_exit() {
+        let mut vm = filesystem_vm();
+        let result = ok_payload(
+            call_builtin(
+                &mut vm,
+                builtin_id("shell_exec"),
+                vec![
+                    Value::Str("sh".into()),
+                    Value::List(ListHandle::from_items(vec![
+                        Value::Str("-c".into()),
+                        Value::Str("printf out; printf err >&2; exit 7".into()),
+                    ])),
+                ],
+            )
+            .expect("shell_exec should run"),
+        );
+
+        let entry = vm
+            .type_registry()
+            .lookup_by_name("CommandResult")
+            .expect("CommandResult should be registered");
+        assert!(matches!(
+            result,
+            Value::Tagged { tag, fields }
+                if tag == entry.tag
+                    && matches!(fields.as_slice(), [
+                        Value::Str(command),
+                        Value::List(_),
+                        Value::Int(exit_code),
+                        Value::Str(stdout),
+                        Value::Str(stderr),
+                    ] if command == "sh" && exit_code == &int(7) && stdout == "out" && stderr == "err")
+        ));
     }
 
     #[test]

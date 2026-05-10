@@ -776,7 +776,12 @@ impl Checker {
         context: TypeSyntaxContext,
         tyvars: &mut HashMap<String, Ty>,
     ) -> Result<Ty, TypeError> {
-        self.resolve_signature_like_ast_ty_in_context(ast_ty, context, tyvars, SignatureTyMode::Normal)
+        self.resolve_signature_like_ast_ty_in_context(
+            ast_ty,
+            context,
+            tyvars,
+            SignatureTyMode::Normal,
+        )
     }
 
     pub(super) fn seed_signature_type_params(
@@ -816,7 +821,12 @@ impl Checker {
         context: TypeSyntaxContext,
         tyvars: &mut HashMap<String, Ty>,
     ) -> Result<Ty, TypeError> {
-        self.resolve_signature_like_ast_ty_in_context(ast_ty, context, tyvars, SignatureTyMode::Builtin)
+        self.resolve_signature_like_ast_ty_in_context(
+            ast_ty,
+            context,
+            tyvars,
+            SignatureTyMode::Builtin,
+        )
     }
 
     fn signature_like_param_context(context: TypeSyntaxContext) -> TypeSyntaxContext {

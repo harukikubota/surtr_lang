@@ -4570,7 +4570,11 @@ out = 1 |> map_err(2)"#,
             Resolved::Pipe(_, _, right) => match right.as_ref() {
                 Resolved::App(_, func, args) => {
                     assert!(matches!(func.as_ref(), Resolved::Var(_, id) if id.name == "map_err"));
-                    assert_eq!(args.len(), 1, "ordinary shadowed call should keep its explicit arg");
+                    assert_eq!(
+                        args.len(),
+                        1,
+                        "ordinary shadowed call should keep its explicit arg"
+                    );
                 }
                 other => panic!("expected ordinary app on shadowed rhs, got {:?}", other),
             },
@@ -4609,8 +4613,15 @@ fn test_pipeline_partial_special_form_does_not_trigger_for_shadowed_parameter() 
     match pipe_rhs {
         Resolved::App(_, func, args) => {
             assert!(matches!(func.as_ref(), Resolved::Var(_, id) if id.name == "map_err"));
-            assert_eq!(args.len(), 1, "ordinary shadowed parameter call should keep its explicit arg");
+            assert_eq!(
+                args.len(),
+                1,
+                "ordinary shadowed parameter call should keep its explicit arg"
+            );
         }
-        other => panic!("expected ordinary app on shadowed parameter rhs, got {:?}", other),
+        other => panic!(
+            "expected ordinary app on shadowed parameter rhs, got {:?}",
+            other
+        ),
     }
 }

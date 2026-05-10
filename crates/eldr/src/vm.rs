@@ -15,7 +15,9 @@ use std::fs::{File, OpenOptions};
 use crate::builtin::call_builtin;
 use crate::dbg_display::{render_dbg_report, DbgRenderArg};
 use crate::error::{RuntimeError, RuntimeErrorContext};
+use std::env;
 use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +114,7 @@ struct VmCheckpoint {
     overwritten_functions: Vec<(usize, FunctionEntry)>,
     open_file_ids: BTreeSet<u64>,
     next_file_handle_id: u64,
+    cwd: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -714,6 +717,7 @@ pub struct VM {
     test_stderr_cursor: usize,
     open_files: HashMap<u64, VmOpenFile>,
     next_file_handle_id: u64,
+    cwd: PathBuf,
     /// VM-owned process table for the initial actor/agent runtime.
     process_runtime: ProcessRuntime,
 }
@@ -751,6 +755,7 @@ impl VM {
             test_stderr_cursor: 0,
             open_files: HashMap::new(),
             next_file_handle_id: 1,
+            cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             process_runtime,
         }
     }
@@ -1361,6 +1366,23 @@ impl VM {
     /// Access the type registry (used by builtins).
     pub fn type_registry(&self) -> &TypeRegistry {
         &self.bytecode.type_registry
+    }
+
+    pub(crate) fn cwd(&self) -> &Path {
+        &self.cwd
+    }
+
+    pub(crate) fn set_cwd(&mut self, cwd: PathBuf) {
+        self.cwd = cwd;
+    }
+
+    pub(crate) fn resolve_host_path(&self, path: &str) -> PathBuf {
+        let path = Path::new(path);
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.cwd.join(path)
+        }
     }
 
     fn boot_failure_error(&self, process_name: &str, detail: &str) -> RuntimeError {
@@ -3091,6 +3113,7 @@ impl VM {
             overwritten_functions,
             open_file_ids: self.open_files.keys().copied().collect(),
             next_file_handle_id: self.next_file_handle_id,
+            cwd: self.cwd.clone(),
         }
     }
 
@@ -3115,6 +3138,7 @@ impl VM {
         self.process_runtime = checkpoint.process_runtime;
         self.rollback_open_files(&checkpoint.open_file_ids);
         self.next_file_handle_id = checkpoint.next_file_handle_id;
+        self.cwd = checkpoint.cwd;
 
         self.bytecode.opcodes.truncate(checkpoint.opcode_len);
         self.bytecode.constants.truncate(checkpoint.constant_len);
@@ -3734,7 +3758,8 @@ impl VM {
         path: &str,
         mode: VmFileMode,
     ) -> Result<FileHandleValue, VmFileError> {
-        let file = Self::open_file_for_mode(path, mode).map_err(VmFileError::Io)?;
+        let host_path = self.resolve_host_path(path);
+        let file = Self::open_file_for_mode(&host_path, mode).map_err(VmFileError::Io)?;
         let handle = FileHandleValue {
             id: self.next_file_handle_id,
         };
@@ -3742,7 +3767,7 @@ impl VM {
         self.open_files.insert(
             handle.id,
             VmOpenFile {
-                path: path.to_string(),
+                path: host_path.to_string_lossy().into_owned(),
                 mode,
                 file,
             },
@@ -5179,7 +5204,7 @@ impl VM {
             .ok_or_else(|| RuntimeError::new("Frame stack underflow"))
     }
 
-    fn open_file_for_mode(path: &str, mode: VmFileMode) -> io::Result<File> {
+    fn open_file_for_mode(path: impl AsRef<Path>, mode: VmFileMode) -> io::Result<File> {
         let mut options = OpenOptions::new();
         match mode {
             VmFileMode::Read => {

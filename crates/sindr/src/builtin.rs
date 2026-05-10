@@ -440,6 +440,91 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(FileHandle) -> Result<Unit>",
     },
     BuiltinMeta {
+        name: "filesystem_path",
+        arity: 1,
+        sig_str: "(String) -> Result<FilePath, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_join",
+        arity: 2,
+        sig_str: "(FilePath, String) -> Result<FilePath, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_parent",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<FilePath, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_name",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<String, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_extension",
+        arity: 1,
+        sig_str: "(FilePath) -> Option<String>",
+    },
+    BuiltinMeta {
+        name: "filesystem_exists",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<Boolean, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_stat",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<FileSystemEntry, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_ls",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<FileSystemSnapshot, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_tree_depth",
+        arity: 2,
+        sig_str: "(FilePath, Int) -> Result<FileSystemSnapshot, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_mkdir",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<Unit, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_mkdir_all",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<Unit, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_rm",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<Unit, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_mv",
+        arity: 2,
+        sig_str: "(FilePath, FilePath) -> Result<Unit, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_cp",
+        arity: 2,
+        sig_str: "(FilePath, FilePath) -> Result<Unit, Error>",
+    },
+    BuiltinMeta {
+        name: "shell_pwd",
+        arity: 0,
+        sig_str: "() -> Result<FilePath, Error>",
+    },
+    BuiltinMeta {
+        name: "shell_cd",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<Unit, Error>",
+    },
+    BuiltinMeta {
+        name: "shell_exec",
+        arity: 2,
+        sig_str: "(String, List<String>) -> Result<CommandResult, Error>",
+    },
+    BuiltinMeta {
         name: "seed",
         arity: 1,
         sig_str: "(Int) -> RandomGenerator",
@@ -941,6 +1026,23 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
         Some("File::read_chunk") => "file_read_chunk",
         Some("File::write_chunk") => "file_write_chunk",
         Some("File::flush") => "file_flush",
+        Some("FS::path") => "filesystem_path",
+        Some("FS::join") => "filesystem_join",
+        Some("FS::parent") => "filesystem_parent",
+        Some("FS::name") => "filesystem_name",
+        Some("FS::extension") => "filesystem_extension",
+        Some("FS::exists") => "filesystem_exists",
+        Some("FS::stat") => "filesystem_stat",
+        Some("FS::ls") => "filesystem_ls",
+        Some("FS::tree_depth") => "filesystem_tree_depth",
+        Some("FS::mkdir") => "filesystem_mkdir",
+        Some("FS::mkdir_all") => "filesystem_mkdir_all",
+        Some("FS::rm") => "filesystem_rm",
+        Some("FS::mv") => "filesystem_mv",
+        Some("FS::cp") => "filesystem_cp",
+        Some("Shell::pwd") => "shell_pwd",
+        Some("Shell::cd") => "shell_cd",
+        Some("Shell::exec") => "shell_exec",
         Some("Json::parse") => "json_parse",
         Some("Json::stringify") => "json_stringify",
         Some("Facet::replace") => "__facet_replace",
@@ -1066,6 +1168,37 @@ mod tests {
             builtin_runtime_name("stringify", Some("Json::stringify")),
             "json_stringify"
         );
+    }
+
+    #[test]
+    fn qualified_filesystem_and_shell_builtins_resolve_to_runtime_names() {
+        let cases = [
+            ("path", "FS::path", "filesystem_path"),
+            ("join", "FS::join", "filesystem_join"),
+            ("parent", "FS::parent", "filesystem_parent"),
+            ("name", "FS::name", "filesystem_name"),
+            ("extension", "FS::extension", "filesystem_extension"),
+            ("exists", "FS::exists", "filesystem_exists"),
+            ("stat", "FS::stat", "filesystem_stat"),
+            ("ls", "FS::ls", "filesystem_ls"),
+            ("tree_depth", "FS::tree_depth", "filesystem_tree_depth"),
+            ("mkdir", "FS::mkdir", "filesystem_mkdir"),
+            ("mkdir_all", "FS::mkdir_all", "filesystem_mkdir_all"),
+            ("rm", "FS::rm", "filesystem_rm"),
+            ("mv", "FS::mv", "filesystem_mv"),
+            ("cp", "FS::cp", "filesystem_cp"),
+            ("pwd", "Shell::pwd", "shell_pwd"),
+            ("cd", "Shell::cd", "shell_cd"),
+            ("exec", "Shell::exec", "shell_exec"),
+        ];
+
+        for (declared, qualified, runtime) in cases {
+            assert_eq!(builtin_runtime_name(declared, Some(qualified)), runtime);
+            assert!(
+                builtin_meta_for_decl(declared, Some(qualified)).is_some(),
+                "{qualified} should have builtin metadata"
+            );
+        }
     }
 
     #[test]

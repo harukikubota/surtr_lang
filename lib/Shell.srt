@@ -1,0 +1,63 @@
+deferror ShellCommandNotFound(command: String) {
+  "shell command not found: #{command}"
+}
+
+deferror ShellSpawnFailed(detail: String) {
+  detail
+}
+
+deferror ShellWorkingDirectoryNotFound(path: String) {
+  "shell working directory not found: #{path}"
+}
+
+deferror ShellUnsupported(detail: String) {
+  detail
+}
+
+deferror ShellIoError(detail: String) {
+  detail
+}
+
+@doc """
+Result of a launched external command.
+
+A non-zero exit code remains an `Ok(CommandResult)` because the process was
+successfully launched and observed.
+"""
+defstruct CommandResult {
+  command: String,
+  args: List<String>,
+  exit_code: Int,
+  stdout: String,
+  stderr: String,
+}
+
+impl CommandResult {
+  def new(
+    command: String,
+    args: List<String>,
+    exit_code: Int,
+    stdout: String,
+    stderr: String,
+  ) -> Self {
+    CommandResult {
+      command: command,
+      args: args,
+      exit_code: exit_code,
+      stdout: stdout,
+      stderr: stderr,
+    }
+  }
+}
+
+@doc """
+Execution-context working directory and external command helpers.
+
+`Shell::exec` does not invoke a shell parser; pass the command and argv
+separately.
+"""
+defmod Shell {
+  @builtin def pwd() -> Result<FilePath, Error>
+  @builtin def cd(path: FilePath) -> Result<Unit, Error>
+  @builtin def exec(command: String, args: List<String>) -> Result<CommandResult, Error>
+}

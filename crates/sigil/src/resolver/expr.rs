@@ -66,7 +66,10 @@ enum CanonicalSpecialForm {
 
 impl Resolver {
     fn canonical_special_form_from_qname(qualified_name: &str) -> Option<CanonicalSpecialForm> {
-        match qualified_name.strip_prefix("Global::").unwrap_or(qualified_name) {
+        match qualified_name
+            .strip_prefix("Global::")
+            .unwrap_or(qualified_name)
+        {
             "Kernel::if" => Some(CanonicalSpecialForm::If(IfKind::If3)),
             "Kernel::if_then" => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
             "Kernel::if_let" => Some(CanonicalSpecialForm::IfLet),
@@ -241,7 +244,9 @@ impl Resolver {
             CanonicalSpecialForm::MapErr => self.resolve_map_err(span, args),
             CanonicalSpecialForm::Cause => self.resolve_cause(span, args),
             CanonicalSpecialForm::RecoverKind => self.resolve_recover_kind(span, args),
-            CanonicalSpecialForm::Logic(logic_kind) => self.resolve_logic_call(span, args, logic_kind),
+            CanonicalSpecialForm::Logic(logic_kind) => {
+                self.resolve_logic_call(span, args, logic_kind)
+            }
         }
     }
 
@@ -1919,14 +1924,16 @@ impl Resolver {
 
                 let resolved_func = match self.resolve_node(*func.clone()) {
                     Ok(resolved_func) => {
-                        if let Some(kind) = self.classify_canonical_special_form_callee(&resolved_func)
+                        if let Some(kind) =
+                            self.classify_canonical_special_form_callee(&resolved_func)
                         {
                             return self.resolve_canonical_special_form_call(span, args, kind);
                         }
                         resolved_func
                     }
                     Err(err) => {
-                        if let Some(kind) = Self::fallback_special_form_from_surface(func.as_ref()) {
+                        if let Some(kind) = Self::fallback_special_form_from_surface(func.as_ref())
+                        {
                             return self.resolve_canonical_special_form_call(span, args, kind);
                         }
                         return Err(self.map_undefined_callable_error(err, &func, args.len()));

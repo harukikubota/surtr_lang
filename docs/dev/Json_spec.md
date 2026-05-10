@@ -135,7 +135,7 @@ schema-level decode は builtin ではなく、利用者が
 
 compile 側の標準定義ソースロード順は次に固定する。
 
-`Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Tuple, Ord, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Option, Generator, HashMap, Result, Duration, Process, Facet, Float, Json, Config, Project, Random, File, IO, StyledDoc] -> [Test] -> ユーザ拡張`
+`Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Tuple, Ord, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Option, Generator, HashMap, Result, Duration, Process, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc] -> [Test] -> ユーザ拡張`
 
 - `Encode` / `Decode` は `From` / `TryFrom` の後、`Json` の前にロードする
 - `JsonValue` / `JsonFormat` は `Json` module 側で定義し、helper trait 側から参照される

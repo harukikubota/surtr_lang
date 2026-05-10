@@ -3936,10 +3936,9 @@ impl Checker {
                     self.expand_facet_capture_path(op_name, capture_span, expr)?;
                 Ok((source_expr, FacetPathInput::Capture(path)))
             }
-            [
-                ResolvedRecordLitArg::Positional(path_expr),
-                ResolvedRecordLitArg::Positional(source_expr),
-            ] => Ok((source_expr.clone(), FacetPathInput::Expr(path_expr))),
+            [ResolvedRecordLitArg::Positional(path_expr), ResolvedRecordLitArg::Positional(source_expr)] => {
+                Ok((source_expr.clone(), FacetPathInput::Expr(path_expr)))
+            }
             _ => unreachable!("validated argument form above"),
         }
     }
@@ -3969,23 +3968,19 @@ impl Checker {
         }
 
         match args {
-            [
-                ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)),
-                ResolvedRecordLitArg::Positional(value_expr),
-            ] => {
+            [ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)), ResolvedRecordLitArg::Positional(value_expr)] =>
+            {
                 let (source_expr, path) =
                     self.expand_facet_capture_path(op_name, capture_span, expr)?;
                 Ok((source_expr, FacetPathInput::Capture(path), value_expr))
             }
-            [
-                ResolvedRecordLitArg::Positional(path_expr),
-                ResolvedRecordLitArg::Positional(source_expr),
-                ResolvedRecordLitArg::Positional(value_expr),
-            ] => Ok((
-                source_expr.clone(),
-                FacetPathInput::Expr(path_expr),
-                value_expr,
-            )),
+            [ResolvedRecordLitArg::Positional(path_expr), ResolvedRecordLitArg::Positional(source_expr), ResolvedRecordLitArg::Positional(value_expr)] => {
+                Ok((
+                    source_expr.clone(),
+                    FacetPathInput::Expr(path_expr),
+                    value_expr,
+                ))
+            }
             _ => unreachable!("validated argument form above"),
         }
     }

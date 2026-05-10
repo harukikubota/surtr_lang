@@ -19,7 +19,7 @@ Surtr の標準定義ソースは language surface の一部です。
 - type modules
   - `Int`, `String`, `Regex`, `Boolean`, `Error`, `List`, `Result`, `Option`, `HashMap`, `Facet`, `Float`
 - effect / runtime-facing modules
-  - `Process`, `IO`, `File`, `Task`, `Random`, `Json`
+  - `Process`, `IO`, `File`, `FS`, `Shell`, `Task`, `Random`, `Json`
 
 ## どこを見るか
 
@@ -31,6 +31,7 @@ Surtr の標準定義ソースは language surface の一部です。
 - JSON: `../../lib/types/json.srt`, `../../lib/traits/encode.srt`, `../../lib/traits/decode.srt`
 - Facet path: `../../lib/facet.srt`
 - file I/O: `../../lib/file.srt`
+- filesystem / shell: `../../lib/FileSystem.srt`, `../../lib/Shell.srt`
 
 ## auto import されるもの
 
@@ -53,6 +54,7 @@ xldr(2)>
 - `Regex` を触りたいなら `./regex.md`
 - `Json` を触りたいなら `./json.md`
 - `File` を触りたいなら `./file-io.md`
+- `FS` / `Shell` を触りたいなら `./shell.md`
 - trait 系を見たいなら `./trait-impls.md`
 - path 操作を見たいなら `./facet.md`
 
@@ -62,6 +64,8 @@ xldr(2)>
   - `../../lib/kernel.srt`
   - `../../lib/facet.srt`
   - `../../lib/file.srt`
+  - `../../lib/FileSystem.srt`
+  - `../../lib/Shell.srt`
   - `../../lib/traits/numeric.srt`
 
 ## 躓きやすいポイント

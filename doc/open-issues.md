@@ -430,6 +430,24 @@
   - `unit/sigil` / `unit/scar` に impl 本文内の nested `decode(...)` と pipeline partial call の回帰ケースを追加する。
   - `spec/json` に custom decoder が unqualified nested `decode(...)` を使う fixture を追加し、`Json::as_*` 回避なしで通ることを固定する。
 
+### OI-026 FS / Shell surface naming and generic import ergonomics
+
+- 背景:
+  - FS / Shell v1 では `FileSystemPermissions` の permission flag を当初 `readonly` としていたが、`readonly` は field modifier として予約されているため field 名には使えない。
+  - 実装では `FileSystemPermissions.read_only` として surface を固定した。
+  - 同名 helper を持つ module を同じ file で unqualified import すると import conflict になる。`File.exists` と `FS.exists` はその具体例で、qualified call 自体は問題なく使える。
+- 未確定点:
+  - 予約語と同名の field を将来 escape syntax で許可するか、標準 surface では今後も別名を採用するか
+  - `import FS::{path, join}` のような選択 import を推奨導線にするか
+  - 同名 helper を持つ標準 module 同士を同時 import した場合の ergonomics を、alias import などで改善するか
+- 受け入れ条件:
+  - `FileSystemPermissions` の field 名が docs / stdlib / runtime display / tests で一致する。
+  - `File` と `FS` の責務境界を崩さず、qualified call で常に曖昧性なく使える。
+  - import ergonomics を改善する場合も、既存の import collision diagnostics を弱めない。
+- テスト方針:
+  - `lib/tests/file_system.srt` では `FS::*` を qualified call で使う形を維持する。
+  - escape syntax や alias import を導入する場合は `compile_errors/modules` と `spec/modules` の両方に fixture を追加する。
+
 ---
 
 ## Deferred Topics
