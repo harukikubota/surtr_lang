@@ -1440,7 +1440,11 @@ fn relocate_chunk_ops_for_artifact(
             Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
                 *addr = map_chunk_pc(*addr, chunk_halt, base_top_len, chunk_func_base)?;
             }
-            Opcode::LoadConst(idx) | Opcode::StoreConstLocal { const_idx: idx, .. } => {
+            Opcode::LoadConst(idx)
+            | Opcode::StoreConstLocal { const_idx: idx, .. }
+            | Opcode::EqLocalTag {
+                tag_const_idx: idx, ..
+            } => {
                 *idx = idx.checked_add(const_base).ok_or_else(|| CodegenError {
                     message: "chunk const relocation overflow".into(),
                     span: Span { start: 0, end: 0 },
@@ -1845,7 +1849,11 @@ fn localize_chunk_indices(
 ) -> Result<(), CodegenError> {
     for op in opcodes.iter_mut() {
         match op {
-            Opcode::LoadConst(idx) | Opcode::StoreConstLocal { const_idx: idx, .. } => {
+            Opcode::LoadConst(idx)
+            | Opcode::StoreConstLocal { const_idx: idx, .. }
+            | Opcode::EqLocalTag {
+                tag_const_idx: idx, ..
+            } => {
                 let idx_usize = *idx as usize;
                 if idx_usize < const_base {
                     return Err(CodegenError {
@@ -1920,6 +1928,7 @@ fn localize_chunk_indices(
 #[cfg(test)]
 mod tests {
     use super::Codegen;
+    use crate::bytecode::Constant;
     use crate::opcode::Opcode;
     use scar::typed::{
         TypedDbgArg, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode, TypedPattern,
@@ -2154,6 +2163,27 @@ mod tests {
         assert!(!opcodes
             .windows(2)
             .any(|window| matches!(window, [Opcode::LoadLocal(_), Opcode::StoreLocal(_)])));
+    }
+
+    #[test]
+    fn emit_local_tag_compare_uses_eq_local_tag_opcode() {
+        let mut gene = Codegen::new();
+        let tag_const = gene.add_constant(Constant::Tag(1));
+
+        gene.emit(Opcode::LoadLocal(2));
+        gene.emit(Opcode::GetTag);
+        gene.emit(Opcode::LoadConst(tag_const));
+        gene.emit(Opcode::EqTag);
+
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+
+        assert_eq!(
+            opcodes,
+            vec![Opcode::EqLocalTag {
+                local_idx: 2,
+                tag_const_idx: tag_const,
+            }]
+        );
     }
 
     #[test]
@@ -3279,6 +3309,29 @@ impl Codegen {
     }
 
     fn emit(&mut self, op: Opcode) {
+        if matches!(op, Opcode::EqTag) && self.ir.len() >= 3 {
+            let start = self.ir.len() - 3;
+            let current = self.ir.len();
+            if self
+                .label_positions
+                .values()
+                .all(|position| !((start + 1)..=current).contains(position))
+            {
+                if let [IrOp::Op(Opcode::LoadLocal(local_idx)), IrOp::Op(Opcode::GetTag), IrOp::Op(Opcode::LoadConst(tag_const_idx))] =
+                    &self.ir[start..]
+                {
+                    let local_idx = *local_idx;
+                    let tag_const_idx = *tag_const_idx;
+                    self.ir.truncate(start);
+                    self.ir.push(IrOp::Op(Opcode::EqLocalTag {
+                        local_idx,
+                        tag_const_idx,
+                    }));
+                    return;
+                }
+            }
+        }
+
         if let Opcode::StoreLocal(local_idx) = op {
             if self
                 .label_positions

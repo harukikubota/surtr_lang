@@ -112,6 +112,10 @@ pub enum OpcodeView {
         src_local_idx: u32,
         dst_local_idx: u32,
     },
+    EqLocalTag {
+        local_idx: u32,
+        tag_const_idx: u32,
+    },
     AddInt,
     SubInt,
     MulInt,
@@ -479,6 +483,13 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
         } => OpcodeView::CopyLocal {
             src_local_idx: *src_local_idx,
             dst_local_idx: *dst_local_idx,
+        },
+        Opcode::EqLocalTag {
+            local_idx,
+            tag_const_idx,
+        } => OpcodeView::EqLocalTag {
+            local_idx: *local_idx,
+            tag_const_idx: *tag_const_idx,
         },
         Opcode::AddInt => OpcodeView::AddInt,
         Opcode::SubInt => OpcodeView::SubInt,

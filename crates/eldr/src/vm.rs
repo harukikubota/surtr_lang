@@ -4517,7 +4517,11 @@ impl VM {
                         return Err(RuntimeError::new(format!("Invalid jump target: {}", addr)));
                     }
                 }
-                Opcode::LoadConst(idx) | Opcode::StoreConstLocal { const_idx: idx, .. } => {
+                Opcode::LoadConst(idx)
+                | Opcode::StoreConstLocal { const_idx: idx, .. }
+                | Opcode::EqLocalTag {
+                    tag_const_idx: idx, ..
+                } => {
                     if *idx as usize >= bytecode.constants.len() {
                         return Err(RuntimeError::new(format!(
                             "LoadConst index out of bounds: {}",
@@ -4603,7 +4607,11 @@ impl VM {
                         )));
                     }
                 }
-                Opcode::LoadConst(idx) | Opcode::StoreConstLocal { const_idx: idx, .. } => {
+                Opcode::LoadConst(idx)
+                | Opcode::StoreConstLocal { const_idx: idx, .. }
+                | Opcode::EqLocalTag {
+                    tag_const_idx: idx, ..
+                } => {
                     if *idx as usize >= chunk.constants.len() {
                         return Err(RuntimeError::new(format!(
                             "Bytecode verifier: chunk LoadConst index out of bounds: {}",
@@ -4793,7 +4801,11 @@ impl VM {
                         ))
                     })?;
                 }
-                Opcode::LoadConst(idx) | Opcode::StoreConstLocal { const_idx: idx, .. } => {
+                Opcode::LoadConst(idx)
+                | Opcode::StoreConstLocal { const_idx: idx, .. }
+                | Opcode::EqLocalTag {
+                    tag_const_idx: idx, ..
+                } => {
                     *idx = idx.checked_add(const_base).ok_or_else(|| {
                         RuntimeError::new(format!(
                             "Const relocation overflow: index {} + base {}",
@@ -5219,6 +5231,23 @@ impl VM {
                 let b = self.pop_tag()?;
                 let a = self.pop_tag()?;
                 self.stack.push(Value::Bool(a == b));
+            }
+            Opcode::EqLocalTag {
+                local_idx,
+                tag_const_idx,
+            } => {
+                let expected = self.constant_tag(tag_const_idx)?;
+                let actual = match self
+                    .current_frame()?
+                    .locals
+                    .get(local_idx as usize)
+                    .ok_or_else(|| {
+                        RuntimeError::new(format!("EqLocalTag local out of bounds: {}", local_idx))
+                    })? {
+                    Value::Tagged { tag, .. } => *tag,
+                    _ => return Err(RuntimeError::new("GetTag on non-tagged value")),
+                };
+                self.stack.push(Value::Bool(actual == expected));
             }
             Opcode::Dbg {
                 template_id,
@@ -5691,6 +5720,13 @@ impl VM {
             Constant::Bool(b) => Value::Bool(*b),
             Constant::Unit => Value::Unit,
         })
+    }
+
+    fn constant_tag(&self, idx: u32) -> Result<u32, RuntimeError> {
+        match self.constant_value(idx)? {
+            Value::Tag(tag) => Ok(tag),
+            other => Err(RuntimeError::new(format!("Expected Tag, got {:?}", other))),
+        }
     }
 
     fn pop_stack(&mut self) -> Result<Value, RuntimeError> {
@@ -6535,6 +6571,32 @@ mod tests {
         assert_eq!(ctx.pc, 1);
         assert_eq!(ctx.stack, Vec::<Value>::new());
         assert_eq!(ctx.frames[0].locals[1], Value::Int(int(7)));
+    }
+
+    #[test]
+    fn eq_local_tag_executes_as_one_opcode() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::EqLocalTag {
+                local_idx: 0,
+                tag_const_idx: 0,
+            },
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Tag(3)];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 1);
+        ctx.frames[0].locals[0] = Value::Tagged {
+            tag: 3,
+            fields: Vec::new(),
+        };
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected one opcode to continue, got {other:?}"),
+        }
+
+        assert_eq!(ctx.pc, 1);
+        assert_eq!(ctx.stack, vec![Value::Bool(true)]);
     }
 
     #[test]
