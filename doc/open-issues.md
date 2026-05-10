@@ -100,21 +100,6 @@
   - tail recursion / mutual recursion / non-tail recursion の観測ケースを回帰基準にする。
   - CLI / JSON 露出を増やす場合は integration で形状を固定する。
 
-### OI-014 private value 持ち出し warning 方針
-
-- 背景:
-  - private field access 自体は FacetPath 生成時に owner impl 境界で拒否する方針へ整理済みだが、owner impl 内で得た plain value を返す形に warning を出すかは未確定である。
-  - これは安全性というより lint / UX の契約として残っている論点である。
-- 未確定点:
-  - owner impl 内の `return self.password` / `return user.password` に warning を導入するか
-  - 導入する場合の severity、文言、lint 体系との接続
-- 受け入れ条件:
-  - warning 導入有無が `doc/要件定義v9.md` と `docs/dev/テスト方針.md` で一貫する。
-  - warning を入れても成功ケースを compile error にしない。
-- テスト方針:
-  - warning 導入時は diagnostics の human / JSON 出力を integration で固定する。
-  - warning を導入しない場合は既存成功 fixture を維持する。
-
 ### OI-015 test DSL I/O capture の `it` 単位分離
 
 - 背景:
@@ -218,26 +203,6 @@
 - テスト方針:
   - 現状の reject ケースは `compile_errors` で維持する。
   - 将来許可する場合は boot plan 生成、restart 伝播、status 表示の fixture を追加する。
-
-### OI-022 Supervisor policy の公開深度
-
-- 状態:
-  - 2026-05-10 に `shutdown_timeout` の `SupervisorStatus` 露出は解決。
-  - `SupervisorStatus.shutdown_timeout: Option<Duration>` とし、未指定は `Option::None`、定義または `supervisor_init` override 指定時は `Option::Some(duration)` を返す。
-  - `supervisor_init` の supervisor policy override は bytecode merge 後も `RuntimeBootPlan.supervisor_overrides` に保持する。
-- 背景:
-  - `defsupervisor` では `strategy`, `max_restarts`, `max_seconds`, `child_restart_default`, `allow_adopt`、必要なら `shutdown_timeout` を policy 値として扱う方針である。
-  - `shutdown_timeout` を含む policy の user-facing surface、status 表示、override 深度のうち、status 表示と boot-time override 反映は baseline として固定した。
-- 未確定点:
-  - `child_restart_default` と `shutdown_timeout` 以外の restart semantics を runtime status / observability でどこまで露出するか
-  - boot-time override を将来どの policy まで広げるか
-- 受け入れ条件:
-  - compiler-managed supervisor surface と runtime status 表示が同じ policy 集合を前提にできる。
-  - policy を追加・露出しても restart semantics の未確定部分を先に固定しなくて済む。
-- テスト方針:
-  - `shutdown_timeout` の surface は `spec/modules/process_supervisor_user_surface` と `unit/eldr` で固定済み。
-  - 今後 surface 化する policy は `spec/modules/process_supervisor_user_surface` と compile error fixture で固定する。
-  - observability へ露出する場合は dump / REPL 表示の形状を integration で固定する。
 
 ### OI-023 Task.Supervisor / Task-DynamicSupervisor link / worker lazy init
 
