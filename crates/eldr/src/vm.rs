@@ -4517,7 +4517,7 @@ impl VM {
                         return Err(RuntimeError::new(format!("Invalid jump target: {}", addr)));
                     }
                 }
-                Opcode::LoadConst(idx) => {
+                Opcode::LoadConst(idx) | Opcode::StoreConstLocal { const_idx: idx, .. } => {
                     if *idx as usize >= bytecode.constants.len() {
                         return Err(RuntimeError::new(format!(
                             "LoadConst index out of bounds: {}",
@@ -4603,7 +4603,7 @@ impl VM {
                         )));
                     }
                 }
-                Opcode::LoadConst(idx) => {
+                Opcode::LoadConst(idx) | Opcode::StoreConstLocal { const_idx: idx, .. } => {
                     if *idx as usize >= chunk.constants.len() {
                         return Err(RuntimeError::new(format!(
                             "Bytecode verifier: chunk LoadConst index out of bounds: {}",
@@ -4793,7 +4793,7 @@ impl VM {
                         ))
                     })?;
                 }
-                Opcode::LoadConst(idx) => {
+                Opcode::LoadConst(idx) | Opcode::StoreConstLocal { const_idx: idx, .. } => {
                     *idx = idx.checked_add(const_base).ok_or_else(|| {
                         RuntimeError::new(format!(
                             "Const relocation overflow: index {} + base {}",
@@ -4879,17 +4879,7 @@ impl VM {
             Opcode::Halt => return Ok(OpcodeControl::Halt),
 
             Opcode::LoadConst(idx) => {
-                let c = self.bytecode.constants.get(idx as usize).ok_or_else(|| {
-                    RuntimeError::new(format!("LoadConst index out of bounds: {}", idx))
-                })?;
-                let val = match c {
-                    Constant::Int(n) => Value::Int(n.clone()),
-                    Constant::Tag(tag) => Value::Tag(*tag),
-                    Constant::Float(f) => Value::Float(*f),
-                    Constant::Str(s) => Value::Str(s.clone()),
-                    Constant::Bool(b) => Value::Bool(*b),
-                    Constant::Unit => Value::Unit,
-                };
+                let val = self.constant_value(idx)?;
                 self.stack.push(val);
             }
 
@@ -4921,6 +4911,21 @@ impl VM {
                     .get_mut(slot as usize)
                     .ok_or_else(|| {
                         RuntimeError::new(format!("StoreLocal out of bounds: {}", slot))
+                    })?;
+                *target = val;
+            }
+
+            Opcode::StoreConstLocal {
+                const_idx,
+                local_idx,
+            } => {
+                let val = self.constant_value(const_idx)?;
+                let target = self
+                    .current_frame_mut()?
+                    .locals
+                    .get_mut(local_idx as usize)
+                    .ok_or_else(|| {
+                        RuntimeError::new(format!("StoreConstLocal out of bounds: {}", local_idx))
                     })?;
                 *target = val;
             }
@@ -5644,6 +5649,21 @@ impl VM {
     }
 
     // Stack helpers
+
+    fn constant_value(&self, idx: u32) -> Result<Value, RuntimeError> {
+        let constant =
+            self.bytecode.constants.get(idx as usize).ok_or_else(|| {
+                RuntimeError::new(format!("LoadConst index out of bounds: {}", idx))
+            })?;
+        Ok(match constant {
+            Constant::Int(n) => Value::Int(n.clone()),
+            Constant::Tag(tag) => Value::Tag(*tag),
+            Constant::Float(f) => Value::Float(*f),
+            Constant::Str(s) => Value::Str(s.clone()),
+            Constant::Bool(b) => Value::Bool(*b),
+            Constant::Unit => Value::Unit,
+        })
+    }
 
     fn pop_stack(&mut self) -> Result<Value, RuntimeError> {
         self.stack
@@ -6441,6 +6461,29 @@ mod tests {
         assert_eq!(ctx.pc, 1);
         assert_eq!(ctx.stack, vec![Value::Int(int(7))]);
         assert_eq!(vm.pc, 1);
+    }
+
+    #[test]
+    fn store_const_local_executes_as_one_opcode() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::StoreConstLocal {
+                const_idx: 0,
+                local_idx: 1,
+            },
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(7))];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 2);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected one opcode to continue, got {other:?}"),
+        }
+
+        assert_eq!(ctx.pc, 1);
+        assert_eq!(ctx.stack, Vec::<Value>::new());
+        assert_eq!(ctx.frames[0].locals[1], Value::Int(int(7)));
     }
 
     #[test]

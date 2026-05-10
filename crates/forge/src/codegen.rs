@@ -1440,7 +1440,7 @@ fn relocate_chunk_ops_for_artifact(
             Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
                 *addr = map_chunk_pc(*addr, chunk_halt, base_top_len, chunk_func_base)?;
             }
-            Opcode::LoadConst(idx) => {
+            Opcode::LoadConst(idx) | Opcode::StoreConstLocal { const_idx: idx, .. } => {
                 *idx = idx.checked_add(const_base).ok_or_else(|| CodegenError {
                     message: "chunk const relocation overflow".into(),
                     span: Span { start: 0, end: 0 },
@@ -1845,7 +1845,7 @@ fn localize_chunk_indices(
 ) -> Result<(), CodegenError> {
     for op in opcodes.iter_mut() {
         match op {
-            Opcode::LoadConst(idx) => {
+            Opcode::LoadConst(idx) | Opcode::StoreConstLocal { const_idx: idx, .. } => {
                 let idx_usize = *idx as usize;
                 if idx_usize < const_base {
                     return Err(CodegenError {
@@ -1921,7 +1921,9 @@ fn localize_chunk_indices(
 mod tests {
     use super::Codegen;
     use crate::opcode::Opcode;
-    use scar::typed::{TypedDbgArg, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode};
+    use scar::typed::{
+        TypedDbgArg, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode, TypedPattern,
+    };
     use scar::types::Ty;
     use spire::ast::{BinOp, Lit, Span};
 
@@ -2083,12 +2085,37 @@ mod tests {
             .expect("ensure emission should succeed");
         let (opcodes, _) = gene.finalize().expect("labels should resolve");
 
-        assert!(opcodes
-            .iter()
-            .any(|opcode| matches!(opcode, Opcode::StoreLocal(_))));
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::StoreLocal(_) | Opcode::StoreConstLocal { .. }
+        )));
         assert!(opcodes
             .iter()
             .any(|opcode| matches!(opcode, Opcode::CallClosure { arity: 1, .. })));
+    }
+
+    #[test]
+    fn emit_literal_bind_uses_store_const_local_opcode() {
+        let mut gene = Codegen::new();
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: span(1, 9),
+            node: TypedInner::Bind(
+                TypedPattern::Wildcard(Ty::Int),
+                Box::new(lit_node(Ty::Int, Lit::Int(42.into()), span(5, 7))),
+            ),
+        };
+
+        gene.emit_node(&node)
+            .expect("literal bind emission should succeed");
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::StoreConstLocal { .. })));
+        assert!(!opcodes
+            .windows(2)
+            .any(|window| matches!(window, [Opcode::LoadConst(_), Opcode::StoreLocal(_)])));
     }
 
     #[test]
@@ -3214,6 +3241,23 @@ impl Codegen {
     }
 
     fn emit(&mut self, op: Opcode) {
+        if let Opcode::StoreLocal(local_idx) = op {
+            if self
+                .label_positions
+                .values()
+                .all(|position| *position != self.ir.len())
+            {
+                if let Some(IrOp::Op(Opcode::LoadConst(const_idx))) = self.ir.last() {
+                    let const_idx = *const_idx;
+                    self.ir.pop();
+                    self.ir.push(IrOp::Op(Opcode::StoreConstLocal {
+                        const_idx,
+                        local_idx,
+                    }));
+                    return;
+                }
+            }
+        }
         self.ir.push(IrOp::Op(op));
     }
 

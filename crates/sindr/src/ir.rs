@@ -141,6 +141,12 @@ pub enum Opcode {
 
     // Program termination
     Halt,
+
+    // Compressed opcodes. Keep appended to preserve existing bincode enum tags.
+    StoreConstLocal {
+        const_idx: u32,
+        local_idx: u32,
+    },
 }
 
 impl Opcode {
@@ -151,6 +157,7 @@ impl Opcode {
             Self::LoadFunctionRef(..) => "LoadFunctionRef",
             Self::LoadLocal(..) => "LoadLocal",
             Self::StoreLocal(..) => "StoreLocal",
+            Self::StoreConstLocal { .. } => "StoreConstLocal",
             Self::AddInt => "AddInt",
             Self::SubInt => "SubInt",
             Self::MulInt => "MulInt",
@@ -1736,6 +1743,23 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_encode_decode_store_const_local_opcode() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![
+            Opcode::StoreConstLocal {
+                const_idx: 0,
+                local_idx: 0,
+            },
+            Opcode::Halt,
+        ];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
     fn roundtrip_encode_decode_with_source_map_some() {
         let bytecode = sample_bytecode(Some(SourceMap {
             entries: vec![OpcodeSource {
@@ -1775,7 +1799,10 @@ mod tests {
         let bytes = bytecode.encode().expect("encode should succeed");
         let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
 
-        assert_eq!(decoded.type_registry.entries(), bytecode.type_registry.entries());
+        assert_eq!(
+            decoded.type_registry.entries(),
+            bytecode.type_registry.entries()
+        );
         assert_eq!(
             decoded
                 .type_registry

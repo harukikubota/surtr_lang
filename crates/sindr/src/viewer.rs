@@ -104,6 +104,10 @@ pub enum OpcodeView {
     StoreLocal {
         local_idx: u32,
     },
+    StoreConstLocal {
+        const_idx: u32,
+        local_idx: u32,
+    },
     AddInt,
     SubInt,
     MulInt,
@@ -456,6 +460,13 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
             local_idx: *local_idx,
         },
         Opcode::StoreLocal(local_idx) => OpcodeView::StoreLocal {
+            local_idx: *local_idx,
+        },
+        Opcode::StoreConstLocal {
+            const_idx,
+            local_idx,
+        } => OpcodeView::StoreConstLocal {
+            const_idx: *const_idx,
             local_idx: *local_idx,
         },
         Opcode::AddInt => OpcodeView::AddInt,
