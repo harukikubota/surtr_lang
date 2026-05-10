@@ -1,0 +1,5 @@
+result = Json::parse("{")
+match result {
+  Ok(_) => print("unexpected-ok"),
+  Err(err) => print(Error::kind(err)),
+}

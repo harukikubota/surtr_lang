@@ -10,6 +10,46 @@ use spire::ast::{BinOp, DbgArg, InterpolatedPart};
 
 const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
 
+#[derive(Debug, Clone, Copy)]
+struct TypeRefHelperSpec {
+    bare_name: &'static str,
+    owner: &'static str,
+    method: &'static str,
+    arity: usize,
+    witness_arg_indices: &'static [usize],
+}
+
+const TYPE_REF_HELPERS: &[TypeRefHelperSpec] = &[
+    TypeRefHelperSpec {
+        bare_name: "from",
+        owner: "From",
+        method: "from",
+        arity: 2,
+        witness_arg_indices: &[1],
+    },
+    TypeRefHelperSpec {
+        bare_name: "try_from",
+        owner: "TryFrom",
+        method: "try_from",
+        arity: 2,
+        witness_arg_indices: &[1],
+    },
+    TypeRefHelperSpec {
+        bare_name: "encode",
+        owner: "Encode",
+        method: "encode",
+        arity: 2,
+        witness_arg_indices: &[1],
+    },
+    TypeRefHelperSpec {
+        bare_name: "decode",
+        owner: "Decode",
+        method: "decode",
+        arity: 3,
+        witness_arg_indices: &[1, 2],
+    },
+];
+
 impl Resolver {
     fn partial_pipeline_special_form_arity(name: &str) -> Option<usize> {
         match name {
@@ -1054,21 +1094,48 @@ impl Resolver {
         Ok(self.desugar_pipeline_rhs_special_form_partial(rhs))
     }
 
-    fn conversion_call_head(func: &Ast) -> Option<&'static str> {
+    fn type_ref_helper_for_call(func: &Ast) -> Option<&'static TypeRefHelperSpec> {
         match func {
-            Ast::Var(_, name) if name == "from" => Some("from"),
-            Ast::Var(_, name) if name == "try_from" => Some("try_from"),
+            Ast::Var(_, name) => TYPE_REF_HELPERS
+                .iter()
+                .find(|spec| spec.bare_name == name.as_str()),
             Ast::Path(_, path) if path.segments.len() >= 2 => {
                 let method = path.segments.last()?;
                 let owner = path.segments.get(path.segments.len() - 2)?;
-                match (owner.as_str(), method.as_str()) {
-                    ("From", "from") => Some("from"),
-                    ("TryFrom", "try_from") => Some("try_from"),
-                    _ => None,
-                }
+                TYPE_REF_HELPERS
+                    .iter()
+                    .find(|spec| spec.owner == owner.as_str() && spec.method == method.as_str())
             }
             _ => None,
         }
+    }
+
+    fn resolve_type_ref_helper_func(
+        &self,
+        span: Span,
+        spec: &TypeRefHelperSpec,
+    ) -> Option<Resolved> {
+        let method_alias = format!("{}::{}", spec.owner, spec.method);
+        let uid = self
+            .scope
+            .lookup(&method_alias)
+            .or_else(|| self.declaration_uids.get(&method_alias).copied())?;
+        let fq_name = self
+            .declaration_fq_name_for_uid(uid)
+            .unwrap_or(method_alias);
+        let entry = self.declaration_entries.get(&fq_name)?;
+        (entry.kind == DeclarationKind::TraitMethod).then(|| {
+            Resolved::Var(
+                span.clone(),
+                ResolvedId {
+                    name: spec.method.into(),
+                    qualified_name: Some(fq_name),
+                    unique_id: uid,
+                    compiler_generated: false,
+                    span,
+                },
+            )
+        })
     }
 
     fn undefined_callable_arity_message(func: &Ast, arity: usize) -> Option<String> {
@@ -1668,21 +1735,33 @@ impl Resolver {
                     }
                 }
 
-                if Self::conversion_call_head(&func).is_some() {
+                if let Some(spec) = Self::type_ref_helper_for_call(&func) {
                     let resolved_func = self
-                        .resolve_node(*func.clone())
-                        .map_err(|err| self.map_undefined_callable_error(err, &func, args.len()))?;
-                    if args.len() != 2 {
+                        .resolve_type_ref_helper_func(func.span().clone(), spec)
+                        .map(Ok)
+                        .unwrap_or_else(|| {
+                            self.resolve_node(*func.clone()).map_err(|err| {
+                                self.map_undefined_callable_error(err, &func, args.len())
+                            })
+                        })?;
+                    let injected_receiver = args.len() + 1 == spec.arity;
+                    if args.len() != spec.arity && !injected_receiver {
                         return Err(ResolveError {
-                            message: "from/try_from expects exactly 2 positional arguments".into(),
+                            message: format!(
+                                "{} expects exactly {} positional arguments",
+                                spec.bare_name, spec.arity
+                            ),
                             span,
                             related_labels: Vec::new(),
                         });
                     }
-                    let mut resolved_args = Vec::with_capacity(2);
+                    let mut resolved_args = Vec::with_capacity(spec.arity);
                     for (idx, arg) in args.into_iter().enumerate() {
+                        let effective_idx = if injected_receiver { idx + 1 } else { idx };
                         match arg {
-                            RecordLitArg::Positional(expr) if idx == 1 => {
+                            RecordLitArg::Positional(expr)
+                                if spec.witness_arg_indices.contains(&effective_idx) =>
+                            {
                                 let witness_ty = Self::type_witness_from_expr(expr)?;
                                 resolved_args.push(ResolvedRecordLitArg::Positional(
                                     Resolved::TypeRefWitness(
@@ -1695,7 +1774,10 @@ impl Resolver {
                                 .push(ResolvedRecordLitArg::Positional(self.resolve_node(expr)?)),
                             RecordLitArg::Named(_, expr) => {
                                 return Err(ResolveError {
-                                    message: "from/try_from does not accept named arguments".into(),
+                                    message: format!(
+                                        "{} does not accept named arguments",
+                                        spec.bare_name
+                                    ),
                                     span: expr.span().clone(),
                                     related_labels: Vec::new(),
                                 });
@@ -2899,7 +2981,6 @@ impl Resolver {
         self.resolve_trait_reference(trait_name, span)
             .map(|(_, qualified_name)| qualified_name)
     }
-
 }
 
 pub(super) fn validate_trait_impl_pairs_in_nodes(
@@ -2914,11 +2995,7 @@ pub(super) fn validate_trait_impl_pairs_in_nodes(
             trait_id.qualified_name.as_deref().unwrap_or(&trait_id.name),
             trait_args,
         );
-        let pair_key = format!(
-            "{} for {}",
-            trait_name,
-            ast_ty_key(target_ty)
-        );
+        let pair_key = format!("{} for {}", trait_name, ast_ty_key(target_ty));
         if let Some(first_span) = seen_pairs.get(&pair_key) {
             return Err(ResolveError {
                 message: format!(

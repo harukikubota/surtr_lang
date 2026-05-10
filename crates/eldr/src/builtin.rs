@@ -1,6 +1,6 @@
 use crate::error::RuntimeError;
 use crate::value::Value;
-use crate::vm::{TaskMode, VM, VmFileError, VmFileMode};
+use crate::vm::{TaskMode, VmFileError, VmFileMode, VM};
 use num_bigint::{BigInt, BigUint, Sign};
 use regex::Regex;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
@@ -644,6 +644,14 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "__operator_string_concat",
         func: builtin_operator_string_concat,
+    },
+    BuiltinImpl {
+        name: "json_parse",
+        func: builtin_json_parse,
+    },
+    BuiltinImpl {
+        name: "json_stringify",
+        func: builtin_json_stringify,
     },
 ];
 
@@ -3142,6 +3150,266 @@ fn duration_to_u64(
     })
 }
 
+#[derive(Debug, Clone)]
+struct JsonRuntimeConstructors {
+    null: u32,
+    bool_: u32,
+    int: u32,
+    float: u32,
+    string: u32,
+    array: u32,
+    object: u32,
+}
+
+#[derive(Debug)]
+enum JsonStringifyError {
+    Recoverable(String),
+    Internal(String),
+}
+
+impl JsonStringifyError {
+    fn recoverable(message: impl Into<String>) -> Self {
+        Self::Recoverable(message.into())
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self::Internal(message.into())
+    }
+}
+
+fn json_constructors(vm: &VM) -> Result<JsonRuntimeConstructors, RuntimeError> {
+    Ok(JsonRuntimeConstructors {
+        null: find_variant_tag(vm, "JsonValue::Null")?,
+        bool_: find_variant_tag(vm, "JsonValue::Bool")?,
+        int: find_variant_tag(vm, "JsonValue::Int")?,
+        float: find_variant_tag(vm, "JsonValue::Float")?,
+        string: find_variant_tag(vm, "JsonValue::String")?,
+        array: find_variant_tag(vm, "JsonValue::Array")?,
+        object: find_variant_tag(vm, "JsonValue::Object")?,
+    })
+}
+
+fn find_variant_tag(vm: &VM, qualified_variant: &str) -> Result<u32, RuntimeError> {
+    vm.type_registry()
+        .tag_by_name(qualified_variant)
+        .ok_or_else(|| {
+            RuntimeError::new(format!("missing Json runtime variant {qualified_variant}"))
+        })
+}
+
+fn json_discriminant(index: i64) -> Value {
+    Value::Int(BigInt::from(index))
+}
+
+fn json_variant(tag: u32, discriminant: i64, payload: Vec<Value>) -> Value {
+    let mut fields = Vec::with_capacity(payload.len() + 1);
+    fields.push(json_discriminant(discriminant));
+    fields.extend(payload);
+    Value::Tagged { tag, fields }
+}
+
+fn json_value_to_surtr(
+    ctors: &JsonRuntimeConstructors,
+    value: serde_json::Value,
+) -> Result<Value, RuntimeError> {
+    match value {
+        serde_json::Value::Null => Ok(json_variant(ctors.null, 0, Vec::new())),
+        serde_json::Value::Bool(value) => {
+            Ok(json_variant(ctors.bool_, 1, vec![Value::Bool(value)]))
+        }
+        serde_json::Value::Number(number) => {
+            if let Some(value) = number.as_i64() {
+                Ok(json_variant(
+                    ctors.int,
+                    2,
+                    vec![Value::Int(BigInt::from(value))],
+                ))
+            } else if let Some(value) = number.as_u64() {
+                Ok(json_variant(
+                    ctors.int,
+                    2,
+                    vec![Value::Int(BigInt::from(value))],
+                ))
+            } else if let Some(value) = number.as_f64() {
+                Ok(json_variant(ctors.float, 3, vec![Value::Float(value)]))
+            } else {
+                Err(RuntimeError::new(
+                    "serde_json number could not be represented",
+                ))
+            }
+        }
+        serde_json::Value::String(text) => {
+            Ok(json_variant(ctors.string, 4, vec![Value::Str(text)]))
+        }
+        serde_json::Value::Array(values) => {
+            let items = values
+                .into_iter()
+                .map(|item| json_value_to_surtr(ctors, item))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(json_variant(
+                ctors.array,
+                5,
+                vec![Value::List(ListHandle::from_items(items))],
+            ))
+        }
+        serde_json::Value::Object(entries) => {
+            let mut map = HashMapHandle::empty();
+            for (key, value) in entries {
+                let converted = json_value_to_surtr(ctors, value)?;
+                map = map.insert(key, converted);
+            }
+            Ok(json_variant(ctors.object, 6, vec![Value::HashMap(map)]))
+        }
+    }
+}
+
+fn builtin_json_parse(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let [Value::Str(text)] = args.as_slice() else {
+        return Err(RuntimeError::new("json_parse expects String"));
+    };
+    match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(value) => {
+            let ctors = json_constructors(vm)?;
+            let converted = json_value_to_surtr(&ctors, value)?;
+            Ok(ok_result(converted))
+        }
+        Err(err) => {
+            let detail = err.to_string();
+            Ok(err_result(
+                vm,
+                "JsonParseError",
+                &format!(
+                    "json parse error at {}:{}: {}",
+                    err.line(),
+                    err.column(),
+                    detail
+                ),
+            ))
+        }
+    }
+}
+
+fn bigint_to_json_number(value: &BigInt) -> Result<serde_json::Number, JsonStringifyError> {
+    if let Some(value) = value.to_i64() {
+        Ok(serde_json::Number::from(value))
+    } else if let Some(value) = value.to_u64() {
+        Ok(serde_json::Number::from(value))
+    } else {
+        Err(JsonStringifyError::recoverable(format!(
+            "JsonValue::Int cannot be represented as a JSON number: {value}"
+        )))
+    }
+}
+
+fn surtr_json_to_serde(
+    ctors: &JsonRuntimeConstructors,
+    value: &Value,
+) -> Result<serde_json::Value, JsonStringifyError> {
+    match value {
+        Value::Tagged { tag, fields } if *tag == ctors.null && fields.len() == 1 => {
+            Ok(serde_json::Value::Null)
+        }
+        Value::Tagged { tag, fields } if *tag == ctors.bool_ && fields.len() == 2 => {
+            match &fields[1] {
+                Value::Bool(value) => Ok(serde_json::Value::Bool(*value)),
+                got => Err(JsonStringifyError::internal(format!(
+                    "JsonValue::Bool expected Boolean, got {got:?}"
+                ))),
+            }
+        }
+        Value::Tagged { tag, fields } if *tag == ctors.int && fields.len() == 2 => {
+            match &fields[1] {
+                Value::Int(value) => bigint_to_json_number(value).map(serde_json::Value::Number),
+                got => Err(JsonStringifyError::internal(format!(
+                    "JsonValue::Int expected Int, got {got:?}"
+                ))),
+            }
+        }
+        Value::Tagged { tag, fields } if *tag == ctors.float && fields.len() == 2 => {
+            match &fields[1] {
+                Value::Float(value) => serde_json::Number::from_f64(*value)
+                    .map(serde_json::Value::Number)
+                    .ok_or_else(|| {
+                        JsonStringifyError::recoverable(
+                            "JsonValue::Float cannot represent NaN or infinity",
+                        )
+                    }),
+                got => Err(JsonStringifyError::internal(format!(
+                    "JsonValue::Float expected Float, got {got:?}"
+                ))),
+            }
+        }
+        Value::Tagged { tag, fields } if *tag == ctors.string && fields.len() == 2 => {
+            match &fields[1] {
+                Value::Str(text) => Ok(serde_json::Value::String(text.clone())),
+                got => Err(JsonStringifyError::internal(format!(
+                    "JsonValue::String expected String, got {got:?}"
+                ))),
+            }
+        }
+        Value::Tagged { tag, fields } if *tag == ctors.array && fields.len() == 2 => {
+            match &fields[1] {
+                Value::List(values) => values
+                    .iter()
+                    .map(|item| surtr_json_to_serde(ctors, &item))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(serde_json::Value::Array),
+                got => Err(JsonStringifyError::internal(format!(
+                    "JsonValue::Array expected List, got {got:?}"
+                ))),
+            }
+        }
+        Value::Tagged { tag, fields } if *tag == ctors.object && fields.len() == 2 => {
+            match &fields[1] {
+                Value::HashMap(map) => {
+                    let mut object = serde_json::Map::new();
+                    for (key, item) in map.sorted_entries() {
+                        object.insert(key, surtr_json_to_serde(ctors, &item)?);
+                    }
+                    Ok(serde_json::Value::Object(object))
+                }
+                got => Err(JsonStringifyError::internal(format!(
+                    "JsonValue::Object expected HashMap, got {got:?}"
+                ))),
+            }
+        }
+        Value::Tagged { tag, fields }
+            if [
+                ctors.bool_,
+                ctors.int,
+                ctors.float,
+                ctors.string,
+                ctors.array,
+                ctors.object,
+            ]
+            .contains(tag) =>
+        {
+            Err(JsonStringifyError::internal(format!(
+                "JsonValue variant has invalid arity: tag {tag}, fields {fields:?}"
+            )))
+        }
+        other => Err(JsonStringifyError::recoverable(format!(
+            "json_stringify expects JsonValue, got {other:?}"
+        ))),
+    }
+}
+
+fn builtin_json_stringify(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let [value] = args.as_slice() else {
+        return Err(RuntimeError::new("json_stringify expects JsonValue"));
+    };
+    let ctors = json_constructors(vm)?;
+    match surtr_json_to_serde(&ctors, value) {
+        Ok(json) => Ok(ok_result(Value::Str(json.to_string()))),
+        Err(JsonStringifyError::Recoverable(detail)) => Ok(err_result(
+            vm,
+            "JsonEncodeError",
+            &format!("json encode error: {detail}"),
+        )),
+        Err(JsonStringifyError::Internal(message)) => Err(RuntimeError::new(message)),
+    }
+}
+
 fn ok_result(value: Value) -> Value {
     Value::Tagged {
         tag: 0,
@@ -3280,7 +3548,10 @@ fn none_result(vm: &VM) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{call_builtin, err_result_from_rich_error, inspect_value, ok_result, BUILTIN_IMPLS};
+    use super::{
+        call_builtin, err_result_from_rich_error, inspect_value, json_variant, ok_result,
+        BUILTIN_IMPLS,
+    };
     use crate::vm::VM;
     use sindr::builtin::{builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name};
     use sindr::ir::{Bytecode, Constant, DocEntry, DocKind, FunctionEntry, FunctionFlags, Opcode};
@@ -3345,6 +3616,120 @@ mod tests {
         builtin_id_by_name(name).unwrap_or_else(|| panic!("missing builtin metadata for {name}"))
     }
 
+    fn json_type_entries() -> Vec<TypeEntry> {
+        vec![
+            TypeEntry {
+                tag: 10,
+                name: "JsonValue::Null".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec![],
+                private_flags: vec![],
+            },
+            TypeEntry {
+                tag: 11,
+                name: "JsonValue::Bool".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["value".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 12,
+                name: "JsonValue::Int".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["value".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 13,
+                name: "JsonValue::Float".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["value".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 14,
+                name: "JsonValue::String".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["value".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 15,
+                name: "JsonValue::Array".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["values".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 16,
+                name: "JsonValue::Object".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["map".into()],
+                private_flags: vec![false],
+            },
+        ]
+    }
+
+    fn json_vm() -> VM {
+        test_vm_with_types(json_type_entries())
+    }
+
+    fn parse_json_ok(text: &str) -> Value {
+        let mut vm = json_vm();
+        let result = call_builtin(
+            &mut vm,
+            builtin_id("json_parse"),
+            vec![Value::Str(text.into())],
+        )
+        .expect("json_parse should execute");
+        match result {
+            Value::Tagged { tag: 0, fields } => fields
+                .into_iter()
+                .next()
+                .expect("Ok result should carry a value"),
+            other => panic!("expected Ok result, got {:?}", other),
+        }
+    }
+
+    fn assert_json_variant(value: &Value, name: &str) {
+        let vm = json_vm();
+        let Value::Tagged { tag, .. } = value else {
+            panic!("expected tagged JsonValue, got {:?}", value);
+        };
+        let entry = vm
+            .type_registry()
+            .lookup(*tag)
+            .unwrap_or_else(|| panic!("missing type entry for tag {tag}"));
+        assert_eq!(entry.name, name);
+    }
+
+    fn json_int_value(value: i64) -> Value {
+        json_variant(12, 2, vec![Value::Int(int(value))])
+    }
+
+    fn json_object_value(entries: Vec<(&str, Value)>) -> Value {
+        json_variant(
+            16,
+            6,
+            vec![Value::HashMap(HashMapHandle::from_entries(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key.to_string(), value))
+                    .collect(),
+            ))],
+        )
+    }
+
+    fn ok_string(value: &Value) -> &str {
+        match value {
+            Value::Tagged { tag: 0, fields } => match fields.as_slice() {
+                [Value::Str(text)] => text,
+                other => panic!("expected Ok(String), got {:?}", other),
+            },
+            other => panic!("expected Ok result, got {:?}", other),
+        }
+    }
+
     fn sandbox_dir(prefix: &str) -> PathBuf {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
@@ -3360,6 +3745,45 @@ mod tests {
             let meta = builtin_meta_by_id(id as u16).expect("builtin metadata by id");
             assert_eq!(builtin.name, meta.name, "builtin impl mismatch at id {id}");
         }
+    }
+
+    #[test]
+    fn json_parse_returns_err_for_malformed_json() {
+        let mut vm = json_vm();
+        let result = call_builtin(
+            &mut vm,
+            builtin_id("json_parse"),
+            vec![Value::Str("{".into())],
+        )
+        .expect("json_parse itself should not raise RuntimeError for malformed user JSON");
+        match result {
+            Value::Tagged { tag: 1, fields } => match fields.as_slice() {
+                [Value::Error(rich)] => assert_eq!(rich.kind, "JsonParseError"),
+                other => panic!("expected JsonParseError value, got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn json_parse_classifies_int_and_float_numbers() {
+        let int_value = parse_json_ok("1");
+        assert_json_variant(&int_value, "JsonValue::Int");
+
+        let decimal_value = parse_json_ok("1.5");
+        assert_json_variant(&decimal_value, "JsonValue::Float");
+
+        let exponent_value = parse_json_ok("1e2");
+        assert_json_variant(&exponent_value, "JsonValue::Float");
+    }
+
+    #[test]
+    fn json_stringify_uses_deterministic_object_key_order() {
+        let mut vm = json_vm();
+        let value = json_object_value(vec![("b", json_int_value(2)), ("a", json_int_value(1))]);
+        let result = call_builtin(&mut vm, builtin_id("json_stringify"), vec![value])
+            .expect("json_stringify should execute");
+        assert_eq!(ok_string(&result), "{\"a\":1,\"b\":2}");
     }
 
     #[test]
@@ -4477,7 +4901,11 @@ mod tests {
             Value::Tagged { tag: 1, .. } => {}
             other => panic!("expected Err result from callback, got {other:?}"),
         }
-        assert_eq!(vm.open_file_count(), 0, "with_open should close handles on Err");
+        assert_eq!(
+            vm.open_file_count(),
+            0,
+            "with_open should close handles on Err"
+        );
 
         let _ = fs::remove_dir_all(dir);
     }

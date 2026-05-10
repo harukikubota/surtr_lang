@@ -19,7 +19,7 @@ Surtr の標準定義ソースは language surface の一部です。
 - type modules
   - `Int`, `String`, `Regex`, `Boolean`, `Error`, `List`, `Result`, `Option`, `HashMap`, `Facet`, `Float`
 - effect / runtime-facing modules
-  - `Process`, `IO`, `File`, `Task`, `Random`
+  - `Process`, `IO`, `File`, `Task`, `Random`, `Json`
 
 ## どこを見るか
 
@@ -28,6 +28,7 @@ Surtr の標準定義ソースは language surface の一部です。
 - 変換: `../../lib/traits/from.srt`, `../../lib/traits/try_from.srt`
 - 型ごとの helper: `../../lib/types/int.srt`, `../../lib/types/string.srt`, `../../lib/types/list.srt` など
 - 正規表現: `../../lib/types/regex.srt`
+- JSON: `../../lib/types/json.srt`, `../../lib/traits/encode.srt`, `../../lib/traits/decode.srt`
 - Facet path: `../../lib/facet.srt`
 - file I/O: `../../lib/file.srt`
 
@@ -50,6 +51,7 @@ xldr(2)>
 
 - `Kernel` を先に触りたいなら `./kernel.md`
 - `Regex` を触りたいなら `./regex.md`
+- `Json` を触りたいなら `./json.md`
 - `File` を触りたいなら `./file-io.md`
 - trait 系を見たいなら `./trait-impls.md`
 - path 操作を見たいなら `./facet.md`

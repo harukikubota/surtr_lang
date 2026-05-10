@@ -1,0 +1,46 @@
+include "./schema/json_schema.srt"
+
+import Test;
+
+test("Json") {
+  describe("parse") {
+    it("parses primitive values") {
+      null_value =? Json::parse("null")
+      assert_eq("JsonValue::Null", inspect(null_value))
+
+      true_value =? Json::parse("true")
+      assert_eq("JsonValue::Bool(True)", inspect(true_value))
+
+      int_value =? Json::parse("42")
+      assert_eq("JsonValue::Int(42)", inspect(int_value))
+
+      float_value =? Json::parse("4.2")
+      assert_eq("JsonValue::Float(4.2)", inspect(float_value))
+    }
+  }
+
+  describe("decode") {
+    it("decodes string fields through Result operators") {
+      json =? Json::parse("{\"name\":\"surtr\"}")
+      name =? Json::get(json, "name") |>= decode(JsonFormat, String)
+      assert_eq("surtr", name)
+    }
+
+    it("decodes custom schema values") {
+      json =? Json::parse("{\"name\":\"surtr\",\"entrypoint\":\"boot\"}")
+      cfg =? decode(json, JsonFormat, JsonConfig)
+      assert_eq(("surtr", "boot"), (cfg.name, cfg.entrypoint))
+    }
+  }
+
+  describe("stringify") {
+    it("uses deterministic object key order") {
+      value = JsonValue::Object(HashMap::from_entries([
+        ("b", JsonValue::Int(2)),
+        ("a", JsonValue::Int(1)),
+      ]))
+      text =? encode(value, JsonFormat)
+      assert_eq("{\"a\":1,\"b\":2}", text)
+    }
+  }
+}

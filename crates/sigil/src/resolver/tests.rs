@@ -1921,7 +1921,7 @@ deftrait TryFrom<$To> {
         .expect_err("named args must fail");
     assert!(err
         .message
-        .contains("from/try_from does not accept named arguments"));
+        .contains("try_from does not accept named arguments"));
 }
 
 #[test]
@@ -1967,6 +1967,116 @@ deftrait TryFrom<$To> {
             other => panic!("expected closure, got {:?}", other),
         },
         other => panic!("expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_decode_helper_lowers_format_and_target_args_to_type_ref_witnesses() {
+    let module_stages = vec![vec![staged_module(
+        "Decode",
+        parse_module_ast(
+            r#"@autoimport
+deftrait Decode<$Format, $To> {
+  def decode(self: Self, format: TypeRef<$Format>, to: TypeRef<$To>) -> Result<$To, Error>
+}"#,
+            "Decode",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules(
+        r#"json = "{}"
+value = decode(json, JsonFormat, Config)"#,
+        &module_stages,
+    )
+    .expect("decode helper should resolve");
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "value"))
+        .expect("value bind should exist");
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, args) => {
+                assert_eq!(args.len(), 3);
+                match func.as_ref() {
+                    Resolved::Var(_, id) => {
+                        assert_eq!(id.name, "decode");
+                        assert_eq!(id.qualified_name.as_deref(), Some("Decode::Decode::decode"));
+                    }
+                    other => panic!("expected helper var, got {:?}", other),
+                }
+                assert!(matches!(
+                    &args[0],
+                    ResolvedRecordLitArg::Positional(Resolved::Var(_, id)) if id.name == "json"
+                ));
+                match &args[1] {
+                    ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, ty)) => {
+                        assert!(matches!(ty, AstTy::Named(_, name) if name == "JsonFormat"));
+                    }
+                    other => panic!("expected format type witness, got {:?}", other),
+                }
+                match &args[2] {
+                    ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, ty)) => {
+                        assert!(matches!(ty, AstTy::Named(_, name) if name == "Config"));
+                    }
+                    other => panic!("expected target type witness, got {:?}", other),
+                }
+            }
+            other => panic!("expected app, got {:?}", other),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_encode_helper_lowers_pipeline_partial_format_arg_to_type_ref_witness() {
+    let module_stages = vec![vec![staged_module(
+        "Encode",
+        parse_module_ast(
+            r#"@autoimport
+deftrait Encode<$Format> {
+  def encode(self: Self, format: TypeRef<$Format>) -> Result<String, Error>
+}"#,
+            "Encode",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules(
+        r#"value = "hello"
+text = value |> encode(JsonFormat)"#,
+        &module_stages,
+    )
+    .expect("encode pipeline helper should resolve");
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "text"))
+        .expect("text bind should exist");
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Pipe(_, _, right) => match right.as_ref() {
+                Resolved::App(_, func, args) => {
+                    assert_eq!(args.len(), 1);
+                    match func.as_ref() {
+                        Resolved::Var(_, id) => {
+                            assert_eq!(id.name, "encode");
+                            assert_eq!(
+                                id.qualified_name.as_deref(),
+                                Some("Encode::Encode::encode")
+                            );
+                        }
+                        other => panic!("expected helper var, got {:?}", other),
+                    }
+                    match &args[0] {
+                        ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, ty)) => {
+                            assert!(matches!(ty, AstTy::Named(_, name) if name == "JsonFormat"));
+                        }
+                        other => panic!("expected format type witness, got {:?}", other),
+                    }
+                }
+                other => panic!("expected app on pipeline rhs, got {:?}", other),
+            },
+            other => panic!("expected pipe, got {:?}", other),
+        },
+        _ => panic!("Expected Bind"),
     }
 }
 

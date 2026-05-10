@@ -2200,6 +2200,66 @@ impl Checker {
         })
     }
 
+    fn check_trait_helper_pipe_callable(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+        input_ty: Ty,
+        op_name: &str,
+    ) -> Result<Option<TypedNode>, TypeError> {
+        if self.trait_method_ref(func).is_none() {
+            return Ok(None);
+        }
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: format!(
+                    "{} does not support named arguments on the right-hand side",
+                    op_name
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let param_id = ResolvedId {
+            name: "__pipe_trait_helper_arg".into(),
+            qualified_name: None,
+            unique_id: Self::next_synthetic_range_uid(),
+            compiler_generated: true,
+            span: span.clone(),
+        };
+        let mut body_args = Vec::with_capacity(args.len() + 1);
+        body_args.push(ResolvedRecordLitArg::Positional(Resolved::Var(
+            span.clone(),
+            param_id.clone(),
+        )));
+        body_args.extend(args.iter().cloned());
+
+        let synthetic = Resolved::Closure(
+            span.clone(),
+            vec![ResolvedClosureParam {
+                id: param_id,
+                ty: None,
+            }],
+            Vec::new(),
+            Box::new(Resolved::App(
+                span.clone(),
+                Box::new(func.clone()),
+                body_args,
+            )),
+        );
+        let expected = Ty::Func(
+            vec![self.resolve_ty(&input_ty)],
+            Box::new(self.env.fresh_tyvar()),
+        );
+        self.check_node_with_expected(&synthetic, Some(&expected))
+            .map(Some)
+    }
+
     pub(super) fn ensure_plain_map_output(
         &self,
         output_ty: &Ty,
@@ -2307,7 +2367,22 @@ impl Checker {
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_node(left)?;
-        let typed_right = self.check_apply_callable(right, "`|>`")?;
+        let typed_right = match right {
+            Resolved::App(call_span, func, args) => {
+                if let Some(typed) = self.check_trait_helper_pipe_callable(
+                    call_span,
+                    func,
+                    args,
+                    self.resolve_ty(&typed_left.ty),
+                    "`|>`",
+                )? {
+                    typed
+                } else {
+                    self.check_apply_callable(right, "`|>`")?
+                }
+            }
+            _ => self.check_apply_callable(right, "`|>`")?,
+        };
         let (param, ret) = self.unary_function_parts(&typed_right.ty, "`|>`", &typed_right.span)?;
         if !matches!(self.resolve_ty(&param), Ty::Hole)
             && !self.types_compatible(&param, &typed_left.ty)
@@ -2481,12 +2556,31 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_right = self.check_apply_callable(right, "`|>=`")?;
+        let typed_left = self.check_node(left)?;
+        let receiver_ty = self.resolve_ty(&typed_left.ty);
+        let trait_helper_input_ty = match &receiver_ty {
+            Ty::Result(ok, _) => Some(self.resolve_ty(ok.as_ref())),
+            Ty::List(item) => Some(self.resolve_ty(item.as_ref())),
+            Ty::Enum(name, args) if Self::surface_name(name) == "Option" && args.len() == 1 => {
+                Some(self.resolve_ty(&args[0]))
+            }
+            _ => None,
+        };
+        let typed_right = match (right, trait_helper_input_ty) {
+            (Resolved::App(call_span, func, args), Some(input_ty)) => {
+                if let Some(typed) =
+                    self.check_trait_helper_pipe_callable(call_span, func, args, input_ty, "`|>=`")?
+                {
+                    typed
+                } else {
+                    self.check_apply_callable(right, "`|>=`")?
+                }
+            }
+            _ => self.check_apply_callable(right, "`|>=`")?,
+        };
         let (rhs_in, rhs_ret) =
             self.unary_function_parts(&typed_right.ty, "`|>=`", &typed_right.span)?;
 
-        let typed_left = self.check_node(left)?;
-        let receiver_ty = self.resolve_ty(&typed_left.ty);
         let is_option_ctx =
             |ty: &Ty| matches!(ty, Ty::Enum(name, _) if Self::surface_name(name) == "Option");
         match (&receiver_ty, self.resolve_ty(&rhs_ret)) {
@@ -3833,10 +3927,9 @@ impl Checker {
                     self.expand_facet_capture_path("Facet::view", capture_span, expr)?;
                 (source_expr, FacetPathInput::Capture(path))
             }
-            [
-                ResolvedRecordLitArg::Positional(path_expr),
-                ResolvedRecordLitArg::Positional(source_expr),
-            ] => (source_expr.clone(), FacetPathInput::Expr(path_expr)),
+            [ResolvedRecordLitArg::Positional(path_expr), ResolvedRecordLitArg::Positional(source_expr)] => {
+                (source_expr.clone(), FacetPathInput::Expr(path_expr))
+            }
             _ => unreachable!("validated argument form above"),
         };
 
@@ -3885,7 +3978,10 @@ impl Checker {
         }
         if args.len() != 1 && args.len() != 2 {
             return Err(TypeError {
-                message: format!("Facet::preview expects 1 or 2 argument(s), got {}", args.len()),
+                message: format!(
+                    "Facet::preview expects 1 or 2 argument(s), got {}",
+                    args.len()
+                ),
                 span: span.clone(),
                 hint: None,
             });
@@ -3896,10 +3992,9 @@ impl Checker {
                     self.expand_facet_capture_path("Facet::preview", capture_span, expr)?;
                 (source_expr, FacetPathInput::Capture(path))
             }
-            [
-                ResolvedRecordLitArg::Positional(path_expr),
-                ResolvedRecordLitArg::Positional(source_expr),
-            ] => (source_expr.clone(), FacetPathInput::Expr(path_expr)),
+            [ResolvedRecordLitArg::Positional(path_expr), ResolvedRecordLitArg::Positional(source_expr)] => {
+                (source_expr.clone(), FacetPathInput::Expr(path_expr))
+            }
             _ => unreachable!("validated argument form above"),
         };
 
@@ -3955,19 +4050,19 @@ impl Checker {
             });
         }
         let (source_expr, path_input, value_expr) = match args {
-            [
-                ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)),
-                ResolvedRecordLitArg::Positional(value_expr),
-            ] => {
+            [ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)), ResolvedRecordLitArg::Positional(value_expr)] =>
+            {
                 let (source_expr, path) =
                     self.expand_facet_capture_path("Facet::set", capture_span, expr)?;
                 (source_expr, FacetPathInput::Capture(path), value_expr)
             }
-            [
-                ResolvedRecordLitArg::Positional(path_expr),
-                ResolvedRecordLitArg::Positional(source_expr),
-                ResolvedRecordLitArg::Positional(value_expr),
-            ] => (source_expr.clone(), FacetPathInput::Expr(path_expr), value_expr),
+            [ResolvedRecordLitArg::Positional(path_expr), ResolvedRecordLitArg::Positional(source_expr), ResolvedRecordLitArg::Positional(value_expr)] => {
+                (
+                    source_expr.clone(),
+                    FacetPathInput::Expr(path_expr),
+                    value_expr,
+                )
+            }
             _ => unreachable!("validated argument form above"),
         };
 
@@ -4050,25 +4145,28 @@ impl Checker {
         }
         if args.len() != 2 && args.len() != 3 {
             return Err(TypeError {
-                message: format!("Facet::replace expects 2 or 3 argument(s), got {}", args.len()),
+                message: format!(
+                    "Facet::replace expects 2 or 3 argument(s), got {}",
+                    args.len()
+                ),
                 span: span.clone(),
                 hint: None,
             });
         }
         let (source_expr, path_input, value_expr) = match args {
-            [
-                ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)),
-                ResolvedRecordLitArg::Positional(value_expr),
-            ] => {
+            [ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)), ResolvedRecordLitArg::Positional(value_expr)] =>
+            {
                 let (source_expr, path) =
                     self.expand_facet_capture_path("Facet::replace", capture_span, expr)?;
                 (source_expr, FacetPathInput::Capture(path), value_expr)
             }
-            [
-                ResolvedRecordLitArg::Positional(path_expr),
-                ResolvedRecordLitArg::Positional(source_expr),
-                ResolvedRecordLitArg::Positional(value_expr),
-            ] => (source_expr.clone(), FacetPathInput::Expr(path_expr), value_expr),
+            [ResolvedRecordLitArg::Positional(path_expr), ResolvedRecordLitArg::Positional(source_expr), ResolvedRecordLitArg::Positional(value_expr)] => {
+                (
+                    source_expr.clone(),
+                    FacetPathInput::Expr(path_expr),
+                    value_expr,
+                )
+            }
             _ => unreachable!("validated argument form above"),
         };
 
@@ -4146,19 +4244,19 @@ impl Checker {
             });
         }
         let (source_expr, path_input, update_expr) = match args {
-            [
-                ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)),
-                ResolvedRecordLitArg::Positional(update_expr),
-            ] => {
+            [ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)), ResolvedRecordLitArg::Positional(update_expr)] =>
+            {
                 let (source_expr, path) =
                     self.expand_facet_capture_path("Facet::over", capture_span, expr)?;
                 (source_expr, FacetPathInput::Capture(path), update_expr)
             }
-            [
-                ResolvedRecordLitArg::Positional(path_expr),
-                ResolvedRecordLitArg::Positional(source_expr),
-                ResolvedRecordLitArg::Positional(update_expr),
-            ] => (source_expr.clone(), FacetPathInput::Expr(path_expr), update_expr),
+            [ResolvedRecordLitArg::Positional(path_expr), ResolvedRecordLitArg::Positional(source_expr), ResolvedRecordLitArg::Positional(update_expr)] => {
+                (
+                    source_expr.clone(),
+                    FacetPathInput::Expr(path_expr),
+                    update_expr,
+                )
+            }
             _ => unreachable!("validated argument form above"),
         };
 
@@ -4224,19 +4322,19 @@ impl Checker {
             });
         }
         let (source_expr, path_input, update_expr) = match args {
-            [
-                ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)),
-                ResolvedRecordLitArg::Positional(update_expr),
-            ] => {
+            [ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)), ResolvedRecordLitArg::Positional(update_expr)] =>
+            {
                 let (source_expr, path) =
                     self.expand_facet_capture_path("Facet::over_result", capture_span, expr)?;
                 (source_expr, FacetPathInput::Capture(path), update_expr)
             }
-            [
-                ResolvedRecordLitArg::Positional(path_expr),
-                ResolvedRecordLitArg::Positional(source_expr),
-                ResolvedRecordLitArg::Positional(update_expr),
-            ] => (source_expr.clone(), FacetPathInput::Expr(path_expr), update_expr),
+            [ResolvedRecordLitArg::Positional(path_expr), ResolvedRecordLitArg::Positional(source_expr), ResolvedRecordLitArg::Positional(update_expr)] => {
+                (
+                    source_expr.clone(),
+                    FacetPathInput::Expr(path_expr),
+                    update_expr,
+                )
+            }
             _ => unreachable!("validated argument form above"),
         };
 

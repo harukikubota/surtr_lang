@@ -1,0 +1,6 @@
+json =? Json::parse("42")
+result = decode(json, JsonFormat, String)
+match result {
+  Ok(_) => print("unexpected-ok"),
+  Err(err) => print(Error::kind(err)),
+}
