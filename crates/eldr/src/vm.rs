@@ -4,7 +4,7 @@ use sindr::ir::{
     RuntimeHandlerTarget, RuntimeInitPolicy, RuntimeProcessInstance, RuntimeProcessSpec,
     RuntimeProcessSpecTable, RuntimeSupervisorPolicy, SourceMap,
 };
-use sindr::primitives::{int, SurtrInt, ToPrimitive};
+use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
     Callable, CallableMetadata, CallableOrigin, CallableTarget, FileHandleValue, ListHandle,
     Location, PidHandle, RichError, TypeRegistry, Value, WorkerLeaseHandle, WorkersHandle,
@@ -4985,6 +4985,17 @@ impl VM {
             Opcode::BitAndInt => self.int_binop(|a, b| Ok(Value::Int(a & b)))?,
             Opcode::BitOrInt => self.int_binop(|a, b| Ok(Value::Int(a | b)))?,
             Opcode::BitXorInt => self.int_binop(|a, b| Ok(Value::Int(a ^ b)))?,
+            Opcode::SafeModInt => {
+                let b = self.pop_int()?;
+                let a = self.pop_int()?;
+                if b.is_zero() {
+                    self.stack.push(err_vm_result(
+                        self.process_error("ZeroDivisionError", "division by zero"),
+                    ));
+                } else {
+                    self.stack.push(ok_vm_result(Value::Int(a % b)));
+                }
+            }
 
             // Arithmetic (Float)
             Opcode::AddFloat => self.float_binop(|a, b| Value::Float(a + b))?,
@@ -5036,6 +5047,25 @@ impl VM {
                 let b = self.pop_str()?;
                 let a = self.pop_str()?;
                 self.stack.push(Value::Str(a + &b));
+            }
+            Opcode::StringLen => {
+                let value = self.pop_str()?;
+                self.stack.push(Value::Int(value.chars().count().into()));
+            }
+            Opcode::StringContains => {
+                let needle = self.pop_str()?;
+                let value = self.pop_str()?;
+                self.stack.push(Value::Bool(value.contains(&needle)));
+            }
+            Opcode::StringStartsWith => {
+                let prefix = self.pop_str()?;
+                let value = self.pop_str()?;
+                self.stack.push(Value::Bool(value.starts_with(&prefix)));
+            }
+            Opcode::StringEndsWith => {
+                let suffix = self.pop_str()?;
+                let value = self.pop_str()?;
+                self.stack.push(Value::Bool(value.ends_with(&suffix)));
             }
             Opcode::StringIsEmpty => {
                 let value = self.pop_str()?;
@@ -5110,6 +5140,18 @@ impl VM {
                     other => {
                         return Err(RuntimeError::new(format!(
                             "ListIsEmpty expects List, got {:?}",
+                            other
+                        )));
+                    }
+                }
+            }
+            Opcode::ListLen => {
+                let list = self.pop_stack()?;
+                match list {
+                    Value::List(handle) => self.stack.push(Value::Int(handle.len.into())),
+                    other => {
+                        return Err(RuntimeError::new(format!(
+                            "ListLen expects List, got {:?}",
                             other
                         )));
                     }
@@ -6597,6 +6639,129 @@ mod tests {
 
         assert_eq!(ctx.pc, 1);
         assert_eq!(ctx.stack, vec![Value::Bool(true)]);
+    }
+
+    #[test]
+    fn string_len_executes_as_one_opcode() {
+        let mut bytecode =
+            base_bytecode(vec![Opcode::LoadConst(0), Opcode::StringLen, Opcode::Halt]);
+        bytecode.constants = vec![Constant::Str("あb".into())];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected load const to continue, got {other:?}"),
+        }
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected string len to continue, got {other:?}"),
+        }
+
+        assert_eq!(ctx.pc, 2);
+        assert_eq!(ctx.stack, vec![Value::Int(int(2))]);
+    }
+
+    #[test]
+    fn list_len_executes_as_one_opcode() {
+        let bytecode = base_bytecode(vec![Opcode::ListEmpty, Opcode::ListLen, Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected list empty to continue, got {other:?}"),
+        }
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected list len to continue, got {other:?}"),
+        }
+
+        assert_eq!(ctx.pc, 2);
+        assert_eq!(ctx.stack, vec![Value::Int(int(0))]);
+    }
+
+    #[test]
+    fn safe_mod_int_executes_as_one_opcode() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::SafeModInt,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(7)), Constant::Int(int(3))];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+
+        assert_eq!(
+            ctx.stack,
+            vec![Value::Tagged {
+                tag: 0,
+                fields: vec![Value::Int(int(1))],
+            }]
+        );
+    }
+
+    #[test]
+    fn safe_mod_int_returns_zero_division_error_result() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::SafeModInt,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(7)), Constant::Int(int(0))];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+
+        match ctx.stack.as_slice() {
+            [Value::Tagged { tag: 1, fields }] => match fields.first() {
+                Some(Value::Error(rich)) => assert_eq!(rich.kind, "ZeroDivisionError"),
+                other => panic!("expected Err(Value::Error), got {other:?}"),
+            },
+            other => panic!("expected Err result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn string_predicates_execute_as_one_opcode() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::StringContains,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(2),
+            Opcode::StringStartsWith,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(3),
+            Opcode::StringEndsWith,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![
+            Constant::Str("surtr".into()),
+            Constant::Str("urt".into()),
+            Constant::Str("sur".into()),
+            Constant::Str("tr".into()),
+        ];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        for _ in 0..9 {
+            assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        }
+
+        assert_eq!(
+            ctx.stack,
+            vec![Value::Bool(true), Value::Bool(true), Value::Bool(true)]
+        );
     }
 
     #[test]

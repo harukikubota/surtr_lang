@@ -155,6 +155,12 @@ pub enum Opcode {
         local_idx: u32,
         tag_const_idx: u32,
     },
+    StringLen,
+    ListLen,
+    SafeModInt,
+    StringContains,
+    StringStartsWith,
+    StringEndsWith,
 }
 
 impl Opcode {
@@ -168,6 +174,12 @@ impl Opcode {
             Self::StoreConstLocal { .. } => "StoreConstLocal",
             Self::CopyLocal { .. } => "CopyLocal",
             Self::EqLocalTag { .. } => "EqLocalTag",
+            Self::StringLen => "StringLen",
+            Self::ListLen => "ListLen",
+            Self::SafeModInt => "SafeModInt",
+            Self::StringContains => "StringContains",
+            Self::StringStartsWith => "StringStartsWith",
+            Self::StringEndsWith => "StringEndsWith",
             Self::AddInt => "AddInt",
             Self::SubInt => "SubInt",
             Self::MulInt => "MulInt",
@@ -1794,6 +1806,55 @@ mod tests {
                 local_idx: 0,
                 tag_const_idx: 0,
             },
+            Opcode::Halt,
+        ];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_string_len_opcode() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![Opcode::StringLen, Opcode::Halt];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_list_len_opcode() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![Opcode::ListLen, Opcode::Halt];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_safe_mod_int_opcode() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![Opcode::SafeModInt, Opcode::Halt];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_string_predicate_opcodes() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![
+            Opcode::StringContains,
+            Opcode::StringStartsWith,
+            Opcode::StringEndsWith,
             Opcode::Halt,
         ];
 

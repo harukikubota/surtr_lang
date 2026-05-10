@@ -961,6 +961,130 @@ right = Int::bit_xor(6, 3)"#,
     }
 
     #[test]
+    fn direct_string_len_builtin_call_lowers_to_specialized_opcode() {
+        let bytecode = codegen_source(r#"size = String::len("あb")"#);
+
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::StringLen)));
+
+        let string_len_id =
+            builtin_id_by_name("string_len").expect("string_len builtin metadata must exist");
+        assert!(!bytecode.opcodes.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    ..
+                } if *builtin_id == string_len_id
+            )
+        }));
+    }
+
+    #[test]
+    fn direct_list_len_builtin_call_lowers_to_specialized_opcode() {
+        let bytecode = codegen_source(r#"size = List::len([1, 2, 3])"#);
+
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::ListLen)));
+
+        let len_id = builtin_id_by_name("len").expect("len builtin metadata must exist");
+        assert!(!bytecode.opcodes.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    ..
+                } if *builtin_id == len_id
+            )
+        }));
+    }
+
+    #[test]
+    fn direct_safe_mod_builtin_call_lowers_to_specialized_opcode() {
+        let bytecode = codegen_source(r#"rem = Int::safe_mod(7, 3)"#);
+
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::SafeModInt)));
+
+        let safe_mod_id =
+            builtin_id_by_name("safe_mod").expect("safe_mod builtin metadata must exist");
+        assert!(!bytecode.opcodes.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    ..
+                } if *builtin_id == safe_mod_id
+            )
+        }));
+    }
+
+    #[test]
+    fn direct_string_predicate_builtin_calls_lower_to_specialized_opcodes() {
+        let bytecode = codegen_source(
+            r#"has = String::contains("surtr", "urt")
+starts = String::starts_with("surtr", "sur")
+ends = String::ends_with("surtr", "tr")"#,
+        );
+
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::StringContains)));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::StringStartsWith)));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::StringEndsWith)));
+
+        for name in ["string_contains", "string_starts_with", "string_ends_with"] {
+            let builtin_id = builtin_id_by_name(name)
+                .unwrap_or_else(|| panic!("{name} builtin metadata must exist"));
+            assert!(!bytecode.opcodes.iter().any(|op| {
+                matches!(
+                    op,
+                    Opcode::CallBuiltin {
+                        builtin_id: id,
+                        ..
+                    } if *id == builtin_id
+                )
+            }));
+        }
+    }
+
+    #[test]
+    fn direct_string_split_and_replace_stay_as_builtin_calls() {
+        let bytecode = codegen_source(
+            r#"parts = String::split("a,b", ",")
+text = String::replace("banana", "na", "NA")"#,
+        );
+
+        for (name, arity) in [("string_split", 2), ("string_replace", 3)] {
+            let builtin_id = builtin_id_by_name(name)
+                .unwrap_or_else(|| panic!("{name} builtin metadata must exist"));
+            assert!(bytecode.opcodes.iter().any(|op| {
+                matches!(
+                    op,
+                    Opcode::CallBuiltin {
+                        builtin_id: id,
+                        arity: actual_arity,
+                        ..
+                    } if *id == builtin_id && *actual_arity == arity
+                )
+            }));
+        }
+    }
+
+    #[test]
     fn int_bit_index_helpers_stay_as_builtin_calls() {
         let bytecode = codegen_source(
             r#"tested = Int::test_bit(5, 0)

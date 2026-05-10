@@ -895,6 +895,36 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 1,
         sig_str: "(JsonValue) -> Result<String, JsonEncodeError>",
     },
+    BuiltinMeta {
+        name: "string_len",
+        arity: 1,
+        sig_str: "(String) -> Int",
+    },
+    BuiltinMeta {
+        name: "string_contains",
+        arity: 2,
+        sig_str: "(String, String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "string_starts_with",
+        arity: 2,
+        sig_str: "(String, String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "string_ends_with",
+        arity: 2,
+        sig_str: "(String, String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "string_split",
+        arity: 2,
+        sig_str: "(String, String) -> List<String>",
+    },
+    BuiltinMeta {
+        name: "string_replace",
+        arity: 3,
+        sig_str: "(String, String, String) -> String",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from standard definition sources.
@@ -1043,6 +1073,12 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
         Some("Shell::pwd") => "shell_pwd",
         Some("Shell::cd") => "shell_cd",
         Some("Shell::exec") => "shell_exec",
+        Some("String::len") => "string_len",
+        Some("String::contains") => "string_contains",
+        Some("String::starts_with") => "string_starts_with",
+        Some("String::ends_with") => "string_ends_with",
+        Some("String::split") => "string_split",
+        Some("String::replace") => "string_replace",
         Some("Json::parse") => "json_parse",
         Some("Json::stringify") => "json_stringify",
         Some("Facet::replace") => "__facet_replace",
@@ -1137,6 +1173,10 @@ mod tests {
     #[test]
     fn qualified_replace_builtins_resolve_to_distinct_runtime_names() {
         assert_eq!(
+            builtin_runtime_name("replace", Some("String::replace")),
+            "string_replace"
+        );
+        assert_eq!(
             builtin_runtime_name("replace", Some("Facet::replace")),
             "__facet_replace"
         );
@@ -1159,6 +1199,20 @@ mod tests {
     }
 
     #[test]
+    fn qualified_string_split_builtin_resolves_to_runtime_name() {
+        assert_eq!(
+            builtin_runtime_name("split", Some("String::split")),
+            "string_split"
+        );
+        assert_eq!(
+            builtin_meta_for_decl("split", Some("String::split"))
+                .expect("string split builtin metadata")
+                .sig_str,
+            "(String, String) -> List<String>"
+        );
+    }
+
+    #[test]
     fn qualified_json_builtins_resolve_to_runtime_names() {
         assert_eq!(
             builtin_runtime_name("parse", Some("Json::parse")),
@@ -1168,6 +1222,37 @@ mod tests {
             builtin_runtime_name("stringify", Some("Json::stringify")),
             "json_stringify"
         );
+    }
+
+    #[test]
+    fn qualified_string_len_builtin_resolves_to_runtime_name() {
+        assert_eq!(
+            builtin_runtime_name("len", Some("String::len")),
+            "string_len"
+        );
+        assert_eq!(
+            builtin_meta_for_decl("len", Some("String::len"))
+                .expect("string len builtin metadata")
+                .sig_str,
+            "(String) -> Int"
+        );
+    }
+
+    #[test]
+    fn qualified_string_predicate_builtins_resolve_to_runtime_names() {
+        let cases = [
+            ("contains", "String::contains", "string_contains"),
+            ("starts_with", "String::starts_with", "string_starts_with"),
+            ("ends_with", "String::ends_with", "string_ends_with"),
+        ];
+
+        for (declared, qualified, runtime) in cases {
+            assert_eq!(builtin_runtime_name(declared, Some(qualified)), runtime);
+            assert!(
+                builtin_meta_for_decl(declared, Some(qualified)).is_some(),
+                "{qualified} should have builtin metadata"
+            );
+        }
     }
 
     #[test]

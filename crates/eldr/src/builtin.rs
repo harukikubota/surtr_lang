@@ -725,6 +725,30 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         name: "json_stringify",
         func: builtin_json_stringify,
     },
+    BuiltinImpl {
+        name: "string_len",
+        func: builtin_string_len,
+    },
+    BuiltinImpl {
+        name: "string_contains",
+        func: builtin_string_contains,
+    },
+    BuiltinImpl {
+        name: "string_starts_with",
+        func: builtin_string_starts_with,
+    },
+    BuiltinImpl {
+        name: "string_ends_with",
+        func: builtin_string_ends_with,
+    },
+    BuiltinImpl {
+        name: "string_split",
+        func: builtin_string_split,
+    },
+    BuiltinImpl {
+        name: "string_replace",
+        func: builtin_string_replace,
+    },
 ];
 
 const _: () = {
@@ -1493,6 +1517,69 @@ fn builtin_list_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
         return Err(RuntimeError::new("len expects List as first argument"));
     };
     Ok(Value::Int(list.len.into()))
+}
+
+fn builtin_string_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(value) = &args[0] else {
+        return Err(RuntimeError::new(
+            "string_len expects String as first argument",
+        ));
+    };
+    Ok(Value::Int(value.chars().count().into()))
+}
+
+fn expect_string_pair(args: &[Value], name: &str) -> Result<(String, String), RuntimeError> {
+    let (Value::Str(left), Value::Str(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(format!(
+            "{name} expects (String, String)"
+        )));
+    };
+    Ok((left.clone(), right.clone()))
+}
+
+fn builtin_string_contains(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (value, needle) = expect_string_pair(&args, "string_contains")?;
+    Ok(Value::Bool(value.contains(&needle)))
+}
+
+fn builtin_string_starts_with(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (value, prefix) = expect_string_pair(&args, "string_starts_with")?;
+    Ok(Value::Bool(value.starts_with(&prefix)))
+}
+
+fn builtin_string_ends_with(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (value, suffix) = expect_string_pair(&args, "string_ends_with")?;
+    Ok(Value::Bool(value.ends_with(&suffix)))
+}
+
+fn builtin_string_split(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (value, separator) = expect_string_pair(&args, "string_split")?;
+    let items = if separator.is_empty() {
+        value
+            .chars()
+            .map(|ch| Value::Str(ch.to_string()))
+            .collect::<Vec<_>>()
+    } else {
+        value
+            .split(&separator)
+            .map(|part| Value::Str(part.to_string()))
+            .collect::<Vec<_>>()
+    };
+    Ok(Value::List(ListHandle::from_items(items)))
+}
+
+fn builtin_string_replace(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Str(value), Value::Str(from), Value::Str(to)) = (&args[0], &args[1], &args[2])
+    else {
+        return Err(RuntimeError::new(
+            "string_replace expects (String, String, String)",
+        ));
+    };
+    if from.is_empty() {
+        Ok(Value::Str(value.clone()))
+    } else {
+        Ok(Value::Str(value.replace(from, to)))
+    }
 }
 
 fn builtin_gen_make(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -4904,6 +4991,70 @@ mod tests {
         )
         .expect_err("safe_mod must reject non-int inputs");
         assert!(err.message.contains("safe_mod expects (Int, Int)"));
+    }
+
+    #[test]
+    fn string_split_builtin_preserves_string_contract() {
+        let mut vm = test_vm();
+        let parts = call_builtin(
+            &mut vm,
+            builtin_id("string_split"),
+            vec![Value::Str("あ|b|".into()), Value::Str("|".into())],
+        )
+        .expect("string_split should succeed");
+        match parts {
+            Value::List(list) => assert_eq!(
+                list.iter().collect::<Vec<_>>(),
+                vec![
+                    Value::Str("あ".into()),
+                    Value::Str("b".into()),
+                    Value::Str("".into()),
+                ]
+            ),
+            other => panic!("expected List, got {other:?}"),
+        }
+
+        let chars = call_builtin(
+            &mut vm,
+            builtin_id("string_split"),
+            vec![Value::Str("あb".into()), Value::Str("".into())],
+        )
+        .expect("string_split should split empty separator into chars");
+        match chars {
+            Value::List(list) => assert_eq!(
+                list.iter().collect::<Vec<_>>(),
+                vec![Value::Str("あ".into()), Value::Str("b".into())]
+            ),
+            other => panic!("expected List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn string_replace_builtin_preserves_string_contract() {
+        let mut vm = test_vm();
+        let replaced = call_builtin(
+            &mut vm,
+            builtin_id("string_replace"),
+            vec![
+                Value::Str("banana".into()),
+                Value::Str("na".into()),
+                Value::Str("NA".into()),
+            ],
+        )
+        .expect("string_replace should succeed");
+        assert_eq!(replaced, Value::Str("baNANA".into()));
+
+        let unchanged = call_builtin(
+            &mut vm,
+            builtin_id("string_replace"),
+            vec![
+                Value::Str("surtr".into()),
+                Value::Str("".into()),
+                Value::Str("-".into()),
+            ],
+        )
+        .expect("string_replace should leave empty pattern unchanged");
+        assert_eq!(unchanged, Value::Str("surtr".into()));
     }
 
     #[test]
