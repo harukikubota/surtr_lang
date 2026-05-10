@@ -1,0 +1,1 @@
+contains: supervisor workers can only be called from Singleton GenServer @init

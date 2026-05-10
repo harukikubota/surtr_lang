@@ -71,8 +71,23 @@ TCO が効いた実行では `return_count` や `max_frame_depth` が非最適�
 実行終了時に VM dump JSON を指定パスへ保存する。
 
 - `stdout` / `stderr` とは分離し、既存の run 契約を壊さない
-- dump には終了状態、exit code、最終 `pc` / opcode、stack / frame 深さ、VM observation を含む
+- dump には終了状態、exit code、最終 `pc` / opcode、stack / frame 深さ、VM observation、process runtime snapshot を含む
 - compile error で VM 実行に到達しなかった場合は dump を生成しない
+
+process runtime snapshot の `worker_sets` は次の JSON 形状を持つ。
+
+```json
+{
+  "id": 0,
+  "worker_process": "ImageWorker",
+  "supervisor": "ImageWorkerSupervisor",
+  "target": 2,
+  "min": 2,
+  "max": 2,
+  "member_pids": [3, 4],
+  "live_count": 2
+}
+```
 
 ### 3.1.2 `--vm-dump-on error|always`
 

@@ -4182,8 +4182,8 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
             TypedInner::SupervisorAdopt { pid, .. } => has_pending_trait_call(pid),
             TypedInner::SupervisorStatus { .. } => false,
-            TypedInner::SupervisorWorkers { init, size, .. } => {
-                has_pending_trait_call(init) || has_pending_trait_call(size)
+            TypedInner::SupervisorWorkers { init, strategy, .. } => {
+                has_pending_trait_call(init) || has_pending_trait_call(strategy)
             }
             TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_) => false,
             TypedInner::FacetView { source, .. } => has_pending_trait_call(source),
@@ -5080,6 +5080,62 @@ fn typecheck_supervisor_spawn_fixture(
     scar::typecheck_staged_program(resolved)
 }
 
+fn typecheck_supervisor_pool_fixture(
+    pool_source: &str,
+) -> Result<TypedProgram, scar::error::TypeError> {
+    let mut stages = std_module_stages();
+    stages.push(vec![
+        staged_process_module(
+            r#"defagent MyWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        ),
+        staged_process_module(
+            r#"defsupervisor MySup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}"#,
+        ),
+        staged_process_module(pool_source),
+    ]);
+    let declaration_index =
+        sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
+    let user_ast = spire::parse_with_context(
+        r#"supervisor_init {
+  MySup {}
+  singleton MyPool {}
+}"#,
+        spire::ParserContext::project(0),
+    )
+    .expect("script should parse");
+    let resolved = sigil::resolve_staged_program_with_state(
+        &stages,
+        user_ast,
+        &declaration_index,
+        Some("__Script::fixture".to_string()),
+    )
+    .expect("resolve should succeed");
+    scar::typecheck_staged_program(resolved)
+}
+
 fn dynsup_spawn_accepts_worker_init_route_reference() {
     let typed =
         typecheck_supervisor_spawn_fixture(r#"pid = DynamicSupervisor::spawn(MyWorker::init(1))"#)
@@ -5136,25 +5192,78 @@ fn supervisor_status_returns_supervisor_status() {
 }
 
 fn supervisor_workers_returns_workers_handle() {
-    let typed =
-        typecheck_supervisor_spawn_fixture(r#"workers =? MySup::workers(MyWorker::init(1), 2)"#)
-            .expect("workers creation should typecheck");
+    let typed = typecheck_supervisor_pool_fixture(
+        r#"defgenserver MyPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Workers<MyWorker>
+  }
+
+  @init
+  def init() -> Result<Workers<MyWorker>> {
+    MySup::workers(MyWorker::init(1), WorkerStrategy::fixed(2))
+  }
+
+  @call
+  def count(workers: Workers<MyWorker>) -> Result<CallResult<Int, Workers<MyWorker>>> {
+    Ok(CallResult::Reply(Workers::size(workers), workers))
+  }
+}"#,
+    )
+    .expect("workers creation should typecheck");
     assert!(!typed.nodes.is_empty());
 }
 
 fn workers_submit_accepts_worker_message_template() {
-    let typed = typecheck_supervisor_spawn_fixture(
-        r#"workers =? MySup::workers(MyWorker::init(1), 2)
-_ =? Workers::submit(workers, MyWorker::set(3))"#,
+    let typed = typecheck_supervisor_pool_fixture(
+        r#"defgenserver MyPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Workers<MyWorker>
+  }
+
+  @init
+  def init() -> Result<Workers<MyWorker>> {
+    MySup::workers(MyWorker::init(1), WorkerStrategy::fixed(2))
+  }
+
+  @call
+  def count(workers: Workers<MyWorker>) -> Result<CallResult<Int, Workers<MyWorker>>> {
+    Ok(CallResult::Reply(Workers::size(workers), workers))
+  }
+
+  @cast
+  def submit(workers: Workers<MyWorker>) -> Result<CastResult<Workers<MyWorker>>> {
+    _ =? Workers::submit(workers, MyWorker::set(3))
+    Ok(CastResult::Next(workers))
+  }
+}"#,
     )
     .expect("workers submit should accept worker message template");
     assert!(!typed.nodes.is_empty());
 }
 
 fn workers_broadcast_accepts_worker_message_template() {
-    let typed = typecheck_supervisor_spawn_fixture(
-        r#"workers =? MySup::workers(MyWorker::init(1), 2)
-values = Workers::broadcast(workers, MyWorker::get("jobs"))"#,
+    let typed = typecheck_supervisor_pool_fixture(
+        r#"defgenserver MyPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Workers<MyWorker>
+  }
+
+  @init
+  def init() -> Result<Workers<MyWorker>> {
+    MySup::workers(MyWorker::init(1), WorkerStrategy::fixed(2))
+  }
+
+  @call
+  def values(workers: Workers<MyWorker>) -> Result<CallResult<List<Result<Int>>, Workers<MyWorker>>> {
+    Ok(CallResult::Reply(Workers::broadcast(workers, MyWorker::get("jobs")), workers))
+  }
+}"#,
     )
     .expect("workers broadcast should accept worker message template");
     assert!(!typed.nodes.is_empty());
@@ -5169,10 +5278,26 @@ value =? Task::await(task)"#,
 }
 
 fn workers_reserve_can_flow_into_worker_call() {
-    let typed = typecheck_supervisor_spawn_fixture(
-        r#"workers =? MySup::workers(MyWorker::init(1), 2)
-lease =? Workers::reserve(workers)
-_ =? MyWorker::set(lease, 9)"#,
+    let typed = typecheck_supervisor_pool_fixture(
+        r#"defgenserver MyPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Workers<MyWorker>
+  }
+
+  @init
+  def init() -> Result<Workers<MyWorker>> {
+    MySup::workers(MyWorker::init(1), WorkerStrategy::fixed(2))
+  }
+
+  @call
+  def reserve_set(workers: Workers<MyWorker>) -> Result<CallResult<Unit, Workers<MyWorker>>> {
+    lease =? Workers::reserve(workers)
+    _ =? MyWorker::set(lease, 9)
+    Ok(CallResult::Reply((), workers))
+  }
+}"#,
     )
     .expect("workers reserve should typecheck as worker capability");
     assert!(!typed.nodes.is_empty());

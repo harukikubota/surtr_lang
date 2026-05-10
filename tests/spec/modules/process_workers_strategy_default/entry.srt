@@ -40,20 +40,7 @@ defgenserver MyPool {
 
   @init
   def init() -> Result<Workers<MyWorker>> {
-    MySup::workers(MyWorker::init(1), WorkerStrategy::fixed(2))
-  }
-
-  @cast
-  def submit(workers: Workers<MyWorker>, next: Int) -> Result<CastResult<Workers<MyWorker>>> {
-    _ =? Workers::submit(workers, MyWorker::set(next))
-    Ok(CastResult::Next(workers))
-  }
-
-  @cast
-  def reserve_set(workers: Workers<MyWorker>, next: Int) -> Result<CastResult<Workers<MyWorker>>> {
-    lease =? Workers::reserve(workers)
-    _ =? MyWorker::set(lease, next)
-    Ok(CastResult::Next(workers))
+    MySup::workers(MyWorker::init(3), WorkerStrategy::default())
   }
 
   @call
@@ -73,8 +60,4 @@ supervisor_init {
 }
 
 print(to_string(MyPool::count()))
-_ =? MyPool::submit(7)
-_ =? MyPool::submit(9)
-print(to_string(MyPool::values()))
-_ =? MyPool::reserve_set(11)
 print(to_string(MyPool::values()))

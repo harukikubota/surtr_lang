@@ -907,34 +907,29 @@ fn builtin_supervisor_workers(vm: &mut VM, args: Vec<Value>) -> Result<Value, Ru
         ));
     };
     match args.as_slice() {
-        [_, Value::Callable(init), Value::Int(size)] => {
+        [_, Value::Callable(init), strategy] => {
             let Some(worker_name) = vm.infer_worker_process_name_from_callable(init) else {
                 return Err(RuntimeError::new(
                     "__supervisor_workers could not infer worker process from init callable",
                 ));
             };
-            let Some(size) = size.to_i64() else {
-                return Err(RuntimeError::new(
-                    "__supervisor_workers expects size representable as i64",
-                ));
-            };
-            vm.supervisor_workers(supervisor_name.clone(), worker_name, init.clone(), size)
+            vm.supervisor_workers(
+                supervisor_name.clone(),
+                worker_name,
+                init.clone(),
+                strategy.clone(),
+            )
         }
-        [_, Value::Str(worker_name), Value::Callable(init), Value::Int(size)] => {
-            let Some(size) = size.to_i64() else {
-                return Err(RuntimeError::new(
-                    "__supervisor_workers expects size representable as i64",
-                ));
-            };
+        [_, Value::Str(worker_name), Value::Callable(init), strategy] => {
             vm.supervisor_workers(
                 supervisor_name.clone(),
                 worker_name.clone(),
                 init.clone(),
-                size,
+                strategy.clone(),
             )
         }
         _ => Err(RuntimeError::new(
-            "__supervisor_workers expects supervisor name, worker init callable, and Int size",
+            "__supervisor_workers expects supervisor name, worker init callable, and WorkerStrategy",
         )),
     }
 }

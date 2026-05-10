@@ -42,6 +42,53 @@ impl SupervisorStatus {
 }
 
 @doc """
+Worker-set scale mode.
+
+`Fix(size)` is the v1 executable strategy. The runtime keeps exactly `size`
+members alive under the owning supervisor.
+"""
+defenum WorkerScale {
+  Fix(Int),
+}
+
+@doc """
+Runtime worker-set strategy.
+
+This is ordinary Surtr data and can be built in any module. The runtime only
+receives it through the generated `Sup::workers(...)` owner helper, which the
+compiler restricts to Singleton GenServer `@init`.
+"""
+defstruct WorkerStrategy {
+  init: Int,
+  min: Int,
+  max: Int,
+  scale: WorkerScale,
+}
+
+impl WorkerStrategy {
+  @doc """
+  Create a worker strategy value.
+  """
+  def new(init: Int, min: Int, max: Int, scale: WorkerScale) -> Self {
+    WorkerStrategy { init: init, min: min, max: max, scale: scale }
+  }
+
+  @doc """
+  Create a fixed-size worker strategy.
+  """
+  def fixed(size: Int) -> Self {
+    WorkerStrategy::new(size, size, size, WorkerScale::Fix(size))
+  }
+
+  @doc """
+  Default worker strategy: one fixed worker.
+  """
+  def default() -> Self {
+    WorkerStrategy::fixed(1)
+  }
+}
+
+@doc """
 Runtime-managed worker set handle for one worker process type.
 
 `Workers<$Worker>` is only usable as Singleton GenServer state. Initialize it
@@ -59,7 +106,7 @@ defgenserver ImageWorkerPool {
 
   @init
   def init() -> Result<Workers<ImageWorker>> {
-    ImageWorkerSupervisor::workers(ImageWorker::init("./input"), 4)
+    ImageWorkerSupervisor::workers(ImageWorker::init("./input"), WorkerStrategy::fixed(4))
   }
 }
 
@@ -85,7 +132,10 @@ defgenserver ImageWorkerPool {
 
   @init
   def init() -> Result<ImageWorkerPoolState> {
-    workers =? ImageWorkerSupervisor::workers(ImageWorker::init("./input"), 4)
+    workers =? ImageWorkerSupervisor::workers(
+      ImageWorker::init("./input"),
+      WorkerStrategy::fixed(4),
+    )
     Ok(ImageWorkerPoolState::new(workers, 0))
   }
 }
@@ -148,7 +198,7 @@ defgenserver ImageWorkerPool {
 
   @init
   def init() -> Result<Workers<ImageWorker>> {
-    ImageWorkerSupervisor::workers(ImageWorker::init("./input"), 4)
+    ImageWorkerSupervisor::workers(ImageWorker::init("./input"), WorkerStrategy::fixed(4))
   }
 
   def assign_reserved(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Unit> {
@@ -311,7 +361,7 @@ defmod Supervisor {
 
     @init
     def init() -> Result<Workers<ImageWorker>> {
-      ImageWorkerSupervisor::workers(ImageWorker::init("./input"), 4)
+      ImageWorkerSupervisor::workers(ImageWorker::init("./input"), WorkerStrategy::fixed(4))
     }
   }
   """
@@ -319,7 +369,7 @@ defmod Supervisor {
   @builtin def workers(
     supervisor: $Supervisor,
     worker_init: (-> Result<$State>),
-    size: Int,
+    strategy: WorkerStrategy,
   ) -> Result<Workers<$Process>>
 }
 

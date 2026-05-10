@@ -26,9 +26,41 @@ defsupervisor MySup {
   }
 }
 
-workers =? MySup::workers(MyWorker::init(7), 1)
-print(to_string(Workers::size(workers)))
-match Workers::broadcast(workers, MyWorker::stop_now()) {
-  [Ok(reply)] => print(to_string(reply)),
-  other => print(inspect(other)),
+defgenserver MyPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Workers<MyWorker>
+  }
+
+  @init
+  def init() -> Result<Workers<MyWorker>> {
+    MySup::workers(MyWorker::init(7), WorkerStrategy::fixed(1))
+  }
+
+  @call
+  def count(workers: Workers<MyWorker>) -> Result<CallResult<Int, Workers<MyWorker>>> {
+    Ok(CallResult::Reply(Workers::size(workers), workers))
+  }
+
+  @call
+  def stop_one(workers: Workers<MyWorker>) -> Result<CallResult<Int, Workers<MyWorker>>> {
+    replies = Workers::broadcast(workers, MyWorker::stop_now())
+    match replies {
+      [Ok(reply)] => Ok(CallResult::Reply(reply, workers)),
+      _ => Ok(CallResult::Reply(0, workers)),
+    }
+  }
 }
+
+supervisor_init {
+  MySup {}
+  singleton MyPool {}
+}
+
+first_count =? MyPool::count()
+print(to_string(first_count))
+reply =? MyPool::stop_one()
+print(to_string(reply))
+second_count =? MyPool::count()
+print(to_string(second_count))

@@ -274,7 +274,7 @@ pub enum TypedInner {
         supervisor_process: String,
         worker_process: String,
         init: Box<TypedNode>,
-        size: Box<TypedNode>,
+        strategy: Box<TypedNode>,
     },
 
     /// Compile-time facet constant path value. Stage 1 does not allow

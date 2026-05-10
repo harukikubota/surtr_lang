@@ -1737,12 +1737,12 @@ impl Checker {
                 supervisor_process,
                 worker_process,
                 init,
-                size,
+                strategy,
             } => TypedInner::SupervisorWorkers {
                 supervisor_process,
                 worker_process,
                 init: Box::new(self.resolve_typed_node(*init)),
-                size: Box::new(self.resolve_typed_node(*size)),
+                strategy: Box::new(self.resolve_typed_node(*strategy)),
             },
             TypedInner::App(func, args) => TypedInner::App(
                 Box::new(self.resolve_typed_node(*func)),
