@@ -3,9 +3,6 @@ defagent Logger {
     instance: Singleton
     init_policy: Eager
     state: Int
-    handlers {
-      out: OutHandler = StdOut
-    }
   }
 
   @init
@@ -14,15 +11,13 @@ defagent Logger {
   }
 
   @get
-  def log(state: Int, message: String) -> Result<Unit> {
-    OutHandler::write(ctx.out, message)
+  def value(state: Int) -> Result<Int> {
+    Ok(state)
   }
 }
 
 supervisor_init {
   Logger {
-    handlers {
-      out: NullOutHandler
-    }
+    max_restarts: 2
   }
 }

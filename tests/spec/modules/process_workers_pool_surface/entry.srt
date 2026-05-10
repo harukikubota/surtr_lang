@@ -69,7 +69,7 @@ defgenserver MyPool {
 
 supervisor_init {
   MySup {}
-  singleton MyPool {}
+  MyPool {}
 }
 
 print(to_string(MyPool::count()))

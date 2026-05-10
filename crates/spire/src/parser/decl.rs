@@ -3192,37 +3192,30 @@ impl Parser<'_> {
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
-        let mut singletons = Vec::new();
-        let mut supervisors = Vec::new();
+        let mut entries = Vec::new();
 
         while !matches!(self.peek(), Token::RBrace) {
             if matches!(self.peek(), Token::Eof) {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
-            let (entry_kind, entry_span) = self.expect_ident()?;
-            if entry_kind == "singleton" {
-                let singleton = self.parse_supervisor_init_singleton()?;
-                if singletons.iter().any(|entry: &SupervisorInitSingleton| {
-                    entry.process_name == singleton.process_name
-                }) {
-                    return Err(ParseError::syntax(
-                        "singleton boot entry is duplicated",
-                        singleton.span,
-                    ));
-                }
-                singletons.push(singleton);
-            } else {
-                let supervisor = self.parse_supervisor_init_override(entry_kind, entry_span)?;
-                if supervisors.iter().any(|entry: &SupervisorInitOverride| {
-                    entry.process_name == supervisor.process_name
-                }) {
-                    return Err(ParseError::syntax(
-                        "supervisor override entry is duplicated",
-                        supervisor.span,
-                    ));
-                }
-                supervisors.push(supervisor);
+            let (entry_name, entry_span) = self.expect_ident()?;
+            if entry_name == "singleton" {
+                return Err(ParseError::syntax(
+                    "supervisor_init `singleton` keyword is no longer used",
+                    entry_span,
+                ));
             }
+            let entry = self.parse_supervisor_init_entry(entry_name, entry_span)?;
+            if entries
+                .iter()
+                .any(|existing: &SupervisorInitEntry| existing.process_name == entry.process_name)
+            {
+                return Err(ParseError::syntax(
+                    "supervisor_init entry is duplicated",
+                    entry.span,
+                ));
+            }
+            entries.push(entry);
             self.skip_newlines();
         }
         let end = self.expect(&Token::RBrace)?;
@@ -3233,19 +3226,24 @@ impl Parser<'_> {
         Ok(Ast::SupervisorInit(
             span,
             SupervisorInitSpec {
-                singletons,
-                supervisors,
+                entries,
+                singletons: Vec::new(),
+                supervisors: Vec::new(),
             },
         ))
     }
 
-    fn parse_supervisor_init_singleton(&mut self) -> Result<SupervisorInitSingleton, ParseError> {
-        let (process_name, name_span) = self.expect_ident()?;
+    fn parse_supervisor_init_entry(
+        &mut self,
+        process_name: String,
+        name_span: Span,
+    ) -> Result<SupervisorInitEntry, ParseError> {
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
         let mut timeout_ms = None;
         let mut handlers = Vec::new();
+        let mut overrides = SupervisorPolicyOverride::default();
 
         while !matches!(self.peek(), Token::RBrace) {
             if matches!(self.peek(), Token::Eof) {
@@ -3273,6 +3271,81 @@ impl Parser<'_> {
                 "handlers" => {
                     handlers = self.parse_supervisor_init_handlers()?;
                 }
+                "strategy" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    if overrides.strategy.is_some() {
+                        return Err(ParseError::syntax(
+                            "strategy override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.strategy = Some(self.parse_supervisor_strategy()?);
+                }
+                "max_restarts" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    if overrides.max_restarts.is_some() {
+                        return Err(ParseError::syntax(
+                            "max_restarts override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.max_restarts = Some(self.parse_non_negative_int_literal()?);
+                }
+                "max_seconds" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    if overrides.max_seconds.is_some() {
+                        return Err(ParseError::syntax(
+                            "max_seconds override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.max_seconds = Some(self.parse_non_negative_int_literal()?);
+                }
+                "child_restart_default" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    if overrides.child_restart_default.is_some() {
+                        return Err(ParseError::syntax(
+                            "child_restart_default override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.child_restart_default = Some(self.parse_child_restart_policy()?);
+                }
+                "allow_adopt" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    if overrides.allow_adopt.is_some() {
+                        return Err(ParseError::syntax(
+                            "allow_adopt override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.allow_adopt = Some(self.parse_bool_literal()?);
+                }
+                "shutdown_timeout" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    if overrides.shutdown_timeout_ms.is_some() {
+                        return Err(ParseError::syntax(
+                            "shutdown_timeout override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.shutdown_timeout_ms =
+                        Some(self.parse_duration_literal_ms("shutdown_timeout")?);
+                }
+                "parent" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    return Err(ParseError::syntax(
+                        "supervisor parent override is fixed in the initial phase",
+                        key_span,
+                    ));
+                }
                 "init_policy" => {
                     return Err(ParseError::syntax(
                         "init policy belongs to process definition",
@@ -3287,7 +3360,7 @@ impl Parser<'_> {
                 }
                 _ => {
                     return Err(ParseError::syntax(
-                        format!("Unknown supervisor_init singleton key: {key}"),
+                        format!("Unknown supervisor_init key: {key}"),
                         key_span,
                     ));
                 }
@@ -3300,114 +3373,10 @@ impl Parser<'_> {
         }
 
         let end = self.expect(&Token::RBrace)?;
-        Ok(SupervisorInitSingleton {
+        Ok(SupervisorInitEntry {
             process_name,
             timeout_ms,
             handlers,
-            span: Span {
-                start: name_span.start,
-                end: end.end,
-            },
-        })
-    }
-
-    fn parse_supervisor_init_override(
-        &mut self,
-        process_name: String,
-        name_span: Span,
-    ) -> Result<SupervisorInitOverride, ParseError> {
-        self.skip_newlines();
-        self.expect(&Token::LBrace)?;
-        self.skip_newlines();
-        let mut overrides = SupervisorPolicyOverride::default();
-
-        while !matches!(self.peek(), Token::RBrace) {
-            if matches!(self.peek(), Token::Eof) {
-                return Err(ParseError::incomplete("}", self.peek_span()));
-            }
-            let (key, key_span) = self.expect_ident()?;
-            self.skip_newlines();
-            self.expect(&Token::Colon)?;
-            self.skip_newlines();
-            match key.as_str() {
-                "strategy" => {
-                    if overrides.strategy.is_some() {
-                        return Err(ParseError::syntax(
-                            "strategy override is duplicated",
-                            key_span,
-                        ));
-                    }
-                    overrides.strategy = Some(self.parse_supervisor_strategy()?);
-                }
-                "max_restarts" => {
-                    if overrides.max_restarts.is_some() {
-                        return Err(ParseError::syntax(
-                            "max_restarts override is duplicated",
-                            key_span,
-                        ));
-                    }
-                    overrides.max_restarts = Some(self.parse_non_negative_int_literal()?);
-                }
-                "max_seconds" => {
-                    if overrides.max_seconds.is_some() {
-                        return Err(ParseError::syntax(
-                            "max_seconds override is duplicated",
-                            key_span,
-                        ));
-                    }
-                    overrides.max_seconds = Some(self.parse_non_negative_int_literal()?);
-                }
-                "child_restart_default" => {
-                    if overrides.child_restart_default.is_some() {
-                        return Err(ParseError::syntax(
-                            "child_restart_default override is duplicated",
-                            key_span,
-                        ));
-                    }
-                    overrides.child_restart_default = Some(self.parse_child_restart_policy()?);
-                }
-                "allow_adopt" => {
-                    if overrides.allow_adopt.is_some() {
-                        return Err(ParseError::syntax(
-                            "allow_adopt override is duplicated",
-                            key_span,
-                        ));
-                    }
-                    overrides.allow_adopt = Some(self.parse_bool_literal()?);
-                }
-                "shutdown_timeout" => {
-                    if overrides.shutdown_timeout_ms.is_some() {
-                        return Err(ParseError::syntax(
-                            "shutdown_timeout override is duplicated",
-                            key_span,
-                        ));
-                    }
-                    overrides.shutdown_timeout_ms =
-                        Some(self.parse_duration_literal_ms("shutdown_timeout")?);
-                }
-                "parent" => {
-                    return Err(ParseError::syntax(
-                        "supervisor parent override is fixed in the initial phase",
-                        key_span,
-                    ));
-                }
-                _ => {
-                    return Err(ParseError::syntax(
-                        format!("Unknown supervisor override key: {key}"),
-                        key_span,
-                    ));
-                }
-            }
-            self.skip_newlines();
-            if matches!(self.peek(), Token::Comma) {
-                self.advance();
-                self.skip_newlines();
-            }
-        }
-
-        let end = self.expect(&Token::RBrace)?;
-        Ok(SupervisorInitOverride {
-            process_name,
             overrides,
             span: Span {
                 start: name_span.start,

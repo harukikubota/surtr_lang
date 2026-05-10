@@ -60,7 +60,7 @@ defgenserver MyPool {
 
 supervisor_init {
   MySup {}
-  singleton MyPool {}
+  MyPool {}
 }
 
 delayed =? MyPool::delayed()

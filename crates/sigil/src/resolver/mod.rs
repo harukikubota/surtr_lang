@@ -260,6 +260,7 @@ fn collect_supervisor_init_specs(stmts: &[Ast], boot_plan: &mut SupervisorInitSp
     for stmt in stmts {
         match stmt {
             Ast::SupervisorInit(_, spec) => {
+                boot_plan.entries.extend(spec.entries.clone());
                 boot_plan.singletons.extend(spec.singletons.clone());
                 boot_plan.supervisors.extend(spec.supervisors.clone());
             }

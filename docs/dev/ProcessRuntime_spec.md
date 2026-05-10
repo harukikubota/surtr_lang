@@ -798,7 +798,7 @@ singleton が存在しない場合は business error ではなく、VM / supervi
 
 ### 3.17 `supervisor_init`
 
-`supervisor_init` は top-level 起動構成 block とし、通常式評価とは分ける。ここで定義されるのは singleton boot entry と handler override を含む `RuntimeBootPlan` の入力であり、VM は surface DSL を直接読まない。
+`supervisor_init` は top-level 起動構成 block とし、通常式評価とは分ける。ここで定義されるのは singleton boot entry、handler override、supervisor policy override を含む `RuntimeBootPlan` の入力であり、VM は surface DSL を直接読まない。
 
 `boot: Required` / `boot: ExplicitOnly` のような boot policy 指定は、定義側にも Boot 側にも置かない。
 起動対象は、`supervisor_init` / project runner に記載された singleton entry と、runtime が自動提供する builtin standard I/O から決まる。
@@ -806,19 +806,16 @@ singleton が存在しない場合は business error ではなく、VM / supervi
 役割:
 
 - 起動対象に含める singleton を明示する
-- 起動対象に含める supervisor を明示し、その policy override を指定する
-- init route を選ぶ
+- custom supervisor を runtime process space へ登録し、その policy override を指定する
+- `DynamicSupervisor` の policy override を指定する
 - init timeout を指定する
-- standard singleton を override する
 - process-local handler を override する
-- standard I/O handler の差し替えを指定する
-- runner-only runtime target を指定する
 
 例:
 
 ```surtr
 supervisor_init {
-  singleton Logger {
+  Logger {
     timeout: 5s
   }
 
@@ -831,7 +828,24 @@ supervisor_init {
 }
 ```
 
-初期フェーズでは supervisor 親は固定で、DSL `parent` override は受理しない。
+entry は `ProcessName { ... }` のみとする。`singleton ProcessName { ... }` は廃止済みであり parse error とする。
+entry 名は通常コードの型名解決と同じく bare type name として解決する。qualified name 専用の DSL ルールは持たない。同一可視圏で同名型が複数見える場合、未知名、同じ型名または同じ解決先の重複 entry は compile error とする。entry 記載順は意味を持たない。
+
+`DynamicSupervisor` は暗黙登録済みである。DSL に記載しない場合は既定 policy のまま利用できる。`DynamicSupervisor {}` は空マージとして許可し、DSL に policy key がある場合だけ BootPlan の effective policy に反映する。
+
+custom `defsupervisor` は `Sup::status()` / `Sup::spawn(...)` / `Sup::adopt(...)` / `Sup::workers(...)` の generated surface に依存する compile unit では `supervisor_init` 登録必須とする。include されているだけで未使用の custom supervisor は登録不要であり、未登録診断は DSL ではなく surface 依存検査で出す。
+
+worker entry は常に禁止する。worker pool / scaling は DSL では扱わず、singleton GenServer の `@init` から `Sup::workers(...)` を呼び、runtime 管理へ渡す。
+
+Entry key:
+
+| entry kind | 許可 | 禁止 |
+|---|---|---|
+| singleton Agent / GenServer | `timeout`, `handlers` | supervisor policy keys, `parent` |
+| `DynamicSupervisor` / custom `defsupervisor` | `strategy`, `max_restarts`, `max_seconds`, `child_restart_default`, `allow_adopt`, `shutdown_timeout` | `timeout`, `handlers`, `parent` |
+| Worker | なし | entry 自体を禁止 |
+
+supervisor 親は固定で、DSL `parent` override は受理しない。
 
 - `RuntimeSupervisor -> RootSupervisor`
 - `DynamicSupervisor -> RootSupervisor`
@@ -845,8 +859,12 @@ supervisor_init {
 | `StdIn` / `StdOut` / `StdErr` | runtime builtin standard I/O として常に自動起動 |
 | Std 内 `Env` / `Logger` など | 任意。`supervisor_init` / project runner に記載された場合に起動 |
 | ユーザ定義 singleton | 任意。`supervisor_init` / project runner に記載された場合に起動 |
+| `DynamicSupervisor` | runtime builtin supervisor として常に登録 |
+| custom `defsupervisor` | `supervisor_init` / project runner に記載された場合に登録 |
+| worker | `supervisor_init` には記載不可。runtime API から生成 |
 | 記載なし、かつプロセス呼び出しなし | 起動しない |
 | プロセス呼び出しあり、かつ available singleton に含まれない | compile-time singleton 利用検査で error |
+| custom supervisor surface 呼び出しあり、かつ登録なし | compile-time supervisor surface 依存検査で error |
 
 `init_policy` は定義側にあるため、Boot 側は Lazy の採否を決めない。Boot 側は起動対象、timeout、handler override、supervisor policy override を指定する。
 
@@ -899,7 +917,7 @@ handler dependency は process の実行構成に属するが、process が必�
 
 ```surtr
 supervisor_init {
-  singleton Logger {
+  Logger {
     handlers {
       out: FileOutHandler(path: "./logs/app.log")
     }
@@ -920,7 +938,7 @@ HandlerName(named_args...)
 
 ```surtr
 supervisor_init {
-  singleton Logger {
+  Logger {
     handlers {
       out: StdOut
     }
@@ -930,7 +948,7 @@ supervisor_init {
 
 ```surtr
 supervisor_init {
-  singleton Logger {
+  Logger {
     handlers {
       out: NullOutHandler
     }
@@ -940,7 +958,7 @@ supervisor_init {
 
 ```surtr
 supervisor_init {
-  singleton Logger {
+  Logger {
     handlers {
       out: FileOutHandler(path: "./logs/app.log")
     }

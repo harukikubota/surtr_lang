@@ -80,10 +80,24 @@ fn validate_required_singletons(
         if spec.spec.instance != ProcessInstance::Singleton {
             continue;
         }
-        surface_to_process.insert(
-            format!("{}::pid", spec.process_name),
-            spec.process_name.clone(),
-        );
+        if matches!(
+            spec.spec.kind,
+            spire::ast::ProcessKind::Supervisor
+                | spire::ast::ProcessKind::DynamicSupervisor
+                | spire::ast::ProcessKind::RuntimeSupervisor
+        ) {
+            for method in ["status", "spawn", "adopt", "workers"] {
+                surface_to_process.insert(
+                    format!("{}::{method}", spec.process_name),
+                    format!("{}::{method}", spec.process_name),
+                );
+            }
+        } else {
+            surface_to_process.insert(
+                format!("{}::pid", spec.process_name),
+                spec.process_name.clone(),
+            );
+        }
         for handler in &spec.spec.handler_specs {
             if handler.kind == ProcessRuntimeHandlerKind::Init {
                 continue;
@@ -102,13 +116,18 @@ fn validate_required_singletons(
     let available_singletons = runtime_boot_plan
         .singletons
         .iter()
-        .map(|entry| entry.process_name.as_str())
+        .map(|entry| entry.process_name.clone())
         .collect::<HashSet<_>>();
-    let available_supervisors = runtime_boot_plan
+    let mut available_supervisors = runtime_boot_plan
         .supervisor_overrides
         .iter()
-        .map(|entry| entry.process_name.as_str())
+        .map(|entry| entry.process_name.clone())
         .collect::<HashSet<_>>();
+    for spec in process_specs {
+        if spec.spec.kind == spire::ast::ProcessKind::DynamicSupervisor {
+            available_supervisors.insert(spec.process_name.clone());
+        }
+    }
     let mut first_missing: HashMap<String, Span> = HashMap::new();
     for node in nodes {
         collect_missing_singleton_calls(
@@ -126,12 +145,16 @@ fn validate_required_singletons(
             .cmp(&right.1.start)
             .then_with(|| left.0.cmp(&right.0))
     }) {
-        return Err(CodegenError {
-            message: format!(
+        let message = if process_name.contains("::") {
+            format!(
+                "supervisor surface `{process_name}` is not available in this compile unit; add the supervisor to supervisor_init"
+            )
+        } else {
+            format!(
                 "singleton `{process_name}` is not available in this compile unit; add it to supervisor_init"
-            ),
-            span,
-        });
+            )
+        };
+        return Err(CodegenError { message, span });
     }
 
     Ok(())
@@ -140,8 +163,8 @@ fn validate_required_singletons(
 fn collect_missing_singleton_calls(
     node: &TypedNode,
     surface_to_process: &HashMap<String, String>,
-    available_singletons: &HashSet<&str>,
-    available_supervisors: &HashSet<&str>,
+    available_singletons: &HashSet<String>,
+    available_supervisors: &HashSet<String>,
     first_missing: &mut HashMap<String, Span>,
 ) {
     if let Some(process_name) = singleton_required_by_call(node, surface_to_process) {
@@ -626,74 +649,136 @@ fn build_runtime_boot_plan(
     let mut runtime = RuntimeBootPlan::default();
     let default_timeout_ms = runtime.runtime_limits.default_init_timeout_ms;
 
-    for singleton in &boot_plan.singletons {
-        let Some(spec) = resolve_boot_process_spec(process_specs, &singleton.process_name) else {
-            return Err(CodegenError {
-                message: "singleton process is not defined or not visible".into(),
-                span: singleton.span.clone(),
-            });
+    for entry in &boot_plan.entries {
+        let spec = match resolve_boot_process_spec(process_specs, &entry.process_name, &entry.span)
+        {
+            Ok(spec) => spec,
+            Err(err) if entry.process_name == "DynamicSupervisor" => {
+                if entry.timeout_ms.is_some() || !entry.handlers.is_empty() {
+                    return Err(CodegenError {
+                        message:
+                            "supervisor_init supervisor entry does not accept timeout or handlers"
+                                .into(),
+                        span: entry.span.clone(),
+                    });
+                }
+                if runtime
+                    .supervisor_overrides
+                    .iter()
+                    .any(|registered| registered.process_name == "DynamicSupervisor")
+                {
+                    return Err(CodegenError {
+                        message: "supervisor_init entry is duplicated".into(),
+                        span: entry.span.clone(),
+                    });
+                }
+                let base_policy = default_dynamic_supervisor_policy();
+                runtime
+                    .supervisor_overrides
+                    .push(RuntimeSupervisorOverrideEntry {
+                        process_name: "DynamicSupervisor".into(),
+                        policy: runtime_supervisor_policy_from_effective(
+                            &base_policy,
+                            &entry.overrides,
+                        ),
+                    });
+                let _ = err;
+                continue;
+            }
+            Err(err) => return Err(err),
         };
+        match spec.spec.instance {
+            ProcessInstance::Worker => {
+                return Err(CodegenError {
+                    message: "worker process cannot appear in supervisor_init".into(),
+                    span: entry.span.clone(),
+                });
+            }
+            ProcessInstance::Singleton
+                if matches!(
+                    spec.spec.kind,
+                    spire::ast::ProcessKind::Supervisor
+                        | spire::ast::ProcessKind::DynamicSupervisor
+                        | spire::ast::ProcessKind::RuntimeSupervisor
+                ) =>
+            {
+                if entry.timeout_ms.is_some() || !entry.handlers.is_empty() {
+                    return Err(CodegenError {
+                        message:
+                            "supervisor_init supervisor entry does not accept timeout or handlers"
+                                .into(),
+                        span: entry.span.clone(),
+                    });
+                }
+                let Some(base_policy) = &spec.spec.supervisor_policy else {
+                    return Err(CodegenError {
+                        message: "supervisor process is missing a policy definition".into(),
+                        span: entry.span.clone(),
+                    });
+                };
+                if runtime
+                    .supervisor_overrides
+                    .iter()
+                    .any(|registered| registered.process_name == spec.process_name)
+                {
+                    return Err(CodegenError {
+                        message: "supervisor_init entry is duplicated".into(),
+                        span: entry.span.clone(),
+                    });
+                }
+                runtime
+                    .supervisor_overrides
+                    .push(RuntimeSupervisorOverrideEntry {
+                        process_name: runtime_supervisor_process_name(spec),
+                        policy: runtime_supervisor_policy_from_effective(
+                            base_policy,
+                            &entry.overrides,
+                        ),
+                    });
+            }
+            ProcessInstance::Singleton => {
+                if entry.overrides != Default::default() {
+                    return Err(CodegenError {
+                        message:
+                            "supervisor_init singleton entry does not accept supervisor policy keys"
+                                .into(),
+                        span: entry.span.clone(),
+                    });
+                }
+                add_runtime_singleton_entry(
+                    &mut runtime,
+                    spec,
+                    entry.timeout_ms,
+                    &entry.handlers,
+                    &entry.span,
+                    default_timeout_ms,
+                )?;
+            }
+        }
+    }
+
+    for singleton in &boot_plan.singletons {
+        let spec =
+            resolve_boot_process_spec(process_specs, &singleton.process_name, &singleton.span)?;
         if spec.spec.instance != ProcessInstance::Singleton {
             return Err(CodegenError {
                 message: "only Singleton process can appear in singleton boot entry".into(),
                 span: singleton.span.clone(),
             });
         }
-        if runtime
-            .singletons
-            .iter()
-            .any(|entry| entry.process_name == spec.process_name)
-        {
-            return Err(CodegenError {
-                message: "singleton boot entry is duplicated".into(),
-                span: singleton.span.clone(),
-            });
-        }
-
-        runtime.singletons.push(SingletonBootEntry {
-            process_name: spec.process_name.clone(),
-            init_timeout_ms: singleton.timeout_ms.unwrap_or(default_timeout_ms),
-            source: BootEntrySource::ExplicitConfig,
-        });
-        for handler in &singleton.handlers {
-            let Some(dependency) = spec
-                .spec
-                .handlers
-                .iter()
-                .find(|dependency| dependency.slot == handler.slot)
-            else {
-                return Err(CodegenError {
-                    message: "handler slot is not declared by the target process".into(),
-                    span: handler.span.clone(),
-                });
-            };
-            validate_runtime_handler_target(dependency, &handler.target)?;
-            runtime.handler_overrides.push(RuntimeHandlerOverride {
-                target_process: spec.process_name.clone(),
-                slot: handler.slot.clone(),
-                handler_target: RuntimeHandlerTarget {
-                    name: handler.target.name.clone(),
-                    named_args: handler
-                        .target
-                        .named_args
-                        .iter()
-                        .map(|arg| RuntimeHandlerArg {
-                            name: arg.name.clone(),
-                            value: arg.value.clone(),
-                        })
-                        .collect(),
-                },
-            });
-        }
+        add_runtime_singleton_entry(
+            &mut runtime,
+            spec,
+            singleton.timeout_ms,
+            &singleton.handlers,
+            &singleton.span,
+            default_timeout_ms,
+        )?;
     }
 
     for supervisor in &boot_plan.supervisors {
-        let Some(spec) = resolve_boot_process_spec(process_specs, &supervisor.process_name) else {
-            return Err(CodegenError {
-                message: "supervisor process is not defined or not visible".into(),
-                span: supervisor.span.clone(),
-            });
-        };
+        let spec =
+            resolve_boot_process_spec(process_specs, &supervisor.process_name, &supervisor.span)?;
         if !matches!(
             spec.spec.kind,
             spire::ast::ProcessKind::Supervisor
@@ -714,7 +799,7 @@ fn build_runtime_boot_plan(
         runtime
             .supervisor_overrides
             .push(RuntimeSupervisorOverrideEntry {
-                process_name: spec.process_name.clone(),
+                process_name: runtime_supervisor_process_name(spec),
                 policy: runtime_supervisor_policy_from_effective(
                     base_policy,
                     &supervisor.overrides,
@@ -725,21 +810,118 @@ fn build_runtime_boot_plan(
     Ok(runtime)
 }
 
+fn runtime_supervisor_process_name(spec: &TypedProcessSpec) -> String {
+    if spec.spec.kind == spire::ast::ProcessKind::DynamicSupervisor {
+        spec.process_name
+            .strip_prefix("Global::")
+            .unwrap_or(&spec.process_name)
+            .to_string()
+    } else {
+        spec.process_name.clone()
+    }
+}
+
+fn add_runtime_singleton_entry(
+    runtime: &mut RuntimeBootPlan,
+    spec: &TypedProcessSpec,
+    timeout_ms: Option<u64>,
+    handlers: &[spire::ast::SupervisorInitHandlerOverride],
+    span: &Span,
+    default_timeout_ms: u64,
+) -> Result<(), CodegenError> {
+    if runtime
+        .singletons
+        .iter()
+        .any(|entry| entry.process_name == spec.process_name)
+    {
+        return Err(CodegenError {
+            message: "singleton boot entry is duplicated".into(),
+            span: span.clone(),
+        });
+    }
+
+    runtime.singletons.push(SingletonBootEntry {
+        process_name: spec.process_name.clone(),
+        init_timeout_ms: timeout_ms.unwrap_or(default_timeout_ms),
+        source: BootEntrySource::ExplicitConfig,
+    });
+    for handler in handlers {
+        let Some(dependency) = spec
+            .spec
+            .handlers
+            .iter()
+            .find(|dependency| dependency.slot == handler.slot)
+        else {
+            return Err(CodegenError {
+                message: "handler slot is not declared by the target process".into(),
+                span: handler.span.clone(),
+            });
+        };
+        validate_runtime_handler_target(dependency, &handler.target)?;
+        runtime.handler_overrides.push(RuntimeHandlerOverride {
+            target_process: spec.process_name.clone(),
+            slot: handler.slot.clone(),
+            handler_target: RuntimeHandlerTarget {
+                name: handler.target.name.clone(),
+                named_args: handler
+                    .target
+                    .named_args
+                    .iter()
+                    .map(|arg| RuntimeHandlerArg {
+                        name: arg.name.clone(),
+                        value: arg.value.clone(),
+                    })
+                    .collect(),
+            },
+        });
+    }
+    Ok(())
+}
+
 fn resolve_boot_process_spec<'a>(
     process_specs: &'a [TypedProcessSpec],
     requested_name: &str,
-) -> Option<&'a TypedProcessSpec> {
-    process_specs
+    span: &Span,
+) -> Result<&'a TypedProcessSpec, CodegenError> {
+    let exact = process_specs
         .iter()
-        .find(|spec| spec.process_name == requested_name)
-        .or_else(|| {
-            process_specs.iter().find(|spec| {
+        .filter(|spec| spec.process_name == requested_name)
+        .collect::<Vec<_>>();
+    let matches = if exact.is_empty() {
+        process_specs
+            .iter()
+            .filter(|spec| {
                 spec.process_name
                     .rsplit("::")
                     .next()
                     .is_some_and(|short| short == requested_name)
             })
-        })
+            .collect::<Vec<_>>()
+    } else {
+        exact
+    };
+    match matches.as_slice() {
+        [spec] => Ok(spec),
+        [] => Err(CodegenError {
+            message: format!("process `{requested_name}` is not defined or not visible"),
+            span: span.clone(),
+        }),
+        _ => Err(CodegenError {
+            message: format!("process name `{requested_name}` is ambiguous"),
+            span: span.clone(),
+        }),
+    }
+}
+
+fn default_dynamic_supervisor_policy() -> spire::ast::SupervisorPolicy {
+    spire::ast::SupervisorPolicy {
+        strategy: spire::ast::SupervisorStrategy::OneForOne,
+        max_restarts: 10,
+        max_seconds: 5,
+        child_restart_default: spire::ast::ChildRestartPolicy::Transient,
+        allow_adopt: true,
+        shutdown_timeout_ms: None,
+    }
 }
 
 fn runtime_supervisor_policy_from_effective(
@@ -6685,7 +6867,10 @@ fn quote_surtr_string_literal(input: &str) -> String {
 mod process_runtime_v2_tests {
     use super::*;
     use sigil::resolved::ResolvedId;
-    use spire::ast::{ProcessKind, ProcessRuntimeHandlerSpec, ProcessSpec};
+    use spire::ast::{
+        ChildRestartPolicy, ProcessKind, ProcessRuntimeHandlerSpec, ProcessSpec,
+        SupervisorInitEntry, SupervisorPolicy, SupervisorStrategy,
+    };
 
     fn span(start: usize, end: usize) -> Span {
         Span { start, end }
@@ -6727,6 +6912,56 @@ mod process_runtime_v2_tests {
         }
     }
 
+    fn worker_process_spec(name: &str) -> TypedProcessSpec {
+        let mut spec = singleton_process_spec(name);
+        spec.spec.instance = ProcessInstance::Worker;
+        spec
+    }
+
+    fn supervisor_policy() -> SupervisorPolicy {
+        SupervisorPolicy {
+            strategy: SupervisorStrategy::OneForOne,
+            max_restarts: 5,
+            max_seconds: 10,
+            child_restart_default: ChildRestartPolicy::Transient,
+            allow_adopt: true,
+            shutdown_timeout_ms: None,
+        }
+    }
+
+    fn supervisor_process_spec(name: &str, kind: ProcessKind) -> TypedProcessSpec {
+        TypedProcessSpec {
+            module_path: name.to_string(),
+            process_name: name.to_string(),
+            spec: ProcessSpec {
+                process_name: name.to_string(),
+                kind,
+                instance: ProcessInstance::Singleton,
+                state: AstTy::Named(span(0, 0), "Unit".to_string()),
+                boot: false,
+                registry: false,
+                lazy: false,
+                handlers: Vec::new(),
+                handler_specs: Vec::new(),
+                supervisor_policy: Some(supervisor_policy()),
+            },
+            init_uid: 1,
+            get_uid: 2,
+            set_uid: None,
+            handler_uids: Vec::new(),
+        }
+    }
+
+    fn supervisor_init_entry(name: &str) -> SupervisorInitEntry {
+        SupervisorInitEntry {
+            process_name: name.into(),
+            timeout_ms: None,
+            handlers: Vec::new(),
+            overrides: Default::default(),
+            span: span(0, 0),
+        }
+    }
+
     fn singleton_surface_call(qualified_name: &str) -> TypedNode {
         TypedNode {
             ty: Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
@@ -6754,6 +6989,16 @@ mod process_runtime_v2_tests {
                     node: TypedInner::Lit(Lit::Str("hello".into())),
                 }],
             ),
+        }
+    }
+
+    fn supervisor_status_call(process_name: &str) -> TypedNode {
+        TypedNode {
+            ty: Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
+            span: span(10, 21),
+            node: TypedInner::SupervisorStatus {
+                supervisor_process: process_name.into(),
+            },
         }
     }
 
@@ -6786,5 +7031,59 @@ mod process_runtime_v2_tests {
             &boot_plan,
         )
         .expect("supervisor_init singleton should satisfy direct singleton call");
+    }
+
+    #[test]
+    fn build_runtime_boot_plan_classifies_unified_entries_by_process_kind() {
+        let boot_plan = SupervisorInitSpec {
+            entries: vec![
+                supervisor_init_entry("Logger"),
+                supervisor_init_entry("ImageWorkerSupervisor"),
+            ],
+            ..SupervisorInitSpec::default()
+        };
+
+        let runtime = build_runtime_boot_plan(
+            &boot_plan,
+            &[
+                singleton_process_spec("Logger"),
+                supervisor_process_spec("ImageWorkerSupervisor", ProcessKind::Supervisor),
+            ],
+        )
+        .expect("unified entries should lower by process kind");
+
+        assert_eq!(runtime.singletons.len(), 1);
+        assert_eq!(runtime.singletons[0].process_name, "Logger");
+        assert_eq!(runtime.supervisor_overrides.len(), 1);
+        assert_eq!(
+            runtime.supervisor_overrides[0].process_name,
+            "ImageWorkerSupervisor"
+        );
+    }
+
+    #[test]
+    fn build_runtime_boot_plan_rejects_worker_entry() {
+        let boot_plan = SupervisorInitSpec {
+            entries: vec![supervisor_init_entry("MyWorker")],
+            ..SupervisorInitSpec::default()
+        };
+
+        let err = build_runtime_boot_plan(&boot_plan, &[worker_process_spec("MyWorker")])
+            .expect_err("workers must not appear in supervisor_init");
+
+        assert!(err.message.contains("worker process cannot appear"));
+    }
+
+    #[test]
+    fn validate_required_singletons_accepts_dynamic_supervisor_without_dsl_entry() {
+        validate_required_singletons(
+            &[supervisor_status_call("DynamicSupervisor")],
+            &[supervisor_process_spec(
+                "DynamicSupervisor",
+                ProcessKind::DynamicSupervisor,
+            )],
+            &RuntimeBootPlan::default(),
+        )
+        .expect("DynamicSupervisor is implicitly registered");
     }
 }

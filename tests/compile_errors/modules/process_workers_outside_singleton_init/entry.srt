@@ -31,6 +31,10 @@ defsupervisor MySup {
   }
 }
 
+supervisor_init {
+  MySup {}
+}
+
 def make_workers() -> Result<Workers<MyWorker>> {
   MySup::workers(MyWorker::init(1), WorkerStrategy::fixed(1))
 }

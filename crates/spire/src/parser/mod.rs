@@ -917,6 +917,11 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
             attrs,
         ),
         Ast::SupervisorInit(span, mut spec) => {
+            for entry in &mut spec.entries {
+                if entry.process_name == old_name {
+                    entry.process_name = new_name.to_string();
+                }
+            }
             for singleton in &mut spec.singletons {
                 if singleton.process_name == old_name {
                     singleton.process_name = new_name.to_string();
@@ -1681,6 +1686,38 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
         Ast::SupervisorInit(span, spec) => Ast::SupervisorInit(
             shift_span(span, delta),
             SupervisorInitSpec {
+                entries: spec
+                    .entries
+                    .into_iter()
+                    .map(|entry| SupervisorInitEntry {
+                        process_name: entry.process_name,
+                        timeout_ms: entry.timeout_ms,
+                        handlers: entry
+                            .handlers
+                            .into_iter()
+                            .map(|handler| SupervisorInitHandlerOverride {
+                                slot: handler.slot,
+                                target: SupervisorInitHandlerTarget {
+                                    name: handler.target.name,
+                                    named_args: handler
+                                        .target
+                                        .named_args
+                                        .into_iter()
+                                        .map(|arg| SupervisorInitHandlerArg {
+                                            name: arg.name,
+                                            value: arg.value,
+                                            span: shift_span(arg.span, delta),
+                                        })
+                                        .collect(),
+                                    span: shift_span(handler.target.span, delta),
+                                },
+                                span: shift_span(handler.span, delta),
+                            })
+                            .collect(),
+                        overrides: entry.overrides,
+                        span: shift_span(entry.span, delta),
+                    })
+                    .collect(),
                 singletons: spec
                     .singletons
                     .into_iter()

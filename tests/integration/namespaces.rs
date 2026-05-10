@@ -166,7 +166,7 @@ fn process_context_out_handler_can_target_file() {
 }}
 
 supervisor_init {{
-  singleton Logger {{
+  Logger {{
     handlers {{
       out: FileOutHandler(path: "{}")
     }}

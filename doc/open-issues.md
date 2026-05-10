@@ -156,22 +156,6 @@
   - `unit/xldr` / `integration/repl` / `rune` integration で process-aware な表示と失敗形状を固定する。
   - `integration/build_roundtrip` / `run_eldr` / viewer 系テストで runtime metadata の可視化形状を固定する。
 
-### OI-021 Supervisor hierarchy の柔軟化
-
-- 背景:
-  - 現行 `supervisor_init` は親構成を固定し、`parent` override を reject する。
-  - custom supervisor / DynamicSupervisor / singleton の基本配置は正本化済みだが、より柔軟な親子指定は将来課題として残っている。
-- 未確定点:
-  - `supervisor_init` に親 override を導入するか
-  - 導入する場合に singleton / worker / supervisor ごとの許可境界をどう切るか
-  - tree 構成変更を compile-time 検査と runtime boot plan にどう反映するか
-- 受け入れ条件:
-  - 親子 DSL を広げても current fixed hierarchy と同じ安全性を保てる。
-  - boot diagnostics と runtime observability が新 hierarchy を矛盾なく表現できる。
-- テスト方針:
-  - 現状の reject ケースは `compile_errors` で維持する。
-  - 将来許可する場合は boot plan 生成、restart 伝播、status 表示の fixture を追加する。
-
 ### OI-023 Task.Supervisor / Task-DynamicSupervisor link / worker lazy init
 
 - 背景:

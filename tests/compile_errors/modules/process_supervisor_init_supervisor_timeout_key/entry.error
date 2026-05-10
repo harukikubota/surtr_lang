@@ -1,0 +1,1 @@
+contains: supervisor_init supervisor entry does not accept timeout or handlers

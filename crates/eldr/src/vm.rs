@@ -763,7 +763,7 @@ impl VM {
     pub fn new(bytecode: Bytecode) -> Self {
         let num_locals = bytecode.num_locals;
         let process_runtime = ProcessRuntime::from_spec_table(&bytecode.runtime_process_specs);
-        Self {
+        let mut vm = Self {
             bytecode,
             stack: Vec::new(),
             frames: vec![CallFrame {
@@ -794,7 +794,9 @@ impl VM {
             next_file_handle_id: 1,
             cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             process_runtime,
-        }
+        };
+        vm.apply_runtime_supervisor_overrides();
+        vm
     }
 
     /// Create an empty VM intended for REPL/incremental execution.
@@ -1432,15 +1434,7 @@ impl VM {
         }
 
         self.apply_runtime_handler_overrides()?;
-        for override_entry in &self.bytecode.runtime_boot_plan.supervisor_overrides {
-            self.process_runtime
-                .root_supervisor
-                .effective_supervisors
-                .insert(
-                    override_entry.process_name.clone(),
-                    override_entry.policy.clone(),
-                );
-        }
+        self.apply_runtime_supervisor_overrides();
         let limits = self.bytecode.runtime_boot_plan.runtime_limits.clone();
         let boot_specs = if self.bytecode.runtime_boot_plan.has_explicit_entries() {
             for entry in &self.bytecode.runtime_boot_plan.singletons {
@@ -1551,6 +1545,29 @@ impl VM {
             );
         }
         Ok(())
+    }
+
+    fn apply_runtime_supervisor_overrides(&mut self) {
+        for override_entry in &self.bytecode.runtime_boot_plan.supervisor_overrides {
+            self.process_runtime
+                .root_supervisor
+                .effective_supervisors
+                .insert(
+                    override_entry.process_name.clone(),
+                    override_entry.policy.clone(),
+                );
+            if override_entry
+                .process_name
+                .rsplit("::")
+                .next()
+                .is_some_and(|name| name == "DynamicSupervisor")
+            {
+                self.process_runtime
+                    .root_supervisor
+                    .effective_supervisors
+                    .insert("DynamicSupervisor".into(), override_entry.policy.clone());
+            }
+        }
     }
 
     fn ensure_singleton_available(&mut self, process_name: &str) -> Result<u64, RuntimeError> {
@@ -1862,17 +1879,7 @@ impl VM {
         pid: PidHandle,
     ) -> Result<Value, RuntimeError> {
         self.ensure_root_supervisor_booted()?;
-        let Some(policy) = self
-            .process_runtime
-            .root_supervisor
-            .effective_supervisors
-            .get(&supervisor_name)
-            .cloned()
-        else {
-            return Err(RuntimeError::new(format!(
-                "unknown supervisor `{supervisor_name}`"
-            )));
-        };
+        let policy = self.effective_supervisor_policy(&supervisor_name)?;
         if !policy.allow_adopt {
             return Ok(err_vm_result(self.process_error(
                 "SupervisorAdoptForbidden",
@@ -1920,17 +1927,7 @@ impl VM {
         supervisor_name: String,
     ) -> Result<Value, RuntimeError> {
         self.ensure_root_supervisor_booted()?;
-        let Some(policy) = self
-            .process_runtime
-            .root_supervisor
-            .effective_supervisors
-            .get(&supervisor_name)
-            .cloned()
-        else {
-            return Err(RuntimeError::new(format!(
-                "unknown supervisor `{supervisor_name}`"
-            )));
-        };
+        let policy = self.effective_supervisor_policy(&supervisor_name)?;
         let child_count = self.unique_live_supervisor_child_count(&supervisor_name);
         let shutdown_timeout =
             self.supervisor_shutdown_timeout_value(policy.shutdown_timeout_ms)?;
@@ -1954,6 +1951,39 @@ impl VM {
                 shutdown_timeout,
             ],
         }))
+    }
+
+    fn effective_supervisor_policy(
+        &self,
+        supervisor_name: &str,
+    ) -> Result<RuntimeSupervisorPolicy, RuntimeError> {
+        let supervisor_short_name = supervisor_name
+            .rsplit("::")
+            .next()
+            .unwrap_or(supervisor_name);
+        if let Some(override_entry) = self
+            .bytecode
+            .runtime_boot_plan
+            .supervisor_overrides
+            .iter()
+            .rev()
+            .find(|entry| {
+                entry.process_name == supervisor_name
+                    || entry
+                        .process_name
+                        .rsplit("::")
+                        .next()
+                        .is_some_and(|name| name == supervisor_short_name)
+            })
+        {
+            return Ok(override_entry.policy.clone());
+        }
+        self.process_runtime
+            .root_supervisor
+            .effective_supervisors
+            .get(supervisor_name)
+            .cloned()
+            .ok_or_else(|| RuntimeError::new(format!("unknown supervisor `{supervisor_name}`")))
     }
 
     fn supervisor_shutdown_timeout_value(
@@ -3231,6 +3261,7 @@ impl VM {
             .extend(runtime_boot_plan.handler_overrides);
         self.process_runtime
             .register_spec_table(&self.bytecode.runtime_process_specs);
+        self.apply_runtime_supervisor_overrides();
         self.bytecode.opcodes.extend(chunk_opcodes);
         self.relocate_and_extend_source_map(source_map, code_base)?;
         // Invariant: runtime uses O(1) lookup `functions[fun_idx as usize]`.
@@ -5615,7 +5646,7 @@ impl ProcessRuntime {
             .cloned()
             .map(|spec| (spec.type_name.clone(), spec))
             .collect();
-        self.root_supervisor.effective_supervisors = spec_table
+        let mut effective_supervisors: BTreeMap<String, RuntimeSupervisorPolicy> = spec_table
             .entries
             .iter()
             .filter_map(|spec| {
@@ -5625,6 +5656,19 @@ impl ProcessRuntime {
                     .map(|policy| (spec.type_name.clone(), policy))
             })
             .collect();
+        for spec in &spec_table.entries {
+            if spec
+                .type_name
+                .rsplit("::")
+                .next()
+                .is_some_and(|name| name == "DynamicSupervisor")
+            {
+                if let Some(policy) = spec.supervision.policy.clone() {
+                    effective_supervisors.insert("DynamicSupervisor".into(), policy);
+                }
+            }
+        }
+        self.root_supervisor.effective_supervisors = effective_supervisors;
         self.handler_contexts = spec_table
             .entries
             .iter()

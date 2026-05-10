@@ -1,0 +1,1 @@
+Ok(SupervisorStatus(supervisor: DynamicSupervisor, child_count: 0, strategy: OneForOne, max_restarts: 20, max_seconds: 5, allow_adopt: True, shutdown_timeout: Option::None))

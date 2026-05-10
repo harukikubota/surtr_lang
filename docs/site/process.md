@@ -183,7 +183,7 @@ defagent Logger {
 }
 
 supervisor_init {
-  singleton Logger {
+  Logger {
     handlers {
       out: NullOutHandler
     }

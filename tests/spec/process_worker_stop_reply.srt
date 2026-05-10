@@ -55,7 +55,7 @@ defgenserver MyPool {
 
 supervisor_init {
   MySup {}
-  singleton MyPool {}
+  MyPool {}
 }
 
 first_count =? MyPool::count()

@@ -5063,6 +5063,7 @@ impl Checker {
         let Some(supervisor_process) = self.supervisor_spawn_target(func) else {
             return Ok(None);
         };
+        self.ensure_supervisor_registered_for_surface(span, &supervisor_process, "spawn")?;
         if args
             .iter()
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
@@ -5136,6 +5137,7 @@ impl Checker {
         let Some(supervisor_process) = self.supervisor_intrinsic_target(func, "adopt") else {
             return Ok(None);
         };
+        self.ensure_supervisor_registered_for_surface(span, &supervisor_process, "adopt")?;
         if args
             .iter()
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
@@ -5220,6 +5222,7 @@ impl Checker {
         let Some(supervisor_process) = self.supervisor_intrinsic_target(func, "status") else {
             return Ok(None);
         };
+        self.ensure_supervisor_registered_for_surface(span, &supervisor_process, "status")?;
         if args
             .iter()
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
@@ -5266,6 +5269,7 @@ impl Checker {
         let Some(supervisor_process) = self.supervisor_intrinsic_target(func, "workers") else {
             return Ok(None);
         };
+        self.ensure_supervisor_registered_for_surface(span, &supervisor_process, "workers")?;
         if args
             .iter()
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
@@ -5390,6 +5394,36 @@ impl Checker {
         };
         let expected = format!("{}::{method}", Self::surface_name(supervisor_process));
         Self::surface_name(symbol) == expected
+    }
+
+    fn ensure_supervisor_registered_for_surface(
+        &self,
+        span: &Span,
+        supervisor_process: &str,
+        method: &str,
+    ) -> Result<(), TypeError> {
+        if self.in_compiler_generated_supervisor_wrapper(supervisor_process, method) {
+            return Ok(());
+        }
+        if Self::surface_name(supervisor_process) == "DynamicSupervisor" {
+            return Ok(());
+        }
+        let registered = self.boot_plan.entries.iter().any(|entry| {
+            Self::surface_name(&entry.process_name) == Self::surface_name(supervisor_process)
+        }) || self.boot_plan.supervisors.iter().any(|entry| {
+            Self::surface_name(&entry.process_name) == Self::surface_name(supervisor_process)
+        });
+        if registered {
+            return Ok(());
+        }
+        Err(TypeError {
+            message: format!(
+                "supervisor surface `{}::{method}` is not available in this compile unit; add the supervisor to supervisor_init",
+                Self::surface_name(supervisor_process)
+            ),
+            span: span.clone(),
+            hint: Some("Register custom supervisors in supervisor_init before using their generated supervisor surface.".into()),
+        })
     }
 
     fn try_check_worker_message_template_app(

@@ -5121,7 +5121,7 @@ fn typecheck_supervisor_pool_fixture(
     let user_ast = spire::parse_with_context(
         r#"supervisor_init {
   MySup {}
-  singleton MyPool {}
+  MyPool {}
 }"#,
         spire::ParserContext::project(0),
     )

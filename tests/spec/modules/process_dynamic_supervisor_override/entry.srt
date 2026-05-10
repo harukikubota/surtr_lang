@@ -1,0 +1,7 @@
+supervisor_init {
+  DynamicSupervisor {
+    max_restarts: 20
+  }
+}
+
+print(to_string(DynamicSupervisor::status()))

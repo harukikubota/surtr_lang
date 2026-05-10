@@ -5083,10 +5083,15 @@ fn test_defgenserver_rejects_compiler_managed_surface_names() {
 }
 
 #[test]
-fn test_supervisor_init_parses_singletons_and_supervisor_overrides() {
+fn test_supervisor_init_parses_entries_in_any_order() {
     let ast = parse_with_context(
         r#"supervisor_init {
-  singleton Logger {
+  ImageWorkerSupervisor {
+    max_restarts: 10
+    allow_adopt: True
+  }
+
+  Logger {
     timeout: 5s
     handlers {
       out: FileOutHandler(path: "./logs/app.log")
@@ -5094,10 +5099,7 @@ fn test_supervisor_init_parses_singletons_and_supervisor_overrides() {
     }
   }
 
-  ImageWorkerSupervisor {
-    max_restarts: 10
-    allow_adopt: True
-  }
+  DynamicSupervisor {}
 }"#,
         ParserContext::project(1),
     )
@@ -5105,42 +5107,65 @@ fn test_supervisor_init_parses_singletons_and_supervisor_overrides() {
 
     match &ast[0] {
         Ast::SupervisorInit(_, spec) => {
-            assert_eq!(spec.singletons.len(), 1);
-            assert_eq!(spec.supervisors.len(), 1);
-            let entry = &spec.singletons[0];
-            assert_eq!(entry.process_name, "Logger");
-            assert_eq!(entry.timeout_ms, Some(5_000));
-            assert_eq!(entry.handlers.len(), 2);
-            assert_eq!(entry.handlers[0].slot, "out");
-            assert_eq!(entry.handlers[0].target.name, "FileOutHandler");
-            assert_eq!(entry.handlers[0].target.named_args[0].name, "path");
-            assert_eq!(
-                entry.handlers[0].target.named_args[0].value,
-                "./logs/app.log"
-            );
-            assert_eq!(entry.handlers[1].slot, "err");
-            assert_eq!(entry.handlers[1].target.name, "NullOutHandler");
-            let supervisor = &spec.supervisors[0];
+            assert_eq!(spec.entries.len(), 3);
+            let supervisor = &spec.entries[0];
             assert_eq!(supervisor.process_name, "ImageWorkerSupervisor");
             assert_eq!(supervisor.overrides.max_restarts, Some(10));
             assert_eq!(supervisor.overrides.allow_adopt, Some(true));
+
+            let logger = &spec.entries[1];
+            assert_eq!(logger.process_name, "Logger");
+            assert_eq!(logger.timeout_ms, Some(5_000));
+            assert_eq!(logger.handlers.len(), 2);
+            assert_eq!(logger.handlers[0].slot, "out");
+            assert_eq!(logger.handlers[0].target.name, "FileOutHandler");
+            assert_eq!(logger.handlers[0].target.named_args[0].name, "path");
+            assert_eq!(
+                logger.handlers[0].target.named_args[0].value,
+                "./logs/app.log"
+            );
+            assert_eq!(logger.handlers[1].slot, "err");
+            assert_eq!(logger.handlers[1].target.name, "NullOutHandler");
+
+            let dynsup = &spec.entries[2];
+            assert_eq!(dynsup.process_name, "DynamicSupervisor");
+            assert_eq!(dynsup.timeout_ms, None);
+            assert!(dynsup.handlers.is_empty());
+            assert_eq!(dynsup.overrides, Default::default());
         }
         other => panic!("expected SupervisorInit, got {other:?}"),
     }
 }
 
 #[test]
-fn test_supervisor_init_rejects_duplicate_singleton() {
+fn test_supervisor_init_rejects_duplicate_entry() {
     let err = parse_with_context(
         r#"supervisor_init {
-  singleton Logger {}
+  Logger {}
+  Logger {}
+}"#,
+        ParserContext::project(1),
+    )
+    .expect_err("duplicate supervisor_init entries should fail");
+
+    assert!(err
+        .message()
+        .contains("supervisor_init entry is duplicated"));
+}
+
+#[test]
+fn test_supervisor_init_rejects_legacy_singleton_keyword() {
+    let err = parse_with_context(
+        r#"supervisor_init {
   singleton Logger {}
 }"#,
         ParserContext::project(1),
     )
-    .expect_err("duplicate singleton boot entries should fail");
+    .expect_err("legacy singleton keyword should fail");
 
-    assert!(err.message().contains("singleton boot entry is duplicated"));
+    assert!(err
+        .message()
+        .contains("`singleton` keyword is no longer used"));
 }
 
 #[test]

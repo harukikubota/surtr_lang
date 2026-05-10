@@ -110,9 +110,21 @@ pub struct ProcessRuntimeHandlerSpec {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SupervisorInitSpec {
+    #[serde(default)]
+    pub entries: Vec<SupervisorInitEntry>,
+    #[serde(default)]
     pub singletons: Vec<SupervisorInitSingleton>,
     #[serde(default)]
     pub supervisors: Vec<SupervisorInitOverride>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SupervisorInitEntry {
+    pub process_name: Symbol,
+    pub timeout_ms: Option<u64>,
+    pub handlers: Vec<SupervisorInitHandlerOverride>,
+    pub overrides: SupervisorPolicyOverride,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

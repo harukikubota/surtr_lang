@@ -973,6 +973,7 @@ impl ScarSession {
             .collect::<Vec<TypedProcessSpec>>();
         let mut checker = Checker::with_persistent_state(self.state.clone(), context);
         checker.set_process_handler_dependencies(&process_specs);
+        checker.boot_plan = program.boot_plan.clone();
         let nodes = checker.check_program(program.resolved)?;
         let persisted_process_specs = checker.process_specs.clone();
         self.state = checker.into_persistent_state();
