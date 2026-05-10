@@ -39,6 +39,27 @@ enum RuntimeOutputEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmRuntimeOutputEventSnapshot {
+    pub stream: String,
+    pub text: String,
+}
+
+impl RuntimeOutputEvent {
+    fn snapshot(&self) -> VmRuntimeOutputEventSnapshot {
+        match self {
+            Self::StdOut(text) => VmRuntimeOutputEventSnapshot {
+                stream: "stdout".into(),
+                text: text.clone(),
+            },
+            Self::StdErr(text) => VmRuntimeOutputEventSnapshot {
+                stream: "stderr".into(),
+                text: text.clone(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VmTestEvent {
     pub path: Vec<String>,
     pub detail: Option<String>,
@@ -219,6 +240,7 @@ pub struct VmProcessCounters {
     pub waiting_table_count: usize,
     pub reply_waiter_count: usize,
     pub deadline_queue_count: usize,
+    pub runtime_output_event_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -690,6 +712,7 @@ impl ProcessRuntime {
             waiting_table_count: self.waiting_table.len(),
             reply_waiter_count: self.reply_table.len(),
             deadline_queue_count: self.deadline_queue.len(),
+            runtime_output_event_count: self.output_events.len(),
             ..VmProcessCounters::default()
         };
 
@@ -3066,6 +3089,14 @@ impl VM {
             snapshot.stats.process = self.process_runtime.counters();
             snapshot
         })
+    }
+
+    pub fn runtime_output_events_snapshot(&self) -> Vec<VmRuntimeOutputEventSnapshot> {
+        self.process_runtime
+            .output_events
+            .iter()
+            .map(RuntimeOutputEvent::snapshot)
+            .collect()
     }
 
     pub fn process_runtime_snapshot(&self) -> VmProcessRuntimeSnapshot {
@@ -6188,7 +6219,7 @@ mod tests {
     use super::{
         decode_vm_result, ok_vm_result, Budget, CallFrame, ExecutionContext, ExecutionTarget,
         ProcessRunOutcome, ProcessStatus, ProcessWaitReason, RuntimeOutputEvent, StepOutcome,
-        TaskMode, VmFileError, VmFileMode, VmObservationOptions, VM,
+        TaskMode, VmFileError, VmFileMode, VmObservationOptions, VmRuntimeOutputEventSnapshot, VM,
     };
     use sindr::ir::{
         BootEntrySource, Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode,
@@ -6725,6 +6756,115 @@ mod tests {
             vm.process_runtime.output_events.pop_front(),
             Some(RuntimeOutputEvent::StdOut("hello\n".into()))
         );
+    }
+
+    #[test]
+    fn runtime_output_events_snapshot_preserves_streams_and_order() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]))
+            .with_output_capture()
+            .with_error_capture();
+
+        vm.emit_stdout_text("out".into())
+            .expect("stdout emit should succeed");
+        vm.emit_stderr_text("err".into())
+            .expect("stderr emit should succeed");
+
+        assert_eq!(
+            vm.runtime_output_events_snapshot(),
+            vec![
+                VmRuntimeOutputEventSnapshot {
+                    stream: "stdout".into(),
+                    text: "out".into(),
+                },
+                VmRuntimeOutputEventSnapshot {
+                    stream: "stderr".into(),
+                    text: "err".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn out_handler_write_records_runtime_output_events() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]))
+            .with_output_capture()
+            .with_error_capture();
+
+        vm.out_handler_write(&handler_pid("StdOut"), "stdout-handler".into())
+            .expect("stdout handler should run");
+        vm.out_handler_write(&handler_pid("StdErr"), "stderr-handler".into())
+            .expect("stderr handler should run");
+
+        assert_eq!(
+            vm.runtime_output_events_snapshot(),
+            vec![
+                VmRuntimeOutputEventSnapshot {
+                    stream: "stdout".into(),
+                    text: "stdout-handler".into(),
+                },
+                VmRuntimeOutputEventSnapshot {
+                    stream: "stderr".into(),
+                    text: "stderr-handler".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn runtime_output_counter_tracks_output_events() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        vm.enable_observation(VmObservationOptions::default());
+
+        vm.emit_stdout_text("one".into())
+            .expect("stdout emit should succeed");
+        vm.emit_stderr_text("two".into())
+            .expect("stderr emit should succeed");
+
+        assert_eq!(
+            vm.observation()
+                .expect("observation should be enabled")
+                .stats
+                .process
+                .runtime_output_event_count,
+            2
+        );
+    }
+
+    #[test]
+    fn push_atomic_rolls_back_runtime_output_events() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt])).with_output_capture();
+        let chunk = BytecodeChunk {
+            opcodes: vec![
+                Opcode::LoadConst(0),
+                Opcode::CallBuiltin {
+                    builtin_id: builtin_id("print"),
+                    arity: 1,
+                    span_start: 0,
+                    span_end: 0,
+                },
+                Opcode::LoadLocal(9),
+                Opcode::Halt,
+            ],
+            source_map: None,
+            const_base: 0,
+            constants: vec![Constant::Str("rolled back".into())],
+            new_locals: 0,
+            type_entries: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+            docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
+        };
+
+        let err = vm.push_atomic(chunk).expect_err("chunk should fail");
+
+        assert!(err.message.contains("LoadLocal out of bounds"));
+        assert!(vm.runtime_output_events_snapshot().is_empty());
+        assert_eq!(vm.captured_stdout(), Some([].as_slice()));
     }
 
     #[test]
