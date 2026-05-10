@@ -995,7 +995,7 @@ fn repl_renders_top_level_lens_compose_expressions() {
 }
 
 #[test]
-fn repl_reports_actionable_trait_helper_inference_error_for_annotated_closure() {
+fn repl_reports_return_mismatch_for_concretized_trait_helper_closure() {
     let output = run_repl_session(
         "f: (String, String -> Unit) = {|x: String, y: String| concat(x, y)}\n:quit\n",
     );
@@ -1013,15 +1013,104 @@ fn repl_reports_actionable_trait_helper_inference_error_for_annotated_closure() 
     );
     let combined = strip_ansi(&combined);
     assert!(
-        combined.contains(
-            "REPL could not use the current closure constraints to resolve trait helper `concat`."
-        ),
-        "expected actionable REPL helper inference error, got:\n{}",
+        combined.contains("Argument type mismatch: expected Unit, got String"),
+        "expected return mismatch, got:\n{}",
         combined
     );
     assert!(
-        combined.contains("Known here: x: String, y: String, expected return: Unit."),
-        "expected inferred constraint details in REPL error, got:\n{}",
+        !combined.contains("could not use the current closure constraints"),
+        "trait helper should have concretized before return mismatch:\n{}",
+        combined
+    );
+}
+
+#[test]
+fn repl_allows_trait_helper_capture_with_expected_callable_annotation() {
+    let output = run_repl_session(
+        "cmp: (Int, Int -> Ordering) = &compare\njoin: (String, String -> String) = &concat\ncmp(1, 2)\njoin(\"sur\", \"tr\")\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(
+        stdout.contains("cmp: (Int, Int -> Ordering) = Closure(Int, Int -> Ordering)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("join: (String, String -> String) = Closure(String, String -> String)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Ordering::Less"), "{stdout}");
+    assert!(stdout.contains("\"surtr\""), "{stdout}");
+}
+
+#[test]
+fn repl_allows_trait_helper_capture_when_function_on_supplies_same_expression_evidence() {
+    let output = run_repl_session(
+        "by_len = &compare `Function::on` &String::len\nby_len(\"a\", \"abcd\")\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(
+        stdout.contains("by_len: (String, String -> Ordering) = Closure(_, _ -> _)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Ordering::Less"), "{stdout}");
+}
+
+#[test]
+fn repl_rejects_function_on_inferred_facet_capture_without_source_evidence() {
+    let output = run_repl_session("by_age = &compare `Function::on` _.age\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let combined = strip_ansi(&combined);
+    assert!(
+        combined.contains("Cannot access field on"),
+        "expected missing source evidence diagnostic, got:\n{}",
+        combined
+    );
+}
+
+#[test]
+fn repl_keeps_bare_trait_helper_capture_unresolved_without_same_expression_evidence() {
+    let output = run_repl_session("cmp = &compare\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let combined = strip_ansi(&combined);
+    assert!(
+        combined.contains("Trait helper `compare` needs expected callable type or same-expression inference evidence"),
+        "expected unresolved capture diagnostic, got:\n{}",
         combined
     );
 }

@@ -31,69 +31,6 @@ struct PreparedFacetInput {
 }
 
 impl Checker {
-    fn is_repl_chunk(&self) -> bool {
-        self.runtime_policy == RuntimeSourcePolicy::repl_chunk()
-    }
-
-    fn trait_helper_name_from_resolved<'a>(&self, node: &'a Resolved) -> Option<&'a str> {
-        let Resolved::App(_, func, _) = node else {
-            return None;
-        };
-        let Resolved::Var(_, id) = func.as_ref() else {
-            return None;
-        };
-        if self.function_ids_by_name.contains_key(&id.name) {
-            return None;
-        }
-        self.trait_methods_by_qualified_name
-            .values()
-            .any(|(_, method_name)| method_name == &id.name)
-            .then_some(id.name.as_str())
-    }
-
-    fn rewrite_repl_closure_helper_error(
-        &self,
-        params: &[ResolvedClosureParam],
-        param_tys: &[Ty],
-        expected: Option<&Ty>,
-        body: &Resolved,
-        err: TypeError,
-    ) -> TypeError {
-        if !self.is_repl_chunk()
-            || !err
-                .message
-                .starts_with("Argument type mismatch: expected Unit")
-        {
-            return err;
-        }
-
-        let Some(helper_name) = self.trait_helper_name_from_resolved(body) else {
-            return err;
-        };
-
-        let mut known_parts = params
-            .iter()
-            .zip(param_tys.iter())
-            .map(|(param, ty)| format!("{}: {}", param.id.name, self.ty_name(ty)))
-            .collect::<Vec<_>>();
-        if let Some(Ty::Func(_, ret)) = expected {
-            known_parts.push(format!("expected return: {}", self.ty_name(ret)));
-        }
-
-        TypeError {
-            message: format!(
-                "REPL could not use the current closure constraints to resolve trait helper `{}`. Known here: {}.",
-                helper_name,
-                known_parts.join(", ")
-            ),
-            span: err.span,
-            hint: Some(
-                "REPL checks this line in isolation. Use a concrete expression such as `x ++ y`, or move the definition to a file where whole-file inference is available."
-                    .into(),
-            ),
-        }
-    }
-
     pub(super) fn match_result_value_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
             message: "MatchResult values are extractor-only and can only be constructed inside extractor definitions"
@@ -5809,9 +5746,7 @@ impl Checker {
                 self.function_return_ty = Some(expected_ret.as_ref().clone());
             }
             let profile = self.profiler.start();
-            let typed_body = self.check_node(body).map_err(|err| {
-                self.rewrite_repl_closure_helper_error(params, &param_tys, expected, body, err)
-            })?;
+            let typed_body = self.check_node(body)?;
             self.profiler.finish(ProfileEvent::ClosureBody, profile);
             let typed_body = self.concretize_pending_trait_calls(typed_body)?;
             if expected.is_none() {
@@ -5847,9 +5782,7 @@ impl Checker {
                         span: typed_body.span.clone(),
                         hint: None,
                     };
-                    return Err(self.rewrite_repl_closure_helper_error(
-                        params, &param_tys, expected, body, err,
-                    ));
+                    return Err(err);
                 }
             }
 
@@ -5901,9 +5834,29 @@ impl Checker {
 
         if self.trait_method_ref(target).is_some() {
             let Some(expected_ty) = expected else {
-                let typed_target = self.check_node(target)?;
-                let _ = typed_target;
-                unreachable!("direct trait helper capture should be rejected by check_node")
+                if let Resolved::Var(_, id) = target {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait helper `{}` needs expected callable type or same-expression inference evidence",
+                            id.name
+                        ),
+                        span: span.clone(),
+                        hint: Some(
+                            "Add a callable annotation such as `cmp: (Int, Int -> Ordering) = &compare`, or use the capture inside an expression like `&compare `Function::on` _.field`."
+                                .into(),
+                        ),
+                    });
+                }
+                return Err(TypeError {
+                    message:
+                        "Trait helper capture needs expected callable type or same-expression inference evidence"
+                            .into(),
+                    span: span.clone(),
+                    hint: Some(
+                        "Add a callable annotation or use the capture where the receiver type can be inferred."
+                            .into(),
+                    ),
+                });
             };
             let Ty::Func(params, _) = self.resolve_ty(expected_ty) else {
                 return Err(TypeError {

@@ -1,0 +1,2 @@
+phase: typecheck
+contains: needs expected callable type or same-expression inference evidence

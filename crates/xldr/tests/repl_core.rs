@@ -1718,8 +1718,9 @@ fn core_callable_refs_and_signature_errors_are_ui_independent() {
     let trait_helper = engine.handle_line("&concat");
     assert!(!trait_helper.should_exit);
     assert!(matches!(trait_helper.output, ReplOutput::EvalError { .. }));
-    assert!(rendered_text(&trait_helper)
-        .contains("Trait helper `concat` cannot be referenced directly"));
+    assert!(rendered_text(&trait_helper).contains(
+        "Trait helper `concat` needs expected callable type or same-expression inference evidence"
+    ));
 
     let builtin_call = engine.handle_line("print()");
     assert!(!builtin_call.should_exit);
