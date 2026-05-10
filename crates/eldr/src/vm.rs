@@ -5119,6 +5119,18 @@ impl VM {
                     }
                 }
             }
+            Opcode::ListLen => {
+                let list = self.pop_stack()?;
+                match list {
+                    Value::List(handle) => self.stack.push(Value::Int(handle.len.into())),
+                    other => {
+                        return Err(RuntimeError::new(format!(
+                            "ListLen expects List, got {:?}",
+                            other
+                        )));
+                    }
+                }
+            }
             Opcode::ListHead => {
                 let list = self.pop_stack()?;
                 match list {
@@ -6622,6 +6634,25 @@ mod tests {
 
         assert_eq!(ctx.pc, 2);
         assert_eq!(ctx.stack, vec![Value::Int(int(2))]);
+    }
+
+    #[test]
+    fn list_len_executes_as_one_opcode() {
+        let bytecode = base_bytecode(vec![Opcode::ListEmpty, Opcode::ListLen, Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected list empty to continue, got {other:?}"),
+        }
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected list len to continue, got {other:?}"),
+        }
+
+        assert_eq!(ctx.pc, 2);
+        assert_eq!(ctx.stack, vec![Value::Int(int(0))]);
     }
 
     #[test]
