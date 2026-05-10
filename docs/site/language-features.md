@@ -41,6 +41,8 @@ include "./src/helper.srt"
 - REPL top-level ではなく source file 側で使う前提
 - `surtr repl --script file.srt` でも同じ規則で `include` を解決し、script を一度実行してから対話を始める
 
+process examples でも、entry script から `include "./Agents.srt"` や `include "./Workers.srt"` の形で定義を読み込むのが基本です。全体像は `./process.md` にまとめています。
+
 ## `@autoimport`
 
 `@autoimport` は標準 surface のうち「最初から見えてよい宣言」に付ける属性です。
