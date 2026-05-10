@@ -1,6 +1,34 @@
 use super::*;
 use sindr::names::{builtin_type_name, TypeName};
 
+#[derive(Clone, Copy)]
+enum SignatureTyMode<'a> {
+    Normal,
+    Trait { self_ty: &'a Ty },
+    Builtin,
+}
+
+impl<'a> SignatureTyMode<'a> {
+    fn self_ty(self) -> Option<&'a Ty> {
+        match self {
+            SignatureTyMode::Trait { self_ty } => Some(self_ty),
+            SignatureTyMode::Normal | SignatureTyMode::Builtin => None,
+        }
+    }
+
+    fn allows_lazy(self) -> bool {
+        matches!(self, SignatureTyMode::Builtin)
+    }
+
+    fn allows_user_generic_fallback(self) -> bool {
+        !matches!(self, SignatureTyMode::Builtin)
+    }
+
+    fn rejects_impl_trait_in_error_marker(self) -> bool {
+        matches!(self, SignatureTyMode::Normal)
+    }
+}
+
 impl Checker {
     fn canonical_user_type_name(name: &str) -> String {
         if name.contains("::") {
@@ -378,6 +406,23 @@ impl Checker {
         Self::surface_name(name)
     }
 
+    fn require_type_arg_count<'a>(
+        &self,
+        span: &Span,
+        args: &'a [AstTy],
+        expected: usize,
+        message: &'static str,
+    ) -> Result<&'a [AstTy], TypeError> {
+        if args.len() != expected {
+            return Err(TypeError {
+                message: message.into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        Ok(args)
+    }
+
     pub(super) fn resolve_ast_ty_in_context(
         &self,
         ast_ty: &AstTy,
@@ -527,38 +572,30 @@ impl Checker {
                     Ok(Ty::Enum("MatchResult".into(), vec![value]))
                 }
                 "List" => {
-                    if args.len() != 1 {
-                        return Err(TypeError {
-                            message: "List<T> requires exactly 1 type argument".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
+                    let args =
+                        self.require_type_arg_count(span, args, 1, "List<T> requires exactly 1 type argument")?;
                     let inner_ty =
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     Ok(Ty::List(Box::new(inner_ty)))
                 }
                 "HashMap" => {
-                    if args.len() != 1 {
-                        return Err(TypeError {
-                            message: "HashMap<V> requires exactly 1 type argument".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
+                    let args = self.require_type_arg_count(
+                        span,
+                        args,
+                        1,
+                        "HashMap<V> requires exactly 1 type argument",
+                    )?;
                     let value_ty =
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     Ok(Ty::Enum("HashMap".into(), vec![value_ty]))
                 }
                 "Generator" => {
-                    if args.len() != 2 {
-                        return Err(TypeError {
-                            message: "Generator<State, Item> requires exactly 2 type arguments"
-                                .into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
+                    let args = self.require_type_arg_count(
+                        span,
+                        args,
+                        2,
+                        "Generator<State, Item> requires exactly 2 type arguments",
+                    )?;
                     let state_ty =
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     let item_ty =
@@ -566,25 +603,23 @@ impl Checker {
                     Ok(Ty::Enum("Generator".into(), vec![state_ty, item_ty]))
                 }
                 "ProcessInit" => {
-                    if args.len() != 1 {
-                        return Err(TypeError {
-                            message: "ProcessInit<T> requires exactly 1 type argument".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
+                    let args = self.require_type_arg_count(
+                        span,
+                        args,
+                        1,
+                        "ProcessInit<T> requires exactly 1 type argument",
+                    )?;
                     let inner_ty =
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     Ok(Ty::Enum("ProcessInit".into(), vec![inner_ty]))
                 }
                 "Facet" => {
-                    if args.len() != 2 {
-                        return Err(TypeError {
-                            message: "Facet<S, A> requires exactly 2 type arguments".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
+                    let args = self.require_type_arg_count(
+                        span,
+                        args,
+                        2,
+                        "Facet<S, A> requires exactly 2 type arguments",
+                    )?;
                     let source =
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     let focus =
@@ -595,13 +630,12 @@ impl Checker {
                 "Workers" => self.resolve_worker_handle_surface_ty(span, args, "Workers"),
                 "WorkerLease" => self.resolve_worker_handle_surface_ty(span, args, "WorkerLease"),
                 "TaskHandle" => {
-                    if args.len() != 1 {
-                        return Err(TypeError {
-                            message: "TaskHandle<T> requires exactly 1 type argument".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
+                    let args = self.require_type_arg_count(
+                        span,
+                        args,
+                        1,
+                        "TaskHandle<T> requires exactly 1 type argument",
+                    )?;
                     let inner =
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     Ok(Ty::Enum("TaskHandle".into(), vec![inner]))
@@ -742,344 +776,7 @@ impl Checker {
         context: TypeSyntaxContext,
         tyvars: &mut HashMap<String, Ty>,
     ) -> Result<Ty, TypeError> {
-        match ast_ty {
-            AstTy::Named(_, name) if name.starts_with('$') => {
-                if context == TypeSyntaxContext::ErrorMarker {
-                    return Err(TypeError {
-                        message:
-                            "The error marker E in Result<T, E> must be a deferror-defined type."
-                                .into(),
-                        span: Self::ast_ty_span(ast_ty).clone(),
-                        hint: None,
-                    });
-                }
-                if let Some(existing) = tyvars.get(name) {
-                    return Ok(existing.clone());
-                }
-                let fresh = self.env.fresh_tyvar();
-                tyvars.insert(name.clone(), fresh.clone());
-                Ok(fresh)
-            }
-            AstTy::Named(span, name) if matches!(Self::surface_type_name(name), "_" | "Hole") => {
-                self.resolve_hole_surface_ty(span, context)
-            }
-            AstTy::Named(span, name)
-                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
-            {
-                Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
-            }
-            AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
-                Err(self.seq_not_allowed_error(span))
-            }
-            AstTy::ImplTrait(_, trait_name) => {
-                if context == TypeSyntaxContext::ErrorMarker {
-                    return Err(TypeError {
-                        message:
-                            "The error marker E in Result<T, E> must be a deferror-defined type."
-                                .into(),
-                        span: Self::ast_ty_span(ast_ty).clone(),
-                        hint: None,
-                    });
-                }
-                let fresh = self.env.fresh_tyvar();
-                if let Ty::Var(var) = fresh {
-                    self.register_tyvar_bound(var, trait_name);
-                }
-                Ok(fresh)
-            }
-            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
-                return Err(self.type_ref_not_allowed_error(span));
-            }
-            AstTy::Generic(span, name, _)
-                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
-            {
-                return Err(
-                    self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name))
-                );
-            }
-            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
-                Err(self.seq_not_allowed_error(span))
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "List" => {
-                if args.len() != 1 {
-                    return Err(TypeError {
-                        message: "List<T> requires exactly 1 type argument".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let inner = self.resolve_signature_ast_ty_in_context(
-                    &args[0],
-                    TypeSyntaxContext::General,
-                    tyvars,
-                )?;
-                Ok(Ty::List(Box::new(inner)))
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "HashMap" => {
-                if args.len() != 1 {
-                    return Err(TypeError {
-                        message: "HashMap<V> requires exactly 1 type argument".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let value = self.resolve_signature_ast_ty_in_context(
-                    &args[0],
-                    TypeSyntaxContext::General,
-                    tyvars,
-                )?;
-                Ok(Ty::Enum("HashMap".into(), vec![value]))
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Generator" => {
-                if args.len() != 2 {
-                    return Err(TypeError {
-                        message: "Generator<State, Item> requires exactly 2 type arguments".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let state = self.resolve_signature_ast_ty_in_context(
-                    &args[0],
-                    TypeSyntaxContext::General,
-                    tyvars,
-                )?;
-                let item = self.resolve_signature_ast_ty_in_context(
-                    &args[1],
-                    TypeSyntaxContext::General,
-                    tyvars,
-                )?;
-                Ok(Ty::Enum("Generator".into(), vec![state, item]))
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "ProcessInit" => {
-                if args.len() != 1 {
-                    return Err(TypeError {
-                        message: "ProcessInit<T> requires exactly 1 type argument".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let inner = self.resolve_signature_ast_ty_in_context(
-                    &args[0],
-                    TypeSyntaxContext::General,
-                    tyvars,
-                )?;
-                Ok(Ty::Enum("ProcessInit".into(), vec![inner]))
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Facet" => {
-                if args.len() != 2 {
-                    return Err(TypeError {
-                        message: "Facet<S, A> requires exactly 2 type arguments".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let source = self.resolve_signature_ast_ty_in_context(
-                    &args[0],
-                    TypeSyntaxContext::General,
-                    tyvars,
-                )?;
-                let focus = self.resolve_signature_ast_ty_in_context(
-                    &args[1],
-                    TypeSyntaxContext::General,
-                    tyvars,
-                )?;
-                Ok(Ty::Facet(Box::new(source), Box::new(focus)))
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "PID" => {
-                self.resolve_pid_surface_ty(span, args)
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Workers" => {
-                self.resolve_worker_handle_surface_ty(span, args, "Workers")
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "WorkerLease" => {
-                self.resolve_worker_handle_surface_ty(span, args, "WorkerLease")
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "TaskHandle" => {
-                if args.len() != 1 {
-                    return Err(TypeError {
-                        message: "TaskHandle<T> requires exactly 1 type argument".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let inner = self.resolve_signature_ast_ty_in_context(
-                    &args[0],
-                    TypeSyntaxContext::General,
-                    tyvars,
-                )?;
-                Ok(Ty::Enum("TaskHandle".into(), vec![inner]))
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "MatchResult" => {
-                if !self.match_result_type_allowed(context) {
-                    return Err(self.match_result_not_allowed_error(span));
-                }
-                if args.is_empty() || args.len() > 2 {
-                    return Err(TypeError {
-                        message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let value = self.resolve_signature_ast_ty_in_context(
-                    &args[0],
-                    TypeSyntaxContext::General,
-                    tyvars,
-                )?;
-                if args.len() == 2 {
-                    let err = self.resolve_signature_ast_ty_in_context(
-                        &args[1],
-                        TypeSyntaxContext::General,
-                        tyvars,
-                    )?;
-                    if !matches!(err, Ty::Error) {
-                        return Err(TypeError {
-                            message:
-                                "MatchResult<$Value, Error> requires Error as the second argument"
-                                    .into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                }
-                Ok(Ty::Enum("MatchResult".into(), vec![value]))
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Result" => {
-                if args.is_empty() || args.len() > 2 {
-                    return Err(TypeError {
-                        message: "Result<T> or Result<T, E> requires 1 or 2 type arguments".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let ok = self.resolve_signature_ast_ty_in_context(
-                    &args[0],
-                    TypeSyntaxContext::General,
-                    tyvars,
-                )?;
-                let err = if args.len() == 2 {
-                    if context != TypeSyntaxContext::FunctionReturn {
-                        return Err(TypeError {
-                            message: "Result<T, E> is only allowed in function return signatures."
-                                .into(),
-                            span: span.clone(),
-                            hint: Some("Use Result<T> in local code.".into()),
-                        });
-                    }
-                    self.resolve_signature_ast_ty_in_context(
-                        &args[1],
-                        TypeSyntaxContext::ErrorMarker,
-                        tyvars,
-                    )?
-                } else {
-                    Ty::Error
-                };
-                Ok(Ty::Result(Box::new(ok), Box::new(err)))
-            }
-            AstTy::Tuple(span, items) => {
-                if items.len() < 2 {
-                    return Err(TypeError {
-                        message: "Tuple types require at least 2 item types".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let items = items
-                    .iter()
-                    .map(|item| {
-                        self.resolve_signature_ast_ty_in_context(
-                            item,
-                            TypeSyntaxContext::General,
-                            tyvars,
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Ty::Tuple(items))
-            }
-            AstTy::Generic(span, name, args) => {
-                if Self::surface_type_name(name) == "Workers" {
-                    return self.resolve_worker_handle_surface_ty(span, args, "Workers");
-                }
-                if Self::surface_type_name(name) == "WorkerLease" {
-                    return self.resolve_worker_handle_surface_ty(span, args, "WorkerLease");
-                }
-                if Self::surface_type_name(name) == "TaskHandle" {
-                    if args.len() != 1 {
-                        return Err(TypeError {
-                            message: "TaskHandle<T> requires exactly 1 type argument".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    let inner = self.resolve_signature_ast_ty_in_context(
-                        &args[0],
-                        TypeSyntaxContext::General,
-                        tyvars,
-                    )?;
-                    return Ok(Ty::Enum("TaskHandle".into(), vec![inner]));
-                }
-                let def = self
-                    .env
-                    .lookup_type_def(name)
-                    .cloned()
-                    .ok_or_else(|| TypeError {
-                        message: format!("Unknown generic type: {}", name),
-                        span: span.clone(),
-                        hint: None,
-                    })?;
-                if def.type_params.len() != args.len() {
-                    return Err(TypeError {
-                        message: format!(
-                            "Type {} requires {} type argument(s), got {}",
-                            name,
-                            def.type_params.len(),
-                            args.len()
-                        ),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let resolved_args = args
-                    .iter()
-                    .map(|arg| {
-                        self.resolve_signature_ast_ty_in_context(
-                            arg,
-                            TypeSyntaxContext::General,
-                            tyvars,
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                match def.kind {
-                    crate::env::TypeKind::Enum => Ok(Ty::Enum(def.name.clone(), resolved_args)),
-                    _ => Err(TypeError {
-                        message: format!("Generic type {} is not supported in this context", name),
-                        span: span.clone(),
-                        hint: None,
-                    }),
-                }
-            }
-            AstTy::Func(_, params, ret) => {
-                let params = params
-                    .iter()
-                    .map(|param| {
-                        self.resolve_signature_ast_ty_in_context(
-                            param,
-                            match context {
-                                TypeSyntaxContext::BindingAnnotation
-                                | TypeSyntaxContext::FunctionReturn
-                                | TypeSyntaxContext::HoleClosureParam => {
-                                    TypeSyntaxContext::HoleClosureParam
-                                }
-                                _ => TypeSyntaxContext::General,
-                            },
-                            tyvars,
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let ret = self.resolve_signature_ast_ty_in_context(ret, context, tyvars)?;
-                Ok(Ty::Func(params, Box::new(ret)))
-            }
-            _ => self.resolve_ast_ty_in_context(ast_ty, context),
-        }
+        self.resolve_signature_like_ast_ty_in_context(ast_ty, context, tyvars, SignatureTyMode::Normal)
     }
 
     pub(super) fn seed_signature_type_params(
@@ -1105,8 +802,47 @@ impl Checker {
         self_ty: &Ty,
         tyvars: &mut HashMap<String, Ty>,
     ) -> Result<Ty, TypeError> {
+        self.resolve_signature_like_ast_ty_in_context(
+            ast_ty,
+            context,
+            tyvars,
+            SignatureTyMode::Trait { self_ty },
+        )
+    }
+
+    pub(super) fn resolve_builtin_ast_ty_in_context(
+        &mut self,
+        ast_ty: &AstTy,
+        context: TypeSyntaxContext,
+        tyvars: &mut HashMap<String, Ty>,
+    ) -> Result<Ty, TypeError> {
+        self.resolve_signature_like_ast_ty_in_context(ast_ty, context, tyvars, SignatureTyMode::Builtin)
+    }
+
+    fn signature_like_param_context(context: TypeSyntaxContext) -> TypeSyntaxContext {
+        match context {
+            TypeSyntaxContext::BindingAnnotation
+            | TypeSyntaxContext::FunctionReturn
+            | TypeSyntaxContext::HoleClosureParam => TypeSyntaxContext::HoleClosureParam,
+            _ => TypeSyntaxContext::General,
+        }
+    }
+
+    fn resolve_signature_like_ast_ty_in_context(
+        &mut self,
+        ast_ty: &AstTy,
+        context: TypeSyntaxContext,
+        tyvars: &mut HashMap<String, Ty>,
+        mode: SignatureTyMode<'_>,
+    ) -> Result<Ty, TypeError> {
         match ast_ty {
-            AstTy::Named(_, name) if name == "Self" => Ok(self_ty.clone()),
+            AstTy::Named(_, name) if name == "Self" => {
+                if let Some(self_ty) = mode.self_ty() {
+                    Ok(self_ty.clone())
+                } else {
+                    self.resolve_ast_ty_in_context(ast_ty, context)
+                }
+            }
             AstTy::Named(_, name) if name.starts_with('$') => {
                 if context == TypeSyntaxContext::ErrorMarker {
                     return Err(TypeError {
@@ -1136,333 +872,9 @@ impl Checker {
                 Err(self.seq_not_allowed_error(span))
             }
             AstTy::ImplTrait(_, trait_name) => {
-                let fresh = self.env.fresh_tyvar();
-                if let Ty::Var(var) = fresh {
-                    self.register_tyvar_bound(var, trait_name);
-                }
-                Ok(fresh)
-            }
-            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
-                return Err(self.type_ref_not_allowed_error(span));
-            }
-            AstTy::Generic(span, name, _)
-                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
-            {
-                return Err(
-                    self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name))
-                );
-            }
-            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
-                Err(self.seq_not_allowed_error(span))
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "List" => {
-                if args.len() != 1 {
-                    return Err(TypeError {
-                        message: "List<T> requires exactly 1 type argument".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let inner = self.resolve_trait_signature_ast_ty_in_context(
-                    &args[0],
-                    TypeSyntaxContext::General,
-                    self_ty,
-                    tyvars,
-                )?;
-                Ok(Ty::List(Box::new(inner)))
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "HashMap" => {
-                if args.len() != 1 {
-                    return Err(TypeError {
-                        message: "HashMap<V> requires exactly 1 type argument".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let value = self.resolve_trait_signature_ast_ty_in_context(
-                    &args[0],
-                    TypeSyntaxContext::General,
-                    self_ty,
-                    tyvars,
-                )?;
-                Ok(Ty::Enum("HashMap".into(), vec![value]))
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Generator" => {
-                if args.len() != 2 {
-                    return Err(TypeError {
-                        message: "Generator<State, Item> requires exactly 2 type arguments".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let state = self.resolve_trait_signature_ast_ty_in_context(
-                    &args[0],
-                    TypeSyntaxContext::General,
-                    self_ty,
-                    tyvars,
-                )?;
-                let item = self.resolve_trait_signature_ast_ty_in_context(
-                    &args[1],
-                    TypeSyntaxContext::General,
-                    self_ty,
-                    tyvars,
-                )?;
-                Ok(Ty::Enum("Generator".into(), vec![state, item]))
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "ProcessInit" => {
-                if args.len() != 1 {
-                    return Err(TypeError {
-                        message: "ProcessInit<T> requires exactly 1 type argument".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let inner = self.resolve_trait_signature_ast_ty_in_context(
-                    &args[0],
-                    TypeSyntaxContext::General,
-                    self_ty,
-                    tyvars,
-                )?;
-                Ok(Ty::Enum("ProcessInit".into(), vec![inner]))
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Facet" => {
-                if args.len() != 2 {
-                    return Err(TypeError {
-                        message: "Facet<S, A> requires exactly 2 type arguments".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let source = self.resolve_trait_signature_ast_ty_in_context(
-                    &args[0],
-                    TypeSyntaxContext::General,
-                    self_ty,
-                    tyvars,
-                )?;
-                let focus = self.resolve_trait_signature_ast_ty_in_context(
-                    &args[1],
-                    TypeSyntaxContext::General,
-                    self_ty,
-                    tyvars,
-                )?;
-                Ok(Ty::Facet(Box::new(source), Box::new(focus)))
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "PID" => {
-                self.resolve_pid_surface_ty(span, args)
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Workers" => {
-                self.resolve_worker_handle_surface_ty(span, args, "Workers")
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "WorkerLease" => {
-                self.resolve_worker_handle_surface_ty(span, args, "WorkerLease")
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "TaskHandle" => {
-                if args.len() != 1 {
-                    return Err(TypeError {
-                        message: "TaskHandle<T> requires exactly 1 type argument".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let inner = self.resolve_trait_signature_ast_ty_in_context(
-                    &args[0],
-                    TypeSyntaxContext::General,
-                    self_ty,
-                    tyvars,
-                )?;
-                Ok(Ty::Enum("TaskHandle".into(), vec![inner]))
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "MatchResult" => {
-                if !self.match_result_type_allowed(context) {
-                    return Err(self.match_result_not_allowed_error(span));
-                }
-                if args.is_empty() || args.len() > 2 {
-                    return Err(TypeError {
-                        message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let value = self.resolve_trait_signature_ast_ty_in_context(
-                    &args[0],
-                    TypeSyntaxContext::General,
-                    self_ty,
-                    tyvars,
-                )?;
-                if args.len() == 2 {
-                    let err = self.resolve_trait_signature_ast_ty_in_context(
-                        &args[1],
-                        TypeSyntaxContext::General,
-                        self_ty,
-                        tyvars,
-                    )?;
-                    if !matches!(err, Ty::Error) {
-                        return Err(TypeError {
-                            message:
-                                "MatchResult<$Value, Error> requires Error as the second argument"
-                                    .into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                }
-                Ok(Ty::Enum("MatchResult".into(), vec![value]))
-            }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Result" => {
-                if args.is_empty() || args.len() > 2 {
-                    return Err(TypeError {
-                        message: "Result<T> or Result<T, E> requires 1 or 2 type arguments".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let ok = self.resolve_trait_signature_ast_ty_in_context(
-                    &args[0],
-                    TypeSyntaxContext::General,
-                    self_ty,
-                    tyvars,
-                )?;
-                let err = if args.len() == 2 {
-                    if context != TypeSyntaxContext::FunctionReturn {
-                        return Err(TypeError {
-                            message: "Result<T, E> is only allowed in function return signatures."
-                                .into(),
-                            span: span.clone(),
-                            hint: Some("Use Result<T> in local code.".into()),
-                        });
-                    }
-                    self.resolve_trait_signature_ast_ty_in_context(
-                        &args[1],
-                        TypeSyntaxContext::ErrorMarker,
-                        self_ty,
-                        tyvars,
-                    )?
-                } else {
-                    Ty::Error
-                };
-                Ok(Ty::Result(Box::new(ok), Box::new(err)))
-            }
-            AstTy::Tuple(span, items) => {
-                if items.len() < 2 {
-                    return Err(TypeError {
-                        message: "Tuple types require at least 2 item types".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let items = items
-                    .iter()
-                    .map(|item| {
-                        self.resolve_trait_signature_ast_ty_in_context(
-                            item,
-                            TypeSyntaxContext::General,
-                            self_ty,
-                            tyvars,
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Ty::Tuple(items))
-            }
-            AstTy::Generic(span, name, args) => {
-                if Self::surface_type_name(name) == "Workers" {
-                    return self.resolve_worker_handle_surface_ty(span, args, "Workers");
-                }
-                if Self::surface_type_name(name) == "WorkerLease" {
-                    return self.resolve_worker_handle_surface_ty(span, args, "WorkerLease");
-                }
-                if Self::surface_type_name(name) == "TaskHandle" {
-                    if args.len() != 1 {
-                        return Err(TypeError {
-                            message: "TaskHandle<T> requires exactly 1 type argument".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    let inner = self.resolve_trait_signature_ast_ty_in_context(
-                        &args[0],
-                        TypeSyntaxContext::General,
-                        self_ty,
-                        tyvars,
-                    )?;
-                    return Ok(Ty::Enum("TaskHandle".into(), vec![inner]));
-                }
-                let def = self
-                    .env
-                    .lookup_type_def(name)
-                    .cloned()
-                    .ok_or_else(|| TypeError {
-                        message: format!("Unknown generic type: {}", name),
-                        span: span.clone(),
-                        hint: None,
-                    })?;
-                if def.type_params.len() != args.len() {
-                    return Err(TypeError {
-                        message: format!(
-                            "Type {} requires {} type argument(s), got {}",
-                            name,
-                            def.type_params.len(),
-                            args.len()
-                        ),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let resolved_args = args
-                    .iter()
-                    .map(|arg| {
-                        self.resolve_trait_signature_ast_ty_in_context(
-                            arg,
-                            TypeSyntaxContext::General,
-                            self_ty,
-                            tyvars,
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                match def.kind {
-                    crate::env::TypeKind::Enum => Ok(Ty::Enum(def.name.clone(), resolved_args)),
-                    _ => Err(TypeError {
-                        message: format!("Generic type {} is not supported in this context", name),
-                        span: span.clone(),
-                        hint: None,
-                    }),
-                }
-            }
-            AstTy::Func(_, params, ret) => {
-                let params = params
-                    .iter()
-                    .map(|param| {
-                        self.resolve_trait_signature_ast_ty_in_context(
-                            param,
-                            match context {
-                                TypeSyntaxContext::BindingAnnotation
-                                | TypeSyntaxContext::FunctionReturn
-                                | TypeSyntaxContext::HoleClosureParam => {
-                                    TypeSyntaxContext::HoleClosureParam
-                                }
-                                _ => TypeSyntaxContext::General,
-                            },
-                            self_ty,
-                            tyvars,
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                let ret =
-                    self.resolve_trait_signature_ast_ty_in_context(ret, context, self_ty, tyvars)?;
-                Ok(Ty::Func(params, Box::new(ret)))
-            }
-            _ => self.resolve_ast_ty_in_context(ast_ty, context),
-        }
-    }
-
-    pub(super) fn resolve_builtin_ast_ty_in_context(
-        &mut self,
-        ast_ty: &AstTy,
-        context: TypeSyntaxContext,
-        tyvars: &mut HashMap<String, Ty>,
-    ) -> Result<Ty, TypeError> {
-        match ast_ty {
-            AstTy::Named(_, name) if name.starts_with('$') => {
-                if context == TypeSyntaxContext::ErrorMarker {
+                if context == TypeSyntaxContext::ErrorMarker
+                    && mode.rejects_impl_trait_in_error_marker()
+                {
                     return Err(TypeError {
                         message:
                             "The error marker E in Result<T, E> must be a deferror-defined type."
@@ -1471,23 +883,14 @@ impl Checker {
                         hint: None,
                     });
                 }
-                if let Some(existing) = tyvars.get(name) {
-                    return Ok(existing.clone());
+                if matches!(mode, SignatureTyMode::Builtin) {
+                    return self.resolve_ast_ty_in_context(ast_ty, context);
                 }
                 let fresh = self.env.fresh_tyvar();
-                tyvars.insert(name.clone(), fresh.clone());
+                if let Ty::Var(var) = fresh {
+                    self.register_tyvar_bound(var, trait_name);
+                }
                 Ok(fresh)
-            }
-            AstTy::Named(span, name) if matches!(Self::surface_type_name(name), "_" | "Hole") => {
-                self.resolve_hole_surface_ty(span, context)
-            }
-            AstTy::Named(span, name)
-                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses") =>
-            {
-                Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
-            }
-            AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
-                Err(self.seq_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
                 Err(self.type_ref_not_allowed_error(span))
@@ -1497,18 +900,20 @@ impl Checker {
             {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
             }
-            AstTy::Generic(span, name, args) if Self::surface_type_name(name) == "Lazy" => {
-                if args.len() != 1 {
-                    return Err(TypeError {
-                        message: "Lazy<T> requires exactly 1 type argument".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let inner = self.resolve_builtin_ast_ty_in_context(
+            AstTy::Generic(span, name, args)
+                if Self::surface_type_name(name) == "Lazy" && mode.allows_lazy() =>
+            {
+                let args = self.require_type_arg_count(
+                    span,
+                    args,
+                    1,
+                    "Lazy<T> requires exactly 1 type argument",
+                )?;
+                let inner = self.resolve_signature_like_ast_ty_in_context(
                     &args[0],
                     TypeSyntaxContext::General,
                     tyvars,
+                    mode,
                 )?;
                 Ok(Ty::Lazy(Box::new(inner)))
             }
@@ -1527,16 +932,18 @@ impl Checker {
                             hint: None,
                         });
                     }
-                    let value = self.resolve_builtin_ast_ty_in_context(
+                    let value = self.resolve_signature_like_ast_ty_in_context(
                         &args[0],
                         TypeSyntaxContext::General,
                         tyvars,
+                        mode,
                     )?;
                     if args.len() == 2 {
-                        let err = self.resolve_builtin_ast_ty_in_context(
+                        let err = self.resolve_signature_like_ast_ty_in_context(
                             &args[1],
                             TypeSyntaxContext::General,
                             tyvars,
+                            mode,
                         )?;
                         if !matches!(err, Ty::Error) {
                             return Err(TypeError {
@@ -1549,88 +956,89 @@ impl Checker {
                     Ok(Ty::Enum("MatchResult".into(), vec![value]))
                 }
                 "List" => {
-                    if args.len() != 1 {
-                        return Err(TypeError {
-                            message: "List<T> requires exactly 1 type argument".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    let inner_ty = self.resolve_builtin_ast_ty_in_context(
+                    let args = self.require_type_arg_count(
+                        span,
+                        args,
+                        1,
+                        "List<T> requires exactly 1 type argument",
+                    )?;
+                    let inner_ty = self.resolve_signature_like_ast_ty_in_context(
                         &args[0],
                         TypeSyntaxContext::General,
                         tyvars,
+                        mode,
                     )?;
                     Ok(Ty::List(Box::new(inner_ty)))
                 }
                 "HashMap" => {
-                    if args.len() != 1 {
-                        return Err(TypeError {
-                            message: "HashMap<V> requires exactly 1 type argument".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    let value_ty = self.resolve_builtin_ast_ty_in_context(
+                    let args = self.require_type_arg_count(
+                        span,
+                        args,
+                        1,
+                        "HashMap<V> requires exactly 1 type argument",
+                    )?;
+                    let value_ty = self.resolve_signature_like_ast_ty_in_context(
                         &args[0],
                         TypeSyntaxContext::General,
                         tyvars,
+                        mode,
                     )?;
                     Ok(Ty::Enum("HashMap".into(), vec![value_ty]))
                 }
                 "Generator" => {
-                    if args.len() != 2 {
-                        return Err(TypeError {
-                            message: "Generator<State, Item> requires exactly 2 type arguments"
-                                .into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    let state_ty = self.resolve_builtin_ast_ty_in_context(
+                    let args = self.require_type_arg_count(
+                        span,
+                        args,
+                        2,
+                        "Generator<State, Item> requires exactly 2 type arguments",
+                    )?;
+                    let state_ty = self.resolve_signature_like_ast_ty_in_context(
                         &args[0],
                         TypeSyntaxContext::General,
                         tyvars,
+                        mode,
                     )?;
-                    let item_ty = self.resolve_builtin_ast_ty_in_context(
+                    let item_ty = self.resolve_signature_like_ast_ty_in_context(
                         &args[1],
                         TypeSyntaxContext::General,
                         tyvars,
+                        mode,
                     )?;
                     Ok(Ty::Enum("Generator".into(), vec![state_ty, item_ty]))
                 }
                 "ProcessInit" => {
-                    if args.len() != 1 {
-                        return Err(TypeError {
-                            message: "ProcessInit<T> requires exactly 1 type argument".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    let inner_ty = self.resolve_builtin_ast_ty_in_context(
+                    let args = self.require_type_arg_count(
+                        span,
+                        args,
+                        1,
+                        "ProcessInit<T> requires exactly 1 type argument",
+                    )?;
+                    let inner_ty = self.resolve_signature_like_ast_ty_in_context(
                         &args[0],
                         TypeSyntaxContext::General,
                         tyvars,
+                        mode,
                     )?;
                     Ok(Ty::Enum("ProcessInit".into(), vec![inner_ty]))
                 }
                 "Facet" => {
-                    if args.len() != 2 {
-                        return Err(TypeError {
-                            message: "Facet<S, A> requires exactly 2 type arguments".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    let source = self.resolve_builtin_ast_ty_in_context(
+                    let args = self.require_type_arg_count(
+                        span,
+                        args,
+                        2,
+                        "Facet<S, A> requires exactly 2 type arguments",
+                    )?;
+                    let source = self.resolve_signature_like_ast_ty_in_context(
                         &args[0],
                         TypeSyntaxContext::General,
                         tyvars,
+                        mode,
                     )?;
-                    let focus = self.resolve_builtin_ast_ty_in_context(
+                    let focus = self.resolve_signature_like_ast_ty_in_context(
                         &args[1],
                         TypeSyntaxContext::General,
                         tyvars,
+                        mode,
                     )?;
                     Ok(Ty::Facet(Box::new(source), Box::new(focus)))
                 }
@@ -1638,17 +1046,17 @@ impl Checker {
                 "Workers" => self.resolve_worker_handle_surface_ty(span, args, "Workers"),
                 "WorkerLease" => self.resolve_worker_handle_surface_ty(span, args, "WorkerLease"),
                 "TaskHandle" => {
-                    if args.len() != 1 {
-                        return Err(TypeError {
-                            message: "TaskHandle<T> requires exactly 1 type argument".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    let inner = self.resolve_builtin_ast_ty_in_context(
+                    let args = self.require_type_arg_count(
+                        span,
+                        args,
+                        1,
+                        "TaskHandle<T> requires exactly 1 type argument",
+                    )?;
+                    let inner = self.resolve_signature_like_ast_ty_in_context(
                         &args[0],
                         TypeSyntaxContext::General,
                         tyvars,
+                        mode,
                     )?;
                     Ok(Ty::Enum("TaskHandle".into(), vec![inner]))
                 }
@@ -1661,10 +1069,11 @@ impl Checker {
                             hint: None,
                         });
                     }
-                    let ok = self.resolve_builtin_ast_ty_in_context(
+                    let ok = self.resolve_signature_like_ast_ty_in_context(
                         &args[0],
                         TypeSyntaxContext::General,
                         tyvars,
+                        mode,
                     )?;
                     let err = if args.len() == 2 {
                         if context != TypeSyntaxContext::FunctionReturn {
@@ -1676,15 +1085,61 @@ impl Checker {
                                 hint: Some("Use Result<T> in local code.".into()),
                             });
                         }
-                        self.resolve_builtin_ast_ty_in_context(
+                        self.resolve_signature_like_ast_ty_in_context(
                             &args[1],
                             TypeSyntaxContext::ErrorMarker,
                             tyvars,
+                            mode,
                         )?
                     } else {
                         Ty::Error
                     };
                     Ok(Ty::Result(Box::new(ok), Box::new(err)))
+                }
+                _ if mode.allows_user_generic_fallback() => {
+                    let def = self
+                        .env
+                        .lookup_type_def(name)
+                        .cloned()
+                        .ok_or_else(|| TypeError {
+                            message: format!("Unknown generic type: {}", name),
+                            span: span.clone(),
+                            hint: None,
+                        })?;
+                    if def.type_params.len() != args.len() {
+                        return Err(TypeError {
+                            message: format!(
+                                "Type {} requires {} type argument(s), got {}",
+                                name,
+                                def.type_params.len(),
+                                args.len()
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let resolved_args = args
+                        .iter()
+                        .map(|arg| {
+                            self.resolve_signature_like_ast_ty_in_context(
+                                arg,
+                                TypeSyntaxContext::General,
+                                tyvars,
+                                mode,
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    match def.kind {
+                        crate::env::TypeKind::Enum => Ok(Ty::Enum(def.name.clone(), resolved_args)),
+                        _ => Err(TypeError {
+                            message: format!(
+                                "Generic type {} is not supported in this context",
+                                name
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        }),
+                    }
                 }
                 _ => self.resolve_ast_ty_in_context(ast_ty, context),
             },
@@ -1699,10 +1154,11 @@ impl Checker {
                 let items = items
                     .iter()
                     .map(|item| {
-                        self.resolve_builtin_ast_ty_in_context(
+                        self.resolve_signature_like_ast_ty_in_context(
                             item,
                             TypeSyntaxContext::General,
                             tyvars,
+                            mode,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -1712,21 +1168,16 @@ impl Checker {
                 let params = params
                     .iter()
                     .map(|p| {
-                        self.resolve_builtin_ast_ty_in_context(
+                        self.resolve_signature_like_ast_ty_in_context(
                             p,
-                            match context {
-                                TypeSyntaxContext::BindingAnnotation
-                                | TypeSyntaxContext::FunctionReturn
-                                | TypeSyntaxContext::HoleClosureParam => {
-                                    TypeSyntaxContext::HoleClosureParam
-                                }
-                                _ => TypeSyntaxContext::General,
-                            },
+                            Self::signature_like_param_context(context),
                             tyvars,
+                            mode,
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let ret = self.resolve_builtin_ast_ty_in_context(ret, context, tyvars)?;
+                let ret =
+                    self.resolve_signature_like_ast_ty_in_context(ret, context, tyvars, mode)?;
                 Ok(Ty::Func(params, Box::new(ret)))
             }
             _ => self.resolve_ast_ty_in_context(ast_ty, context),

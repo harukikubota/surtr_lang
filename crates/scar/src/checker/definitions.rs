@@ -1,5 +1,106 @@
 use super::*;
 
+struct SpecialFormBuiltinContract {
+    expected_qname: &'static str,
+    expected_signature: &'static str,
+    shape_ok: fn(&[ResolvedFunParam], &Option<AstTy>) -> bool,
+}
+
+fn special_form_shape_if(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 3
+        && Checker::is_named_type(&params[0].ty, "Boolean")
+        && Checker::is_lazy_of_named(&params[1].ty, "$A")
+        && Checker::is_lazy_of_named(&params[2].ty, "$A")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_named_type(ty, "$A"))
+}
+
+fn special_form_shape_if_then(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 2
+        && Checker::is_named_type(&params[0].ty, "Boolean")
+        && Checker::is_lazy_of_unit(&params[1].ty)
+        && ret_ty.as_ref().is_some_and(Checker::is_unit_type)
+}
+
+fn special_form_shape_if_let(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 4
+        && Checker::is_named_type(&params[0].ty, "$A")
+        && Checker::is_named_type(&params[1].ty, "$Pattern")
+        && Checker::is_lazy_of_named(&params[2].ty, "$B")
+        && Checker::is_lazy_of_named(&params[3].ty, "$B")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_named_type(ty, "$B"))
+}
+
+fn special_form_shape_if_let_then(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 3
+        && Checker::is_named_type(&params[0].ty, "$A")
+        && Checker::is_named_type(&params[1].ty, "$Pattern")
+        && Checker::is_lazy_of_unit(&params[2].ty)
+        && ret_ty.as_ref().is_some_and(Checker::is_unit_type)
+}
+
+fn special_form_shape_is_match(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 2
+        && Checker::is_named_type(&params[0].ty, "$A")
+        && Checker::is_named_type(&params[1].ty, "$Pattern")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_named_type(ty, "Boolean"))
+}
+
+fn special_form_shape_assert(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 2
+        && Checker::is_named_type(&params[0].ty, "Boolean")
+        && Checker::is_lazy_of_named(&params[1].ty, "Error")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_result_of_named(ty, "Unit"))
+}
+
+fn special_form_shape_ensure(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 3
+        && Checker::is_named_type(&params[0].ty, "$A")
+        && Checker::is_unary_func_from_named_to_named(&params[1].ty, "$A", "Boolean")
+        && Checker::is_lazy_of_named(&params[2].ty, "Error")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_result_of_named(ty, "$A"))
+}
+
+fn special_form_shape_map_err_or_cause(
+    params: &[ResolvedFunParam],
+    ret_ty: &Option<AstTy>,
+) -> bool {
+    params.len() == 2
+        && Checker::is_result_of_named(&params[0].ty, "$T")
+        && Checker::is_lazy_of_named(&params[1].ty, "Error")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_result_of_named(ty, "$T"))
+}
+
+fn special_form_shape_recover_kind(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 3
+        && Checker::is_result_of_named(&params[0].ty, "$A")
+        && Checker::is_lazy_of_named(&params[1].ty, "Error")
+        && Checker::is_unary_func_from_named_to_result(&params[2].ty, "Error", "$A")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_result_of_named(ty, "$A"))
+}
+
+fn special_form_shape_and_or(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 2
+        && Checker::is_named_type(&params[0].ty, "Boolean")
+        && Checker::is_lazy_of_named(&params[1].ty, "Boolean")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_named_type(ty, "Boolean"))
+}
+
 impl Checker {
     pub(super) fn check_builtin_decl(
         &mut self,
@@ -77,23 +178,11 @@ impl Checker {
         params: &[ResolvedFunParam],
         ret_ty: &Option<AstTy>,
     ) -> Result<TypedNode, TypeError> {
-        let expected_qname = match id.name.as_str() {
-            "if" => "Kernel::if",
-            "if_then" => "Kernel::if_then",
-            "if_let" => "Kernel::if_let",
-            "if_let_then" => "Kernel::if_let_then",
-            "is_match" => "Kernel::is_match",
-            "assert" => "Kernel::assert",
-            "ensure" => "Kernel::ensure",
-            "map_err" => "Result::map_err",
-            "cause" => "Result::cause",
-            "recover_kind" => "Result::recover_kind",
-            "and" => "Kernel::and",
-            "or" => "Kernel::or",
-            _ => unreachable!(),
-        };
+        let contract = Self::special_form_builtin_contract(id.name.as_str());
 
-        if Self::surface_qualified_name(id.qualified_name.as_deref()) != Some(expected_qname) {
+        if Self::surface_qualified_name(id.qualified_name.as_deref())
+            != Some(contract.expected_qname)
+        {
             return Err(TypeError {
                 message: format!(
                     "Special-form declaration `{}` is only allowed in std module `Kernel`.",
@@ -104,112 +193,11 @@ impl Checker {
             });
         }
 
-        let shape_ok = match id.name.as_str() {
-            "if" => {
-                params.len() == 3
-                    && Self::is_named_type(&params[0].ty, "Boolean")
-                    && Self::is_lazy_of_named(&params[1].ty, "$A")
-                    && Self::is_lazy_of_named(&params[2].ty, "$A")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_named_type(ty, "$A"))
-            }
-            "if_then" => {
-                params.len() == 2
-                    && Self::is_named_type(&params[0].ty, "Boolean")
-                    && Self::is_lazy_of_unit(&params[1].ty)
-                    && ret_ty.as_ref().is_some_and(Self::is_unit_type)
-            }
-            "if_let" => {
-                params.len() == 4
-                    && Self::is_named_type(&params[0].ty, "$A")
-                    && Self::is_named_type(&params[1].ty, "$Pattern")
-                    && Self::is_lazy_of_named(&params[2].ty, "$B")
-                    && Self::is_lazy_of_named(&params[3].ty, "$B")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_named_type(ty, "$B"))
-            }
-            "if_let_then" => {
-                params.len() == 3
-                    && Self::is_named_type(&params[0].ty, "$A")
-                    && Self::is_named_type(&params[1].ty, "$Pattern")
-                    && Self::is_lazy_of_unit(&params[2].ty)
-                    && ret_ty.as_ref().is_some_and(Self::is_unit_type)
-            }
-            "is_match" => {
-                params.len() == 2
-                    && Self::is_named_type(&params[0].ty, "$A")
-                    && Self::is_named_type(&params[1].ty, "$Pattern")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
-            }
-            "assert" => {
-                params.len() == 2
-                    && Self::is_named_type(&params[0].ty, "Boolean")
-                    && Self::is_lazy_of_named(&params[1].ty, "Error")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_result_of_named(ty, "Unit"))
-            }
-            "ensure" => {
-                params.len() == 3
-                    && Self::is_named_type(&params[0].ty, "$A")
-                    && Self::is_unary_func_from_named_to_named(&params[1].ty, "$A", "Boolean")
-                    && Self::is_lazy_of_named(&params[2].ty, "Error")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_result_of_named(ty, "$A"))
-            }
-            "map_err" | "cause" => {
-                params.len() == 2
-                    && Self::is_result_of_named(&params[0].ty, "$T")
-                    && Self::is_lazy_of_named(&params[1].ty, "Error")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_result_of_named(ty, "$T"))
-            }
-            "recover_kind" => {
-                params.len() == 3
-                    && Self::is_result_of_named(&params[0].ty, "$A")
-                    && Self::is_lazy_of_named(&params[1].ty, "Error")
-                    && Self::is_unary_func_from_named_to_result(&params[2].ty, "Error", "$A")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_result_of_named(ty, "$A"))
-            }
-            "and" | "or" => {
-                params.len() == 2
-                    && Self::is_named_type(&params[0].ty, "Boolean")
-                    && Self::is_lazy_of_named(&params[1].ty, "Boolean")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
-            }
-            _ => false,
-        };
-
-        if !shape_ok {
-            let expected = match id.name.as_str() {
-                "if" => "@builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A",
-                "if_then" => "@builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit",
-                "if_let" => "@builtin def if_let(value: $A, pattern: $Pattern, then_branch: Lazy<$B>, else_branch: Lazy<$B>) -> $B",
-                "if_let_then" => "@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: Lazy<Unit>) -> Unit",
-                "is_match" => "@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean",
-                "assert" => "@builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>",
-                "ensure" => "@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>",
-                "map_err" => "@builtin def map_err(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
-                "cause" => "@builtin def cause(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
-                "recover_kind" => "@builtin def recover_kind(value: Result<$A>, marker: Lazy<Error>, handler: (Error -> Result<$A>)) -> Result<$A>",
-                "and" => "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean",
-                "or" => "@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean",
-                _ => unreachable!(),
-            };
+        if !(contract.shape_ok)(params, ret_ty) {
             return Err(TypeError {
                 message: format!(
                     "Special-form declaration must match the canonical contract: {}",
-                    expected
+                    contract.expected_signature
                 ),
                 span: span.clone(),
                 hint: None,
@@ -475,6 +463,84 @@ impl Checker {
                 | "gte"
                 | "concat"
         )
+    }
+
+    fn special_form_builtin_contract(name: &str) -> SpecialFormBuiltinContract {
+        match name {
+            "if" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::if",
+                expected_signature:
+                    "@builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A",
+                shape_ok: special_form_shape_if,
+            },
+            "if_then" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::if_then",
+                expected_signature:
+                    "@builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit",
+                shape_ok: special_form_shape_if_then,
+            },
+            "if_let" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::if_let",
+                expected_signature:
+                    "@builtin def if_let(value: $A, pattern: $Pattern, then_branch: Lazy<$B>, else_branch: Lazy<$B>) -> $B",
+                shape_ok: special_form_shape_if_let,
+            },
+            "if_let_then" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::if_let_then",
+                expected_signature:
+                    "@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: Lazy<Unit>) -> Unit",
+                shape_ok: special_form_shape_if_let_then,
+            },
+            "is_match" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::is_match",
+                expected_signature:
+                    "@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean",
+                shape_ok: special_form_shape_is_match,
+            },
+            "assert" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::assert",
+                expected_signature:
+                    "@builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>",
+                shape_ok: special_form_shape_assert,
+            },
+            "ensure" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::ensure",
+                expected_signature:
+                    "@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>",
+                shape_ok: special_form_shape_ensure,
+            },
+            "map_err" => SpecialFormBuiltinContract {
+                expected_qname: "Result::map_err",
+                expected_signature:
+                    "@builtin def map_err(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
+                shape_ok: special_form_shape_map_err_or_cause,
+            },
+            "cause" => SpecialFormBuiltinContract {
+                expected_qname: "Result::cause",
+                expected_signature:
+                    "@builtin def cause(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
+                shape_ok: special_form_shape_map_err_or_cause,
+            },
+            "recover_kind" => SpecialFormBuiltinContract {
+                expected_qname: "Result::recover_kind",
+                expected_signature:
+                    "@builtin def recover_kind(value: Result<$A>, marker: Lazy<Error>, handler: (Error -> Result<$A>)) -> Result<$A>",
+                shape_ok: special_form_shape_recover_kind,
+            },
+            "and" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::and",
+                expected_signature:
+                    "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean",
+                shape_ok: special_form_shape_and_or,
+            },
+            "or" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::or",
+                expected_signature:
+                    "@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean",
+                shape_ok: special_form_shape_and_or,
+            },
+            _ => unreachable!(),
+        }
     }
 
     pub(super) fn is_result_of_named(ast_ty: &AstTy, expected_name: &str) -> bool {

@@ -23,6 +23,13 @@ enum FacetPathInput<'a> {
     Capture(PendingFacetPath),
 }
 
+struct PreparedFacetInput {
+    typed_source: TypedNode,
+    source_is_result: bool,
+    source_value_ty: Ty,
+    path: TypedFacetPath,
+}
+
 impl Checker {
     fn is_repl_chunk(&self) -> bool {
         self.runtime_policy == RuntimeSourcePolicy::repl_chunk()
@@ -3899,49 +3906,127 @@ impl Checker {
         Ok(path)
     }
 
-    fn check_facet_view_intrinsic(
-        &mut self,
+    fn parse_facet_read_intrinsic_args<'a>(
+        &self,
         span: &Span,
-        args: &[ResolvedRecordLitArg],
-    ) -> Result<TypedNode, TypeError> {
+        op_name: &str,
+        args: &'a [ResolvedRecordLitArg],
+    ) -> Result<(Resolved, FacetPathInput<'a>), TypeError> {
         if args
             .iter()
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                message: "Facet::view does not accept named arguments".into(),
+                message: format!("{op_name} does not accept named arguments"),
                 span: span.clone(),
                 hint: None,
             });
         }
         if args.len() != 1 && args.len() != 2 {
             return Err(TypeError {
-                message: format!("Facet::view expects 1 or 2 argument(s), got {}", args.len()),
+                message: format!("{op_name} expects 1 or 2 argument(s), got {}", args.len()),
                 span: span.clone(),
                 hint: None,
             });
         }
-        let (source_expr, path_input) = match args {
+
+        match args {
             [ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr))] => {
                 let (source_expr, path) =
-                    self.expand_facet_capture_path("Facet::view", capture_span, expr)?;
-                (source_expr, FacetPathInput::Capture(path))
+                    self.expand_facet_capture_path(op_name, capture_span, expr)?;
+                Ok((source_expr, FacetPathInput::Capture(path)))
             }
-            [ResolvedRecordLitArg::Positional(path_expr), ResolvedRecordLitArg::Positional(source_expr)] => {
-                (source_expr.clone(), FacetPathInput::Expr(path_expr))
-            }
+            [
+                ResolvedRecordLitArg::Positional(path_expr),
+                ResolvedRecordLitArg::Positional(source_expr),
+            ] => Ok((source_expr.clone(), FacetPathInput::Expr(path_expr))),
             _ => unreachable!("validated argument form above"),
-        };
+        }
+    }
 
+    fn parse_facet_mutating_intrinsic_args<'a>(
+        &self,
+        span: &Span,
+        op_name: &str,
+        args: &'a [ResolvedRecordLitArg],
+    ) -> Result<(Resolved, FacetPathInput<'a>, &'a Resolved), TypeError> {
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: format!("{op_name} does not accept named arguments"),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if args.len() != 2 && args.len() != 3 {
+            return Err(TypeError {
+                message: format!("{op_name} expects 2 or 3 argument(s), got {}", args.len()),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        match args {
+            [
+                ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)),
+                ResolvedRecordLitArg::Positional(value_expr),
+            ] => {
+                let (source_expr, path) =
+                    self.expand_facet_capture_path(op_name, capture_span, expr)?;
+                Ok((source_expr, FacetPathInput::Capture(path), value_expr))
+            }
+            [
+                ResolvedRecordLitArg::Positional(path_expr),
+                ResolvedRecordLitArg::Positional(source_expr),
+                ResolvedRecordLitArg::Positional(value_expr),
+            ] => Ok((
+                source_expr.clone(),
+                FacetPathInput::Expr(path_expr),
+                value_expr,
+            )),
+            _ => unreachable!("validated argument form above"),
+        }
+    }
+
+    fn prepare_facet_input(
+        &mut self,
+        span: &Span,
+        op_name: &str,
+        source_expr: &Resolved,
+        path_input: FacetPathInput<'_>,
+    ) -> Result<PreparedFacetInput, TypeError> {
         let (typed_source, source_is_result, source_value_ty) =
-            self.check_facet_source_value("Facet::view", &source_expr)?;
+            self.check_facet_source_value(op_name, source_expr)?;
         let path = self.check_facet_path_input(
             span,
-            "Facet::view",
+            op_name,
             path_input,
             &source_value_ty,
             &typed_source.ty,
         )?;
+        Ok(PreparedFacetInput {
+            typed_source,
+            source_is_result,
+            source_value_ty,
+            path,
+        })
+    }
+
+    fn check_facet_view_intrinsic(
+        &mut self,
+        span: &Span,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        let (source_expr, path_input) =
+            self.parse_facet_read_intrinsic_args(span, "Facet::view", args)?;
+        let PreparedFacetInput {
+            typed_source,
+            source_is_result,
+            path,
+            ..
+        } = self.prepare_facet_input(span, "Facet::view", &source_expr, path_input)?;
 
         let focus_ty = self.resolve_ty(&path.focus_ty);
         let out_ty = if source_is_result || path.may_fail {
@@ -3966,47 +4051,14 @@ impl Checker {
         span: &Span,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
-        if args
-            .iter()
-            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
-        {
-            return Err(TypeError {
-                message: "Facet::preview does not accept named arguments".into(),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-        if args.len() != 1 && args.len() != 2 {
-            return Err(TypeError {
-                message: format!(
-                    "Facet::preview expects 1 or 2 argument(s), got {}",
-                    args.len()
-                ),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-        let (source_expr, path_input) = match args {
-            [ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr))] => {
-                let (source_expr, path) =
-                    self.expand_facet_capture_path("Facet::preview", capture_span, expr)?;
-                (source_expr, FacetPathInput::Capture(path))
-            }
-            [ResolvedRecordLitArg::Positional(path_expr), ResolvedRecordLitArg::Positional(source_expr)] => {
-                (source_expr.clone(), FacetPathInput::Expr(path_expr))
-            }
-            _ => unreachable!("validated argument form above"),
-        };
-
-        let (typed_source, source_is_result, source_value_ty) =
-            self.check_facet_source_value("Facet::preview", &source_expr)?;
-        let path = self.check_facet_path_input(
-            span,
-            "Facet::preview",
-            path_input,
-            &source_value_ty,
-            &typed_source.ty,
-        )?;
+        let (source_expr, path_input) =
+            self.parse_facet_read_intrinsic_args(span, "Facet::preview", args)?;
+        let PreparedFacetInput {
+            typed_source,
+            source_is_result,
+            path,
+            ..
+        } = self.prepare_facet_input(span, "Facet::preview", &source_expr, path_input)?;
         if path.path_kind != TypedFacetPathKind::Variant {
             return Err(TypeError {
                 message: "Facet::preview requires a variant Facet".into(),
@@ -4032,49 +4084,14 @@ impl Checker {
         span: &Span,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
-        if args
-            .iter()
-            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
-        {
-            return Err(TypeError {
-                message: "Facet::set does not accept named arguments".into(),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-        if args.len() != 2 && args.len() != 3 {
-            return Err(TypeError {
-                message: format!("Facet::set expects 2 or 3 argument(s), got {}", args.len()),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-        let (source_expr, path_input, value_expr) = match args {
-            [ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)), ResolvedRecordLitArg::Positional(value_expr)] =>
-            {
-                let (source_expr, path) =
-                    self.expand_facet_capture_path("Facet::set", capture_span, expr)?;
-                (source_expr, FacetPathInput::Capture(path), value_expr)
-            }
-            [ResolvedRecordLitArg::Positional(path_expr), ResolvedRecordLitArg::Positional(source_expr), ResolvedRecordLitArg::Positional(value_expr)] => {
-                (
-                    source_expr.clone(),
-                    FacetPathInput::Expr(path_expr),
-                    value_expr,
-                )
-            }
-            _ => unreachable!("validated argument form above"),
-        };
-
-        let (typed_source, source_is_result, source_value_ty) =
-            self.check_facet_source_value("Facet::set", &source_expr)?;
-        let path = self.check_facet_path_input(
-            span,
-            "Facet::set",
-            path_input,
-            &source_value_ty,
-            &typed_source.ty,
-        )?;
+        let (source_expr, path_input, value_expr) =
+            self.parse_facet_mutating_intrinsic_args(span, "Facet::set", args)?;
+        let PreparedFacetInput {
+            typed_source,
+            source_is_result,
+            source_value_ty,
+            path,
+        } = self.prepare_facet_input(span, "Facet::set", &source_expr, path_input)?;
         self.check_mutating_facet_path_permissions("Facet::set", &path, span)?;
 
         let resolved_focus_ty = self.resolve_ty(&path.focus_ty);
@@ -4133,45 +4150,14 @@ impl Checker {
         span: &Span,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
-        if args
-            .iter()
-            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
-        {
-            return Err(TypeError {
-                message: "Facet::replace does not accept named arguments".into(),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-        if args.len() != 2 && args.len() != 3 {
-            return Err(TypeError {
-                message: format!(
-                    "Facet::replace expects 2 or 3 argument(s), got {}",
-                    args.len()
-                ),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-        let (source_expr, path_input, value_expr) = match args {
-            [ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)), ResolvedRecordLitArg::Positional(value_expr)] =>
-            {
-                let (source_expr, path) =
-                    self.expand_facet_capture_path("Facet::replace", capture_span, expr)?;
-                (source_expr, FacetPathInput::Capture(path), value_expr)
-            }
-            [ResolvedRecordLitArg::Positional(path_expr), ResolvedRecordLitArg::Positional(source_expr), ResolvedRecordLitArg::Positional(value_expr)] => {
-                (
-                    source_expr.clone(),
-                    FacetPathInput::Expr(path_expr),
-                    value_expr,
-                )
-            }
-            _ => unreachable!("validated argument form above"),
-        };
-
-        let (typed_source, source_is_result, source_value_ty) =
-            self.check_facet_source_value("Facet::replace", &source_expr)?;
+        let (source_expr, path_input, value_expr) =
+            self.parse_facet_mutating_intrinsic_args(span, "Facet::replace", args)?;
+        let PreparedFacetInput {
+            typed_source,
+            source_is_result,
+            source_value_ty,
+            path,
+        } = self.prepare_facet_input(span, "Facet::replace", &source_expr, path_input)?;
         if source_is_result {
             return Err(TypeError {
                 message: "Facet::replace requires a plain source value".into(),
@@ -4179,13 +4165,6 @@ impl Checker {
                 hint: Some("Use Facet::set when the source is already Result<T>.".into()),
             });
         }
-        let path = self.check_facet_path_input(
-            span,
-            "Facet::replace",
-            path_input,
-            &source_value_ty,
-            &typed_source.ty,
-        )?;
         if path.path_kind != TypedFacetPathKind::Structural {
             return Err(TypeError {
                 message: "Facet::replace requires a structural Facet path".into(),
@@ -4226,49 +4205,14 @@ impl Checker {
         span: &Span,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
-        if args
-            .iter()
-            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
-        {
-            return Err(TypeError {
-                message: "Facet::over does not accept named arguments".into(),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-        if args.len() != 2 && args.len() != 3 {
-            return Err(TypeError {
-                message: format!("Facet::over expects 2 or 3 argument(s), got {}", args.len()),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-        let (source_expr, path_input, update_expr) = match args {
-            [ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)), ResolvedRecordLitArg::Positional(update_expr)] =>
-            {
-                let (source_expr, path) =
-                    self.expand_facet_capture_path("Facet::over", capture_span, expr)?;
-                (source_expr, FacetPathInput::Capture(path), update_expr)
-            }
-            [ResolvedRecordLitArg::Positional(path_expr), ResolvedRecordLitArg::Positional(source_expr), ResolvedRecordLitArg::Positional(update_expr)] => {
-                (
-                    source_expr.clone(),
-                    FacetPathInput::Expr(path_expr),
-                    update_expr,
-                )
-            }
-            _ => unreachable!("validated argument form above"),
-        };
-
-        let (typed_source, source_is_result, source_value_ty) =
-            self.check_facet_source_value("Facet::over", &source_expr)?;
-        let path = self.check_facet_path_input(
-            span,
-            "Facet::over",
-            path_input,
-            &source_value_ty,
-            &typed_source.ty,
-        )?;
+        let (source_expr, path_input, update_expr) =
+            self.parse_facet_mutating_intrinsic_args(span, "Facet::over", args)?;
+        let PreparedFacetInput {
+            typed_source,
+            source_is_result,
+            source_value_ty,
+            path,
+        } = self.prepare_facet_input(span, "Facet::over", &source_expr, path_input)?;
         self.check_mutating_facet_path_permissions("Facet::over", &path, span)?;
 
         let typed_update = self.check_node(update_expr)?;
@@ -4301,52 +4245,14 @@ impl Checker {
         span: &Span,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
-        if args
-            .iter()
-            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
-        {
-            return Err(TypeError {
-                message: "Facet::over_result does not accept named arguments".into(),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-        if args.len() != 2 && args.len() != 3 {
-            return Err(TypeError {
-                message: format!(
-                    "Facet::over_result expects 2 or 3 argument(s), got {}",
-                    args.len()
-                ),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-        let (source_expr, path_input, update_expr) = match args {
-            [ResolvedRecordLitArg::Positional(Resolved::FacetCapture(capture_span, expr)), ResolvedRecordLitArg::Positional(update_expr)] =>
-            {
-                let (source_expr, path) =
-                    self.expand_facet_capture_path("Facet::over_result", capture_span, expr)?;
-                (source_expr, FacetPathInput::Capture(path), update_expr)
-            }
-            [ResolvedRecordLitArg::Positional(path_expr), ResolvedRecordLitArg::Positional(source_expr), ResolvedRecordLitArg::Positional(update_expr)] => {
-                (
-                    source_expr.clone(),
-                    FacetPathInput::Expr(path_expr),
-                    update_expr,
-                )
-            }
-            _ => unreachable!("validated argument form above"),
-        };
-
-        let (typed_source, source_is_result, source_value_ty) =
-            self.check_facet_source_value("Facet::over_result", &source_expr)?;
-        let path = self.check_facet_path_input(
-            span,
-            "Facet::over_result",
-            path_input,
-            &source_value_ty,
-            &typed_source.ty,
-        )?;
+        let (source_expr, path_input, update_expr) =
+            self.parse_facet_mutating_intrinsic_args(span, "Facet::over_result", args)?;
+        let PreparedFacetInput {
+            typed_source,
+            source_is_result,
+            source_value_ty,
+            path,
+        } = self.prepare_facet_input(span, "Facet::over_result", &source_expr, path_input)?;
         self.check_mutating_facet_path_permissions("Facet::over_result", &path, span)?;
 
         if !matches!(self.resolve_ty(&path.focus_ty), Ty::Result(_, _)) {
@@ -4650,22 +4556,7 @@ impl Checker {
         func: &Resolved,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
-        if let Some(typed) = self.try_check_supervisor_spawn_app(span, func, args)? {
-            return Ok(typed);
-        }
-        if let Some(typed) = self.try_check_supervisor_adopt_app(span, func, args)? {
-            return Ok(typed);
-        }
-        if let Some(typed) = self.try_check_supervisor_status_app(span, func, args)? {
-            return Ok(typed);
-        }
-        if let Some(typed) = self.try_check_supervisor_workers_app(span, func, args)? {
-            return Ok(typed);
-        }
-        if let Some(typed) = self.try_check_worker_message_template_app(span, func, args)? {
-            return Ok(typed);
-        }
-        if let Some(typed) = self.try_check_singleton_explicit_pid_app(span, func, args)? {
+        if let Some(typed) = self.try_check_process_intrinsic_app(span, func, args)? {
             return Ok(typed);
         }
 
@@ -4687,59 +4578,14 @@ impl Checker {
                 } else {
                     Some(self.call_target_signature_hint(name, params, ret.as_ref(), None))
                 };
-                if args
-                    .iter()
-                    .any(|a| matches!(a, ResolvedRecordLitArg::Named(_, _)))
-                {
-                    return Err(TypeError {
-                        message: format!("{} does not accept named arguments", name),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-
-                if args.len() != params.len() {
-                    return Err(TypeError {
-                        message: format!(
-                            "{} expects {} argument(s), got {}",
-                            name,
-                            params.len(),
-                            args.len()
-                        ),
-                        span: span.clone(),
-                        hint: callable_hint.clone(),
-                    });
-                }
-                let typed_args: Vec<TypedNode> = args
-                    .iter()
-                    .zip(params.iter())
-                    .map(|(arg, expected)| match arg {
-                        ResolvedRecordLitArg::Positional(expr) => match self.resolve_ty(expected) {
-                            Ty::Hole => self.check_node(expr),
-                            _ => self.check_node_with_expected(expr, Some(expected)),
-                        },
-                        ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                for (param, arg) in params.iter().zip(&typed_args) {
-                    if !matches!(self.resolve_ty(param), Ty::Hole)
-                        && !self.types_compatible(param, &arg.ty)
-                    {
-                        return Err(TypeError {
-                            message: format!(
-                                "Argument type mismatch: expected {}, got {}",
-                                self.ty_name(param),
-                                self.ty_name(&arg.ty)
-                            ),
-                            span: arg.span.clone(),
-                            hint: callable_hint.clone(),
-                        });
-                    }
-                }
-                let typed_args = typed_args
-                    .into_iter()
-                    .map(|arg| self.concretize_pending_trait_calls(arg))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let typed_args = self.typecheck_positional_call_args(
+                    span,
+                    name,
+                    params,
+                    args,
+                    callable_hint.clone(),
+                    format!("{} does not accept named arguments", name),
+                )?;
                 self.ensure_no_runtime_facet_args(&typed_args, span, name)?;
 
                 if name == "__process_self" {
@@ -4855,58 +4701,14 @@ impl Checker {
             Ty::Func(params, ret) => {
                 let callable_hint =
                     self.callable_signature_hint(&Ty::Func(params.clone(), ret.clone()));
-                if args
-                    .iter()
-                    .any(|a| matches!(a, ResolvedRecordLitArg::Named(_, _)))
-                {
-                    return Err(TypeError {
-                        message: "Function values do not accept named arguments".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-
-                if args.len() != params.len() {
-                    return Err(TypeError {
-                        message: format!(
-                            "function expects {} argument(s), got {}",
-                            params.len(),
-                            args.len()
-                        ),
-                        span: span.clone(),
-                        hint: callable_hint.clone(),
-                    });
-                }
-                let typed_args: Vec<TypedNode> = args
-                    .iter()
-                    .zip(params.iter())
-                    .map(|(arg, expected)| match arg {
-                        ResolvedRecordLitArg::Positional(expr) => match self.resolve_ty(expected) {
-                            Ty::Hole => self.check_node(expr),
-                            _ => self.check_node_with_expected(expr, Some(expected)),
-                        },
-                        ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                for (param, arg) in params.iter().zip(&typed_args) {
-                    if !matches!(self.resolve_ty(param), Ty::Hole)
-                        && !self.types_compatible(param, &arg.ty)
-                    {
-                        return Err(TypeError {
-                            message: format!(
-                                "Argument type mismatch: expected {}, got {}",
-                                self.ty_name(param),
-                                self.ty_name(&arg.ty)
-                            ),
-                            span: arg.span.clone(),
-                            hint: callable_hint.clone(),
-                        });
-                    }
-                }
-                let typed_args = typed_args
-                    .into_iter()
-                    .map(|arg| self.concretize_pending_trait_calls(arg))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let typed_args = self.typecheck_positional_call_args(
+                    span,
+                    "function",
+                    params,
+                    args,
+                    callable_hint.clone(),
+                    "Function values do not accept named arguments".into(),
+                )?;
                 self.ensure_no_runtime_facet_args(&typed_args, span, "Function call")?;
 
                 Ok(TypedNode {
@@ -4923,10 +4725,100 @@ impl Checker {
         }
     }
 
+    fn typecheck_positional_call_args(
+        &mut self,
+        span: &Span,
+        callee_name: &str,
+        params: &[Ty],
+        args: &[ResolvedRecordLitArg],
+        callable_hint: Option<String>,
+        named_arg_error: String,
+    ) -> Result<Vec<TypedNode>, TypeError> {
+        if args
+            .iter()
+            .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return Err(TypeError {
+                message: named_arg_error,
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        if args.len() != params.len() {
+            return Err(TypeError {
+                message: format!(
+                    "{} expects {} argument(s), got {}",
+                    callee_name,
+                    params.len(),
+                    args.len()
+                ),
+                span: span.clone(),
+                hint: callable_hint.clone(),
+            });
+        }
+
+        let typed_args: Vec<TypedNode> = args
+            .iter()
+            .zip(params.iter())
+            .map(|(arg, expected)| match arg {
+                ResolvedRecordLitArg::Positional(expr) => match self.resolve_ty(expected) {
+                    Ty::Hole => self.check_node(expr),
+                    _ => self.check_node_with_expected(expr, Some(expected)),
+                },
+                ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        for (param, arg) in params.iter().zip(&typed_args) {
+            if !matches!(self.resolve_ty(param), Ty::Hole) && !self.types_compatible(param, &arg.ty)
+            {
+                return Err(TypeError {
+                    message: format!(
+                        "Argument type mismatch: expected {}, got {}",
+                        self.ty_name(param),
+                        self.ty_name(&arg.ty)
+                    ),
+                    span: arg.span.clone(),
+                    hint: callable_hint.clone(),
+                });
+            }
+        }
+
+        typed_args
+            .into_iter()
+            .map(|arg| self.concretize_pending_trait_calls(arg))
+            .collect::<Result<Vec<_>, _>>()
+    }
+
     pub(super) fn current_process_name(&self) -> Option<String> {
         let symbol = self.current_function_symbol.as_deref()?;
         let (module, handler) = symbol.rsplit_once("::")?;
         Self::is_process_handler_name(handler).then(|| module.to_string())
+    }
+
+    fn try_check_process_intrinsic_app(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<Option<TypedNode>, TypeError> {
+        if let Some(typed) = self.try_check_supervisor_spawn_app(span, func, args)? {
+            return Ok(Some(typed));
+        }
+        if let Some(typed) = self.try_check_supervisor_adopt_app(span, func, args)? {
+            return Ok(Some(typed));
+        }
+        if let Some(typed) = self.try_check_supervisor_status_app(span, func, args)? {
+            return Ok(Some(typed));
+        }
+        if let Some(typed) = self.try_check_supervisor_workers_app(span, func, args)? {
+            return Ok(Some(typed));
+        }
+        if let Some(typed) = self.try_check_worker_message_template_app(span, func, args)? {
+            return Ok(Some(typed));
+        }
+        self.try_check_singleton_explicit_pid_app(span, func, args)
     }
 
     fn try_check_supervisor_spawn_app(

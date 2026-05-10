@@ -839,6 +839,78 @@ fn format_builtin_type_param_suffix(params: &[&str]) -> String {
 type TraitImplKey = (String, String);
 type TraitImplIndex = HashMap<String, Vec<TraitImplKey>>;
 
+#[derive(Debug, Clone)]
+struct PersistentCheckerState {
+    env: TypeEnv,
+    consts: HashMap<u32, ConstMeta>,
+    facet_bindings: HashMap<u32, StoredFacetPath>,
+    user_func_params: HashMap<u32, Vec<String>>,
+    impl_method_uids: HashMap<String, u32>,
+    function_ids_by_name: HashMap<String, ResolvedId>,
+    specializable_defs: HashMap<u32, TypedNode>,
+    traits: HashMap<String, TraitInfo>,
+    trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_impl_index_by_base_trait: TraitImplIndex,
+    trait_methods_by_qualified_name: HashMap<String, (String, String)>,
+    tyvar_bounds: HashMap<u32, Vec<String>>,
+}
+
+impl PersistentCheckerState {
+    fn new() -> Self {
+        Self {
+            env: initialize_env(),
+            consts: HashMap::new(),
+            facet_bindings: HashMap::new(),
+            user_func_params: HashMap::new(),
+            impl_method_uids: HashMap::new(),
+            function_ids_by_name: HashMap::new(),
+            specializable_defs: HashMap::new(),
+            traits: HashMap::new(),
+            trait_impls: HashMap::new(),
+            trait_impl_index_by_base_trait: HashMap::new(),
+            trait_methods_by_qualified_name: HashMap::new(),
+            tyvar_bounds: HashMap::new(),
+        }
+    }
+
+    fn checkpoint(&self, process_specs: Vec<TypedProcessSpec>) -> ScarCheckpoint {
+        ScarCheckpoint {
+            env: self.env.clone(),
+            consts: self.consts.clone(),
+            facet_bindings: self.facet_bindings.clone(),
+            user_func_params: self.user_func_params.clone(),
+            impl_method_uids: self.impl_method_uids.clone(),
+            function_ids_by_name: self.function_ids_by_name.clone(),
+            specializable_defs: self.specializable_defs.clone(),
+            traits: self.traits.clone(),
+            trait_impls: self.trait_impls.clone(),
+            trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
+            trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
+            tyvar_bounds: self.tyvar_bounds.clone(),
+            process_specs,
+        }
+    }
+}
+
+impl From<ScarCheckpoint> for PersistentCheckerState {
+    fn from(checkpoint: ScarCheckpoint) -> Self {
+        Self {
+            env: checkpoint.env,
+            consts: checkpoint.consts,
+            facet_bindings: checkpoint.facet_bindings,
+            user_func_params: checkpoint.user_func_params,
+            impl_method_uids: checkpoint.impl_method_uids,
+            function_ids_by_name: checkpoint.function_ids_by_name,
+            specializable_defs: checkpoint.specializable_defs,
+            traits: checkpoint.traits,
+            trait_impls: checkpoint.trait_impls,
+            trait_impl_index_by_base_trait: checkpoint.trait_impl_index_by_base_trait,
+            trait_methods_by_qualified_name: checkpoint.trait_methods_by_qualified_name,
+            tyvar_bounds: checkpoint.tyvar_bounds,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScarCheckpoint {
     env: TypeEnv,
@@ -858,51 +930,14 @@ pub struct ScarCheckpoint {
 
 #[derive(Debug, Clone)]
 pub struct ScarSession {
-    env: TypeEnv,
-    consts: HashMap<u32, ConstMeta>,
-    facet_bindings: HashMap<u32, StoredFacetPath>,
-    user_func_params: HashMap<u32, Vec<String>>,
-    impl_method_uids: HashMap<String, u32>,
-    function_ids_by_name: HashMap<String, ResolvedId>,
-    specializable_defs: HashMap<u32, TypedNode>,
-    traits: HashMap<String, TraitInfo>,
-    trait_impls: HashMap<(String, String), TraitImplInfo>,
-    trait_impl_index_by_base_trait: TraitImplIndex,
-    trait_methods_by_qualified_name: HashMap<String, (String, String)>,
-    tyvar_bounds: HashMap<u32, Vec<String>>,
+    state: PersistentCheckerState,
     process_specs: Vec<TypedProcessSpec>,
-}
-
-struct CheckerParts {
-    env: TypeEnv,
-    consts: HashMap<u32, ConstMeta>,
-    facet_bindings: HashMap<u32, StoredFacetPath>,
-    user_func_params: HashMap<u32, Vec<String>>,
-    impl_method_uids: HashMap<String, u32>,
-    function_ids_by_name: HashMap<String, ResolvedId>,
-    specializable_defs: HashMap<u32, TypedNode>,
-    traits: HashMap<String, TraitInfo>,
-    trait_impls: HashMap<(String, String), TraitImplInfo>,
-    trait_impl_index_by_base_trait: TraitImplIndex,
-    trait_methods_by_qualified_name: HashMap<String, (String, String)>,
-    tyvar_bounds: HashMap<u32, Vec<String>>,
 }
 
 impl ScarSession {
     pub fn new() -> Self {
         Self {
-            env: initialize_env(),
-            consts: HashMap::new(),
-            facet_bindings: HashMap::new(),
-            user_func_params: HashMap::new(),
-            impl_method_uids: HashMap::new(),
-            function_ids_by_name: HashMap::new(),
-            specializable_defs: HashMap::new(),
-            traits: HashMap::new(),
-            trait_impls: HashMap::new(),
-            trait_impl_index_by_base_trait: HashMap::new(),
-            trait_methods_by_qualified_name: HashMap::new(),
-            tyvar_bounds: HashMap::new(),
+            state: PersistentCheckerState::new(),
             process_specs: Vec::new(),
         }
     }
@@ -928,50 +963,11 @@ impl ScarSession {
             .into_iter()
             .map(Into::into)
             .collect::<Vec<TypedProcessSpec>>();
-        let mut checker = Checker::with_env_and_params(
-            self.env.clone(),
-            self.consts.clone(),
-            self.facet_bindings.clone(),
-            self.user_func_params.clone(),
-            self.impl_method_uids.clone(),
-            self.function_ids_by_name.clone(),
-            self.specializable_defs.clone(),
-            self.traits.clone(),
-            self.trait_impls.clone(),
-            self.trait_impl_index_by_base_trait.clone(),
-            self.trait_methods_by_qualified_name.clone(),
-            self.tyvar_bounds.clone(),
-            context,
-        );
+        let mut checker = Checker::with_persistent_state(self.state.clone(), context);
         checker.set_process_handler_dependencies(&process_specs);
         let nodes = checker.check_program(program.resolved)?;
         let persisted_process_specs = checker.process_specs.clone();
-        let CheckerParts {
-            env,
-            consts,
-            facet_bindings,
-            user_func_params,
-            impl_method_uids,
-            function_ids_by_name,
-            specializable_defs,
-            traits,
-            trait_impls,
-            trait_impl_index_by_base_trait,
-            trait_methods_by_qualified_name,
-            tyvar_bounds,
-        } = checker.into_parts();
-        self.env = env;
-        self.consts = consts;
-        self.facet_bindings = facet_bindings;
-        self.user_func_params = user_func_params;
-        self.impl_method_uids = impl_method_uids;
-        self.function_ids_by_name = function_ids_by_name;
-        self.specializable_defs = specializable_defs;
-        self.traits = traits;
-        self.trait_impls = trait_impls;
-        self.trait_impl_index_by_base_trait = trait_impl_index_by_base_trait;
-        self.trait_methods_by_qualified_name = trait_methods_by_qualified_name;
-        self.tyvar_bounds = tyvar_bounds;
+        self.state = checker.into_persistent_state();
         self.process_specs = persisted_process_specs;
         Ok(TypedProgram {
             nodes,
@@ -985,101 +981,38 @@ impl ScarSession {
         resolved: Vec<Resolved>,
         context: TypecheckContext,
     ) -> Result<Vec<TypedNode>, TypeError> {
-        let mut checker = Checker::with_env_and_params(
-            self.env.clone(),
-            self.consts.clone(),
-            self.facet_bindings.clone(),
-            self.user_func_params.clone(),
-            self.impl_method_uids.clone(),
-            self.function_ids_by_name.clone(),
-            self.specializable_defs.clone(),
-            self.traits.clone(),
-            self.trait_impls.clone(),
-            self.trait_impl_index_by_base_trait.clone(),
-            self.trait_methods_by_qualified_name.clone(),
-            self.tyvar_bounds.clone(),
-            context,
-        );
+        let mut checker = Checker::with_persistent_state(self.state.clone(), context);
         checker.set_process_handler_dependencies(self.process_specs.as_slice());
         let typed = checker.check_program(resolved)?;
         let persisted_process_specs = checker.process_specs.clone();
-        let CheckerParts {
-            env,
-            consts,
-            facet_bindings,
-            user_func_params,
-            impl_method_uids,
-            function_ids_by_name,
-            specializable_defs,
-            traits,
-            trait_impls,
-            trait_impl_index_by_base_trait,
-            trait_methods_by_qualified_name,
-            tyvar_bounds,
-        } = checker.into_parts();
-        self.env = env;
-        self.consts = consts;
-        self.facet_bindings = facet_bindings;
-        self.user_func_params = user_func_params;
-        self.impl_method_uids = impl_method_uids;
-        self.function_ids_by_name = function_ids_by_name;
-        self.specializable_defs = specializable_defs;
-        self.traits = traits;
-        self.trait_impls = trait_impls;
-        self.trait_impl_index_by_base_trait = trait_impl_index_by_base_trait;
-        self.trait_methods_by_qualified_name = trait_methods_by_qualified_name;
-        self.tyvar_bounds = tyvar_bounds;
+        self.state = checker.into_persistent_state();
         self.process_specs = persisted_process_specs;
         Ok(typed)
     }
 
     pub fn checkpoint(&self) -> ScarCheckpoint {
-        ScarCheckpoint {
-            env: self.env.clone(),
-            consts: self.consts.clone(),
-            facet_bindings: self.facet_bindings.clone(),
-            user_func_params: self.user_func_params.clone(),
-            impl_method_uids: self.impl_method_uids.clone(),
-            function_ids_by_name: self.function_ids_by_name.clone(),
-            specializable_defs: self.specializable_defs.clone(),
-            traits: self.traits.clone(),
-            trait_impls: self.trait_impls.clone(),
-            trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
-            trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
-            tyvar_bounds: self.tyvar_bounds.clone(),
-            process_specs: self.process_specs.clone(),
-        }
+        self.state.checkpoint(self.process_specs.clone())
     }
 
     pub fn lookup_type_def(&self, name: &str) -> Option<&crate::env::TypeDefInfo> {
-        self.env.lookup_type_def(name)
+        self.state.env.lookup_type_def(name)
     }
 
     pub fn enum_variants_of(&self, enum_name: &str) -> Option<&Vec<crate::env::EnumVariantInfo>> {
-        self.env.enum_variants_of(enum_name)
+        self.state.env.enum_variants_of(enum_name)
     }
 
     pub fn rollback(&mut self, checkpoint: ScarCheckpoint) {
-        self.env = checkpoint.env;
-        self.consts = checkpoint.consts;
-        self.facet_bindings = checkpoint.facet_bindings;
-        self.user_func_params = checkpoint.user_func_params;
-        self.impl_method_uids = checkpoint.impl_method_uids;
-        self.function_ids_by_name = checkpoint.function_ids_by_name;
-        self.specializable_defs = checkpoint.specializable_defs;
-        self.traits = checkpoint.traits;
-        self.trait_impls = checkpoint.trait_impls;
-        self.trait_impl_index_by_base_trait = checkpoint.trait_impl_index_by_base_trait;
-        self.trait_methods_by_qualified_name = checkpoint.trait_methods_by_qualified_name;
-        self.tyvar_bounds = checkpoint.tyvar_bounds;
-        self.process_specs = checkpoint.process_specs;
+        let process_specs = checkpoint.process_specs.clone();
+        self.state = checkpoint.into();
+        self.process_specs = process_specs;
     }
 
     pub fn ensure_next_fun_idx_at_least(&mut self, next_fun_idx: u32) {
         // REPL runtime is the source of truth for currently materialized
         // function indices. Never move Scar backwards because stdlib
         // checkpoints may also reserve indices for delayed specializations.
-        self.env.next_fun_idx = self.env.next_fun_idx.max(next_fun_idx);
+        self.state.env.next_fun_idx = self.state.env.next_fun_idx.max(next_fun_idx);
     }
 
     pub fn reconcile_function_indices<'a, I>(&mut self, functions: I)
@@ -1092,11 +1025,11 @@ impl ScarSession {
             .copied()
             .max()
             .map(|idx| idx + 1)
-            .unwrap_or(self.env.next_fun_idx);
+            .unwrap_or(self.state.env.next_fun_idx);
         let mut specializable_rekeys = Vec::new();
         let mut fun_idx_rewrites = HashMap::new();
-        for (qualified_name, id) in &self.function_ids_by_name {
-            let old_fun_idx = match self.env.vars.get(&id.unique_id) {
+        for (qualified_name, id) in &self.state.function_ids_by_name {
+            let old_fun_idx = match self.state.env.vars.get(&id.unique_id) {
                 Some(Ty::UserFunc { fun_idx, .. }) => Some(*fun_idx),
                 _ => None,
             };
@@ -1113,7 +1046,7 @@ impl ScarSession {
             if let Some(Ty::UserFunc {
                 fun_idx: stored_fun_idx,
                 ..
-            }) = self.env.vars.get_mut(&id.unique_id)
+            }) = self.state.env.vars.get_mut(&id.unique_id)
             {
                 if let Some(old_fun_idx) = old_fun_idx {
                     fun_idx_rewrites.insert(old_fun_idx, fun_idx);
@@ -1122,34 +1055,34 @@ impl ScarSession {
             }
         }
         for (old_fun_idx, new_fun_idx) in specializable_rekeys {
-            if let Some(mut def) = self.specializable_defs.remove(&old_fun_idx) {
+            if let Some(mut def) = self.state.specializable_defs.remove(&old_fun_idx) {
                 Self::set_def_fun_idx(&mut def, new_fun_idx);
-                self.specializable_defs.insert(new_fun_idx, def);
+                self.state.specializable_defs.insert(new_fun_idx, def);
             }
         }
-        for def in self.specializable_defs.values_mut() {
+        for def in self.state.specializable_defs.values_mut() {
             Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
         }
-        self.env.next_fun_idx = self.env.next_fun_idx.max(next_fun_idx);
+        self.state.env.next_fun_idx = self.state.env.next_fun_idx.max(next_fun_idx);
     }
 
     pub fn reconcile_visible_function_indices<I>(&mut self, functions: I)
     where
         I: IntoIterator<Item = (u32, u32)>,
     {
-        let mut next_fun_idx = self.env.next_fun_idx;
+        let mut next_fun_idx = self.state.env.next_fun_idx;
         let mut specializable_rekeys = Vec::new();
         let mut fun_idx_rewrites = HashMap::new();
 
         for (uid, fun_idx) in functions {
-            let old_fun_idx = match self.env.vars.get(&uid) {
+            let old_fun_idx = match self.state.env.vars.get(&uid) {
                 Some(Ty::UserFunc { fun_idx, .. }) => Some(*fun_idx),
                 _ => None,
             };
             if let Some(Ty::UserFunc {
                 fun_idx: stored_fun_idx,
                 ..
-            }) = self.env.vars.get_mut(&uid)
+            }) = self.state.env.vars.get_mut(&uid)
             {
                 if let Some(old_fun_idx) = old_fun_idx {
                     fun_idx_rewrites.insert(old_fun_idx, fun_idx);
@@ -1161,21 +1094,25 @@ impl ScarSession {
         }
 
         for (old_fun_idx, new_fun_idx) in specializable_rekeys {
-            if let Some(mut def) = self.specializable_defs.remove(&old_fun_idx) {
+            if let Some(mut def) = self.state.specializable_defs.remove(&old_fun_idx) {
                 Self::set_def_fun_idx(&mut def, new_fun_idx);
-                self.specializable_defs.insert(new_fun_idx, def);
+                self.state.specializable_defs.insert(new_fun_idx, def);
             }
         }
-        for def in self.specializable_defs.values_mut() {
+        for def in self.state.specializable_defs.values_mut() {
             Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
         }
-        self.env.next_fun_idx = self.env.next_fun_idx.max(next_fun_idx);
+        self.state.env.next_fun_idx = self.state.env.next_fun_idx.max(next_fun_idx);
     }
 
     fn specializable_fun_idx_for_name(&self, qualified_name: &str) -> Option<u32> {
-        self.specializable_defs.iter().find_map(|(fun_idx, def)| {
-            (Self::def_qualified_name(def).as_deref() == Some(qualified_name)).then_some(*fun_idx)
-        })
+        self.state
+            .specializable_defs
+            .iter()
+            .find_map(|(fun_idx, def)| {
+                (Self::def_qualified_name(def).as_deref() == Some(qualified_name))
+                    .then_some(*fun_idx)
+            })
     }
 
     fn def_qualified_name(def: &TypedNode) -> Option<String> {
@@ -1658,76 +1595,34 @@ impl Checker {
     }
 
     fn new(context: TypecheckContext) -> Self {
-        Self {
-            env: initialize_env(),
-            function_return_ty: None,
-            local_annotation_tyvars: HashMap::new(),
-            current_function_symbol: None,
-            current_impl_struct_target: None,
-            in_extractor_body: false,
-            closure_depth: 0,
-            facet_bindings: HashMap::new(),
-            consts: HashMap::new(),
-            user_func_params: HashMap::new(),
-            impl_method_uids: HashMap::new(),
-            function_ids_by_name: HashMap::new(),
-            specializable_defs: HashMap::new(),
-            substitutions: HashMap::new(),
-            tyvar_bounds: HashMap::new(),
-            runtime_policy: context.runtime_policy,
-            enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
-            allow_error_function_params: context.allow_error_function_params,
-            seen_builtin_type_decls: HashMap::new(),
-            traits: HashMap::new(),
-            trait_impls: HashMap::new(),
-            trait_impl_index_by_base_trait: HashMap::new(),
-            trait_methods_by_qualified_name: HashMap::new(),
-            profiler: TypecheckProfiler::new_from_env(),
-            process_handler_dependencies: HashMap::new(),
-            process_specs: Vec::new(),
-            boot_plan: spire::ast::SupervisorInitSpec::default(),
-        }
+        Self::with_persistent_state(PersistentCheckerState::new(), context)
     }
 
-    fn with_env_and_params(
-        env: TypeEnv,
-        consts: HashMap<u32, ConstMeta>,
-        facet_bindings: HashMap<u32, StoredFacetPath>,
-        user_func_params: HashMap<u32, Vec<String>>,
-        impl_method_uids: HashMap<String, u32>,
-        function_ids_by_name: HashMap<String, ResolvedId>,
-        specializable_defs: HashMap<u32, TypedNode>,
-        traits: HashMap<String, TraitInfo>,
-        trait_impls: HashMap<(String, String), TraitImplInfo>,
-        trait_impl_index_by_base_trait: TraitImplIndex,
-        trait_methods_by_qualified_name: HashMap<String, (String, String)>,
-        tyvar_bounds: HashMap<u32, Vec<String>>,
-        context: TypecheckContext,
-    ) -> Self {
+    fn with_persistent_state(state: PersistentCheckerState, context: TypecheckContext) -> Self {
         Self {
-            env,
+            env: state.env,
             function_return_ty: None,
             local_annotation_tyvars: HashMap::new(),
             current_function_symbol: None,
             current_impl_struct_target: None,
             in_extractor_body: false,
             closure_depth: 0,
-            facet_bindings,
-            consts,
-            user_func_params,
-            impl_method_uids,
-            function_ids_by_name,
-            specializable_defs,
+            facet_bindings: state.facet_bindings,
+            consts: state.consts,
+            user_func_params: state.user_func_params,
+            impl_method_uids: state.impl_method_uids,
+            function_ids_by_name: state.function_ids_by_name,
+            specializable_defs: state.specializable_defs,
             substitutions: HashMap::new(),
-            tyvar_bounds,
+            tyvar_bounds: state.tyvar_bounds,
             runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
             allow_error_function_params: context.allow_error_function_params,
             seen_builtin_type_decls: HashMap::new(),
-            traits,
-            trait_impls,
-            trait_impl_index_by_base_trait,
-            trait_methods_by_qualified_name,
+            traits: state.traits,
+            trait_impls: state.trait_impls,
+            trait_impl_index_by_base_trait: state.trait_impl_index_by_base_trait,
+            trait_methods_by_qualified_name: state.trait_methods_by_qualified_name,
             profiler: TypecheckProfiler::new_from_env(),
             process_handler_dependencies: HashMap::new(),
             process_specs: Vec::new(),
@@ -1737,19 +1632,10 @@ impl Checker {
 
     fn spawn_child_checker(&self, env: TypeEnv) -> Self {
         let profile = self.profiler.start();
-        let mut checker = Checker::with_env_and_params(
-            env,
-            self.consts.clone(),
-            self.facet_bindings.clone(),
-            self.user_func_params.clone(),
-            self.impl_method_uids.clone(),
-            self.function_ids_by_name.clone(),
-            self.specializable_defs.clone(),
-            self.traits.clone(),
-            self.trait_impls.clone(),
-            self.trait_impl_index_by_base_trait.clone(),
-            self.trait_methods_by_qualified_name.clone(),
-            self.tyvar_bounds.clone(),
+        let mut state = self.persistent_state();
+        state.env = env;
+        let mut checker = Checker::with_persistent_state(
+            state,
             TypecheckContext {
                 runtime_policy: self.runtime_policy.clone(),
                 enforce_builtin_type_contracts: self.enforce_builtin_type_contracts,
@@ -2319,8 +2205,25 @@ impl Checker {
         variant
     }
 
-    fn into_parts(self) -> CheckerParts {
-        CheckerParts {
+    fn persistent_state(&self) -> PersistentCheckerState {
+        PersistentCheckerState {
+            env: self.env.clone(),
+            consts: self.consts.clone(),
+            facet_bindings: self.facet_bindings.clone(),
+            user_func_params: self.user_func_params.clone(),
+            impl_method_uids: self.impl_method_uids.clone(),
+            function_ids_by_name: self.function_ids_by_name.clone(),
+            specializable_defs: self.specializable_defs.clone(),
+            traits: self.traits.clone(),
+            trait_impls: self.trait_impls.clone(),
+            trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
+            trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
+            tyvar_bounds: self.tyvar_bounds.clone(),
+        }
+    }
+
+    fn into_persistent_state(self) -> PersistentCheckerState {
+        PersistentCheckerState {
             env: self.env,
             consts: self.consts,
             facet_bindings: self.facet_bindings,
