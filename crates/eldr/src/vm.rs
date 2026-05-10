@@ -4,7 +4,7 @@ use sindr::ir::{
     RuntimeHandlerTarget, RuntimeInitPolicy, RuntimeProcessInstance, RuntimeProcessSpec,
     RuntimeProcessSpecTable, RuntimeSupervisorPolicy, SourceMap,
 };
-use sindr::primitives::{int, SurtrInt, ToPrimitive};
+use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
     Callable, CallableMetadata, CallableOrigin, CallableTarget, FileHandleValue, ListHandle,
     Location, PidHandle, RichError, TypeRegistry, Value, WorkerLeaseHandle, WorkersHandle,
@@ -4985,6 +4985,17 @@ impl VM {
             Opcode::BitAndInt => self.int_binop(|a, b| Ok(Value::Int(a & b)))?,
             Opcode::BitOrInt => self.int_binop(|a, b| Ok(Value::Int(a | b)))?,
             Opcode::BitXorInt => self.int_binop(|a, b| Ok(Value::Int(a ^ b)))?,
+            Opcode::SafeModInt => {
+                let b = self.pop_int()?;
+                let a = self.pop_int()?;
+                if b.is_zero() {
+                    self.stack.push(err_vm_result(
+                        self.process_error("ZeroDivisionError", "division by zero"),
+                    ));
+                } else {
+                    self.stack.push(ok_vm_result(Value::Int(a % b)));
+                }
+            }
 
             // Arithmetic (Float)
             Opcode::AddFloat => self.float_binop(|a, b| Value::Float(a + b))?,
@@ -6653,6 +6664,56 @@ mod tests {
 
         assert_eq!(ctx.pc, 2);
         assert_eq!(ctx.stack, vec![Value::Int(int(0))]);
+    }
+
+    #[test]
+    fn safe_mod_int_executes_as_one_opcode() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::SafeModInt,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(7)), Constant::Int(int(3))];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+
+        assert_eq!(
+            ctx.stack,
+            vec![Value::Tagged {
+                tag: 0,
+                fields: vec![Value::Int(int(1))],
+            }]
+        );
+    }
+
+    #[test]
+    fn safe_mod_int_returns_zero_division_error_result() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::SafeModInt,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(7)), Constant::Int(int(0))];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+
+        match ctx.stack.as_slice() {
+            [Value::Tagged { tag: 1, fields }] => match fields.first() {
+                Some(Value::Error(rich)) => assert_eq!(rich.kind, "ZeroDivisionError"),
+                other => panic!("expected Err(Value::Error), got {other:?}"),
+            },
+            other => panic!("expected Err result, got {other:?}"),
+        }
     }
 
     #[test]

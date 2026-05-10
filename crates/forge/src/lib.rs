@@ -689,6 +689,28 @@ right = Int::bit_xor(6, 3)"#,
     }
 
     #[test]
+    fn direct_safe_mod_builtin_call_lowers_to_specialized_opcode() {
+        let bytecode = codegen_source(r#"rem = Int::safe_mod(7, 3)"#);
+
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::SafeModInt)));
+
+        let safe_mod_id =
+            builtin_id_by_name("safe_mod").expect("safe_mod builtin metadata must exist");
+        assert!(!bytecode.opcodes.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    ..
+                } if *builtin_id == safe_mod_id
+            )
+        }));
+    }
+
+    #[test]
     fn int_bit_index_helpers_stay_as_builtin_calls() {
         let bytecode = codegen_source(
             r#"tested = Int::test_bit(5, 0)

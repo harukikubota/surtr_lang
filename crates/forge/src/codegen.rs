@@ -2917,6 +2917,7 @@ impl Codegen {
             "bit_xor" if arity == 2 => Some(Opcode::BitXorInt),
             "string_len" if arity == 1 => Some(Opcode::StringLen),
             "len" if arity == 1 => Some(Opcode::ListLen),
+            "safe_mod" if arity == 2 => Some(Opcode::SafeModInt),
             _ => None,
         }
     }

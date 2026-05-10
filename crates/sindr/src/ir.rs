@@ -157,6 +157,7 @@ pub enum Opcode {
     },
     StringLen,
     ListLen,
+    SafeModInt,
 }
 
 impl Opcode {
@@ -172,6 +173,7 @@ impl Opcode {
             Self::EqLocalTag { .. } => "EqLocalTag",
             Self::StringLen => "StringLen",
             Self::ListLen => "ListLen",
+            Self::SafeModInt => "SafeModInt",
             Self::AddInt => "AddInt",
             Self::SubInt => "SubInt",
             Self::MulInt => "MulInt",
@@ -1822,6 +1824,17 @@ mod tests {
     fn roundtrip_encode_decode_list_len_opcode() {
         let mut bytecode = sample_bytecode(None);
         bytecode.opcodes = vec![Opcode::ListLen, Opcode::Halt];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_safe_mod_int_opcode() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![Opcode::SafeModInt, Opcode::Halt];
 
         let bytes = bytecode.encode().expect("encode should succeed");
         let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
