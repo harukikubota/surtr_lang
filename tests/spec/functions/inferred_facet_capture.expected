@@ -1,0 +1,11 @@
+["bob", "alice"]
+["b", "a"]
+[30, 20]
+[30, 20]
+[2, 1]
+[User(name: "alice", age: 20, profile: Profile(name: "a")), User(name: "bob", age: 30, profile: Profile(name: "b"))]
+bob
+b
+carol-profile
+Ok(User(name: "dave", age: 50, profile: Profile(name: "dave-profile")))
+Ok("eve")

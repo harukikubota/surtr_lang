@@ -114,6 +114,32 @@ placeholder は outermost な capture にだけ属します。
 &outer(&1, &inner(10))  # compile error
 ```
 
+## inferred field/facet capture
+
+`_.path` は、期待される関数型から source 型を推論する unary capture です。
+
+```surtr
+users |*> _.name
+users |*> _.profile.name
+pairs |*> _._0
+List::sort_by(users, &compare `Function::on` _.age)
+```
+
+`_.path` は単独の値ではなく、`A -> B` のような unary function context でだけ
+型解決されます。source 型が文脈から決まると、明示形の `&Type.path` と同じ
+field / Facet ルールで解決されます。
+
+```surtr
+users |*> _.age
+users |*> &User.age
+```
+
+文脈がない場所では compile error になります。
+
+```surtr
+name = _.name  # compile error
+```
+
 この制約は「`&1` がどの capture に属するか」を明確に保つためです。
 
 ## 旧 partial capture は廃止

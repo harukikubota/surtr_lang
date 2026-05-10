@@ -95,6 +95,27 @@ pair2 = Facet::replace(~pair._1, 99)
 binding、関数引数、戻り値、container 格納には使えず、
 `Facet::view/preview/replace/set/over/over_result` の第1引数位置でだけ消費できます。
 
+## `_.path` inferred capture
+
+`_.path` は field / Facet path を unary function として扱うための推論付き capture です。
+`|*>`、`Function::on`、関数引数など、期待型が `A -> B` になる場所で使えます。
+
+```surtr
+users |*> _.name
+users |*> _.profile.name
+pairs |*> _._0
+List::sort_by(users, &compare `Function::on` _.age)
+```
+
+source 型を明示したい場合は `&Type.path` を使います。
+
+```surtr
+users |*> &User.name
+```
+
+`_.path` は standalone の Facet 値ではありません。文脈から source 型を推論できない
+場所では compile error になります。
+
 ## struct path
 
 ```surtr

@@ -392,6 +392,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         | Resolved::Semi(_, inner) => {
             rebase_resolved_node(inner, base, offset);
         }
+        Resolved::InferredFacetCapture(_, _) => {}
         Resolved::ProcessContextHandler(_, _) => {}
         Resolved::Dbg(_, nodes) => {
             rebase_resolved_nodes(nodes, base, offset);

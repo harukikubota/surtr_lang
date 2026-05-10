@@ -808,6 +808,17 @@ impl Checker {
             Resolved::Match(span, scrutinee, arms) => self.check_match(span, scrutinee, arms),
 
             Resolved::FieldAccess(span, expr, field) => self.check_field_access(span, expr, field),
+            Resolved::InferredFacetCapture(span, segments) => Err(TypeError {
+                message: format!(
+                    "{} requires expected unary function context",
+                    Self::inferred_facet_capture_display(segments)
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "Use inferred capture where a unary function is expected, or use an explicit capture such as `&Type.field`."
+                        .into(),
+                ),
+            }),
             Resolved::FacetCapture(span, _) => Err(TypeError {
                 message: "`~source.path` is Facet API shorthand and must be consumed as the first argument of Facet::view/preview/replace/set/over/over_result".into(),
                 span: span.clone(),
@@ -913,6 +924,14 @@ impl Checker {
             }
             (Resolved::Capture(span, target, args), Some(expected_ty)) => {
                 self.check_capture(span, target, args, Some(expected_ty))
+            }
+            (Resolved::InferredFacetCapture(span, segments), Some(expected_ty)) => {
+                self.check_inferred_facet_capture(span, segments, expected_ty)
+            }
+            (Resolved::App(span, func, args), Some(expected_ty))
+                if self.is_function_on_callee(func) =>
+            {
+                self.check_function_on_with_expected(span, func, args, expected_ty)
             }
             (Resolved::FieldAccess(span, expr, field), expected_ty) => {
                 self.check_field_access_with_expected(span, expr, field, expected_ty)
@@ -1157,6 +1176,229 @@ impl Checker {
         }
     }
 
+    fn inferred_rhs_expected(&mut self, input_ty: &Ty) -> Ty {
+        Ty::Func(
+            vec![self.resolve_ty(input_ty)],
+            Box::new(self.env.fresh_tyvar()),
+        )
+    }
+
+    fn can_use_expected_callable_context(node: &Resolved) -> bool {
+        matches!(
+            node,
+            Resolved::InferredFacetCapture(_, _)
+                | Resolved::Capture(_, _, _)
+                | Resolved::Closure(_, _, _, _)
+        )
+    }
+
+    fn check_apply_callable_with_input_hint(
+        &mut self,
+        node: &Resolved,
+        input_ty: &Ty,
+        op_name: &str,
+    ) -> Result<TypedNode, TypeError> {
+        if Self::can_use_expected_callable_context(node) {
+            let expected = self.inferred_rhs_expected(input_ty);
+            self.check_node_with_expected(node, Some(&expected))
+        } else {
+            self.check_apply_callable(node, op_name)
+        }
+    }
+
+    fn check_compose_rhs_with_input_hint(
+        &mut self,
+        node: &Resolved,
+        input_ty: &Ty,
+        op_name: &str,
+    ) -> Result<TypedNode, TypeError> {
+        if Self::can_use_expected_callable_context(node) {
+            let expected = self.inferred_rhs_expected(input_ty);
+            self.check_node_with_expected(node, Some(&expected))
+        } else {
+            self.check_operator_compose_callable(node, op_name)
+        }
+    }
+
+    fn inferred_facet_capture_display(segments: &[String]) -> String {
+        if segments.is_empty() {
+            "_".to_string()
+        } else {
+            format!("_.{}", segments.join("."))
+        }
+    }
+
+    fn inferred_capture_body(span: &Span, param_id: &ResolvedId, segments: &[String]) -> Resolved {
+        segments.iter().fold(
+            Resolved::Var(span.clone(), param_id.clone()),
+            |expr, segment| Resolved::FieldAccess(span.clone(), Box::new(expr), segment.clone()),
+        )
+    }
+
+    fn check_inferred_facet_capture(
+        &mut self,
+        span: &Span,
+        segments: &[String],
+        expected_ty: &Ty,
+    ) -> Result<TypedNode, TypeError> {
+        let expected_ty = self.resolve_ty(expected_ty);
+        let Ty::Func(params, _) = &expected_ty else {
+            return Err(TypeError {
+                message: format!(
+                    "{} requires expected unary function context",
+                    Self::inferred_facet_capture_display(segments)
+                ),
+                span: span.clone(),
+                hint: Some(format!(
+                    "Expected a function type like `(A -> B)`, got {}. Use an explicit capture such as `&Type.field` when no context is available.",
+                    self.ty_name(&expected_ty)
+                )),
+            });
+        };
+        if params.len() != 1 {
+            return Err(TypeError {
+                message: format!(
+                    "{} requires expected unary function context",
+                    Self::inferred_facet_capture_display(segments)
+                ),
+                span: span.clone(),
+                hint: Some(format!(
+                    "Expected a one-argument function type, got {}.",
+                    self.ty_name(&expected_ty)
+                )),
+            });
+        }
+
+        let param_id = ResolvedId {
+            name: "__inferred_facet_capture_arg".to_string(),
+            qualified_name: None,
+            unique_id: Self::next_synthetic_range_uid(),
+            compiler_generated: true,
+            span: span.clone(),
+        };
+        let body = Self::inferred_capture_body(span, &param_id, segments);
+        let synthetic = Resolved::Closure(
+            span.clone(),
+            vec![ResolvedClosureParam {
+                id: param_id,
+                ty: None,
+            }],
+            Vec::new(),
+            Box::new(body),
+        );
+        let typed = self.check_node_with_expected(&synthetic, Some(&expected_ty))?;
+        if !self.types_compatible(&expected_ty, &typed.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "{} inferred type mismatch: expected {}, got {}",
+                    Self::inferred_facet_capture_display(segments),
+                    self.ty_name(&expected_ty),
+                    self.ty_name(&typed.ty)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        Ok(typed)
+    }
+
+    fn is_function_on_callee(&self, func: &Resolved) -> bool {
+        matches!(
+            func,
+            Resolved::Var(_, id)
+                if id.name == "on"
+                    || id.name == "Function::on"
+                    || id.qualified_name.as_deref() == Some("Function::on")
+        )
+    }
+
+    fn check_function_on_with_expected(
+        &mut self,
+        span: &Span,
+        func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+        expected_ty: &Ty,
+    ) -> Result<TypedNode, TypeError> {
+        let expected_ty = self.resolve_ty(expected_ty);
+        let Ty::Func(params, ret) = &expected_ty else {
+            return self.check_app(span, func, args);
+        };
+        if params.len() != 2 || !self.types_compatible(&params[0], &params[1]) {
+            return self.check_app(span, func, args);
+        }
+        if args.len() != 2
+            || args
+                .iter()
+                .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
+        {
+            return self.check_app(span, func, args);
+        }
+
+        let ResolvedRecordLitArg::Positional(compare_expr) = &args[0] else {
+            unreachable!("named arguments rejected above")
+        };
+        let ResolvedRecordLitArg::Positional(key_expr) = &args[1] else {
+            unreachable!("named arguments rejected above")
+        };
+
+        let source_ty = self.resolve_ty(&params[0]);
+        let key_ty = self.env.fresh_tyvar();
+        let key_expected = Ty::Func(vec![source_ty.clone()], Box::new(key_ty.clone()));
+        let typed_key = self.check_node_with_expected(key_expr, Some(&key_expected))?;
+        if !self.types_compatible(&key_expected, &typed_key.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "Function::on key type mismatch: expected {}, got {}",
+                    self.ty_name(&key_expected),
+                    self.ty_name(&typed_key.ty)
+                ),
+                span: typed_key.span.clone(),
+                hint: None,
+            });
+        }
+
+        let key_ty = match self.resolve_ty(&typed_key.ty) {
+            Ty::Func(_, focus) => focus.as_ref().clone(),
+            other => {
+                return Err(TypeError {
+                    message: format!(
+                        "Function::on key must be unary, got {}",
+                        self.ty_name(&other)
+                    ),
+                    span: typed_key.span.clone(),
+                    hint: None,
+                })
+            }
+        };
+        let compare_expected = Ty::Func(
+            vec![self.resolve_ty(&key_ty), self.resolve_ty(&key_ty)],
+            Box::new(self.resolve_ty(ret.as_ref())),
+        );
+        let typed_compare = self.check_node_with_expected(compare_expr, Some(&compare_expected))?;
+        if !self.types_compatible(&compare_expected, &typed_compare.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "Function::on comparator type mismatch: expected {}, got {}",
+                    self.ty_name(&compare_expected),
+                    self.ty_name(&typed_compare.ty)
+                ),
+                span: typed_compare.span.clone(),
+                hint: None,
+            });
+        }
+
+        let typed_func = self.check_node(func)?;
+        let result_ty = Ty::Func(
+            vec![source_ty.clone(), source_ty],
+            Box::new(self.resolve_ty(ret)),
+        );
+        Ok(TypedNode {
+            ty: result_ty,
+            span: span.clone(),
+            node: TypedInner::App(Box::new(typed_func), vec![typed_compare, typed_key]),
+        })
+    }
+
     pub(super) fn check_function_value_operand(
         &mut self,
         node: &Resolved,
@@ -1354,6 +1596,7 @@ impl Checker {
             | Resolved::RecoverKind(span, _, _, _)
             | Resolved::Match(span, _, _)
             | Resolved::FieldAccess(span, _, _)
+            | Resolved::InferredFacetCapture(span, _)
             | Resolved::FacetCapture(span, _)
             | Resolved::ProcessContextHandler(span, _)
             | Resolved::StructLit(span, _, _)
@@ -2375,6 +2618,11 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_node(left)?;
         let typed_right = match right {
+            Resolved::InferredFacetCapture(_, _)
+            | Resolved::Capture(_, _, _)
+            | Resolved::Closure(_, _, _, _) => {
+                self.check_apply_callable_with_input_hint(right, &typed_left.ty, "`|>`")?
+            }
             Resolved::App(call_span, func, args) => {
                 if let Some(typed) = self.check_trait_helper_pipe_callable(
                     call_span,
@@ -2431,13 +2679,36 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_right = self.check_apply_callable(right, "`|*>`")?;
+        let typed_left = self.check_node(left)?;
+        let receiver_ty = self.resolve_ty(&typed_left.ty);
+        let rhs_input_hint = match &receiver_ty {
+            Ty::Result(ok, _) => Some(ok.as_ref().clone()),
+            Ty::List(item) => Some(item.as_ref().clone()),
+            Ty::Enum(name, args) if Self::surface_name(name) == "Option" && args.len() == 1 => {
+                Some(args[0].clone())
+            }
+            _ => None,
+        };
+        let typed_right = if let Some(rhs_in) = &rhs_input_hint {
+            if matches!(
+                right,
+                Resolved::InferredFacetCapture(_, _)
+                    | Resolved::Capture(_, _, _)
+                    | Resolved::Closure(_, _, _, _)
+            ) {
+                self.check_apply_callable_with_input_hint(right, rhs_in, "`|*>`")?
+            } else {
+                let expected = self.inferred_rhs_expected(rhs_in);
+                self.check_node_with_expected(right, Some(&expected))
+                    .or_else(|_| self.check_apply_callable(right, "`|*>`"))?
+            }
+        } else {
+            self.check_apply_callable(right, "`|*>`")?
+        };
         let (rhs_in, rhs_out) =
             self.unary_function_parts(&typed_right.ty, "`|*>`", &typed_right.span)?;
         self.ensure_plain_map_output(&rhs_out, "`|*>`", &typed_right.span)?;
 
-        let typed_left = self.check_node(left)?;
-        let receiver_ty = self.resolve_ty(&typed_left.ty);
         match &receiver_ty {
             Ty::Result(ok, _) => {
                 if !self.types_compatible(ok.as_ref(), &rhs_in) {
@@ -2574,6 +2845,12 @@ impl Checker {
             _ => None,
         };
         let typed_right = match (right, trait_helper_input_ty) {
+            (
+                Resolved::InferredFacetCapture(_, _)
+                | Resolved::Capture(_, _, _)
+                | Resolved::Closure(_, _, _, _),
+                Some(input_ty),
+            ) => self.check_apply_callable_with_input_hint(right, &input_ty, "`|>=`")?,
             (Resolved::App(call_span, func, args), Some(input_ty)) => {
                 if let Some(typed) =
                     self.check_trait_helper_pipe_callable(call_span, func, args, input_ty, "`|>=`")?
@@ -2832,9 +3109,9 @@ impl Checker {
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_operator_compose_callable(left, "`>>`")?;
-        let typed_right = self.check_operator_compose_callable(right, "`>>`")?;
         let (left_in, left_out) =
             self.unary_function_parts(&typed_left.ty, "`>>`", &typed_left.span)?;
+        let typed_right = self.check_compose_rhs_with_input_hint(right, &left_out, "`>>`")?;
         let (right_in, right_out) =
             self.unary_function_parts(&typed_right.ty, "`>>`", &typed_right.span)?;
         if !self.types_compatible(&left_out, &right_in) {
@@ -2893,9 +3170,21 @@ impl Checker {
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_operator_compose_callable(left, "`>*`")?;
-        let typed_right = self.check_operator_compose_callable(right, "`>*`")?;
         let (left_in, left_out) =
             self.unary_function_parts(&typed_left.ty, "`>*`", &typed_left.span)?;
+        let rhs_input_hint = match self.resolve_ty(&left_out) {
+            Ty::Result(ok, _) => Some(self.resolve_ty(ok.as_ref())),
+            Ty::List(item) => Some(self.resolve_ty(item.as_ref())),
+            Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
+                Some(self.resolve_ty(&args[0]))
+            }
+            _ => None,
+        };
+        let typed_right = if let Some(rhs_in) = &rhs_input_hint {
+            self.check_compose_rhs_with_input_hint(right, rhs_in, "`>*`")?
+        } else {
+            self.check_operator_compose_callable(right, "`>*`")?
+        };
         let (right_in, right_out) =
             self.unary_function_parts(&typed_right.ty, "`>*`", &typed_right.span)?;
         self.ensure_plain_map_output(&right_out, "`>*`", &typed_right.span)?;
@@ -3050,9 +3339,21 @@ impl Checker {
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_operator_compose_callable(left, "`>=>`")?;
-        let typed_right = self.check_operator_compose_callable(right, "`>=>`")?;
         let (left_in, left_out) =
             self.unary_function_parts(&typed_left.ty, "`>=>`", &typed_left.span)?;
+        let rhs_input_hint = match self.resolve_ty(&left_out) {
+            Ty::Result(ok, _) => Some(self.resolve_ty(ok.as_ref())),
+            Ty::List(item) => Some(self.resolve_ty(item.as_ref())),
+            Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
+                Some(self.resolve_ty(&args[0]))
+            }
+            _ => None,
+        };
+        let typed_right = if let Some(rhs_in) = &rhs_input_hint {
+            self.check_compose_rhs_with_input_hint(right, rhs_in, "`>=>`")?
+        } else {
+            self.check_operator_compose_callable(right, "`>=>`")?
+        };
         let (right_in, right_out) =
             self.unary_function_parts(&typed_right.ty, "`>=>`", &typed_right.span)?;
         match (self.resolve_ty(&left_out), self.resolve_ty(&right_out)) {
@@ -5659,16 +5960,9 @@ impl Checker {
                 compiler_generated: true,
                 span: span.clone(),
             };
-            let captured_facet = match target {
-                Resolved::Var(_, id) => id.clone(),
-                _ => {
-                    return Err(TypeError {
-                        message: "Facet capture shorthand currently requires a facet binding"
-                            .into(),
-                        span: span.clone(),
-                        hint: Some("Bind the facet first, then capture it with `&facet`.".into()),
-                    })
-                }
+            let captures = match target {
+                Resolved::Var(_, id) => vec![id.clone()],
+                _ => Vec::new(),
             };
             let body = Resolved::App(
                 span.clone(),
@@ -5678,22 +5972,23 @@ impl Checker {
                     ResolvedRecordLitArg::Positional(Resolved::Var(span.clone(), param_id.clone())),
                 ],
             );
+            let ret_ty = match &typed_target.node {
+                TypedInner::FacetPath(path) if path.may_fail => Ty::Result(
+                    Box::new(self.resolve_ty(focus_ty.as_ref())),
+                    Box::new(Ty::Error),
+                ),
+                _ => self.resolve_ty(focus_ty.as_ref()),
+            };
             let synthetic = Resolved::Closure(
                 span.clone(),
                 vec![ResolvedClosureParam {
                     id: param_id,
                     ty: None,
                 }],
-                vec![captured_facet],
+                captures,
                 Box::new(body),
             );
-            let expected = Ty::Func(
-                vec![self.resolve_ty(source_ty.as_ref())],
-                Box::new(Ty::Result(
-                    Box::new(self.resolve_ty(focus_ty.as_ref())),
-                    Box::new(Ty::Error),
-                )),
-            );
+            let expected = Ty::Func(vec![self.resolve_ty(source_ty.as_ref())], Box::new(ret_ty));
             return self
                 .check_node_with_expected(&synthetic, Some(&expected))
                 .or_else(|_| self.check_node(&synthetic));
