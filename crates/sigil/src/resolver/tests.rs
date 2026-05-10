@@ -4456,13 +4456,17 @@ def pred(n: Int) -> Boolean {
 
 checked = Ok(3) |>= ensure(&pred, GuardError)
 flagged = True |> and(False)
-verified = Ok(True) |>= assert(GuardError)"#,
+verified = Ok(True) |>= assert(GuardError)
+replaced = Err(GuardError) |> map_err(GuardError)
+wrapped = Err(GuardError) |> cause(GuardError)"#,
     )
     .expect("pipeline partial special forms should resolve");
 
     let mut checked_ok = false;
     let mut flagged_ok = false;
     let mut verified_ok = false;
+    let mut replaced_ok = false;
+    let mut wrapped_ok = false;
 
     for node in resolved {
         let Resolved::Bind(_, pat, rhs) = node else {
@@ -4514,6 +4518,34 @@ verified = Ok(True) |>= assert(GuardError)"#,
                 },
                 other => panic!("expected context bind for verified, got {:?}", other),
             },
+            "replaced" => match rhs.as_ref() {
+                Resolved::Pipe(_, _, right) => match right.as_ref() {
+                    Resolved::Closure(_, params, _, body) => {
+                        assert_eq!(params.len(), 1, "partial map_err must become unary closure");
+                        assert!(
+                            matches!(body.as_ref(), Resolved::MapErr(_, _, _)),
+                            "partial map_err closure body must resolve to MapErr"
+                        );
+                        replaced_ok = true;
+                    }
+                    other => panic!("expected closure on replaced rhs, got {:?}", other),
+                },
+                other => panic!("expected pipe for replaced, got {:?}", other),
+            },
+            "wrapped" => match rhs.as_ref() {
+                Resolved::Pipe(_, _, right) => match right.as_ref() {
+                    Resolved::Closure(_, params, _, body) => {
+                        assert_eq!(params.len(), 1, "partial cause must become unary closure");
+                        assert!(
+                            matches!(body.as_ref(), Resolved::Cause(_, _, _)),
+                            "partial cause closure body must resolve to Cause"
+                        );
+                        wrapped_ok = true;
+                    }
+                    other => panic!("expected closure on wrapped rhs, got {:?}", other),
+                },
+                other => panic!("expected pipe for wrapped, got {:?}", other),
+            },
             _ => {}
         }
     }
@@ -4521,4 +4553,64 @@ verified = Ok(True) |>= assert(GuardError)"#,
     assert!(checked_ok, "missing checked bind assertion");
     assert!(flagged_ok, "missing flagged bind assertion");
     assert!(verified_ok, "missing verified bind assertion");
+    assert!(replaced_ok, "missing replaced bind assertion");
+    assert!(wrapped_ok, "missing wrapped bind assertion");
+}
+
+#[test]
+fn test_pipeline_partial_special_form_does_not_trigger_for_shadowed_local_binding() {
+    let resolved = parse_and_resolve(
+        r#"map_err = {|value: Int, suffix: Int| value + suffix}
+out = 1 |> map_err(2)"#,
+    )
+    .expect("shadowed local map_err should resolve like an ordinary pipe call");
+
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Pipe(_, _, right) => match right.as_ref() {
+                Resolved::App(_, func, args) => {
+                    assert!(matches!(func.as_ref(), Resolved::Var(_, id) if id.name == "map_err"));
+                    assert_eq!(args.len(), 1, "ordinary shadowed call should keep its explicit arg");
+                }
+                other => panic!("expected ordinary app on shadowed rhs, got {:?}", other),
+            },
+            other => panic!("expected pipe on shadowed binding, got {:?}", other),
+        },
+        other => panic!("expected bind for shadowed pipeline, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_pipeline_partial_special_form_does_not_trigger_for_shadowed_parameter() {
+    fn find_pipe_rhs(node: &Resolved) -> Option<&Resolved> {
+        match node {
+            Resolved::Pipe(_, _, right) => Some(right.as_ref()),
+            Resolved::Block(_, nodes) => nodes.iter().find_map(find_pipe_rhs),
+            Resolved::Bind(_, _, rhs) | Resolved::SafeBind(_, _, rhs) => find_pipe_rhs(rhs),
+            _ => None,
+        }
+    }
+
+    let resolved = parse_and_resolve(
+        r#"def apply(map_err: (Int -> Int)) -> Int {
+  1 |> map_err(2)
+}"#,
+    )
+    .expect("shadowed parameter map_err should resolve like an ordinary pipe call");
+
+    let pipe_rhs = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, body, _) if id.name == "apply" => find_pipe_rhs(body),
+            _ => None,
+        })
+        .expect("expected pipe rhs inside apply body");
+
+    match pipe_rhs {
+        Resolved::App(_, func, args) => {
+            assert!(matches!(func.as_ref(), Resolved::Var(_, id) if id.name == "map_err"));
+            assert_eq!(args.len(), 1, "ordinary shadowed parameter call should keep its explicit arg");
+        }
+        other => panic!("expected ordinary app on shadowed parameter rhs, got {:?}", other),
+    }
 }

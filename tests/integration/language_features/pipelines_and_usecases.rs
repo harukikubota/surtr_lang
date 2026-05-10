@@ -228,6 +228,14 @@ print(inspect(parse_hand("x")))"#,
     );
 }
 
+fn pipeline_shadowed_special_form_name_stays_ordinary_call() {
+    assert_output(
+        r#"map_err = {|value: Int, suffix: Int| value + suffix}
+print(to_string(1 |> map_err(2)))"#,
+        &["3"],
+    );
+}
+
 fn list_pipeline_helpers_and_compose_work() {
     assert_output(
         r#"def inc(x: Int) -> Int {
@@ -725,6 +733,10 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "pipeline_rhs_supports_partial_special_forms_without_lambda_wrapping",
             pipeline_rhs_supports_partial_special_forms_without_lambda_wrapping as fn(),
+        ),
+        (
+            "pipeline_shadowed_special_form_name_stays_ordinary_call",
+            pipeline_shadowed_special_form_name_stays_ordinary_call as fn(),
         ),
         (
             "list_pipeline_helpers_and_compose_work",

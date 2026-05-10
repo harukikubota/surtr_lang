@@ -50,35 +50,222 @@ const TYPE_REF_HELPERS: &[TypeRefHelperSpec] = &[
     },
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CanonicalSpecialForm {
+    If(IfKind),
+    IfLet,
+    IfLetThen,
+    IsMatch,
+    Assert,
+    Ensure,
+    MapErr,
+    Cause,
+    RecoverKind,
+    Logic(LogicKind),
+}
+
 impl Resolver {
-    fn partial_pipeline_special_form_arity(name: &str) -> Option<usize> {
-        match name {
-            "if" => Some(3),
-            "if_then" => Some(2),
-            "if_let" => Some(4),
-            "if_let_then" => Some(3),
-            "is_match" => Some(2),
-            "assert" => Some(2),
-            "ensure" => Some(3),
-            "map_err" | "cause" => Some(2),
-            "and" | "or" => Some(2),
+    fn canonical_special_form_from_qname(qualified_name: &str) -> Option<CanonicalSpecialForm> {
+        match qualified_name.strip_prefix("Global::").unwrap_or(qualified_name) {
+            "Kernel::if" => Some(CanonicalSpecialForm::If(IfKind::If3)),
+            "Kernel::if_then" => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
+            "Kernel::if_let" => Some(CanonicalSpecialForm::IfLet),
+            "Kernel::if_let_then" => Some(CanonicalSpecialForm::IfLetThen),
+            "Kernel::is_match" => Some(CanonicalSpecialForm::IsMatch),
+            "Kernel::assert" => Some(CanonicalSpecialForm::Assert),
+            "Kernel::ensure" => Some(CanonicalSpecialForm::Ensure),
+            "Kernel::and" => Some(CanonicalSpecialForm::Logic(LogicKind::And)),
+            "Kernel::or" => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
+            "Result::map_err" => Some(CanonicalSpecialForm::MapErr),
+            "Result::cause" => Some(CanonicalSpecialForm::Cause),
+            "Result::recover_kind" => Some(CanonicalSpecialForm::RecoverKind),
             _ => None,
         }
     }
 
-    fn desugar_pipeline_rhs_special_form_partial(&self, rhs: Ast) -> Ast {
+    fn classify_canonical_special_form_callee(
+        &self,
+        resolved_func: &Resolved,
+    ) -> Option<CanonicalSpecialForm> {
+        let Resolved::Var(_, id) = resolved_func else {
+            return None;
+        };
+        if let Some(qualified_name) = id.qualified_name.as_deref() {
+            if let Some(kind) = Self::canonical_special_form_from_qname(qualified_name) {
+                return Some(kind);
+            }
+        }
+        let entry = self.declaration_entry_for_uid(id.unique_id)?;
+        if let Some(kind) = Self::canonical_special_form_from_qname(&entry.fq_name) {
+            return Some(kind);
+        }
+        if entry.auto_import && is_special_form_builtin_decl(entry.name.as_str()) {
+            return Self::fallback_special_form_from_surface(&Ast::Var(
+                id.span.clone(),
+                entry.name.clone(),
+            ));
+        }
+        match (
+            entry
+                .module_path
+                .strip_prefix("Global::")
+                .unwrap_or(entry.module_path.as_str()),
+            entry.name.as_str(),
+        ) {
+            ("Kernel", "if") => Some(CanonicalSpecialForm::If(IfKind::If3)),
+            ("Kernel", "if_then") => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
+            ("Kernel", "if_let") => Some(CanonicalSpecialForm::IfLet),
+            ("Kernel", "if_let_then") => Some(CanonicalSpecialForm::IfLetThen),
+            ("Kernel", "is_match") => Some(CanonicalSpecialForm::IsMatch),
+            ("Kernel", "assert") => Some(CanonicalSpecialForm::Assert),
+            ("Kernel", "ensure") => Some(CanonicalSpecialForm::Ensure),
+            ("Kernel", "and") => Some(CanonicalSpecialForm::Logic(LogicKind::And)),
+            ("Kernel", "or") => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
+            ("Result", "map_err") => Some(CanonicalSpecialForm::MapErr),
+            ("Result", "cause") => Some(CanonicalSpecialForm::Cause),
+            ("Result", "recover_kind") => Some(CanonicalSpecialForm::RecoverKind),
+            _ => None,
+        }
+    }
+
+    fn fallback_special_form_from_surface(func: &Ast) -> Option<CanonicalSpecialForm> {
+        match func {
+            Ast::Var(_, name) | Ast::InternalVar(_, name) => match name.as_str() {
+                "if" => Some(CanonicalSpecialForm::If(IfKind::If3)),
+                "if_then" => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
+                "if_let" => Some(CanonicalSpecialForm::IfLet),
+                "if_let_then" => Some(CanonicalSpecialForm::IfLetThen),
+                "is_match" => Some(CanonicalSpecialForm::IsMatch),
+                "assert" => Some(CanonicalSpecialForm::Assert),
+                "ensure" => Some(CanonicalSpecialForm::Ensure),
+                "map_err" => Some(CanonicalSpecialForm::MapErr),
+                "cause" => Some(CanonicalSpecialForm::Cause),
+                "recover_kind" => Some(CanonicalSpecialForm::RecoverKind),
+                "and" => Some(CanonicalSpecialForm::Logic(LogicKind::And)),
+                "or" => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
+                _ => None,
+            },
+            Ast::Path(_, path)
+                if path.segments.len() == 2
+                    && path.segments[0] == "Result"
+                    && path.segments[1] == "map_err" =>
+            {
+                Some(CanonicalSpecialForm::MapErr)
+            }
+            Ast::Path(_, path)
+                if path.segments.len() == 2
+                    && path.segments[0] == "Result"
+                    && path.segments[1] == "cause" =>
+            {
+                Some(CanonicalSpecialForm::Cause)
+            }
+            Ast::Path(_, path)
+                if path.segments.len() == 2
+                    && path.segments[0] == "Result"
+                    && path.segments[1] == "recover_kind" =>
+            {
+                Some(CanonicalSpecialForm::RecoverKind)
+            }
+            _ => None,
+        }
+    }
+
+    fn fallback_partial_pipeline_special_form_from_surface(
+        func: &Ast,
+    ) -> Option<CanonicalSpecialForm> {
+        match func {
+            Ast::Var(_, name) | Ast::InternalVar(_, name) => match name.as_str() {
+                "if" => Some(CanonicalSpecialForm::If(IfKind::If3)),
+                "if_then" => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
+                "if_let" => Some(CanonicalSpecialForm::IfLet),
+                "if_let_then" => Some(CanonicalSpecialForm::IfLetThen),
+                "is_match" => Some(CanonicalSpecialForm::IsMatch),
+                "assert" => Some(CanonicalSpecialForm::Assert),
+                "ensure" => Some(CanonicalSpecialForm::Ensure),
+                "map_err" => Some(CanonicalSpecialForm::MapErr),
+                "cause" => Some(CanonicalSpecialForm::Cause),
+                "and" => Some(CanonicalSpecialForm::Logic(LogicKind::And)),
+                "or" => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn canonical_special_form_arity(kind: CanonicalSpecialForm) -> usize {
+        match kind {
+            CanonicalSpecialForm::If(IfKind::If3) => 3,
+            CanonicalSpecialForm::If(IfKind::IfThen2) => 2,
+            CanonicalSpecialForm::IfLet => 4,
+            CanonicalSpecialForm::IfLetThen => 3,
+            CanonicalSpecialForm::IsMatch => 2,
+            CanonicalSpecialForm::Assert => 2,
+            CanonicalSpecialForm::Ensure => 3,
+            CanonicalSpecialForm::MapErr => 2,
+            CanonicalSpecialForm::Cause => 2,
+            CanonicalSpecialForm::RecoverKind => 3,
+            CanonicalSpecialForm::Logic(LogicKind::And) => 2,
+            CanonicalSpecialForm::Logic(LogicKind::Or) => 2,
+        }
+    }
+
+    fn partial_pipeline_special_form_arity(kind: CanonicalSpecialForm) -> Option<usize> {
+        match kind {
+            CanonicalSpecialForm::If(IfKind::If3)
+            | CanonicalSpecialForm::If(IfKind::IfThen2)
+            | CanonicalSpecialForm::IfLet
+            | CanonicalSpecialForm::IfLetThen
+            | CanonicalSpecialForm::IsMatch
+            | CanonicalSpecialForm::Assert
+            | CanonicalSpecialForm::Ensure
+            | CanonicalSpecialForm::MapErr
+            | CanonicalSpecialForm::Cause
+            | CanonicalSpecialForm::Logic(_) => Some(Self::canonical_special_form_arity(kind)),
+            CanonicalSpecialForm::RecoverKind => None,
+        }
+    }
+
+    fn resolve_canonical_special_form_call(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+        kind: CanonicalSpecialForm,
+    ) -> Result<Resolved, ResolveError> {
+        match kind {
+            CanonicalSpecialForm::If(if_kind) => self.resolve_if(span, args, if_kind),
+            CanonicalSpecialForm::IfLet => self.resolve_if_let(span, args),
+            CanonicalSpecialForm::IfLetThen => self.resolve_if_let_then(span, args),
+            CanonicalSpecialForm::IsMatch => self.resolve_is_match(span, args),
+            CanonicalSpecialForm::Assert => self.resolve_assert(span, args),
+            CanonicalSpecialForm::Ensure => self.resolve_ensure(span, args),
+            CanonicalSpecialForm::MapErr => self.resolve_map_err(span, args),
+            CanonicalSpecialForm::Cause => self.resolve_cause(span, args),
+            CanonicalSpecialForm::RecoverKind => self.resolve_recover_kind(span, args),
+            CanonicalSpecialForm::Logic(logic_kind) => self.resolve_logic_call(span, args, logic_kind),
+        }
+    }
+
+    fn desugar_pipeline_rhs_special_form_partial(&mut self, rhs: Ast) -> Result<Ast, ResolveError> {
         let Ast::App(span, func, args) = rhs else {
-            return rhs;
+            return Ok(rhs);
         };
 
-        let Ast::Var(_, ref name) = *func else {
-            return Ast::App(span, func, args);
+        if !matches!(func.as_ref(), Ast::Var(_, _) | Ast::InternalVar(_, _)) {
+            return Ok(Ast::App(span, func, args));
+        }
+
+        let kind = match self.resolve_node(*func.clone()) {
+            Ok(resolved_func) => self.classify_canonical_special_form_callee(&resolved_func),
+            Err(_) => Self::fallback_partial_pipeline_special_form_from_surface(func.as_ref()),
         };
-        let Some(expected_arity) = Self::partial_pipeline_special_form_arity(name) else {
-            return Ast::App(span, func, args);
+        let Some(kind) = kind else {
+            return Ok(Ast::App(span, func, args));
+        };
+        let Some(expected_arity) = Self::partial_pipeline_special_form_arity(kind) else {
+            return Ok(Ast::App(span, func, args));
         };
         if args.len() + 1 != expected_arity {
-            return Ast::App(span, func, args);
+            return Ok(Ast::App(span, func, args));
         }
 
         let param_name = format!("__pipe_injected_{}_{}", span.start, span.end);
@@ -91,7 +278,7 @@ impl Resolver {
         injected_args.extend(args);
 
         let call = Ast::App(span.clone(), func, injected_args);
-        Ast::Closure(
+        Ok(Ast::Closure(
             span.clone(),
             vec![ClosureParam {
                 name: param_name,
@@ -99,7 +286,7 @@ impl Resolver {
                 span: param_span,
             }],
             Box::new(call),
-        )
+        ))
     }
 
     fn capture_placeholder_param_name(span: &Span, index: usize) -> String {
@@ -1089,9 +1276,9 @@ impl Resolver {
         ))
     }
 
-    fn prepare_pipe_rhs(&self, rhs: Ast) -> Result<Ast, ResolveError> {
+    fn prepare_pipe_rhs(&mut self, rhs: Ast) -> Result<Ast, ResolveError> {
         let rhs = self.lower_pipe_rhs_slots(rhs)?;
-        Ok(self.desugar_pipeline_rhs_special_form_partial(rhs))
+        self.desugar_pipeline_rhs_special_form_partial(rhs)
     }
 
     fn type_ref_helper_for_call(func: &Ast) -> Option<&'static TypeRefHelperSpec> {
@@ -1669,69 +1856,12 @@ impl Resolver {
             }),
 
             Ast::App(span, func, args) => {
-                // Check for special forms
                 if let Ast::Var(_, ref name) = *func {
-                    if name == "if" {
-                        return self.resolve_if(span, args, IfKind::If3);
-                    }
-                    if name == "if_then" {
-                        return self.resolve_if(span, args, IfKind::IfThen2);
-                    }
-                    if name == "if_let" {
-                        return self.resolve_if_let(span, args);
-                    }
-                    if name == "if_let_then" {
-                        return self.resolve_if_let_then(span, args);
-                    }
-                    if name == "is_match" {
-                        return self.resolve_is_match(span, args);
-                    }
-                    if name == "assert" {
-                        return self.resolve_assert(span, args);
-                    }
-                    if name == "ensure" {
-                        return self.resolve_ensure(span, args);
-                    }
-                    if name == "map_err" {
-                        return self.resolve_map_err(span, args);
-                    }
-                    if name == "cause" {
-                        return self.resolve_cause(span, args);
-                    }
-                    if name == "recover_kind" {
-                        return self.resolve_recover_kind(span, args);
-                    }
-                    if name == "and" {
-                        return self.resolve_logic_call(span, args, LogicKind::And);
-                    }
-                    if name == "or" {
-                        return self.resolve_logic_call(span, args, LogicKind::Or);
-                    }
                     if name == "&&" {
                         return self.resolve_logic_call(span, args, LogicKind::And);
                     }
                     if name == "||" {
                         return self.resolve_logic_call(span, args, LogicKind::Or);
-                    }
-                }
-                if let Ast::Path(_, ref path) = *func {
-                    if path.segments.len() == 2
-                        && path.segments[0] == "Result"
-                        && path.segments[1] == "map_err"
-                    {
-                        return self.resolve_map_err(span, args);
-                    }
-                    if path.segments.len() == 2
-                        && path.segments[0] == "Result"
-                        && path.segments[1] == "cause"
-                    {
-                        return self.resolve_cause(span, args);
-                    }
-                    if path.segments.len() == 2
-                        && path.segments[0] == "Result"
-                        && path.segments[1] == "recover_kind"
-                    {
-                        return self.resolve_recover_kind(span, args);
                     }
                 }
 
@@ -1787,9 +1917,21 @@ impl Resolver {
                     return Ok(Resolved::App(span, Box::new(resolved_func), resolved_args));
                 }
 
-                let resolved_func = self
-                    .resolve_node(*func.clone())
-                    .map_err(|err| self.map_undefined_callable_error(err, &func, args.len()))?;
+                let resolved_func = match self.resolve_node(*func.clone()) {
+                    Ok(resolved_func) => {
+                        if let Some(kind) = self.classify_canonical_special_form_callee(&resolved_func)
+                        {
+                            return self.resolve_canonical_special_form_call(span, args, kind);
+                        }
+                        resolved_func
+                    }
+                    Err(err) => {
+                        if let Some(kind) = Self::fallback_special_form_from_surface(func.as_ref()) {
+                            return self.resolve_canonical_special_form_call(span, args, kind);
+                        }
+                        return Err(self.map_undefined_callable_error(err, &func, args.len()));
+                    }
+                };
                 self.ensure_user_callable_surface(&resolved_func, &span, args.len())?;
                 let resolved_args = args
                     .into_iter()
