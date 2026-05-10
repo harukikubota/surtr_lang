@@ -747,6 +747,29 @@ ends = String::ends_with("surtr", "tr")"#,
     }
 
     #[test]
+    fn direct_string_split_and_replace_stay_as_builtin_calls() {
+        let bytecode = codegen_source(
+            r#"parts = String::split("a,b", ",")
+text = String::replace("banana", "na", "NA")"#,
+        );
+
+        for (name, arity) in [("string_split", 2), ("string_replace", 3)] {
+            let builtin_id = builtin_id_by_name(name)
+                .unwrap_or_else(|| panic!("{name} builtin metadata must exist"));
+            assert!(bytecode.opcodes.iter().any(|op| {
+                matches!(
+                    op,
+                    Opcode::CallBuiltin {
+                        builtin_id: id,
+                        arity: actual_arity,
+                        ..
+                    } if *id == builtin_id && *actual_arity == arity
+                )
+            }));
+        }
+    }
+
+    #[test]
     fn int_bit_index_helpers_stay_as_builtin_calls() {
         let bytecode = codegen_source(
             r#"tested = Int::test_bit(5, 0)

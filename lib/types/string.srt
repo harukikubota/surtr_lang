@@ -362,9 +362,7 @@ impl String {
   xldr(1)> String::replace("abc", "b", "B")
   "aBc"
   """
-  def replace(value: String, from: String, to: String) -> String {
-    if(from == "", value, _replace_go(value, from, to))
-  }
+  @builtin def replace(value: String, from: String, to: String) -> String
 
   @doc """
   Split `value` at every occurrence of `separator`.
@@ -373,16 +371,7 @@ impl String {
   xldr(1)> String::split("a,b,c", ",")
   Ok(["a", "b", "c"] )
   """
-  def split(value: String, separator: String) -> List<String> {
-    if(
-      separator == "",
-      chars(value),
-      match split_once(value, separator) {
-        Ok(StringSplit::Split(before, after)) => [before, ..split(after, separator)],
-        Err(_) => [value],
-      },
-    )
-  }
+  @builtin def split(value: String, separator: String) -> List<String>
 
   @doc """
   Split `value` into lines.
