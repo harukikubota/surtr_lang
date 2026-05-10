@@ -2119,6 +2119,44 @@ mod tests {
     }
 
     #[test]
+    fn emit_local_bind_uses_copy_local_opcode() {
+        let mut gene = Codegen::new();
+        let source_id = sigil::resolved::ResolvedId {
+            name: "source".into(),
+            qualified_name: None,
+            unique_id: 10,
+            compiler_generated: false,
+            span: span(1, 7),
+        };
+        gene.state.slot_map.insert(source_id.unique_id, 0);
+        gene.state.next_slot = 1;
+
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: span(1, 16),
+            node: TypedInner::Bind(
+                TypedPattern::Wildcard(Ty::Int),
+                Box::new(TypedNode {
+                    ty: Ty::Int,
+                    span: span(11, 16),
+                    node: TypedInner::Var(source_id),
+                }),
+            ),
+        };
+
+        gene.emit_node(&node)
+            .expect("local bind emission should succeed");
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::CopyLocal { .. })));
+        assert!(!opcodes
+            .windows(2)
+            .any(|window| matches!(window, [Opcode::LoadLocal(_), Opcode::StoreLocal(_)])));
+    }
+
+    #[test]
     fn emit_dbg_uses_dedicated_opcode() {
         let mut gene = Codegen::new();
         let node = TypedNode {
@@ -3253,6 +3291,24 @@ impl Codegen {
                     self.ir.push(IrOp::Op(Opcode::StoreConstLocal {
                         const_idx,
                         local_idx,
+                    }));
+                    return;
+                }
+                if let Some(IrOp::Op(Opcode::LoadLocal(src_local_idx))) = self.ir.last() {
+                    let src_local_idx = *src_local_idx;
+                    self.ir.pop();
+                    self.ir.push(IrOp::Op(Opcode::CopyLocal {
+                        src_local_idx,
+                        dst_local_idx: local_idx,
+                    }));
+                    return;
+                }
+                if let Some(IrOp::Op(Opcode::LoadLocal(src_local_idx))) = self.ir.last() {
+                    let src_local_idx = *src_local_idx;
+                    self.ir.pop();
+                    self.ir.push(IrOp::Op(Opcode::CopyLocal {
+                        src_local_idx,
+                        dst_local_idx: local_idx,
                     }));
                     return;
                 }

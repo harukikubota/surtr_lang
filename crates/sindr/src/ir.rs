@@ -147,6 +147,10 @@ pub enum Opcode {
         const_idx: u32,
         local_idx: u32,
     },
+    CopyLocal {
+        src_local_idx: u32,
+        dst_local_idx: u32,
+    },
 }
 
 impl Opcode {
@@ -158,6 +162,7 @@ impl Opcode {
             Self::LoadLocal(..) => "LoadLocal",
             Self::StoreLocal(..) => "StoreLocal",
             Self::StoreConstLocal { .. } => "StoreConstLocal",
+            Self::CopyLocal { .. } => "CopyLocal",
             Self::AddInt => "AddInt",
             Self::SubInt => "SubInt",
             Self::MulInt => "MulInt",
@@ -1749,6 +1754,23 @@ mod tests {
             Opcode::StoreConstLocal {
                 const_idx: 0,
                 local_idx: 0,
+            },
+            Opcode::Halt,
+        ];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_copy_local_opcode() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![
+            Opcode::CopyLocal {
+                src_local_idx: 0,
+                dst_local_idx: 1,
             },
             Opcode::Halt,
         ];

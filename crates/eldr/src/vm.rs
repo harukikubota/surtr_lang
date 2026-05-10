@@ -4930,6 +4930,34 @@ impl VM {
                 *target = val;
             }
 
+            Opcode::CopyLocal {
+                src_local_idx,
+                dst_local_idx,
+            } => {
+                let value = self
+                    .current_frame()?
+                    .locals
+                    .get(src_local_idx as usize)
+                    .cloned()
+                    .ok_or_else(|| {
+                        RuntimeError::new(format!(
+                            "CopyLocal source out of bounds: {}",
+                            src_local_idx
+                        ))
+                    })?;
+                let target = self
+                    .current_frame_mut()?
+                    .locals
+                    .get_mut(dst_local_idx as usize)
+                    .ok_or_else(|| {
+                        RuntimeError::new(format!(
+                            "CopyLocal destination out of bounds: {}",
+                            dst_local_idx
+                        ))
+                    })?;
+                *target = value;
+            }
+
             Opcode::Pop => {
                 self.pop_stack()?;
             }
@@ -6475,6 +6503,29 @@ mod tests {
         bytecode.constants = vec![Constant::Int(int(7))];
         let mut vm = VM::new(bytecode);
         let mut ctx = top_level_context(0, 2);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected one opcode to continue, got {other:?}"),
+        }
+
+        assert_eq!(ctx.pc, 1);
+        assert_eq!(ctx.stack, Vec::<Value>::new());
+        assert_eq!(ctx.frames[0].locals[1], Value::Int(int(7)));
+    }
+
+    #[test]
+    fn copy_local_executes_as_one_opcode() {
+        let bytecode = base_bytecode(vec![
+            Opcode::CopyLocal {
+                src_local_idx: 0,
+                dst_local_idx: 1,
+            },
+            Opcode::Halt,
+        ]);
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 2);
+        ctx.frames[0].locals[0] = Value::Int(int(7));
 
         match vm.step_context(&mut ctx) {
             StepOutcome::Continue => {}
