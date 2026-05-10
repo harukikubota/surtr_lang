@@ -3,7 +3,7 @@
 > 目的: V9 正本でまだ固定していない未解決事項だけを追跡する。
 > 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md`、開発者向け spec は `docs/dev/` 配下を正本とする。`doc/` は draft / input / tmp 置き場として扱う。
 
-最終更新日: 2026-05-06
+最終更新日: 2026-05-10
 
 ---
 
@@ -390,6 +390,27 @@
 - テスト方針:
   - 仕様確定後に Task spawn/link/cancel、worker async init、supervisor 配下 completion の spec fixture を追加する。
   - compile-time 制約を入れる場合は process runtime 系 compile error fixture を増やす。
+
+### OI-024 `File` v2 拡張境界
+
+- 背景:
+  - `File` v1 では `lib/file.srt` の `defmod File` として、UTF-8 text-only の `read` / `write` / `append` / `exists` / `delete` / `with_open` / `read_chunk` / `write_chunk` / `flush` を確定した。
+  - resource lifetime は VM-owned open file table で管理し、`with_open` callback 終了時、VM run 終了時、interactive rollback 時の close を baseline として固定した。
+  - 一方で、binary I/O、directory 操作、metadata、rename/copy、path surface、seek などは v1 から意図的に外している。
+- 未確定点:
+  - `Bytes` もしくは同等の binary surface を導入したうえで binary file API を追加するか
+  - `mkdir`, `read_dir`, `rename`, `copy`, `metadata`, `canonicalize` のような host file-system helper を `File` に含めるか、別 module に分離するか
+  - seek / cursor reposition を user-visible API として許可するか、それとも append/read sequential contract を維持するか
+  - path を単なる `String` のまま扱うか、将来 `Path` 的な dedicated surface を持つか
+  - file permission / mtime / size / kind を user-facing metadata としてどこまで露出するか
+- 受け入れ条件:
+  - v1 の cleanup guarantee と opaque `FileHandle` 契約を壊さずに拡張できる。
+  - `FileOutHandler` の append-only runtime sink と、一般 file-system access の責務境界が docs と実装で混ざらない。
+  - binary / directory / metadata を追加する場合も、`doc/要件定義v9.md`、`docs/dev/EldrVM_spec.md`、`lib/file.srt` の三者で同じ境界を説明できる。
+- テスト方針:
+  - binary surface を導入する場合は `unit/sindr` / `unit/eldr` で runtime value と builtin contract を固定し、`lib/tests/*.srt` では `./tmp/sandbox/` 配下だけを使う。
+  - directory / metadata surface を増やす場合は Rust integration で実ファイル状態を検証しつつ、spec/compile error のどこに置くかを `docs/dev/テスト方針.md` と同期する。
+  - seek や cursor API を導入する場合は rollback / shutdown cleanup と両立することを `eldr` unit test で固定する。
 
 ---
 
