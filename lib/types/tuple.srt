@@ -6,7 +6,6 @@ Tuples with 9 or more elements are not covered by the standard library in this
 version. Define your own `impl Compare for (...)` or nest tuples to stay within
 the provided arity range.
 """
-
 impl Compare for (impl Compare, impl Compare) {
   def compare(self: Self, rhs: Self) -> Ordering {
     match Compare::compare(self._0, rhs._0) {

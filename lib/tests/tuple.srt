@@ -1,0 +1,59 @@
+import Test;
+
+test("Tuple") {
+  describe("zip_with helpers") {
+    it("zip_with2 maps each position with its own function") {
+      left = ("alice", 20)
+      right = ("bob", 18)
+      zipped = zip_with2(
+        left,
+        right,
+        {|a, b| a ++ "/" ++ b},
+        {|a, b| a + b},
+      )
+      assert_eq(("alice/bob", 38), zipped)
+    }
+
+    it("zip_with8 scales to wider tuples") {
+      left = (1, 2, 3, 4, 5, 6, 7, 8)
+      right = (10, 20, 30, 40, 50, 60, 70, 80)
+      zipped = zip_with8(
+        left,
+        right,
+        {|a, b| a + b},
+        {|a, b| a + b},
+        {|a, b| a + b},
+        {|a, b| a + b},
+        {|a, b| a + b},
+        {|a, b| a + b},
+        {|a, b| a + b},
+        {|a, b| a + b},
+      )
+      assert_eq((11, 22, 33, 44, 55, 66, 77, 88), zipped)
+    }
+
+    it("zip_with2_result returns Ok when all mappers succeed") {
+      left = ("alice", 20)
+      right = ("bob", 18)
+      zipped = zip_with2_result(
+        left,
+        right,
+        {|a, b| Ok(a ++ "/" ++ b)},
+        {|a, b| Ok(a + b)},
+      )
+      assert_eq("Ok((\"alice/bob\", 38))", inspect(zipped))
+    }
+
+    it("zip_with2_result propagates mapper errors") {
+      left = ("alice", 20)
+      right = ("bob", 18)
+      zipped = zip_with2_result(
+        left,
+        right,
+        {|a, b| Ok(a ++ "/" ++ b)},
+        {|a, b| if(a > b, Ok(a - b), Err(NoneError))},
+      )
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(zipped))
+    }
+  }
+}

@@ -1,0 +1,15 @@
+pair = zip_with2(
+  ("alice", 20),
+  ("bob", 18),
+  {|a, b| a ++ "/" ++ b},
+  {|a, b| a + b},
+)
+print(inspect(pair))
+
+pair_result = zip_with2_result(
+  ("alice", 20),
+  ("bob", 18),
+  {|a, b| Ok(a ++ "/" ++ b)},
+  {|a, b| Ok(a + b)},
+)
+print(inspect(pair_result))
