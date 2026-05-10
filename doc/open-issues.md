@@ -361,18 +361,22 @@
 
 ### OI-022 Supervisor policy の公開深度
 
+- 状態:
+  - 2026-05-10 に `shutdown_timeout` の `SupervisorStatus` 露出は解決。
+  - `SupervisorStatus.shutdown_timeout: Option<Duration>` とし、未指定は `Option::None`、定義または `supervisor_init` override 指定時は `Option::Some(duration)` を返す。
+  - `supervisor_init` の supervisor policy override は bytecode merge 後も `RuntimeBootPlan.supervisor_overrides` に保持する。
 - 背景:
   - `defsupervisor` では `strategy`, `max_restarts`, `max_seconds`, `child_restart_default`, `allow_adopt`、必要なら `shutdown_timeout` を policy 値として扱う方針である。
-  - ただし `shutdown_timeout` を含む policy の user-facing surface、status 表示、override 深度はまだ十分固定されていない。
+  - `shutdown_timeout` を含む policy の user-facing surface、status 表示、override 深度のうち、status 表示と boot-time override 反映は baseline として固定した。
 - 未確定点:
-  - `shutdown_timeout` を初期フェーズから正式 surface に含めるか
-  - supervisor `status()` や observability で policy 値をどこまで露出するか
-  - boot-time override をどの policy まで許可するか
+  - `child_restart_default` と `shutdown_timeout` 以外の restart semantics を runtime status / observability でどこまで露出するか
+  - boot-time override を将来どの policy まで広げるか
 - 受け入れ条件:
   - compiler-managed supervisor surface と runtime status 表示が同じ policy 集合を前提にできる。
   - policy を追加・露出しても restart semantics の未確定部分を先に固定しなくて済む。
 - テスト方針:
-  - surface 化する policy は `spec/modules/process_supervisor_user_surface` と compile error fixture で固定する。
+  - `shutdown_timeout` の surface は `spec/modules/process_supervisor_user_surface` と `unit/eldr` で固定済み。
+  - 今後 surface 化する policy は `spec/modules/process_supervisor_user_surface` と compile error fixture で固定する。
   - observability へ露出する場合は dump / REPL 表示の形状を integration で固定する。
 
 ### OI-023 Task.Supervisor / Task-DynamicSupervisor link / worker lazy init

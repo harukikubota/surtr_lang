@@ -1895,6 +1895,8 @@ impl VM {
             )));
         };
         let child_count = self.unique_live_supervisor_child_count(&supervisor_name);
+        let shutdown_timeout =
+            self.supervisor_shutdown_timeout_value(policy.shutdown_timeout_ms)?;
         let Some(tag) = self
             .type_registry()
             .entries
@@ -1920,8 +1922,48 @@ impl VM {
                 Value::Int(int(policy.max_restarts as i64)),
                 Value::Int(int(policy.max_seconds as i64)),
                 Value::Bool(policy.allow_adopt),
+                shutdown_timeout,
             ],
         }))
+    }
+
+    fn supervisor_shutdown_timeout_value(
+        &self,
+        timeout_ms: Option<u64>,
+    ) -> Result<Value, RuntimeError> {
+        let Some(none_tag) = self.type_registry().tag_by_name("Option::None") else {
+            return Err(RuntimeError::new(
+                "Option::None type is not registered for SupervisorStatus",
+            ));
+        };
+        let Some(some_tag) = self.type_registry().tag_by_name("Option::Some") else {
+            return Err(RuntimeError::new(
+                "Option::Some type is not registered for SupervisorStatus",
+            ));
+        };
+        match timeout_ms {
+            Some(ms) => {
+                let Some(duration_tag) = self.type_registry().tag_by_name("Duration") else {
+                    return Err(RuntimeError::new(
+                        "Duration type is not registered for SupervisorStatus",
+                    ));
+                };
+                Ok(Value::Tagged {
+                    tag: some_tag,
+                    fields: vec![
+                        Value::Int(int(1)),
+                        Value::Tagged {
+                            tag: duration_tag,
+                            fields: vec![Value::Int(int(ms))],
+                        },
+                    ],
+                })
+            }
+            None => Ok(Value::Tagged {
+                tag: none_tag,
+                fields: vec![Value::Int(int(0))],
+            }),
+        }
     }
 
     pub(crate) fn supervisor_workers(
@@ -5938,8 +5980,30 @@ mod tests {
                 "max_restarts".into(),
                 "max_seconds".into(),
                 "allow_adopt".into(),
+                "shutdown_timeout".into(),
             ],
-            private_flags: vec![false; 6],
+            private_flags: vec![false; 7],
+        });
+        registry.register(TypeEntry {
+            tag: 11,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: vec![true],
+        });
+        registry.register(TypeEntry {
+            tag: 12,
+            name: "Option::None".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: Vec::new(),
+            private_flags: Vec::new(),
+        });
+        registry.register(TypeEntry {
+            tag: 13,
+            name: "Option::Some".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: vec!["value".into()],
+            private_flags: vec![false],
         });
         registry
     }
@@ -6329,6 +6393,83 @@ mod tests {
         match decode_vm_result(value, "test", "status") {
             Ok(Ok(Value::Tagged { fields, .. })) => {
                 assert_eq!(fields.get(1), Some(&Value::Int(int(1))));
+            }
+            other => panic!("expected Ok(SupervisorStatus), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn supervisor_status_reports_missing_shutdown_timeout_as_option_none() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry = supervisor_status_type_registry();
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![supervisor_spec(0, "MySup")],
+        };
+        let mut vm = VM::new(bytecode);
+
+        let value = vm
+            .supervisor_status("MySup".into())
+            .expect("status should return Result");
+
+        match decode_vm_result(value, "test", "status") {
+            Ok(Ok(Value::Tagged { fields, .. })) => {
+                assert_eq!(
+                    fields.get(6),
+                    Some(&Value::Tagged {
+                        tag: 12,
+                        fields: vec![Value::Int(int(0))],
+                    })
+                );
+            }
+            other => panic!("expected Ok(SupervisorStatus), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn supervisor_status_reports_configured_shutdown_timeout_as_option_duration() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry = supervisor_status_type_registry();
+        let mut policy = allow_adopt_policy();
+        policy.shutdown_timeout_ms = Some(250);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![RuntimeProcessSpec {
+                supervision: RuntimeSupervisionSpec {
+                    policy: Some(policy),
+                    ..RuntimeSupervisionSpec::default()
+                },
+                ..test_runtime_process_spec(
+                    0,
+                    "MySup",
+                    RuntimeProcessKind::Supervisor,
+                    RuntimeProcessInstance::Singleton,
+                    false,
+                    0,
+                    1,
+                    None,
+                )
+            }],
+        };
+        let mut vm = VM::new(bytecode);
+
+        let value = vm
+            .supervisor_status("MySup".into())
+            .expect("status should return Result");
+
+        match decode_vm_result(value, "test", "status") {
+            Ok(Ok(Value::Tagged { fields, .. })) => {
+                assert_eq!(
+                    fields.get(6),
+                    Some(&Value::Tagged {
+                        tag: 13,
+                        fields: vec![
+                            Value::Int(int(1)),
+                            Value::Tagged {
+                                tag: 11,
+                                fields: vec![Value::Int(int(250))],
+                            },
+                        ],
+                    })
+                );
             }
             other => panic!("expected Ok(SupervisorStatus), got {other:?}"),
         }

@@ -8,6 +8,7 @@ defstruct SupervisorStatus {
   max_restarts: Int,
   max_seconds: Int,
   allow_adopt: Boolean,
+  shutdown_timeout: Option<Duration>,
 }
 
 impl SupervisorStatus {
@@ -26,6 +27,7 @@ impl SupervisorStatus {
     max_restarts: Int,
     max_seconds: Int,
     allow_adopt: Boolean,
+    shutdown_timeout: Option<Duration>,
   ) -> Self {
     SupervisorStatus {
       supervisor: supervisor,
@@ -34,6 +36,7 @@ impl SupervisorStatus {
       max_restarts: max_restarts,
       max_seconds: max_seconds,
       allow_adopt: allow_adopt,
+      shutdown_timeout: shutdown_timeout,
     }
   }
 }
