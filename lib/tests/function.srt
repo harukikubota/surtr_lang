@@ -71,7 +71,7 @@ test("Function") {
 
   describe("bothN helpers") {
     it("both3 returns a flat triple") {
-      summary = both3(&String::len, {|text: String| text ++ "!"}, {|text: String| text ++ "?"})
+      summary = Tuple::both3(&String::len, {|text: String| text ++ "!"}, {|text: String| text ++ "?"})
       assert_eq((3, "abc!", "abc?"), summary("abc"))
     }
 
@@ -82,7 +82,7 @@ test("Function") {
         (1, 5, 20),
         (1, 5, 10),
       ]
-      sorted = List::sort_by(users, &compare `on` both3(
+      sorted = List::sort_by(users, &compare `on` Tuple::both3(
         {|user: (Int, Int, Int)| user._0},
         {|user: (Int, Int, Int)| user._1},
         {|user: (Int, Int, Int)| user._2},

@@ -116,6 +116,15 @@ defmod Kernel {
   @builtin def is_match(value: $A, pattern: $Pattern) -> Boolean
 
   @doc """
+  Duplicate one value into a pair.
+
+  ## REPL
+  xldr(1)> dup(7)
+  (7, 7)
+  """
+  def dup(value: $A) -> ($A, $A) { (value, value) }
+
+  @doc """
   Logical conjunction with short-circuit evaluation.
 
   The declared type is:

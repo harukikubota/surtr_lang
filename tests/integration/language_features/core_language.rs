@@ -420,7 +420,7 @@ print(to_string(apply(&id, 42)))
 print(to_string(flipped_sub(2, 10)))
 print(to_string(by_len("ab", "c")))
 
-name_score = both(&String::len, {|text: String| text ++ "!"})
+name_score = Tuple::both(&String::len, {|text: String| text ++ "!"})
 print(inspect(name_score("abc")))
 
 users = [
@@ -429,15 +429,15 @@ users = [
   (1, 5, 20),
   (1, 5, 10),
 ]
-by_user = &compare `Function::on` both3(
+by_user = &compare `Function::on` Tuple::both3(
 {|user: (Int, Int, Int)| user._0},
 {|user: (Int, Int, Int)| user._1},
 {|user: (Int, Int, Int)| user._2}
 )
 print(inspect(List::sort_by(users, by_user)))
 
-show_first = first({|num: Int| to_string(num)})
-len_second = second(&String::len)
+show_first = Tuple::first({|num: Int| to_string(num)})
+len_second = Tuple::second(&String::len)
 print(inspect(dup(7)))
 print(inspect(show_first((10, "ok"))))
 print(inspect(len_second((10, "four"))))
