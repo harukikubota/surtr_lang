@@ -117,6 +117,9 @@ users |*> &User.name
 `_.path` は standalone の Facet 値ではありません。文脈から source 型を推論できない
 場所では compile error になります。
 
+- 文脈で source 型が決まるなら `_.name`
+- source 型も source 上で明示したいなら `&User.name`
+
 ## `&Type.path` explicit capture
 
 `&User.name` は type-root の FacetPath を unary capture として使う明示形です。

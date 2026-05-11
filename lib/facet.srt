@@ -18,6 +18,7 @@ conversion.
 Common path forms:
 
 - struct / record field: `User.name`
+- inferred unary capture from context: `_.name`
 - explicit type-root capture in unary function context: `&User.name`
 - tuple field: `Tuple._0`, `Tuple._1`, ...
 - nested path: `User.profile / Profile.name`, `User.profile.name`
@@ -27,11 +28,17 @@ Common path forms:
 - shorthand source/path capture: `~value.segment`
 
 `User.name` is the Facet path itself.
+`_.name` infers the source type from unary function context and uses the same
+field / Facet traversal rules.
 `&User.name` captures that type-root path as a unary function when a callable
 such as `(User -> String)` is expected.
 For example:
 
+`users |*> _.name`
 `users |*> &User.name`
+
+Use `_.path` when the surrounding context already determines the source type.
+Use `&Type.path` when you want to make that source type explicit in the code.
 
 `~value.segment` is compiler-managed shorthand that expands to a source value and
 structural path when consumed by `Facet::view/preview/replace/set/over/over_result`.
