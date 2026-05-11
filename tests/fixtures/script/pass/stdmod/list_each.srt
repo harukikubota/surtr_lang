@@ -1,0 +1,1 @@
+List::each([1, 2, 3], {|n| print("item:#{to_string(n)}")})
