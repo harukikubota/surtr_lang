@@ -209,6 +209,82 @@ fn dump_peephole_candidates_lists_branch_fusion_opportunities() {
 }
 
 #[test]
+fn dump_peephole_candidates_include_operand_details() {
+    let fixture = repo_root().join("tests/fixtures/script/pass/stdmod/result_helpers.srt");
+    let dump = surtr_command()
+        .args([
+            "dump",
+            fixture.to_str().expect("fixture path must be utf-8"),
+            "--format",
+            "json",
+            "--peephole-candidates",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    let item = json["peephole_candidates"]["items"]
+        .as_array()
+        .expect("items must be an array")
+        .iter()
+        .find(|item| item["kind"] == "branch_fusion")
+        .expect("expected a branch_fusion candidate");
+    let operands = item["operands"]
+        .as_array()
+        .expect("operands must be an array");
+    assert_eq!(operands.len(), 2);
+    assert_eq!(operands[0]["opcode"], "EqLocalTag");
+    assert!(operands[0]["local_idx"].as_u64().is_some());
+    assert!(operands[0]["tag_const_idx"].as_u64().is_some());
+    assert!(operands[1]["opcode"] == "JumpIfFalse" || operands[1]["opcode"] == "JumpIfTrue");
+    assert!(operands[1]["target"].as_u64().is_some());
+}
+
+#[test]
+fn dump_opcode_histogram_includes_function_summary() {
+    let fixture = repo_root().join("tests/fixtures/script/pass/stdmod/result_helpers.srt");
+    let dump = surtr_command()
+        .args([
+            "dump",
+            fixture.to_str().expect("fixture path must be utf-8"),
+            "--format",
+            "json",
+            "--opcode-histogram",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    assert!(
+        json["function_summary"]["summary"]["generated_function_count"]
+            .as_u64()
+            .is_some()
+    );
+    let functions = json["function_summary"]["functions"]
+        .as_array()
+        .expect("functions must be an array");
+    assert!(!functions.is_empty());
+    let first = &functions[0];
+    assert!(first["fun_idx"].as_u64().is_some());
+    assert!(first["name"].as_str().is_some());
+    assert!(first["opcode_count"].as_u64().is_some());
+    assert!(first["opcode_histogram"].as_object().is_some());
+    assert!(first["call_counts"]["call_closure"].as_u64().is_some());
+}
+
+#[test]
 fn dump_outputs_runtime_process_specs_for_agent_modules() {
     let fixture = module_spec_fixtures()
         .into_iter()

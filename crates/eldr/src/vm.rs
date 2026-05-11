@@ -203,6 +203,14 @@ pub struct VmObservationOptions {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VmBranchStats {
+    pub jump_if_true_taken: usize,
+    pub jump_if_true_not_taken: usize,
+    pub jump_if_false_taken: usize,
+    pub jump_if_false_not_taken: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VmStats {
     pub executed_opcodes: usize,
     pub per_opcode: BTreeMap<String, usize>,
@@ -213,6 +221,7 @@ pub struct VmStats {
     pub closure_calls: usize,
     pub return_count: usize,
     pub tail_calls_optimized: usize,
+    pub branch: VmBranchStats,
     pub process: VmProcessCounters,
 }
 
@@ -392,6 +401,22 @@ impl VmObserver {
     fn record_call_event(&mut self, kind: &str, line: String) {
         if self.options.trace_calls && self.trace_enabled_for(kind) {
             self.push_trace(line);
+        }
+    }
+
+    fn record_branch_outcome(&mut self, kind: &str, pc: usize, target: u32, taken: bool) {
+        match (kind, taken) {
+            ("JumpIfTrue", true) => self.stats.branch.jump_if_true_taken += 1,
+            ("JumpIfTrue", false) => self.stats.branch.jump_if_true_not_taken += 1,
+            ("JumpIfFalse", true) => self.stats.branch.jump_if_false_taken += 1,
+            ("JumpIfFalse", false) => self.stats.branch.jump_if_false_not_taken += 1,
+            _ => {}
+        }
+        if self.options.trace_opcodes && self.trace_enabled_for(kind) {
+            self.push_trace(format!(
+                "branch pc={} opcode={} target={} taken={}",
+                pc, kind, target, taken
+            ));
         }
     }
 }
@@ -3617,6 +3642,12 @@ impl VM {
         }
     }
 
+    fn observe_branch_outcome(&mut self, kind: &str, pc: usize, target: u32, taken: bool) {
+        if let Some(observer) = self.observer.as_mut() {
+            observer.record_branch_outcome(kind, pc, target, taken);
+        }
+    }
+
     fn capture_execution_context(
         &self,
         pc: usize,
@@ -5647,24 +5678,32 @@ impl VM {
                 *pc = self.validate_jump_target(addr)?;
             }
             Opcode::JumpIfFalse(addr) => {
+                let branch_pc = (*pc).saturating_sub(1);
                 let val = self.pop_stack()?;
                 match val {
                     Value::Bool(false) => {
+                        self.observe_branch_outcome("JumpIfFalse", branch_pc, addr, true);
                         *pc = self.validate_jump_target(addr)?;
                     }
-                    Value::Bool(true) => {}
+                    Value::Bool(true) => {
+                        self.observe_branch_outcome("JumpIfFalse", branch_pc, addr, false);
+                    }
                     _ => {
                         return Err(RuntimeError::new("JumpIfFalse: expected Bool"));
                     }
                 }
             }
             Opcode::JumpIfTrue(addr) => {
+                let branch_pc = (*pc).saturating_sub(1);
                 let val = self.pop_stack()?;
                 match val {
                     Value::Bool(true) => {
+                        self.observe_branch_outcome("JumpIfTrue", branch_pc, addr, true);
                         *pc = self.validate_jump_target(addr)?;
                     }
-                    Value::Bool(false) => {}
+                    Value::Bool(false) => {
+                        self.observe_branch_outcome("JumpIfTrue", branch_pc, addr, false);
+                    }
                     _ => {
                         return Err(RuntimeError::new("JumpIfTrue: expected Bool"));
                     }
