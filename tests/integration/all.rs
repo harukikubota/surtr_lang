@@ -11,8 +11,6 @@ mod module_import_fixtures;
 mod namespaces;
 #[path = "private_visibility.rs"]
 mod private_visibility;
-#[path = "process_examples.rs"]
-mod process_examples;
 #[path = "repl.rs"]
 mod repl;
 #[path = "run_eldr.rs"]

@@ -13,7 +13,8 @@ use support::*;
 
 const PROCESS_MODULE_SOURCE: &str = include_str!("../../../lib/process.srt");
 
-const SURFACE_WORKER_COUNT: usize = 8;
+const SURFACE_WORKER_COUNT: usize = 1;
+const SURFACE_BUCKET_COUNT: usize = 32;
 
 const SURFACE_CASES: &[(&str, fn())] = &[
     (
@@ -864,12 +865,65 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     ),
 ];
 
-#[test]
-fn typecheck_surface_suite() {
-    run_surface_cases_parallel();
+macro_rules! surface_bucket_test {
+    ($name:ident, $bucket:expr) => {
+        #[test]
+        fn $name() {
+            run_surface_case_bucket($bucket, SURFACE_BUCKET_COUNT);
+        }
+    };
 }
 
-fn run_surface_cases_parallel() {
+surface_bucket_test!(typecheck_surface_bucket_0, 0);
+surface_bucket_test!(typecheck_surface_bucket_1, 1);
+surface_bucket_test!(typecheck_surface_bucket_2, 2);
+surface_bucket_test!(typecheck_surface_bucket_3, 3);
+surface_bucket_test!(typecheck_surface_bucket_4, 4);
+surface_bucket_test!(typecheck_surface_bucket_5, 5);
+surface_bucket_test!(typecheck_surface_bucket_6, 6);
+surface_bucket_test!(typecheck_surface_bucket_7, 7);
+surface_bucket_test!(typecheck_surface_bucket_8, 8);
+surface_bucket_test!(typecheck_surface_bucket_9, 9);
+surface_bucket_test!(typecheck_surface_bucket_10, 10);
+surface_bucket_test!(typecheck_surface_bucket_11, 11);
+surface_bucket_test!(typecheck_surface_bucket_12, 12);
+surface_bucket_test!(typecheck_surface_bucket_13, 13);
+surface_bucket_test!(typecheck_surface_bucket_14, 14);
+surface_bucket_test!(typecheck_surface_bucket_15, 15);
+surface_bucket_test!(typecheck_surface_bucket_16, 16);
+surface_bucket_test!(typecheck_surface_bucket_17, 17);
+surface_bucket_test!(typecheck_surface_bucket_18, 18);
+surface_bucket_test!(typecheck_surface_bucket_19, 19);
+surface_bucket_test!(typecheck_surface_bucket_20, 20);
+surface_bucket_test!(typecheck_surface_bucket_21, 21);
+surface_bucket_test!(typecheck_surface_bucket_22, 22);
+surface_bucket_test!(typecheck_surface_bucket_23, 23);
+surface_bucket_test!(typecheck_surface_bucket_24, 24);
+surface_bucket_test!(typecheck_surface_bucket_25, 25);
+surface_bucket_test!(typecheck_surface_bucket_26, 26);
+surface_bucket_test!(typecheck_surface_bucket_27, 27);
+surface_bucket_test!(typecheck_surface_bucket_28, 28);
+surface_bucket_test!(typecheck_surface_bucket_29, 29);
+surface_bucket_test!(typecheck_surface_bucket_30, 30);
+surface_bucket_test!(typecheck_surface_bucket_31, 31);
+
+fn run_surface_case_bucket(bucket: usize, bucket_count: usize) {
+    assert!(bucket_count > 0, "bucket_count must be positive");
+    assert!(
+        bucket < bucket_count,
+        "bucket {bucket} out of range {bucket_count}"
+    );
+
+    let case_indices = SURFACE_CASES
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, _)| (idx % bucket_count == bucket).then_some(idx))
+        .collect::<Vec<_>>();
+    assert!(
+        !case_indices.is_empty(),
+        "no scar surface cases assigned to bucket {bucket} of {bucket_count}"
+    );
+
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
 
@@ -883,7 +937,10 @@ fn run_surface_cases_parallel() {
                 if failed.load(Ordering::Relaxed) {
                     break;
                 }
-                let idx = next_case.fetch_add(1, Ordering::Relaxed);
+                let position = next_case.fetch_add(1, Ordering::Relaxed);
+                let Some(idx) = case_indices.get(position).copied() else {
+                    break;
+                };
                 let Some((name, case)) = SURFACE_CASES.get(idx) else {
                     break;
                 };
@@ -904,8 +961,10 @@ fn run_surface_cases_parallel() {
     let failures = failures.into_inner().expect("failure lock");
     if !failures.is_empty() {
         panic!(
-            "{} scar surface case(s) failed:\n{}",
+            "{} scar surface case(s) failed in bucket {}/{}:\n{}",
             failures.len(),
+            bucket,
+            bucket_count,
             failures.join("\n")
         );
     }
