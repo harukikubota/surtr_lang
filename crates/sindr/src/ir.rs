@@ -161,6 +161,18 @@ pub enum Opcode {
     StringContains,
     StringStartsWith,
     StringEndsWith,
+    MakeOk,
+    MakeErr,
+    JumpIfLocalTagEq {
+        local_idx: u32,
+        tag_const_idx: u32,
+        target_pc: u32,
+    },
+    JumpIfLocalTagNe {
+        local_idx: u32,
+        tag_const_idx: u32,
+        target_pc: u32,
+    },
 }
 
 impl Opcode {
@@ -180,6 +192,10 @@ impl Opcode {
             Self::StringContains => "StringContains",
             Self::StringStartsWith => "StringStartsWith",
             Self::StringEndsWith => "StringEndsWith",
+            Self::MakeOk => "MakeOk",
+            Self::MakeErr => "MakeErr",
+            Self::JumpIfLocalTagEq { .. } => "JumpIfLocalTagEq",
+            Self::JumpIfLocalTagNe { .. } => "JumpIfLocalTagNe",
             Self::AddInt => "AddInt",
             Self::SubInt => "SubInt",
             Self::MulInt => "MulInt",
@@ -1805,6 +1821,57 @@ mod tests {
             Opcode::EqLocalTag {
                 local_idx: 0,
                 tag_const_idx: 0,
+            },
+            Opcode::Halt,
+        ];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_result_branch_opcode_batch() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.constants = vec![Constant::Tag(0), Constant::Tag(1)];
+        bytecode.opcodes = vec![
+            Opcode::JumpIfLocalTagEq {
+                local_idx: 0,
+                tag_const_idx: 0,
+                target_pc: 3,
+            },
+            Opcode::JumpIfLocalTagNe {
+                local_idx: 0,
+                tag_const_idx: 1,
+                target_pc: 4,
+            },
+            Opcode::Halt,
+            Opcode::Halt,
+            Opcode::Halt,
+        ];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_result_and_local_tag_jump_opcodes() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![
+            Opcode::MakeOk,
+            Opcode::MakeErr,
+            Opcode::JumpIfLocalTagEq {
+                local_idx: 1,
+                tag_const_idx: 0,
+                target_pc: 4,
+            },
+            Opcode::JumpIfLocalTagNe {
+                local_idx: 2,
+                tag_const_idx: 1,
+                target_pc: 5,
             },
             Opcode::Halt,
         ];

@@ -175,7 +175,7 @@ fn dump_opcode_histogram_adds_static_opcode_counts() {
 }
 
 #[test]
-fn dump_peephole_candidates_lists_branch_fusion_opportunities() {
+fn dump_peephole_candidates_reports_remaining_branch_fusion_opportunities() {
     let fixture = repo_root().join("tests/fixtures/script/pass/stdmod/result_helpers.srt");
     let dump = surtr_command()
         .args([
@@ -200,7 +200,7 @@ fn dump_peephole_candidates_lists_branch_fusion_opportunities() {
             .as_u64()
             .unwrap_or(0)
             > 0,
-        "expected branch-fusion candidates in result_helpers dump: {json}"
+        "expected remaining branch-fusion candidates in result_helpers dump: {json}"
     );
     let first = &json["peephole_candidates"]["items"][0];
     assert!(first["pc"].as_u64().is_some());
@@ -282,6 +282,55 @@ fn dump_opcode_histogram_includes_function_summary() {
     assert!(first["opcode_count"].as_u64().is_some());
     assert!(first["opcode_histogram"].as_object().is_some());
     assert!(first["call_counts"]["call_closure"].as_u64().is_some());
+}
+
+#[test]
+fn dump_opcode_histogram_tracks_result_branch_opcode_batch() {
+    let fixture = repo_root().join("tests/fixtures/script/pass/stdmod/result_helpers.srt");
+    let dump = surtr_command()
+        .args([
+            "dump",
+            fixture.to_str().expect("fixture path must be utf-8"),
+            "--format",
+            "json",
+            "--opcode-histogram",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    assert!(
+        json["opcode_histogram"]["JumpIfLocalTagEq"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "expected JumpIfLocalTagEq histogram entries in result_helpers dump: {json}"
+    );
+    assert!(
+        json["opcode_histogram"]["JumpIfLocalTagNe"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "expected JumpIfLocalTagNe histogram entries in result_helpers dump: {json}"
+    );
+    assert!(
+        json["optimization_summary"]["compressed_opcodes"]["JumpIfLocalTagEq"]["count"]
+            .as_u64()
+            .is_some(),
+        "expected JumpIfLocalTagEq optimization summary entry: {json}"
+    );
+    assert!(
+        json["optimization_summary"]["compressed_opcodes"]["JumpIfLocalTagNe"]["count"]
+            .as_u64()
+            .is_some(),
+        "expected JumpIfLocalTagNe optimization summary entry: {json}"
+    );
 }
 
 #[test]
