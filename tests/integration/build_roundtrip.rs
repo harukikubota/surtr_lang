@@ -2,7 +2,9 @@ use crate::common::{
     module_spec_fixtures, repo_root, surtr_command, unique_temp_dir, write_source,
 };
 use crate::support;
+use forge::bytecode::{Bytecode, Constant};
 use serde_json::Value;
+use sindr::ir::Opcode;
 use std::fs;
 
 #[test]
@@ -199,22 +201,35 @@ fn dump_peephole_candidates_reports_remaining_branch_fusion_opportunities() {
         json["peephole_candidates"]["summary"]["branch_fusion"]
             .as_u64()
             .unwrap_or(0)
-            > 0,
-        "expected remaining branch-fusion candidates in result_helpers dump: {json}"
+            == 0,
+        "expected no remaining branch-fusion candidates in result_helpers dump: {json}"
     );
-    let first = &json["peephole_candidates"]["items"][0];
-    assert!(first["pc"].as_u64().is_some());
-    assert!(first["function"].is_string() || first["function"].is_null());
-    assert!(first["opcode_window"].as_array().is_some());
+    assert!(
+        json["peephole_candidates"]["items"]
+            .as_array()
+            .is_some_and(|items| items.is_empty()),
+        "expected no remaining peephole candidates in result_helpers dump: {json}"
+    );
 }
 
 #[test]
 fn dump_peephole_candidates_include_operand_details() {
-    let fixture = repo_root().join("tests/fixtures/script/pass/stdmod/result_helpers.srt");
+    let temp = unique_temp_dir("surtr_dump_peephole_operand_details");
+    let eldr_path = temp.join("candidate.eldr");
+    let mut bytecode = Bytecode::default();
+    bytecode.constants = vec![Constant::Bool(true)];
+    bytecode.num_locals = 1;
+    bytecode.opcodes = vec![Opcode::LoadConst(0), Opcode::StoreLocal(0), Opcode::Halt];
+    fs::write(
+        &eldr_path,
+        bytecode.encode().expect("bytecode should encode"),
+    )
+    .expect("failed to write candidate bytecode");
+
     let dump = surtr_command()
         .args([
             "dump",
-            fixture.to_str().expect("fixture path must be utf-8"),
+            eldr_path.to_str().expect("eldr path must be utf-8"),
             "--format",
             "json",
             "--peephole-candidates",
@@ -233,17 +248,22 @@ fn dump_peephole_candidates_include_operand_details() {
         .as_array()
         .expect("items must be an array")
         .iter()
-        .find(|item| item["kind"] == "branch_fusion")
-        .expect("expected a branch_fusion candidate");
+        .find(|item| item["kind"] == "load_const_store_local")
+        .expect("expected a load_const_store_local candidate");
+    assert!(item["pc"].as_u64().is_some());
+    assert!(item["function"].is_null());
+    assert_eq!(item["opcode_window"], serde_json::json!(["LoadConst", "StoreLocal"]));
     let operands = item["operands"]
         .as_array()
         .expect("operands must be an array");
     assert_eq!(operands.len(), 2);
-    assert_eq!(operands[0]["opcode"], "EqLocalTag");
-    assert!(operands[0]["local_idx"].as_u64().is_some());
-    assert!(operands[0]["tag_const_idx"].as_u64().is_some());
-    assert!(operands[1]["opcode"] == "JumpIfFalse" || operands[1]["opcode"] == "JumpIfTrue");
-    assert!(operands[1]["target"].as_u64().is_some());
+    assert_eq!(operands[0]["opcode"], "LoadConst");
+    assert_eq!(operands[0]["const_idx"], 0);
+    assert_eq!(operands[0]["constant"], "Bool(true)");
+    assert_eq!(operands[1]["opcode"], "StoreLocal");
+    assert_eq!(operands[1]["local_idx"], 0);
+
+    let _ = fs::remove_dir_all(temp);
 }
 
 #[test]

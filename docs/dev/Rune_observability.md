@@ -239,12 +239,16 @@ runtime error または `run` entrypoint が返した `Err(...)` の表示に以
 
 ### 3.9 `--peephole-candidates`
 
-`dump --format json` の出力に、既存または次候補の peephole 最適化に一致する
+`dump --format json` の出力に、現在の lowering 後にも残っている peephole 最適化候補に一致する
 opcode window を追加する。各候補は `pc` / `function` / `source` /
 `opcode_window` / `operands` を持つ。主用途は VM 命令圧縮の次手を選ぶための静的レポートであり、
 実行意味には影響しない。
 
 `operands` は window 内 opcode の機械可読な operand summary である。
+すでに専用 opcode へ畳み込み済みの箇所は候補としては現れない。たとえば
+`EqLocalTag + JumpIfFalse/JumpIfTrue` が `JumpIfLocalTagEq/JumpIfLocalTagNe` へ
+lowering 済みの場合、`branch_fusion` は報告されず、専用 opcode の出現数は
+`--opcode-histogram` / `optimization_summary` 側で観測する。
 
 ```json
 {
