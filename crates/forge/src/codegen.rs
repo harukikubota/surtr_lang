@@ -1390,6 +1390,12 @@ fn relocate_base_ops_for_insert(
             {
                 *addr = add_u32(*addr, inserted_len, "base jump relocation")?;
             }
+            Opcode::JumpIfLocalTagEq { target_pc, .. }
+            | Opcode::JumpIfLocalTagNe { target_pc, .. }
+                if *target_pc as usize >= insertion_pc =>
+            {
+                *target_pc = add_u32(*target_pc, inserted_len, "base jump relocation")?;
+            }
             _ => {}
         }
     }
@@ -1437,6 +1443,24 @@ fn relocate_chunk_ops_for_artifact(
     })?;
     for op in opcodes {
         match op {
+            Opcode::JumpIfLocalTagEq {
+                tag_const_idx,
+                target_pc,
+                ..
+            }
+            | Opcode::JumpIfLocalTagNe {
+                tag_const_idx,
+                target_pc,
+                ..
+            } => {
+                *target_pc = map_chunk_pc(*target_pc, chunk_halt, base_top_len, chunk_func_base)?;
+                *tag_const_idx = tag_const_idx.checked_add(const_base).ok_or_else(|| {
+                    CodegenError {
+                        message: "chunk const relocation overflow".into(),
+                        span: Span { start: 0, end: 0 },
+                    }
+                })?;
+            }
             Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
                 *addr = map_chunk_pc(*addr, chunk_halt, base_top_len, chunk_func_base)?;
             }
@@ -1849,6 +1873,26 @@ fn localize_chunk_indices(
 ) -> Result<(), CodegenError> {
     for op in opcodes.iter_mut() {
         match op {
+            Opcode::JumpIfLocalTagEq {
+                tag_const_idx,
+                ..
+            }
+            | Opcode::JumpIfLocalTagNe {
+                tag_const_idx,
+                ..
+            } => {
+                let idx_usize = *tag_const_idx as usize;
+                if idx_usize < const_base {
+                    return Err(CodegenError {
+                        message: format!(
+                            "chunk constant index {} is below base {}",
+                            idx_usize, const_base
+                        ),
+                        span: Span { start: 0, end: 0 },
+                    });
+                }
+                *tag_const_idx -= const_base as u32;
+            }
             Opcode::LoadConst(idx)
             | Opcode::StoreConstLocal { const_idx: idx, .. }
             | Opcode::EqLocalTag {
@@ -2031,13 +2075,12 @@ mod tests {
         assert!(opcodes
             .iter()
             .any(|opcode| matches!(opcode, Opcode::JumpIfFalse(_))));
-        assert!(
-            opcodes
-                .iter()
-                .filter(|opcode| matches!(opcode, Opcode::StructNew { field_count: 1 }))
-                .count()
-                >= 2
-        );
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::MakeOk)));
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::MakeErr)));
     }
 
     #[test]
@@ -2184,6 +2227,53 @@ mod tests {
                 tag_const_idx: tag_const,
             }]
         );
+    }
+
+    #[test]
+    fn emit_local_tag_branch_fuses_to_dedicated_jump_opcodes() {
+        let mut gene = Codegen::new();
+        let tag_const = gene.add_constant(Constant::Tag(1));
+        let false_label = gene.fresh_label();
+        let true_label = gene.fresh_label();
+
+        gene.emit(Opcode::LoadLocal(2));
+        gene.emit(Opcode::GetTag);
+        gene.emit(Opcode::LoadConst(tag_const));
+        gene.emit(Opcode::EqTag);
+        gene.emit_jump_if_false(false_label);
+        gene.patch_label(false_label);
+
+        gene.emit(Opcode::LoadLocal(3));
+        gene.emit(Opcode::GetTag);
+        gene.emit(Opcode::LoadConst(tag_const));
+        gene.emit(Opcode::EqTag);
+        gene.emit_jump_if_true(true_label);
+        gene.patch_label(true_label);
+
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::JumpIfLocalTagNe {
+                local_idx: 2,
+                tag_const_idx,
+                ..
+            } if *tag_const_idx == tag_const
+        )));
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::JumpIfLocalTagEq {
+                local_idx: 3,
+                tag_const_idx,
+                ..
+            } if *tag_const_idx == tag_const
+        )));
+        assert!(!opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::EqLocalTag { .. })));
+        assert!(!opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::JumpIfFalse(_) | Opcode::JumpIfTrue(_))));
     }
 
     #[test]
@@ -2797,6 +2887,16 @@ enum IrOp {
     JumpIfFalseLabel(Label),
     /// Jump-if-true to label
     JumpIfTrueLabel(Label),
+    JumpIfLocalTagEqLabel {
+        local_idx: u32,
+        tag_const_idx: u32,
+        label: Label,
+    },
+    JumpIfLocalTagNeLabel {
+        local_idx: u32,
+        tag_const_idx: u32,
+        label: Label,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -3482,10 +3582,40 @@ impl Codegen {
     }
 
     fn emit_jump_if_false(&mut self, label: Label) {
+        if let Some(IrOp::Op(Opcode::EqLocalTag {
+            local_idx,
+            tag_const_idx,
+        })) = self.ir.last()
+        {
+            let local_idx = *local_idx;
+            let tag_const_idx = *tag_const_idx;
+            self.ir.pop();
+            self.ir.push(IrOp::JumpIfLocalTagNeLabel {
+                local_idx,
+                tag_const_idx,
+                label,
+            });
+            return;
+        }
         self.ir.push(IrOp::JumpIfFalseLabel(label));
     }
 
     fn emit_jump_if_true(&mut self, label: Label) {
+        if let Some(IrOp::Op(Opcode::EqLocalTag {
+            local_idx,
+            tag_const_idx,
+        })) = self.ir.last()
+        {
+            let local_idx = *local_idx;
+            let tag_const_idx = *tag_const_idx;
+            self.ir.pop();
+            self.ir.push(IrOp::JumpIfLocalTagEqLabel {
+                local_idx,
+                tag_const_idx,
+                label,
+            });
+            return;
+        }
         self.ir.push(IrOp::JumpIfTrueLabel(label));
     }
 
@@ -6567,27 +6697,21 @@ impl Codegen {
     }
 
     fn emit_ok_unit_result(&mut self) -> Result<(), CodegenError> {
-        let ok_tag = self.add_constant(Constant::Tag(0));
         let unit_idx = self.add_constant(Constant::Unit);
-        self.emit(Opcode::LoadConst(ok_tag));
         self.emit(Opcode::LoadConst(unit_idx));
-        self.emit(Opcode::StructNew { field_count: 1 });
+        self.emit(Opcode::MakeOk);
         Ok(())
     }
 
     fn emit_ok_result_local(&mut self, slot: u32) -> Result<(), CodegenError> {
-        let ok_tag = self.add_constant(Constant::Tag(0));
-        self.emit(Opcode::LoadConst(ok_tag));
         self.emit(Opcode::LoadLocal(slot));
-        self.emit(Opcode::StructNew { field_count: 1 });
+        self.emit(Opcode::MakeOk);
         Ok(())
     }
 
     fn emit_err_result_value(&mut self, err: &TypedNode) -> Result<(), CodegenError> {
-        let err_tag = self.add_constant(Constant::Tag(1));
-        self.emit(Opcode::LoadConst(err_tag));
         self.emit_node(err)?;
-        self.emit(Opcode::StructNew { field_count: 1 });
+        self.emit(Opcode::MakeErr);
         Ok(())
     }
 
@@ -7112,6 +7236,50 @@ impl Codegen {
                                 span: Span { start: 0, end: 0 },
                             })? as u32;
                     opcodes.push(Opcode::JumpIfTrue(pos));
+                }
+                IrOp::JumpIfLocalTagEqLabel {
+                    local_idx,
+                    tag_const_idx,
+                    label,
+                } => {
+                    let pos =
+                        self.label_positions
+                            .get(label)
+                            .copied()
+                            .ok_or_else(|| CodegenError {
+                                message: format!(
+                                    "unresolved jump-if-local-tag-eq label {:?}",
+                                    label
+                                ),
+                                span: Span { start: 0, end: 0 },
+                            })? as u32;
+                    opcodes.push(Opcode::JumpIfLocalTagEq {
+                        local_idx: *local_idx,
+                        tag_const_idx: *tag_const_idx,
+                        target_pc: pos,
+                    });
+                }
+                IrOp::JumpIfLocalTagNeLabel {
+                    local_idx,
+                    tag_const_idx,
+                    label,
+                } => {
+                    let pos =
+                        self.label_positions
+                            .get(label)
+                            .copied()
+                            .ok_or_else(|| CodegenError {
+                                message: format!(
+                                    "unresolved jump-if-local-tag-ne label {:?}",
+                                    label
+                                ),
+                                span: Span { start: 0, end: 0 },
+                            })? as u32;
+                    opcodes.push(Opcode::JumpIfLocalTagNe {
+                        local_idx: *local_idx,
+                        tag_const_idx: *tag_const_idx,
+                        target_pc: pos,
+                    });
                 }
             }
         }

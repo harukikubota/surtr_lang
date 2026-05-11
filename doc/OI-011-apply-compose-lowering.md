@@ -54,14 +54,11 @@ turns apply / pipe / compose surfaces into ordinary callable references, local
 slots, closure calls, and generated wrapper functions. A broad opcode would mix
 call semantics, capture semantics, and branch behavior too early.
 
-Prefer these next steps, in order:
+Next steps, in order:
 
-1. Branch-fused tag test, for example `JumpIfLocalTagEq` or `JumpIfLocalTagNe`.
-   This targets the common Result / enum lowering shape more directly than
-   `EqLocalTag` and can remove the follow-up `JumpIfFalse` or `JumpIfTrue`.
-2. Zero-capture closure creation fusion, replacing
+1. Zero-capture closure creation fusion, replacing
    `LoadFunctionRef(fun_idx); CaptureClosure(0)` when it appears.
-3. Tail closure-call fusion only after checking interaction with existing VM
+2. Tail closure-call fusion only after checking interaction with existing VM
    tail-call frame reuse. TCO behavior may change, but if it becomes disruptive,
    disable the new fused path temporarily rather than changing surface behavior.
 
@@ -70,3 +67,14 @@ Avoid for now:
 - New polymorphic apply / compose VM opcodes.
 - Rewriting standard `.srt` definitions for optimization only.
 - Optimizations that require changing user-visible callable behavior.
+
+## Implemented in Result opcode batch
+
+- `JumpIfLocalTagEq` / `JumpIfLocalTagNe` are now emitted from the centralized
+  Forge jump layer when `EqLocalTag` is immediately consumed by `JumpIfTrue` /
+  `JumpIfFalse`.
+- `rune dump --format json --opcode-histogram` now exposes histogram and
+  optimization-summary entries for both fused branch opcodes.
+- `MakeOk` / `MakeErr` are available as Result constructor opcodes for the
+  direct helper emission paths used by `assert`, `ensure`, and related Result
+  builders.

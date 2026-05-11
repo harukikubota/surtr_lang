@@ -258,6 +258,10 @@ fn optimization_summary(bytecode: &Bytecode) -> Value {
     let store_const = histogram.get("StoreConstLocal").copied().unwrap_or(0);
     let copy_local = histogram.get("CopyLocal").copied().unwrap_or(0);
     let eq_local_tag = histogram.get("EqLocalTag").copied().unwrap_or(0);
+    let make_ok = histogram.get("MakeOk").copied().unwrap_or(0);
+    let make_err = histogram.get("MakeErr").copied().unwrap_or(0);
+    let jump_if_local_tag_eq = histogram.get("JumpIfLocalTagEq").copied().unwrap_or(0);
+    let jump_if_local_tag_ne = histogram.get("JumpIfLocalTagNe").copied().unwrap_or(0);
 
     let mut capture_closure_total = 0usize;
     let mut capture_closure_zero = 0usize;
@@ -304,7 +308,29 @@ fn optimization_summary(bytecode: &Bytecode) -> Value {
                 "count": eq_local_tag,
                 "estimated_saved_opcodes": eq_local_tag * 3
             },
-            "estimated_saved_opcodes_total": store_const + copy_local + (eq_local_tag * 3)
+            "MakeOk": {
+                "count": make_ok,
+                "estimated_saved_opcodes": make_ok
+            },
+            "MakeErr": {
+                "count": make_err,
+                "estimated_saved_opcodes": make_err
+            },
+            "JumpIfLocalTagEq": {
+                "count": jump_if_local_tag_eq,
+                "estimated_saved_opcodes": jump_if_local_tag_eq
+            },
+            "JumpIfLocalTagNe": {
+                "count": jump_if_local_tag_ne,
+                "estimated_saved_opcodes": jump_if_local_tag_ne
+            },
+            "estimated_saved_opcodes_total": store_const
+                + copy_local
+                + (eq_local_tag * 3)
+                + make_ok
+                + make_err
+                + jump_if_local_tag_eq
+                + jump_if_local_tag_ne
         },
         "apply_compose": {
             "call_closure": call_closure,

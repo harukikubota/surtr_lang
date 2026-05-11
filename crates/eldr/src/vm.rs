@@ -4512,6 +4512,26 @@ impl VM {
 
         for (idx, op) in bytecode.opcodes.iter().enumerate() {
             match op {
+                Opcode::JumpIfLocalTagEq {
+                    tag_const_idx,
+                    target_pc: addr,
+                    ..
+                }
+                | Opcode::JumpIfLocalTagNe {
+                    tag_const_idx,
+                    target_pc: addr,
+                    ..
+                } => {
+                    if *tag_const_idx as usize >= bytecode.constants.len() {
+                        return Err(RuntimeError::new(format!(
+                            "LoadConst index out of bounds: {}",
+                            tag_const_idx
+                        )));
+                    }
+                    if *addr as usize >= bytecode.opcodes.len() {
+                        return Err(RuntimeError::new(format!("Invalid jump target: {}", addr)));
+                    }
+                }
                 Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
                     if *addr as usize >= bytecode.opcodes.len() {
                         return Err(RuntimeError::new(format!("Invalid jump target: {}", addr)));
@@ -4599,6 +4619,29 @@ impl VM {
 
         for (idx, op) in chunk.opcodes.iter().enumerate() {
             match op {
+                Opcode::JumpIfLocalTagEq {
+                    tag_const_idx,
+                    target_pc: addr,
+                    ..
+                }
+                | Opcode::JumpIfLocalTagNe {
+                    tag_const_idx,
+                    target_pc: addr,
+                    ..
+                } => {
+                    if *tag_const_idx as usize >= chunk.constants.len() {
+                        return Err(RuntimeError::new(format!(
+                            "Bytecode verifier: chunk LoadConst index out of bounds: {}",
+                            tag_const_idx
+                        )));
+                    }
+                    if *addr as usize >= chunk.opcodes.len() {
+                        return Err(RuntimeError::new(format!(
+                            "Bytecode verifier: chunk jump target out of bounds: {}",
+                            addr
+                        )));
+                    }
+                }
                 Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
                     if *addr as usize >= chunk.opcodes.len() {
                         return Err(RuntimeError::new(format!(
@@ -4793,6 +4836,29 @@ impl VM {
 
         for op in opcodes.iter_mut() {
             match op {
+                Opcode::JumpIfLocalTagEq {
+                    tag_const_idx,
+                    target_pc: addr,
+                    ..
+                }
+                | Opcode::JumpIfLocalTagNe {
+                    tag_const_idx,
+                    target_pc: addr,
+                    ..
+                } => {
+                    *tag_const_idx = tag_const_idx.checked_add(const_base).ok_or_else(|| {
+                        RuntimeError::new(format!(
+                            "Const relocation overflow: index {} + base {}",
+                            *tag_const_idx, const_base
+                        ))
+                    })?;
+                    *addr = addr.checked_add(code_base).ok_or_else(|| {
+                        RuntimeError::new(format!(
+                            "Jump relocation overflow: target {} + base {}",
+                            *addr, code_base
+                        ))
+                    })?;
+                }
                 Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
                     *addr = addr.checked_add(code_base).ok_or_else(|| {
                         RuntimeError::new(format!(
@@ -5274,6 +5340,30 @@ impl VM {
                 let a = self.pop_tag()?;
                 self.stack.push(Value::Bool(a == b));
             }
+            Opcode::MakeOk => {
+                let payload = self.pop_stack()?;
+                self.stack.push(Value::Tagged {
+                    tag: 0,
+                    fields: vec![payload],
+                });
+            }
+            Opcode::MakeErr => {
+                let payload = self.pop_stack()?;
+                match payload {
+                    Value::Error(_) => {
+                        self.stack.push(Value::Tagged {
+                            tag: 1,
+                            fields: vec![payload],
+                        });
+                    }
+                    other => {
+                        return Err(RuntimeError::new(format!(
+                            "MakeErr: expected Error, got {:?}",
+                            other
+                        )));
+                    }
+                }
+            }
             Opcode::EqLocalTag {
                 local_idx,
                 tag_const_idx,
@@ -5290,6 +5380,26 @@ impl VM {
                     _ => return Err(RuntimeError::new("GetTag on non-tagged value")),
                 };
                 self.stack.push(Value::Bool(actual == expected));
+            }
+            Opcode::JumpIfLocalTagEq {
+                local_idx,
+                tag_const_idx,
+                target_pc,
+            } => {
+                let expected = self.constant_tag(tag_const_idx)?;
+                if self.local_tag(local_idx, "JumpIfLocalTagEq")? == expected {
+                    *pc = self.validate_jump_target(target_pc)?;
+                }
+            }
+            Opcode::JumpIfLocalTagNe {
+                local_idx,
+                tag_const_idx,
+                target_pc,
+            } => {
+                let expected = self.constant_tag(tag_const_idx)?;
+                if self.local_tag(local_idx, "JumpIfLocalTagNe")? != expected {
+                    *pc = self.validate_jump_target(target_pc)?;
+                }
             }
             Opcode::Dbg {
                 template_id,
@@ -5745,6 +5855,19 @@ impl VM {
             return Err(RuntimeError::new(format!("Invalid jump target: {}", addr)));
         }
         Ok(target)
+    }
+
+    fn local_tag(&self, local_idx: u32, op_name: &str) -> Result<u32, RuntimeError> {
+        match self
+            .current_frame()?
+            .locals
+            .get(local_idx as usize)
+            .ok_or_else(|| {
+                RuntimeError::new(format!("{op_name} local out of bounds: {local_idx}"))
+            })? {
+            Value::Tagged { tag, .. } => Ok(*tag),
+            _ => Err(RuntimeError::new("GetTag on non-tagged value")),
+        }
     }
 
     // Stack helpers
@@ -6358,8 +6481,8 @@ mod tests {
     };
     use sindr::primitives::int;
     use sindr::runtime::{
-        Callable, CallableMetadata, CallableTarget, PidHandle, TypeEntry, TypeKind, TypeRegistry,
-        Value,
+        Callable, CallableMetadata, CallableTarget, Location, PidHandle, RichError, TypeEntry,
+        TypeKind, TypeRegistry, Value,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -6639,6 +6762,113 @@ mod tests {
 
         assert_eq!(ctx.pc, 1);
         assert_eq!(ctx.stack, vec![Value::Bool(true)]);
+    }
+
+    #[test]
+    fn make_ok_and_make_err_execute_as_one_opcode() {
+        let mut ok_bytecode =
+            base_bytecode(vec![Opcode::LoadConst(0), Opcode::MakeOk, Opcode::Halt]);
+        ok_bytecode.constants = vec![Constant::Int(int(7))];
+        let mut ok_vm = VM::new(ok_bytecode);
+        let mut ok_ctx = top_level_context(0, 0);
+
+        match ok_vm.step_context(&mut ok_ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected load const to continue, got {other:?}"),
+        }
+        match ok_vm.step_context(&mut ok_ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected make ok to continue, got {other:?}"),
+        }
+
+        assert_eq!(
+            ok_ctx.stack,
+            vec![Value::Tagged {
+                tag: 0,
+                fields: vec![Value::Int(int(7))],
+            }]
+        );
+
+        let err_bytecode = base_bytecode(vec![Opcode::MakeErr, Opcode::Halt]);
+        let mut err_vm = VM::new(err_bytecode);
+        let mut err_ctx = top_level_context(0, 0);
+        err_ctx.stack.push(Value::Error(Box::new(RichError::new(
+            "NoneError",
+            "boom",
+            Location {
+                file: "<test>".into(),
+                func: "make_err".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 0,
+            },
+            None,
+        ))));
+        match err_vm.step_context(&mut err_ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected make err to continue, got {other:?}"),
+        }
+
+        match &err_ctx.stack[..] {
+            [Value::Tagged { tag, fields }] => {
+                assert_eq!(*tag, 1);
+                assert!(matches!(&fields[..], [Value::Error(_)]));
+            }
+            other => panic!("expected Err tagged value, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn make_err_rejects_non_error_payload() {
+        let mut bytecode = base_bytecode(vec![Opcode::LoadConst(0), Opcode::MakeErr, Opcode::Halt]);
+        bytecode.constants = vec![Constant::Int(int(1))];
+
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("MakeErr: expected Error"));
+    }
+
+    #[test]
+    fn result_branch_opcodes_execute_as_one_opcode() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::JumpIfLocalTagEq {
+                local_idx: 0,
+                tag_const_idx: 0,
+                target_pc: 1,
+            },
+            Opcode::JumpIfLocalTagNe {
+                local_idx: 1,
+                tag_const_idx: 1,
+                target_pc: 3,
+            },
+            Opcode::Halt,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Tag(3), Constant::Tag(4)];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 2);
+        ctx.frames[0].locals[0] = Value::Tagged {
+            tag: 3,
+            fields: Vec::new(),
+        };
+        ctx.frames[0].locals[1] = Value::Tagged {
+            tag: 3,
+            fields: Vec::new(),
+        };
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected one opcode to continue, got {other:?}"),
+        }
+        assert_eq!(ctx.pc, 1);
+        assert_eq!(ctx.stack, Vec::<Value>::new());
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected one opcode to continue, got {other:?}"),
+        }
+        assert_eq!(ctx.pc, 3);
+        assert_eq!(ctx.stack, Vec::<Value>::new());
     }
 
     #[test]
@@ -9774,22 +10004,58 @@ mod tests {
     fn observation_collects_opcode_stats() {
         let mut bytecode = base_bytecode(vec![
             Opcode::LoadConst(0),
-            Opcode::LoadConst(1),
-            Opcode::BitAndInt,
+            Opcode::MakeOk,
+            Opcode::JumpIfLocalTagEq {
+                local_idx: 0,
+                tag_const_idx: 1,
+                target_pc: 3,
+            },
             Opcode::Halt,
         ]);
-        bytecode.constants = vec![Constant::Int(int(6)), Constant::Int(int(3))];
+        bytecode.constants = vec![Constant::Int(int(6)), Constant::Tag(0)];
 
         let mut vm = VM::new(bytecode);
         vm.enable_observation(VmObservationOptions::default());
-        vm.run().expect("run should succeed");
+        let mut ctx = top_level_context(0, 1);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected load const to continue, got {other:?}"),
+        }
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected make ok to continue, got {other:?}"),
+        }
+        ctx.frames[0].locals[0] = ctx
+            .stack
+            .last()
+            .cloned()
+            .expect("make ok should leave a tagged result on the stack");
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected fused local tag jump to continue, got {other:?}"),
+        }
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Halt(value) => assert_eq!(
+                value,
+                Value::Tagged {
+                    tag: 0,
+                    fields: vec![Value::Int(int(6))],
+                }
+            ),
+            other => panic!("expected halt, got {other:?}"),
+        }
 
         let observation = vm.observation().expect("observation should exist");
         assert_eq!(observation.stats.executed_opcodes, 4);
-        assert_eq!(observation.stats.per_opcode.get("LoadConst"), Some(&2));
-        assert_eq!(observation.stats.per_opcode.get("BitAndInt"), Some(&1));
+        assert_eq!(observation.stats.per_opcode.get("LoadConst"), Some(&1));
+        assert_eq!(observation.stats.per_opcode.get("MakeOk"), Some(&1));
+        assert_eq!(
+            observation.stats.per_opcode.get("JumpIfLocalTagEq"),
+            Some(&1)
+        );
         assert_eq!(observation.stats.per_opcode.get("Halt"), Some(&1));
-        assert_eq!(observation.stats.max_stack_depth, 2);
+        assert_eq!(observation.stats.max_stack_depth, 1);
         assert_eq!(observation.stats.max_frame_depth, 1);
     }
 
