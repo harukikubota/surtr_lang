@@ -268,7 +268,7 @@ impl User {
 
     assert!(err
         .message()
-        .contains("Only @doc / @hidden / @builtin are allowed before impl members"));
+        .contains("Only @doc / @hidden / @builtin / @intrinsic are allowed before impl members"));
 }
 
 #[test]
@@ -518,6 +518,119 @@ fn test_intrinsic_cond_decl_parses_in_std_module() {
         }
         other => panic!("Expected Defmod, got {other:?}"),
     }
+}
+
+#[test]
+fn test_intrinsic_bulk_update_decl_parses_in_std_module() {
+    let mut context = ParserContext::project(0);
+    context.parse_rules = ParseRules::permissive_for_tests();
+    let ast = parse_with_context(
+        r#"@builtin type Facet<$S, $A>
+impl Facet {
+  @doc """
+  Bulk update special form.
+  """
+  @intrinsic def bulk_update(source: $S, updates: BulkUpdateEntries<$S>) -> Result<$S>
+}"#,
+        context,
+    )
+    .expect("intrinsic bulk_update decl should parse");
+
+    match &ast[0] {
+        Ast::BuiltinTypeDecl(_, _, _) => match &ast[1] {
+            Ast::ImplDef(_, name, body, _) => {
+                assert_eq!(name, "Global::Facet");
+                match &body[0] {
+                    Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
+                        assert_eq!(intrinsic_name, "bulk_update");
+                        assert!(signature.contains(
+                            "@intrinsic def bulk_update(source: $S, updates: BulkUpdateEntries<$S>) -> Result<$S>"
+                        ));
+                        assert!(attrs
+                            .doc
+                            .as_deref()
+                            .is_some_and(|doc| doc.contains("Bulk update special form.")));
+                    }
+                    other => panic!("Expected IntrinsicDecl, got {other:?}"),
+                }
+            }
+            other => panic!("Expected ImplDef, got {other:?}"),
+        },
+        other => panic!("Expected BuiltinTypeDecl, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_facet_bulk_update_special_form_parses() {
+    let ast = parse(
+        r#"updated =? Facet::bulk_update(user) {
+  name <- set("taro")
+  score <- over_result({|score: Result<Int>| Ok(score)})
+  address {
+    country <- set("Tokyo")
+  }
+}"#,
+    )
+    .expect("bulk update should parse");
+
+    match &ast[0] {
+        Ast::SafeBind(_, AstPattern::Var(_, name), rhs) => {
+            assert_eq!(name, "updated");
+            match rhs.as_ref() {
+                Ast::BulkUpdate(_, source, entries) => {
+                    assert!(matches!(source.as_ref(), Ast::Var(_, name) if name == "user"));
+                    assert_eq!(entries.len(), 3);
+                    assert_eq!(entries[0].path, vec!["name"]);
+                    assert!(matches!(entries[0].kind, BulkUpdateEntryKind::Set(_)));
+                    assert_eq!(entries[1].path, vec!["score"]);
+                    assert!(matches!(entries[1].kind, BulkUpdateEntryKind::OverResult(_)));
+                    assert_eq!(entries[2].path, vec!["address"]);
+                    assert!(matches!(entries[2].kind, BulkUpdateEntryKind::Nested(_)));
+                }
+                other => panic!("Expected BulkUpdate, got {other:?}"),
+            }
+        }
+        other => panic!("Expected SafeBind, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_facet_bulk_update_rejects_commas_between_entries() {
+    let err = parse(
+        r#"updated =? Facet::bulk_update(user) {
+  name <- set("taro"),
+  age <- over({|age| Ok(age + 1)})
+}"#,
+    )
+    .expect_err("commas should be rejected");
+
+    assert!(!err.message().is_empty());
+}
+
+#[test]
+fn test_facet_bulk_update_rejects_non_whitelisted_leaf_call() {
+    let err = parse(
+        r#"updated =? Facet::bulk_update(user) {
+  name <- replace("taro")
+}"#,
+    )
+    .expect_err("non-whitelisted leaf should be rejected");
+
+    assert!(err
+        .message()
+        .contains("set(value), over(update_fun), or over_result(update_fun)"));
+}
+
+#[test]
+fn test_facet_bulk_update_rejects_qualified_facet_leaf_call() {
+    let err = parse(
+        r#"updated =? Facet::bulk_update(user) {
+  name <- Facet::set("taro")
+}"#,
+    )
+    .expect_err("qualified Facet leaf call should be rejected");
+
+    assert!(!err.message().is_empty());
 }
 
 #[test]

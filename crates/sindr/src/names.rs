@@ -23,6 +23,7 @@ pub enum TypeName {
     Closure,
     MatchArms,
     CondClauses,
+    BulkUpdateEntries,
     Error,
     Regex,
     RegexCaptures,
@@ -56,6 +57,7 @@ impl TypeName {
             Self::Closure => "Closure",
             Self::MatchArms => "MatchArms",
             Self::CondClauses => "CondClauses",
+            Self::BulkUpdateEntries => "BulkUpdateEntries",
             Self::Error => "Error",
             Self::Regex => "Regex",
             Self::RegexCaptures => "RegexCaptures",
@@ -91,6 +93,7 @@ impl TypeName {
                 | Self::Closure
                 | Self::MatchArms
                 | Self::CondClauses
+                | Self::BulkUpdateEntries
                 | Self::ProcessInit
                 | Self::Lazy
                 | Self::Pid
@@ -109,6 +112,7 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "Closure" => Some(TypeName::Closure),
         "MatchArms" => Some(TypeName::MatchArms),
         "CondClauses" => Some(TypeName::CondClauses),
+        "BulkUpdateEntries" => Some(TypeName::BulkUpdateEntries),
         "Error" => Some(TypeName::Error),
         "Regex" => Some(TypeName::Regex),
         "RegexCaptures" => Some(TypeName::RegexCaptures),

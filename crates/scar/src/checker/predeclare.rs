@@ -972,7 +972,8 @@ impl Checker {
         let display = Self::surface_ast_ty_key(&info.target_ast_ty);
         let base = display.split('<').next().unwrap_or(display.as_str());
         match base {
-            "TypeRef" | "Hole" | "Closure" | "MatchArms" | "CondClauses" | "Self" => None,
+            "TypeRef" | "Hole" | "Closure" | "MatchArms" | "CondClauses"
+            | "BulkUpdateEntries" | "Self" => None,
             _ => Some(display),
         }
     }

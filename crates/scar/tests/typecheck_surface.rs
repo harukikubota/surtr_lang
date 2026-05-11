@@ -170,6 +170,14 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_replace_rejects_type_changing_tuple_update as fn(),
     ),
     (
+        "facet_replace_rejects_result_annotation_context",
+        facet_replace_rejects_result_annotation_context as fn(),
+    ),
+    (
+        "facet_replace_rejects_result_return_context",
+        facet_replace_rejects_result_return_context as fn(),
+    ),
+    (
         "facet_over_requires_unary_result_callable",
         facet_over_requires_unary_result_callable as fn(),
     ),
@@ -1651,6 +1659,28 @@ fn facet_replace_rejects_type_changing_tuple_update() {
     assert!(err
         .message
         .contains("Facet::replace value type mismatch: expected Int, got String"));
+}
+
+fn facet_replace_rejects_result_annotation_context() {
+    let err = typecheck_with_rules(
+        r#"defrecord User(name: String)
+updated: Result<User> = Facet::replace(User.name, User("alice"), "bob")"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("Facet::replace should explain Result annotation mismatch");
+    assert!(err.message.contains("expected Result<User>, got User"));
+}
+
+fn facet_replace_rejects_result_return_context() {
+    let err = typecheck_with_rules(
+        r#"defrecord User(name: String)
+def rename() -> Result<User> {
+  Facet::replace(User.name, User("alice"), "bob")
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("Facet::replace should explain Result return mismatch");
+    assert!(err.message.contains("expected Result<User>, got User"));
 }
 
 fn facet_over_requires_unary_result_callable() {

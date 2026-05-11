@@ -6,7 +6,9 @@ use super::scope_init::{
 };
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
-use spire::ast::{BinOp, DbgArg, InterpolatedPart};
+use spire::ast::{
+    AstPath, BinOp, BulkUpdateEntry, BulkUpdateEntryKind, DbgArg, InterpolatedPart, Symbol,
+};
 
 const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
 
@@ -391,6 +393,37 @@ impl Resolver {
         inside_placeholder_capture: bool,
         used: &mut HashSet<usize>,
     ) -> Result<(), ResolveError> {
+        fn walk_bulk_entries(
+            resolver: &Resolver,
+            entries: &[BulkUpdateEntry],
+            allow_placeholders: bool,
+            inside_placeholder_capture: bool,
+            used: &mut HashSet<usize>,
+        ) -> Result<(), ResolveError> {
+            for entry in entries {
+                match &entry.kind {
+                    BulkUpdateEntryKind::Set(expr)
+                    | BulkUpdateEntryKind::Over(expr)
+                    | BulkUpdateEntryKind::OverResult(expr) => {
+                        resolver.collect_capture_placeholders(
+                            expr,
+                            allow_placeholders,
+                            inside_placeholder_capture,
+                            used,
+                        )?;
+                    }
+                    BulkUpdateEntryKind::Nested(entries) => walk_bulk_entries(
+                        resolver,
+                        entries,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                        used,
+                    )?,
+                }
+            }
+            Ok(())
+        }
+
         match expr {
             Ast::CapturePlaceholder(span, index) => {
                 if !allow_placeholders {
@@ -530,6 +563,21 @@ impl Resolver {
                     )?;
                 }
                 Ok(())
+            }
+            Ast::BulkUpdate(_, source, entries) => {
+                self.collect_capture_placeholders(
+                    source,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                    used,
+                )?;
+                walk_bulk_entries(
+                    self,
+                    entries,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                    used,
+                )
             }
             Ast::StructLit(_, _, fields) | Ast::InternalStructLit(_, _, fields) => {
                 for field in fields {
@@ -1862,6 +1910,116 @@ impl Resolver {
 }
 
 impl Resolver {
+    fn flatten_bulk_update_entries(
+        prefix: &[Symbol],
+        entries: Vec<BulkUpdateEntry>,
+        out: &mut Vec<(Span, Vec<Symbol>, BulkUpdateEntryKind)>,
+    ) {
+        for entry in entries {
+            let mut path = prefix.to_vec();
+            path.extend(entry.path);
+            match entry.kind {
+                BulkUpdateEntryKind::Nested(children) => {
+                    Self::flatten_bulk_update_entries(&path, children, out);
+                }
+                kind => out.push((entry.span, path, kind)),
+            }
+        }
+    }
+
+    fn make_bulk_update_capture_path(
+        span: &Span,
+        root_name: &str,
+        path: &[Symbol],
+    ) -> Result<Ast, ResolveError> {
+        let mut expr = Ast::Var(span.clone(), root_name.to_string());
+        for segment in path {
+            expr = Ast::FieldAccess(span.clone(), Box::new(expr), segment.clone());
+        }
+        Ok(Ast::FacetCapture(span.clone(), Box::new(expr)))
+    }
+
+    fn make_facet_intrinsic_call(
+        span: &Span,
+        method: &str,
+        path_expr: Ast,
+        value_expr: Ast,
+    ) -> Ast {
+        Ast::App(
+            span.clone(),
+            Box::new(Ast::Path(
+                span.clone(),
+                AstPath {
+                    span: span.clone(),
+                    segments: vec!["Facet".into(), method.into()],
+                },
+            )),
+            vec![
+                RecordLitArg::Positional(path_expr),
+                RecordLitArg::Positional(value_expr),
+            ],
+        )
+    }
+
+    fn lower_bulk_update_special_form(
+        &mut self,
+        span: Span,
+        source: Ast,
+        entries: Vec<BulkUpdateEntry>,
+    ) -> Result<Resolved, ResolveError> {
+        let mut flat_entries = Vec::new();
+        Self::flatten_bulk_update_entries(&[], entries, &mut flat_entries);
+
+        let mut expr = Ast::ConstructorCall(
+            source.span().clone(),
+            "Ok".into(),
+            vec![RecordLitArg::Positional(source)],
+        );
+
+        for (index, entry_span, path, kind) in flat_entries
+            .into_iter()
+            .enumerate()
+            .map(|(index, (span, path, kind))| (index, span, path, kind))
+        {
+            let param_name = format!("__bulk_state_{}_{}", span.start, index);
+            let capture = Self::make_bulk_update_capture_path(&entry_span, &param_name, &path)?;
+            let body = match kind {
+                BulkUpdateEntryKind::Set(value) => {
+                    Self::make_facet_intrinsic_call(&entry_span, "set", capture, value)
+                }
+                BulkUpdateEntryKind::Over(update_fun) => {
+                    Self::make_facet_intrinsic_call(&entry_span, "over", capture, update_fun)
+                }
+                BulkUpdateEntryKind::OverResult(update_fun) => Self::make_facet_intrinsic_call(
+                    &entry_span,
+                    "over_result",
+                    capture,
+                    update_fun,
+                ),
+                BulkUpdateEntryKind::Nested(_) => unreachable!("nested entries must be flattened"),
+            };
+            let closure = Ast::Closure(
+                entry_span.clone(),
+                vec![ClosureParam {
+                    name: param_name,
+                    ty: None,
+                    span: entry_span.clone(),
+                }],
+                Box::new(body),
+            );
+            expr = Ast::ContextBind(
+                Span {
+                    start: span.start,
+                    end: entry_span.end,
+                },
+                Box::new(expr),
+                Box::new(closure),
+            );
+        }
+
+        self.resolve_node(expr)
+    }
+
     pub(super) fn resolve_node(&mut self, node: Ast) -> Result<Resolved, ResolveError> {
         match node {
             Ast::Lit(span, lit) => Ok(Resolved::Lit(span, lit)),
@@ -2099,6 +2257,10 @@ impl Resolver {
                     .map(|arg| self.resolve_node(arg.expr))
                     .collect::<Result<Vec<_>, _>>()?,
             )),
+
+            Ast::BulkUpdate(span, source, entries) => {
+                self.lower_bulk_update_special_form(span, *source, entries)
+            }
 
             Ast::FieldAccess(span, expr, field) => {
                 let original = Ast::FieldAccess(span.clone(), expr.clone(), field.clone());

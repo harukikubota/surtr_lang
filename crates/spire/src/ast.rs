@@ -296,6 +296,21 @@ pub struct AstMatchArm {
     pub body: Ast,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct BulkUpdateEntry {
+    pub span: Span,
+    pub path: Vec<Symbol>,
+    pub kind: BulkUpdateEntryKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BulkUpdateEntryKind {
+    Set(Ast),
+    Over(Ast),
+    OverResult(Ast),
+    Nested(Vec<BulkUpdateEntry>),
+}
+
 // ── Struct / Record fields ──
 
 #[derive(Debug, Clone, PartialEq)]
@@ -492,6 +507,9 @@ pub enum Ast {
 
     /// Match expression
     Match(Span, Box<Ast>, Vec<AstMatchArm>),
+
+    /// `Facet::bulk_update(source) { ... }` special form.
+    BulkUpdate(Span, Box<Ast>, Vec<BulkUpdateEntry>),
 
     /// Field access: `user.name`, `pair._0`
     FieldAccess(Span, Box<Ast>, Symbol),

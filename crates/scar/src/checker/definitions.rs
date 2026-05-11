@@ -790,6 +790,20 @@ impl Checker {
             return Err(err);
         }
         if !self.types_compatible(&expected_ret, &typed_body.ty) {
+            if let Some(err) = self.facet_replace_result_context_error(
+                &typed_body,
+                &expected_ret,
+                &self.return_mismatch_span(&typed_body),
+            ) {
+                return Err(err);
+            }
+            if let Some(err) = self.plain_value_result_context_error(
+                &expected_ret,
+                &typed_body.ty,
+                &self.return_mismatch_span(&typed_body),
+            ) {
+                return Err(err);
+            }
             let hint = if matches!(actual_ret, Ty::Unit) {
                 self.describe_unit_return_hint(&typed_body)
             } else {
@@ -1089,6 +1103,20 @@ impl Checker {
                 return Err(err);
             }
             if !self.types_compatible(&expected_ret, &typed_body.ty) {
+                if let Some(err) = self.facet_replace_result_context_error(
+                    &typed_body,
+                    &expected_ret,
+                    &self.return_mismatch_span(&typed_body),
+                ) {
+                    return Err(err);
+                }
+                if let Some(err) = self.plain_value_result_context_error(
+                    &expected_ret,
+                    &typed_body.ty,
+                    &self.return_mismatch_span(&typed_body),
+                ) {
+                    return Err(err);
+                }
                 let hint = if matches!(actual_ret, Ty::Unit) {
                     self.describe_unit_return_hint(&typed_body)
                 } else {

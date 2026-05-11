@@ -708,10 +708,13 @@ pub fn precollect_declaration_index(
                             Ast::BuiltinExtractorDecl(method_span, method_name, _, _, attrs) => {
                                 (method_span, method_name, DeclarationKind::Extractor, attrs)
                             }
+                            Ast::IntrinsicDecl(method_span, method_name, _, attrs) => {
+                                (method_span, method_name, DeclarationKind::Def, attrs)
+                            }
                             _ => {
                                 return Err(ResolveError {
                                     message:
-                                        "impl body may only contain `def` / `defextractor` / `@builtin def` / `@builtin defextractor` declarations"
+                                        "impl body may only contain `def` / `defextractor` / `@builtin def` / `@builtin defextractor` / `@intrinsic def` declarations"
                                             .to_string(),
                                     span: span.clone(),
                                 related_labels: Vec::new(),
@@ -1365,10 +1368,20 @@ impl Resolver {
                                     attrs,
                                 ));
                             }
+                            Ast::IntrinsicDecl(method_span, method_name, signature, attrs) => {
+                                let lowered_name =
+                                    lower_impl_member_name(lowered_module_path, &target, &method_name);
+                                lowered.push(Ast::IntrinsicDecl(
+                                    method_span,
+                                    lowered_name,
+                                    signature,
+                                    attrs,
+                                ));
+                            }
                             _ => {
                                 return Err(ResolveError {
                                     message:
-                                        "impl body may only contain `def` / `defextractor` / `@builtin def` / `@builtin defextractor` declarations"
+                                        "impl body may only contain `def` / `defextractor` / `@builtin def` / `@builtin defextractor` / `@intrinsic def` declarations"
                                             .to_string(),
                                     span: span.clone(),
                                 related_labels: Vec::new(),

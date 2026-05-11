@@ -74,6 +74,11 @@ fn timing_report_lock() -> &'static Mutex<()> {
     TIMING_REPORT_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+fn semantic_prefix_cache_lock() -> &'static Mutex<()> {
+    static SEMANTIC_PREFIX_CACHE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    SEMANTIC_PREFIX_CACHE_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 fn remove_semantic_prefix_cache_entry(cache_path: &PathBuf) {
     let _ = fs::remove_file(cache_path);
     if let Some(parent) = cache_path.parent() {
@@ -300,6 +305,9 @@ def helper() -> Unit { () }"#,
 
 #[test]
 fn compile_error_phase_primes_semantic_prefix_cache_without_final_bytecode_cache() {
+    let _cache_guard = semantic_prefix_cache_lock()
+        .lock()
+        .expect("semantic prefix cache lock poisoned");
     let prefix_dir =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-fixture-cache/prefix");
 
@@ -345,6 +353,9 @@ fn compile_error_phase_primes_semantic_prefix_cache_without_final_bytecode_cache
 
 #[test]
 fn semantic_prefix_cache_cleanup_keeps_unrelated_entries() {
+    let _cache_guard = semantic_prefix_cache_lock()
+        .lock()
+        .expect("semantic prefix cache lock poisoned");
     let prefix_dir =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-fixture-cache/prefix");
     let _ = fs::remove_dir_all(&prefix_dir);

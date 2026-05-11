@@ -6439,6 +6439,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::InterpolatedStr(span, _)
         | Ast::Dbg(span, _)
         | Ast::Match(span, _, _)
+        | Ast::BulkUpdate(span, _, _)
         | Ast::FieldAccess(span, _, _)
         | Ast::FacetCapture(span, _)
         | Ast::StructDef(span, _, _, _)

@@ -689,6 +689,113 @@ print("over_result:" ++ inspect(user5.score))"#,
     );
 }
 
+fn facet_bulk_update_special_form_works() {
+    assert_output(
+        r#"defrecord Address(country: String, zip: Int)
+defrecord User(name: String, age: Int, address: Address)
+defrecord Account(user: User, score: Result<Int>, pair: (String, Int))
+defenum BulkWidth {
+  Wide(Int),
+  Fixed(Int),
+}
+
+user = User("alice", 20, Address("Osaka", 530))
+updated =? Facet::bulk_update(user) {
+  name <- set("taro")
+  age <- over({|age| Ok(age + 1)})
+  address {
+    country <- set("Tokyo")
+  }
+}
+print(updated.name)
+print(to_string(updated.age))
+print(updated.address.country)
+
+account = Account(user, Ok(10), ("left", 2))
+account2 =? Facet::bulk_update(account) {
+  score <- set(30)
+  pair._1 <- over({|n| Ok(n + 5)})
+  user {
+    address.zip <- over({|zip| Ok(zip + 1)})
+  }
+}
+print("score:" ++ inspect(account2.score))
+print("pair:" ++ inspect(account2.pair))
+print("zip:" ++ to_string(account2.user.address.zip))
+
+account_err = Account(user, Err(NoneError), ("hold", 9))
+account_err2 =? Facet::bulk_update(account_err) {
+  score <- over({|value| Ok(value + 1)})
+}
+print("score skip:" ++ inspect(account_err2.score))
+
+account3 =? Facet::bulk_update(account2) {
+  score <- over_result({|score: Result<Int>| Ok(Ok(41))})
+}
+print("score over_result:" ++ inspect(account3.score))
+
+width = BulkWidth::Wide(7)
+width2 =? Facet::bulk_update(width) {
+  Wide <- over({|value| Ok(value + 2)})
+}
+print(inspect(width2))"#,
+        &[
+            "taro",
+            "21",
+            "Tokyo",
+            "score:Ok(Ok(30))",
+            "pair:(\"left\", 7)",
+            "zip:531",
+            "score skip:Ok(Err(NoneError(\"None Value.\")))",
+            "score over_result:Ok(Ok(41))",
+            "BulkWidth::Wide(9)",
+        ],
+    );
+}
+
+fn facet_api_variants_and_result_patterns_work() {
+    assert_output(
+        r#"defrecord Boxed(payload: Result<Int>, pair: (String, Int))
+defenum Shape {
+  Point((Int, Int)),
+  Radius(Int),
+}
+
+boxed = Boxed(Ok(4), ("x", 1))
+print("view payload:" ++ inspect(Facet::view(Boxed.payload, boxed)))
+print("view tuple:" ++ inspect(Facet::view(Boxed.pair._1, boxed)))
+
+boxed2 =? Facet::set(Boxed.payload, boxed, 9)
+print("set payload:" ++ inspect(boxed2.payload))
+
+boxed3 =? Facet::over(Boxed.pair._1, boxed2, {|n| Ok(n + 2)})
+print("over tuple:" ++ inspect(boxed3.pair))
+
+boxed4 =? Facet::over_result(Boxed.payload, boxed3, {|payload: Result<Int>| Ok(Ok(12))})
+print("over_result payload:" ++ inspect(boxed4.payload))
+
+shape = Shape::Point((2, 5))
+point =? Facet::preview(Shape.Point, shape)
+print("preview point:" ++ inspect(point))
+
+shape2 =? Facet::set(Shape.Point._0, shape, 7)
+print("set variant tuple:" ++ inspect(shape2))
+
+shape3 =? Facet::over(Shape.Point._1, shape2, {|n| Ok(n * 2)})
+print("over variant tuple:" ++ inspect(shape3))"#,
+        &[
+            "view payload:Ok(Ok(4))",
+            "view tuple:1",
+            "set payload:Ok(Ok(9))",
+            "over tuple:(\"x\", 3)",
+            "over_result payload:Ok(Ok(12))",
+            "preview point:(2, 5)",
+            "set variant tuple:Shape::Point((7, 5))",
+            "over variant tuple:Shape::Point((7, 10))",
+        ],
+    );
+}
+
 fn language_goal_combined() {
     assert_output(
         r#"num = 10
@@ -843,6 +950,14 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "lens_result_helpers_support_set_over_and_over_result",
             lens_result_helpers_support_set_over_and_over_result as fn(),
+        ),
+        (
+            "facet_bulk_update_special_form_works",
+            facet_bulk_update_special_form_works as fn(),
+        ),
+        (
+            "facet_api_variants_and_result_patterns_work",
+            facet_api_variants_and_result_patterns_work as fn(),
         ),
         ("language_goal_combined", language_goal_combined as fn()),
     ];

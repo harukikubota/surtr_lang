@@ -1978,6 +1978,7 @@ impl Parser<'_> {
         let mut attrs = DeclAttrs::default();
         let mut saw_annotator = false;
         let mut saw_builtin = false;
+        let mut saw_intrinsic = false;
         let mut start_span: Option<Span> = None;
 
         while let Token::Annotator(name) = self.peek().clone() {
@@ -1997,6 +1998,21 @@ impl Parser<'_> {
                         ));
                     }
                     saw_builtin = true;
+                }
+                "intrinsic" => {
+                    if saw_intrinsic {
+                        return Err(ParseError::syntax(
+                            "@intrinsic may only appear once before an impl member",
+                            annotator_span,
+                        ));
+                    }
+                    if saw_builtin {
+                        return Err(ParseError::syntax(
+                            "@builtin and @intrinsic cannot be combined",
+                            annotator_span,
+                        ));
+                    }
+                    saw_intrinsic = true;
                 }
                 "doc" => {
                     if attrs.doc.is_some() {
@@ -2038,7 +2054,7 @@ impl Parser<'_> {
                 }
                 _ => {
                     return Err(ParseError::syntax(
-                        "Only @doc / @hidden / @builtin are allowed before impl members",
+                        "Only @doc / @hidden / @builtin / @intrinsic are allowed before impl members",
                         annotator_span,
                     ));
                 }
@@ -2088,6 +2104,24 @@ impl Parser<'_> {
                 )),
                 _ => Err(ParseError::syntax(
                     "impl body may only contain `@builtin def` / `@builtin defextractor` declarations",
+                    self.peek_span(),
+                )),
+            };
+        }
+
+        if saw_intrinsic {
+            let start = start_span
+                .as_ref()
+                .map(|span| span.start)
+                .unwrap_or_else(|| self.peek_span().start);
+            return match self.peek() {
+                Token::Def => self.parse_intrinsic_decl(start, attrs),
+                Token::Defp => Err(ParseError::syntax(
+                    "@intrinsic is not allowed before `defp` impl members",
+                    self.peek_span(),
+                )),
+                _ => Err(ParseError::syntax(
+                    "impl body may only contain `@intrinsic def` declarations for intrinsic members",
                     self.peek_span(),
                 )),
             };

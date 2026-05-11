@@ -10,6 +10,7 @@
 - `Facet::set(facet, source, value)`
 - `Facet::over(facet, source, update_fun)`
 - `Facet::over_result(facet, source, update_fun)`
+- `Facet::bulk_update(source) { ... }`
 - `outer / inner`
 - `Facet::compose(outer, inner)`
 
@@ -172,6 +173,38 @@ add_facet = Expr.Add
 - 現在値が別 variant なら `Err(...)` になる
 - `set` / `over` でも同じく variant mismatch が失敗になる
 - `over_result` は `Result` focus 全体を書き換えたいときに使う
+
+## bulk_update
+
+`Facet::bulk_update(source) { ... }` は、1 つの state に対する複数の Facet 更新を
+source order でまとめて書くための special form です。
+
+- 返り値は常に `Result<S>`
+- block は通常 block ではなく、`match` に近い専用 surface
+- entry は改行区切りで、`,` は使わない
+- 許可される entry は次だけ
+- `path <- set(value)`
+- `path <- over(update_fun)`
+- `path <- over_result(update_fun)`
+- `path { nested_entries... }`
+
+```surtr
+updated =? Facet::bulk_update(user) {
+  name <- set("taro")
+  age <- over({|age| Ok(age + 1)})
+  account {
+    score <- over_result({|score: Result<Int>| Ok(Ok(9))})
+  }
+}
+```
+
+ネスト block は path prefix を積む sugar です。
+そのため `address.country <- set("Tokyo")` と
+`address { country <- set("Tokyo") }` は同じ更新へ lower されます。
+
+`bulk_update` は `Facet::set` / `Facet::over` / `Facet::over_result` の並びへ
+lower される範囲に限定されています。`S -> Result<S>` の whole-state updater を
+混ぜたい場合は、普通の関数として bulk の外で `|>=` 合成します。
 
 ## compose
 

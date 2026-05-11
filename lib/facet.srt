@@ -231,6 +231,56 @@ impl Facet {
   @builtin def over_result(facet: Facet<$S, Result<$A>>, source: $S, update_fun: (Result<$A> -> Result<Result<$A>>)) -> Result<$S>
 
   @doc """
+  Bulk update special form.
+
+  `Facet::bulk_update(source) { ... }` is a language-provided update form for
+  applying multiple Facet-based updates to one state value in source order.
+
+  Each entry targets a relative path from `source` and must use one of these
+  update shapes:
+
+  - `path <- set(value)`
+  - `path <- over(update_fun)`
+  - `path <- over_result(update_fun)`
+  - `path { nested_entries... }`
+
+  Nested blocks extend the current path prefix. This makes the following forms
+  equivalent:
+
+  `address.country <- set("Tokyo")`
+  `address { country <- set("Tokyo") }`
+
+  `bulk_update` is not an ordinary callable block argument. The update block is
+  a dedicated special-form surface, similar to `match`.
+  Entries are separated by newlines, not commas.
+
+  `bulk_update` lowers to ordinary `Facet::set` / `Facet::over` /
+  `Facet::over_result` calls and
+  returns `Result<$S>`.
+  Each later entry sees the latest updated state produced so far.
+
+  Use ordinary functions and `|>=` outside `bulk_update` when you need whole
+  state updaters of shape `$S -> Result<$S>`.
+
+  ## Examples
+  renamed =? Facet::bulk_update(user) {
+    name <- set("taro")
+    age <- over({|age| Ok(age + 1)})
+  }
+
+  rewritten =? Facet::bulk_update(account) {
+    score <- over_result({|score: Result<Int>| Ok(Ok(9))})
+  }
+
+  moved =? Facet::bulk_update(user) {
+    address {
+      country <- set("Tokyo")
+    }
+  }
+  """
+  @intrinsic def bulk_update(source: $S, updates: BulkUpdateEntries<$S>) -> Result<$S>
+
+  @doc """
   Compose two facet paths in sequence.
   `compose(outer, inner)` focuses from `S` to `B` via `A`.
   `outer / inner` is equivalent operator sugar.

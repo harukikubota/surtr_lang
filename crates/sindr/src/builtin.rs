@@ -965,6 +965,10 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         params: &["$Result"],
     },
     BuiltinTypeMeta {
+        name: TypeName::BulkUpdateEntries.as_str(),
+        params: &["$State"],
+    },
+    BuiltinTypeMeta {
         name: TypeName::Error.as_str(),
         params: &[],
     },

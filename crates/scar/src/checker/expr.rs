@@ -673,7 +673,20 @@ impl Checker {
                 let typed_rhs = if let ResolvedPattern::Annotated(_, ast_ty) = pat {
                     let expected =
                         self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
-                    self.check_node_with_expected(rhs, Some(&expected))?
+                    let typed_rhs = self.check_node_with_expected(rhs, Some(&expected))?;
+                    if !self.types_compatible(&expected, &typed_rhs.ty) {
+                        if let Some(err) =
+                            self.facet_replace_result_context_error(&typed_rhs, &expected, span)
+                        {
+                            return Err(err);
+                        }
+                        if let Some(err) =
+                            self.plain_value_result_context_error(&expected, &typed_rhs.ty, span)
+                        {
+                            return Err(err);
+                        }
+                    }
+                    typed_rhs
                 } else {
                     self.check_node(rhs)?
                 };
@@ -920,6 +933,82 @@ impl Checker {
                 Ok(typed)
             }
             _ => self.check_node(node),
+        }
+    }
+
+    pub(super) fn facet_replace_result_context_error(
+        &self,
+        typed: &TypedNode,
+        expected: &Ty,
+        span: &Span,
+    ) -> Option<TypeError> {
+        let typed = self.tail_typed_node(typed);
+        let TypedInner::FacetSet { mode, .. } = &typed.node else {
+            return None;
+        };
+        if *mode != TypedFacetSetMode::Exact {
+            return None;
+        }
+
+        let expected = self.resolve_ty(expected);
+        let actual = self.resolve_ty(&typed.ty);
+        let Ty::Result(ok_ty, _) = &expected else {
+            return None;
+        };
+        if self.resolve_ty(ok_ty.as_ref()) != actual {
+            return None;
+        }
+
+        Some(TypeError {
+            message: format!(
+                "Facet::replace returns plain {}, not {}",
+                self.ty_name(&actual),
+                self.ty_name(&expected)
+            ),
+            span: span.clone(),
+            hint: Some(format!(
+                "Use Facet::set when the update should stay in {} context, or wrap the replaced value with Ok(...).",
+                self.ty_name(&expected)
+            )),
+        })
+    }
+
+    pub(super) fn plain_value_result_context_error(
+        &self,
+        expected: &Ty,
+        actual: &Ty,
+        span: &Span,
+    ) -> Option<TypeError> {
+        let expected = self.resolve_ty(expected);
+        let actual = self.resolve_ty(actual);
+        let Ty::Result(ok_ty, _) = &expected else {
+            return None;
+        };
+        if self.resolve_ty(ok_ty.as_ref()) != actual {
+            return None;
+        }
+        Some(TypeError {
+            message: format!(
+                "Result context expects {}, but the expression returns plain {}",
+                self.ty_name(&expected),
+                self.ty_name(&actual)
+            ),
+            span: span.clone(),
+            hint: Some(format!(
+                "Wrap the value with Ok(...), or use an API that already returns {}.",
+                self.ty_name(&expected)
+            )),
+        })
+    }
+
+    fn tail_typed_node<'a>(&self, typed: &'a TypedNode) -> &'a TypedNode {
+        match &typed.node {
+            TypedInner::Semi(inner) => self.tail_typed_node(inner),
+            TypedInner::Block(items) => items
+                .last()
+                .map(|last| self.tail_typed_node(last))
+                .unwrap_or(typed),
+            _ => typed,
         }
     }
 

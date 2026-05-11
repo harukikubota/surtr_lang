@@ -61,6 +61,7 @@ pub enum Token {
     DotDot,         // ..
     FatArrow,       // =>
     Arrow,          // ->
+    LeftArrow,      // <-
     Semicolon,      // ;
     Pipe,           // |
     PipeApply,      // |>

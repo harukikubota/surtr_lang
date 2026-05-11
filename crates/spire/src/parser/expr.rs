@@ -869,6 +869,32 @@ impl Parser<'_> {
                 let args = self.parse_call_args()?;
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RParen)?;
+                if path_name == "Facet::bulk_update" {
+                    if args.len() != 1
+                        || args
+                            .iter()
+                            .any(|arg| matches!(arg, RecordLitArg::Named(_, _)))
+                    {
+                        return Err(ParseError::syntax(
+                            "Facet::bulk_update expects exactly 1 positional argument before its update block",
+                            Span {
+                                start: name_span.start,
+                                end: end_span.end,
+                            },
+                        ));
+                    }
+                    if !matches!(self.peek(), Token::LBrace) {
+                        return Err(ParseError::syntax(
+                            "Facet::bulk_update requires a special update block",
+                            self.peek_span(),
+                        ));
+                    }
+                    let source = match args.into_iter().next().expect("checked arg length") {
+                        RecordLitArg::Positional(expr) => expr,
+                        RecordLitArg::Named(_, _) => unreachable!("validated positional args"),
+                    };
+                    return self.parse_bulk_update_expr(name_span.start, source);
+                }
                 if path_last_is_uppercase {
                     self.reject_constructor_trailing_block()?;
                     let span = Span {
@@ -1734,6 +1760,143 @@ impl Parser<'_> {
             Box::new(scrutinee),
             arms,
         ))
+    }
+
+    fn parse_bulk_update_expr(&mut self, start: usize, source: Ast) -> Result<Ast, ParseError> {
+        self.skip_newlines();
+        let lbrace = self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        if matches!(self.peek(), Token::RBrace) {
+            return Err(ParseError::syntax(
+                "Facet::bulk_update must contain at least one entry",
+                lbrace,
+            ));
+        }
+
+        let mut entries = Vec::new();
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            self.skip_newlines();
+            if matches!(self.peek(), Token::RBrace) {
+                break;
+            }
+            entries.push(self.parse_bulk_update_entry()?);
+            self.skip_newlines();
+        }
+
+        let end = self.expect(&Token::RBrace)?;
+        Ok(Ast::BulkUpdate(
+            Span {
+                start,
+                end: end.end,
+            },
+            Box::new(source),
+            entries,
+        ))
+    }
+
+    fn parse_bulk_update_entry(&mut self) -> Result<BulkUpdateEntry, ParseError> {
+        let start = self.peek_span().start;
+        let path = self.parse_bulk_update_path()?;
+        self.skip_newlines();
+
+        if matches!(self.peek(), Token::LBrace) {
+            let lbrace = self.advance().span.clone();
+            self.skip_newlines();
+            if matches!(self.peek(), Token::RBrace) {
+                return Err(ParseError::syntax(
+                    "Bulk update nested path must contain at least one entry",
+                    lbrace,
+                ));
+            }
+
+            let mut entries = Vec::new();
+            while !matches!(self.peek(), Token::RBrace) {
+                if matches!(self.peek(), Token::Eof) {
+                    return Err(ParseError::incomplete("}", self.peek_span()));
+                }
+                self.skip_newlines();
+                if matches!(self.peek(), Token::RBrace) {
+                    break;
+                }
+                entries.push(self.parse_bulk_update_entry()?);
+                self.skip_newlines();
+            }
+            let end = self.expect(&Token::RBrace)?;
+            return Ok(BulkUpdateEntry {
+                span: Span {
+                    start,
+                    end: end.end,
+                },
+                path,
+                kind: BulkUpdateEntryKind::Nested(entries),
+            });
+        }
+
+        self.expect(&Token::LeftArrow)?;
+        let kind = self.parse_bulk_update_leaf()?;
+        let end = match &kind {
+            BulkUpdateEntryKind::Set(expr)
+            | BulkUpdateEntryKind::Over(expr)
+            | BulkUpdateEntryKind::OverResult(expr) => expr.span().end,
+            BulkUpdateEntryKind::Nested(_) => unreachable!("leaf classifier cannot produce nested"),
+        };
+        Ok(BulkUpdateEntry {
+            span: Span { start, end },
+            path,
+            kind,
+        })
+    }
+
+    fn parse_bulk_update_path(&mut self) -> Result<Vec<Symbol>, ParseError> {
+        let (first, _) = self.expect_ident()?;
+        let mut segments = vec![first];
+        while matches!(self.peek(), Token::Dot) {
+            self.advance();
+            let (segment, _) = self.expect_ident()?;
+            segments.push(segment);
+        }
+        Ok(segments)
+    }
+
+    fn parse_bulk_update_leaf(&mut self) -> Result<BulkUpdateEntryKind, ParseError> {
+        self.skip_newlines();
+        let (name, name_span) = self.expect_ident()?;
+        if !matches!(name.as_str(), "set" | "over" | "over_result") {
+            return Err(ParseError::syntax(
+                "Bulk update entries must use set(value), over(update_fun), or over_result(update_fun)",
+                name_span,
+            ));
+        }
+        self.skip_newlines();
+        self.expect(&Token::LParen)?;
+        let args = self.with_trailing_call_block_disabled(|parser| parser.parse_call_args())?;
+        let call_end = self.expect(&Token::RParen)?;
+
+        if args.len() != 1 || args.iter().any(|arg| matches!(arg, RecordLitArg::Named(_, _))) {
+            return Err(ParseError::syntax(
+                "Bulk update entries must use set(value), over(update_fun), or over_result(update_fun)",
+                Span {
+                    start: name_span.start,
+                    end: call_end.end,
+                },
+            ));
+        }
+
+        let inner = match args.into_iter().next().expect("checked arg length") {
+            RecordLitArg::Positional(expr) => expr,
+            RecordLitArg::Named(_, _) => unreachable!("validated positional args"),
+        };
+
+        match name.as_str() {
+            "set" => Ok(BulkUpdateEntryKind::Set(inner)),
+            "over" => Ok(BulkUpdateEntryKind::Over(inner)),
+            "over_result" => Ok(BulkUpdateEntryKind::OverResult(inner)),
+            _ => unreachable!("validated bulk update whitelist"),
+        }
     }
 
     /// `cond { cond1 => expr1, ..., True => exprN }`

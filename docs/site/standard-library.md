@@ -562,6 +562,25 @@ focus が `Result<A>` のとき、`over` は `Ok(value)` の payload だけを�
 - successful payload だけ触りたいなら `over` の方が軽い
 - `~source.path` shorthand は source を伴う `Facet` API の第1引数だけで使える
 
+### `Facet::bulk_update`
+
+`Facet::bulk_update(source) { ... }` は、relative path ごとの Facet 更新を
+改行区切りで並べる special form です。
+
+- 返り値: `Result<S>`
+- 許可される update 形: `set`, `over`, `over_result`
+- nested path 形: `path { ... }`
+- 通常 block ではないため、任意の式や `S -> Result<S>` updater は置けない
+
+```surtr
+updated =? Facet::bulk_update(user) {
+  name <- set("taro")
+  profile {
+    nickname <- over_result({|name: Result<String>| Ok(name)})
+  }
+}
+```
+
 ### `Facet::compose`
 
 `Facet::compose(outer, inner)` は 2 つの path を順につなぎます。`outer / inner` は同じ意味の operator sugar です。

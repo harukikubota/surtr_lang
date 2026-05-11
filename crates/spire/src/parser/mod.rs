@@ -720,6 +720,34 @@ fn rewrite_process_owner_refs_in_body(body: Vec<Ast>, old_name: &str, new_name: 
         .collect()
 }
 
+fn rewrite_process_owner_bulk_entries(
+    entries: Vec<BulkUpdateEntry>,
+    old_name: &str,
+    new_name: &str,
+) -> Vec<BulkUpdateEntry> {
+    entries
+        .into_iter()
+        .map(|entry| BulkUpdateEntry {
+            span: entry.span,
+            path: entry.path,
+            kind: match entry.kind {
+                BulkUpdateEntryKind::Set(expr) => {
+                    BulkUpdateEntryKind::Set(rewrite_process_owner_refs(expr, old_name, new_name))
+                }
+                BulkUpdateEntryKind::Over(expr) => {
+                    BulkUpdateEntryKind::Over(rewrite_process_owner_refs(expr, old_name, new_name))
+                }
+                BulkUpdateEntryKind::OverResult(expr) => BulkUpdateEntryKind::OverResult(
+                    rewrite_process_owner_refs(expr, old_name, new_name),
+                ),
+                BulkUpdateEntryKind::Nested(entries) => BulkUpdateEntryKind::Nested(
+                    rewrite_process_owner_bulk_entries(entries, old_name, new_name),
+                ),
+            },
+        })
+        .collect()
+}
+
 fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast {
     match node {
         Ast::App(span, func, args) => {
@@ -845,6 +873,11 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
                     body: rewrite_process_owner_refs(arm.body, old_name, new_name),
                 })
                 .collect(),
+        ),
+        Ast::BulkUpdate(span, source, entries) => Ast::BulkUpdate(
+            span,
+            Box::new(rewrite_process_owner_refs(*source, old_name, new_name)),
+            rewrite_process_owner_bulk_entries(entries, old_name, new_name),
         ),
         Ast::FieldAccess(span, expr, field) => Ast::FieldAccess(
             span,
@@ -1416,6 +1449,30 @@ fn shift_ast_path(path: AstPath, delta: usize) -> AstPath {
     }
 }
 
+fn shift_bulk_update_entries(entries: Vec<BulkUpdateEntry>, delta: usize) -> Vec<BulkUpdateEntry> {
+    entries
+        .into_iter()
+        .map(|entry| BulkUpdateEntry {
+            span: shift_span(entry.span, delta),
+            path: entry.path,
+            kind: match entry.kind {
+                BulkUpdateEntryKind::Set(expr) => {
+                    BulkUpdateEntryKind::Set(shift_ast_span(expr, delta))
+                }
+                BulkUpdateEntryKind::Over(expr) => {
+                    BulkUpdateEntryKind::Over(shift_ast_span(expr, delta))
+                }
+                BulkUpdateEntryKind::OverResult(expr) => {
+                    BulkUpdateEntryKind::OverResult(shift_ast_span(expr, delta))
+                }
+                BulkUpdateEntryKind::Nested(entries) => {
+                    BulkUpdateEntryKind::Nested(shift_bulk_update_entries(entries, delta))
+                }
+            },
+        })
+        .collect()
+}
+
 fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
     match ast {
         Ast::Lit(span, lit) => Ast::Lit(shift_span(span, delta), lit),
@@ -1542,6 +1599,11 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     body: shift_ast_span(arm.body, delta),
                 })
                 .collect(),
+        ),
+        Ast::BulkUpdate(span, source, entries) => Ast::BulkUpdate(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*source, delta)),
+            shift_bulk_update_entries(entries, delta),
         ),
         Ast::FieldAccess(span, expr, field) => Ast::FieldAccess(
             shift_span(span, delta),
@@ -1984,6 +2046,7 @@ impl Ast {
             | Ast::InterpolatedStr(s, _)
             | Ast::Dbg(s, _)
             | Ast::Match(s, _, _)
+            | Ast::BulkUpdate(s, _, _)
             | Ast::FieldAccess(s, _, _)
             | Ast::FacetCapture(s, _)
             | Ast::StructDef(s, _, _, _)
