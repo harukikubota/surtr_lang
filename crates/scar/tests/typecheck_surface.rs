@@ -54,6 +54,14 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         safebind_function_requires_result_return_type as fn(),
     ),
     (
+        "safebind_result_closure_uses_nearest_callable_return_type",
+        safebind_result_closure_uses_nearest_callable_return_type as fn(),
+    ),
+    (
+        "safebind_non_result_closure_is_rejected",
+        safebind_non_result_closure_is_rejected as fn(),
+    ),
+    (
         "safebind_top_ok_pattern_requires_nested_result_rhs",
         safebind_top_ok_pattern_requires_nested_result_rhs as fn(),
     ),
@@ -565,6 +573,22 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     (
         "context_bind_rejects_plain_rhs_return",
         context_bind_rejects_plain_rhs_return as fn(),
+    ),
+    (
+        "context_bind_rhs_closure_receives_result_return_expectation",
+        context_bind_rhs_closure_receives_result_return_expectation as fn(),
+    ),
+    (
+        "apply_and_map_rhs_closures_receive_whole_expression_return_expectation",
+        apply_and_map_rhs_closures_receive_whole_expression_return_expectation as fn(),
+    ),
+    (
+        "kleisli_compose_closures_receive_result_return_expectation",
+        kleisli_compose_closures_receive_result_return_expectation as fn(),
+    ),
+    (
+        "lifted_compose_rhs_closure_allows_explicit_nested_result_expectation",
+        lifted_compose_rhs_closure_allows_explicit_nested_result_expectation as fn(),
     ),
     (
         "context_map_keeps_result_for_later_bind",
@@ -1159,6 +1183,29 @@ fn safebind_function_requires_result_return_type() {
     );
 
     let err = typecheck(resolved).expect_err("typecheck should fail");
+    assert!(err
+        .message
+        .contains("can only be used in functions returning Result"));
+}
+
+fn safebind_result_closure_uses_nearest_callable_return_type() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"handler: (Int -> Result<Int>) = {|x|
+  value =? Ok(x + 1)
+  Ok(value)
+}"#,
+    );
+    typecheck(resolved).expect("Result-returning closure should allow SafeBind");
+}
+
+fn safebind_non_result_closure_is_rejected() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"bad: (Int -> Int) = {|x|
+  value =? Ok(x)
+  value
+}"#,
+    );
+    let err = typecheck(resolved).expect_err("non-Result closure should reject SafeBind");
     assert!(err
         .message
         .contains("can only be used in functions returning Result"));
@@ -3327,6 +3374,66 @@ bad = parse(1) |>= &inc"#,
     assert!(hint.contains("`|>=` signature rule"));
     assert!(hint.contains("RHS: (Int -> Int)"));
     assert!(hint.contains("Use `|*>`"));
+}
+
+fn context_bind_rhs_closure_receives_result_return_expectation() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"bound: Result<Int> = Ok(1) |>= {|x|
+  value =? Ok(x + 1)
+  Ok(value)
+}"#,
+    );
+    typecheck(resolved).expect("bind RHS closure should receive Result return expectation");
+}
+
+fn apply_and_map_rhs_closures_receive_whole_expression_return_expectation() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"applied: Result<Int> = 1 |> {|x|
+  value =? Ok(x + 1)
+  Ok(value)
+}
+
+mapped: Result<Result<Int>> = Ok(1) |*> {|x|
+  value =? Ok(x + 1)
+  Ok(value)
+}"#,
+    );
+    typecheck(resolved)
+        .expect("annotated apply/map operators should pass Result expectation to RHS closures");
+}
+
+fn kleisli_compose_closures_receive_result_return_expectation() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"pipeline: (Int -> Result<Int>) = {|x|
+  value =? Ok(x + 1)
+  Ok(value)
+} >=> {|x|
+  value =? Ok(x + 1)
+  Ok(value)
+}"#,
+    );
+    typecheck(resolved).expect("Kleisli operands should receive Result return expectation");
+}
+
+fn lifted_compose_rhs_closure_allows_explicit_nested_result_expectation() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"deferror Oops {
+  "oops"
+}
+
+def gen(x: Int) -> Result<Int, Oops> {
+  if(x > 0, Ok(x), Err(Oops))
+}
+
+pipeline: (Int -> Result<Result<Int>>) = {|x|
+  gen(x)
+} >* {|x|
+  value =? Ok(x + 1)
+  Ok(value)
+}"#,
+    );
+    typecheck(resolved)
+        .expect("Lifted compose should allow explicit nested Result RHS expectation");
 }
 
 fn context_map_keeps_result_for_later_bind() {

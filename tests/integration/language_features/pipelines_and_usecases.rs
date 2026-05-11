@@ -165,6 +165,56 @@ match bound_grouped {
     );
 }
 
+fn flow_bind_closure_safebind_receives_result_context() {
+    assert_output(
+        r#"deferror Oops {
+  "oops"
+}
+
+def gen(x: Int) -> Result<Int, Oops> {
+  if(x > 0, Ok(x), Err(Oops))
+}
+
+bound: Result<Int> = Ok(2) |>= {|x|
+  value =? gen(x)
+  Ok(value + 10)
+}
+
+bound_grouped: Result<Int> = Ok(2) |>= ({|x|
+  value =? gen(x)
+  Ok(value + 5)
+})
+
+print(inspect(bound))
+print(inspect(bound_grouped))"#,
+        &["Ok(12)", "Ok(7)"],
+    );
+}
+
+fn flow_kleisli_closures_safebind_use_nearest_callable() {
+    assert_output(
+        r#"deferror Oops {
+  "oops"
+}
+
+def gen(x: Int) -> Result<Int, Oops> {
+  if(x > 0, Ok(x), Err(Oops))
+}
+
+pipeline: (Int -> Result<String>) = {|x|
+  value =? gen(x)
+  Ok(value + 1)
+} >=> {|x|
+  value =? gen(x)
+  Ok(to_string(value))
+}
+
+print(inspect(pipeline(1)))
+print(inspect(pipeline(0)))"#,
+        &["Ok(\"2\")", "Err(Oops(\"oops\"))"],
+    );
+}
+
 fn result_pipeline_injects_left_value_into_call_rhs() {
     assert_output(
         r#"deferror TooSmall {
@@ -725,6 +775,14 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "flow_operators_accept_function_value_variables_and_grouped_calls",
             flow_operators_accept_function_value_variables_and_grouped_calls as fn(),
+        ),
+        (
+            "flow_bind_closure_safebind_receives_result_context",
+            flow_bind_closure_safebind_receives_result_context as fn(),
+        ),
+        (
+            "flow_kleisli_closures_safebind_use_nearest_callable",
+            flow_kleisli_closures_safebind_use_nearest_callable as fn(),
         ),
         (
             "result_pipeline_injects_left_value_into_call_rhs",

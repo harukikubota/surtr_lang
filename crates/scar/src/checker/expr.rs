@@ -30,6 +30,18 @@ struct PreparedFacetInput {
     path: TypedFacetPath,
 }
 
+#[derive(Clone, Copy)]
+enum ExpectedCallableSlot {
+    Plain,
+    Contextual,
+}
+
+struct ExpectedCallableContract {
+    input: Ty,
+    ret: Option<Ty>,
+    slot: ExpectedCallableSlot,
+}
+
 impl Checker {
     pub(super) fn match_result_value_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
@@ -865,6 +877,24 @@ impl Checker {
             (Resolved::InferredFacetCapture(span, segments), Some(expected_ty)) => {
                 self.check_inferred_facet_capture(span, segments, expected_ty)
             }
+            (Resolved::Pipe(span, left, right), Some(expected_ty)) => {
+                self.check_pipe_with_expected(span, left, right, Some(expected_ty))
+            }
+            (Resolved::ContextMap(span, left, right), Some(expected_ty)) => {
+                self.check_context_map_with_expected(span, left, right, Some(expected_ty))
+            }
+            (Resolved::ContextBind(span, left, right), Some(expected_ty)) => {
+                self.check_context_bind_with_expected(span, left, right, Some(expected_ty))
+            }
+            (Resolved::Compose(span, left, right), Some(expected_ty)) => {
+                self.check_compose_with_expected(span, left, right, Some(expected_ty))
+            }
+            (Resolved::LiftedCompose(span, left, right), Some(expected_ty)) => {
+                self.check_lifted_compose_with_expected(span, left, right, Some(expected_ty))
+            }
+            (Resolved::KleisliCompose(span, left, right), Some(expected_ty)) => {
+                self.check_kleisli_compose_with_expected(span, left, right, Some(expected_ty))
+            }
             (Resolved::App(span, func, args), Some(expected_ty))
                 if self.is_function_on_callee(func) =>
             {
@@ -872,6 +902,11 @@ impl Checker {
             }
             (Resolved::FieldAccess(span, expr, field), expected_ty) => {
                 self.check_field_access_with_expected(span, expr, field, expected_ty)
+            }
+            (Resolved::Grouped(span, inner), Some(expected_ty)) => {
+                let mut typed = self.check_node_with_expected(inner, Some(expected_ty))?;
+                typed.span = span.clone();
+                Ok(typed)
             }
             (Resolved::ProcessContextHandler(span, slot), _) => {
                 self.check_process_context_handler(span, slot)
@@ -1113,47 +1148,113 @@ impl Checker {
         }
     }
 
-    fn inferred_rhs_expected(&mut self, input_ty: &Ty) -> Ty {
-        Ty::Func(
-            vec![self.resolve_ty(input_ty)],
-            Box::new(self.env.fresh_tyvar()),
-        )
-    }
-
     fn can_use_expected_callable_context(node: &Resolved) -> bool {
         matches!(
             node,
             Resolved::InferredFacetCapture(_, _)
                 | Resolved::Capture(_, _, _)
                 | Resolved::Closure(_, _, _, _)
+                | Resolved::Grouped(_, _)
         )
     }
 
-    fn check_apply_callable_with_input_hint(
+    fn expected_callable_ty(&mut self, contract: &ExpectedCallableContract) -> Ty {
+        match contract.slot {
+            ExpectedCallableSlot::Plain | ExpectedCallableSlot::Contextual => {}
+        }
+        Ty::Func(
+            vec![self.resolve_ty(&contract.input)],
+            Box::new(
+                contract
+                    .ret
+                    .as_ref()
+                    .map(|ret| self.resolve_ty(ret))
+                    .unwrap_or_else(|| self.env.fresh_tyvar()),
+            ),
+        )
+    }
+
+    fn callable_contract(
+        &mut self,
+        input_ty: &Ty,
+        ret_ty: Option<Ty>,
+        slot: ExpectedCallableSlot,
+    ) -> ExpectedCallableContract {
+        ExpectedCallableContract {
+            input: self.resolve_ty(input_ty),
+            ret: ret_ty.map(|ty| self.resolve_ty(&ty)),
+            slot,
+        }
+    }
+
+    fn check_apply_callable_with_contract(
         &mut self,
         node: &Resolved,
-        input_ty: &Ty,
+        contract: &ExpectedCallableContract,
         op_name: &str,
     ) -> Result<TypedNode, TypeError> {
         if Self::can_use_expected_callable_context(node) {
-            let expected = self.inferred_rhs_expected(input_ty);
+            let expected = self.expected_callable_ty(contract);
             self.check_node_with_expected(node, Some(&expected))
         } else {
             self.check_apply_callable(node, op_name)
         }
     }
 
-    fn check_compose_rhs_with_input_hint(
+    fn check_compose_callable_with_contract(
         &mut self,
         node: &Resolved,
-        input_ty: &Ty,
+        contract: &ExpectedCallableContract,
         op_name: &str,
     ) -> Result<TypedNode, TypeError> {
         if Self::can_use_expected_callable_context(node) {
-            let expected = self.inferred_rhs_expected(input_ty);
+            let expected = self.expected_callable_ty(contract);
             self.check_node_with_expected(node, Some(&expected))
         } else {
             self.check_operator_compose_callable(node, op_name)
+        }
+    }
+
+    fn expected_unary_function_parts(&mut self, expected: Option<&Ty>) -> Option<(Ty, Ty)> {
+        let expected = self.resolve_ty(expected?);
+        let Ty::Func(params, ret) = expected else {
+            return None;
+        };
+        if params.len() == 1 {
+            Some((self.resolve_ty(&params[0]), self.resolve_ty(ret.as_ref())))
+        } else {
+            None
+        }
+    }
+
+    fn context_payload_ty(&mut self, ty: &Ty) -> Option<Ty> {
+        match self.resolve_ty(ty) {
+            Ty::Result(ok, _) => Some(self.resolve_ty(ok.as_ref())),
+            Ty::List(item) => Some(self.resolve_ty(item.as_ref())),
+            Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
+                Some(self.resolve_ty(&args[0]))
+            }
+            _ => None,
+        }
+    }
+
+    fn map_rhs_output_from_expected(
+        &mut self,
+        receiver_ty: &Ty,
+        expected: Option<&Ty>,
+    ) -> Option<Ty> {
+        let expected = self.resolve_ty(expected?);
+        match (self.resolve_ty(receiver_ty), expected) {
+            (Ty::Result(_, _), Ty::Result(ok, _)) => Some(self.resolve_ty(ok.as_ref())),
+            (Ty::List(_), Ty::List(item)) => Some(self.resolve_ty(item.as_ref())),
+            (Ty::Enum(receiver_name, _), Ty::Enum(expected_name, expected_args))
+                if Self::surface_name(&receiver_name) == "Option"
+                    && Self::surface_name(&expected_name) == "Option"
+                    && expected_args.len() == 1 =>
+            {
+                Some(self.resolve_ty(&expected_args[0]))
+            }
+            _ => None,
         }
     }
 
@@ -2393,6 +2494,7 @@ impl Checker {
         func: &Resolved,
         args: &[ResolvedRecordLitArg],
         input_ty: Ty,
+        ret_ty: Option<Ty>,
         op_name: &str,
     ) -> Result<Option<TypedNode>, TypeError> {
         if self.trait_method_ref(func).is_none() {
@@ -2439,10 +2541,8 @@ impl Checker {
                 body_args,
             )),
         );
-        let expected = Ty::Func(
-            vec![self.resolve_ty(&input_ty)],
-            Box::new(self.env.fresh_tyvar()),
-        );
+        let contract = self.callable_contract(&input_ty, ret_ty, ExpectedCallableSlot::Contextual);
+        let expected = self.expected_callable_ty(&contract);
         self.check_node_with_expected(&synthetic, Some(&expected))
             .map(Some)
     }
@@ -2553,12 +2653,29 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
+        self.check_pipe_with_expected(span, left, right, None)
+    }
+
+    fn check_pipe_with_expected(
+        &mut self,
+        span: &Span,
+        left: &Resolved,
+        right: &Resolved,
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_node(left)?;
+        let rhs_ret_expected = expected.map(|ty| self.resolve_ty(ty));
         let typed_right = match right {
             Resolved::InferredFacetCapture(_, _)
             | Resolved::Capture(_, _, _)
-            | Resolved::Closure(_, _, _, _) => {
-                self.check_apply_callable_with_input_hint(right, &typed_left.ty, "`|>`")?
+            | Resolved::Closure(_, _, _, _)
+            | Resolved::Grouped(_, _) => {
+                let contract = self.callable_contract(
+                    &typed_left.ty,
+                    rhs_ret_expected.clone(),
+                    ExpectedCallableSlot::Plain,
+                );
+                self.check_apply_callable_with_contract(right, &contract, "`|>`")?
             }
             Resolved::App(call_span, func, args) => {
                 if let Some(typed) = self.check_trait_helper_pipe_callable(
@@ -2566,6 +2683,7 @@ impl Checker {
                     func,
                     args,
                     self.resolve_ty(&typed_left.ty),
+                    rhs_ret_expected.clone(),
                     "`|>`",
                 )? {
                     typed
@@ -2616,6 +2734,16 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
+        self.check_context_map_with_expected(span, left, right, None)
+    }
+
+    fn check_context_map_with_expected(
+        &mut self,
+        span: &Span,
+        left: &Resolved,
+        right: &Resolved,
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_node(left)?;
         let receiver_ty = self.resolve_ty(&typed_left.ty);
         let rhs_input_hint = match &receiver_ty {
@@ -2626,17 +2754,37 @@ impl Checker {
             }
             _ => None,
         };
+        let rhs_ret_expected = self.map_rhs_output_from_expected(&receiver_ty, expected);
+        let allow_contextual_map_output = rhs_ret_expected
+            .as_ref()
+            .map(|ty| match self.resolve_ty(ty) {
+                Ty::Result(_, _) | Ty::List(_) => true,
+                Ty::Enum(name, _) if Self::surface_name(&name) == "Option" => true,
+                _ => false,
+            })
+            .unwrap_or(false);
         let typed_right = if let Some(rhs_in) = &rhs_input_hint {
             if matches!(
                 right,
                 Resolved::InferredFacetCapture(_, _)
                     | Resolved::Capture(_, _, _)
                     | Resolved::Closure(_, _, _, _)
+                    | Resolved::Grouped(_, _)
             ) {
-                self.check_apply_callable_with_input_hint(right, rhs_in, "`|*>`")?
+                let contract = self.callable_contract(
+                    rhs_in,
+                    rhs_ret_expected.clone(),
+                    ExpectedCallableSlot::Plain,
+                );
+                self.check_apply_callable_with_contract(right, &contract, "`|*>`")?
             } else {
-                let expected = self.inferred_rhs_expected(rhs_in);
-                self.check_node_with_expected(right, Some(&expected))
+                let contract = self.callable_contract(
+                    rhs_in,
+                    rhs_ret_expected.clone(),
+                    ExpectedCallableSlot::Plain,
+                );
+                let expected_callable = self.expected_callable_ty(&contract);
+                self.check_node_with_expected(right, Some(&expected_callable))
                     .or_else(|_| self.check_apply_callable(right, "`|*>`"))?
             }
         } else {
@@ -2644,7 +2792,9 @@ impl Checker {
         };
         let (rhs_in, rhs_out) =
             self.unary_function_parts(&typed_right.ty, "`|*>`", &typed_right.span)?;
-        self.ensure_plain_map_output(&rhs_out, "`|*>`", &typed_right.span)?;
+        if !allow_contextual_map_output {
+            self.ensure_plain_map_output(&rhs_out, "`|*>`", &typed_right.span)?;
+        }
 
         match &receiver_ty {
             Ty::Result(ok, _) => {
@@ -2771,27 +2921,63 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
+        self.check_context_bind_with_expected(span, left, right, None)
+    }
+
+    fn check_context_bind_with_expected(
+        &mut self,
+        span: &Span,
+        left: &Resolved,
+        right: &Resolved,
+        _expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_node(left)?;
         let receiver_ty = self.resolve_ty(&typed_left.ty);
-        let trait_helper_input_ty = match &receiver_ty {
-            Ty::Result(ok, _) => Some(self.resolve_ty(ok.as_ref())),
-            Ty::List(item) => Some(self.resolve_ty(item.as_ref())),
+        let trait_helper_contract = match &receiver_ty {
+            Ty::Result(ok, err) => {
+                let next_ok = self.env.fresh_tyvar();
+                let err_ty = self.resolve_ty(err.as_ref());
+                Some(self.callable_contract(
+                    ok.as_ref(),
+                    Some(Ty::Result(Box::new(next_ok), Box::new(err_ty))),
+                    ExpectedCallableSlot::Contextual,
+                ))
+            }
+            Ty::List(item) => {
+                let next_item = self.env.fresh_tyvar();
+                Some(self.callable_contract(
+                    item.as_ref(),
+                    Some(Ty::List(Box::new(next_item))),
+                    ExpectedCallableSlot::Contextual,
+                ))
+            }
             Ty::Enum(name, args) if Self::surface_name(name) == "Option" && args.len() == 1 => {
-                Some(self.resolve_ty(&args[0]))
+                let next_item = self.env.fresh_tyvar();
+                Some(self.callable_contract(
+                    &args[0],
+                    Some(Ty::Enum(name.clone(), vec![next_item])),
+                    ExpectedCallableSlot::Contextual,
+                ))
             }
             _ => None,
         };
-        let typed_right = match (right, trait_helper_input_ty) {
+        let typed_right = match (right, trait_helper_contract) {
             (
                 Resolved::InferredFacetCapture(_, _)
                 | Resolved::Capture(_, _, _)
-                | Resolved::Closure(_, _, _, _),
-                Some(input_ty),
-            ) => self.check_apply_callable_with_input_hint(right, &input_ty, "`|>=`")?,
-            (Resolved::App(call_span, func, args), Some(input_ty)) => {
-                if let Some(typed) =
-                    self.check_trait_helper_pipe_callable(call_span, func, args, input_ty, "`|>=`")?
-                {
+                | Resolved::Closure(_, _, _, _)
+                | Resolved::Grouped(_, _),
+                Some(contract),
+            ) => self.check_apply_callable_with_contract(right, &contract, "`|>=`")?,
+            (Resolved::App(call_span, func, args), Some(contract)) => {
+                if let Some(typed) = self.check_trait_helper_pipe_callable(
+                    call_span,
+                    func,
+                    args,
+                    contract.input.clone(),
+                    contract.ret.clone(),
+                    "`|>=`",
+                )? {
                     typed
                 } else {
                     self.check_apply_callable(right, "`|>=`")?
@@ -3045,10 +3231,30 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_left = self.check_operator_compose_callable(left, "`>>`")?;
+        self.check_compose_with_expected(span, left, right, None)
+    }
+
+    fn check_compose_with_expected(
+        &mut self,
+        span: &Span,
+        left: &Resolved,
+        right: &Resolved,
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let expected_parts = self.expected_unary_function_parts(expected);
+        let typed_left = if let Some((expected_in, _)) = &expected_parts {
+            let contract = self.callable_contract(expected_in, None, ExpectedCallableSlot::Plain);
+            self.check_compose_callable_with_contract(left, &contract, "`>>`")?
+        } else {
+            self.check_operator_compose_callable(left, "`>>`")?
+        };
         let (left_in, left_out) =
             self.unary_function_parts(&typed_left.ty, "`>>`", &typed_left.span)?;
-        let typed_right = self.check_compose_rhs_with_input_hint(right, &left_out, "`>>`")?;
+        let right_ret_expected = expected_parts.map(|(_, ret)| ret);
+        let right_contract =
+            self.callable_contract(&left_out, right_ret_expected, ExpectedCallableSlot::Plain);
+        let typed_right =
+            self.check_compose_callable_with_contract(right, &right_contract, "`>>`")?;
         let (right_in, right_out) =
             self.unary_function_parts(&typed_right.ty, "`>>`", &typed_right.span)?;
         if !self.types_compatible(&left_out, &right_in) {
@@ -3106,7 +3312,45 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_left = self.check_operator_compose_callable(left, "`>*`")?;
+        self.check_lifted_compose_with_expected(span, left, right, None)
+    }
+
+    fn check_lifted_compose_with_expected(
+        &mut self,
+        span: &Span,
+        left: &Resolved,
+        right: &Resolved,
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let expected_parts = self.expected_unary_function_parts(expected);
+        let expected_ret = expected_parts.as_ref().map(|(_, ret)| ret.clone());
+        let typed_left = if let Some((expected_in, expected_ret)) = &expected_parts {
+            let left_context_ret = match self.resolve_ty(expected_ret) {
+                Ty::Result(_, err) => Some(Ty::Result(
+                    Box::new(self.env.fresh_tyvar()),
+                    Box::new(self.resolve_ty(err.as_ref())),
+                )),
+                Ty::List(_) => Some(Ty::List(Box::new(self.env.fresh_tyvar()))),
+                Ty::Enum(name, args)
+                    if Self::surface_name(&name) == "Option" && args.len() == 1 =>
+                {
+                    Some(Ty::Enum(name, vec![self.env.fresh_tyvar()]))
+                }
+                _ => None,
+            };
+            if let Some(left_ret) = left_context_ret {
+                let contract = self.callable_contract(
+                    expected_in,
+                    Some(left_ret),
+                    ExpectedCallableSlot::Contextual,
+                );
+                self.check_compose_callable_with_contract(left, &contract, "`>*`")?
+            } else {
+                self.check_operator_compose_callable(left, "`>*`")?
+            }
+        } else {
+            self.check_operator_compose_callable(left, "`>*`")?
+        };
         let (left_in, left_out) =
             self.unary_function_parts(&typed_left.ty, "`>*`", &typed_left.span)?;
         let rhs_input_hint = match self.resolve_ty(&left_out) {
@@ -3117,14 +3361,25 @@ impl Checker {
             }
             _ => None,
         };
+        let mut allow_contextual_lift_output = false;
         let typed_right = if let Some(rhs_in) = &rhs_input_hint {
-            self.check_compose_rhs_with_input_hint(right, rhs_in, "`>*`")?
+            let rhs_ret_expected = expected_ret.as_ref().and_then(|ret| {
+                let payload = self.context_payload_ty(ret)?;
+                allow_contextual_lift_output = matches!(self.resolve_ty(&payload), Ty::Result(_, _) | Ty::List(_))
+                    || matches!(self.resolve_ty(&payload), Ty::Enum(name, _) if Self::surface_name(&name) == "Option");
+                Some(payload)
+            });
+            let contract =
+                self.callable_contract(rhs_in, rhs_ret_expected, ExpectedCallableSlot::Plain);
+            self.check_compose_callable_with_contract(right, &contract, "`>*`")?
         } else {
             self.check_operator_compose_callable(right, "`>*`")?
         };
         let (right_in, right_out) =
             self.unary_function_parts(&typed_right.ty, "`>*`", &typed_right.span)?;
-        self.ensure_plain_map_output(&right_out, "`>*`", &typed_right.span)?;
+        if !allow_contextual_lift_output {
+            self.ensure_plain_map_output(&right_out, "`>*`", &typed_right.span)?;
+        }
         match self.resolve_ty(&left_out) {
             Ty::Result(ok, err) => {
                 if !self.types_compatible(ok.as_ref(), &right_in) {
@@ -3275,7 +3530,45 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_left = self.check_operator_compose_callable(left, "`>=>`")?;
+        self.check_kleisli_compose_with_expected(span, left, right, None)
+    }
+
+    fn check_kleisli_compose_with_expected(
+        &mut self,
+        span: &Span,
+        left: &Resolved,
+        right: &Resolved,
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let expected_parts = self.expected_unary_function_parts(expected);
+        let expected_ret = expected_parts.as_ref().map(|(_, ret)| ret.clone());
+        let typed_left = if let Some((expected_in, expected_ret)) = &expected_parts {
+            let left_context_ret = match self.resolve_ty(expected_ret) {
+                Ty::Result(_, err) => Some(Ty::Result(
+                    Box::new(self.env.fresh_tyvar()),
+                    Box::new(self.resolve_ty(err.as_ref())),
+                )),
+                Ty::List(_) => Some(Ty::List(Box::new(self.env.fresh_tyvar()))),
+                Ty::Enum(name, args)
+                    if Self::surface_name(&name) == "Option" && args.len() == 1 =>
+                {
+                    Some(Ty::Enum(name, vec![self.env.fresh_tyvar()]))
+                }
+                _ => None,
+            };
+            if let Some(left_ret) = left_context_ret {
+                let contract = self.callable_contract(
+                    expected_in,
+                    Some(left_ret),
+                    ExpectedCallableSlot::Contextual,
+                );
+                self.check_compose_callable_with_contract(left, &contract, "`>=>`")?
+            } else {
+                self.check_operator_compose_callable(left, "`>=>`")?
+            }
+        } else {
+            self.check_operator_compose_callable(left, "`>=>`")?
+        };
         let (left_in, left_out) =
             self.unary_function_parts(&typed_left.ty, "`>=>`", &typed_left.span)?;
         let rhs_input_hint = match self.resolve_ty(&left_out) {
@@ -3287,7 +3580,25 @@ impl Checker {
             _ => None,
         };
         let typed_right = if let Some(rhs_in) = &rhs_input_hint {
-            self.check_compose_rhs_with_input_hint(right, rhs_in, "`>=>`")?
+            let rhs_ret_expected =
+                expected_ret
+                    .clone()
+                    .or_else(|| match self.resolve_ty(&left_out) {
+                        Ty::Result(_, err) => Some(Ty::Result(
+                            Box::new(self.env.fresh_tyvar()),
+                            Box::new(self.resolve_ty(err.as_ref())),
+                        )),
+                        Ty::List(_) => Some(Ty::List(Box::new(self.env.fresh_tyvar()))),
+                        Ty::Enum(name, args)
+                            if Self::surface_name(&name) == "Option" && args.len() == 1 =>
+                        {
+                            Some(Ty::Enum(name, vec![self.env.fresh_tyvar()]))
+                        }
+                        _ => None,
+                    });
+            let contract =
+                self.callable_contract(rhs_in, rhs_ret_expected, ExpectedCallableSlot::Contextual);
+            self.check_compose_callable_with_contract(right, &contract, "`>=>`")?
         } else {
             self.check_operator_compose_callable(right, "`>=>`")?
         };
