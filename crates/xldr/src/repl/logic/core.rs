@@ -2074,16 +2074,10 @@ impl ReplEngine {
     }
 
     fn display_signature_for_doc_entry(entry: &DocEntry) -> Option<String> {
-        match entry.qualified_name.as_str() {
-            "Bootstrap::match" => Some("match value { pattern => expr, ... } -> $B".to_string()),
-            "Bootstrap::cond" => {
-                Some("cond { cond1 => expr1, ..., True => exprN } -> $A".to_string())
-            }
-            _ => entry
-                .signature
-                .clone()
-                .map(|signature| crate::surface_rendered_name(&signature)),
-        }
+        entry
+            .signature
+            .clone()
+            .map(|signature| crate::surface_rendered_name(&signature))
     }
 
     fn handle_doc_binding(&self, symbol: &str) -> Option<ReplResult> {

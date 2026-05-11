@@ -620,7 +620,7 @@ fn core_doc_reports_match_and_cond_from_bootstrap_surface() {
     let match_doc = doc_text(&match_doc);
     assert!(match_doc.contains("Bootstrap::match"), "{match_doc}");
     assert!(
-        match_doc.contains("match value { pattern => expr, ... } -> $B"),
+        match_doc.contains("@intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B"),
         "{match_doc}"
     );
     assert!(match_doc.contains("Match special form."), "{match_doc}");
@@ -641,7 +641,7 @@ fn core_doc_reports_match_and_cond_from_bootstrap_surface() {
     let cond_doc = doc_text(&cond_doc);
     assert!(cond_doc.contains("Bootstrap::cond"), "{cond_doc}");
     assert!(
-        cond_doc.contains("cond { cond1 => expr1, ..., True => exprN } -> $A"),
+        cond_doc.contains("@intrinsic def cond(clauses: CondClauses<$A>) -> $A"),
         "{cond_doc}"
     );
     assert!(cond_doc.contains("Cond special form."), "{cond_doc}");
@@ -1110,14 +1110,14 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let match_sig = signature_text(&match_sig);
     assert_eq!(
         match_sig.trim(),
-        "match value { pattern => expr, ... } -> $B"
+        "@intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B"
     );
 
     let cond_sig = engine.handle_line(":sig cond");
     let cond_sig = signature_text(&cond_sig);
     assert_eq!(
         cond_sig.trim(),
-        "cond { cond1 => expr1, ..., True => exprN } -> $A"
+        "@intrinsic def cond(clauses: CondClauses<$A>) -> $A"
     );
 
     let typed_doc = engine.handle_line(":doc gt(Int, Int)");
