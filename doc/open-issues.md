@@ -131,8 +131,8 @@
   - worker 生成、所有権移譲、終了観測の surface が REPL / script / project で一貫する。
   - current process ownership を default とする方針と `DynamicSupervisor` 配下運用の両方を矛盾なく説明できる。
 - テスト方針:
-  - `spec/process_runtime/**` に worker spawn / await / on_down / supervisor 経由 spawn の成立ケースを追加する。
-  - `compile_errors/process_runtime/**` に不正な ownership / lifecycle API 組み合わせを追加する。
+  - `tests/fixtures/script/pass/process_runtime/**` に worker spawn / await / on_down / supervisor 経由 spawn の成立ケースを追加する。
+  - `tests/fixtures/script/fail/process_runtime/**` に不正な ownership / lifecycle API 組み合わせを追加する。
 
 ### OI-018 Process Runtime の最終同期項目
 

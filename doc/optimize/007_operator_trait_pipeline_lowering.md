@@ -140,7 +140,7 @@ pub enum OperatorTraitOp {
 最小検証コマンド:
 
 ```bash
-cargo nextest run -p rune --test run_srt
+cargo nextest run -p rune --test integration run_srt
 cargo nextest run --workspace
 ```
 

@@ -399,7 +399,7 @@ Project, Random, File, FS, IO, Shell, StyledDoc
 cargo nextest run -p sindr
 cargo nextest run -p scar
 cargo nextest run -p eldr
-cargo nextest run -p rune --test test_command
+cargo nextest run -p rune --test integration test_command
 cargo nextest run --workspace
 ```
 

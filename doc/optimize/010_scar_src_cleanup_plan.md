@@ -13,7 +13,7 @@
 ## 前提
 
 - `doc/optimize/009_scar_surface_test_harness_cleanup.md` の方針を引き継ぐ。
-- user-visible behavior は `tests/spec/**` と `tests/compile_errors/**` を正本にする。
+- user-visible behavior は `tests/fixtures/script/**` と `tests/fixtures/modules/**` を正本にする。
 - Scar crate 側に残す Rust tests は、typed IR / metadata / private invariant を直接見るものに寄せる。
 
 ## 実施内容
@@ -40,8 +40,7 @@
 ## 変更しない範囲
 
 - `lib/*.srt`
-- `tests/spec/**/*.srt`
-- `tests/compile_errors/**/*.srt`
+- `tests/fixtures/**/*.srt`
 - `*.expected` / `*.error`
 - `types_compatible` / `bind_tyvar` / `resolve_ty`
 - trait specialization 本体

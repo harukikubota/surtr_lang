@@ -15,7 +15,7 @@ local-frame semantics.
     `result_helpers.srt` bytecode after standard-library lowering.
 - `CopyLocal { src_local_idx, dst_local_idx }`
   - Replaces `LoadLocal(src_local_idx); StoreLocal(dst_local_idx)`.
-  - In the sampled standard-heavy `tests/spec/stdmod/result_helpers.srt`
+  - In the sampled standard-heavy `tests/fixtures/script/pass/stdmod/result_helpers.srt`
     bytecode, this removed 689 adjacent load/store pairs.
 - `EqLocalTag { local_idx, tag_const_idx }`
   - Replaces `LoadLocal(local_idx); GetTag; LoadConst(tag_const_idx); EqTag`.
@@ -29,7 +29,7 @@ Sample command shape:
 ```bash
 SURTR_RUN_CACHE=0 CARGO_TARGET_DIR=/private/tmp/surtr-target \
   cargo run --manifest-path /Users/haruca/work/rust/surtr/Cargo.toml \
-  -p rune -- dump /Users/haruca/work/rust/surtr/tests/spec/stdmod/result_helpers.srt \
+  -p rune -- dump /Users/haruca/work/rust/surtr/tests/fixtures/script/pass/stdmod/result_helpers.srt \
   --format json
 ```
 

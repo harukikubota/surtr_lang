@@ -448,7 +448,8 @@ fn run_vm_dump_includes_process_runtime_tables_for_agents() {
         .into_iter()
         .find(|fixture| {
             fixture.case.case_dir
-                == repo_root().join("tests/spec/modules/process_state_agent_singleton_surface")
+                == repo_root()
+                    .join("tests/fixtures/modules/pass/process_state_agent_singleton_surface")
         })
         .expect("process_state_agent_singleton_surface fixture should exist");
     let module_sources =

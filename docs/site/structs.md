@@ -256,5 +256,5 @@ match user {
 - ソース
   - `../../doc/要件定義v9.md`
   - `../../tests/integration/language_features/core_language.rs`
-  - `../../tests/spec/modules/private_visibility_*`
-  - `../../tests/compile_errors/modules/private_field_*`
+  - `../../tests/fixtures/modules/pass/private_visibility_*`
+  - `../../tests/fixtures/modules/fail/private_field_*`

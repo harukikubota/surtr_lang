@@ -60,13 +60,13 @@ helper には `OnceLock` による std prelude cache があるが、`cargo nexte
 ## 残った課題
 
 - `typecheck_surface.rs` はまだ 212 case を保持している。実行時間の大部分は各 case が小さな source snippet を個別に parse / resolve / typecheck することに残っている。
-- Facet / Process / trait helper 周辺には、`spec` / `compile_errors` / integration fixture と重複する legacy surface tests が多い。
+- Facet / Process / trait helper 周辺には、`tests/fixtures/**` / integration fixture と重複する legacy surface tests が多い。
 - clean build 短縮をさらに進めるなら、Scar に残すのは typed IR / metadata / private invariant を直接見る case に絞り、user-visible behavior は既存 fixture 層へ寄せる。
 
 ## 今後の方針
 
 - `crates/scar/tests/typecheck_surface.rs` は「公開 API で見たい Scar 固有の typed result」に限定する。
-- user-visible 成功 / 失敗は `tests/spec/**` と `tests/compile_errors/**` を正本にする。
+- user-visible 成功 / 失敗は `tests/fixtures/script/**` と `tests/fixtures/modules/**` を正本にする。
 - 新規型機能追加が薄い前提では、型周りの surface regression を増やすより、既存 case の重複削除を優先する。
 - clean timing は workspace 全体と package 単体を分けて記録し、warm nextest の改善と混同しない。
 

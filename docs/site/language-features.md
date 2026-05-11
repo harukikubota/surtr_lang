@@ -89,7 +89,7 @@ print(to_string(add(3, 4)))
 
 - surface の正本: `../../doc/要件定義v9.md`
 - 標準定義ソースの説明: `./standard-modules.md`
-- 実例: `../../tests/spec/modules/`
+- 実例: `../../tests/fixtures/modules/pass/`
 
 ## 確認したソース
 

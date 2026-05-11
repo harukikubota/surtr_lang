@@ -6,7 +6,7 @@ use crate::support;
 use xldr::ModuleInput;
 
 fn find_module_spec_case(name: &str) -> crate::common::ModuleSpecFixtureCase {
-    let case_dir = repo_root().join(format!("tests/spec/modules/{name}"));
+    let case_dir = repo_root().join(format!("tests/fixtures/modules/pass/{name}"));
     module_spec_fixtures()
         .into_iter()
         .find(|fixture| fixture.case.case_dir == case_dir)
@@ -14,7 +14,7 @@ fn find_module_spec_case(name: &str) -> crate::common::ModuleSpecFixtureCase {
 }
 
 fn find_module_compile_error_case(name: &str) -> crate::common::ModuleCompileErrorFixtureCase {
-    let case_dir = repo_root().join(format!("tests/compile_errors/modules/{name}"));
+    let case_dir = repo_root().join(format!("tests/fixtures/modules/fail/{name}"));
     module_compile_error_fixtures()
         .into_iter()
         .find(|fixture| fixture.case.case_dir == case_dir)

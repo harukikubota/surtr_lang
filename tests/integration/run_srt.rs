@@ -1,7 +1,7 @@
-use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::common::{
@@ -41,12 +41,6 @@ fn run_surtr(source: &str) -> Result<Vec<String>, String> {
     support::run_script("fixture.srt", source)
 }
 
-#[derive(Debug)]
-struct PhaseTiming {
-    phase: String,
-    duration: Duration,
-}
-
 fn timing_breakdown_enabled() -> bool {
     matches!(
         env::var("SURTR_TEST_TIMING").as_deref(),
@@ -54,29 +48,28 @@ fn timing_breakdown_enabled() -> bool {
     )
 }
 
-fn print_timing_breakdown(
+fn print_timing_report(
+    group: &str,
+    fixture_count: usize,
     total: Duration,
-    phase_totals: &[PhaseTiming],
-    slowest: &[(PathBuf, String, Duration)],
+    cache: support::CacheStatsSnapshot,
+    slowest: Vec<support::SlowFixtureTiming>,
 ) {
-    eprintln!("compile_error timing total: {:.3}s", total.as_secs_f64());
+    eprintln!(
+        "{}",
+        support::format_timing_report(&support::TimingReportInput {
+            group,
+            fixture_count,
+            total,
+            cache,
+            slowest: &slowest,
+        })
+    );
+}
 
-    for phase in phase_totals {
-        eprintln!(
-            "phase {} total: {:.3}s",
-            phase.phase,
-            phase.duration.as_secs_f64()
-        );
-    }
-
-    for (path, phase, duration) in slowest.iter().take(10) {
-        eprintln!(
-            "slow fixture {:.3}s [{}] {}",
-            duration.as_secs_f64(),
-            phase,
-            path.display()
-        );
-    }
+fn timing_report_lock() -> &'static Mutex<()> {
+    static TIMING_REPORT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    TIMING_REPORT_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
@@ -93,7 +86,19 @@ fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
         bucket_count
     );
 
+    let timing_enabled = timing_breakdown_enabled();
+    let _timing_guard = timing_enabled.then(|| {
+        timing_report_lock()
+            .lock()
+            .expect("timing report lock poisoned")
+    });
+    let cache_stats_start = support::cache_stats_snapshot();
+    let timing_start = Instant::now();
+    let mut slowest = Vec::<support::SlowFixtureTiming>::new();
+    let fixture_count = sources.len();
+
     for fixture in sources {
+        let fixture_start = Instant::now();
         let output = run_surtr(fixture.source).unwrap_or_else(|e| {
             panic!(
                 "pipeline failed for {}: {}",
@@ -101,6 +106,14 @@ fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
                 e
             )
         });
+        let fixture_elapsed = fixture_start.elapsed();
+        if timing_enabled {
+            slowest.push(support::SlowFixtureTiming {
+                path: fixture.source_path.clone(),
+                phase: "run".to_string(),
+                duration: fixture_elapsed,
+            });
+        }
 
         let actual_stdout = output.join("\n");
         assert_eq!(
@@ -108,6 +121,21 @@ fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
             normalize_text(fixture.expected),
             "stdout mismatch for {}",
             fixture.source_path.display()
+        );
+    }
+
+    if timing_enabled {
+        slowest.sort_by(|a, b| {
+            b.duration
+                .cmp(&a.duration)
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        print_timing_report(
+            &format!("script pass bucket {bucket}"),
+            fixture_count,
+            timing_start.elapsed(),
+            support::cache_stats_snapshot().saturating_delta_since(&cache_stats_start),
+            slowest,
         );
     }
 }
@@ -147,9 +175,15 @@ fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
     );
 
     let timing_enabled = timing_breakdown_enabled();
+    let _timing_guard = timing_enabled.then(|| {
+        timing_report_lock()
+            .lock()
+            .expect("timing report lock poisoned")
+    });
+    let cache_stats_start = support::cache_stats_snapshot();
     let timing_start = Instant::now();
-    let mut phase_totals = HashMap::<String, Duration>::new();
-    let mut slowest = Vec::<(PathBuf, String, Duration)>::new();
+    let mut slowest = Vec::<support::SlowFixtureTiming>::new();
+    let fixture_count = sources.len();
 
     for fixture in sources {
         let expected = parse_compile_error_expectation(&fixture.error_path);
@@ -160,8 +194,11 @@ fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
         let fixture_elapsed = fixture_start.elapsed();
 
         if timing_enabled {
-            *phase_totals.entry(phase_name.clone()).or_default() += fixture_elapsed;
-            slowest.push((fixture.source_path.clone(), phase_name, fixture_elapsed));
+            slowest.push(support::SlowFixtureTiming {
+                path: fixture.source_path.clone(),
+                phase: phase_name,
+                duration: fixture_elapsed,
+            });
         }
 
         match result {
@@ -193,18 +230,18 @@ fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
     }
 
     if timing_enabled {
-        let mut phase_totals = phase_totals
-            .into_iter()
-            .map(|(phase, duration)| PhaseTiming { phase, duration })
-            .collect::<Vec<_>>();
-        phase_totals.sort_by(|a, b| {
+        slowest.sort_by(|a, b| {
             b.duration
                 .cmp(&a.duration)
-                .then_with(|| a.phase.cmp(&b.phase))
+                .then_with(|| a.path.cmp(&b.path))
         });
-
-        slowest.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
-        print_timing_breakdown(timing_start.elapsed(), &phase_totals, &slowest);
+        print_timing_report(
+            &format!("script fail bucket {bucket}"),
+            fixture_count,
+            timing_start.elapsed(),
+            support::cache_stats_snapshot().saturating_delta_since(&cache_stats_start),
+            slowest,
+        );
     }
 }
 

@@ -165,31 +165,42 @@ Forge は `GetField(idx)` を emit するだけでよい。
 ### 仕様ベーステスト
 
 ```
-tests/spec/
-  control/*.srt + *.expected
-  types/*.srt + *.expected
+tests/fixtures/script/pass/
+  functions/*.srt + *.expected
+  stdmod/*.srt + *.expected
   ...
 
-tests/compile_errors/
-  type_mismatch/*.srt + *.error
+tests/fixtures/script/fail/
+  typecheck/*.srt + *.error
   exhaustiveness/*.srt + *.error
   ...
+
+tests/fixtures/modules/pass/<case>/
+  entry.srt + entry.expected
+  *.srt
+
+tests/fixtures/modules/fail/<case>/
+  entry.srt + entry.error
+  *.srt
 ```
 
 実行方法:
 
 ```bash
 cargo nextest run --workspace
-cargo nextest run -p rune --test run_srt
+cargo nextest run -p rune --test integration run_srt
+cargo nextest run -p rune --test integration module_import_fixtures
 ```
 
-`spec` は `stdout` を `.expected` と比較して一致すれば合格。
-`compile_errors` は `.error` の `phase` / `contains` を満たせば合格。
+`script/pass` は `stdout` を `.expected` と比較して一致すれば合格。
+`script/fail` は `.error` の `phase` / `contains` を満たせば合格。
 
 ### エラーケース
 
-コンパイルエラーになるべきファイルは `tests/compile_errors/**.srt` に配置し、
+コンパイルエラーになるべき script fixture は `tests/fixtures/script/fail/**.srt` に配置し、
 対応する `.error` で `phase` / `contains` を検証すること。
+multi-source module のコンパイルエラーは `tests/fixtures/modules/fail/<case>/entry.srt` と
+`entry.error` で固定すること。
 
 ---
 
@@ -262,7 +273,7 @@ Error: TypeMismatch
 ### 6. 完了条件（Definition of Done）
 
 - 実装: 仕様差分が説明可能
-- テスト: 最低 `cargo nextest run --workspace`、必要に応じ `cargo nextest run -p rune --test run_srt`
+- テスト: 最低 `cargo nextest run --workspace`、必要に応じ `cargo nextest run -p rune --test integration run_srt`
 - 共有: 変更理由・影響範囲・未解決事項を PR/ログに明記
 
 ---

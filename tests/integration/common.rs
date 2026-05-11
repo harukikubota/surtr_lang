@@ -147,14 +147,6 @@ fn sorted_immediate_subdirs(dir: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-fn normalize_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
-fn is_module_fixture(path: &Path) -> bool {
-    normalize_path(path).contains("/modules/")
-}
-
 fn module_path_from_fixture_file(path: &Path) -> String {
     path.file_stem()
         .and_then(|stem| stem.to_str())
@@ -217,7 +209,10 @@ fn collect_module_fixture_stages(case_dir: &Path) -> Vec<Vec<ModuleInput>> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_stage_dir_order;
+    use super::{
+        compile_error_fixtures, module_compile_error_fixtures, module_spec_fixtures,
+        parse_stage_dir_order, spec_fixtures,
+    };
     use std::path::Path;
 
     #[test]
@@ -228,6 +223,60 @@ mod tests {
         assert_eq!(parse_stage_dir_order(Path::new("stage-notes")), None);
         assert_eq!(parse_stage_dir_order(Path::new("notes")), None);
     }
+
+    #[test]
+    fn script_pass_fixtures_use_warm_fixture_root() {
+        let fixtures = spec_fixtures();
+        assert!(!fixtures.is_empty(), "expected script pass fixtures");
+        assert!(
+            fixtures.iter().all(|fixture| fixture
+                .source_path
+                .to_string_lossy()
+                .contains("/tests/fixtures/script/pass/")),
+            "script pass fixtures should live under tests/fixtures/script/pass"
+        );
+    }
+
+    #[test]
+    fn script_fail_fixtures_use_warm_fixture_root() {
+        let fixtures = compile_error_fixtures();
+        assert!(!fixtures.is_empty(), "expected script fail fixtures");
+        assert!(
+            fixtures.iter().all(|fixture| fixture
+                .source_path
+                .to_string_lossy()
+                .contains("/tests/fixtures/script/fail/")),
+            "script fail fixtures should live under tests/fixtures/script/fail"
+        );
+    }
+
+    #[test]
+    fn module_pass_fixtures_use_warm_fixture_root() {
+        let fixtures = module_spec_fixtures();
+        assert!(!fixtures.is_empty(), "expected module pass fixtures");
+        assert!(
+            fixtures.iter().all(|fixture| fixture
+                .case
+                .case_dir
+                .to_string_lossy()
+                .contains("/tests/fixtures/modules/pass/")),
+            "module pass fixtures should live under tests/fixtures/modules/pass"
+        );
+    }
+
+    #[test]
+    fn module_fail_fixtures_use_warm_fixture_root() {
+        let fixtures = module_compile_error_fixtures();
+        assert!(!fixtures.is_empty(), "expected module fail fixtures");
+        assert!(
+            fixtures.iter().all(|fixture| fixture
+                .case
+                .case_dir
+                .to_string_lossy()
+                .contains("/tests/fixtures/modules/fail/")),
+            "module fail fixtures should live under tests/fixtures/modules/fail"
+        );
+    }
 }
 
 pub fn spec_fixtures() -> Vec<SpecFixture> {
@@ -235,17 +284,21 @@ pub fn spec_fixtures() -> Vec<SpecFixture> {
 
     FIXTURES
         .get_or_init(|| {
-            let spec_root = repo_root().join("tests/spec");
+            let spec_root = repo_root().join("tests/fixtures/script/pass");
             let mut fixtures = collect_files_with_extension(&spec_root, "srt")
                 .into_iter()
-                .filter(|path| !is_module_fixture(path))
-                .filter_map(|path| {
+                .map(|path| {
                     let expected_path = path.with_extension("expected");
-                    expected_path.exists().then(|| SpecFixture {
+                    assert!(
+                        expected_path.exists(),
+                        "missing expected file for script pass fixture: {}",
+                        path.display()
+                    );
+                    SpecFixture {
                         source_path: path.clone(),
                         source: leak_text(read_text(&path)),
                         expected: leak_text(read_text(&expected_path)),
-                    })
+                    }
                 })
                 .collect::<Vec<_>>();
             fixtures.sort_by(|a, b| a.source_path.cmp(&b.source_path));
@@ -259,17 +312,21 @@ pub fn compile_error_fixtures() -> Vec<CompileErrorFixture> {
 
     FIXTURES
         .get_or_init(|| {
-            let compile_errors_root = repo_root().join("tests/compile_errors");
+            let compile_errors_root = repo_root().join("tests/fixtures/script/fail");
             let mut fixtures = collect_files_with_extension(&compile_errors_root, "srt")
                 .into_iter()
-                .filter(|path| !is_module_fixture(path))
-                .filter_map(|path| {
+                .map(|path| {
                     let error_path = path.with_extension("error");
-                    error_path.exists().then(|| CompileErrorFixture {
+                    assert!(
+                        error_path.exists(),
+                        "missing error file for script fail fixture: {}",
+                        path.display()
+                    );
+                    CompileErrorFixture {
                         source_path: path.clone(),
                         source: leak_text(read_text(&path)),
                         error_path,
-                    })
+                    }
                 })
                 .collect::<Vec<_>>();
             fixtures.sort_by(|a, b| a.source_path.cmp(&b.source_path));
@@ -283,7 +340,7 @@ pub fn module_spec_fixtures() -> Vec<ModuleSpecFixtureCase> {
 
     FIXTURES
         .get_or_init(|| {
-            let modules_root = repo_root().join("tests/spec/modules");
+            let modules_root = repo_root().join("tests/fixtures/modules/pass");
             let mut fixtures = sorted_immediate_subdirs(&modules_root)
                 .into_iter()
                 .filter_map(|case_dir| {
@@ -312,7 +369,7 @@ pub fn module_compile_error_fixtures() -> Vec<ModuleCompileErrorFixtureCase> {
 
     FIXTURES
         .get_or_init(|| {
-            let modules_root = repo_root().join("tests/compile_errors/modules");
+            let modules_root = repo_root().join("tests/fixtures/modules/fail");
             let mut fixtures = sorted_immediate_subdirs(&modules_root)
                 .into_iter()
                 .filter_map(|case_dir| {

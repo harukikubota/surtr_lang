@@ -176,7 +176,7 @@ fn dump_opcode_histogram_adds_static_opcode_counts() {
 
 #[test]
 fn dump_peephole_candidates_lists_branch_fusion_opportunities() {
-    let fixture = repo_root().join("tests/spec/stdmod/result_helpers.srt");
+    let fixture = repo_root().join("tests/fixtures/script/pass/stdmod/result_helpers.srt");
     let dump = surtr_command()
         .args([
             "dump",
@@ -214,7 +214,8 @@ fn dump_outputs_runtime_process_specs_for_agent_modules() {
         .into_iter()
         .find(|fixture| {
             fixture.case.case_dir
-                == repo_root().join("tests/spec/modules/process_state_agent_singleton_surface")
+                == repo_root()
+                    .join("tests/fixtures/modules/pass/process_state_agent_singleton_surface")
         })
         .expect("process_state_agent_singleton_surface fixture should exist");
     let module_sources =

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use forge::bytecode::Bytecode;
@@ -11,6 +12,7 @@ use super::sources::{
     compile_chunk_typecheck_context_for_mode, compile_unit_kind_for_mode, default_stdlib_snapshot,
     parse_module_stage_suffix, parse_module_stages, std_typecheck_context_for_mode,
 };
+use super::timing::CacheStatsSnapshot;
 use super::types::{
     CachedCompilePrefix, CachedModulePipeline, SharedCompilePrefix, TestCompileMode,
 };
@@ -37,6 +39,25 @@ fn fixture_cache_root() -> PathBuf {
 
 fn semantic_prefix_cache_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-fixture-cache/prefix")
+}
+
+pub(crate) fn cache_stats_snapshot() -> CacheStatsSnapshot {
+    cache_stats()
+        .lock()
+        .expect("test fixture cache stats poisoned")
+        .clone()
+}
+
+fn cache_stats() -> &'static Mutex<CacheStatsSnapshot> {
+    static CACHE_STATS: OnceLock<Mutex<CacheStatsSnapshot>> = OnceLock::new();
+    CACHE_STATS.get_or_init(|| Mutex::new(CacheStatsSnapshot::default()))
+}
+
+fn record_cache_event(update: impl FnOnce(&mut CacheStatsSnapshot)) {
+    let mut stats = cache_stats()
+        .lock()
+        .expect("test fixture cache stats poisoned");
+    update(&mut stats);
 }
 
 fn module_pipeline_cache_key(compile_sources: &CompileSources, mode: TestCompileMode) -> String {
@@ -139,17 +160,25 @@ pub(super) fn load_cached_bytecode(
 
     let cache_path = cached_eldr_path(compile_sources, mode)?;
     if !cache_path.exists() {
+        record_cache_event(|stats| stats.final_bytecode_misses += 1);
         return Ok(None);
     }
 
     let bytes = match fs::read(&cache_path) {
         Ok(bytes) => bytes,
-        Err(_) => return Ok(None),
+        Err(_) => {
+            record_cache_event(|stats| stats.final_bytecode_misses += 1);
+            return Ok(None);
+        }
     };
 
     match Bytecode::decode(&bytes) {
-        Ok(bytecode) => Ok(Some(bytecode)),
+        Ok(bytecode) => {
+            record_cache_event(|stats| stats.final_bytecode_hits += 1);
+            Ok(Some(bytecode))
+        }
         Err(_) => {
+            record_cache_event(|stats| stats.final_bytecode_corrupt += 1);
             let _ = fs::remove_file(&cache_path);
             Ok(None)
         }
@@ -179,7 +208,9 @@ pub(super) fn store_cached_bytecode(
     let bytes = bytecode
         .encode()
         .map_err(|e| format!("phase=cache; message=failed to encode .eldr cache: {}", e))?;
-    let temp_path = cache_path.with_extension(format!("{}.tmp", std::process::id()));
+    static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let temp_id = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp_path = cache_path.with_extension(format!("{}.{}.tmp", std::process::id(), temp_id));
     fs::write(&temp_path, bytes).map_err(|e| {
         format!(
             "phase=cache; message=failed to write cache file {}: {}",
@@ -201,6 +232,7 @@ pub(super) fn store_cached_bytecode(
             )
         })?;
 
+    record_cache_event(|stats| stats.final_bytecode_writes += 1);
     Ok(())
 }
 
@@ -289,6 +321,7 @@ fn cached_script_compile_prefix(
     let cache_path = cached_semantic_prefix_path(compile_sources, TestCompileMode::Script)?;
 
     if let Some(payload) = xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key) {
+        record_cache_event(|stats| stats.semantic_prefix_hits += 1);
         return Ok(Arc::new(CachedCompilePrefix {
             module_asts: cached_modules.module_asts,
             declaration_index: cached_modules.declaration_index,
@@ -296,6 +329,11 @@ fn cached_script_compile_prefix(
             scar_checkpoint: payload.scar_checkpoint,
             bytecode: payload.bytecode,
         }));
+    }
+    if cache_path.exists() {
+        record_cache_event(|stats| stats.semantic_prefix_corrupt += 1);
+    } else {
+        record_cache_event(|stats| stats.semantic_prefix_misses += 1);
     }
 
     let resolved = sigil::resolve_staged_program_from_state(
@@ -351,6 +389,7 @@ fn cached_script_compile_prefix(
             bytecode: prefix.bytecode.clone(),
         },
     );
+    record_cache_event(|stats| stats.semantic_prefix_writes += 1);
     Ok(prefix)
 }
 
@@ -388,6 +427,7 @@ pub(super) fn cached_compile_prefix(
         let cache_path = cached_semantic_prefix_path(compile_sources, mode)?;
 
         if let Some(payload) = xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key) {
+            record_cache_event(|stats| stats.semantic_prefix_hits += 1);
             Arc::new(CachedCompilePrefix {
                 module_asts: cached_modules.module_asts,
                 declaration_index: cached_modules.declaration_index,
@@ -396,6 +436,11 @@ pub(super) fn cached_compile_prefix(
                 bytecode: payload.bytecode,
             })
         } else {
+            if cache_path.exists() {
+                record_cache_event(|stats| stats.semantic_prefix_corrupt += 1);
+            } else {
+                record_cache_event(|stats| stats.semantic_prefix_misses += 1);
+            }
             let resolved = sigil::resolve_staged_program_with_state(
                 &cached_modules.module_asts,
                 Vec::new(),
@@ -440,6 +485,7 @@ pub(super) fn cached_compile_prefix(
                     bytecode: prefix.bytecode.clone(),
                 },
             );
+            record_cache_event(|stats| stats.semantic_prefix_writes += 1);
             prefix
         }
     };
