@@ -1,6 +1,130 @@
 use super::*;
 
+struct SpecialFormBuiltinContract {
+    expected_qname: &'static str,
+    expected_signature: &'static str,
+    shape_ok: fn(&[ResolvedFunParam], &Option<AstTy>) -> bool,
+}
+
+fn special_form_shape_if(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 3
+        && Checker::is_named_type(&params[0].ty, "Boolean")
+        && Checker::is_lazy_of_named(&params[1].ty, "$A")
+        && Checker::is_lazy_of_named(&params[2].ty, "$A")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_named_type(ty, "$A"))
+}
+
+fn special_form_shape_if_then(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 2
+        && Checker::is_named_type(&params[0].ty, "Boolean")
+        && Checker::is_lazy_of_unit(&params[1].ty)
+        && ret_ty.as_ref().is_some_and(Checker::is_unit_type)
+}
+
+fn special_form_shape_if_let(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 4
+        && Checker::is_named_type(&params[0].ty, "$A")
+        && Checker::is_named_type(&params[1].ty, "$Pattern")
+        && Checker::is_lazy_of_named(&params[2].ty, "$B")
+        && Checker::is_lazy_of_named(&params[3].ty, "$B")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_named_type(ty, "$B"))
+}
+
+fn special_form_shape_if_let_then(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 3
+        && Checker::is_named_type(&params[0].ty, "$A")
+        && Checker::is_named_type(&params[1].ty, "$Pattern")
+        && Checker::is_lazy_of_unit(&params[2].ty)
+        && ret_ty.as_ref().is_some_and(Checker::is_unit_type)
+}
+
+fn special_form_shape_is_match(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 2
+        && Checker::is_named_type(&params[0].ty, "$A")
+        && Checker::is_named_type(&params[1].ty, "$Pattern")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_named_type(ty, "Boolean"))
+}
+
+fn special_form_shape_assert(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 2
+        && Checker::is_named_type(&params[0].ty, "Boolean")
+        && Checker::is_lazy_of_named(&params[1].ty, "Error")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_result_of_named(ty, "Unit"))
+}
+
+fn special_form_shape_ensure(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 3
+        && Checker::is_named_type(&params[0].ty, "$A")
+        && Checker::is_unary_func_from_named_to_named(&params[1].ty, "$A", "Boolean")
+        && Checker::is_lazy_of_named(&params[2].ty, "Error")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_result_of_named(ty, "$A"))
+}
+
+fn special_form_shape_map_err_or_cause(
+    params: &[ResolvedFunParam],
+    ret_ty: &Option<AstTy>,
+) -> bool {
+    params.len() == 2
+        && Checker::is_result_of_named(&params[0].ty, "$T")
+        && Checker::is_lazy_of_named(&params[1].ty, "Error")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_result_of_named(ty, "$T"))
+}
+
+fn special_form_shape_recover_kind(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 3
+        && Checker::is_result_of_named(&params[0].ty, "$A")
+        && Checker::is_lazy_of_named(&params[1].ty, "Error")
+        && Checker::is_unary_func_from_named_to_result(&params[2].ty, "Error", "$A")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_result_of_named(ty, "$A"))
+}
+
+fn special_form_shape_and_or(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+    params.len() == 2
+        && Checker::is_named_type(&params[0].ty, "Boolean")
+        && Checker::is_lazy_of_named(&params[1].ty, "Boolean")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_named_type(ty, "Boolean"))
+}
+
 impl Checker {
+    fn bare_return_typevar_result_mismatch(
+        &self,
+        expected_ret: &Ty,
+        actual_ret: &Ty,
+        span: &Span,
+    ) -> Option<TypeError> {
+        match (self.resolve_ty(expected_ret), self.resolve_ty(actual_ret)) {
+            (Ty::Var(_), Ty::Result(_, _)) => Some(TypeError {
+                message: format!(
+                    "expected {}, got {}",
+                    self.ty_name(expected_ret),
+                    self.ty_name(actual_ret)
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "A plain return type variable cannot be satisfied by Err(...). Declare Result<$T> when the function propagates failures."
+                        .into(),
+                ),
+            }),
+            _ => None,
+        }
+    }
+
     pub(super) fn check_builtin_decl(
         &mut self,
         span: &Span,
@@ -8,8 +132,9 @@ impl Checker {
         params: &[ResolvedFunParam],
         ret_ty: &Option<AstTy>,
     ) -> Result<TypedNode, TypeError> {
-        let is_kernel_is_match =
-            id.name == "is_match" && id.qualified_name.as_deref() == Some("Kernel::is_match");
+        let is_kernel_is_match = id.name == "is_match"
+            && Self::surface_qualified_name(id.qualified_name.as_deref())
+                == Some("Kernel::is_match");
         let is_special_form = if id.name == "is_match" {
             is_kernel_is_match
         } else {
@@ -76,23 +201,11 @@ impl Checker {
         params: &[ResolvedFunParam],
         ret_ty: &Option<AstTy>,
     ) -> Result<TypedNode, TypeError> {
-        let expected_qname = match id.name.as_str() {
-            "if" => "Kernel::if",
-            "if_then" => "Kernel::if_then",
-            "if_let" => "Kernel::if_let",
-            "if_let_then" => "Kernel::if_let_then",
-            "is_match" => "Kernel::is_match",
-            "assert" => "Kernel::assert",
-            "ensure" => "Kernel::ensure",
-            "map_err" => "Result::map_err",
-            "cause" => "Result::cause",
-            "recover_kind" => "Result::recover_kind",
-            "and" => "Kernel::and",
-            "or" => "Kernel::or",
-            _ => unreachable!(),
-        };
+        let contract = Self::special_form_builtin_contract(id.name.as_str());
 
-        if id.qualified_name.as_deref() != Some(expected_qname) {
+        if Self::surface_qualified_name(id.qualified_name.as_deref())
+            != Some(contract.expected_qname)
+        {
             return Err(TypeError {
                 message: format!(
                     "Special-form declaration `{}` is only allowed in std module `Kernel`.",
@@ -103,112 +216,11 @@ impl Checker {
             });
         }
 
-        let shape_ok = match id.name.as_str() {
-            "if" => {
-                params.len() == 3
-                    && Self::is_named_type(&params[0].ty, "Boolean")
-                    && Self::is_lazy_of_named(&params[1].ty, "$A")
-                    && Self::is_lazy_of_named(&params[2].ty, "$A")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_named_type(ty, "$A"))
-            }
-            "if_then" => {
-                params.len() == 2
-                    && Self::is_named_type(&params[0].ty, "Boolean")
-                    && Self::is_lazy_of_unit(&params[1].ty)
-                    && ret_ty.as_ref().is_some_and(Self::is_unit_type)
-            }
-            "if_let" => {
-                params.len() == 4
-                    && Self::is_named_type(&params[0].ty, "$A")
-                    && Self::is_named_type(&params[1].ty, "$Pattern")
-                    && Self::is_lazy_of_named(&params[2].ty, "$B")
-                    && Self::is_lazy_of_named(&params[3].ty, "$B")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_named_type(ty, "$B"))
-            }
-            "if_let_then" => {
-                params.len() == 3
-                    && Self::is_named_type(&params[0].ty, "$A")
-                    && Self::is_named_type(&params[1].ty, "$Pattern")
-                    && Self::is_lazy_of_unit(&params[2].ty)
-                    && ret_ty.as_ref().is_some_and(Self::is_unit_type)
-            }
-            "is_match" => {
-                params.len() == 2
-                    && Self::is_named_type(&params[0].ty, "$A")
-                    && Self::is_named_type(&params[1].ty, "$Pattern")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
-            }
-            "assert" => {
-                params.len() == 2
-                    && Self::is_named_type(&params[0].ty, "Boolean")
-                    && Self::is_lazy_of_named(&params[1].ty, "Error")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_result_of_named(ty, "Unit"))
-            }
-            "ensure" => {
-                params.len() == 3
-                    && Self::is_named_type(&params[0].ty, "$A")
-                    && Self::is_unary_func_from_named_to_named(&params[1].ty, "$A", "Boolean")
-                    && Self::is_lazy_of_named(&params[2].ty, "Error")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_result_of_named(ty, "$A"))
-            }
-            "map_err" | "cause" => {
-                params.len() == 2
-                    && Self::is_result_of_named(&params[0].ty, "$T")
-                    && Self::is_lazy_of_named(&params[1].ty, "Error")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_result_of_named(ty, "$T"))
-            }
-            "recover_kind" => {
-                params.len() == 3
-                    && Self::is_result_of_named(&params[0].ty, "$A")
-                    && Self::is_lazy_of_named(&params[1].ty, "Error")
-                    && Self::is_unary_func_from_named_to_result(&params[2].ty, "Error", "$A")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_result_of_named(ty, "$A"))
-            }
-            "and" | "or" => {
-                params.len() == 2
-                    && Self::is_named_type(&params[0].ty, "Boolean")
-                    && Self::is_lazy_of_named(&params[1].ty, "Boolean")
-                    && ret_ty
-                        .as_ref()
-                        .is_some_and(|ty| Self::is_named_type(ty, "Boolean"))
-            }
-            _ => false,
-        };
-
-        if !shape_ok {
-            let expected = match id.name.as_str() {
-                "if" => "@builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A",
-                "if_then" => "@builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit",
-                "if_let" => "@builtin def if_let(value: $A, pattern: $Pattern, then_branch: Lazy<$B>, else_branch: Lazy<$B>) -> $B",
-                "if_let_then" => "@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: Lazy<Unit>) -> Unit",
-                "is_match" => "@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean",
-                "assert" => "@builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>",
-                "ensure" => "@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>",
-                "map_err" => "@builtin def map_err(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
-                "cause" => "@builtin def cause(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
-                "recover_kind" => "@builtin def recover_kind(value: Result<$A>, marker: Lazy<Error>, handler: (Error -> Result<$A>)) -> Result<$A>",
-                "and" => "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean",
-                "or" => "@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean",
-                _ => unreachable!(),
-            };
+        if !(contract.shape_ok)(params, ret_ty) {
             return Err(TypeError {
                 message: format!(
                     "Special-form declaration must match the canonical contract: {}",
-                    expected
+                    contract.expected_signature
                 ),
                 span: span.clone(),
                 hint: None,
@@ -252,7 +264,7 @@ impl Checker {
         params: &[String],
         _attrs: &ResolvedDeclAttrs,
     ) -> Result<TypedNode, TypeError> {
-        let Some(meta) = builtin_type_meta_by_name(&id.name) else {
+        let Some(meta) = builtin_type_meta_by_name(Self::surface_name(&id.name)) else {
             return Err(TypeError {
                 message: format!("Unknown builtin type declaration: {}", id.name),
                 span: span.clone(),
@@ -360,7 +372,7 @@ impl Checker {
             }
         };
 
-        if id.qualified_name.as_deref() != Some(expected_qname) {
+        if Self::surface_qualified_name(id.qualified_name.as_deref()) != Some(expected_qname) {
             return Err(TypeError {
                 message: format!(
                     "Result constructor declaration `{}` is only allowed in std module `Result`.",
@@ -476,6 +488,84 @@ impl Checker {
         )
     }
 
+    fn special_form_builtin_contract(name: &str) -> SpecialFormBuiltinContract {
+        match name {
+            "if" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::if",
+                expected_signature:
+                    "@builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A",
+                shape_ok: special_form_shape_if,
+            },
+            "if_then" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::if_then",
+                expected_signature:
+                    "@builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit",
+                shape_ok: special_form_shape_if_then,
+            },
+            "if_let" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::if_let",
+                expected_signature:
+                    "@builtin def if_let(value: $A, pattern: $Pattern, then_branch: Lazy<$B>, else_branch: Lazy<$B>) -> $B",
+                shape_ok: special_form_shape_if_let,
+            },
+            "if_let_then" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::if_let_then",
+                expected_signature:
+                    "@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: Lazy<Unit>) -> Unit",
+                shape_ok: special_form_shape_if_let_then,
+            },
+            "is_match" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::is_match",
+                expected_signature:
+                    "@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean",
+                shape_ok: special_form_shape_is_match,
+            },
+            "assert" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::assert",
+                expected_signature:
+                    "@builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>",
+                shape_ok: special_form_shape_assert,
+            },
+            "ensure" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::ensure",
+                expected_signature:
+                    "@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>",
+                shape_ok: special_form_shape_ensure,
+            },
+            "map_err" => SpecialFormBuiltinContract {
+                expected_qname: "Result::map_err",
+                expected_signature:
+                    "@builtin def map_err(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
+                shape_ok: special_form_shape_map_err_or_cause,
+            },
+            "cause" => SpecialFormBuiltinContract {
+                expected_qname: "Result::cause",
+                expected_signature:
+                    "@builtin def cause(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
+                shape_ok: special_form_shape_map_err_or_cause,
+            },
+            "recover_kind" => SpecialFormBuiltinContract {
+                expected_qname: "Result::recover_kind",
+                expected_signature:
+                    "@builtin def recover_kind(value: Result<$A>, marker: Lazy<Error>, handler: (Error -> Result<$A>)) -> Result<$A>",
+                shape_ok: special_form_shape_recover_kind,
+            },
+            "and" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::and",
+                expected_signature:
+                    "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean",
+                shape_ok: special_form_shape_and_or,
+            },
+            "or" => SpecialFormBuiltinContract {
+                expected_qname: "Kernel::or",
+                expected_signature:
+                    "@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean",
+                shape_ok: special_form_shape_and_or,
+            },
+            _ => unreachable!(),
+        }
+    }
+
     pub(super) fn is_result_of_named(ast_ty: &AstTy, expected_name: &str) -> bool {
         matches!(
             ast_ty,
@@ -511,6 +601,7 @@ impl Checker {
     fn check_body_in_isolated_scope(
         &mut self,
         local_bindings: &[(u32, Ty)],
+        local_annotation_tyvars: HashMap<String, Ty>,
         function_return_ty: Ty,
         function_symbol: String,
         impl_target: Option<String>,
@@ -518,14 +609,16 @@ impl Checker {
         body: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let saved_function_return_ty = self.function_return_ty.clone();
+        let saved_local_annotation_tyvars = self.local_annotation_tyvars.clone();
         let saved_current_function_symbol = self.current_function_symbol.clone();
         let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
         let saved_in_extractor_body = self.in_extractor_body;
         let saved_closure_depth = self.closure_depth;
-        let saved_lens_bindings = self.lens_bindings.clone();
+        let saved_facet_bindings = self.facet_bindings.clone();
 
         self.env.push_var_scope();
         self.function_return_ty = Some(function_return_ty);
+        self.local_annotation_tyvars = local_annotation_tyvars;
         self.current_function_symbol = Some(function_symbol);
         self.current_impl_struct_target = impl_target;
         self.in_extractor_body = in_extractor_body;
@@ -543,11 +636,12 @@ impl Checker {
 
         self.env.pop_var_scope();
         self.function_return_ty = saved_function_return_ty;
+        self.local_annotation_tyvars = saved_local_annotation_tyvars;
         self.current_function_symbol = saved_current_function_symbol;
         self.current_impl_struct_target = saved_current_impl_struct_target;
         self.in_extractor_body = saved_in_extractor_body;
         self.closure_depth = saved_closure_depth;
-        self.lens_bindings = saved_lens_bindings;
+        self.facet_bindings = saved_facet_bindings;
 
         result
     }
@@ -588,10 +682,10 @@ impl Checker {
                     self.error_function_param_not_allowed_error(Self::ast_ty_span(&param.ty))
                 );
             }
-            if self.ty_contains_lens(&param_ty) {
+            if self.ty_contains_facet(&param_ty) {
                 return Err(TypeError {
                     message:
-                        "Lens is compile-time only in Stage1 and cannot appear in function parameter types"
+                        "Facet is compile-time only in Stage1 and cannot appear in function parameter types"
                             .into(),
                     span: param.id.span.clone(),
                     hint: None,
@@ -612,10 +706,10 @@ impl Checker {
             )?,
             None => Ty::Unit,
         };
-        if self.ty_contains_lens(&expected_ret) {
+        if self.ty_contains_facet(&expected_ret) {
             return Err(TypeError {
                 message:
-                    "Lens is compile-time only in Stage1 and cannot appear in function return types"
+                    "Facet is compile-time only in Stage1 and cannot appear in function return types"
                         .into(),
                 span: span.clone(),
                 hint: None,
@@ -623,28 +717,6 @@ impl Checker {
         }
 
         let current_symbol = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
-        let is_process_handler = current_symbol
-            .rsplit_once("::")
-            .is_some_and(|(_, handler)| Self::is_process_handler_name(handler));
-        if attrs.visibility == spire::ast::Visibility::Public && !is_process_handler {
-            if let Some((state_name, owner)) = typed_params
-                .iter()
-                .find_map(|param| self.ty_contains_process_state_type(&param.ty))
-                .or_else(|| self.ty_contains_process_state_type(&expected_ret))
-            {
-                return Err(TypeError {
-                    message: format!(
-                        "process state type `{}` cannot appear in public function signatures",
-                        state_name
-                    ),
-                    span: span.clone(),
-                    hint: Some(format!(
-                        "Keep `{}` values inside process `{}` handlers.",
-                        state_name, owner
-                    )),
-                });
-            }
-        }
         if self.process_handler_return_exposes_context_pid(&current_symbol, &expected_ret) {
             return Err(TypeError {
                 message: "handler dependency cannot be returned from process handlers".into(),
@@ -697,10 +769,11 @@ impl Checker {
             self.env
                 .lookup_type_def(&impl_target)
                 .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
-                .then_some(impl_target)
+                .then_some(Self::surface_name(&impl_target).to_string())
         });
         let typed_body = self.check_body_in_isolated_scope(
             &local_bindings,
+            tyvars.clone(),
             expected_ret.clone(),
             current_symbol,
             impl_target,
@@ -708,8 +781,29 @@ impl Checker {
             body,
         )?;
 
+        let actual_ret = self.resolve_ty(&typed_body.ty);
+        if let Some(err) = self.bare_return_typevar_result_mismatch(
+            &expected_ret,
+            &actual_ret,
+            &self.return_mismatch_span(&typed_body),
+        ) {
+            return Err(err);
+        }
         if !self.types_compatible(&expected_ret, &typed_body.ty) {
-            let actual_ret = self.resolve_ty(&typed_body.ty);
+            if let Some(err) = self.facet_replace_result_context_error(
+                &typed_body,
+                &expected_ret,
+                &self.return_mismatch_span(&typed_body),
+            ) {
+                return Err(err);
+            }
+            if let Some(err) = self.plain_value_result_context_error(
+                &expected_ret,
+                &typed_body.ty,
+                &self.return_mismatch_span(&typed_body),
+            ) {
+                return Err(err);
+            }
             let hint = if matches!(actual_ret, Ty::Unit) {
                 self.describe_unit_return_hint(&typed_body)
             } else {
@@ -791,10 +885,10 @@ impl Checker {
             )?,
             None => self.env.fresh_tyvar(),
         };
-        if self.ty_contains_lens(&param_ty) {
+        if self.ty_contains_facet(&param_ty) {
             return Err(TypeError {
                 message:
-                    "Lens is compile-time only in Stage1 and cannot appear in extractor parameter types"
+                    "Facet is compile-time only in Stage1 and cannot appear in extractor parameter types"
                         .into(),
                 span: param.id.span.clone(),
                 hint: None,
@@ -811,10 +905,10 @@ impl Checker {
             TypeSyntaxContext::ExtractorReturn,
             &mut tyvars,
         )?;
-        if self.ty_contains_lens(&expected_ret) {
+        if self.ty_contains_facet(&expected_ret) {
             return Err(TypeError {
                 message:
-                    "Lens is compile-time only in Stage1 and cannot appear in extractor return types"
+                    "Facet is compile-time only in Stage1 and cannot appear in extractor return types"
                         .into(),
                 span: span.clone(),
                 hint: None,
@@ -827,11 +921,18 @@ impl Checker {
         )?;
 
         let current_symbol = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
+        let impl_target = Self::split_impl_method_id(id).and_then(|(impl_target, _method)| {
+            self.env
+                .lookup_type_def(&impl_target)
+                .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
+                .then_some(Self::surface_name(&impl_target).to_string())
+        });
         let typed_body = self.check_body_in_isolated_scope(
             &local_bindings,
+            tyvars.clone(),
             expected_ret.clone(),
             current_symbol,
-            None,
+            impl_target,
             true,
             body,
         )?;
@@ -905,7 +1006,9 @@ impl Checker {
         let target_name = self
             .trait_target_name(&target_ty)
             .ok_or_else(|| TypeError {
-                message: "trait impl target must be a concrete named type".into(),
+                message:
+                    "trait impl target must be a concrete named type, tuple type, or function type"
+                        .into(),
                 span: Self::ast_ty_span(target_ast_ty).clone(),
                 hint: None,
             })?;
@@ -980,9 +1083,10 @@ impl Checker {
                 .env
                 .lookup_type_def(&target_name)
                 .is_some_and(|def| def.kind == crate::env::TypeKind::Struct)
-                .then_some(target_name.clone());
+                .then_some(Self::surface_name(&target_name).to_string());
             let typed_body = self.check_body_in_isolated_scope(
                 &local_bindings,
+                HashMap::new(),
                 expected_ret.clone(),
                 method.function_id.name.clone(),
                 impl_target,
@@ -990,8 +1094,29 @@ impl Checker {
                 &method.body,
             )?;
 
+            let actual_ret = self.resolve_ty(&typed_body.ty);
+            if let Some(err) = self.bare_return_typevar_result_mismatch(
+                &expected_ret,
+                &actual_ret,
+                &self.return_mismatch_span(&typed_body),
+            ) {
+                return Err(err);
+            }
             if !self.types_compatible(&expected_ret, &typed_body.ty) {
-                let actual_ret = self.resolve_ty(&typed_body.ty);
+                if let Some(err) = self.facet_replace_result_context_error(
+                    &typed_body,
+                    &expected_ret,
+                    &self.return_mismatch_span(&typed_body),
+                ) {
+                    return Err(err);
+                }
+                if let Some(err) = self.plain_value_result_context_error(
+                    &expected_ret,
+                    &typed_body.ty,
+                    &self.return_mismatch_span(&typed_body),
+                ) {
+                    return Err(err);
+                }
                 let hint = if matches!(actual_ret, Ty::Unit) {
                     self.describe_unit_return_hint(&typed_body)
                 } else {
@@ -1058,7 +1183,9 @@ impl Checker {
         let target_name = self
             .trait_target_name(&target_ty)
             .ok_or_else(|| TypeError {
-                message: "trait impl target must be a concrete named type".into(),
+                message:
+                    "trait impl target must be a concrete named type, tuple type, or function type"
+                        .into(),
                 span: Self::ast_ty_span(target_ast_ty).clone(),
                 hint: None,
             })?;
@@ -1101,9 +1228,25 @@ impl Checker {
             .map(|field| field.name.clone())
             .collect::<HashSet<_>>();
 
+        let readonly_fields = fields
+            .iter()
+            .filter(|field| field.readonly)
+            .map(|field| field.name.clone())
+            .collect::<HashSet<_>>();
+        let readonly_root = self
+            .env
+            .lookup_type_def(&id.name)
+            .is_some_and(|def| def.readonly_root);
+
         let tag = self
             .env
-            .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
+            .resolve_type_def_signature(
+                &id.name,
+                ty_fields.clone(),
+                private_fields,
+                readonly_fields,
+                readonly_root,
+            )
             .ok_or_else(|| TypeError {
                 message: format!("Unknown struct type declaration: {}", id.name),
                 span: span.clone(),
@@ -1114,15 +1257,24 @@ impl Checker {
             .bind_var(id.unique_id, Ty::Struct(id.name.clone(), ty_fields.clone()));
 
         let field_names: Vec<String> = ty_fields.iter().map(|(n, _)| n.clone()).collect();
-        let private_flags: Vec<bool> = fields
+        let field_policies = fields
             .iter()
-            .map(|field| field.visibility == spire::ast::Visibility::Private)
+            .map(|field| crate::typed::TypedFieldPolicy {
+                private: field.visibility == spire::ast::Visibility::Private,
+                readonly: field.readonly,
+            })
             .collect();
 
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::StructDef(tag, id.name.clone(), field_names, private_flags),
+            node: TypedInner::StructDef(
+                tag,
+                id.name.clone(),
+                field_names,
+                field_policies,
+                readonly_root,
+            ),
         })
     }
 
@@ -1191,9 +1343,22 @@ impl Checker {
             .map(|field| field.name.clone())
             .collect::<HashSet<_>>();
 
+        let readonly_fields = fields
+            .iter()
+            .filter(|field| field.readonly)
+            .map(|field| field.name.clone())
+            .collect::<HashSet<_>>();
+        let readonly_root = false;
+
         let tag = self
             .env
-            .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
+            .resolve_type_def_signature(
+                &id.name,
+                ty_fields.clone(),
+                private_fields,
+                readonly_fields,
+                readonly_root,
+            )
             .ok_or_else(|| TypeError {
                 message: format!("Unknown record type declaration: {}", id.name),
                 span: span.clone(),
@@ -1204,15 +1369,24 @@ impl Checker {
             .bind_var(id.unique_id, Ty::Record(id.name.clone(), ty_fields.clone()));
 
         let field_names: Vec<String> = ty_fields.iter().map(|(n, _)| n.clone()).collect();
-        let private_flags: Vec<bool> = fields
+        let field_policies = fields
             .iter()
-            .map(|field| field.visibility == spire::ast::Visibility::Private)
+            .map(|field| crate::typed::TypedFieldPolicy {
+                private: field.visibility == spire::ast::Visibility::Private,
+                readonly: field.readonly,
+            })
             .collect();
 
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::RecordDef(tag, id.name.clone(), field_names, private_flags),
+            node: TypedInner::RecordDef(
+                tag,
+                id.name.clone(),
+                field_names,
+                field_policies,
+                readonly_root,
+            ),
         })
     }
 
@@ -1233,18 +1407,8 @@ impl Checker {
             .clone();
 
         if !id.compiler_generated {
-            if let Some(owner) = def.process_state_owner.as_deref() {
-                if self.current_process_name().as_deref() != Some(owner) {
-                    return Err(TypeError {
-                        message: format!(
-                            "process state type `{}` can only be constructed inside process `{}`",
-                            id.name, owner
-                        ),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-            } else if self.current_impl_struct_target.as_deref() != Some(id.name.as_str()) {
+            let owner_name = Self::surface_name(&def.name);
+            if self.current_impl_struct_target.as_deref() != Some(owner_name) {
                 return Err(TypeError {
                     message: format!(
                         "Struct literal `{}` is only allowed inside `impl {} {{ ... }}` method bodies",
@@ -1302,13 +1466,13 @@ impl Checker {
                     hint: None,
                 })?;
             let typed_val = self.check_node(resolved_val)?;
-            if self.ty_contains_lens(&typed_val.ty) {
+            if self.ty_contains_facet(&typed_val.ty) {
                 return Err(TypeError {
                     message:
-                        "Struct literal fields cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                        "Struct literal fields cannot contain Facet values in Stage1 (Facet is compile-time only)"
                             .into(),
                     span: typed_val.span.clone(),
-                    hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                    hint: Some("Apply Facet::view/set/over before constructing runtime values.".into()),
                 });
             }
             if !self.types_compatible(def_ty, &typed_val.ty) {
@@ -1351,14 +1515,14 @@ impl Checker {
             let inner = match &args[0] {
                 ResolvedRecordLitArg::Positional(expr) => {
                     let typed = self.check_node(expr)?;
-                    if self.ty_contains_lens(&typed.ty) {
+                    if self.ty_contains_facet(&typed.ty) {
                         return Err(TypeError {
                             message:
-                                "Result constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                "Result constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                     .into(),
                             span: typed.span.clone(),
                             hint: Some(
-                                "Apply Lens::view/set/over before wrapping with Ok(...) or Err(...)."
+                                "Apply Facet::view/set/over before wrapping with Ok(...) or Err(...)."
                                     .into(),
                             ),
                         });
@@ -1409,8 +1573,15 @@ impl Checker {
 
         if let Some(variant) = self.lookup_enum_variant_by_constructor_id(id.unique_id) {
             let variant = self.instantiate_enum_variant(&variant);
-            if variant.enum_name == "MatchResult" && !self.in_extractor_body {
+            if Self::surface_name(&variant.enum_name) == "MatchResult" && !self.in_extractor_body {
                 return Err(self.match_result_value_not_allowed_error(span));
+            }
+            if matches!(
+                Self::surface_name(&variant.enum_name),
+                "StopReply" | "StopReason"
+            ) && !self.stop_constructor_allowed()
+            {
+                return Err(self.stop_constructor_error(span, &variant.enum_name));
             }
             if args.len() != variant.payload.len() {
                 return Err(TypeError {
@@ -1437,13 +1608,13 @@ impl Checker {
                         });
                     }
                 };
-                if self.ty_contains_lens(&typed.ty) {
+                if self.ty_contains_facet(&typed.ty) {
                     return Err(TypeError {
                         message:
-                            "Enum constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                            "Enum constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                 .into(),
                         span: typed.span.clone(),
-                        hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                        hint: Some("Apply Facet::view/set/over before constructing runtime values.".into()),
                     });
                 }
                 if !self.types_compatible(expected, &typed.ty) {
@@ -1504,14 +1675,14 @@ impl Checker {
                                 });
                             }
                         };
-                        if self.ty_contains_lens(&typed_val.ty) {
+                        if self.ty_contains_facet(&typed_val.ty) {
                             return Err(TypeError {
                                 message:
-                                    "Constructor arguments cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                    "Constructor arguments cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                         .into(),
                                 span: typed_val.span.clone(),
                                 hint: Some(
-                                    "Apply Lens::view/set/over before passing constructor arguments."
+                                    "Apply Facet::view/set/over before passing constructor arguments."
                                         .into(),
                                 ),
                             });
@@ -1596,14 +1767,14 @@ impl Checker {
                             unreachable!("validated argument form above")
                         };
                         let typed = self.check_node(expr)?;
-                        if self.ty_contains_lens(&typed.ty) {
+                        if self.ty_contains_facet(&typed.ty) {
                             return Err(TypeError {
                                 message:
-                                    "Constructor arguments cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                    "Constructor arguments cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                         .into(),
                                 span: typed.span.clone(),
                                 hint: Some(
-                                    "Apply Lens::view/set/over before passing constructor arguments."
+                                    "Apply Facet::view/set/over before passing constructor arguments."
                                         .into(),
                                 ),
                             });
@@ -1768,13 +1939,13 @@ impl Checker {
             for (i, arg) in args.iter().enumerate() {
                 if let ResolvedRecordLitArg::Positional(expr) = arg {
                     let typed_val = self.check_node(expr)?;
-                    if self.ty_contains_lens(&typed_val.ty) {
+                    if self.ty_contains_facet(&typed_val.ty) {
                         return Err(TypeError {
                             message:
-                                "Record constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                "Record constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                     .into(),
                             span: typed_val.span.clone(),
-                            hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                            hint: Some("Apply Facet::view/set/over before constructing runtime values.".into()),
                         });
                     }
                     let (_, def_ty) = &def.fields[i];
@@ -1814,13 +1985,13 @@ impl Checker {
                             hint: None,
                         })?;
                     let typed_val = self.check_node(expr)?;
-                    if self.ty_contains_lens(&typed_val.ty) {
+                    if self.ty_contains_facet(&typed_val.ty) {
                         return Err(TypeError {
                             message:
-                                "Record constructors cannot contain Lens values in Stage1 (Lens is compile-time only)"
+                                "Record constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                     .into(),
                             span: typed_val.span.clone(),
-                            hint: Some("Apply Lens::view/set/over before constructing runtime values.".into()),
+                            hint: Some("Apply Facet::view/set/over before constructing runtime values.".into()),
                         });
                     }
                     let (_, def_ty) = &def.fields[idx];
@@ -1906,6 +2077,8 @@ impl Checker {
                     .filter(|field| field.visibility == spire::ast::Visibility::Private)
                     .map(|field| field.name.clone())
                     .collect(),
+                HashSet::new(),
+                false,
             )
             .ok_or_else(|| TypeError {
                 message: format!("Unknown error type declaration: {}", id.name),

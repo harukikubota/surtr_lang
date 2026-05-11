@@ -1,0 +1,7 @@
+import Secrets::{
+  public_secret,
+  secret_suffix,
+  missing_fun
+}
+
+print(public_secret())

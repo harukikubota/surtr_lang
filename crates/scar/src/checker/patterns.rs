@@ -35,6 +35,11 @@ impl Checker {
                 let expected =
                     self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                 if !self.types_compatible(&expected, rhs_ty) {
+                    if let Some(err) =
+                        self.plain_value_result_context_error(&expected, rhs_ty, span)
+                    {
+                        return Err(err);
+                    }
                     return Err(TypeError {
                         message: format!(
                             "expected {}, got {}",

@@ -170,7 +170,7 @@ value |> add(10, _1)
 
 ## `pair._1` との違い
 
-tuple path の `_1` は field / lens path 側の surface です。
+tuple path の `_1` は field / Facet path 側の surface です。
 これは必ず `.` の直後に現れます。
 
 ```surtr

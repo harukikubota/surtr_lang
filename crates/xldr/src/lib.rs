@@ -1,3 +1,4 @@
+mod command_error;
 pub mod error_display;
 mod loader;
 pub mod repl;
@@ -9,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+pub use command_error::{CommandDiagnostic, CommandError, CommandResult};
 pub use error_display::ErrorDisplayMode;
 pub use loader::{
     collect_additional_default_std_module_inputs, collect_lib_module_inputs,
@@ -28,6 +30,16 @@ use sindr::ir::{stable_hash_hex, Bytecode, DocEntry, DocKind};
 use sindr::policy::{CompileUnitKind, EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
 
 pub const MODULE_SPAN_STRIDE: usize = 1_000_000;
+const IMPLICIT_ROOT_NAMESPACE_PREFIX: &str = "Global::";
+
+pub(crate) fn surface_path_name(name: &str) -> &str {
+    name.strip_prefix(IMPLICIT_ROOT_NAMESPACE_PREFIX)
+        .unwrap_or(name)
+}
+
+pub(crate) fn surface_rendered_name(name: &str) -> String {
+    name.replace(IMPLICIT_ROOT_NAMESPACE_PREFIX, "")
+}
 
 fn stable_hash_bytes(bytes: &[u8]) -> String {
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
@@ -118,13 +130,13 @@ fn first_non_import_index(ast: &[spire::ast::Ast]) -> usize {
 
 fn find_result_owner_module(lowered: &[LoweredModuleAst]) -> Option<usize> {
     lowered.iter().position(|module| {
-        module.module_path == "Result"
+        surface_path_name(&module.module_path) == "Result"
             && matches!(
                 module
                     .ast
                     .iter()
                     .find(|stmt| !matches!(stmt, spire::ast::Ast::Import(_, _, _))),
-                Some(spire::ast::Ast::ImplDef(_, target, _, _)) if target == "Result"
+                Some(spire::ast::Ast::ImplDef(_, target, _, _)) if surface_path_name(target) == "Result"
             )
     })
 }
@@ -141,15 +153,15 @@ fn find_fallback_namespace_module(
 
 fn format_ast_ty(ty: &spire::ast::AstTy) -> String {
     match ty {
-        spire::ast::AstTy::Named(_, name) => name.clone(),
-        spire::ast::AstTy::ImplTrait(_, name) => format!("impl {name}"),
+        spire::ast::AstTy::Named(_, name) => surface_path_name(name).to_string(),
+        spire::ast::AstTy::ImplTrait(_, name) => format!("impl {}", surface_path_name(name)),
         spire::ast::AstTy::Generic(_, name, args) => {
             let args = args
                 .iter()
                 .map(format_ast_ty)
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("{name}<{args}>")
+            format!("{}<{args}>", surface_path_name(name))
         }
         spire::ast::AstTy::Tuple(_, items) => {
             let items = items
@@ -236,28 +248,32 @@ fn format_result_ctor_signature(
 
 fn format_builtin_type_signature(head: &spire::ast::BuiltinTypeHead) -> String {
     if head.params.is_empty() {
-        format!("type {}", head.name)
+        format!("type {}", surface_path_name(&head.name))
     } else {
-        format!("type {}<{}>", head.name, head.params.join(", "))
+        format!(
+            "type {}<{}>",
+            surface_path_name(&head.name),
+            head.params.join(", ")
+        )
     }
 }
 
 fn format_deferror_signature(name: &str, fields: &[spire::ast::RecordField]) -> String {
     if fields.is_empty() {
-        format!("deferror {name}")
+        format!("deferror {}", surface_path_name(name))
     } else {
         let fields = fields
             .iter()
             .map(|field| format!("{}: {}", field.name, format_ast_ty(&field.ty)))
             .collect::<Vec<_>>()
             .join(", ");
-        format!("deferror {name}({fields})")
+        format!("deferror {}({fields})", surface_path_name(name))
     }
 }
 
 fn format_defenum_signature(name: &str, variants: &[spire::ast::EnumVariant]) -> String {
     if variants.is_empty() {
-        return format!("defenum {name}");
+        return format!("defenum {}", surface_path_name(name));
     }
     let variants = variants
         .iter()
@@ -276,15 +292,15 @@ fn format_defenum_signature(name: &str, variants: &[spire::ast::EnumVariant]) ->
         })
         .collect::<Vec<_>>()
         .join(", ");
-    format!("defenum {name} {{ {variants} }}")
+    format!("defenum {} {{ {variants} }}", surface_path_name(name))
 }
 
 fn format_struct_signature(name: &str) -> String {
-    format!("defstruct {name}")
+    format!("defstruct {}", surface_path_name(name))
 }
 
 fn format_record_signature(name: &str) -> String {
-    format!("defrecord {name}")
+    format!("defrecord {}", surface_path_name(name))
 }
 
 fn format_impl_method_signature(
@@ -296,7 +312,7 @@ fn format_impl_method_signature(
 ) -> String {
     let signature = format_fun_signature(name, type_params, params, ret_ty);
     if let Some(rest) = signature.strip_prefix(name) {
-        format!("{target}::{name}{rest}")
+        format!("{}::{name}{rest}", surface_path_name(target))
     } else {
         signature
     }
@@ -311,7 +327,7 @@ fn format_impl_extractor_signature(
 ) -> String {
     let signature = format_extractor_signature(name, type_params, param, ret_ty);
     if let Some(rest) = signature.strip_prefix(name) {
-        format!("{target}::{name}{rest}")
+        format!("{}::{name}{rest}", surface_path_name(target))
     } else {
         signature
     }
@@ -349,7 +365,14 @@ fn format_trait_impl_method_signature(
 }
 
 fn qualified_name(module_path: &str, name: &str) -> String {
+    let module_path = surface_path_name(module_path);
+    let name = surface_path_name(name);
     if module_path.is_empty() {
+        name.to_string()
+    } else if name
+        .strip_prefix(module_path)
+        .is_some_and(|rest| rest.starts_with("::"))
+    {
         name.to_string()
     } else {
         format!("{module_path}::{name}")
@@ -368,7 +391,7 @@ fn collect_doc_entries_for_ast(
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Function,
-                        module_path: module_path.to_string(),
+                        module_path: surface_path_name(module_path).to_string(),
                         signature: Some(format_fun_signature(name, type_params, params, ret_ty)),
                         doc: doc.clone(),
                     });
@@ -379,7 +402,7 @@ fn collect_doc_entries_for_ast(
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Function,
-                        module_path: module_path.to_string(),
+                        module_path: surface_path_name(module_path).to_string(),
                         signature: Some(format_fun_signature(name, &[], params, ret_ty)),
                         doc: doc.clone(),
                     });
@@ -390,7 +413,7 @@ fn collect_doc_entries_for_ast(
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Function,
-                        module_path: module_path.to_string(),
+                        module_path: surface_path_name(module_path).to_string(),
                         signature: Some(signature.clone()),
                         doc: doc.clone(),
                     });
@@ -401,7 +424,7 @@ fn collect_doc_entries_for_ast(
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Function,
-                        module_path: module_path.to_string(),
+                        module_path: surface_path_name(module_path).to_string(),
                         signature: Some(format_extractor_signature(
                             name,
                             type_params,
@@ -417,7 +440,7 @@ fn collect_doc_entries_for_ast(
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Function,
-                        module_path: module_path.to_string(),
+                        module_path: surface_path_name(module_path).to_string(),
                         signature: Some(format_extractor_signature(name, &[], param, ret_ty)),
                         doc: doc.clone(),
                     });
@@ -428,10 +451,10 @@ fn collect_doc_entries_for_ast(
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Type,
-                        module_path: module_path.to_string(),
+                        module_path: surface_path_name(module_path).to_string(),
                         signature: Some(format!(
                             "trait {} {{ {} }}",
-                            name,
+                            surface_path_name(name),
                             methods
                                 .iter()
                                 .map(|method| format!(
@@ -455,7 +478,7 @@ fn collect_doc_entries_for_ast(
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Type,
-                        module_path: module_path.to_string(),
+                        module_path: surface_path_name(module_path).to_string(),
                         signature: Some(format_struct_signature(name)),
                         doc: doc.clone(),
                     });
@@ -466,7 +489,7 @@ fn collect_doc_entries_for_ast(
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Type,
-                        module_path: module_path.to_string(),
+                        module_path: surface_path_name(module_path).to_string(),
                         signature: Some(format_record_signature(name)),
                         doc: doc.clone(),
                     });
@@ -477,15 +500,17 @@ fn collect_doc_entries_for_ast(
                     match method {
                         spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, attrs) => {
                             if let Some(doc) = &attrs.doc {
-                                let qualified_method_name = if module_path == target {
-                                    format!("{target}::{name}")
+                                let qualified_method_name = if surface_path_name(module_path)
+                                    == surface_path_name(target)
+                                {
+                                    format!("{}::{name}", surface_path_name(target))
                                 } else {
                                     qualified_name(module_path, &format!("{target}::{name}"))
                                 };
                                 out.push(DocEntry {
                                     qualified_name: qualified_method_name,
                                     kind: DocKind::Function,
-                                    module_path: module_path.to_string(),
+                                    module_path: surface_path_name(module_path).to_string(),
                                     signature: Some(format_impl_method_signature(
                                         target,
                                         name,
@@ -499,15 +524,17 @@ fn collect_doc_entries_for_ast(
                         }
                         spire::ast::Ast::BuiltinDecl(_, name, params, ret_ty, attrs) => {
                             if let Some(doc) = &attrs.doc {
-                                let qualified_method_name = if module_path == target {
-                                    format!("{target}::{name}")
+                                let qualified_method_name = if surface_path_name(module_path)
+                                    == surface_path_name(target)
+                                {
+                                    format!("{}::{name}", surface_path_name(target))
                                 } else {
                                     qualified_name(module_path, &format!("{target}::{name}"))
                                 };
                                 out.push(DocEntry {
                                     qualified_name: qualified_method_name,
                                     kind: DocKind::Function,
-                                    module_path: module_path.to_string(),
+                                    module_path: surface_path_name(module_path).to_string(),
                                     signature: Some(format_impl_method_signature(
                                         target,
                                         name,
@@ -529,15 +556,17 @@ fn collect_doc_entries_for_ast(
                             attrs,
                         ) => {
                             if let Some(doc) = &attrs.doc {
-                                let qualified_method_name = if module_path == target {
-                                    format!("{target}::{name}")
+                                let qualified_method_name = if surface_path_name(module_path)
+                                    == surface_path_name(target)
+                                {
+                                    format!("{}::{name}", surface_path_name(target))
                                 } else {
                                     qualified_name(module_path, &format!("{target}::{name}"))
                                 };
                                 out.push(DocEntry {
                                     qualified_name: qualified_method_name,
                                     kind: DocKind::Function,
-                                    module_path: module_path.to_string(),
+                                    module_path: surface_path_name(module_path).to_string(),
                                     signature: Some(format_impl_extractor_signature(
                                         target,
                                         name,
@@ -551,15 +580,17 @@ fn collect_doc_entries_for_ast(
                         }
                         spire::ast::Ast::BuiltinExtractorDecl(_, name, param, ret_ty, attrs) => {
                             if let Some(doc) = &attrs.doc {
-                                let qualified_method_name = if module_path == target {
-                                    format!("{target}::{name}")
+                                let qualified_method_name = if surface_path_name(module_path)
+                                    == surface_path_name(target)
+                                {
+                                    format!("{}::{name}", surface_path_name(target))
                                 } else {
                                     qualified_name(module_path, &format!("{target}::{name}"))
                                 };
                                 out.push(DocEntry {
                                     qualified_name: qualified_method_name,
                                     kind: DocKind::Function,
-                                    module_path: module_path.to_string(),
+                                    module_path: surface_path_name(module_path).to_string(),
                                     signature: Some(format_impl_extractor_signature(
                                         target,
                                         name,
@@ -581,7 +612,7 @@ fn collect_doc_entries_for_ast(
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, &rendered),
                         kind: DocKind::Type,
-                        module_path: module_path.to_string(),
+                        module_path: surface_path_name(module_path).to_string(),
                         signature: Some(rendered),
                         doc: doc.clone(),
                     });
@@ -631,7 +662,7 @@ fn collect_doc_entries_for_ast(
                                     ),
                                 ),
                                 kind: DocKind::Function,
-                                module_path: module_path.to_string(),
+                                module_path: surface_path_name(module_path).to_string(),
                                 signature: Some(rendered),
                                 doc: doc.clone(),
                             });
@@ -644,7 +675,7 @@ fn collect_doc_entries_for_ast(
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, &head.name),
                         kind: DocKind::Type,
-                        module_path: module_path.to_string(),
+                        module_path: surface_path_name(module_path).to_string(),
                         signature: Some(format_builtin_type_signature(head)),
                         doc: doc.clone(),
                     });
@@ -655,7 +686,7 @@ fn collect_doc_entries_for_ast(
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Function,
-                        module_path: module_path.to_string(),
+                        module_path: surface_path_name(module_path).to_string(),
                         signature: Some(format_result_ctor_signature(name, param_ty, ret_ty)),
                         doc: doc.clone(),
                     });
@@ -666,7 +697,7 @@ fn collect_doc_entries_for_ast(
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Type,
-                        module_path: module_path.to_string(),
+                        module_path: surface_path_name(module_path).to_string(),
                         signature: Some(format_deferror_signature(name, fields)),
                         doc: doc.clone(),
                     });
@@ -677,7 +708,7 @@ fn collect_doc_entries_for_ast(
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Type,
-                        module_path: module_path.to_string(),
+                        module_path: surface_path_name(module_path).to_string(),
                         signature: Some(format_defenum_signature(name, variants)),
                         doc: doc.clone(),
                     });
@@ -1101,7 +1132,7 @@ pub struct DefaultStdlibSnapshot {
     pub default_stage_count: usize,
 }
 
-const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 3;
+const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 5;
 const TEST_SEMANTIC_PREFIX_CACHE_SCHEMA: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1308,7 +1339,7 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
         .iter()
         .flat_map(|stage| stage.iter())
         .filter(|module| module.auto_import)
-        .map(|module| module.module_path.clone())
+        .map(|module| surface_path_name(&module.module_path).to_string())
         .collect::<BTreeSet<_>>();
     let default_stage_count = module_stages.len();
 
@@ -1565,8 +1596,8 @@ defmod B {
 
         let lowered = lower_module_source_ast(ast, None);
         assert_eq!(lowered.len(), 3);
-        assert_eq!(lowered[0].module_path, "A");
-        assert_eq!(lowered[1].module_path, "B");
+        assert_eq!(lowered[0].module_path, "Global::A");
+        assert_eq!(lowered[1].module_path, "Global::B");
         assert_eq!(lowered[2].module_path, "");
         assert!(matches!(
             lowered[0].ast[0],
@@ -1587,7 +1618,7 @@ defmod B {
         assert!(snapshot
             .declaration_index
             .values()
-            .any(|entry| entry.fq_name == "Kernel::print"));
+            .any(|entry| entry.fq_name == "Global::Kernel::print"));
         assert!(!snapshot
             .declaration_index
             .values()
@@ -1659,12 +1690,12 @@ impl Result {
 
         let lowered = lower_module_source_ast(ast, None);
         assert_eq!(lowered.len(), 1);
-        assert_eq!(lowered[0].module_path, "Result");
+        assert_eq!(lowered[0].module_path, "Global::Result");
         assert!(lowered[0].ast.iter().any(
             |stmt| matches!(stmt, spire::ast::Ast::ResultCtorDecl(_, name, _, _, _) if name == "Ok")
         ));
         assert!(lowered[0].ast.iter().any(
-            |stmt| matches!(stmt, spire::ast::Ast::ImplDef(_, target, methods, _) if target == "Result"
+            |stmt| matches!(stmt, spire::ast::Ast::ImplDef(_, target, methods, _) if target == "Global::Result"
                 && methods.iter().any(|method| matches!(method, spire::ast::Ast::Def(_, name, _, _, _, _, _) if name == "dummy")))
         ));
     }
@@ -1684,7 +1715,7 @@ impl Int {
 
         let lowered = lower_module_source_ast(ast, None);
         assert_eq!(lowered.len(), 2);
-        assert_eq!(lowered[0].module_path, "Int");
+        assert_eq!(lowered[0].module_path, "Global::Int");
         assert_eq!(lowered[1].module_path, "");
         assert!(lowered[1]
             .ast
@@ -1710,7 +1741,7 @@ defmod AppConfig {
 
         let lowered = lower_module_source_ast(ast, Some("AppConfig"));
         assert_eq!(lowered.len(), 1);
-        assert_eq!(lowered[0].module_path, "AppConfig");
+        assert_eq!(lowered[0].module_path, "Global::AppConfig");
         assert!(lowered[0].ast.iter().any(
             |stmt| matches!(stmt, spire::ast::Ast::ConstDef(_, name, _, _, _) if name == "APP_NAME")
         ));
@@ -1729,7 +1760,7 @@ defmod AppConfig {
 
         let lowered = lower_module_source_ast(ast, None);
         assert_eq!(lowered.len(), 1);
-        assert_eq!(lowered[0].module_path, "Parser");
+        assert_eq!(lowered[0].module_path, "Global::Parser");
         assert!(matches!(
             lowered[0].ast.as_slice(),
             [
@@ -1752,13 +1783,13 @@ defmod AppConfig {
 
         let lowered = lower_module_source_ast(ast, None);
         assert_eq!(lowered.len(), 1);
-        assert_eq!(lowered[0].module_path, "User");
+        assert_eq!(lowered[0].module_path, "Global::User");
         assert!(matches!(
             lowered[0].ast.as_slice(),
             [
                 spire::ast::Ast::Import(_, _, spire::ast::ImportSpec::All),
                 spire::ast::Ast::ImplDef(_, target, methods, _)
-            ] if target == "User"
+            ] if target == "Global::User"
                 && matches!(methods.as_slice(), [spire::ast::Ast::Def(_, name, _, _, _, _, _)] if name == "normalize")
         ));
     }
@@ -1776,14 +1807,14 @@ defmod AppConfig {
 
         let lowered = lower_module_source_ast(ast, None);
         assert_eq!(lowered.len(), 1);
-        assert_eq!(lowered[0].module_path, "User");
+        assert_eq!(lowered[0].module_path, "Global::User");
         assert!(matches!(
             lowered[0].ast.as_slice(),
             [
                 spire::ast::Ast::Import(_, _, spire::ast::ImportSpec::All),
                 spire::ast::Ast::TraitImplDef(_, trait_name, _, spire::ast::AstTy::Named(_, target), methods, _)
             ] if trait_name == "Show"
-                && target == "User"
+                && target == "Global::User"
                 && matches!(methods.as_slice(), [spire::ast::Ast::Def(_, name, _, _, _, _, _)] if name == "to_string")
         ));
     }
@@ -1862,7 +1893,7 @@ deferror NoneError { "None Value." }"#,
         assert!(ast.iter().any(|stmt| matches!(
             stmt,
             spire::ast::Ast::Defmod(_, name, body, _)
-                if name == "Bootstrap"
+                if name == "Global::Bootstrap"
                 && body.iter().any(|stmt| matches!(
                     stmt,
                     spire::ast::Ast::BuiltinDecl(_, builtin_name, _, _, _) if builtin_name == "import"
@@ -1881,7 +1912,7 @@ deferror NoneError { "None Value." }"#,
         let lowered = lower_module_source_ast(ast, None);
         assert!(lowered
             .iter()
-            .any(|module| module.module_path == "Kernel" && module.auto_import));
+            .any(|module| module.module_path == "Global::Kernel" && module.auto_import));
     }
 
     #[test]
@@ -1939,6 +1970,52 @@ deferror NoneError { "None Value." }"#,
     }
 
     #[test]
+    fn collect_doc_entries_include_kernel_builtin_docs() {
+        let ast = spire::parse_with_context(
+            r#"@doc """Kernel module."""
+@autoimport
+defmod Kernel {
+  @doc """Print a string to stdout."""
+  @builtin def print(a: String) -> Unit
+}"#,
+            spire::ParserContext::module(1, None).with_rules(spire::ParseRules::std_module()),
+        )
+        .expect("kernel source should parse");
+
+        let lowered = lower_module_source_ast(ast, Some("Kernel"));
+        let stages = vec![lowered
+            .into_iter()
+            .map(|module| sigil::StagedModuleAst {
+                module_path: module.module_path,
+                doc_module_path: module.doc_module_path,
+                ast: module.ast,
+                module_doc: module.module_doc,
+                auto_import: module.auto_import,
+                process_spec: module.process_spec,
+            })
+            .collect::<Vec<_>>()];
+
+        let docs = collect_doc_entries(&stages, &[], None);
+        assert!(
+            docs.iter().any(|entry| {
+                surface_path_name(&entry.qualified_name) == "Kernel"
+                    && entry.kind == DocKind::Module
+                    && entry.doc == "Kernel module."
+            }),
+            "{docs:?}"
+        );
+        assert!(
+            docs.iter().any(|entry| {
+                entry.qualified_name == "Kernel::print"
+                    && entry.kind == DocKind::Function
+                    && entry.signature.as_deref() == Some("print(a: String) -> Unit")
+                    && entry.doc == "Print a string to stdout."
+            }),
+            "{docs:?}"
+        );
+    }
+
+    #[test]
     fn collect_doc_entries_keeps_single_bootstrap_dbg_intrinsic_doc() {
         let ast = spire::parse_with_context(
             r#"defmod Bootstrap {
@@ -1981,6 +2058,7 @@ deferror NoneError { "None Value." }"#,
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -2002,7 +2080,7 @@ deferror NoneError { "None Value." }"#,
             .process_spec
             .as_ref()
             .expect("lowered module should keep process spec");
-        assert_eq!(process_spec.process_name, "Counter");
+        assert_eq!(process_spec.process_name, "Global::Counter");
         assert!(!process_spec.boot);
         assert!(matches!(process_spec.kind, spire::ast::ProcessKind::Agent));
     }
@@ -2309,7 +2387,7 @@ impl User {
                 .expect_err("duplicate defmod path must fail");
         assert!(matches!(
             err.kind,
-            ModuleStageParseErrorKind::DuplicateModulePath { ref module_path, .. } if module_path == "Shared"
+            ModuleStageParseErrorKind::DuplicateModulePath { ref module_path, .. } if module_path == "Global::Shared"
         ));
     }
 
@@ -2335,7 +2413,7 @@ impl User {
                 .expect("module stages should parse");
         let user_stage = parsed.last().expect("user module stage should exist");
 
-        assert_eq!(user_stage[0].module_path, "First");
-        assert_eq!(user_stage[1].module_path, "Second");
+        assert_eq!(user_stage[0].module_path, "Global::First");
+        assert_eq!(user_stage[1].module_path, "Global::Second");
     }
 }

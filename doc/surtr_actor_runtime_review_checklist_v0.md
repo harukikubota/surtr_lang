@@ -36,7 +36,7 @@
 ### 1-3. state
 - [ ] process-owned State は public API に出現しないか
 - [ ] process-owned State は owner process 外から構築できないか
-- [ ] process-owned State は owner process 外から lens root にできないか
+- [ ] process-owned State は owner process 外から facet root にできないか
 - [ ] `@init`, `@call`, `@cast`, `@get`, `@set` の state 型が常に一致するか
 
 ### 1-4. spec
@@ -83,8 +83,9 @@
 - [ ] target down 後の reply を重複処理しないか
 
 ### 3-2. call / cast / get / set
-- [ ] `@call` は `Result<(Reply, State)>` 契約に従っているか
-- [ ] `@cast` / `@set` は `Result<State>` 契約に従っているか
+- [ ] `@call` は `Result<CallResult<Reply, State>>` 契約に従っているか
+- [ ] `@cast` は `Result<CastResult<State>>`、`@set` は `Result<State>` 契約に従っているか
+- [ ] `ReplyLater` / `Stop(...)` を返す場合の state commit、reply、停止処理が一貫しているか
 - [ ] `Err` 時に state を commit していないか
 - [ ] `Ok` 時に state commit と reply が一貫しているか
 
@@ -218,7 +219,7 @@ shared-memory の lock race より、runtime table と lifecycle 更新の race 
 
 ### 8-2. process-owned state
 - [ ] `@process_state` が public API に漏れないか
-- [ ] `State` 型に対する lens root が外へ出ていないか
+- [ ] `State` 型に対する facet root が外へ出ていないか
 - [ ] snapshot / view が通常型として分離されているか
 
 ### 8-3. singleton 利用検査
@@ -331,4 +332,3 @@ shared-memory の lock race より、runtime table と lifecycle 更新の race 
 - 誰にも観測されない worker
 - process-owned state の漏洩
 - runtime spec に抽象型が残ること
-

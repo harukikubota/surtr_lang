@@ -1,0 +1,21 @@
+defgenserver Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+    handlers {
+      out: OutHandler = StdOut
+    }
+  }
+
+  @init
+  def init() -> Result<Int> {
+    Ok(0)
+  }
+
+  @call
+  def info(state: Int, message: String) -> Result<CallResult<Unit, Int>> {
+    written =? OutHandler::write(ctx.out, message)
+    Ok(CallResult::Reply(written, state))
+  }
+}

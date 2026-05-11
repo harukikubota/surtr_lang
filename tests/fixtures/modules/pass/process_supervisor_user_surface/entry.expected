@@ -1,0 +1,4 @@
+Ok(SupervisorStatus(supervisor: AppSup, child_count: 0, strategy: OneForOne, max_restarts: 5, max_seconds: 10, allow_adopt: True, shutdown_timeout: Option::None))
+Ok(SupervisorStatus(supervisor: SlowSup, child_count: 0, strategy: OneForOne, max_restarts: 3, max_seconds: 30, allow_adopt: False, shutdown_timeout: Option::Some(250ms)))
+Ok(SupervisorStatus(supervisor: OverrideSup, child_count: 0, strategy: OneForOne, max_restarts: 2, max_seconds: 20, allow_adopt: True, shutdown_timeout: Option::Some(750ms)))
+Ok(SupervisorStatus(supervisor: DynamicSupervisor, child_count: 0, strategy: OneForOne, max_restarts: 10, max_seconds: 5, allow_adopt: True, shutdown_timeout: Option::None))

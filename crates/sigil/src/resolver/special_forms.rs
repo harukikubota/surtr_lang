@@ -6,6 +6,7 @@ pub(super) enum IfKind {
     IfThen2,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LogicKind {
     And,
     Or,

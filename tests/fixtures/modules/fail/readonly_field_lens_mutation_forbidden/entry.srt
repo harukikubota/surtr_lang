@@ -1,0 +1,2 @@
+user = User(Profile("alice"))
+Facet::set(User.profile.name, user, "bob")

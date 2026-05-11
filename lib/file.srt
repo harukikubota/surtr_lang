@@ -1,0 +1,242 @@
+@doc """
+Concrete file-system errors returned by `File`.
+
+`File` is a UTF-8 text-only surface in v1. Host I/O failures are normalized
+into these recoverable Surtr errors so ordinary code can handle them through
+`Result` instead of treating them as VM failures.
+
+Typical mapping:
+- missing file or missing parent path: `FileNotFound`
+- permission failure: `FilePermissionDenied`
+- invalid or unsupported path syntax: `FileInvalidPath`
+- non-UTF-8 text input: `FileEncodingError`
+- other host-side failures: `FileIoError`
+"""
+deferror FileNotFound(path: String) {
+  "file not found: #{path}"
+}
+
+deferror FilePermissionDenied(path: String) {
+  "permission denied: #{path}"
+}
+
+deferror FileAlreadyExists(path: String) {
+  "file already exists: #{path}"
+}
+
+deferror FileInvalidPath(path: String) {
+  "invalid path: #{path}"
+}
+
+deferror FileClosed {
+  "file is already closed"
+}
+
+deferror FileEncodingError(detail: String) {
+  detail
+}
+
+deferror FileIoError(detail: String) {
+  detail
+}
+
+@doc """
+Opaque runtime-managed file handle used by `File::with_open`.
+
+`FileHandle` values are created by the runtime and are only valid inside the
+callback passed to `File::with_open`. User code cannot construct, store, or
+close them directly. The runtime owns their lifetime and guarantees cleanup
+when the callback returns, when the current VM run ends, and when an
+interactive chunk is rolled back.
+"""
+@builtin type FileHandle
+
+@doc """
+Open mode for `File::with_open`.
+
+Modes describe how one temporary handle is opened for the callback body.
+
+- `Read`
+  Read-only access. `File::write_chunk` returns `Err(FileIoError(...))`.
+- `Write`
+  Create or truncate, then write from the start of the file.
+- `Append`
+  Create if missing and write at the end of the file.
+- `ReadWrite`
+  Open for both reading and writing. The write position starts at the
+  beginning of the file.
+- `ReadAppend`
+  Open for reading and appending. Writes always target the end of the file.
+"""
+defenum FileMode {
+  Read,
+  Write,
+  Append,
+  ReadWrite,
+  ReadAppend,
+}
+
+@doc """
+UTF-8 text file helpers.
+
+`File` is intentionally not auto-imported; use qualified calls such as
+`File::read("./tmp/sandbox/note.txt")`.
+
+All paths are resolved relative to the current working directory of the Surtr
+process. In tests this usually means the project root of the current run.
+
+Design boundaries for v1:
+- text only: all read APIs decode UTF-8 into `String`
+- no user-visible `close`: prefer `File::with_open` for structured resource use
+- one-shot helpers (`read`, `write`, `append`, `delete`) open and close within
+  a single call
+- append-only process log sinks remain the responsibility of `FileOutHandler`,
+  not `File`
+
+## REPL
+xldr(1)> File::write("./tmp/sandbox/repl-note.txt", "hello")
+Ok(())
+xldr(2)> File::read("./tmp/sandbox/repl-note.txt")
+Ok("hello")
+"""
+defmod File {
+  @doc """
+  Read the whole file as UTF-8 text.
+
+  This is the simplest entry point when the file comfortably fits in memory and
+  chunked access is unnecessary. The file is opened, read, decoded, and closed
+  within one call.
+
+  Returns:
+  - `Ok(text)` on success
+  - `Err(FileNotFound(path))` when the path is missing
+  - `Err(FileEncodingError(...))` when the bytes are not valid UTF-8
+  - `Err(FilePermissionDenied(path))` or `Err(FileIoError(...))` for host-side
+    failures
+
+  ## REPL
+  xldr(1)> File::read("./tmp/sandbox/repl-note.txt")
+  Ok("hello")
+  """
+  @builtin def read(path: String) -> Result<String>
+
+  @doc """
+  Create or truncate the file and write the whole text.
+
+  Use this when replacing the entire contents of a text file. Missing parent
+  directories are not created automatically.
+
+  ## REPL
+  xldr(1)> File::write("./tmp/sandbox/repl-note.txt", "alpha")
+  Ok(())
+  """
+  @builtin def write(path: String, text: String) -> Result<Unit>
+
+  @doc """
+  Create the file if missing and append text to the end.
+
+  This is a one-shot append helper for simple logging or incremental text
+  accumulation. For multiple related writes, prefer `File::with_open` so one
+  handle can be reused during the callback.
+
+  ## REPL
+  xldr(1)> File::append("./tmp/sandbox/repl-note.txt", "\\nbeta")
+  Ok(())
+  """
+  @builtin def append(path: String, text: String) -> Result<Unit>
+
+  @doc """
+  Return `True` when the path exists.
+
+  `exists` only reports presence. It does not prove the path is readable,
+  writable, or a regular file.
+
+  ## REPL
+  xldr(1)> File::exists("./tmp/sandbox/repl-note.txt")
+  True
+  """
+  @builtin def exists(path: String) -> Boolean
+
+  @doc """
+  Delete one file.
+
+  Use this for ordinary file cleanup. Deleting a missing path returns
+  `Err(FileNotFound(path))`.
+
+  ## REPL
+  xldr(1)> File::delete("./tmp/sandbox/repl-note.txt")
+  Ok(())
+  """
+  @builtin def delete(path: String) -> Result<Unit>
+
+  @doc """
+  Open a file for the duration of `body`.
+
+  The runtime always flushes and closes the handle before returning from this
+  call, whether `body` returns `Ok(...)` or `Err(...)`.
+
+  This is the primary API when several operations should share one open file.
+  `FileHandle` values are opaque and only meaningful inside `body`.
+
+  Cleanup guarantee:
+  - success path: flush, then close
+  - error path from `body`: flush if possible, then close
+  - VM shutdown or interactive rollback: remaining handles are closed by the VM
+
+  Prefer this API over any manual open/close pattern. `File` does not expose a
+  user-visible `close` function on purpose.
+
+  ## Example
+  ```surtr
+  File::with_open("./tmp/sandbox/chunked.txt", Write, fn(file) {
+    _ =? File::write_chunk(file, "hello")
+    _ =? File::write_chunk(file, "\\nworld")
+    File::flush(file)
+  })
+  ```
+  """
+  @builtin def with_open(path: String, mode: FileMode, body: (FileHandle -> Result<$A>)) -> Result<$A>
+
+  @doc """
+  Read at most `max_chars` UTF-8 characters from an opened file.
+  Returns `Ok("")` at EOF.
+
+  `max_chars` counts decoded UTF-8 characters rather than raw bytes. This makes
+  the API predictable for text processing, though it is not intended as a
+  binary streaming surface.
+
+  ## Example
+  ```surtr
+  File::with_open("./tmp/sandbox/chunked.txt", Read, fn(file) {
+    first =? File::read_chunk(file, 5)
+    second =? File::read_chunk(file, 5)
+    Ok((first, second))
+  })
+  ```
+  """
+  @builtin def read_chunk(file: FileHandle, max_chars: Int) -> Result<String>
+
+  @doc """
+  Write UTF-8 text through an opened file handle.
+
+  The exact behavior depends on the `FileMode` used to open the handle.
+  Writing through a `Read` handle returns `Err(FileIoError(...))`.
+
+  ## Example
+  ```surtr
+  File::with_open("./tmp/sandbox/chunked.txt", Append, fn(file) {
+    File::write_chunk(file, "tail")
+  })
+  ```
+  """
+  @builtin def write_chunk(file: FileHandle, text: String) -> Result<Unit>
+
+  @doc """
+  Flush buffered writes for an opened file handle.
+
+  Most code does not need an explicit flush because `File::with_open` flushes on
+  the way out. Call `flush` when the callback needs the host file contents to be
+  visible before the callback returns.
+  """
+  @builtin def flush(file: FileHandle) -> Result<Unit>
+}

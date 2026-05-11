@@ -103,7 +103,7 @@ impl Checker {
                 supervisor_process,
                 worker_process,
                 init,
-                size,
+                strategy,
             } => TypedInner::SupervisorWorkers {
                 supervisor_process,
                 worker_process,
@@ -115,8 +115,8 @@ impl Checker {
                     specialization_fun_idxs,
                     generated_defs,
                 )?),
-                size: Box::new(self.rewrite_specializations_in_node(
-                    *size,
+                strategy: Box::new(self.rewrite_specializations_in_node(
+                    *strategy,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
@@ -246,6 +246,57 @@ impl Checker {
                             span: span.clone(),
                             hint: None,
                         })?,
+                    other => other,
+                };
+                let dispatch = match dispatch {
+                    TraitDispatch::Static(TraitDispatchTarget::UserFunction { name, fun_idx })
+                        if needs_specialization.contains(&fun_idx) =>
+                    {
+                        let original_def =
+                            defs_by_fun_idx.get(&fun_idx).ok_or_else(|| TypeError {
+                                message: format!(
+                                    "Missing generic definition for fun_idx {}",
+                                    fun_idx
+                                ),
+                                span: span.clone(),
+                                hint: None,
+                            })?;
+                        let bound_tyvars = bound_tyvars_by_fun_idx
+                            .get(&fun_idx)
+                            .cloned()
+                            .unwrap_or_default();
+                        let mapping =
+                            self.infer_specialization_mapping(original_def, &args, &bound_tyvars)?;
+                        if mapping.len() == bound_tyvars.len()
+                            && bound_tyvars.iter().all(|var| {
+                                mapping.get(var).is_some_and(|ty| !matches!(ty, Ty::Var(_)))
+                            })
+                        {
+                            let concrete_tys = bound_tyvars
+                                .iter()
+                                .filter_map(|var| mapping.get(var).cloned())
+                                .collect::<Vec<_>>();
+                            let specialized_fun_idx = self.ensure_specialized_def(
+                                fun_idx,
+                                &concrete_tys,
+                                &mapping,
+                                defs_by_fun_idx,
+                                bound_tyvars_by_fun_idx,
+                                needs_specialization,
+                                specialization_fun_idxs,
+                                generated_defs,
+                            )?;
+                            TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+                                name,
+                                fun_idx: specialized_fun_idx,
+                            })
+                        } else {
+                            TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+                                name,
+                                fun_idx,
+                            })
+                        }
+                    }
                     other => other,
                 };
                 TypedInner::TraitCall {
@@ -646,13 +697,13 @@ impl Checker {
             TypedInner::ProcessContextHandler { process_name, slot } => {
                 TypedInner::ProcessContextHandler { process_name, slot }
             }
-            TypedInner::LensPath(path) => TypedInner::LensPath(path),
-            TypedInner::PendingLensPath(path) => TypedInner::PendingLensPath(path),
-            TypedInner::LensView {
+            TypedInner::FacetPath(path) => TypedInner::FacetPath(path),
+            TypedInner::PendingFacetPath(path) => TypedInner::PendingFacetPath(path),
+            TypedInner::FacetView {
                 source,
                 path,
                 source_is_result,
-            } => TypedInner::LensView {
+            } => TypedInner::FacetView {
                 source: Box::new(self.rewrite_specializations_in_node(
                     *source,
                     defs_by_fun_idx,
@@ -664,13 +715,13 @@ impl Checker {
                 path,
                 source_is_result,
             },
-            TypedInner::LensSet {
+            TypedInner::FacetSet {
                 source,
                 path,
                 value,
                 source_is_result,
                 mode,
-            } => TypedInner::LensSet {
+            } => TypedInner::FacetSet {
                 source: Box::new(self.rewrite_specializations_in_node(
                     *source,
                     defs_by_fun_idx,
@@ -691,13 +742,13 @@ impl Checker {
                 source_is_result,
                 mode,
             },
-            TypedInner::LensOver {
+            TypedInner::FacetOver {
                 source,
                 path,
                 update_fun,
                 source_is_result,
                 mode,
-            } => TypedInner::LensOver {
+            } => TypedInner::FacetOver {
                 source: Box::new(self.rewrite_specializations_in_node(
                     *source,
                     defs_by_fun_idx,
@@ -837,11 +888,11 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             ),
-            TypedInner::StructDef(tag, name, field_names, private_flags) => {
-                TypedInner::StructDef(tag, name, field_names, private_flags)
+            TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root) => {
+                TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root)
             }
-            TypedInner::RecordDef(tag, name, field_names, private_flags) => {
-                TypedInner::RecordDef(tag, name, field_names, private_flags)
+            TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root) => {
+                TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::TraitDef(name, methods) => TypedInner::TraitDef(name, methods),
@@ -1175,25 +1226,25 @@ impl Checker {
                 self.collect_bound_tyvars_in_node(pid, ordered, seen);
             }
             TypedInner::SupervisorStatus { .. } => {}
-            TypedInner::SupervisorWorkers { init, size, .. } => {
+            TypedInner::SupervisorWorkers { init, strategy, .. } => {
                 self.collect_bound_tyvars_in_node(init, ordered, seen);
-                self.collect_bound_tyvars_in_node(size, ordered, seen);
+                self.collect_bound_tyvars_in_node(strategy, ordered, seen);
             }
-            TypedInner::LensPath(path) => {
+            TypedInner::FacetPath(path) => {
                 self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
             }
-            TypedInner::PendingLensPath(path) => {
+            TypedInner::PendingFacetPath(path) => {
                 if let Some(source_ty_hint) = &path.source_ty_hint {
                     self.collect_bound_tyvars_in_ty(source_ty_hint, ordered, seen);
                 }
             }
-            TypedInner::LensView { source, path, .. } => {
+            TypedInner::FacetView { source, path, .. } => {
                 self.collect_bound_tyvars_in_node(source, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.source_ty, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
             }
-            TypedInner::LensSet {
+            TypedInner::FacetSet {
                 source,
                 path,
                 value,
@@ -1204,7 +1255,7 @@ impl Checker {
                 self.collect_bound_tyvars_in_ty(&path.focus_ty, ordered, seen);
                 self.collect_bound_tyvars_in_node(value, ordered, seen);
             }
-            TypedInner::LensOver {
+            TypedInner::FacetOver {
                 source,
                 path,
                 update_fun,
@@ -1250,7 +1301,7 @@ impl Checker {
             Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
                 self.collect_bound_tyvars_in_ty(&inner, ordered, seen)
             }
-            Ty::Lens(source, focus) => {
+            Ty::Facet(source, focus) => {
                 self.collect_bound_tyvars_in_ty(&source, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&focus, ordered, seen);
             }
@@ -1331,12 +1382,12 @@ impl Checker {
                 supervisor_process,
                 worker_process,
                 init,
-                size,
+                strategy,
             } => TypedInner::SupervisorWorkers {
                 supervisor_process,
                 worker_process,
                 init: Box::new(self.substitute_typed_node_with_mapping(*init, mapping)),
-                size: Box::new(self.substitute_typed_node_with_mapping(*size, mapping)),
+                strategy: Box::new(self.substitute_typed_node_with_mapping(*strategy, mapping)),
             },
             TypedInner::App(func, args) => TypedInner::App(
                 Box::new(self.substitute_typed_node_with_mapping(*func, mapping)),
@@ -1482,62 +1533,70 @@ impl Checker {
             TypedInner::ProcessContextHandler { process_name, slot } => {
                 TypedInner::ProcessContextHandler { process_name, slot }
             }
-            TypedInner::LensPath(path) => TypedInner::LensPath(TypedLensPath {
+            TypedInner::FacetPath(path) => TypedInner::FacetPath(TypedFacetPath {
                 source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                 focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+                path_kind: path.path_kind,
                 may_fail: path.may_fail,
+                source_readonly_root: path.source_readonly_root,
                 segments: path.segments,
             }),
-            TypedInner::PendingLensPath(path) => TypedInner::PendingLensPath(PendingLensPath {
+            TypedInner::PendingFacetPath(path) => TypedInner::PendingFacetPath(PendingFacetPath {
                 source_ty_hint: path
                     .source_ty_hint
                     .map(|ty| self.substitute_ty_with_mapping(&ty, mapping)),
                 segments: path.segments,
             }),
-            TypedInner::LensView {
+            TypedInner::FacetView {
                 source,
                 path,
                 source_is_result,
-            } => TypedInner::LensView {
+            } => TypedInner::FacetView {
                 source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
-                path: TypedLensPath {
+                path: TypedFacetPath {
                     source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                     focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+                    path_kind: path.path_kind,
                     may_fail: path.may_fail,
+                    source_readonly_root: path.source_readonly_root,
                     segments: path.segments,
                 },
                 source_is_result,
             },
-            TypedInner::LensSet {
+            TypedInner::FacetSet {
                 source,
                 path,
                 value,
                 source_is_result,
                 mode,
-            } => TypedInner::LensSet {
+            } => TypedInner::FacetSet {
                 source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
-                path: TypedLensPath {
+                path: TypedFacetPath {
                     source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                     focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+                    path_kind: path.path_kind,
                     may_fail: path.may_fail,
+                    source_readonly_root: path.source_readonly_root,
                     segments: path.segments,
                 },
                 value: Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
                 source_is_result,
                 mode,
             },
-            TypedInner::LensOver {
+            TypedInner::FacetOver {
                 source,
                 path,
                 update_fun,
                 source_is_result,
                 mode,
-            } => TypedInner::LensOver {
+            } => TypedInner::FacetOver {
                 source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
-                path: TypedLensPath {
+                path: TypedFacetPath {
                     source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                     focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+                    path_kind: path.path_kind,
                     may_fail: path.may_fail,
+                    source_readonly_root: path.source_readonly_root,
                     segments: path.segments,
                 },
                 update_fun: Box::new(self.substitute_typed_node_with_mapping(*update_fun, mapping)),
@@ -1640,11 +1699,11 @@ impl Checker {
                     .map(|arg| self.substitute_typed_node_with_mapping(arg, mapping))
                     .collect(),
             ),
-            TypedInner::StructDef(tag, name, field_names, private_flags) => {
-                TypedInner::StructDef(tag, name, field_names, private_flags)
+            TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root) => {
+                TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root)
             }
-            TypedInner::RecordDef(tag, name, field_names, private_flags) => {
-                TypedInner::RecordDef(tag, name, field_names, private_flags)
+            TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root) => {
+                TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
             TypedInner::TraitDef(name, methods) => TypedInner::TraitDef(name, methods),
@@ -1816,7 +1875,7 @@ impl Checker {
                 .cloned()
                 .unwrap_or_else(|| self.resolve_ty(ty)),
             Ty::List(inner) => Ty::List(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
-            Ty::Lens(source, focus) => Ty::Lens(
+            Ty::Facet(source, focus) => Ty::Facet(
                 Box::new(self.substitute_ty_with_mapping(source, mapping)),
                 Box::new(self.substitute_ty_with_mapping(focus, mapping)),
             ),
@@ -1984,18 +2043,18 @@ impl Checker {
             }
             TypedInner::SupervisorAdopt { pid, .. } => Self::typed_node_has_pending_trait_call(pid),
             TypedInner::SupervisorStatus { .. } => false,
-            TypedInner::SupervisorWorkers { init, size, .. } => {
+            TypedInner::SupervisorWorkers { init, strategy, .. } => {
                 Self::typed_node_has_pending_trait_call(init)
-                    || Self::typed_node_has_pending_trait_call(size)
+                    || Self::typed_node_has_pending_trait_call(strategy)
             }
             TypedInner::ProcessContextHandler { .. } => false,
-            TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => false,
-            TypedInner::LensView { source, .. } => Self::typed_node_has_pending_trait_call(source),
-            TypedInner::LensSet { source, value, .. } => {
+            TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_) => false,
+            TypedInner::FacetView { source, .. } => Self::typed_node_has_pending_trait_call(source),
+            TypedInner::FacetSet { source, value, .. } => {
                 Self::typed_node_has_pending_trait_call(source)
                     || Self::typed_node_has_pending_trait_call(value)
             }
-            TypedInner::LensOver {
+            TypedInner::FacetOver {
                 source, update_fun, ..
             } => {
                 Self::typed_node_has_pending_trait_call(source)

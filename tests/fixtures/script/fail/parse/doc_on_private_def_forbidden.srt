@@ -1,0 +1,4 @@
+@doc """
+Private helper docs.
+"""
+defp helper() -> String { "secret" }

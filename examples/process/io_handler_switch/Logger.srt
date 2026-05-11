@@ -2,6 +2,7 @@ defagent Logger {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
     handlers {
       out: OutHandler = StdOut
     }
@@ -19,7 +20,7 @@ defagent Logger {
 }
 
 supervisor_init {
-  singleton Logger {
+  Logger {
     handlers {
       out: NullOutHandler
     }

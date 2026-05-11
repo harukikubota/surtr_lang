@@ -2,7 +2,9 @@ use crate::common::{
     module_spec_fixtures, repo_root, surtr_command, unique_temp_dir, write_source,
 };
 use crate::support;
+use forge::bytecode::{Bytecode, Constant};
 use serde_json::Value;
+use sindr::ir::Opcode;
 use std::fs;
 
 #[test]
@@ -135,12 +137,230 @@ fn dump_outputs_valid_json_for_jq() {
 }
 
 #[test]
+fn dump_opcode_histogram_adds_static_opcode_counts() {
+    let temp = unique_temp_dir("surtr_dump_opcode_histogram");
+    let source_path = temp.join("histogram_sample.srt");
+
+    write_source(&source_path, "print(to_string(1 + 2))\n");
+    let dump = surtr_command()
+        .args([
+            "dump",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--format",
+            "json",
+            "--opcode-histogram",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    assert!(json["opcode_histogram"]["LoadConst"].as_u64().unwrap_or(0) > 0);
+    assert!(
+        json["opcode_histogram"]["CallBuiltin"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0
+    );
+    assert!(
+        json["optimization_summary"]["apply_compose"]["direct_calls"]
+            .as_u64()
+            .is_some()
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn dump_peephole_candidates_reports_remaining_branch_fusion_opportunities() {
+    let fixture = repo_root().join("tests/fixtures/script/pass/stdmod/result_helpers.srt");
+    let dump = surtr_command()
+        .args([
+            "dump",
+            fixture.to_str().expect("fixture path must be utf-8"),
+            "--format",
+            "json",
+            "--peephole-candidates",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    assert!(
+        json["peephole_candidates"]["summary"]["branch_fusion"]
+            .as_u64()
+            .unwrap_or(0)
+            == 0,
+        "expected no remaining branch-fusion candidates in result_helpers dump: {json}"
+    );
+    assert!(
+        json["peephole_candidates"]["items"]
+            .as_array()
+            .is_some_and(|items| items.is_empty()),
+        "expected no remaining peephole candidates in result_helpers dump: {json}"
+    );
+}
+
+#[test]
+fn dump_peephole_candidates_include_operand_details() {
+    let temp = unique_temp_dir("surtr_dump_peephole_operand_details");
+    let eldr_path = temp.join("candidate.eldr");
+    let mut bytecode = Bytecode::default();
+    bytecode.constants = vec![Constant::Bool(true)];
+    bytecode.num_locals = 1;
+    bytecode.opcodes = vec![Opcode::LoadConst(0), Opcode::StoreLocal(0), Opcode::Halt];
+    fs::write(
+        &eldr_path,
+        bytecode.encode().expect("bytecode should encode"),
+    )
+    .expect("failed to write candidate bytecode");
+
+    let dump = surtr_command()
+        .args([
+            "dump",
+            eldr_path.to_str().expect("eldr path must be utf-8"),
+            "--format",
+            "json",
+            "--peephole-candidates",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    let item = json["peephole_candidates"]["items"]
+        .as_array()
+        .expect("items must be an array")
+        .iter()
+        .find(|item| item["kind"] == "load_const_store_local")
+        .expect("expected a load_const_store_local candidate");
+    assert!(item["pc"].as_u64().is_some());
+    assert!(item["function"].is_null());
+    assert_eq!(item["opcode_window"], serde_json::json!(["LoadConst", "StoreLocal"]));
+    let operands = item["operands"]
+        .as_array()
+        .expect("operands must be an array");
+    assert_eq!(operands.len(), 2);
+    assert_eq!(operands[0]["opcode"], "LoadConst");
+    assert_eq!(operands[0]["const_idx"], 0);
+    assert_eq!(operands[0]["constant"], "Bool(true)");
+    assert_eq!(operands[1]["opcode"], "StoreLocal");
+    assert_eq!(operands[1]["local_idx"], 0);
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn dump_opcode_histogram_includes_function_summary() {
+    let fixture = repo_root().join("tests/fixtures/script/pass/stdmod/result_helpers.srt");
+    let dump = surtr_command()
+        .args([
+            "dump",
+            fixture.to_str().expect("fixture path must be utf-8"),
+            "--format",
+            "json",
+            "--opcode-histogram",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    assert!(
+        json["function_summary"]["summary"]["generated_function_count"]
+            .as_u64()
+            .is_some()
+    );
+    let functions = json["function_summary"]["functions"]
+        .as_array()
+        .expect("functions must be an array");
+    assert!(!functions.is_empty());
+    let first = &functions[0];
+    assert!(first["fun_idx"].as_u64().is_some());
+    assert!(first["name"].as_str().is_some());
+    assert!(first["opcode_count"].as_u64().is_some());
+    assert!(first["opcode_histogram"].as_object().is_some());
+    assert!(first["call_counts"]["call_closure"].as_u64().is_some());
+}
+
+#[test]
+fn dump_opcode_histogram_tracks_result_branch_opcode_batch() {
+    let fixture = repo_root().join("tests/fixtures/script/pass/stdmod/result_helpers.srt");
+    let dump = surtr_command()
+        .args([
+            "dump",
+            fixture.to_str().expect("fixture path must be utf-8"),
+            "--format",
+            "json",
+            "--opcode-histogram",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    assert!(
+        json["opcode_histogram"]["JumpIfLocalTagEq"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "expected JumpIfLocalTagEq histogram entries in result_helpers dump: {json}"
+    );
+    assert!(
+        json["opcode_histogram"]["JumpIfLocalTagNe"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "expected JumpIfLocalTagNe histogram entries in result_helpers dump: {json}"
+    );
+    assert!(
+        json["optimization_summary"]["compressed_opcodes"]["JumpIfLocalTagEq"]["count"]
+            .as_u64()
+            .is_some(),
+        "expected JumpIfLocalTagEq optimization summary entry: {json}"
+    );
+    assert!(
+        json["optimization_summary"]["compressed_opcodes"]["JumpIfLocalTagNe"]["count"]
+            .as_u64()
+            .is_some(),
+        "expected JumpIfLocalTagNe optimization summary entry: {json}"
+    );
+}
+
+#[test]
 fn dump_outputs_runtime_process_specs_for_agent_modules() {
     let fixture = module_spec_fixtures()
         .into_iter()
         .find(|fixture| {
             fixture.case.case_dir
-                == repo_root().join("tests/spec/modules/process_state_agent_singleton_surface")
+                == repo_root()
+                    .join("tests/fixtures/modules/pass/process_state_agent_singleton_surface")
         })
         .expect("process_state_agent_singleton_surface fixture should exist");
     let module_sources =

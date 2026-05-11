@@ -49,8 +49,9 @@ impl Checker {
             Resolved::Var(_, id) => self
                 .consts
                 .get(&id.unique_id)
-                .is_none_or(|meta| matches!(meta.kind, ConstKind::LensPath)),
+                .is_none_or(|meta| matches!(meta.kind, ConstKind::FacetPath)),
             Resolved::FieldAccess(_, inner, _) => self.const_surface_is_allowed(inner),
+            Resolved::InferredFacetCapture(_, _) => false,
             Resolved::BinOp(_, BinOp::Slash, left, right) => {
                 self.const_surface_is_allowed(left) && self.const_surface_is_allowed(right)
             }
@@ -66,10 +67,10 @@ impl Checker {
 
             if !self.const_surface_is_allowed(value) {
                 return Err(TypeError {
-                    message: "const value must be a primitive literal or a lens path".into(),
+                    message: "const value must be a primitive literal or a facet path".into(),
                     span: span.clone(),
                     hint: Some(
-                        "V1 const supports literal values, lens paths, Lens const refs, and `/` composition of those lens values only.".into(),
+                        "V1 const supports literal values, facet paths, Facet const refs, and `/` composition of those facet values only.".into(),
                     ),
                 });
             }
@@ -86,16 +87,16 @@ impl Checker {
                     ConstKind::PrimitiveLiteral,
                     StoredConstValue::Literal(lit.clone()),
                 ),
-                TypedInner::LensPath(path) => (
-                    ConstKind::LensPath,
-                    StoredConstValue::LensPath(path.clone()),
+                TypedInner::FacetPath(path) => (
+                    ConstKind::FacetPath,
+                    StoredConstValue::FacetPath(path.clone()),
                 ),
                 _ => {
                     return Err(TypeError {
-                        message: "const value must be a primitive literal or a lens path".into(),
+                        message: "const value must be a primitive literal or a facet path".into(),
                         span: span.clone(),
                         hint: Some(
-                            "Use `const NAME = 1`, `const NAME = User.profile`, or compose Lens consts with `/`.".into(),
+                            "Use `const NAME = 1`, `const NAME = User.profile`, or compose Facet consts with `/`.".into(),
                         ),
                     })
                 }
@@ -150,11 +151,11 @@ impl Checker {
                 continue;
             };
 
-            if builtin_type_meta_by_name(name).is_some() {
+            if builtin_type_meta_by_name(Self::surface_name(name)).is_some() {
                 return Err(TypeError {
                     message: format!(
                         "Type name `{}` is reserved by a canonical builtin type declaration",
-                        name
+                        Self::surface_name(name)
                     ),
                     span: span.clone(),
                     hint: Some("Builtin and canonical type names cannot be redefined.".into()),
@@ -178,13 +179,6 @@ impl Checker {
 
             self.env
                 .predeclare_type_def(name.clone(), kind, type_params);
-            match stmt {
-                Resolved::StructDef(_, id, _, attrs) | Resolved::EnumDef(_, id, _, _, attrs) => {
-                    self.env
-                        .set_process_state_owner(&id.name, attrs.process_state_owner.clone());
-                }
-                _ => {}
-            }
         }
 
         self.ensure_no_type_cycles(stmts)?;
@@ -192,7 +186,7 @@ impl Checker {
         // Pass 2: finalize field signatures and constructor-like bindings.
         for stmt in stmts {
             match stmt {
-                Resolved::StructDef(_, id, fields, _) => {
+                Resolved::StructDef(_, id, fields, attrs) => {
                     let ty_fields = fields
                         .iter()
                         .map(|f| {
@@ -215,8 +209,19 @@ impl Checker {
                         .filter(|field| field.visibility == spire::ast::Visibility::Private)
                         .map(|field| field.name.clone())
                         .collect::<HashSet<_>>();
+                    let readonly_fields = fields
+                        .iter()
+                        .filter(|field| field.readonly)
+                        .map(|field| field.name.clone())
+                        .collect::<HashSet<_>>();
                     self.env
-                        .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
+                        .resolve_type_def_signature(
+                            &id.name,
+                            ty_fields.clone(),
+                            private_fields,
+                            readonly_fields,
+                            attrs.readonly,
+                        )
                         .ok_or_else(|| TypeError {
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
@@ -250,7 +255,13 @@ impl Checker {
                         .map(|field| field.name.clone())
                         .collect::<HashSet<_>>();
                     self.env
-                        .resolve_type_def_signature(&id.name, ty_fields.clone(), private_fields)
+                        .resolve_type_def_signature(
+                            &id.name,
+                            ty_fields.clone(),
+                            private_fields,
+                            HashSet::new(),
+                            false,
+                        )
                         .ok_or_else(|| TypeError {
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
@@ -276,7 +287,13 @@ impl Checker {
                         .map(|field| field.name.clone())
                         .collect::<HashSet<_>>();
                     self.env
-                        .resolve_type_def_signature(&id.name, ty_fields, private_fields)
+                        .resolve_type_def_signature(
+                            &id.name,
+                            ty_fields,
+                            private_fields,
+                            HashSet::new(),
+                            false,
+                        )
                         .ok_or_else(|| TypeError {
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
@@ -286,7 +303,13 @@ impl Checker {
                 Resolved::EnumDef(_, id, type_params, variants, _) => {
                     let _ = self
                         .env
-                        .resolve_type_def_signature(&id.name, Vec::new(), HashSet::new())
+                        .resolve_type_def_signature(
+                            &id.name,
+                            Vec::new(),
+                            HashSet::new(),
+                            HashSet::new(),
+                            false,
+                        )
                         .ok_or_else(|| TypeError {
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
@@ -511,6 +534,12 @@ impl Checker {
     }
 
     pub(super) fn split_impl_method_id(id: &ResolvedId) -> Option<(String, String)> {
+        if let Some(qualified) = id.qualified_name.as_deref() {
+            if let Some(split) = Self::split_impl_method_name(qualified) {
+                return Some(split);
+            }
+        }
+
         if let Some(split) = Self::split_impl_method_name(&id.name) {
             return Some(split);
         }
@@ -641,10 +670,7 @@ impl Checker {
         let mut structs_with_new: HashSet<String> = HashSet::new();
 
         for stmt in stmts {
-            if let Resolved::StructDef(_, id, fields, attrs) = stmt {
-                if attrs.process_state_owner.is_some() {
-                    continue;
-                }
+            if let Resolved::StructDef(_, id, fields, _attrs) = stmt {
                 let expected_self_ty = Ty::Struct(
                     id.name.clone(),
                     fields
@@ -660,7 +686,13 @@ impl Checker {
                         })
                         .collect::<Result<Vec<_>, TypeError>>()?,
                 );
-                struct_defs.insert(id.name.clone(), (id.span.clone(), expected_self_ty));
+                struct_defs.insert(id.name.clone(), (id.span.clone(), expected_self_ty.clone()));
+                if let Some(surface_name) = id.name.strip_prefix("Global::") {
+                    struct_defs.insert(
+                        surface_name.to_string(),
+                        (id.span.clone(), expected_self_ty),
+                    );
+                }
             }
         }
 
@@ -671,6 +703,12 @@ impl Checker {
             if let Some((target, method)) = Self::split_impl_method_id(id) {
                 if method == "new" {
                     structs_with_new.insert(target.clone());
+                    if !target.contains("::") {
+                        structs_with_new.insert(format!("Global::{}", target));
+                    }
+                    if let Some(surface_name) = target.strip_prefix("Global::") {
+                        structs_with_new.insert(surface_name.to_string());
+                    }
                     let Some((span, expected_self_ty)) = struct_defs.get(&target) else {
                         continue;
                     };
@@ -711,7 +749,11 @@ impl Checker {
 
     pub(super) fn register_function_id(&mut self, id: &ResolvedId) {
         let key = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
-        self.function_ids_by_name.insert(key, id.clone());
+        self.function_ids_by_name.insert(key.clone(), id.clone());
+        if let Some(surface_key) = key.strip_prefix("Global::") {
+            self.function_ids_by_name
+                .insert(surface_key.to_string(), id.clone());
+        }
     }
 
     pub(super) fn trait_key(&self, id: &ResolvedId) -> String {
@@ -829,7 +871,7 @@ impl Checker {
             Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
                 Self::collect_ty_vars(inner, out)
             }
-            Ty::Lens(source, focus) | Ty::Result(source, focus) => {
+            Ty::Facet(source, focus) | Ty::Result(source, focus) => {
                 Self::collect_ty_vars(source, out);
                 Self::collect_ty_vars(focus, out);
             }
@@ -872,11 +914,9 @@ impl Checker {
         target_ast_ty: &AstTy,
     ) -> Result<(Vec<Ty>, Ty, Vec<u32>), TypeError> {
         let mut tyvars = HashMap::new();
-        let placeholder_self = self.env.fresh_tyvar();
-        let target_ty = self.resolve_trait_signature_ast_ty_in_context(
+        let target_ty = self.resolve_signature_ast_ty_in_context(
             target_ast_ty,
             TypeSyntaxContext::General,
-            &placeholder_self,
             &mut tyvars,
         )?;
         let trait_arg_tys = trait_args
@@ -929,11 +969,43 @@ impl Checker {
     }
 
     fn public_trait_target_display(info: &TraitImplInfo) -> Option<String> {
-        let display = Self::ast_ty_key(&info.target_ast_ty);
+        let display = Self::surface_ast_ty_key(&info.target_ast_ty);
         let base = display.split('<').next().unwrap_or(display.as_str());
         match base {
-            "TypeRef" | "Hole" | "Closure" | "MatchArms" | "CondClauses" | "Self" => None,
+            "TypeRef" | "Hole" | "Closure" | "MatchArms" | "CondClauses"
+            | "BulkUpdateEntries" | "Self" => None,
             _ => Some(display),
+        }
+    }
+
+    fn surface_ast_ty_key(ty: &AstTy) -> String {
+        match ty {
+            AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => Self::surface_name(name).into(),
+            AstTy::Generic(_, name, args) => format!(
+                "{}<{}>",
+                Self::surface_name(name),
+                args.iter()
+                    .map(Self::surface_ast_ty_key)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Tuple(_, items) => format!(
+                "({})",
+                items
+                    .iter()
+                    .map(Self::surface_ast_ty_key)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Func(_, params, ret) => format!(
+                "({} -> {})",
+                params
+                    .iter()
+                    .map(Self::surface_ast_ty_key)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                Self::surface_ast_ty_key(ret)
+            ),
         }
     }
 
@@ -993,7 +1065,8 @@ impl Checker {
             Ty::Pid(name) => Some(format!("PID<{name}>")),
             Ty::Result(_, _) => Some("Result".into()),
             Ty::List(_) => Some("List".into()),
-            Ty::Lens(_, _) => Some("Lens".into()),
+            Ty::Facet(_, _) => Some("Facet".into()),
+            Ty::Tuple(items) if items.len() >= 2 => Some(format!("Tuple{}", items.len())),
             Ty::Func(_, _) => Some("Function".into()),
             Ty::Struct(name, _) | Ty::Record(name, _) => Some(name),
             Ty::Enum(name, _) => Some(name),
@@ -1001,12 +1074,31 @@ impl Checker {
         }
     }
 
-    pub(super) fn trait_impl_exists(&self, trait_name: &str, ty: &Ty) -> bool {
+    pub(super) fn trait_impl_exists(&mut self, trait_name: &str, ty: &Ty) -> bool {
         if self.trait_target_name(ty).is_some_and(|target_name| {
             self.trait_impls
                 .contains_key(&(trait_name.into(), target_name))
         }) {
             return true;
+        }
+        if !trait_name.contains('<') {
+            let receiver_ty = self.resolve_ty(ty);
+            for impl_key in self.trait_impl_candidate_keys(trait_name) {
+                let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
+                    continue;
+                };
+                if !impl_info.trait_arg_tys.is_empty() {
+                    continue;
+                }
+                let mut fresh = HashMap::new();
+                let impl_target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+                let before = self.substitutions.clone();
+                let target_matches = self.types_compatible(&impl_target, &receiver_ty);
+                self.substitutions = before;
+                if target_matches {
+                    return true;
+                }
+            }
         }
         self.compiler_trait_impl_exists(trait_name, ty)
     }
@@ -1017,6 +1109,7 @@ impl Checker {
         method_name: &str,
         target_name: &str,
     ) -> Option<TraitDispatchTarget> {
+        let target_name = Self::surface_name(target_name);
         if matches!(target_name, "Int" | "Float") {
             let op = if self.trait_matches_short_name(trait_name, "Add") && method_name == "add" {
                 Some(BinOp::Add)
@@ -1330,9 +1423,9 @@ impl Checker {
             let (trait_arg_tys, target_ty, type_param_vars) =
                 self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
             let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
-                message: "trait impl target must be a concrete named type or function type".into(),
+                message: "trait impl target must be a concrete named type, tuple type, or function type".into(),
                 span: Self::ast_ty_span(target_ast_ty).clone(),
-                hint: Some("Use `impl Trait for Int` / `impl Trait for Float` / `impl Trait for UserType` / `impl Trait for ($A -> $B)`.".into()),
+                hint: Some("Use `impl Trait for Int` / `impl Trait for UserType` / `impl Trait for (Int, String)` / `impl Trait for ($A -> $B)`.".into()),
             })?;
 
             let mut method_map = HashMap::new();

@@ -141,6 +141,38 @@ pub enum Opcode {
 
     // Program termination
     Halt,
+
+    // Compressed opcodes. Keep appended to preserve existing bincode enum tags.
+    StoreConstLocal {
+        const_idx: u32,
+        local_idx: u32,
+    },
+    CopyLocal {
+        src_local_idx: u32,
+        dst_local_idx: u32,
+    },
+    EqLocalTag {
+        local_idx: u32,
+        tag_const_idx: u32,
+    },
+    StringLen,
+    ListLen,
+    SafeModInt,
+    StringContains,
+    StringStartsWith,
+    StringEndsWith,
+    MakeOk,
+    MakeErr,
+    JumpIfLocalTagEq {
+        local_idx: u32,
+        tag_const_idx: u32,
+        target_pc: u32,
+    },
+    JumpIfLocalTagNe {
+        local_idx: u32,
+        tag_const_idx: u32,
+        target_pc: u32,
+    },
 }
 
 impl Opcode {
@@ -151,6 +183,19 @@ impl Opcode {
             Self::LoadFunctionRef(..) => "LoadFunctionRef",
             Self::LoadLocal(..) => "LoadLocal",
             Self::StoreLocal(..) => "StoreLocal",
+            Self::StoreConstLocal { .. } => "StoreConstLocal",
+            Self::CopyLocal { .. } => "CopyLocal",
+            Self::EqLocalTag { .. } => "EqLocalTag",
+            Self::StringLen => "StringLen",
+            Self::ListLen => "ListLen",
+            Self::SafeModInt => "SafeModInt",
+            Self::StringContains => "StringContains",
+            Self::StringStartsWith => "StringStartsWith",
+            Self::StringEndsWith => "StringEndsWith",
+            Self::MakeOk => "MakeOk",
+            Self::MakeErr => "MakeErr",
+            Self::JumpIfLocalTagEq { .. } => "JumpIfLocalTagEq",
+            Self::JumpIfLocalTagNe { .. } => "JumpIfLocalTagNe",
             Self::AddInt => "AddInt",
             Self::SubInt => "SubInt",
             Self::MulInt => "MulInt",
@@ -414,8 +459,6 @@ pub struct RuntimeTypeRef {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeStateSpec {
     pub state_type: RuntimeTypeRef,
-    #[serde(default)]
-    pub owner_process: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1635,7 +1678,6 @@ mod tests {
                 state_type: RuntimeTypeRef {
                     name: "Int".to_string(),
                 },
-                owner_process: Some("Counter".to_string()),
             },
             init: RuntimeInitSpec {
                 callable: RuntimeCallableRef { fun_idx: 0 },
@@ -1739,6 +1781,157 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_encode_decode_store_const_local_opcode() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![
+            Opcode::StoreConstLocal {
+                const_idx: 0,
+                local_idx: 0,
+            },
+            Opcode::Halt,
+        ];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_copy_local_opcode() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![
+            Opcode::CopyLocal {
+                src_local_idx: 0,
+                dst_local_idx: 1,
+            },
+            Opcode::Halt,
+        ];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_eq_local_tag_opcode() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![
+            Opcode::EqLocalTag {
+                local_idx: 0,
+                tag_const_idx: 0,
+            },
+            Opcode::Halt,
+        ];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_result_branch_opcode_batch() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.constants = vec![Constant::Tag(0), Constant::Tag(1)];
+        bytecode.opcodes = vec![
+            Opcode::JumpIfLocalTagEq {
+                local_idx: 0,
+                tag_const_idx: 0,
+                target_pc: 3,
+            },
+            Opcode::JumpIfLocalTagNe {
+                local_idx: 0,
+                tag_const_idx: 1,
+                target_pc: 4,
+            },
+            Opcode::Halt,
+            Opcode::Halt,
+            Opcode::Halt,
+        ];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_result_and_local_tag_jump_opcodes() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![
+            Opcode::MakeOk,
+            Opcode::MakeErr,
+            Opcode::JumpIfLocalTagEq {
+                local_idx: 1,
+                tag_const_idx: 0,
+                target_pc: 4,
+            },
+            Opcode::JumpIfLocalTagNe {
+                local_idx: 2,
+                tag_const_idx: 1,
+                target_pc: 5,
+            },
+            Opcode::Halt,
+        ];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_string_len_opcode() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![Opcode::StringLen, Opcode::Halt];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_list_len_opcode() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![Opcode::ListLen, Opcode::Halt];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_safe_mod_int_opcode() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![Opcode::SafeModInt, Opcode::Halt];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_string_predicate_opcodes() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![
+            Opcode::StringContains,
+            Opcode::StringStartsWith,
+            Opcode::StringEndsWith,
+            Opcode::Halt,
+        ];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
     fn roundtrip_encode_decode_with_source_map_some() {
         let bytecode = sample_bytecode(Some(SourceMap {
             entries: vec![OpcodeSource {
@@ -1756,6 +1949,42 @@ mod tests {
     }
 
     #[test]
+    fn roundtrip_rebuilds_type_registry_lookup_index() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.type_registry = TypeRegistry::from_entries(vec![
+            TypeEntry {
+                tag: 10,
+                name: "Global::User".to_string(),
+                kind: TypeKind::Struct,
+                field_names: vec!["name".to_string(), "age".to_string()],
+                private_flags: vec![false, false],
+            },
+            TypeEntry {
+                tag: 42,
+                name: "Global::Profile".to_string(),
+                kind: TypeKind::Record,
+                field_names: vec!["id".to_string()],
+                private_flags: vec![false],
+            },
+        ]);
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(
+            decoded.type_registry.entries(),
+            bytecode.type_registry.entries()
+        );
+        assert_eq!(
+            decoded
+                .type_registry
+                .lookup(42)
+                .map(|entry| entry.name.as_str()),
+            Some("Global::Profile")
+        );
+    }
+
+    #[test]
     fn process_spec_roundtrip_uses_v2_shape_without_legacy_boot_registry_lazy_fields() {
         let mut bytecode = sample_bytecode(None);
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
@@ -1768,7 +1997,6 @@ mod tests {
                     state_type: RuntimeTypeRef {
                         name: "Int".to_string(),
                     },
-                    owner_process: Some("LazyCache".to_string()),
                 },
                 init: RuntimeInitSpec {
                     callable: RuntimeCallableRef { fun_idx: 0 },

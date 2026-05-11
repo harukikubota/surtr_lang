@@ -163,7 +163,7 @@ fn module_compile_error_fixtures_bucket_3() {
 #[test]
 fn direct_module_file_requires_module_loading_path_instead_of_script_cli_mode() {
     let module_path =
-        repo_root().join("tests/compile_errors/modules/duplicate_import_all_all/Kernel.srt");
+        repo_root().join("tests/fixtures/modules/fail/duplicate_import_all_all/Kernel.srt");
     let output = surtr_command()
         .args([
             "check",
@@ -198,7 +198,7 @@ fn dump_includes_qualified_function_names_for_module_defined_functions() {
         .into_iter()
         .find(|fixture| {
             fixture.case.case_dir
-                == repo_root().join("tests/spec/modules/qualified_name_without_import")
+                == repo_root().join("tests/fixtures/modules/pass/qualified_name_without_import")
         })
         .expect("qualified_name_without_import fixture should exist");
     let bytecode = compile_multi_source_case(&fixture.case).unwrap_or_else(|e| {

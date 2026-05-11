@@ -60,8 +60,11 @@ static GLOBAL_COMMANDS: &[(&str, &str)] = &[
     ("error", ":error [full|summary]  — set error display mode"),
     ("sig", ":sig <symbol|expr>  — show signature"),
     ("info", ":info <query>  — show derived info"),
-    ("type", ":type <binding>  — lookup binding type"),
-    ("lens", ":lens <binding|expr>  — inspect lens path"),
+    (
+        "type",
+        ":type <binding>  — lookup binding type (annotate unresolved generics before persistence)",
+    ),
+    ("facet", ":facet <binding|expr>  — inspect facet path"),
     ("save", ":save <path>  — save session to .eldr"),
 ];
 
@@ -174,7 +177,11 @@ fn handle_results_pane(app: &mut App, key: KeyEvent) {
         KeyCode::BackTab => app.prev_focus(),
         KeyCode::Up => app.results_scroll = app.results_scroll.saturating_sub(1),
         KeyCode::Down => {
-            let max: usize = app.results.iter().map(|e| 3 + e.rendered_lines.len()).sum();
+            let max: usize = app
+                .results
+                .iter()
+                .map(|e| 3 + e.stdout_lines.len() + e.rendered_lines.len() + e.stderr_lines.len())
+                .sum();
             app.results_scroll = (app.results_scroll + 1).min(max);
         }
         _ => {}
@@ -211,7 +218,13 @@ pub(super) fn submit_input(app: &mut App, engine: &mut ReplEngine) {
     let presented = present_for_interaction(engine.handle_line(&source));
     match presented.event {
         PresentedEvent::None => {}
-        PresentedEvent::Result(result) => app.push_result(&source, result.lines, result.kind),
+        PresentedEvent::Result(result) => app.push_result(
+            &source,
+            result.stdout_lines,
+            result.lines,
+            result.stderr_lines,
+            result.kind,
+        ),
         PresentedEvent::Doc(doc) => app.push_doc(doc),
     }
     if presented.should_exit {
@@ -237,7 +250,7 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
 
     match cmd {
         "q" | "quit" => app.should_quit = true,
-        "help" | "save" | "doc" | "error" | "sig" | "info" | "type" | "lens" => {
+        "help" | "save" | "doc" | "error" | "sig" | "info" | "type" | "facet" => {
             let line = if arg.is_empty() {
                 format!(":{cmd}")
             } else {
@@ -246,7 +259,13 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
             let presented = present_for_interaction(engine.handle_line(&line));
             match presented.event {
                 PresentedEvent::Result(result) => {
-                    app.push_result(line, result.lines, result.kind);
+                    app.push_result(
+                        line,
+                        result.stdout_lines,
+                        result.lines,
+                        result.stderr_lines,
+                        result.kind,
+                    );
                 }
                 PresentedEvent::Doc(doc) => app.push_doc(doc),
                 PresentedEvent::None => {}
@@ -262,7 +281,9 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
                     } else {
                         app.push_result(
                             format!(":v {arg}"),
+                            Vec::new(),
                             vec![format!("no result with idx {arg}")],
+                            Vec::new(),
                             PresentedResultKind::EvalError,
                         );
                     }
@@ -270,7 +291,9 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
                 _ => {
                     app.push_result(
                         format!(":v {arg}"),
+                        Vec::new(),
                         vec![format!("invalid index: {arg}")],
+                        Vec::new(),
                         PresentedResultKind::EvalError,
                     );
                 }
@@ -284,13 +307,17 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
                         .results
                         .iter()
                         .take(pos)
-                        .map(|e| 3 + e.rendered_lines.len())
+                        .map(|e| {
+                            3 + e.stdout_lines.len() + e.rendered_lines.len() + e.stderr_lines.len()
+                        })
                         .sum();
                     app.results_scroll = line_offset;
                 } else {
                     app.push_result(
                         format!(":j {arg}"),
+                        Vec::new(),
                         vec![format!("no result with idx {arg}")],
+                        Vec::new(),
                         PresentedResultKind::EvalError,
                     );
                 }
@@ -321,7 +348,9 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
         other => {
             app.push_result(
                 format!(":{other}"),
+                Vec::new(),
                 vec![format!("unknown command: {other}")],
+                Vec::new(),
                 PresentedResultKind::EvalError,
             );
         }

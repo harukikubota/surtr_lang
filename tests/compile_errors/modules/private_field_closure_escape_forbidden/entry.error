@@ -1,2 +1,0 @@
-phase: typecheck
-contains: Field 'User.password' is private and cannot be accessed from closures outside impl User

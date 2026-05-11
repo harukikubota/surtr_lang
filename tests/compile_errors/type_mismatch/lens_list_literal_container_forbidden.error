@@ -1,2 +1,0 @@
-phase: typecheck
-contains: List literal cannot contain Lens values

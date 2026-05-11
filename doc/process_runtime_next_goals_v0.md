@@ -35,7 +35,7 @@
 ### 2026-05-06 完了分
 
 - `@process_state(Owner)` を parser / resolver / typechecker の metadata として保持し、Agent / GenServer の state 型に marker を要求する検査を追加した。
-- process-owned state 型について、owner process 外の public API 露出、構築、field / lens access を拒否する最小契約を入れた。
+- process-owned state 型について、owner process 外の public API 露出、構築、field / facet access を拒否する最小契約を入れた。
 - `ProcessInit<T>` を標準 surface / builtin type metadata に追加し、Lazy `@init` の `Result<ProcessInit<State>>` 以外の戻り値・引数・data field / enum payload で拒否する検査を追加した。
 - Eager `@init` は `Result<State>`、Lazy `@init` は `Result<ProcessInit<State>>` という戻り値契約を typecheck 側で固定した。
 - `@process_state` 付き struct は通常の `impl new` 必須契約から除外し、owner handler 内の struct literal 構築を許可した。

@@ -409,6 +409,66 @@ print(inspect(idle2()))"#,
     );
 }
 
+fn function_module_helpers_work_end_to_end() {
+    assert_output(
+        r#"add = {|left: Int, right: Int| left + right}
+sub = {|left: Int, right: Int| left - right}
+flipped_sub = flip(sub)
+by_len = {|left, right| compare(left, right)} `Function::on` &String::len
+
+print(to_string(apply(&id, 42)))
+print(to_string(flipped_sub(2, 10)))
+print(to_string(by_len("ab", "c")))
+
+name_score = Tuple::both(&String::len, {|text: String| text ++ "!"})
+print(inspect(name_score("abc")))
+
+users = [
+  (2, 9, 10),
+  (1, 9, 30),
+  (1, 5, 20),
+  (1, 5, 10),
+]
+by_user = &compare `Function::on` Tuple::both3(
+{|user: (Int, Int, Int)| user._0},
+{|user: (Int, Int, Int)| user._1},
+{|user: (Int, Int, Int)| user._2}
+)
+print(inspect(List::sort_by(users, by_user)))
+
+show_first = Tuple::first({|num: Int| to_string(num)})
+len_second = Tuple::second(&String::len)
+print(inspect(dup(7)))
+print(inspect(show_first((10, "ok"))))
+print(inspect(len_second((10, "four"))))
+
+add_curried = curry(add)
+add_two = add_curried(2)
+add_uncurried = uncurry(add_curried)
+print(to_string(add_two(5)))
+print(to_string(add_uncurried(3, 4)))"#,
+        &[
+            "42",
+            "8",
+            "Ordering::Greater",
+            "(3, \"abc!\")",
+            "[(1, 5, 10), (1, 5, 20), (1, 9, 30), (2, 9, 10)]",
+            "(7, 7)",
+            "(\"10\", \"ok\")",
+            "(10, 4)",
+            "7",
+            "7",
+        ],
+    );
+}
+
+fn kernel_callable_helpers_are_removed_from_qualified_surface() {
+    assert_compile_error(
+        "print(to_string(Kernel::id(1)))",
+        "Undefined function Kernel::id/1",
+    );
+}
+
 fn func_literal_infix_invocation_works() {
     assert_output(
         r#"def eq(left: Int, right: Int) -> Boolean {
@@ -1125,6 +1185,14 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "const_helper_and_hole_return_surface_work",
             const_helper_and_hole_return_surface_work as fn(),
+        ),
+        (
+            "function_module_helpers_work_end_to_end",
+            function_module_helpers_work_end_to_end as fn(),
+        ),
+        (
+            "kernel_callable_helpers_are_removed_from_qualified_surface",
+            kernel_callable_helpers_are_removed_from_qualified_surface as fn(),
         ),
         (
             "func_literal_infix_invocation_works",

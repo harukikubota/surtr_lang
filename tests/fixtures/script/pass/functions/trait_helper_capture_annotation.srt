@@ -1,0 +1,9 @@
+cmp: (Int, Int -> Ordering) = &compare
+join: (String, String -> String) = &concat
+by_len = &compare `Function::on` &String::len
+sorted = List::sort_by(["aaaa", "b", "cc"], by_len)
+
+print(inspect(cmp(1, 2)))
+print(join("sur", "tr"))
+print(inspect(by_len("a", "abcd")))
+print(inspect(sorted))

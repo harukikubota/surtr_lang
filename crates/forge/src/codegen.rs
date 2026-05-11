@@ -14,7 +14,8 @@ use sindr::ir::{
 };
 use sindr::primitives::int;
 use spire::ast::{
-    BinOp, Lit, ProcessInstance, ProcessRuntimeHandlerKind, Span, SupervisorInitSpec, Visibility,
+    AstTy, BinOp, Lit, ProcessInstance, ProcessRuntimeHandlerKind, Span, SupervisorInitSpec,
+    Visibility,
 };
 
 use crate::bytecode::*;
@@ -79,10 +80,24 @@ fn validate_required_singletons(
         if spec.spec.instance != ProcessInstance::Singleton {
             continue;
         }
-        surface_to_process.insert(
-            format!("{}::pid", spec.process_name),
-            spec.process_name.clone(),
-        );
+        if matches!(
+            spec.spec.kind,
+            spire::ast::ProcessKind::Supervisor
+                | spire::ast::ProcessKind::DynamicSupervisor
+                | spire::ast::ProcessKind::RuntimeSupervisor
+        ) {
+            for method in ["status", "spawn", "adopt", "workers"] {
+                surface_to_process.insert(
+                    format!("{}::{method}", spec.process_name),
+                    format!("{}::{method}", spec.process_name),
+                );
+            }
+        } else {
+            surface_to_process.insert(
+                format!("{}::pid", spec.process_name),
+                spec.process_name.clone(),
+            );
+        }
         for handler in &spec.spec.handler_specs {
             if handler.kind == ProcessRuntimeHandlerKind::Init {
                 continue;
@@ -101,13 +116,18 @@ fn validate_required_singletons(
     let available_singletons = runtime_boot_plan
         .singletons
         .iter()
-        .map(|entry| entry.process_name.as_str())
+        .map(|entry| entry.process_name.clone())
         .collect::<HashSet<_>>();
-    let available_supervisors = runtime_boot_plan
+    let mut available_supervisors = runtime_boot_plan
         .supervisor_overrides
         .iter()
-        .map(|entry| entry.process_name.as_str())
+        .map(|entry| entry.process_name.clone())
         .collect::<HashSet<_>>();
+    for spec in process_specs {
+        if spec.spec.kind == spire::ast::ProcessKind::DynamicSupervisor {
+            available_supervisors.insert(spec.process_name.clone());
+        }
+    }
     let mut first_missing: HashMap<String, Span> = HashMap::new();
     for node in nodes {
         collect_missing_singleton_calls(
@@ -125,12 +145,16 @@ fn validate_required_singletons(
             .cmp(&right.1.start)
             .then_with(|| left.0.cmp(&right.0))
     }) {
-        return Err(CodegenError {
-            message: format!(
+        let message = if process_name.contains("::") {
+            format!(
+                "supervisor surface `{process_name}` is not available in this compile unit; add the supervisor to supervisor_init"
+            )
+        } else {
+            format!(
                 "singleton `{process_name}` is not available in this compile unit; add it to supervisor_init"
-            ),
-            span,
-        });
+            )
+        };
+        return Err(CodegenError { message, span });
     }
 
     Ok(())
@@ -139,8 +163,8 @@ fn validate_required_singletons(
 fn collect_missing_singleton_calls(
     node: &TypedNode,
     surface_to_process: &HashMap<String, String>,
-    available_singletons: &HashSet<&str>,
-    available_supervisors: &HashSet<&str>,
+    available_singletons: &HashSet<String>,
+    available_supervisors: &HashSet<String>,
     first_missing: &mut HashMap<String, Span>,
 ) {
     if let Some(process_name) = singleton_required_by_call(node, surface_to_process) {
@@ -156,14 +180,14 @@ fn collect_missing_singleton_calls(
         | TypedInner::Var(_)
         | TypedInner::ListNil
         | TypedInner::ProcessContextHandler { .. }
-        | TypedInner::LensPath(_)
-        | TypedInner::PendingLensPath(_)
+        | TypedInner::FacetPath(_)
+        | TypedInner::PendingFacetPath(_)
         | TypedInner::EnumDef(_, _)
         | TypedInner::TraitDef(_, _)
         | TypedInner::TraitImplDef(_, _)
         | TypedInner::BuiltinExtractorDecl(_, _, _)
-        | TypedInner::StructDef(_, _, _, _)
-        | TypedInner::RecordDef(_, _, _, _) => {}
+        | TypedInner::StructDef(_, _, _, _, _)
+        | TypedInner::RecordDef(_, _, _, _, _) => {}
         TypedInner::SupervisorSpawn {
             supervisor_process,
             init,
@@ -210,7 +234,7 @@ fn collect_missing_singleton_calls(
         TypedInner::SupervisorWorkers {
             supervisor_process,
             init,
-            size,
+            strategy,
             ..
         } => {
             if !available_supervisors.contains(supervisor_process.as_str()) {
@@ -226,7 +250,7 @@ fn collect_missing_singleton_calls(
                 first_missing,
             );
             collect_missing_singleton_calls(
-                size,
+                strategy,
                 surface_to_process,
                 available_singletons,
                 available_supervisors,
@@ -406,14 +430,14 @@ fn collect_missing_singleton_calls(
                 );
             }
         }
-        TypedInner::LensView { source, .. } => collect_missing_singleton_calls(
+        TypedInner::FacetView { source, .. } => collect_missing_singleton_calls(
             source,
             surface_to_process,
             available_singletons,
             available_supervisors,
             first_missing,
         ),
-        TypedInner::LensSet { source, value, .. } => {
+        TypedInner::FacetSet { source, value, .. } => {
             collect_missing_singleton_calls(
                 source,
                 surface_to_process,
@@ -429,7 +453,7 @@ fn collect_missing_singleton_calls(
                 first_missing,
             );
         }
-        TypedInner::LensOver {
+        TypedInner::FacetOver {
             source, update_fun, ..
         } => {
             collect_missing_singleton_calls(
@@ -597,7 +621,7 @@ pub fn compose_bytecode_with_chunk(
 
     base.opcodes = opcodes;
     base.constants.extend(chunk.constants);
-    base.type_registry.entries.extend(chunk.type_entries);
+    base.type_registry.extend(chunk.type_entries);
     base.error_templates.extend(chunk.error_templates);
     base.dbg_templates.extend(chunk.dbg_templates);
     base.num_locals = base.num_locals.saturating_add(chunk.new_locals);
@@ -615,6 +639,7 @@ fn extend_runtime_boot_plan(base: &mut RuntimeBootPlan, chunk: RuntimeBootPlan) 
     base.singletons.extend(chunk.singletons);
     base.standard_overrides.extend(chunk.standard_overrides);
     base.handler_overrides.extend(chunk.handler_overrides);
+    base.supervisor_overrides.extend(chunk.supervisor_overrides);
 }
 
 fn build_runtime_boot_plan(
@@ -624,74 +649,136 @@ fn build_runtime_boot_plan(
     let mut runtime = RuntimeBootPlan::default();
     let default_timeout_ms = runtime.runtime_limits.default_init_timeout_ms;
 
-    for singleton in &boot_plan.singletons {
-        let Some(spec) = resolve_boot_process_spec(process_specs, &singleton.process_name) else {
-            return Err(CodegenError {
-                message: "singleton process is not defined or not visible".into(),
-                span: singleton.span.clone(),
-            });
+    for entry in &boot_plan.entries {
+        let spec = match resolve_boot_process_spec(process_specs, &entry.process_name, &entry.span)
+        {
+            Ok(spec) => spec,
+            Err(err) if entry.process_name == "DynamicSupervisor" => {
+                if entry.timeout_ms.is_some() || !entry.handlers.is_empty() {
+                    return Err(CodegenError {
+                        message:
+                            "supervisor_init supervisor entry does not accept timeout or handlers"
+                                .into(),
+                        span: entry.span.clone(),
+                    });
+                }
+                if runtime
+                    .supervisor_overrides
+                    .iter()
+                    .any(|registered| registered.process_name == "DynamicSupervisor")
+                {
+                    return Err(CodegenError {
+                        message: "supervisor_init entry is duplicated".into(),
+                        span: entry.span.clone(),
+                    });
+                }
+                let base_policy = default_dynamic_supervisor_policy();
+                runtime
+                    .supervisor_overrides
+                    .push(RuntimeSupervisorOverrideEntry {
+                        process_name: "DynamicSupervisor".into(),
+                        policy: runtime_supervisor_policy_from_effective(
+                            &base_policy,
+                            &entry.overrides,
+                        ),
+                    });
+                let _ = err;
+                continue;
+            }
+            Err(err) => return Err(err),
         };
+        match spec.spec.instance {
+            ProcessInstance::Worker => {
+                return Err(CodegenError {
+                    message: "worker process cannot appear in supervisor_init".into(),
+                    span: entry.span.clone(),
+                });
+            }
+            ProcessInstance::Singleton
+                if matches!(
+                    spec.spec.kind,
+                    spire::ast::ProcessKind::Supervisor
+                        | spire::ast::ProcessKind::DynamicSupervisor
+                        | spire::ast::ProcessKind::RuntimeSupervisor
+                ) =>
+            {
+                if entry.timeout_ms.is_some() || !entry.handlers.is_empty() {
+                    return Err(CodegenError {
+                        message:
+                            "supervisor_init supervisor entry does not accept timeout or handlers"
+                                .into(),
+                        span: entry.span.clone(),
+                    });
+                }
+                let Some(base_policy) = &spec.spec.supervisor_policy else {
+                    return Err(CodegenError {
+                        message: "supervisor process is missing a policy definition".into(),
+                        span: entry.span.clone(),
+                    });
+                };
+                if runtime
+                    .supervisor_overrides
+                    .iter()
+                    .any(|registered| registered.process_name == spec.process_name)
+                {
+                    return Err(CodegenError {
+                        message: "supervisor_init entry is duplicated".into(),
+                        span: entry.span.clone(),
+                    });
+                }
+                runtime
+                    .supervisor_overrides
+                    .push(RuntimeSupervisorOverrideEntry {
+                        process_name: runtime_supervisor_process_name(spec),
+                        policy: runtime_supervisor_policy_from_effective(
+                            base_policy,
+                            &entry.overrides,
+                        ),
+                    });
+            }
+            ProcessInstance::Singleton => {
+                if entry.overrides != Default::default() {
+                    return Err(CodegenError {
+                        message:
+                            "supervisor_init singleton entry does not accept supervisor policy keys"
+                                .into(),
+                        span: entry.span.clone(),
+                    });
+                }
+                add_runtime_singleton_entry(
+                    &mut runtime,
+                    spec,
+                    entry.timeout_ms,
+                    &entry.handlers,
+                    &entry.span,
+                    default_timeout_ms,
+                )?;
+            }
+        }
+    }
+
+    for singleton in &boot_plan.singletons {
+        let spec =
+            resolve_boot_process_spec(process_specs, &singleton.process_name, &singleton.span)?;
         if spec.spec.instance != ProcessInstance::Singleton {
             return Err(CodegenError {
                 message: "only Singleton process can appear in singleton boot entry".into(),
                 span: singleton.span.clone(),
             });
         }
-        if runtime
-            .singletons
-            .iter()
-            .any(|entry| entry.process_name == spec.process_name)
-        {
-            return Err(CodegenError {
-                message: "singleton boot entry is duplicated".into(),
-                span: singleton.span.clone(),
-            });
-        }
-
-        runtime.singletons.push(SingletonBootEntry {
-            process_name: spec.process_name.clone(),
-            init_timeout_ms: singleton.timeout_ms.unwrap_or(default_timeout_ms),
-            source: BootEntrySource::ExplicitConfig,
-        });
-        for handler in &singleton.handlers {
-            let Some(dependency) = spec
-                .spec
-                .handlers
-                .iter()
-                .find(|dependency| dependency.slot == handler.slot)
-            else {
-                return Err(CodegenError {
-                    message: "handler slot is not declared by the target process".into(),
-                    span: handler.span.clone(),
-                });
-            };
-            validate_runtime_handler_target(dependency, &handler.target)?;
-            runtime.handler_overrides.push(RuntimeHandlerOverride {
-                target_process: spec.process_name.clone(),
-                slot: handler.slot.clone(),
-                handler_target: RuntimeHandlerTarget {
-                    name: handler.target.name.clone(),
-                    named_args: handler
-                        .target
-                        .named_args
-                        .iter()
-                        .map(|arg| RuntimeHandlerArg {
-                            name: arg.name.clone(),
-                            value: arg.value.clone(),
-                        })
-                        .collect(),
-                },
-            });
-        }
+        add_runtime_singleton_entry(
+            &mut runtime,
+            spec,
+            singleton.timeout_ms,
+            &singleton.handlers,
+            &singleton.span,
+            default_timeout_ms,
+        )?;
     }
 
     for supervisor in &boot_plan.supervisors {
-        let Some(spec) = resolve_boot_process_spec(process_specs, &supervisor.process_name) else {
-            return Err(CodegenError {
-                message: "supervisor process is not defined or not visible".into(),
-                span: supervisor.span.clone(),
-            });
-        };
+        let spec =
+            resolve_boot_process_spec(process_specs, &supervisor.process_name, &supervisor.span)?;
         if !matches!(
             spec.spec.kind,
             spire::ast::ProcessKind::Supervisor
@@ -712,7 +799,7 @@ fn build_runtime_boot_plan(
         runtime
             .supervisor_overrides
             .push(RuntimeSupervisorOverrideEntry {
-                process_name: spec.process_name.clone(),
+                process_name: runtime_supervisor_process_name(spec),
                 policy: runtime_supervisor_policy_from_effective(
                     base_policy,
                     &supervisor.overrides,
@@ -723,21 +810,118 @@ fn build_runtime_boot_plan(
     Ok(runtime)
 }
 
+fn runtime_supervisor_process_name(spec: &TypedProcessSpec) -> String {
+    if spec.spec.kind == spire::ast::ProcessKind::DynamicSupervisor {
+        spec.process_name
+            .strip_prefix("Global::")
+            .unwrap_or(&spec.process_name)
+            .to_string()
+    } else {
+        spec.process_name.clone()
+    }
+}
+
+fn add_runtime_singleton_entry(
+    runtime: &mut RuntimeBootPlan,
+    spec: &TypedProcessSpec,
+    timeout_ms: Option<u64>,
+    handlers: &[spire::ast::SupervisorInitHandlerOverride],
+    span: &Span,
+    default_timeout_ms: u64,
+) -> Result<(), CodegenError> {
+    if runtime
+        .singletons
+        .iter()
+        .any(|entry| entry.process_name == spec.process_name)
+    {
+        return Err(CodegenError {
+            message: "singleton boot entry is duplicated".into(),
+            span: span.clone(),
+        });
+    }
+
+    runtime.singletons.push(SingletonBootEntry {
+        process_name: spec.process_name.clone(),
+        init_timeout_ms: timeout_ms.unwrap_or(default_timeout_ms),
+        source: BootEntrySource::ExplicitConfig,
+    });
+    for handler in handlers {
+        let Some(dependency) = spec
+            .spec
+            .handlers
+            .iter()
+            .find(|dependency| dependency.slot == handler.slot)
+        else {
+            return Err(CodegenError {
+                message: "handler slot is not declared by the target process".into(),
+                span: handler.span.clone(),
+            });
+        };
+        validate_runtime_handler_target(dependency, &handler.target)?;
+        runtime.handler_overrides.push(RuntimeHandlerOverride {
+            target_process: spec.process_name.clone(),
+            slot: handler.slot.clone(),
+            handler_target: RuntimeHandlerTarget {
+                name: handler.target.name.clone(),
+                named_args: handler
+                    .target
+                    .named_args
+                    .iter()
+                    .map(|arg| RuntimeHandlerArg {
+                        name: arg.name.clone(),
+                        value: arg.value.clone(),
+                    })
+                    .collect(),
+            },
+        });
+    }
+    Ok(())
+}
+
 fn resolve_boot_process_spec<'a>(
     process_specs: &'a [TypedProcessSpec],
     requested_name: &str,
-) -> Option<&'a TypedProcessSpec> {
-    process_specs
+    span: &Span,
+) -> Result<&'a TypedProcessSpec, CodegenError> {
+    let exact = process_specs
         .iter()
-        .find(|spec| spec.process_name == requested_name)
-        .or_else(|| {
-            process_specs.iter().find(|spec| {
+        .filter(|spec| spec.process_name == requested_name)
+        .collect::<Vec<_>>();
+    let matches = if exact.is_empty() {
+        process_specs
+            .iter()
+            .filter(|spec| {
                 spec.process_name
                     .rsplit("::")
                     .next()
                     .is_some_and(|short| short == requested_name)
             })
-        })
+            .collect::<Vec<_>>()
+    } else {
+        exact
+    };
+    match matches.as_slice() {
+        [spec] => Ok(spec),
+        [] => Err(CodegenError {
+            message: format!("process `{requested_name}` is not defined or not visible"),
+            span: span.clone(),
+        }),
+        _ => Err(CodegenError {
+            message: format!("process name `{requested_name}` is ambiguous"),
+            span: span.clone(),
+        }),
+    }
+}
+
+fn default_dynamic_supervisor_policy() -> spire::ast::SupervisorPolicy {
+    spire::ast::SupervisorPolicy {
+        strategy: spire::ast::SupervisorStrategy::OneForOne,
+        max_restarts: 10,
+        max_seconds: 5,
+        child_restart_default: spire::ast::ChildRestartPolicy::Transient,
+        allow_adopt: true,
+        shutdown_timeout_ms: None,
+    }
 }
 
 fn runtime_supervisor_policy_from_effective(
@@ -851,6 +1035,46 @@ fn init_state_ty(ret_ty: &Ty, lazy: bool, process_name: &str) -> Result<Ty, Code
 fn runtime_type_ref(ty: &Ty) -> RuntimeTypeRef {
     RuntimeTypeRef {
         name: ty_to_string(ty),
+    }
+}
+
+fn runtime_type_ref_from_ast(ty: &AstTy) -> RuntimeTypeRef {
+    fn ast_ty_to_string(ty: &AstTy) -> String {
+        match ty {
+            AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => name.clone(),
+            AstTy::Generic(_, name, args) => format!(
+                "{}<{}>",
+                name,
+                args.iter()
+                    .map(ast_ty_to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Tuple(_, items) => format!(
+                "({})",
+                items
+                    .iter()
+                    .map(ast_ty_to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Func(_, params, ret) => {
+                let params = params
+                    .iter()
+                    .map(ast_ty_to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if params.is_empty() {
+                    format!("(-> {})", ast_ty_to_string(ret))
+                } else {
+                    format!("({} -> {})", params, ast_ty_to_string(ret))
+                }
+            }
+        }
+    }
+
+    RuntimeTypeRef {
+        name: ast_ty_to_string(ty),
     }
 }
 
@@ -1075,8 +1299,8 @@ fn build_runtime_process_specs(
                 ),
                 span: Span { start: 0, end: 0 },
             })?;
-        let state_ty = init_state_ty(init_ret_ty, spec.spec.lazy, &spec.process_name)?;
-        let state_type = runtime_type_ref(&state_ty);
+        let _state_ty = init_state_ty(init_ret_ty, spec.spec.lazy, &spec.process_name)?;
+        let state_type = runtime_type_ref_from_ast(&spec.spec.state);
         let result_type = runtime_type_ref(init_ret_ty);
         let init_policy = if spec.spec.lazy {
             RuntimeInitPolicy::Lazy
@@ -1103,7 +1327,6 @@ fn build_runtime_process_specs(
             },
             state: RuntimeStateSpec {
                 state_type: state_type.clone(),
-                owner_process: Some(spec.process_name.clone()),
             },
             init: RuntimeInitSpec {
                 callable: RuntimeCallableRef {
@@ -1167,6 +1390,12 @@ fn relocate_base_ops_for_insert(
             {
                 *addr = add_u32(*addr, inserted_len, "base jump relocation")?;
             }
+            Opcode::JumpIfLocalTagEq { target_pc, .. }
+            | Opcode::JumpIfLocalTagNe { target_pc, .. }
+                if *target_pc as usize >= insertion_pc =>
+            {
+                *target_pc = add_u32(*target_pc, inserted_len, "base jump relocation")?;
+            }
             _ => {}
         }
     }
@@ -1214,10 +1443,32 @@ fn relocate_chunk_ops_for_artifact(
     })?;
     for op in opcodes {
         match op {
+            Opcode::JumpIfLocalTagEq {
+                tag_const_idx,
+                target_pc,
+                ..
+            }
+            | Opcode::JumpIfLocalTagNe {
+                tag_const_idx,
+                target_pc,
+                ..
+            } => {
+                *target_pc = map_chunk_pc(*target_pc, chunk_halt, base_top_len, chunk_func_base)?;
+                *tag_const_idx = tag_const_idx.checked_add(const_base).ok_or_else(|| {
+                    CodegenError {
+                        message: "chunk const relocation overflow".into(),
+                        span: Span { start: 0, end: 0 },
+                    }
+                })?;
+            }
             Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
                 *addr = map_chunk_pc(*addr, chunk_halt, base_top_len, chunk_func_base)?;
             }
-            Opcode::LoadConst(idx) => {
+            Opcode::LoadConst(idx)
+            | Opcode::StoreConstLocal { const_idx: idx, .. }
+            | Opcode::EqLocalTag {
+                tag_const_idx: idx, ..
+            } => {
                 *idx = idx.checked_add(const_base).ok_or_else(|| CodegenError {
                     message: "chunk const relocation overflow".into(),
                     span: Span { start: 0, end: 0 },
@@ -1329,7 +1580,7 @@ pub struct BindingInfo {
     pub callable_kind: Option<ReplCallableKind>,
     pub callable_display: Option<ReplCallableDisplay>,
     pub callable_captures: Vec<String>,
-    pub lens_info: Option<ReplLensInfo>,
+    pub facet_info: Option<ReplFacetInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1345,7 +1596,7 @@ pub enum ReplCallableDisplay {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReplLensSegmentInfo {
+pub struct ReplFacetSegmentInfo {
     pub label: String,
     pub kind: String,
     pub source_ty: String,
@@ -1355,11 +1606,12 @@ pub struct ReplLensSegmentInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReplLensInfo {
+pub struct ReplFacetInfo {
     pub ty: String,
+    pub path_kind: String,
     pub view_result_ty: String,
     pub full_path: String,
-    pub segments: Vec<ReplLensSegmentInfo>,
+    pub segments: Vec<ReplFacetSegmentInfo>,
     pub stop_points: Vec<String>,
 }
 
@@ -1373,7 +1625,7 @@ pub struct TypeDefDisplay {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChunkMeta {
     pub bindings: Vec<BindingInfo>,
-    pub result_lens_info: Option<ReplLensInfo>,
+    pub result_facet_info: Option<ReplFacetInfo>,
     pub type_defs: Vec<TypeDefDisplay>,
     pub function_defs: Vec<String>,
     pub docs: Vec<DocEntry>,
@@ -1569,7 +1821,7 @@ impl ForgeSession {
         let new_constants = after.constants[before.constants.len()..].to_vec();
         let new_locals = after.next_slot.saturating_sub(before.next_slot) as usize;
         let type_entries =
-            after.type_registry.entries[before.type_registry.entries.len()..].to_vec();
+            after.type_registry.entries()[before.type_registry.entries().len()..].to_vec();
         let error_templates = after.error_templates[before.error_templates.len()..].to_vec();
         let dbg_templates = after.dbg_templates[before.dbg_templates.len()..].to_vec();
         let meta = collect_chunk_meta(&typed_for_meta, &after.slot_map);
@@ -1621,7 +1873,31 @@ fn localize_chunk_indices(
 ) -> Result<(), CodegenError> {
     for op in opcodes.iter_mut() {
         match op {
-            Opcode::LoadConst(idx) => {
+            Opcode::JumpIfLocalTagEq {
+                tag_const_idx,
+                ..
+            }
+            | Opcode::JumpIfLocalTagNe {
+                tag_const_idx,
+                ..
+            } => {
+                let idx_usize = *tag_const_idx as usize;
+                if idx_usize < const_base {
+                    return Err(CodegenError {
+                        message: format!(
+                            "chunk constant index {} is below base {}",
+                            idx_usize, const_base
+                        ),
+                        span: Span { start: 0, end: 0 },
+                    });
+                }
+                *tag_const_idx -= const_base as u32;
+            }
+            Opcode::LoadConst(idx)
+            | Opcode::StoreConstLocal { const_idx: idx, .. }
+            | Opcode::EqLocalTag {
+                tag_const_idx: idx, ..
+            } => {
                 let idx_usize = *idx as usize;
                 if idx_usize < const_base {
                     return Err(CodegenError {
@@ -1696,8 +1972,11 @@ fn localize_chunk_indices(
 #[cfg(test)]
 mod tests {
     use super::Codegen;
+    use crate::bytecode::Constant;
     use crate::opcode::Opcode;
-    use scar::typed::{TypedDbgArg, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode};
+    use scar::typed::{
+        TypedDbgArg, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode, TypedPattern,
+    };
     use scar::types::Ty;
     use spire::ast::{BinOp, Lit, Span};
 
@@ -1796,13 +2075,12 @@ mod tests {
         assert!(opcodes
             .iter()
             .any(|opcode| matches!(opcode, Opcode::JumpIfFalse(_))));
-        assert!(
-            opcodes
-                .iter()
-                .filter(|opcode| matches!(opcode, Opcode::StructNew { field_count: 1 }))
-                .count()
-                >= 2
-        );
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::MakeOk)));
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::MakeErr)));
     }
 
     #[test]
@@ -1859,12 +2137,143 @@ mod tests {
             .expect("ensure emission should succeed");
         let (opcodes, _) = gene.finalize().expect("labels should resolve");
 
-        assert!(opcodes
-            .iter()
-            .any(|opcode| matches!(opcode, Opcode::StoreLocal(_))));
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::StoreLocal(_) | Opcode::StoreConstLocal { .. }
+        )));
         assert!(opcodes
             .iter()
             .any(|opcode| matches!(opcode, Opcode::CallClosure { arity: 1, .. })));
+    }
+
+    #[test]
+    fn emit_literal_bind_uses_store_const_local_opcode() {
+        let mut gene = Codegen::new();
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: span(1, 9),
+            node: TypedInner::Bind(
+                TypedPattern::Wildcard(Ty::Int),
+                Box::new(lit_node(Ty::Int, Lit::Int(42.into()), span(5, 7))),
+            ),
+        };
+
+        gene.emit_node(&node)
+            .expect("literal bind emission should succeed");
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::StoreConstLocal { .. })));
+        assert!(!opcodes
+            .windows(2)
+            .any(|window| matches!(window, [Opcode::LoadConst(_), Opcode::StoreLocal(_)])));
+    }
+
+    #[test]
+    fn emit_local_bind_uses_copy_local_opcode() {
+        let mut gene = Codegen::new();
+        let source_id = sigil::resolved::ResolvedId {
+            name: "source".into(),
+            qualified_name: None,
+            unique_id: 10,
+            compiler_generated: false,
+            span: span(1, 7),
+        };
+        gene.state.slot_map.insert(source_id.unique_id, 0);
+        gene.state.next_slot = 1;
+
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: span(1, 16),
+            node: TypedInner::Bind(
+                TypedPattern::Wildcard(Ty::Int),
+                Box::new(TypedNode {
+                    ty: Ty::Int,
+                    span: span(11, 16),
+                    node: TypedInner::Var(source_id),
+                }),
+            ),
+        };
+
+        gene.emit_node(&node)
+            .expect("local bind emission should succeed");
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::CopyLocal { .. })));
+        assert!(!opcodes
+            .windows(2)
+            .any(|window| matches!(window, [Opcode::LoadLocal(_), Opcode::StoreLocal(_)])));
+    }
+
+    #[test]
+    fn emit_local_tag_compare_uses_eq_local_tag_opcode() {
+        let mut gene = Codegen::new();
+        let tag_const = gene.add_constant(Constant::Tag(1));
+
+        gene.emit(Opcode::LoadLocal(2));
+        gene.emit(Opcode::GetTag);
+        gene.emit(Opcode::LoadConst(tag_const));
+        gene.emit(Opcode::EqTag);
+
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+
+        assert_eq!(
+            opcodes,
+            vec![Opcode::EqLocalTag {
+                local_idx: 2,
+                tag_const_idx: tag_const,
+            }]
+        );
+    }
+
+    #[test]
+    fn emit_local_tag_branch_fuses_to_dedicated_jump_opcodes() {
+        let mut gene = Codegen::new();
+        let tag_const = gene.add_constant(Constant::Tag(1));
+        let false_label = gene.fresh_label();
+        let true_label = gene.fresh_label();
+
+        gene.emit(Opcode::LoadLocal(2));
+        gene.emit(Opcode::GetTag);
+        gene.emit(Opcode::LoadConst(tag_const));
+        gene.emit(Opcode::EqTag);
+        gene.emit_jump_if_false(false_label);
+        gene.patch_label(false_label);
+
+        gene.emit(Opcode::LoadLocal(3));
+        gene.emit(Opcode::GetTag);
+        gene.emit(Opcode::LoadConst(tag_const));
+        gene.emit(Opcode::EqTag);
+        gene.emit_jump_if_true(true_label);
+        gene.patch_label(true_label);
+
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::JumpIfLocalTagNe {
+                local_idx: 2,
+                tag_const_idx,
+                ..
+            } if *tag_const_idx == tag_const
+        )));
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::JumpIfLocalTagEq {
+                local_idx: 3,
+                tag_const_idx,
+                ..
+            } if *tag_const_idx == tag_const
+        )));
+        assert!(!opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::EqLocalTag { .. })));
+        assert!(!opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::JumpIfFalse(_) | Opcode::JumpIfTrue(_))));
     }
 
     #[test]
@@ -1921,14 +2330,14 @@ fn collect_chunk_meta(typed: &[TypedNode], slot_map: &HashMap<u32, u32>) -> Chun
 
     ChunkMeta {
         bindings,
-        result_lens_info: top_level_result_lens_info(typed),
+        result_facet_info: top_level_result_facet_info(typed),
         type_defs,
         function_defs,
         docs: Vec::new(),
     }
 }
 
-fn top_level_result_lens_info(typed: &[TypedNode]) -> Option<ReplLensInfo> {
+fn top_level_result_facet_info(typed: &[TypedNode]) -> Option<ReplFacetInfo> {
     typed
         .iter()
         .rev()
@@ -1938,22 +2347,22 @@ fn top_level_result_lens_info(typed: &[TypedNode]) -> Option<ReplLensInfo> {
                 TypedInner::Def(..) | TypedInner::ExtractorDef(..) | TypedInner::DeferrorDef(..)
             )
         })
-        .and_then(lens_info_for_node)
+        .and_then(facet_info_for_node)
 }
 
-fn lens_segment_label(segment: &TypedLensSegment) -> String {
+fn facet_segment_label(segment: &TypedFacetSegment) -> String {
     match segment {
-        TypedLensSegment::Field { field_name, .. } => field_name.clone(),
-        TypedLensSegment::Tuple { field_index, .. } => format!("_{field_index}"),
-        TypedLensSegment::Variant { variant_name, .. } => variant_name.clone(),
+        TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
+        TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
+        TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
     }
 }
 
-fn lens_path_full_path(path: &TypedLensPath) -> String {
+fn facet_path_full_path(path: &TypedFacetPath) -> String {
     let mut rendered = String::new();
     for segment in &path.segments {
         match segment {
-            TypedLensSegment::Tuple { field_index, .. } => {
+            TypedFacetSegment::Tuple { field_index, .. } => {
                 if rendered.is_empty() {
                     rendered.push_str("Tuple");
                 }
@@ -1966,39 +2375,39 @@ fn lens_path_full_path(path: &TypedLensPath) -> String {
                 if !rendered.is_empty() {
                     rendered.push('.');
                 }
-                rendered.push_str(&lens_segment_label(other));
+                rendered.push_str(&facet_segment_label(other));
             }
         }
     }
     if rendered.is_empty() {
-        "<lens>".to_string()
+        "<facet>".to_string()
     } else {
         rendered
     }
 }
 
-fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
+fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
     match &node.node {
-        TypedInner::LensPath(path) => {
+        TypedInner::FacetPath(path) => {
             let mut current_source = path.source_ty.clone();
             let mut segments = Vec::with_capacity(path.segments.len());
             let mut stop_points = Vec::new();
             let mut path_is_fallible = false;
             let mut prefix = String::new();
             for segment in &path.segments {
-                let label = lens_segment_label(segment);
+                let label = facet_segment_label(segment);
                 let focus_ty = match segment {
-                    TypedLensSegment::Field { .. } | TypedLensSegment::Tuple { .. } => {
+                    TypedFacetSegment::Field { .. } | TypedFacetSegment::Tuple { .. } => {
                         match &current_source {
                             Ty::Tuple(items) => match segment {
-                                TypedLensSegment::Tuple { field_index, .. } => items
+                                TypedFacetSegment::Tuple { field_index, .. } => items
                                     .get(*field_index as usize)
                                     .cloned()
                                     .unwrap_or(Ty::Unit),
                                 _ => Ty::Unit,
                             },
                             Ty::Struct(_, fields) | Ty::Record(_, fields) => match segment {
-                                TypedLensSegment::Field { field_index, .. } => fields
+                                TypedFacetSegment::Field { field_index, .. } => fields
                                     .get(*field_index as usize)
                                     .map(|(_, ty)| ty.clone())
                                     .unwrap_or(Ty::Unit),
@@ -2007,7 +2416,7 @@ fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
                             _ => Ty::Unit,
                         }
                     }
-                    TypedLensSegment::Variant {
+                    TypedFacetSegment::Variant {
                         payload_arity,
                         variant_name,
                         ..
@@ -2024,11 +2433,11 @@ fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
                         }
                     }
                 };
-                if !prefix.is_empty() && !matches!(segment, TypedLensSegment::Tuple { .. }) {
+                if !prefix.is_empty() && !matches!(segment, TypedFacetSegment::Tuple { .. }) {
                     prefix.push('.');
                 }
                 match segment {
-                    TypedLensSegment::Tuple { field_index, .. } => {
+                    TypedFacetSegment::Tuple { field_index, .. } => {
                         if prefix.is_empty() {
                             prefix.push_str("Tuple");
                         }
@@ -2037,14 +2446,14 @@ fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
                     _ => prefix.push_str(&label),
                 }
                 let (kind, fallible, reason) = match segment {
-                    TypedLensSegment::Field { .. } => ("field", false, "field access"),
-                    TypedLensSegment::Tuple { .. } => ("tuple", false, "tuple index access"),
-                    TypedLensSegment::Variant { .. } => {
+                    TypedFacetSegment::Field { .. } => ("field", false, "field access"),
+                    TypedFacetSegment::Tuple { .. } => ("tuple", false, "tuple index access"),
+                    TypedFacetSegment::Variant { .. } => {
                         path_is_fallible = true;
                         ("variant", true, "variant mismatch returns Result")
                     }
                 };
-                segments.push(ReplLensSegmentInfo {
+                segments.push(ReplFacetSegmentInfo {
                     label: prefix.clone(),
                     kind: kind.to_string(),
                     source_ty: ty_to_string(&current_source),
@@ -2054,23 +2463,25 @@ fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
                 });
                 current_source = focus_ty;
             }
-            Some(ReplLensInfo {
+            Some(ReplFacetInfo {
                 ty: ty_to_string(&node.ty),
+                path_kind: path.path_kind.as_str().to_string(),
                 view_result_ty: if path_is_fallible {
                     format!("Result<{}, Error>", ty_to_string(&path.focus_ty))
                 } else {
                     ty_to_string(&path.focus_ty)
                 },
-                full_path: lens_path_full_path(path),
+                full_path: facet_path_full_path(path),
                 segments,
                 stop_points,
             })
         }
-        TypedInner::PendingLensPath(path) => Some(ReplLensInfo {
+        TypedInner::PendingFacetPath(path) => Some(ReplFacetInfo {
             ty: ty_to_string(&node.ty),
+            path_kind: "structural".to_string(),
             view_result_ty: "_".to_string(),
             full_path: if path.segments.is_empty() {
-                "<lens>".to_string()
+                "<facet>".to_string()
             } else {
                 let mut rendered = String::new();
                 for (index, segment) in path.segments.iter().enumerate() {
@@ -2089,7 +2500,7 @@ fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
             segments: path
                 .segments
                 .iter()
-                .map(|segment| ReplLensSegmentInfo {
+                .map(|segment| ReplFacetSegmentInfo {
                     label: if segment.starts_with('_') {
                         format!("Tuple.{segment}")
                     } else {
@@ -2103,7 +2514,7 @@ fn lens_info_for_node(node: &TypedNode) -> Option<ReplLensInfo> {
                     source_ty: "_".to_string(),
                     focus_ty: "_".to_string(),
                     fallible: false,
-                    reason: "requires Lens context to specialize".to_string(),
+                    reason: "requires Facet context to specialize".to_string(),
                 })
                 .collect(),
             stop_points: Vec::new(),
@@ -2132,10 +2543,10 @@ fn collect_stmt_meta(
                 callable_kind_for_node(rhs),
                 callable_display_for_node(rhs),
                 &callable_capture_names(rhs),
-                lens_info_for_node(rhs),
+                facet_info_for_node(rhs),
             );
         }
-        TypedInner::StructDef(_, name, field_names, _) => {
+        TypedInner::StructDef(_, name, field_names, _, _) => {
             type_defs.push(TypeDefDisplay {
                 name: name.clone(),
                 kind: ReplTypeKind::Struct,
@@ -2145,7 +2556,7 @@ fn collect_stmt_meta(
                     .collect(),
             });
         }
-        TypedInner::RecordDef(_, name, field_names, _) => {
+        TypedInner::RecordDef(_, name, field_names, _, _) => {
             type_defs.push(TypeDefDisplay {
                 name: name.clone(),
                 kind: ReplTypeKind::Record,
@@ -2195,7 +2606,7 @@ fn collect_pattern_binding_infos(
     callable_kind: Option<ReplCallableKind>,
     callable_display: Option<ReplCallableDisplay>,
     callable_captures: &[String],
-    lens_info: Option<ReplLensInfo>,
+    facet_info: Option<ReplFacetInfo>,
 ) {
     match pat {
         TypedPattern::Var(ty, id) => {
@@ -2207,7 +2618,7 @@ fn collect_pattern_binding_infos(
                     callable_kind,
                     callable_display: callable_display.clone(),
                     callable_captures: callable_captures.to_vec(),
-                    lens_info: lens_info.clone(),
+                    facet_info: facet_info.clone(),
                 });
             }
         }
@@ -2220,7 +2631,7 @@ fn collect_pattern_binding_infos(
                     callable_kind,
                     callable_display: callable_display.clone(),
                     callable_captures: callable_captures.to_vec(),
-                    lens_info: lens_info.clone(),
+                    facet_info: facet_info.clone(),
                 });
             }
             collect_pattern_binding_infos(
@@ -2230,7 +2641,7 @@ fn collect_pattern_binding_infos(
                 callable_kind,
                 callable_display,
                 callable_captures,
-                lens_info,
+                facet_info,
             );
         }
         TypedPattern::Wildcard(_)
@@ -2248,7 +2659,7 @@ fn collect_pattern_binding_infos(
                     callable_kind,
                     callable_display.clone(),
                     callable_captures,
-                    lens_info.clone(),
+                    facet_info.clone(),
                 );
             }
         }
@@ -2260,7 +2671,7 @@ fn collect_pattern_binding_infos(
                 callable_kind,
                 callable_display.clone(),
                 callable_captures,
-                lens_info.clone(),
+                facet_info.clone(),
             );
             collect_pattern_binding_infos(
                 tail,
@@ -2269,7 +2680,7 @@ fn collect_pattern_binding_infos(
                 callable_kind,
                 callable_display,
                 callable_captures,
-                lens_info,
+                facet_info,
             );
         }
         TypedPattern::ResultOk(_, inner) => {
@@ -2280,7 +2691,7 @@ fn collect_pattern_binding_infos(
                 callable_kind,
                 callable_display,
                 callable_captures,
-                lens_info,
+                facet_info,
             );
         }
         TypedPattern::Extractor { items, .. } => {
@@ -2292,7 +2703,7 @@ fn collect_pattern_binding_infos(
                     callable_kind,
                     callable_display.clone(),
                     callable_captures,
-                    lens_info.clone(),
+                    facet_info.clone(),
                 );
             }
         }
@@ -2403,8 +2814,8 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Lazy(inner) => format!("Lazy<{}>", ty_to_string(inner)),
         Ty::TypeRef(inner) => format!("TypeRef<{}>", ty_to_string(inner)),
         Ty::Pid(name) => format!("PID<{}>", name),
-        Ty::Lens(source, focus) => {
-            format!("Lens<{}, {}>", ty_to_string(source), ty_to_string(focus))
+        Ty::Facet(source, focus) => {
+            format!("Facet<{}, {}>", ty_to_string(source), ty_to_string(focus))
         }
         Ty::Tuple(items) => format!(
             "({})",
@@ -2476,6 +2887,16 @@ enum IrOp {
     JumpIfFalseLabel(Label),
     /// Jump-if-true to label
     JumpIfTrueLabel(Label),
+    JumpIfLocalTagEqLabel {
+        local_idx: u32,
+        tag_const_idx: u32,
+        label: Label,
+    },
+    JumpIfLocalTagNeLabel {
+        local_idx: u32,
+        tag_const_idx: u32,
+        label: Label,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -2496,6 +2917,7 @@ struct PendingCompose {
     fun_idx: u32,
     flavor: ComposeFlavor,
     span: Span,
+    direct_targets: Option<(DirectCallableTarget, DirectCallableTarget)>,
 }
 
 #[derive(Debug, Clone)]
@@ -2508,16 +2930,22 @@ struct PendingInjectCall {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum LensUpdateLeaf {
+enum FacetUpdateLeaf {
     Set {
         value_slot: u32,
         wrap_plain_result: bool,
     },
     Over {
         update_fun_slot: u32,
-        mode: TypedLensOverMode,
+        mode: TypedFacetOverMode,
         focus_is_result: bool,
     },
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DirectCallableTarget {
+    Builtin(u16),
+    User(u32),
 }
 
 struct Codegen {
@@ -2594,6 +3022,12 @@ impl Codegen {
             "bit_and" if arity == 2 => Some(Opcode::BitAndInt),
             "bit_or" if arity == 2 => Some(Opcode::BitOrInt),
             "bit_xor" if arity == 2 => Some(Opcode::BitXorInt),
+            "string_len" if arity == 1 => Some(Opcode::StringLen),
+            "len" if arity == 1 => Some(Opcode::ListLen),
+            "safe_mod" if arity == 2 => Some(Opcode::SafeModInt),
+            "string_contains" if arity == 2 => Some(Opcode::StringContains),
+            "string_starts_with" if arity == 2 => Some(Opcode::StringStartsWith),
+            "string_ends_with" if arity == 2 => Some(Opcode::StringEndsWith),
             _ => None,
         }
     }
@@ -2627,6 +3061,63 @@ impl Codegen {
             }
         }
         Ok(())
+    }
+
+    fn direct_callable_target_for_ref(
+        &self,
+        node: &TypedNode,
+    ) -> Result<Option<DirectCallableTarget>, CodegenError> {
+        match (&node.node, &node.ty) {
+            (TypedInner::Var(_), Ty::BuiltinFunc { name, .. }) => {
+                let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
+                    message: format!("Unknown builtin: {}", name),
+                    span: node.span.clone(),
+                })?;
+                Ok(Some(DirectCallableTarget::Builtin(builtin_id)))
+            }
+            (TypedInner::Var(_), Ty::UserFunc { fun_idx, .. }) => {
+                Ok(Some(DirectCallableTarget::User(*fun_idx)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn direct_callable_target_for_capture(
+        &self,
+        node: &TypedNode,
+    ) -> Result<Option<DirectCallableTarget>, CodegenError> {
+        match &node.node {
+            TypedInner::Capture(target, args) if args.is_empty() => {
+                self.direct_callable_target_for_ref(target)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn emit_direct_callable_ref(&mut self, target: DirectCallableTarget) {
+        match target {
+            DirectCallableTarget::Builtin(builtin_id) => {
+                self.emit(Opcode::LoadBuiltinRef(builtin_id))
+            }
+            DirectCallableTarget::User(fun_idx) => self.emit(Opcode::LoadFunctionRef(fun_idx)),
+        }
+    }
+
+    fn emit_direct_call(&mut self, target: DirectCallableTarget, arity: u8, span: &Span) {
+        match target {
+            DirectCallableTarget::Builtin(builtin_id) => self.emit(Opcode::CallBuiltin {
+                builtin_id,
+                arity,
+                span_start: span.start as u32,
+                span_end: span.end as u32,
+            }),
+            DirectCallableTarget::User(fun_idx) => self.emit(Opcode::Call {
+                fun_idx,
+                arity,
+                span_start: span.start as u32,
+                span_end: span.end as u32,
+            }),
+        }
     }
 
     fn emit_closure_function(
@@ -2717,45 +3208,59 @@ impl Codegen {
         fun_idx: u32,
         flavor: &ComposeFlavor,
         span: &Span,
+        direct_targets: Option<(DirectCallableTarget, DirectCallableTarget)>,
     ) -> Result<(), CodegenError> {
         let saved_slot_map = self.state.slot_map.clone();
         let saved_next_slot = self.state.next_slot;
 
         self.state.slot_map = HashMap::new();
-        self.state.next_slot = 3;
-
-        let lhs_slot = 0u32;
-        let rhs_slot = 1u32;
-        let input_slot = 2u32;
+        let (lhs_slot, rhs_slot, input_slot, arity) = if direct_targets.is_some() {
+            self.state.next_slot = 1;
+            (None, None, 0u32, 1u8)
+        } else {
+            self.state.next_slot = 3;
+            (Some(0u32), Some(1u32), 2u32, 3u8)
+        };
         let entry_pc = self.current_pos() as u32;
         let prev_in_function = self.in_function;
         self.in_function = true;
 
         match flavor {
             ComposeFlavor::Plain => {
-                self.emit(Opcode::LoadLocal(rhs_slot));
-                self.emit(Opcode::LoadLocal(lhs_slot));
                 self.emit(Opcode::LoadLocal(input_slot));
-                self.emit(Opcode::CallClosure {
-                    arity: 1,
-                    span_start: span.start as u32,
-                    span_end: span.end as u32,
-                });
-                self.emit(Opcode::CallClosure {
-                    arity: 1,
-                    span_start: span.start as u32,
-                    span_end: span.end as u32,
-                });
+                if let Some((lhs, rhs)) = direct_targets {
+                    self.emit_direct_call(lhs, 1, span);
+                    self.emit_direct_call(rhs, 1, span);
+                } else {
+                    self.emit(Opcode::LoadLocal(rhs_slot.expect("captured rhs slot")));
+                    self.emit(Opcode::LoadLocal(lhs_slot.expect("captured lhs slot")));
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::CallClosure {
+                        arity: 1,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
+                    self.emit(Opcode::CallClosure {
+                        arity: 1,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
+                }
                 self.emit(Opcode::Return);
             }
             ComposeFlavor::ResultMap | ComposeFlavor::ResultBind => {
-                self.emit(Opcode::LoadLocal(lhs_slot));
                 self.emit(Opcode::LoadLocal(input_slot));
-                self.emit(Opcode::CallClosure {
-                    arity: 1,
-                    span_start: span.start as u32,
-                    span_end: span.end as u32,
-                });
+                if let Some((lhs, _)) = direct_targets {
+                    self.emit_direct_call(lhs, 1, span);
+                } else {
+                    self.emit(Opcode::LoadLocal(lhs_slot.expect("captured lhs slot")));
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::CallClosure {
+                        arity: 1,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
+                }
                 let result_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::StoreLocal(result_slot));
@@ -2776,40 +3281,58 @@ impl Codegen {
                     ComposeFlavor::ResultMap => {
                         let ok_tag = self.add_constant(Constant::Tag(0));
                         self.emit(Opcode::LoadConst(ok_tag));
-                        self.emit(Opcode::LoadLocal(rhs_slot));
-                        self.emit(Opcode::LoadLocal(result_slot));
-                        self.emit(Opcode::GetField { field_index: 0 });
-                        self.emit(Opcode::CallClosure {
-                            arity: 1,
-                            span_start: span.start as u32,
-                            span_end: span.end as u32,
-                        });
+                        if let Some((_, rhs)) = direct_targets {
+                            self.emit(Opcode::LoadLocal(result_slot));
+                            self.emit(Opcode::GetField { field_index: 0 });
+                            self.emit_direct_call(rhs, 1, span);
+                        } else {
+                            self.emit(Opcode::LoadLocal(rhs_slot.expect("captured rhs slot")));
+                            self.emit(Opcode::LoadLocal(result_slot));
+                            self.emit(Opcode::GetField { field_index: 0 });
+                            self.emit(Opcode::CallClosure {
+                                arity: 1,
+                                span_start: span.start as u32,
+                                span_end: span.end as u32,
+                            });
+                        }
                         self.emit(Opcode::StructNew { field_count: 1 });
                         self.emit(Opcode::Return);
                     }
                     ComposeFlavor::ResultBind => {
-                        self.emit(Opcode::LoadLocal(rhs_slot));
-                        self.emit(Opcode::LoadLocal(result_slot));
-                        self.emit(Opcode::GetField { field_index: 0 });
-                        self.emit(Opcode::CallClosure {
-                            arity: 1,
-                            span_start: span.start as u32,
-                            span_end: span.end as u32,
-                        });
+                        if let Some((_, rhs)) = direct_targets {
+                            self.emit(Opcode::LoadLocal(result_slot));
+                            self.emit(Opcode::GetField { field_index: 0 });
+                            self.emit_direct_call(rhs, 1, span);
+                        } else {
+                            self.emit(Opcode::LoadLocal(rhs_slot.expect("captured rhs slot")));
+                            self.emit(Opcode::LoadLocal(result_slot));
+                            self.emit(Opcode::GetField { field_index: 0 });
+                            self.emit(Opcode::CallClosure {
+                                arity: 1,
+                                span_start: span.start as u32,
+                                span_end: span.end as u32,
+                            });
+                        }
                         self.emit(Opcode::Return);
                     }
                     _ => unreachable!(),
                 }
             }
             ComposeFlavor::ListMap { helper } | ComposeFlavor::ListBind { helper } => {
-                self.emit(Opcode::LoadLocal(lhs_slot));
                 self.emit(Opcode::LoadLocal(input_slot));
-                self.emit(Opcode::CallClosure {
-                    arity: 1,
-                    span_start: span.start as u32,
-                    span_end: span.end as u32,
-                });
-                self.emit(Opcode::LoadLocal(rhs_slot));
+                if let Some((lhs, rhs)) = direct_targets {
+                    self.emit_direct_call(lhs, 1, span);
+                    self.emit_direct_callable_ref(rhs);
+                } else {
+                    self.emit(Opcode::LoadLocal(lhs_slot.expect("captured lhs slot")));
+                    self.emit(Opcode::LoadLocal(input_slot));
+                    self.emit(Opcode::CallClosure {
+                        arity: 1,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
+                    self.emit(Opcode::LoadLocal(rhs_slot.expect("captured rhs slot")));
+                }
                 match helper {
                     ListHelperRef::Builtin(builtin_id) => self.emit(Opcode::CallBuiltin {
                         builtin_id: *builtin_id,
@@ -2833,7 +3356,7 @@ impl Codegen {
             fun_idx,
             entry_pc,
             num_locals: self.state.next_slot,
-            arity: 3,
+            arity,
             qualified_name: None,
             signature: None,
             end_pc: 0,
@@ -2931,7 +3454,12 @@ impl Codegen {
             if !self.pending_composes.is_empty() {
                 let pending = std::mem::take(&mut self.pending_composes);
                 for compose in pending {
-                    self.emit_compose_function(compose.fun_idx, &compose.flavor, &compose.span)?;
+                    self.emit_compose_function(
+                        compose.fun_idx,
+                        &compose.flavor,
+                        &compose.span,
+                        compose.direct_targets,
+                    )?;
                 }
             }
             if !self.pending_inject_calls.is_empty() {
@@ -2988,6 +3516,64 @@ impl Codegen {
     }
 
     fn emit(&mut self, op: Opcode) {
+        if matches!(op, Opcode::EqTag) && self.ir.len() >= 3 {
+            let start = self.ir.len() - 3;
+            let current = self.ir.len();
+            if self
+                .label_positions
+                .values()
+                .all(|position| !((start + 1)..=current).contains(position))
+            {
+                if let [IrOp::Op(Opcode::LoadLocal(local_idx)), IrOp::Op(Opcode::GetTag), IrOp::Op(Opcode::LoadConst(tag_const_idx))] =
+                    &self.ir[start..]
+                {
+                    let local_idx = *local_idx;
+                    let tag_const_idx = *tag_const_idx;
+                    self.ir.truncate(start);
+                    self.ir.push(IrOp::Op(Opcode::EqLocalTag {
+                        local_idx,
+                        tag_const_idx,
+                    }));
+                    return;
+                }
+            }
+        }
+
+        if let Opcode::StoreLocal(local_idx) = op {
+            if self
+                .label_positions
+                .values()
+                .all(|position| *position != self.ir.len())
+            {
+                if let Some(IrOp::Op(Opcode::LoadConst(const_idx))) = self.ir.last() {
+                    let const_idx = *const_idx;
+                    self.ir.pop();
+                    self.ir.push(IrOp::Op(Opcode::StoreConstLocal {
+                        const_idx,
+                        local_idx,
+                    }));
+                    return;
+                }
+                if let Some(IrOp::Op(Opcode::LoadLocal(src_local_idx))) = self.ir.last() {
+                    let src_local_idx = *src_local_idx;
+                    self.ir.pop();
+                    self.ir.push(IrOp::Op(Opcode::CopyLocal {
+                        src_local_idx,
+                        dst_local_idx: local_idx,
+                    }));
+                    return;
+                }
+                if let Some(IrOp::Op(Opcode::LoadLocal(src_local_idx))) = self.ir.last() {
+                    let src_local_idx = *src_local_idx;
+                    self.ir.pop();
+                    self.ir.push(IrOp::Op(Opcode::CopyLocal {
+                        src_local_idx,
+                        dst_local_idx: local_idx,
+                    }));
+                    return;
+                }
+            }
+        }
         self.ir.push(IrOp::Op(op));
     }
 
@@ -2996,10 +3582,40 @@ impl Codegen {
     }
 
     fn emit_jump_if_false(&mut self, label: Label) {
+        if let Some(IrOp::Op(Opcode::EqLocalTag {
+            local_idx,
+            tag_const_idx,
+        })) = self.ir.last()
+        {
+            let local_idx = *local_idx;
+            let tag_const_idx = *tag_const_idx;
+            self.ir.pop();
+            self.ir.push(IrOp::JumpIfLocalTagNeLabel {
+                local_idx,
+                tag_const_idx,
+                label,
+            });
+            return;
+        }
         self.ir.push(IrOp::JumpIfFalseLabel(label));
     }
 
     fn emit_jump_if_true(&mut self, label: Label) {
+        if let Some(IrOp::Op(Opcode::EqLocalTag {
+            local_idx,
+            tag_const_idx,
+        })) = self.ir.last()
+        {
+            let local_idx = *local_idx;
+            let tag_const_idx = *tag_const_idx;
+            self.ir.pop();
+            self.ir.push(IrOp::JumpIfLocalTagEqLabel {
+                local_idx,
+                tag_const_idx,
+                label,
+            });
+            return;
+        }
         self.ir.push(IrOp::JumpIfTrueLabel(label));
     }
 
@@ -3027,7 +3643,9 @@ impl Codegen {
         stmts: Vec<TypedNode>,
         pop_last: bool,
     ) -> Result<(), CodegenError> {
-        // Contract with VM::push_atomic():
+        // Contract with interactive chunk execution:
+        // - InteractiveVm::push_chunk(...) and VM::push_atomic(...) both expect
+        //   top-level code first and callable bodies only after the top-level Halt.
         // - Main/top-level statements are emitted first.
         // - A single Halt terminates top-level execution.
         // - Function bodies are emitted strictly after Halt and are entered only via Call/CallClosure.
@@ -3083,10 +3701,10 @@ impl Codegen {
             if self.top_level_returns_result
                 && matches!(
                     stmt.node,
-                    TypedInner::LensPath(_) | TypedInner::PendingLensPath(_)
+                    TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_)
                 )
             {
-                // REPL chunks may end with a LensPath expression so the session can
+                // REPL chunks may end with a FacetPath expression so the session can
                 // inspect the canonical path without materializing a runtime value.
                 self.emit_unit_const();
             } else {
@@ -3331,8 +3949,8 @@ impl Codegen {
             }
 
             TypedInner::Bind(pat, rhs) => {
-                if matches!(rhs.ty, Ty::Lens(_, _)) {
-                    self.reserve_pattern_slots_for_lens_bind(pat);
+                if matches!(rhs.ty, Ty::Facet(_, _)) {
+                    self.reserve_pattern_slots_for_facet_bind(pat);
                     let unit_idx = self.add_constant(Constant::Unit);
                     self.emit(Opcode::LoadConst(unit_idx));
                     return Ok(());
@@ -3431,14 +4049,14 @@ impl Codegen {
                 supervisor_process,
                 worker_process,
                 init,
-                size,
+                strategy,
             } => {
                 let supervisor_idx = self.add_constant(Constant::Str(supervisor_process.clone()));
                 self.emit(Opcode::LoadConst(supervisor_idx));
                 let worker_idx = self.add_constant(Constant::Str(worker_process.clone()));
                 self.emit(Opcode::LoadConst(worker_idx));
                 self.emit_node(init)?;
-                self.emit_node(size)?;
+                self.emit_node(strategy)?;
                 let builtin_id =
                     Self::builtin_id("__supervisor_workers").ok_or_else(|| CodegenError {
                         message: "Unknown builtin: __supervisor_workers".into(),
@@ -3549,6 +4167,21 @@ impl Codegen {
             }
 
             TypedInner::Pipe(left, right) => {
+                if let Some(target) = self.direct_callable_target_for_capture(right)? {
+                    self.emit_node(left)?;
+                    self.emit_direct_call(target, 1, &node.span);
+                    return Ok(());
+                }
+                if let TypedInner::InjectCall(func, args) = &right.node {
+                    if let Some(target) = self.direct_callable_target_for_ref(func)? {
+                        self.emit_node(left)?;
+                        for arg in args {
+                            self.emit_node(arg)?;
+                        }
+                        self.emit_direct_call(target, (args.len() + 1) as u8, &node.span);
+                        return Ok(());
+                    }
+                }
                 self.emit_callable_ref(right)?;
                 self.emit_node(left)?;
                 self.emit(Opcode::CallClosure {
@@ -3560,15 +4193,25 @@ impl Codegen {
 
             TypedInner::Compose(flavor, left, right) => {
                 let fun_idx = self.reserve_fun_idx();
+                let direct_targets = match (
+                    self.direct_callable_target_for_capture(left)?,
+                    self.direct_callable_target_for_capture(right)?,
+                ) {
+                    (Some(left), Some(right)) => Some((left, right)),
+                    _ => None,
+                };
                 self.pending_composes.push(PendingCompose {
                     fun_idx,
                     flavor: flavor.clone(),
                     span: node.span.clone(),
+                    direct_targets,
                 });
                 self.emit(Opcode::LoadFunctionRef(fun_idx));
-                self.emit_callable_ref(left)?;
-                self.emit_callable_ref(right)?;
-                self.emit(Opcode::CaptureClosure(2));
+                if direct_targets.is_none() {
+                    self.emit_callable_ref(left)?;
+                    self.emit_callable_ref(right)?;
+                    self.emit(Opcode::CaptureClosure(2));
+                }
             }
 
             TypedInner::ListNil => self.emit(Opcode::ListNil),
@@ -3653,39 +4296,39 @@ impl Codegen {
                 });
             }
 
-            TypedInner::LensPath(_) | TypedInner::PendingLensPath(_) => {
+            TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_) => {
                 return Err(CodegenError {
                     message:
-                        "Lens path value leaked to codegen; Lens is compile-time only in Stage1"
+                        "Facet path value leaked to codegen; Facet is compile-time only in Stage1"
                             .into(),
                     span: node.span.clone(),
                 });
             }
 
-            TypedInner::LensView {
+            TypedInner::FacetView {
                 source,
                 path,
                 source_is_result,
             } => {
-                self.emit_lens_view(node, source, path, *source_is_result)?;
+                self.emit_facet_view(node, source, path, *source_is_result)?;
             }
-            TypedInner::LensSet {
+            TypedInner::FacetSet {
                 source,
                 path,
                 value,
                 source_is_result,
                 mode,
             } => {
-                self.emit_lens_set(node, source, path, value, *source_is_result, *mode)?;
+                self.emit_facet_set(node, source, path, value, *source_is_result, *mode)?;
             }
-            TypedInner::LensOver {
+            TypedInner::FacetOver {
                 source,
                 path,
                 update_fun,
                 source_is_result,
                 mode,
             } => {
-                self.emit_lens_over(node, source, path, update_fun, *source_is_result, *mode)?;
+                self.emit_facet_over(node, source, path, update_fun, *source_is_result, *mode)?;
             }
 
             TypedInner::StructLit(tag, fields) => {
@@ -3766,7 +4409,9 @@ impl Codegen {
                     let slot = self.alloc_slot(capture.unique_id);
                     self.emit(Opcode::LoadLocal(slot));
                 }
-                self.emit(Opcode::CaptureClosure(filtered_captures.len() as u8));
+                if !filtered_captures.is_empty() {
+                    self.emit(Opcode::CaptureClosure(filtered_captures.len() as u8));
+                }
             }
 
             TypedInner::Capture(target, args) => {
@@ -3780,25 +4425,25 @@ impl Codegen {
                 self.emit_callable_ref(target)?;
             }
 
-            TypedInner::StructDef(tag, name, field_names, private_flags) => {
+            TypedInner::StructDef(tag, name, field_names, field_policies, _) => {
                 self.state.type_registry.register(TypeEntry {
                     tag: *tag,
                     name: name.clone(),
                     kind: TypeKind::Struct,
                     field_names: field_names.clone(),
-                    private_flags: private_flags.clone(),
+                    private_flags: field_policies.iter().map(|policy| policy.private).collect(),
                 });
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
-            TypedInner::RecordDef(tag, name, field_names, private_flags) => {
+            TypedInner::RecordDef(tag, name, field_names, field_policies, _) => {
                 self.state.type_registry.register(TypeEntry {
                     tag: *tag,
                     name: name.clone(),
                     kind: TypeKind::Record,
                     field_names: field_names.clone(),
-                    private_flags: private_flags.clone(),
+                    private_flags: field_policies.iter().map(|policy| policy.private).collect(),
                 });
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
@@ -3840,11 +4485,11 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_lens_view(
+    fn emit_facet_view(
         &mut self,
         node: &TypedNode,
         source: &TypedNode,
-        path: &TypedLensPath,
+        path: &TypedFacetPath,
         source_is_result: bool,
     ) -> Result<(), CodegenError> {
         let returns_result = matches!(node.ty, Ty::Result(_, _));
@@ -3875,7 +4520,7 @@ impl Codegen {
             self.state.next_slot += 1;
             self.emit(Opcode::StoreLocal(current_slot));
 
-            self.emit_lens_segments_from_local(current_slot, path, &node.span, Some(end_label))?;
+            self.emit_facet_segments_from_local(current_slot, path, &node.span, Some(end_label))?;
 
             let ok_tag = self.add_constant(Constant::Tag(0));
             self.emit(Opcode::LoadConst(ok_tag));
@@ -3893,7 +4538,7 @@ impl Codegen {
 
         if returns_result {
             let end_label = self.fresh_label();
-            self.emit_lens_segments_from_local(current_slot, path, &node.span, Some(end_label))?;
+            self.emit_facet_segments_from_local(current_slot, path, &node.span, Some(end_label))?;
 
             let ok_tag = self.add_constant(Constant::Tag(0));
             self.emit(Opcode::LoadConst(ok_tag));
@@ -3902,21 +4547,21 @@ impl Codegen {
 
             self.patch_label(end_label);
         } else {
-            self.emit_lens_segments_from_local(current_slot, path, &node.span, None)?;
+            self.emit_facet_segments_from_local(current_slot, path, &node.span, None)?;
             self.emit(Opcode::LoadLocal(current_slot));
         }
 
         Ok(())
     }
 
-    fn emit_lens_set(
+    fn emit_facet_set(
         &mut self,
         node: &TypedNode,
         source: &TypedNode,
-        path: &TypedLensPath,
+        path: &TypedFacetPath,
         value: &TypedNode,
         source_is_result: bool,
-        mode: TypedLensSetMode,
+        mode: TypedFacetSetMode,
     ) -> Result<(), CodegenError> {
         self.emit_node(source)?;
         let source_slot = self.state.next_slot;
@@ -3928,26 +4573,26 @@ impl Codegen {
         self.state.next_slot += 1;
         self.emit(Opcode::StoreLocal(value_slot));
 
-        self.emit_lens_update_from_source_slot(
+        self.emit_facet_update_from_source_slot(
             node,
             source_slot,
             path,
             source_is_result,
-            LensUpdateLeaf::Set {
+            FacetUpdateLeaf::Set {
                 value_slot,
-                wrap_plain_result: matches!(mode, TypedLensSetMode::WrapPlainResult),
+                wrap_plain_result: matches!(mode, TypedFacetSetMode::WrapPlainResult),
             },
         )
     }
 
-    fn emit_lens_over(
+    fn emit_facet_over(
         &mut self,
         node: &TypedNode,
         source: &TypedNode,
-        path: &TypedLensPath,
+        path: &TypedFacetPath,
         update_fun: &TypedNode,
         source_is_result: bool,
-        mode: TypedLensOverMode,
+        mode: TypedFacetOverMode,
     ) -> Result<(), CodegenError> {
         self.emit_node(source)?;
         let source_slot = self.state.next_slot;
@@ -3959,12 +4604,12 @@ impl Codegen {
         self.state.next_slot += 1;
         self.emit(Opcode::StoreLocal(update_fun_slot));
 
-        self.emit_lens_update_from_source_slot(
+        self.emit_facet_update_from_source_slot(
             node,
             source_slot,
             path,
             source_is_result,
-            LensUpdateLeaf::Over {
+            FacetUpdateLeaf::Over {
                 update_fun_slot,
                 mode,
                 focus_is_result: matches!(path.focus_ty, Ty::Result(_, _)),
@@ -3972,17 +4617,20 @@ impl Codegen {
         )
     }
 
-    fn emit_lens_update_from_source_slot(
+    fn emit_facet_update_from_source_slot(
         &mut self,
         node: &TypedNode,
         source_slot: u32,
-        path: &TypedLensPath,
+        path: &TypedFacetPath,
         source_is_result: bool,
-        leaf: LensUpdateLeaf,
+        leaf: FacetUpdateLeaf,
     ) -> Result<(), CodegenError> {
-        if !matches!(node.ty, Ty::Result(_, _)) {
+        let returns_result = matches!(node.ty, Ty::Result(_, _));
+        if source_is_result && !returns_result {
             return Err(CodegenError {
-                message: "Internal invariant broken: Lens::set/over must return Result".into(),
+                message:
+                    "Internal invariant broken: plain facet update cannot start from Result source"
+                        .into(),
                 span: node.span.clone(),
             });
         }
@@ -4011,32 +4659,36 @@ impl Codegen {
             source_slot
         };
 
-        self.emit_lens_update_at_path(root_slot, path, 0, leaf, &node.span, end_label)?;
+        self.emit_facet_update_at_path(root_slot, path, 0, leaf, &node.span, end_label)?;
 
-        let ok_tag = self.add_constant(Constant::Tag(0));
-        self.emit(Opcode::LoadConst(ok_tag));
-        self.emit(Opcode::LoadLocal(root_slot));
-        self.emit(Opcode::StructNew { field_count: 1 });
+        if returns_result {
+            let ok_tag = self.add_constant(Constant::Tag(0));
+            self.emit(Opcode::LoadConst(ok_tag));
+            self.emit(Opcode::LoadLocal(root_slot));
+            self.emit(Opcode::StructNew { field_count: 1 });
+        } else {
+            self.emit(Opcode::LoadLocal(root_slot));
+        }
 
         self.patch_label(end_label);
         Ok(())
     }
 
-    fn emit_lens_update_at_path(
+    fn emit_facet_update_at_path(
         &mut self,
         current_slot: u32,
-        path: &TypedLensPath,
+        path: &TypedFacetPath,
         segment_idx: usize,
-        leaf: LensUpdateLeaf,
+        leaf: FacetUpdateLeaf,
         span: &Span,
         failure_end: Label,
     ) -> Result<(), CodegenError> {
         if segment_idx == path.segments.len() {
-            return self.emit_lens_leaf_update(current_slot, leaf, span, failure_end);
+            return self.emit_facet_leaf_update(current_slot, leaf, span, failure_end);
         }
 
         match &path.segments[segment_idx] {
-            TypedLensSegment::Field {
+            TypedFacetSegment::Field {
                 field_index,
                 container_field_count,
                 ..
@@ -4049,7 +4701,7 @@ impl Codegen {
                 });
                 self.emit(Opcode::StoreLocal(focus_slot));
 
-                self.emit_lens_update_at_path(
+                self.emit_facet_update_at_path(
                     focus_slot,
                     path,
                     segment_idx + 1,
@@ -4073,9 +4725,10 @@ impl Codegen {
                 });
                 self.emit(Opcode::StoreLocal(current_slot));
             }
-            TypedLensSegment::Tuple {
+            TypedFacetSegment::Tuple {
                 field_index,
                 tuple_len,
+                ..
             } => {
                 let focus_slot = self.state.next_slot;
                 self.state.next_slot += 1;
@@ -4085,7 +4738,7 @@ impl Codegen {
                 });
                 self.emit(Opcode::StoreLocal(focus_slot));
 
-                self.emit_lens_update_at_path(
+                self.emit_facet_update_at_path(
                     focus_slot,
                     path,
                     segment_idx + 1,
@@ -4105,11 +4758,12 @@ impl Codegen {
                 self.emit(Opcode::TupleNew { len: *tuple_len });
                 self.emit(Opcode::StoreLocal(current_slot));
             }
-            TypedLensSegment::Variant {
+            TypedFacetSegment::Variant {
                 enum_name,
                 variant_name,
                 variant_tag,
                 payload_arity,
+                ..
             } => {
                 self.emit(Opcode::LoadLocal(current_slot));
                 self.emit(Opcode::GetTag);
@@ -4146,7 +4800,7 @@ impl Codegen {
                     }
                 }
 
-                self.emit_lens_update_at_path(
+                self.emit_facet_update_at_path(
                     focus_slot,
                     path,
                     segment_idx + 1,
@@ -4180,9 +4834,9 @@ impl Codegen {
 
                 self.patch_label(mismatch_label);
                 let detail = format!(
-                    "Variant mismatch at segment {} ({}) in lens path: expected variant {}::{}, but got a different variant",
+                    "Variant mismatch at segment {} ({}) in facet path: expected variant {}::{}, but got a different variant",
                     segment_idx + 1,
-                    Self::lens_segment_display(&path.segments[segment_idx]),
+                    Self::facet_segment_display(&path.segments[segment_idx]),
                     enum_name,
                     variant_name
                 );
@@ -4195,15 +4849,15 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_lens_leaf_update(
+    fn emit_facet_leaf_update(
         &mut self,
         current_slot: u32,
-        leaf: LensUpdateLeaf,
+        leaf: FacetUpdateLeaf,
         span: &Span,
         failure_end: Label,
     ) -> Result<(), CodegenError> {
         match leaf {
-            LensUpdateLeaf::Set {
+            FacetUpdateLeaf::Set {
                 value_slot,
                 wrap_plain_result,
             } => {
@@ -4217,12 +4871,12 @@ impl Codegen {
                 }
                 self.emit(Opcode::StoreLocal(current_slot));
             }
-            LensUpdateLeaf::Over {
+            FacetUpdateLeaf::Over {
                 update_fun_slot,
                 mode,
                 focus_is_result,
             } => match (mode, focus_is_result) {
-                (TypedLensOverMode::FocusValue, true) => {
+                (TypedFacetOverMode::FocusValue, true) => {
                     self.emit(Opcode::LoadLocal(current_slot));
                     self.emit(Opcode::GetTag);
                     let err_tag = self.add_constant(Constant::Tag(1));
@@ -4299,39 +4953,40 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_lens_segments_from_local(
+    fn emit_facet_segments_from_local(
         &mut self,
         current_slot: u32,
-        path: &TypedLensPath,
+        path: &TypedFacetPath,
         span: &Span,
         mismatch_end: Option<Label>,
     ) -> Result<(), CodegenError> {
         for (segment_idx, segment) in path.segments.iter().enumerate() {
             match segment {
-                TypedLensSegment::Field { field_index, .. } => {
+                TypedFacetSegment::Field { field_index, .. } => {
                     self.emit(Opcode::LoadLocal(current_slot));
                     self.emit(Opcode::GetField {
                         field_index: *field_index,
                     });
                     self.emit(Opcode::StoreLocal(current_slot));
                 }
-                TypedLensSegment::Tuple { field_index, .. } => {
+                TypedFacetSegment::Tuple { field_index, .. } => {
                     self.emit(Opcode::LoadLocal(current_slot));
                     self.emit(Opcode::GetTupleField {
                         field_index: *field_index,
                     });
                     self.emit(Opcode::StoreLocal(current_slot));
                 }
-                TypedLensSegment::Variant {
+                TypedFacetSegment::Variant {
                     enum_name,
                     variant_name,
                     variant_tag,
                     payload_arity,
+                    ..
                 } => {
                     let Some(end_label) = mismatch_end else {
                         return Err(CodegenError {
                             message:
-                                "Internal invariant broken: variant lens segment in plain context"
+                                "Internal invariant broken: variant facet segment in plain context"
                                     .into(),
                             span: span.clone(),
                         });
@@ -4352,9 +5007,9 @@ impl Codegen {
 
                     self.patch_label(mismatch_label);
                     let detail = format!(
-                        "Variant mismatch at segment {} ({}) in lens path: expected variant {}::{}, but got a different variant",
+                        "Variant mismatch at segment {} ({}) in facet path: expected variant {}::{}, but got a different variant",
                         segment_idx + 1,
-                        Self::lens_segment_display(segment),
+                        Self::facet_segment_display(segment),
                         enum_name,
                         variant_name
                     );
@@ -4393,11 +5048,11 @@ impl Codegen {
         }
     }
 
-    fn lens_segment_display(segment: &TypedLensSegment) -> String {
+    fn facet_segment_display(segment: &TypedFacetSegment) -> String {
         match segment {
-            TypedLensSegment::Field { field_name, .. } => format!(".{}", field_name),
-            TypedLensSegment::Tuple { field_index, .. } => format!("._{}", field_index),
-            TypedLensSegment::Variant { variant_name, .. } => format!(".{}", variant_name),
+            TypedFacetSegment::Field { field_name, .. } => format!(".{}", field_name),
+            TypedFacetSegment::Tuple { field_index, .. } => format!("._{}", field_index),
+            TypedFacetSegment::Variant { variant_name, .. } => format!(".{}", variant_name),
         }
     }
 
@@ -5287,14 +5942,14 @@ impl Codegen {
         self.emit_pattern_bind_from_local(current_pat, current_slot)
     }
 
-    fn reserve_pattern_slots_for_lens_bind(&mut self, pat: &TypedPattern) {
+    fn reserve_pattern_slots_for_facet_bind(&mut self, pat: &TypedPattern) {
         match pat {
             TypedPattern::Var(_, id) => {
                 self.alloc_slot(id.unique_id);
             }
             TypedPattern::As(_, inner, alias) => {
                 self.alloc_slot(alias.unique_id);
-                self.reserve_pattern_slots_for_lens_bind(inner);
+                self.reserve_pattern_slots_for_facet_bind(inner);
             }
             TypedPattern::Wildcard(_) => {}
             _ => {}
@@ -6042,27 +6697,21 @@ impl Codegen {
     }
 
     fn emit_ok_unit_result(&mut self) -> Result<(), CodegenError> {
-        let ok_tag = self.add_constant(Constant::Tag(0));
         let unit_idx = self.add_constant(Constant::Unit);
-        self.emit(Opcode::LoadConst(ok_tag));
         self.emit(Opcode::LoadConst(unit_idx));
-        self.emit(Opcode::StructNew { field_count: 1 });
+        self.emit(Opcode::MakeOk);
         Ok(())
     }
 
     fn emit_ok_result_local(&mut self, slot: u32) -> Result<(), CodegenError> {
-        let ok_tag = self.add_constant(Constant::Tag(0));
-        self.emit(Opcode::LoadConst(ok_tag));
         self.emit(Opcode::LoadLocal(slot));
-        self.emit(Opcode::StructNew { field_count: 1 });
+        self.emit(Opcode::MakeOk);
         Ok(())
     }
 
     fn emit_err_result_value(&mut self, err: &TypedNode) -> Result<(), CodegenError> {
-        let err_tag = self.add_constant(Constant::Tag(1));
-        self.emit(Opcode::LoadConst(err_tag));
         self.emit_node(err)?;
-        self.emit(Opcode::StructNew { field_count: 1 });
+        self.emit(Opcode::MakeErr);
         Ok(())
     }
 
@@ -6588,6 +7237,50 @@ impl Codegen {
                             })? as u32;
                     opcodes.push(Opcode::JumpIfTrue(pos));
                 }
+                IrOp::JumpIfLocalTagEqLabel {
+                    local_idx,
+                    tag_const_idx,
+                    label,
+                } => {
+                    let pos =
+                        self.label_positions
+                            .get(label)
+                            .copied()
+                            .ok_or_else(|| CodegenError {
+                                message: format!(
+                                    "unresolved jump-if-local-tag-eq label {:?}",
+                                    label
+                                ),
+                                span: Span { start: 0, end: 0 },
+                            })? as u32;
+                    opcodes.push(Opcode::JumpIfLocalTagEq {
+                        local_idx: *local_idx,
+                        tag_const_idx: *tag_const_idx,
+                        target_pc: pos,
+                    });
+                }
+                IrOp::JumpIfLocalTagNeLabel {
+                    local_idx,
+                    tag_const_idx,
+                    label,
+                } => {
+                    let pos =
+                        self.label_positions
+                            .get(label)
+                            .copied()
+                            .ok_or_else(|| CodegenError {
+                                message: format!(
+                                    "unresolved jump-if-local-tag-ne label {:?}",
+                                    label
+                                ),
+                                span: Span { start: 0, end: 0 },
+                            })? as u32;
+                    opcodes.push(Opcode::JumpIfLocalTagNe {
+                        local_idx: *local_idx,
+                        tag_const_idx: *tag_const_idx,
+                        target_pc: pos,
+                    });
+                }
             }
         }
         Ok((opcodes, self.state))
@@ -6629,7 +7322,10 @@ fn quote_surtr_string_literal(input: &str) -> String {
 mod process_runtime_v2_tests {
     use super::*;
     use sigil::resolved::ResolvedId;
-    use spire::ast::{ProcessKind, ProcessRuntimeHandlerSpec, ProcessSpec};
+    use spire::ast::{
+        ChildRestartPolicy, ProcessKind, ProcessRuntimeHandlerSpec, ProcessSpec,
+        SupervisorInitEntry, SupervisorPolicy, SupervisorStrategy,
+    };
 
     fn span(start: usize, end: usize) -> Span {
         Span { start, end }
@@ -6643,6 +7339,7 @@ mod process_runtime_v2_tests {
                 process_name: name.to_string(),
                 kind: ProcessKind::Agent,
                 instance: ProcessInstance::Singleton,
+                state: AstTy::Named(span(0, 0), "Int".to_string()),
                 boot: false,
                 registry: false,
                 lazy: false,
@@ -6666,6 +7363,57 @@ mod process_runtime_v2_tests {
             init_uid: 1,
             get_uid: 2,
             set_uid: None,
+            handler_uids: Vec::new(),
+        }
+    }
+
+    fn worker_process_spec(name: &str) -> TypedProcessSpec {
+        let mut spec = singleton_process_spec(name);
+        spec.spec.instance = ProcessInstance::Worker;
+        spec
+    }
+
+    fn supervisor_policy() -> SupervisorPolicy {
+        SupervisorPolicy {
+            strategy: SupervisorStrategy::OneForOne,
+            max_restarts: 5,
+            max_seconds: 10,
+            child_restart_default: ChildRestartPolicy::Transient,
+            allow_adopt: true,
+            shutdown_timeout_ms: None,
+        }
+    }
+
+    fn supervisor_process_spec(name: &str, kind: ProcessKind) -> TypedProcessSpec {
+        TypedProcessSpec {
+            module_path: name.to_string(),
+            process_name: name.to_string(),
+            spec: ProcessSpec {
+                process_name: name.to_string(),
+                kind,
+                instance: ProcessInstance::Singleton,
+                state: AstTy::Named(span(0, 0), "Unit".to_string()),
+                boot: false,
+                registry: false,
+                lazy: false,
+                handlers: Vec::new(),
+                handler_specs: Vec::new(),
+                supervisor_policy: Some(supervisor_policy()),
+            },
+            init_uid: 1,
+            get_uid: 2,
+            set_uid: None,
+            handler_uids: Vec::new(),
+        }
+    }
+
+    fn supervisor_init_entry(name: &str) -> SupervisorInitEntry {
+        SupervisorInitEntry {
+            process_name: name.into(),
+            timeout_ms: None,
+            handlers: Vec::new(),
+            overrides: Default::default(),
+            span: span(0, 0),
         }
     }
 
@@ -6699,6 +7447,16 @@ mod process_runtime_v2_tests {
         }
     }
 
+    fn supervisor_status_call(process_name: &str) -> TypedNode {
+        TypedNode {
+            ty: Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error)),
+            span: span(10, 21),
+            node: TypedInner::SupervisorStatus {
+                supervisor_process: process_name.into(),
+            },
+        }
+    }
+
     #[test]
     fn validate_required_singletons_rejects_direct_call_when_absent_from_boot_plan() {
         let err = validate_required_singletons(
@@ -6728,5 +7486,59 @@ mod process_runtime_v2_tests {
             &boot_plan,
         )
         .expect("supervisor_init singleton should satisfy direct singleton call");
+    }
+
+    #[test]
+    fn build_runtime_boot_plan_classifies_unified_entries_by_process_kind() {
+        let boot_plan = SupervisorInitSpec {
+            entries: vec![
+                supervisor_init_entry("Logger"),
+                supervisor_init_entry("ImageWorkerSupervisor"),
+            ],
+            ..SupervisorInitSpec::default()
+        };
+
+        let runtime = build_runtime_boot_plan(
+            &boot_plan,
+            &[
+                singleton_process_spec("Logger"),
+                supervisor_process_spec("ImageWorkerSupervisor", ProcessKind::Supervisor),
+            ],
+        )
+        .expect("unified entries should lower by process kind");
+
+        assert_eq!(runtime.singletons.len(), 1);
+        assert_eq!(runtime.singletons[0].process_name, "Logger");
+        assert_eq!(runtime.supervisor_overrides.len(), 1);
+        assert_eq!(
+            runtime.supervisor_overrides[0].process_name,
+            "ImageWorkerSupervisor"
+        );
+    }
+
+    #[test]
+    fn build_runtime_boot_plan_rejects_worker_entry() {
+        let boot_plan = SupervisorInitSpec {
+            entries: vec![supervisor_init_entry("MyWorker")],
+            ..SupervisorInitSpec::default()
+        };
+
+        let err = build_runtime_boot_plan(&boot_plan, &[worker_process_spec("MyWorker")])
+            .expect_err("workers must not appear in supervisor_init");
+
+        assert!(err.message.contains("worker process cannot appear"));
+    }
+
+    #[test]
+    fn validate_required_singletons_accepts_dynamic_supervisor_without_dsl_entry() {
+        validate_required_singletons(
+            &[supervisor_status_call("DynamicSupervisor")],
+            &[supervisor_process_spec(
+                "DynamicSupervisor",
+                ProcessKind::DynamicSupervisor,
+            )],
+            &RuntimeBootPlan::default(),
+        )
+        .expect("DynamicSupervisor is implicitly registered");
     }
 }

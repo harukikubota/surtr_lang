@@ -30,21 +30,29 @@ pub use self::declarations::{
 pub use self::session::{SigilCheckpoint, SigilSession};
 
 use self::declarations::{
-    assign_declaration_uids, collect_stage_impl_target_resolutions, declaration_uid_kind_map,
-    trait_impl_method_qualified_name, trait_method_qualified_name,
+    assign_declaration_uids, ast_ty_key, collect_stage_impl_target_resolutions,
+    declaration_uid_kind_map, trait_impl_method_qualified_name, trait_method_qualified_name,
 };
 use self::expr::validate_trait_impl_pairs_in_nodes;
 use self::imports::{build_global_scope, build_module_scope};
 
 const STAGE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+fn surface_module_name(module_path: &str) -> String {
+    module_path
+        .strip_prefix("Global::")
+        .unwrap_or(module_path)
+        .to_string()
+}
+
 fn auto_import_module_names(module_stages: &[Vec<StagedModuleAst>]) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = HashSet::new();
     for stage in module_stages {
         for module in stage {
-            if module.auto_import && seen.insert(module.module_path.clone()) {
-                names.push(module.module_path.clone());
+            let module_name = surface_module_name(&module.module_path);
+            if module.auto_import && seen.insert(module_name.clone()) {
+                names.push(module_name);
             }
         }
     }
@@ -178,6 +186,29 @@ pub fn resolve_staged_program_from_state(
                     related_labels: Vec::new(),
                 })?;
                 let set_uid = declaration_uids.get(&set_fq).copied();
+                let handler_uids = spec
+                    .handler_specs
+                    .iter()
+                    .map(|handler| {
+                        let fq_name = if handler.internal_name.is_empty() {
+                            format!("{}::{}", module.module_path, handler.name)
+                        } else {
+                            format!("{}::{}", module.module_path, handler.internal_name)
+                        };
+                        declaration_uids
+                            .get(&fq_name)
+                            .copied()
+                            .map(|uid| ResolvedProcessHandlerUid {
+                                internal_name: handler.internal_name.clone(),
+                                uid,
+                            })
+                            .ok_or_else(|| ResolveError {
+                                message: format!("missing lowered process handler `{fq_name}`"),
+                                span: handler.span.clone(),
+                                related_labels: Vec::new(),
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 process_specs.push(ResolvedProcessSpec {
                     module_path: module.module_path.clone(),
                     process_name: spec.process_name.clone(),
@@ -185,6 +216,7 @@ pub fn resolve_staged_program_from_state(
                     init_uid,
                     get_uid,
                     set_uid,
+                    handler_uids,
                 });
             }
         }
@@ -204,6 +236,7 @@ pub fn resolve_staged_program_from_state(
         )?;
         user_scope.advance_next_id_to(next_local_id);
         let mut user_resolver = Resolver::with_scope(user_scope);
+        user_resolver.declaration_entries = declaration_index.clone().into_iter().collect();
         user_resolver.declaration_uids = declaration_uids;
         user_resolver.declaration_uid_kinds = declaration_uid_kinds;
         user_resolver.declaration_hidden_by_uid = declaration_hidden_by_uid;
@@ -227,6 +260,7 @@ fn collect_supervisor_init_specs(stmts: &[Ast], boot_plan: &mut SupervisorInitSp
     for stmt in stmts {
         match stmt {
             Ast::SupervisorInit(_, spec) => {
+                boot_plan.entries.extend(spec.entries.clone());
                 boot_plan.singletons.extend(spec.singletons.clone());
                 boot_plan.supervisors.extend(spec.supervisors.clone());
             }
@@ -275,6 +309,8 @@ fn resolve_stage_modules_parallel(
                         module_scope.advance_next_id_to(stage_local_base);
                         let mut resolver = Resolver::with_scope(module_scope);
                         resolver.current_module_path = Some(module.module_path.clone());
+                        resolver.declaration_entries =
+                            declaration_index.clone().into_iter().collect();
                         resolver.declaration_uids = declaration_uids.clone();
                         resolver.declaration_uid_kinds = declaration_uid_kinds.clone();
                         resolver.declaration_hidden_by_uid = declaration_hidden_by_uid.clone();
@@ -353,9 +389,11 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         }
         Resolved::Grouped(_, inner)
         | Resolved::FieldAccess(_, inner, _)
+        | Resolved::FacetCapture(_, inner)
         | Resolved::Semi(_, inner) => {
             rebase_resolved_node(inner, base, offset);
         }
+        Resolved::InferredFacetCapture(_, _) => {}
         Resolved::ProcessContextHandler(_, _) => {}
         Resolved::Dbg(_, nodes) => {
             rebase_resolved_nodes(nodes, base, offset);
@@ -582,10 +620,14 @@ struct Resolver {
     scope: Scope,
     /// Fresh IDs reserved in predeclaration order for each top-level declaration name.
     predeclared_ids: HashMap<String, VecDeque<u32>>,
+    declaration_entries: HashMap<String, DeclarationEntry>,
     declaration_uids: HashMap<String, u32>,
     declaration_uid_kinds: HashMap<u32, DeclarationKind>,
     declaration_hidden_by_uid: HashMap<u32, bool>,
+    explicit_module_imports: HashSet<String>,
     current_module_path: Option<String>,
     current_stage_impl_targets: Option<HashMap<String, declarations::ImplTargetResolution>>,
     allow_top_level_shadowing: bool,
+    forbidden_top_level_value_bindings: HashMap<u32, String>,
+    current_top_level_def_name: Option<String>,
 }

@@ -44,7 +44,7 @@ print(match 1 {
 - extractor の入力型と pattern 期待型が合わないと type error
 - 戻り値の arity と pattern 側の束縛数が合う必要がある
 
-関連する compile error 例は `../../tests/compile_errors/modules/resolve_extractor_*` と `../../tests/compile_errors/modules/type_mismatch_extractor_*` にあります。
+関連する compile error 例は `../../tests/fixtures/modules/fail/resolve_extractor_*` と `../../tests/fixtures/modules/fail/type_mismatch_extractor_*` にあります。
 
 ## 関連ページ
 

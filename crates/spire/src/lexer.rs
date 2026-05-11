@@ -299,6 +299,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "cond" => Token::Cond,
                 "private" => Token::Private,
                 "public" => Token::Public,
+                "readonly" => Token::Readonly,
                 "const" => Token::Const,
                 "type" => Token::Type,
                 "where" => Token::Where,
@@ -361,6 +362,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "!=" => Some(Token::BangEq),
                 "<=" => Some(Token::LtEq),
                 ">=" => Some(Token::GtEq),
+                "<-" => Some(Token::LeftArrow),
                 "&&" => Some(Token::AndAnd),
                 "||" => Some(Token::OrOr),
                 ".." => Some(Token::DotDot),
@@ -418,6 +420,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             ';' => Token::Semicolon,
             '|' => Token::Pipe,
             '&' => Token::Amp,
+            '~' => Token::Tilde,
             '$' => Token::Dollar,
             _ => {
                 return Err(ParseError::syntax(
@@ -799,7 +802,7 @@ mod tests {
 
     #[test]
     fn test_two_char_ops() {
-        let tokens = tokenize("/ ++ =? == != <= >= && || => -> |> >> >* |*> |>= >=>").unwrap();
+        let tokens = tokenize("/ ++ =? == != <= >= <- && || => -> |> >> >* |*> |>= >=>").unwrap();
         assert!(matches!(tokens[0].token, Token::Slash));
         assert!(matches!(tokens[1].token, Token::Concat));
         assert!(matches!(tokens[2].token, Token::SafeBind));
@@ -807,16 +810,17 @@ mod tests {
         assert!(matches!(tokens[4].token, Token::BangEq));
         assert!(matches!(tokens[5].token, Token::LtEq));
         assert!(matches!(tokens[6].token, Token::GtEq));
-        assert!(matches!(tokens[7].token, Token::AndAnd));
-        assert!(matches!(tokens[8].token, Token::OrOr));
-        assert!(matches!(tokens[9].token, Token::FatArrow));
-        assert!(matches!(tokens[10].token, Token::Arrow));
-        assert!(matches!(tokens[11].token, Token::PipeApply));
-        assert!(matches!(tokens[12].token, Token::Compose));
-        assert!(matches!(tokens[13].token, Token::LiftCompose));
-        assert!(matches!(tokens[14].token, Token::PipeMap));
-        assert!(matches!(tokens[15].token, Token::PipeBind));
-        assert!(matches!(tokens[16].token, Token::KleisliCompose));
+        assert!(matches!(tokens[7].token, Token::LeftArrow));
+        assert!(matches!(tokens[8].token, Token::AndAnd));
+        assert!(matches!(tokens[9].token, Token::OrOr));
+        assert!(matches!(tokens[10].token, Token::FatArrow));
+        assert!(matches!(tokens[11].token, Token::Arrow));
+        assert!(matches!(tokens[12].token, Token::PipeApply));
+        assert!(matches!(tokens[13].token, Token::Compose));
+        assert!(matches!(tokens[14].token, Token::LiftCompose));
+        assert!(matches!(tokens[15].token, Token::PipeMap));
+        assert!(matches!(tokens[16].token, Token::PipeBind));
+        assert!(matches!(tokens[17].token, Token::KleisliCompose));
     }
 
     #[test]

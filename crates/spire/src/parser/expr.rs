@@ -13,6 +13,25 @@ enum FuncLiteralBodyKind {
 }
 
 impl Parser<'_> {
+    fn function_on_path(span: Span) -> Ast {
+        Ast::Path(
+            span.clone(),
+            AstPath {
+                span,
+                segments: vec!["Function".into(), "on".into()],
+            },
+        )
+    }
+
+    fn is_function_on_path(path: &AstPath) -> bool {
+        matches!(path.segments.as_slice(), [module, name] if module == "Function" && name == "on")
+    }
+
+    fn is_low_precedence_on_target(kind: &FuncLiteralBodyKind) -> bool {
+        matches!(kind, FuncLiteralBodyKind::Name(name) if name == "on")
+            || matches!(kind, FuncLiteralBodyKind::Path(path) if Self::is_function_on_path(path))
+    }
+
     fn parse_func_literal_body(body: &str, span: Span) -> Result<FuncLiteralBodyKind, ParseError> {
         if Self::expr_binop_from_func_literal(body).is_some()
             || Self::logical_binop_from_func_literal(body).is_some()
@@ -65,7 +84,33 @@ impl Parser<'_> {
     }
 
     pub(super) fn parse_expr(&mut self) -> Result<Ast, ParseError> {
-        self.parse_flow_expr()
+        self.parse_on_expr()
+    }
+
+    pub(super) fn parse_on_expr(&mut self) -> Result<Ast, ParseError> {
+        let mut left = self.parse_flow_expr()?;
+
+        loop {
+            let Some(Token::FuncLiteral(body)) = self.peek_n(0).cloned() else {
+                break;
+            };
+            let func_span = self.peek_span();
+            let func_kind = Self::parse_func_literal_body(&body, func_span.clone())?;
+            if !Self::is_low_precedence_on_target(&func_kind) {
+                break;
+            }
+
+            self.advance();
+            let right = self.parse_flow_expr()?;
+            let func = match func_kind {
+                FuncLiteralBodyKind::Name(_) => Self::function_on_path(func_span),
+                FuncLiteralBodyKind::Path(path) => Ast::Path(path.span.clone(), path),
+                FuncLiteralBodyKind::Operator(_) => unreachable!("validated low-precedence target"),
+            };
+            left = Self::lower_func_literal_call(left, func, right);
+        }
+
+        Ok(left)
     }
 
     pub(super) fn parse_flow_expr(&mut self) -> Result<Ast, ParseError> {
@@ -265,6 +310,7 @@ impl Parser<'_> {
                 if Self::logical_binop_from_func_literal(op_body).is_some())
                 || matches!(func_kind, FuncLiteralBodyKind::Name(ref name)
                     if Self::logical_func_literal_name(name))
+                || Self::is_low_precedence_on_target(&func_kind)
             {
                 break;
             }
@@ -575,6 +621,7 @@ impl Parser<'_> {
 
             // Capture / placeholder capture: &foo, &foo(&1), &1
             Token::Amp => self.parse_capture_expr(sp),
+            Token::Tilde => self.parse_facet_capture_expr(sp),
 
             Token::FuncLiteral(_) => Err(ParseError::syntax(
                 "FuncLiteral must appear in infix position",
@@ -696,7 +743,7 @@ impl Parser<'_> {
             Ast::App(_, func, args) => (*func, args),
             _ => {
                 return Err(ParseError::syntax(
-                    "@timeout(...) can only be applied to Task calls",
+                    "@timeout(...) can only be applied to runtime-managed calls",
                     Span {
                         start,
                         end: end_span.end,
@@ -709,18 +756,18 @@ impl Parser<'_> {
             Ast::Path(_, path) if path.segments.as_slice() == ["Task", "call"] => {
                 "__task_call_timeout"
             }
-            Ast::Path(_, path) if path.segments.as_slice() == ["Task", "async"] => {
-                "__task_async_timeout"
+            Ast::Path(_, path) if path.segments.as_slice() == ["Task", "await"] => {
+                "__task_await_timeout"
             }
-            Ast::Path(_, path) if path.segments.as_slice() == ["Task", "launch"] => {
-                "__task_launch_timeout"
+            Ast::Path(_, path) if path.segments.as_slice() == ["Workers", "submit"] => {
+                "__workers_submit_timeout"
             }
-            Ast::Path(_, path) if path.segments.as_slice() == ["Task", "cast"] => {
-                "__task_cast_timeout"
+            Ast::Path(_, path) if path.segments.as_slice() == ["Workers", "broadcast"] => {
+                "__workers_broadcast_timeout"
             }
             _ => {
                 return Err(ParseError::syntax(
-                    "@timeout(...) is only supported on Task::call/async/launch/cast",
+                    "@timeout(...) is only supported on Task::call/await and Workers::submit/broadcast",
                     Span {
                         start,
                         end: end_span.end,
@@ -729,9 +776,19 @@ impl Parser<'_> {
             }
         };
 
-        if args.len() != 1 || matches!(args[0], RecordLitArg::Named(_, _)) {
+        let expected_arity = match hidden_name {
+            "__task_call_timeout" | "__task_await_timeout" => 1,
+            "__workers_submit_timeout" | "__workers_broadcast_timeout" => 2,
+            _ => 1,
+        };
+
+        if args.len() != expected_arity
+            || args
+                .iter()
+                .any(|arg| matches!(arg, RecordLitArg::Named(_, _)))
+        {
             return Err(ParseError::syntax(
-                "@timeout(...) expects a Task call with exactly one positional body argument",
+                "@timeout(...) expects positional arguments for the runtime-managed call",
                 Span {
                     start,
                     end: end_span.end,
@@ -812,6 +869,32 @@ impl Parser<'_> {
                 let args = self.parse_call_args()?;
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RParen)?;
+                if path_name == "Facet::bulk_update" {
+                    if args.len() != 1
+                        || args
+                            .iter()
+                            .any(|arg| matches!(arg, RecordLitArg::Named(_, _)))
+                    {
+                        return Err(ParseError::syntax(
+                            "Facet::bulk_update expects exactly 1 positional argument before its update block",
+                            Span {
+                                start: name_span.start,
+                                end: end_span.end,
+                            },
+                        ));
+                    }
+                    if !matches!(self.peek(), Token::LBrace) {
+                        return Err(ParseError::syntax(
+                            "Facet::bulk_update requires a special update block",
+                            self.peek_span(),
+                        ));
+                    }
+                    let source = match args.into_iter().next().expect("checked arg length") {
+                        RecordLitArg::Positional(expr) => expr,
+                        RecordLitArg::Named(_, _) => unreachable!("validated positional args"),
+                    };
+                    return self.parse_bulk_update_expr(name_span.start, source);
+                }
                 if path_last_is_uppercase {
                     self.reject_constructor_trailing_block()?;
                     let span = Span {
@@ -1475,7 +1558,7 @@ impl Parser<'_> {
                 },
             ));
         }
-        let (target, mut end) = match self.peek().clone() {
+        let (mut target, mut end) = match self.peek().clone() {
             Token::Ident(_) => {
                 let (name, name_span) = self.expect_ident()?;
                 let mut path_segments = vec![name.clone()];
@@ -1536,6 +1619,31 @@ impl Parser<'_> {
             }
         };
 
+        while matches!(self.peek(), Token::Dot) {
+            self.advance();
+            let (field, field_span) = match self.peek().clone() {
+                Token::Ident(field) => {
+                    let span = self.advance().span.clone();
+                    (field, span)
+                }
+                _ => {
+                    return Err(ParseError::syntax(
+                        "Expected field name after '.'. Tuple access uses ._0, ._1, ...",
+                        self.peek_span(),
+                    ));
+                }
+            };
+            end = field_span.end;
+            target = Ast::FieldAccess(
+                Span {
+                    start: target.span().start,
+                    end,
+                },
+                Box::new(target),
+                field,
+            );
+        }
+
         let mut parsed_args = Vec::new();
         if matches!(self.peek(), Token::LParen) {
             self.advance();
@@ -1579,6 +1687,18 @@ impl Parser<'_> {
             },
             Box::new(target),
             args,
+        ))
+    }
+
+    pub(super) fn parse_facet_capture_expr(&mut self, sp: Span) -> Result<Ast, ParseError> {
+        self.expect(&Token::Tilde)?;
+        let inner = self.parse_postfix()?;
+        Ok(Ast::FacetCapture(
+            Span {
+                start: sp.start,
+                end: inner.span().end,
+            },
+            Box::new(inner),
         ))
     }
 
@@ -1640,6 +1760,143 @@ impl Parser<'_> {
             Box::new(scrutinee),
             arms,
         ))
+    }
+
+    fn parse_bulk_update_expr(&mut self, start: usize, source: Ast) -> Result<Ast, ParseError> {
+        self.skip_newlines();
+        let lbrace = self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+
+        if matches!(self.peek(), Token::RBrace) {
+            return Err(ParseError::syntax(
+                "Facet::bulk_update must contain at least one entry",
+                lbrace,
+            ));
+        }
+
+        let mut entries = Vec::new();
+        while !matches!(self.peek(), Token::RBrace) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete("}", self.peek_span()));
+            }
+            self.skip_newlines();
+            if matches!(self.peek(), Token::RBrace) {
+                break;
+            }
+            entries.push(self.parse_bulk_update_entry()?);
+            self.skip_newlines();
+        }
+
+        let end = self.expect(&Token::RBrace)?;
+        Ok(Ast::BulkUpdate(
+            Span {
+                start,
+                end: end.end,
+            },
+            Box::new(source),
+            entries,
+        ))
+    }
+
+    fn parse_bulk_update_entry(&mut self) -> Result<BulkUpdateEntry, ParseError> {
+        let start = self.peek_span().start;
+        let path = self.parse_bulk_update_path()?;
+        self.skip_newlines();
+
+        if matches!(self.peek(), Token::LBrace) {
+            let lbrace = self.advance().span.clone();
+            self.skip_newlines();
+            if matches!(self.peek(), Token::RBrace) {
+                return Err(ParseError::syntax(
+                    "Bulk update nested path must contain at least one entry",
+                    lbrace,
+                ));
+            }
+
+            let mut entries = Vec::new();
+            while !matches!(self.peek(), Token::RBrace) {
+                if matches!(self.peek(), Token::Eof) {
+                    return Err(ParseError::incomplete("}", self.peek_span()));
+                }
+                self.skip_newlines();
+                if matches!(self.peek(), Token::RBrace) {
+                    break;
+                }
+                entries.push(self.parse_bulk_update_entry()?);
+                self.skip_newlines();
+            }
+            let end = self.expect(&Token::RBrace)?;
+            return Ok(BulkUpdateEntry {
+                span: Span {
+                    start,
+                    end: end.end,
+                },
+                path,
+                kind: BulkUpdateEntryKind::Nested(entries),
+            });
+        }
+
+        self.expect(&Token::LeftArrow)?;
+        let kind = self.parse_bulk_update_leaf()?;
+        let end = match &kind {
+            BulkUpdateEntryKind::Set(expr)
+            | BulkUpdateEntryKind::Over(expr)
+            | BulkUpdateEntryKind::OverResult(expr) => expr.span().end,
+            BulkUpdateEntryKind::Nested(_) => unreachable!("leaf classifier cannot produce nested"),
+        };
+        Ok(BulkUpdateEntry {
+            span: Span { start, end },
+            path,
+            kind,
+        })
+    }
+
+    fn parse_bulk_update_path(&mut self) -> Result<Vec<Symbol>, ParseError> {
+        let (first, _) = self.expect_ident()?;
+        let mut segments = vec![first];
+        while matches!(self.peek(), Token::Dot) {
+            self.advance();
+            let (segment, _) = self.expect_ident()?;
+            segments.push(segment);
+        }
+        Ok(segments)
+    }
+
+    fn parse_bulk_update_leaf(&mut self) -> Result<BulkUpdateEntryKind, ParseError> {
+        self.skip_newlines();
+        let (name, name_span) = self.expect_ident()?;
+        if !matches!(name.as_str(), "set" | "over" | "over_result") {
+            return Err(ParseError::syntax(
+                "Bulk update entries must use set(value), over(update_fun), or over_result(update_fun)",
+                name_span,
+            ));
+        }
+        self.skip_newlines();
+        self.expect(&Token::LParen)?;
+        let args = self.with_trailing_call_block_disabled(|parser| parser.parse_call_args())?;
+        let call_end = self.expect(&Token::RParen)?;
+
+        if args.len() != 1 || args.iter().any(|arg| matches!(arg, RecordLitArg::Named(_, _))) {
+            return Err(ParseError::syntax(
+                "Bulk update entries must use set(value), over(update_fun), or over_result(update_fun)",
+                Span {
+                    start: name_span.start,
+                    end: call_end.end,
+                },
+            ));
+        }
+
+        let inner = match args.into_iter().next().expect("checked arg length") {
+            RecordLitArg::Positional(expr) => expr,
+            RecordLitArg::Named(_, _) => unreachable!("validated positional args"),
+        };
+
+        match name.as_str() {
+            "set" => Ok(BulkUpdateEntryKind::Set(inner)),
+            "over" => Ok(BulkUpdateEntryKind::Over(inner)),
+            "over_result" => Ok(BulkUpdateEntryKind::OverResult(inner)),
+            _ => unreachable!("validated bulk update whitelist"),
+        }
     }
 
     /// `cond { cond1 => expr1, ..., True => exprN }`

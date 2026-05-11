@@ -19,13 +19,29 @@ pub enum Visibility {
 }
 
 /// Attributes attached to a declaration.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DeclAttrs {
     pub doc: Option<String>,
     pub auto_import: bool,
     pub hidden: bool,
+    pub readonly: bool,
     pub visibility: Visibility,
-    pub process_state_owner: Option<Symbol>,
+    pub user_importable: bool,
+    pub user_callable: bool,
+}
+
+impl Default for DeclAttrs {
+    fn default() -> Self {
+        Self {
+            doc: None,
+            auto_import: false,
+            hidden: false,
+            readonly: false,
+            visibility: Visibility::Public,
+            user_importable: true,
+            user_callable: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +66,7 @@ pub struct ProcessSpec {
     pub process_name: Symbol,
     pub kind: ProcessKind,
     pub instance: ProcessInstance,
+    pub state: AstTy,
     pub boot: bool,
     pub registry: bool,
     pub lazy: bool,
@@ -93,9 +110,21 @@ pub struct ProcessRuntimeHandlerSpec {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SupervisorInitSpec {
+    #[serde(default)]
+    pub entries: Vec<SupervisorInitEntry>,
+    #[serde(default)]
     pub singletons: Vec<SupervisorInitSingleton>,
     #[serde(default)]
     pub supervisors: Vec<SupervisorInitOverride>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SupervisorInitEntry {
+    pub process_name: Symbol,
+    pub timeout_ms: Option<u64>,
+    pub handlers: Vec<SupervisorInitHandlerOverride>,
+    pub overrides: SupervisorPolicyOverride,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -267,6 +296,21 @@ pub struct AstMatchArm {
     pub body: Ast,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct BulkUpdateEntry {
+    pub span: Span,
+    pub path: Vec<Symbol>,
+    pub kind: BulkUpdateEntryKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BulkUpdateEntryKind {
+    Set(Ast),
+    Over(Ast),
+    OverResult(Ast),
+    Nested(Vec<BulkUpdateEntry>),
+}
+
 // ── Struct / Record fields ──
 
 #[derive(Debug, Clone, PartialEq)]
@@ -275,6 +319,7 @@ pub struct StructField {
     pub ty: AstTy,
     pub span: Span,
     pub visibility: Visibility,
+    pub readonly: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -283,6 +328,7 @@ pub struct RecordField {
     pub ty: AstTy,
     pub span: Span,
     pub visibility: Visibility,
+    pub readonly: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -462,8 +508,14 @@ pub enum Ast {
     /// Match expression
     Match(Span, Box<Ast>, Vec<AstMatchArm>),
 
+    /// `Facet::bulk_update(source) { ... }` special form.
+    BulkUpdate(Span, Box<Ast>, Vec<BulkUpdateEntry>),
+
     /// Field access: `user.name`, `pair._0`
     FieldAccess(Span, Box<Ast>, Symbol),
+
+    /// Compiler-managed Facet shorthand capture: `~source.path`
+    FacetCapture(Span, Box<Ast>),
 
     /// Struct definition: `defstruct User { name: String, age: Int }`
     StructDef(Span, Symbol, Vec<StructField>, DeclAttrs),

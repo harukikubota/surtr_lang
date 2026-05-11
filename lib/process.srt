@@ -8,6 +8,7 @@ defstruct SupervisorStatus {
   max_restarts: Int,
   max_seconds: Int,
   allow_adopt: Boolean,
+  shutdown_timeout: Option<Duration>,
 }
 
 impl SupervisorStatus {
@@ -26,6 +27,7 @@ impl SupervisorStatus {
     max_restarts: Int,
     max_seconds: Int,
     allow_adopt: Boolean,
+    shutdown_timeout: Option<Duration>,
   ) -> Self {
     SupervisorStatus {
       supervisor: supervisor,
@@ -34,7 +36,55 @@ impl SupervisorStatus {
       max_restarts: max_restarts,
       max_seconds: max_seconds,
       allow_adopt: allow_adopt,
+      shutdown_timeout: shutdown_timeout,
     }
+  }
+}
+
+@doc """
+Worker-set scale mode.
+
+`Fix(size)` is the v1 executable strategy. The runtime keeps exactly `size`
+members alive under the owning supervisor.
+"""
+defenum WorkerScale {
+  Fix(Int),
+}
+
+@doc """
+Runtime worker-set strategy.
+
+This is ordinary Surtr data and can be built in any module. The runtime only
+receives it through the generated `Sup::workers(...)` owner helper, which the
+compiler restricts to Singleton GenServer `@init`.
+"""
+defstruct WorkerStrategy {
+  init: Int,
+  min: Int,
+  max: Int,
+  scale: WorkerScale,
+}
+
+impl WorkerStrategy {
+  @doc """
+  Create a worker strategy value.
+  """
+  def new(init: Int, min: Int, max: Int, scale: WorkerScale) -> Self {
+    WorkerStrategy { init: init, min: min, max: max, scale: scale }
+  }
+
+  @doc """
+  Create a fixed-size worker strategy.
+  """
+  def fixed(size: Int) -> Self {
+    WorkerStrategy::new(size, size, size, WorkerScale::Fix(size))
+  }
+
+  @doc """
+  Default worker strategy: one fixed worker.
+  """
+  def default() -> Self {
+    WorkerStrategy::fixed(1)
   }
 }
 
@@ -56,32 +106,82 @@ defgenserver ImageWorkerPool {
 
   @init
   def init() -> Result<Workers<ImageWorker>> {
-    ImageWorkerSupervisor::workers(ImageWorker::init("./input"), 4)
+    ImageWorkerSupervisor::workers(ImageWorker::init("./input"), WorkerStrategy::fixed(4))
   }
 }
 
 State contains the worker set:
 
-@process_state(ImageWorkerPool)
 defstruct ImageWorkerPoolState {
   workers: Workers<ImageWorker>,
   accepted: Int,
+}
+
+impl ImageWorkerPoolState {
+  def new(workers: Workers<ImageWorker>, accepted: Int) -> Self {
+    ImageWorkerPoolState { workers: workers, accepted: accepted }
+  }
 }
 
 defgenserver ImageWorkerPool {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: ImageWorkerPoolState
   }
 
   @init
   def init() -> Result<ImageWorkerPoolState> {
-    workers =? ImageWorkerSupervisor::workers(ImageWorker::init("./input"), 4)
-    Ok(ImageWorkerPoolState { workers: workers, accepted: 0 })
+    workers =? ImageWorkerSupervisor::workers(
+      ImageWorker::init("./input"),
+      WorkerStrategy::fixed(4),
+    )
+    Ok(ImageWorkerPoolState::new(workers, 0))
   }
 }
 """
 @builtin type Workers<$Worker>
+
+@doc """
+Runtime-managed task handle for an async task body.
+
+`TaskHandle<$T>` is returned by `Task::async(...)` and consumed by
+`Task::await(...)`.
+"""
+@builtin type TaskHandle<$T>
+
+@doc """
+Return contract for worker `@call` handlers.
+"""
+defenum CallResult<$Reply, $State> {
+  Reply($Reply, $State),
+  ReplyLater($State, (-> Result<$Reply>)),
+  Stop(StopReply<$Reply>),
+}
+
+@doc """
+Stop payload for worker `@call` handlers.
+"""
+defenum StopReply<$Reply> {
+  Normal($Reply),
+  Error(Error),
+}
+
+@doc """
+Return contract for worker `@cast` handlers.
+"""
+defenum CastResult<$State> {
+  Next($State),
+  Stop(StopReason),
+}
+
+@doc """
+Stop payload for worker `@cast` handlers.
+"""
+defenum StopReason {
+  Normal,
+  Error(Error),
+}
 
 @doc """
 Runtime-managed reservation for one worker from a `Workers<$Worker>` handle.
@@ -98,7 +198,7 @@ defgenserver ImageWorkerPool {
 
   @init
   def init() -> Result<Workers<ImageWorker>> {
-    ImageWorkerSupervisor::workers(ImageWorker::init("./input"), 4)
+    ImageWorkerSupervisor::workers(ImageWorker::init("./input"), WorkerStrategy::fixed(4))
   }
 
   def assign_reserved(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Unit> {
@@ -126,9 +226,9 @@ impl Workers {
     }
 
     @cast
-    def submit(workers: Workers<ImageWorker>, job: ImageJob) -> Result<Workers<ImageWorker>> {
+    def submit(workers: Workers<ImageWorker>, job: ImageJob) -> Result<CastResult<Workers<ImageWorker>>> {
       _ =? Workers::submit(workers, ImageWorker::assign(job))
-      Ok(workers)
+      Ok(CastResult::Next(workers))
     }
   }
   """
@@ -152,9 +252,9 @@ impl Workers {
     @call
     def current_states(
       workers: Workers<ImageWorker>
-    ) -> Result<(List<Result<ImageWorkerStateView>>, Workers<ImageWorker>)> {
+    ) -> Result<CallResult<List<Result<ImageWorkerStateView>>, Workers<ImageWorker>>> {
       views = Workers::broadcast(workers, ImageWorker::current_state())
-      Ok((views, workers))
+      Ok(CallResult::Reply(views, workers))
     }
   }
   """
@@ -197,8 +297,8 @@ impl Workers {
     }
 
     @call
-    def size(workers: Workers<ImageWorker>) -> Result<(Int, Workers<ImageWorker>)> {
-      Ok((Workers::size(workers), workers))
+    def size(workers: Workers<ImageWorker>) -> Result<CallResult<Int, Workers<ImageWorker>>> {
+      Ok(CallResult::Reply(Workers::size(workers), workers))
     }
   }
   """
@@ -261,7 +361,7 @@ defmod Supervisor {
 
     @init
     def init() -> Result<Workers<ImageWorker>> {
-      ImageWorkerSupervisor::workers(ImageWorker::init("./input"), 4)
+      ImageWorkerSupervisor::workers(ImageWorker::init("./input"), WorkerStrategy::fixed(4))
     }
   }
   """
@@ -269,7 +369,7 @@ defmod Supervisor {
   @builtin def workers(
     supervisor: $Supervisor,
     worker_init: (-> Result<$State>),
-    size: Int,
+    strategy: WorkerStrategy,
   ) -> Result<Workers<$Process>>
 }
 
@@ -279,6 +379,9 @@ defmod GenServer {
 
   Ordinary code cannot call this function directly. Use the generated owner
   helper from `defgenserver` instead.
+
+  REPL note: `GenServer::pid` is the hidden lower doc source, while
+  `QueueServer::pid()` is the public singleton surface.
 
   ## Regular Surface
   xldr(1)> QueueServer::pid()
@@ -362,6 +465,9 @@ defmod Agent {
 
   Ordinary code cannot call this function directly. Use the generated owner
   helper from `defagent` instead.
+
+  REPL note: `Agent::pid` is the hidden lower doc source, while
+  `Counter::pid()` is the public singleton surface.
 
   ## Regular Surface
   xldr(1)> Counter::pid()
@@ -503,13 +609,23 @@ defmod Task {
   @builtin def call(body: (-> Result<$A>)) -> Result<$A>
 
   @doc """
-  Run a zero-argument task body through the task runtime and return its Result.
+  Start a zero-argument task body through the task runtime and return a handle.
 
   ## REPL
   xldr(1)> Task::async({|| Ok("ready")})
+  <task>
+  """
+  @builtin def async(body: (-> Result<$A>)) -> TaskHandle<$A>
+
+  @doc """
+  Await a task handle and return its Result.
+
+  ## REPL
+  xldr(1)> task = Task::async({|| Ok("ready")})
+  xldr(2)> Task::await(task)
   Ok("ready")
   """
-  @builtin def async(body: (-> Result<$A>)) -> Result<$A>
+  @builtin def await(task: TaskHandle<$A>) -> Result<$A>
 
   @doc """
   Start a detached task body and return Ok(()) after the runtime accepts it.

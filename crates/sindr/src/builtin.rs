@@ -242,27 +242,37 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "view",
         arity: 2,
-        sig_str: "(Lens<$S, $A>, $S) -> Result<$A>",
+        sig_str: "(Facet<$S, $A>, $S) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "preview",
+        arity: 2,
+        sig_str: "(Facet<$S, $A>, $S) -> Result<$A>",
     },
     BuiltinMeta {
         name: "compose",
         arity: 2,
-        sig_str: "(Lens<$S, $A>, Lens<$A, $B>) -> Lens<$S, $B>",
+        sig_str: "(Facet<$S, $A>, Facet<$A, $B>) -> Facet<$S, $B>",
+    },
+    BuiltinMeta {
+        name: "__facet_replace",
+        arity: 3,
+        sig_str: "(Facet<$S, $A>, $S, $A) -> $S",
     },
     BuiltinMeta {
         name: "set",
         arity: 3,
-        sig_str: "(Lens<$S, $A>, $S, $A) -> Result<$S>",
+        sig_str: "(Facet<$S, $A>, $S, $A) -> Result<$S>",
     },
     BuiltinMeta {
         name: "over",
         arity: 3,
-        sig_str: "(Lens<$S, $A>, $S, ($A -> Result<$A>)) -> Result<$S>",
+        sig_str: "(Facet<$S, $A>, $S, ($A -> Result<$A>)) -> Result<$S>",
     },
     BuiltinMeta {
         name: "over_result",
         arity: 3,
-        sig_str: "(Lens<$S, Result<$A>>, $S, (Result<$A> -> Result<Result<$A>>)) -> Result<$S>",
+        sig_str: "(Facet<$S, Result<$A>>, $S, (Result<$A> -> Result<Result<$A>>)) -> Result<$S>",
     },
     BuiltinMeta {
         name: "__test_capture_stdout",
@@ -335,7 +345,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Regex, String) -> List<String>",
     },
     BuiltinMeta {
-        name: "replace",
+        name: "__regex_replace",
         arity: 3,
         sig_str: "(Regex, String, String) -> String",
     },
@@ -383,6 +393,136 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         name: "io_get_line",
         arity: 1,
         sig_str: "(String) -> Result<String, InputError>",
+    },
+    BuiltinMeta {
+        name: "file_read",
+        arity: 1,
+        sig_str: "(String) -> Result<String>",
+    },
+    BuiltinMeta {
+        name: "file_write",
+        arity: 2,
+        sig_str: "(String, String) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "file_append",
+        arity: 2,
+        sig_str: "(String, String) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "file_exists",
+        arity: 1,
+        sig_str: "(String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "file_delete",
+        arity: 1,
+        sig_str: "(String) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "file_with_open",
+        arity: 3,
+        sig_str: "(String, FileMode, (FileHandle -> Result<$A>)) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "file_read_chunk",
+        arity: 2,
+        sig_str: "(FileHandle, Int) -> Result<String>",
+    },
+    BuiltinMeta {
+        name: "file_write_chunk",
+        arity: 2,
+        sig_str: "(FileHandle, String) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "file_flush",
+        arity: 1,
+        sig_str: "(FileHandle) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "filesystem_path",
+        arity: 1,
+        sig_str: "(String) -> Result<FilePath, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_join",
+        arity: 2,
+        sig_str: "(FilePath, String) -> Result<FilePath, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_parent",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<FilePath, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_name",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<String, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_extension",
+        arity: 1,
+        sig_str: "(FilePath) -> Option<String>",
+    },
+    BuiltinMeta {
+        name: "filesystem_exists",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<Boolean, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_stat",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<FileSystemEntry, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_ls",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<FileSystemSnapshot, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_tree_depth",
+        arity: 2,
+        sig_str: "(FilePath, Int) -> Result<FileSystemSnapshot, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_mkdir",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<Unit, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_mkdir_all",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<Unit, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_rm",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<Unit, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_mv",
+        arity: 2,
+        sig_str: "(FilePath, FilePath) -> Result<Unit, Error>",
+    },
+    BuiltinMeta {
+        name: "filesystem_cp",
+        arity: 2,
+        sig_str: "(FilePath, FilePath) -> Result<Unit, Error>",
+    },
+    BuiltinMeta {
+        name: "shell_pwd",
+        arity: 0,
+        sig_str: "() -> Result<FilePath, Error>",
+    },
+    BuiltinMeta {
+        name: "shell_cd",
+        arity: 1,
+        sig_str: "(FilePath) -> Result<Unit, Error>",
+    },
+    BuiltinMeta {
+        name: "shell_exec",
+        arity: 2,
+        sig_str: "(String, List<String>) -> Result<CommandResult, Error>",
     },
     BuiltinMeta {
         name: "seed",
@@ -468,7 +608,7 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "__supervisor_workers",
         arity: 3,
-        sig_str: "($Supervisor, (-> Result<$State>), Int) -> Result<Workers<$Process>>",
+        sig_str: "($Supervisor, (-> Result<$State>), WorkerStrategy) -> Result<Workers<$Process>>",
     },
     BuiltinMeta {
         name: "__process_state",
@@ -479,6 +619,41 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         name: "__process_store",
         arity: 2,
         sig_str: "(PID<$Process>, $State) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__genserver_call_reply",
+        arity: 3,
+        sig_str: "(PID<$Process>, $State, $Reply) -> Result<$Reply>",
+    },
+    BuiltinMeta {
+        name: "__genserver_call_reply_later",
+        arity: 3,
+        sig_str: "(PID<$Process>, $State, (-> Result<$Reply>)) -> Result<$Reply>",
+    },
+    BuiltinMeta {
+        name: "__genserver_call_stop_normal",
+        arity: 2,
+        sig_str: "(PID<$Process>, $Reply) -> Result<$Reply>",
+    },
+    BuiltinMeta {
+        name: "__genserver_call_stop_error",
+        arity: 2,
+        sig_str: "(PID<$Process>, Error) -> Result<$Reply>",
+    },
+    BuiltinMeta {
+        name: "__genserver_cast_next",
+        arity: 2,
+        sig_str: "(PID<$Process>, $State) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__genserver_cast_stop_normal",
+        arity: 1,
+        sig_str: "(PID<$Process>) -> Result<Unit>",
+    },
+    BuiltinMeta {
+        name: "__genserver_cast_stop_error",
+        arity: 2,
+        sig_str: "(PID<$Process>, Error) -> Result<Unit>",
     },
     BuiltinMeta {
         name: "__process_self",
@@ -523,7 +698,12 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "__task_async",
         arity: 1,
-        sig_str: "((-> Result<$A>)) -> Result<$A>",
+        sig_str: "((-> Result<$A>)) -> TaskHandle<$A>",
+    },
+    BuiltinMeta {
+        name: "__task_await",
+        arity: 1,
+        sig_str: "(TaskHandle<$A>) -> Result<$A>",
     },
     BuiltinMeta {
         name: "__task_launch",
@@ -543,7 +723,12 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "__task_async_timeout",
         arity: 2,
-        sig_str: "(Duration, (-> Result<$A>)) -> Result<$A>",
+        sig_str: "(Duration, (-> Result<$A>)) -> TaskHandle<$A>",
+    },
+    BuiltinMeta {
+        name: "__task_await_timeout",
+        arity: 2,
+        sig_str: "(Duration, TaskHandle<$A>) -> Result<$A>",
     },
     BuiltinMeta {
         name: "__task_launch_timeout",
@@ -561,9 +746,19 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Workers<$Worker>, (PID<$Worker> -> Result<Unit>)) -> Result<Unit>",
     },
     BuiltinMeta {
+        name: "__workers_submit_timeout",
+        arity: 3,
+        sig_str: "(Duration, Workers<$Worker>, (PID<$Worker> -> Result<Unit>)) -> Result<Unit>",
+    },
+    BuiltinMeta {
         name: "__workers_broadcast",
         arity: 2,
         sig_str: "(Workers<$Worker>, (PID<$Worker> -> Result<$A>)) -> List<Result<$A>>",
+    },
+    BuiltinMeta {
+        name: "__workers_broadcast_timeout",
+        arity: 3,
+        sig_str: "(Duration, Workers<$Worker>, (PID<$Worker> -> Result<$A>)) -> List<Result<$A>>",
     },
     BuiltinMeta {
         name: "__workers_reserve",
@@ -690,6 +885,46 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 2,
         sig_str: "(String, String) -> String",
     },
+    BuiltinMeta {
+        name: "json_parse",
+        arity: 1,
+        sig_str: "(String) -> Result<JsonValue, JsonParseError>",
+    },
+    BuiltinMeta {
+        name: "json_stringify",
+        arity: 1,
+        sig_str: "(JsonValue) -> Result<String, JsonEncodeError>",
+    },
+    BuiltinMeta {
+        name: "string_len",
+        arity: 1,
+        sig_str: "(String) -> Int",
+    },
+    BuiltinMeta {
+        name: "string_contains",
+        arity: 2,
+        sig_str: "(String, String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "string_starts_with",
+        arity: 2,
+        sig_str: "(String, String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "string_ends_with",
+        arity: 2,
+        sig_str: "(String, String) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "string_split",
+        arity: 2,
+        sig_str: "(String, String) -> List<String>",
+    },
+    BuiltinMeta {
+        name: "string_replace",
+        arity: 3,
+        sig_str: "(String, String, String) -> String",
+    },
 ];
 
 /// Canonical builtin type declarations accepted from standard definition sources.
@@ -730,6 +965,10 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         params: &["$Result"],
     },
     BuiltinTypeMeta {
+        name: TypeName::BulkUpdateEntries.as_str(),
+        params: &["$State"],
+    },
+    BuiltinTypeMeta {
         name: TypeName::Error.as_str(),
         params: &[],
     },
@@ -747,6 +986,10 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
     },
     BuiltinTypeMeta {
         name: TypeName::RandomGenerator.as_str(),
+        params: &[],
+    },
+    BuiltinTypeMeta {
+        name: TypeName::FileHandle.as_str(),
         params: &[],
     },
     BuiltinTypeMeta {
@@ -782,7 +1025,7 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         params: &[],
     },
     BuiltinTypeMeta {
-        name: TypeName::Lens.as_str(),
+        name: TypeName::Facet.as_str(),
         params: &["$S", "$A"],
     },
     BuiltinTypeMeta {
@@ -793,6 +1036,10 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         name: TypeName::WorkerLease.as_str(),
         params: &["$Worker"],
     },
+    BuiltinTypeMeta {
+        name: TypeName::TaskHandle.as_str(),
+        params: &["$T"],
+    },
 ];
 
 pub fn builtin_meta_by_name(name: &str) -> Option<&'static BuiltinMeta> {
@@ -800,9 +1047,45 @@ pub fn builtin_meta_by_name(name: &str) -> Option<&'static BuiltinMeta> {
 }
 
 pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&str>) -> &'a str {
+    let qualified_name = qualified_name.map(|name| name.strip_prefix("Global::").unwrap_or(name));
     match qualified_name {
         Some("IO::get") => "io_get",
         Some("IO::get_line") => "io_get_line",
+        Some("File::read") => "file_read",
+        Some("File::write") => "file_write",
+        Some("File::append") => "file_append",
+        Some("File::exists") => "file_exists",
+        Some("File::delete") => "file_delete",
+        Some("File::with_open") => "file_with_open",
+        Some("File::read_chunk") => "file_read_chunk",
+        Some("File::write_chunk") => "file_write_chunk",
+        Some("File::flush") => "file_flush",
+        Some("FS::path") => "filesystem_path",
+        Some("FS::join") => "filesystem_join",
+        Some("FS::parent") => "filesystem_parent",
+        Some("FS::name") => "filesystem_name",
+        Some("FS::extension") => "filesystem_extension",
+        Some("FS::exists") => "filesystem_exists",
+        Some("FS::stat") => "filesystem_stat",
+        Some("FS::ls") => "filesystem_ls",
+        Some("FS::tree_depth") => "filesystem_tree_depth",
+        Some("FS::mkdir") => "filesystem_mkdir",
+        Some("FS::mkdir_all") => "filesystem_mkdir_all",
+        Some("FS::rm") => "filesystem_rm",
+        Some("FS::mv") => "filesystem_mv",
+        Some("FS::cp") => "filesystem_cp",
+        Some("Shell::pwd") => "shell_pwd",
+        Some("Shell::cd") => "shell_cd",
+        Some("Shell::exec") => "shell_exec",
+        Some("String::len") => "string_len",
+        Some("String::contains") => "string_contains",
+        Some("String::starts_with") => "string_starts_with",
+        Some("String::ends_with") => "string_ends_with",
+        Some("String::split") => "string_split",
+        Some("String::replace") => "string_replace",
+        Some("Json::parse") => "json_parse",
+        Some("Json::stringify") => "json_stringify",
+        Some("Facet::replace") => "__facet_replace",
         Some("Process::self") => "__process_self",
         Some("Process::sleep") => "__process_sleep",
         Some("Agent::pid") => "__process_pid",
@@ -831,8 +1114,10 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
         Some("Workers::size") => "__workers_size",
         Some("Task::call") => "__task_call",
         Some("Task::async") => "__task_async",
+        Some("Task::await") => "__task_await",
         Some("Task::launch") => "__task_launch",
         Some("Task::cast") => "__task_cast",
+        Some("Regex::replace") => "__regex_replace",
         _ => declared_name,
     }
 }
@@ -870,7 +1155,8 @@ pub fn builtin_uid(builtin_id: u16) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name, builtin_uid, BUILTIN_METAS,
+        builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name, builtin_meta_for_decl,
+        builtin_runtime_name, builtin_uid, BUILTIN_METAS,
     };
 
     #[test]
@@ -886,6 +1172,122 @@ mod tests {
     fn builtin_lookup_returns_none_for_unknown_values() {
         assert!(builtin_meta_by_id(u16::MAX).is_none());
         assert!(builtin_meta_by_name("__missing__").is_none());
+    }
+
+    #[test]
+    fn qualified_replace_builtins_resolve_to_distinct_runtime_names() {
+        assert_eq!(
+            builtin_runtime_name("replace", Some("String::replace")),
+            "string_replace"
+        );
+        assert_eq!(
+            builtin_runtime_name("replace", Some("Facet::replace")),
+            "__facet_replace"
+        );
+        assert_eq!(
+            builtin_runtime_name("replace", Some("Regex::replace")),
+            "__regex_replace"
+        );
+        assert_eq!(
+            builtin_meta_for_decl("replace", Some("Facet::replace"))
+                .expect("facet replace builtin metadata")
+                .sig_str,
+            "(Facet<$S, $A>, $S, $A) -> $S"
+        );
+        assert_eq!(
+            builtin_meta_for_decl("replace", Some("Regex::replace"))
+                .expect("regex replace builtin metadata")
+                .sig_str,
+            "(Regex, String, String) -> String"
+        );
+    }
+
+    #[test]
+    fn qualified_string_split_builtin_resolves_to_runtime_name() {
+        assert_eq!(
+            builtin_runtime_name("split", Some("String::split")),
+            "string_split"
+        );
+        assert_eq!(
+            builtin_meta_for_decl("split", Some("String::split"))
+                .expect("string split builtin metadata")
+                .sig_str,
+            "(String, String) -> List<String>"
+        );
+    }
+
+    #[test]
+    fn qualified_json_builtins_resolve_to_runtime_names() {
+        assert_eq!(
+            builtin_runtime_name("parse", Some("Json::parse")),
+            "json_parse"
+        );
+        assert_eq!(
+            builtin_runtime_name("stringify", Some("Json::stringify")),
+            "json_stringify"
+        );
+    }
+
+    #[test]
+    fn qualified_string_len_builtin_resolves_to_runtime_name() {
+        assert_eq!(
+            builtin_runtime_name("len", Some("String::len")),
+            "string_len"
+        );
+        assert_eq!(
+            builtin_meta_for_decl("len", Some("String::len"))
+                .expect("string len builtin metadata")
+                .sig_str,
+            "(String) -> Int"
+        );
+    }
+
+    #[test]
+    fn qualified_string_predicate_builtins_resolve_to_runtime_names() {
+        let cases = [
+            ("contains", "String::contains", "string_contains"),
+            ("starts_with", "String::starts_with", "string_starts_with"),
+            ("ends_with", "String::ends_with", "string_ends_with"),
+        ];
+
+        for (declared, qualified, runtime) in cases {
+            assert_eq!(builtin_runtime_name(declared, Some(qualified)), runtime);
+            assert!(
+                builtin_meta_for_decl(declared, Some(qualified)).is_some(),
+                "{qualified} should have builtin metadata"
+            );
+        }
+    }
+
+    #[test]
+    fn qualified_filesystem_and_shell_builtins_resolve_to_runtime_names() {
+        let cases = [
+            ("path", "FS::path", "filesystem_path"),
+            ("join", "FS::join", "filesystem_join"),
+            ("parent", "FS::parent", "filesystem_parent"),
+            ("name", "FS::name", "filesystem_name"),
+            ("extension", "FS::extension", "filesystem_extension"),
+            ("exists", "FS::exists", "filesystem_exists"),
+            ("stat", "FS::stat", "filesystem_stat"),
+            ("ls", "FS::ls", "filesystem_ls"),
+            ("tree_depth", "FS::tree_depth", "filesystem_tree_depth"),
+            ("mkdir", "FS::mkdir", "filesystem_mkdir"),
+            ("mkdir_all", "FS::mkdir_all", "filesystem_mkdir_all"),
+            ("rm", "FS::rm", "filesystem_rm"),
+            ("mv", "FS::mv", "filesystem_mv"),
+            ("cp", "FS::cp", "filesystem_cp"),
+            ("pwd", "Shell::pwd", "shell_pwd"),
+            ("cd", "Shell::cd", "shell_cd"),
+            ("exec", "Shell::exec", "shell_exec"),
+        ];
+
+        for (declared, qualified, runtime) in cases {
+            assert_eq!(builtin_runtime_name(declared, Some(qualified)), runtime);
+            assert!(
+                builtin_meta_for_decl(declared, Some(qualified)).is_some(),
+                "{qualified} should have builtin metadata"
+            );
+        }
     }
 
     #[test]

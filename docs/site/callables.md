@@ -16,6 +16,8 @@ Surtr では、見た目が似ていても次の 4 つは役割が違います�
 - `add(1, 2)` は call、`&add` は capture です
 - backtick FuncLiteral は中置 call の書き換えであり、関数値にはなりません
 - compose 系演算子 `>>`, `>*`, `>=>` は call ではなく関数値を要求します
+- unqualified infix `` `on` `` は常に `Function::on` を呼びます
+- closure / capture 内の trait helper は、期待 callable 型がある場所まで解決を遅延できます
 
 ## 関数コール
 
@@ -200,6 +202,9 @@ left `concat` right
 
 - ``left `name` right`` は `name(left, right)`
 - ``left `+` right`` は通常の演算子と同じ
+- unqualified ``left `on` right`` は `Function::on(left, right)` として扱います
+- ``left `Function::on` right`` も同じ意味で、flow 演算子より低優先度です
+- ``left `Other::on` right`` は通常どおり `Other::on(left, right)` です
 
 FuncLiteral は値にならないので、単独では置けません。
 

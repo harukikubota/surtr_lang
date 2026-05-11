@@ -1,0 +1,50 @@
+defrecord Profile(name: String)
+defrecord User(name: String, age: Int, profile: Profile)
+defrecord UserLookup(user: Result<User>)
+defrecord UserNickname(nickname: Result<String>)
+
+def identity_user(user: User) -> User {
+  user
+}
+
+def load_user(seed: String) -> Result<User> {
+  Ok(User(seed, 40, Profile(seed ++ "-profile")))
+}
+
+def load_lookup(seed: String) -> Result<UserLookup> {
+  Ok(UserLookup(Ok(User(seed, 50, Profile(seed ++ "-profile")))))
+}
+
+users = [
+  User("bob", 30, Profile("b")),
+  User("alice", 20, Profile("a")),
+]
+first_user = User("bob", 30, Profile("b"))
+
+names = users |*> _.name
+profile_names = users |*> _.profile.name
+ages = users |*> _.age
+explicit_ages = users |*> &User.age
+pairs = [(2, "b"), (1, "a")]
+firsts = pairs |*> _._0
+sorted = List::sort_by(users, &compare `Function::on` _.age)
+pipe_name = first_user |> _.name
+profile_name_reader = &identity_user >> _.profile.name
+composed_name = profile_name_reader(first_user)
+profile_name_loader = &load_user >* _.profile.name
+lifted_name =? profile_name_loader("carol")
+lookup_loader = &load_lookup >=> _.user
+kleisli_user =? lookup_loader("dave")
+bind_nickname =? Ok(UserNickname(Ok("eve"))) |>= _.nickname
+
+print(inspect(names))
+print(inspect(profile_names))
+print(inspect(ages))
+print(inspect(explicit_ages))
+print(inspect(firsts))
+print(inspect(sorted))
+print(pipe_name)
+print(composed_name)
+print(lifted_name)
+print(inspect(kleisli_user))
+print(inspect(bind_nickname))

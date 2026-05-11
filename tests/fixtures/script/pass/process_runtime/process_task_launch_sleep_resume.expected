@@ -1,0 +1,5 @@
+tick 1
+main:before
+tick 2
+tick 3
+main:after

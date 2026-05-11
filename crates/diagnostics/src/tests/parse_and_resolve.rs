@@ -219,6 +219,21 @@ fn parse_error_spec_labels_where_clause_staging() {
 }
 
 #[test]
+fn parse_error_spec_guides_missing_process_state_with_concrete_meta_entry() {
+    let source = "defgenserver Ticker {\n  meta {\n    instance: Singleton\n  }\n}";
+    let spec = parse_error_spec(source, "meta requires state", Span { start: 24, end: 30 });
+
+    assert_eq!(
+        spec.help.as_deref(),
+        Some("Add a state declaration inside `meta { ... }`. For example:\n\n  state: Int")
+    );
+    assert!(spec
+        .labels
+        .iter()
+        .any(|label| label.message == "process declaration"));
+}
+
+#[test]
 fn resolve_error_spec_labels_undefined_name() {
     let spec = resolve_error_spec(
         "unknown(1)",

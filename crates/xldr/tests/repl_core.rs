@@ -1,10 +1,71 @@
 use std::fs;
+use std::time::Duration;
 
 use xldr::repl::logic::{ReplOutput, ReplResult};
 use xldr::ReplEngine;
 
 fn engine() -> ReplEngine {
     ReplEngine::new().expect("REPL engine should bootstrap")
+}
+
+fn process_engine() -> ReplEngine {
+    ReplEngine::from_script_source(
+        "process_preload.srt",
+        r#"
+defagent MyWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @get
+  def read(state: Int) -> Result<Int> { Ok(state) }
+
+  @set
+  def write(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+
+  def hidden_value(_state: Int) -> Result<Int> { Ok(99) }
+}
+
+defgenserver MyServer {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(1) }
+
+  @call
+  def size(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+
+  def hidden_size(_state: Int) -> Result<Int> { Ok(0) }
+}
+
+defsupervisor MySup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+
+supervisor_init {
+  MyServer {}
+  MySup {}
+}
+"#,
+    )
+    .expect("process preload should bootstrap")
 }
 
 fn rendered(result: &ReplResult) -> &[String] {
@@ -39,6 +100,16 @@ fn rendered(result: &ReplResult) -> &[String] {
 
 fn rendered_text(result: &ReplResult) -> String {
     rendered(result).join("\n")
+}
+
+fn visible_text(result: &ReplResult) -> String {
+    result
+        .stdout
+        .iter()
+        .chain(rendered(result).iter())
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn doc_text(result: &ReplResult) -> String {
@@ -173,6 +244,69 @@ fn core_rolls_back_failed_input_without_losing_previous_state() {
 }
 
 #[test]
+fn core_rebinding_uses_latest_value_and_grows_snapshot_locals() {
+    let mut engine = engine();
+    let dir = tempfile_dir("xldr-repl-core-rebind");
+    let first_path = dir.join("after-first.eldr");
+    let path = dir.join("session.eldr");
+
+    let first = engine.handle_line("x = 1");
+    assert!(rendered_text(&first).contains("x: Int = 1"));
+    assert_eq!(engine.prompt(), "xldr(2)> ");
+
+    let first_save = engine.handle_line(&format!(":save {}", first_path.display()));
+    assert!(rendered_text(&first_save).contains("saved to"));
+    let first_bytes = fs::read(&first_path).expect("first .eldr should exist");
+    let first_snapshot =
+        sindr::ir::Bytecode::decode(&first_bytes).expect("first .eldr should decode");
+
+    let second = engine.handle_line("x = 2");
+    assert!(rendered_text(&second).contains("x: Int = 2"));
+
+    let value = engine.handle_line("x");
+    assert!(rendered_text(&value).contains("2"));
+
+    let recalled = engine.handle_line(":v 1");
+    assert!(
+        rendered_text(&recalled).contains("1"),
+        "kind={} text={}",
+        output_kind(&recalled.output),
+        rendered_text(&recalled)
+    );
+
+    let save = engine.handle_line(&format!(":save {}", path.display()));
+    assert!(rendered_text(&save).contains("saved to"));
+    let bytes = fs::read(&path).expect("saved .eldr should exist");
+    let snapshot = sindr::ir::Bytecode::decode(&bytes).expect("saved .eldr should decode");
+    assert!(
+        snapshot.num_locals >= first_snapshot.num_locals + 1,
+        "num_locals did not grow: before={}, after={}",
+        first_snapshot.num_locals,
+        snapshot.num_locals
+    );
+}
+
+#[test]
+fn core_rejects_top_level_def_capturing_session_value_binding() {
+    let mut engine = engine();
+
+    let bind = engine.handle_line("x = 1");
+    assert!(rendered_text(&bind).contains("x: Int = 1"));
+
+    let def = engine.handle_line("def f() -> Int { x }");
+    assert!(!def.should_exit);
+    assert!(
+        matches!(def.output, ReplOutput::EvalError { .. }),
+        "kind={} text={}",
+        output_kind(&def.output),
+        rendered_text(&def)
+    );
+    assert!(
+        rendered_text(&def).contains("Top-level definition `f` cannot reference value binding `x`")
+    );
+}
+
+#[test]
 fn core_rejects_repl_forbidden_top_level_declarations() {
     let mut engine = engine();
 
@@ -180,6 +314,51 @@ fn core_rejects_repl_forbidden_top_level_declarations() {
     assert!(!err.should_exit);
     assert!(matches!(err.output, ReplOutput::EvalError { .. }));
     assert!(rendered_text(&err).contains("This top-level declaration is not allowed in REPL"));
+}
+
+#[test]
+fn core_routes_print_side_effects_into_repl_result_lines() {
+    let mut engine = engine();
+
+    let result = engine.handle_line(r#"print("hello from repl")"#);
+
+    assert!(!result.should_exit);
+    assert_eq!(visible_text(&result), "hello from repl");
+    assert!(result.stderr.is_empty());
+}
+
+#[test]
+fn core_routes_eprint_side_effects_into_repl_stderr_lines() {
+    let mut engine = engine();
+
+    let result = engine.handle_line("eprint(NoneError)");
+
+    assert!(!result.should_exit);
+    assert_eq!(rendered_text(&result), "");
+    assert!(
+        result.stderr.iter().any(|line| line.contains("REPL:")),
+        "{:?}",
+        result.stderr
+    );
+}
+
+#[test]
+fn core_routes_background_prints_into_pump_result_lines() {
+    let mut engine = engine();
+
+    let launched = engine.handle_line(
+        r#"_ =? Task::launch({||
+  _ =? Process::sleep(5ms)
+  print("hello from background")
+  Ok(())
+})"#,
+    );
+    assert!(!launched.should_exit, "{}", rendered_text(&launched));
+
+    let background = engine.advance_background_time(Duration::from_millis(5));
+
+    assert!(!background.should_exit);
+    assert_eq!(visible_text(&background), "hello from background");
 }
 
 #[test]
@@ -274,6 +453,27 @@ defmod Math {
 }
 
 #[test]
+fn core_from_project_module_stages_exposes_compiled_project_definitions() {
+    let mut engine = ReplEngine::from_project_module_stages(&[vec![xldr::ModuleInput {
+        file_name: "math.srt".into(),
+        source: r#"
+defmod Math {
+  def add2(x: Int, y: Int) -> Int { x + y }
+}
+"#
+        .into(),
+        module_path: "Math".into(),
+    }]])
+    .expect("project preload should bootstrap");
+
+    let imported = engine.handle_line("import Math::add2");
+    assert!(rendered_text(&imported).contains("Imported Math::add2"));
+
+    let call = engine.handle_line("add2(20, 22)");
+    assert!(rendered_text(&call).contains("42"));
+}
+
+#[test]
 fn core_from_module_source_rejects_include_directive() {
     let result = ReplEngine::from_module_source(
         "math.srt",
@@ -321,16 +521,16 @@ fn core_commands_do_not_require_a_cli_process() {
 }
 
 #[test]
-fn core_reuses_deferred_tuple_lens_bindings_between_inputs() {
+fn core_reuses_deferred_tuple_facet_bindings_between_inputs() {
     let mut engine = engine();
 
-    let lens = engine.handle_line("a = Tuple._1");
-    assert!(rendered_text(&lens).contains("a: Lens<_, _> = Tuple._1"));
+    let facet = engine.handle_line("a = Tuple._1");
+    assert!(rendered_text(&facet).contains("a: Facet<_, _> = Tuple._1"));
 
     let pair = engine.handle_line("pair = (\"alice\", 2)");
     assert!(rendered_text(&pair).contains("pair: (String, Int) = (\"alice\", 2)"));
 
-    let value = engine.handle_line("Lens::view(a, pair)");
+    let value = engine.handle_line("Facet::view(a, pair)");
     assert!(rendered_text(&value).contains("2"));
 }
 
@@ -348,44 +548,58 @@ fn core_static_impl_methods_keep_runtime_arity_in_sync() {
 }
 
 #[test]
-fn core_renders_top_level_lens_compose_expressions_without_codegen_leak() {
+fn core_renders_top_level_facet_compose_expressions_without_codegen_leak() {
     let mut engine = engine();
 
-    let tuple_lens = engine.handle_line("a = Tuple._1");
-    assert!(rendered_text(&tuple_lens).contains("a: Lens<_, _> = Tuple._1"));
+    let tuple_facet = engine.handle_line("a = Tuple._1");
+    assert!(rendered_text(&tuple_facet).contains("a: Facet<_, _> = Tuple._1"));
 
-    let enum_lens = engine.handle_line("ep = IntBase.Oct");
-    assert!(rendered_text(&enum_lens).contains("ep: Lens<IntBase, Unit> = IntBase.Oct"));
+    let enum_facet = engine.handle_line("ep = IntBase.Oct");
+    assert!(rendered_text(&enum_facet).contains("ep: Facet<IntBase, Unit> = IntBase.Oct"));
 
     let slash = engine.handle_line("a / ep");
     let slash = rendered_text(&slash);
-    assert!(slash.contains("Lens<_, _> = Tuple._1.Oct"), "{slash}");
+    assert!(slash.contains("Facet<_, _> = Tuple._1.Oct"), "{slash}");
 
-    let helper = engine.handle_line("Lens::compose(a, ep)");
+    let helper = engine.handle_line("Facet::compose(a, ep)");
     let helper = rendered_text(&helper);
-    assert!(helper.contains("Lens<_, _> = Tuple._1.Oct"), "{helper}");
+    assert!(helper.contains("Facet<_, _> = Tuple._1.Oct"), "{helper}");
 }
 
 #[test]
-fn core_lens_command_reports_segments_and_stop_points() {
+fn core_facet_command_reports_kind_apis_segments_and_stop_points() {
     let mut engine = engine();
 
     let binding = engine.handle_line("path = Tuple._0");
-    assert!(rendered_text(&binding).contains("path: Lens<_, _> = Tuple._0"));
+    assert!(rendered_text(&binding).contains("path: Facet<_, _> = Tuple._0"));
 
-    let lens_info = engine.handle_line(":lens path");
-    assert!(matches!(lens_info.output, ReplOutput::StyledDoc { .. }));
-    let lens_info = rendered_text(&lens_info);
-    assert!(lens_info.contains("## LensPath"), "{lens_info}");
-    assert!(lens_info.contains("type: Lens<_, _>"), "{lens_info}");
-    assert!(lens_info.contains("view result: _"), "{lens_info}");
-    assert!(lens_info.contains("full path: Tuple._0"), "{lens_info}");
-    assert!(lens_info.contains("## Flow"), "{lens_info}");
-    assert!(lens_info.contains("hop 1: Tuple._0"), "{lens_info}");
-    assert!(lens_info.contains("relation: _ -> _"), "{lens_info}");
+    let facet_info = engine.handle_line(":facet path");
+    assert!(matches!(facet_info.output, ReplOutput::StyledDoc { .. }));
+    let facet_info = rendered_text(&facet_info);
+    assert!(facet_info.contains("## FacetPath"), "{facet_info}");
+    assert!(facet_info.contains("type: Facet<_, _>"), "{facet_info}");
+    assert!(facet_info.contains("kind: structural"), "{facet_info}");
+    assert!(facet_info.contains("view API: Facet::view"), "{facet_info}");
+    assert!(
+        facet_info.contains("preview API: unavailable"),
+        "{facet_info}"
+    );
+    assert!(facet_info.contains("view result: _"), "{facet_info}");
+    assert!(facet_info.contains("full path: Tuple._0"), "{facet_info}");
+    assert!(facet_info.contains("## Flow"), "{facet_info}");
+    assert!(facet_info.contains("hop 1: Tuple._0"), "{facet_info}");
+    assert!(facet_info.contains("relation: _ -> _"), "{facet_info}");
 
-    let fallible = engine.handle_line(":lens BitWidth.Any");
+    let legacy = engine.handle_line(":lens path");
+    assert!(rendered_text(&legacy).contains("Unknown REPL command: :lens"));
+
+    let fallible = engine.handle_line(":facet BitWidth.Any");
     let fallible = rendered_text(&fallible);
+    assert!(fallible.contains("kind: variant"), "{fallible}");
+    assert!(
+        fallible.contains("preview API: Facet::preview"),
+        "{fallible}"
+    );
     assert!(
         fallible.contains("view result: Result<Int, Error>"),
         "{fallible}"
@@ -406,7 +620,7 @@ fn core_doc_reports_match_and_cond_from_bootstrap_surface() {
     let match_doc = doc_text(&match_doc);
     assert!(match_doc.contains("Bootstrap::match"), "{match_doc}");
     assert!(
-        match_doc.contains("match value { pattern => expr, ... } -> $B"),
+        match_doc.contains("@intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B"),
         "{match_doc}"
     );
     assert!(match_doc.contains("Match special form."), "{match_doc}");
@@ -427,7 +641,7 @@ fn core_doc_reports_match_and_cond_from_bootstrap_surface() {
     let cond_doc = doc_text(&cond_doc);
     assert!(cond_doc.contains("Bootstrap::cond"), "{cond_doc}");
     assert!(
-        cond_doc.contains("cond { cond1 => expr1, ..., True => exprN } -> $A"),
+        cond_doc.contains("@intrinsic def cond(clauses: CondClauses<$A>) -> $A"),
         "{cond_doc}"
     );
     assert!(cond_doc.contains("Cond special form."), "{cond_doc}");
@@ -529,7 +743,10 @@ fn core_type_command_looks_up_visible_bindings_only() {
     for invalid in [":type if", ":type String::is_empty()"] {
         let result = engine.handle_line(invalid);
         let text = rendered_text(&result);
-        assert!(text.contains("Usage: :type <binding>"), "{text}");
+        assert!(
+            text.contains("Usage: :type <binding|singleton-owner> or :type $<binding>"),
+            "{text}"
+        );
     }
 }
 
@@ -578,12 +795,19 @@ fn core_help_and_error_commands_return_structured_command_output() {
     assert!(help_text.contains("REPL commands:"));
     assert!(help_text.contains(":save <path.eldr>"));
     assert!(help_text.contains(":info <query>"));
+    assert!(help_text.contains(":vars"));
+    assert!(help_text.contains(":history [selector]"));
+    assert!(help_text.contains(":reload [all|defs]"));
+    assert!(help_text.contains(":clear"));
 
     let sig_help = engine.handle_line(":h sig");
     assert!(rendered_text(&sig_help).contains("Usage: :sig <function|query>"));
 
     let info_help = engine.handle_line(":help info");
     assert!(rendered_text(&info_help).contains("Usage: :info <query>"));
+
+    let history_help = engine.handle_line(":help history");
+    assert!(rendered_text(&history_help).contains("Usage: :history [selector]"));
 
     let error_default = engine.handle_line(":error");
     assert!(rendered_text(&error_default).contains("error display mode: full"));
@@ -662,6 +886,96 @@ fn core_value_recall_uses_engine_history_and_prompt_index() {
     let recalled = engine.handle_line(":v 1");
     assert!(rendered_text(&recalled).contains("5"));
     assert_eq!(engine.prompt(), "xldr(3)> ");
+}
+
+#[test]
+fn core_session_listing_commands_render_current_state() {
+    let mut engine = ReplEngine::from_preload_sources(
+        Some((
+            "math.srt",
+            r#"
+defmod Math {
+  def add2(x: Int, y: Int) -> Int { x + y }
+}
+"#,
+        )),
+        Some((
+            "preload.srt",
+            r#"
+def greet() -> String { "hi" }
+import Math::add2
+"#,
+        )),
+    )
+    .expect("preload should bootstrap");
+
+    let _ = engine.handle_line("answer = add2(1, 2)");
+    let _ = engine.handle_line("def local_twice(x: Int) -> Int { add2(x, x) }");
+
+    let vars = rendered_text(&engine.handle_line(":vars"));
+    assert!(vars.contains("line"), "{vars}");
+    assert!(vars.contains("answer"), "{vars}");
+    assert!(vars.contains("Int"), "{vars}");
+
+    let imported = rendered_text(&engine.handle_line(":imported"));
+    assert!(imported.contains("auto"), "{imported}");
+    assert!(imported.contains("Math::add2"), "{imported}");
+
+    let defs = rendered_text(&engine.handle_line(":defs"));
+    assert!(defs.contains("greet"), "{defs}");
+    assert!(defs.contains("local_twice"), "{defs}");
+
+    let history = rendered_text(&engine.handle_line(":history"));
+    assert!(history.contains("line"), "{history}");
+    assert!(history.contains("answer = add2(1, 2)"), "{history}");
+    assert!(history.contains("def local_twice"), "{history}");
+
+    let selected = rendered_text(&engine.handle_line(":history 1, 2"));
+    assert!(selected.contains("1:"), "{selected}");
+    assert!(selected.contains("2:"), "{selected}");
+}
+
+#[test]
+fn core_reload_and_clear_commands_preserve_only_requested_state() {
+    let mut engine = engine();
+
+    let _ = engine.handle_line("seed = 41");
+    let _ = engine.handle_line("def keep() -> Int { 42 }");
+
+    let cleared = rendered_text(&engine.handle_line(":clear"));
+    assert!(
+        cleared.contains("clear") || cleared.contains("Clear") || cleared.contains("not available"),
+        "{cleared}"
+    );
+    let after_clear = rendered_text(&engine.handle_line("seed"));
+    assert!(after_clear.contains("41"), "{after_clear}");
+
+    let reloaded = rendered_text(&engine.handle_line(":reload"));
+    assert!(reloaded.contains("reload"), "{reloaded}");
+
+    let keep_after_reload = rendered_text(&engine.handle_line("keep()"));
+    assert!(keep_after_reload.contains("42"), "{keep_after_reload}");
+
+    let seed_after_reload = rendered_text(&engine.handle_line("seed"));
+    assert!(
+        seed_after_reload.contains("not found")
+            || seed_after_reload.contains("Unknown symbol")
+            || seed_after_reload.contains("Undefined variable"),
+        "{seed_after_reload}"
+    );
+
+    let _ = engine.handle_line("def drop_me() -> Int { 7 }");
+    let reload_defs = rendered_text(&engine.handle_line(":reload defs"));
+    assert!(reload_defs.contains("reload"), "{reload_defs}");
+
+    let dropped = rendered_text(&engine.handle_line("drop_me()"));
+    assert!(
+        dropped.contains("not found")
+            || dropped.contains("Unknown symbol")
+            || dropped.contains("Undefined variable")
+            || dropped.contains("Undefined function"),
+        "{dropped}"
+    );
 }
 
 #[test]
@@ -796,14 +1110,14 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let match_sig = signature_text(&match_sig);
     assert_eq!(
         match_sig.trim(),
-        "match value { pattern => expr, ... } -> $B"
+        "@intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B"
     );
 
     let cond_sig = engine.handle_line(":sig cond");
     let cond_sig = signature_text(&cond_sig);
     assert_eq!(
         cond_sig.trim(),
-        "cond { cond1 => expr1, ..., True => exprN } -> $A"
+        "@intrinsic def cond(clauses: CondClauses<$A>) -> $A"
     );
 
     let typed_doc = engine.handle_line(":doc gt(Int, Int)");
@@ -989,6 +1303,240 @@ fn core_doc_command_resolves_closure_type_and_callable_bindings() {
 }
 
 #[test]
+fn core_process_doc_and_sig_support_hidden_and_concrete_surfaces() {
+    let mut engine = process_engine();
+
+    let hidden_doc = doc_text(&engine.handle_line(":doc GenServer::spawn"));
+    assert!(hidden_doc.contains("GenServer::spawn"), "{hidden_doc}");
+    assert!(
+        hidden_doc.contains("Compiler-managed lower target for GenServer worker spawn."),
+        "{hidden_doc}"
+    );
+
+    let concrete_doc = doc_text(&engine.handle_line(":doc MySup::status"));
+    assert!(concrete_doc.contains("MySup::status"), "{concrete_doc}");
+    assert!(
+        concrete_doc.contains("Compiler-managed lower target for reading supervisor status."),
+        "{concrete_doc}"
+    );
+    assert!(
+        !concrete_doc.contains("Supervisor::status(supervisor:"),
+        "{concrete_doc}"
+    );
+
+    let hidden_sig = signature_text(&engine.handle_line(":sig Supervisor::status"));
+    assert!(
+        hidden_sig
+            .contains("Supervisor::status(supervisor: $Supervisor) -> Result<SupervisorStatus>"),
+        "{hidden_sig}"
+    );
+
+    let concrete_sig = signature_text(&engine.handle_line(":sig MySup::status"));
+    assert!(
+        concrete_sig.contains("MySup::status() -> Result<SupervisorStatus, Error>"),
+        "{concrete_sig}"
+    );
+
+    let hidden_pid_doc = doc_text(&engine.handle_line(":doc Agent::pid"));
+    assert!(hidden_pid_doc.contains("Agent::pid"), "{hidden_pid_doc}");
+    assert!(
+        hidden_pid_doc.contains("Compiler-managed lower target for Agent singleton PID lookup."),
+        "{hidden_pid_doc}"
+    );
+
+    let concrete_pid_doc = doc_text(&engine.handle_line(":doc MyServer::pid"));
+    assert!(
+        concrete_pid_doc.contains("MyServer::pid"),
+        "{concrete_pid_doc}"
+    );
+    assert!(
+        concrete_pid_doc
+            .contains("Compiler-managed lower target for GenServer singleton PID lookup."),
+        "{concrete_pid_doc}"
+    );
+    assert!(
+        !concrete_pid_doc.contains("GenServer::pid(owner:"),
+        "{concrete_pid_doc}"
+    );
+
+    let hidden_pid_sig = signature_text(&engine.handle_line(":sig GenServer::pid"));
+    assert!(
+        hidden_pid_sig
+            .contains("GenServer::pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>"),
+        "{hidden_pid_sig}"
+    );
+
+    let concrete_pid_sig = signature_text(&engine.handle_line(":sig MyServer::pid"));
+    assert!(
+        concrete_pid_sig.contains("MyServer::pid() -> PID<MyServer>"),
+        "{concrete_pid_sig}"
+    );
+}
+
+#[test]
+fn core_process_public_surface_respects_annotations() {
+    let mut engine = process_engine();
+
+    let public_sig = signature_text(&engine.handle_line(":sig MyServer::size"));
+    assert!(
+        public_sig.contains("MyServer::size() -> Result<Int, Error>"),
+        "{public_sig}"
+    );
+
+    let public_doc = doc_text(&engine.handle_line(":doc MyWorker::read"));
+    assert!(public_doc.contains("MyWorker::read"), "{public_doc}");
+
+    let private_sig = rendered_text(&engine.handle_line(":sig MyServer::hidden_size"));
+    assert!(
+        private_sig
+            .contains("`MyServer::hidden_size` is private and cannot be queried with `:sig`."),
+        "{private_sig}"
+    );
+    assert!(
+        private_sig.contains("Only public declarations are visible to REPL signature lookup."),
+        "{private_sig}"
+    );
+
+    let private_doc = rendered_text(&engine.handle_line(":doc MyWorker::hidden_value"));
+    assert!(
+        private_doc
+            .contains("`MyWorker::hidden_value` is private and cannot be queried with `:doc`."),
+        "{private_doc}"
+    );
+    assert!(
+        private_doc.contains("Add `@doc` only to public declarations."),
+        "{private_doc}"
+    );
+
+    let annotation_query = rendered_text(&engine.handle_line(":sig @call"));
+    assert!(
+        annotation_query.contains("No signature found"),
+        "{annotation_query}"
+    );
+}
+
+#[test]
+fn core_process_sig_owner_summary_includes_init_pid_and_messages() {
+    let mut engine = process_engine();
+
+    let owner_sig = signature_text(&engine.handle_line(":sig MyServer"));
+    assert!(owner_sig.contains("GenServer MyServer"), "{owner_sig}");
+    assert!(
+        owner_sig.contains("@init init() -> Result<PID<MyServer>>"),
+        "{owner_sig}"
+    );
+    assert!(
+        owner_sig.contains("@pid pid() -> PID<MyServer>"),
+        "{owner_sig}"
+    );
+    assert!(
+        owner_sig.contains("@call size(pid: PID<MyServer>) -> Result<Int, Error>"),
+        "{owner_sig}"
+    );
+}
+
+#[test]
+fn core_process_sig_worker_owner_summary_includes_init_and_messages() {
+    let mut engine = process_engine();
+
+    let owner_sig = signature_text(&engine.handle_line(":sig MyWorker"));
+    assert!(owner_sig.contains("Agent MyWorker"), "{owner_sig}");
+    assert!(
+        owner_sig.contains("@init init(seed: Int) -> Result<PID<MyWorker>, Error>"),
+        "{owner_sig}"
+    );
+    assert!(
+        owner_sig.contains("@get read(pid: PID<MyWorker>) -> Result<Int, Error>"),
+        "{owner_sig}"
+    );
+    assert!(
+        owner_sig.contains("@set write(pid: PID<MyWorker>, next: Int) -> Result<Unit, Error>"),
+        "{owner_sig}"
+    );
+    assert!(!owner_sig.contains("@pid"), "{owner_sig}");
+}
+
+#[test]
+fn core_process_sig_pid_binding_lists_available_messages() {
+    let mut engine = process_engine();
+
+    let bind = engine.handle_line("server = MyServer::pid()");
+    assert!(rendered_text(&bind).contains("server: PID<MyServer>"));
+
+    let pid_sig = signature_text(&engine.handle_line(":sig $server"));
+    assert!(pid_sig.contains("PID<MyServer> messaging"), "{pid_sig}");
+    assert!(
+        pid_sig.contains("@call size(pid: PID<MyServer>) -> Result<Int, Error>"),
+        "{pid_sig}"
+    );
+    assert!(!pid_sig.contains("@init"), "{pid_sig}");
+    assert!(!pid_sig.contains("@pid"), "{pid_sig}");
+}
+
+#[test]
+fn core_process_type_and_info_support_singletons_and_worker_pids() {
+    let mut engine = process_engine();
+
+    let singleton_type = rendered_text(&engine.handle_line(":type MyServer"));
+    assert!(
+        singleton_type.contains("type: PID<MyServer>"),
+        "{singleton_type}"
+    );
+    assert!(
+        !singleton_type.contains("<pid>") && !singleton_type.contains("pid:"),
+        "{singleton_type}"
+    );
+
+    let singleton_info = rendered_text(&engine.handle_line(":info MyServer"));
+    assert!(
+        singleton_info.contains("defined: PID<MyServer>"),
+        "{singleton_info}"
+    );
+    assert!(
+        singleton_info.contains("instance: Singleton"),
+        "{singleton_info}"
+    );
+
+    let spawn = engine.handle_line("pid =? MyWorker::init(1)");
+    let spawn_text = rendered_text(&spawn);
+    assert!(spawn_text.contains("pid: PID<MyWorker>"), "{spawn_text}");
+    assert!(!spawn_text.contains("PID<$Process>"), "{spawn_text}");
+
+    let worker_type = rendered_text(&engine.handle_line(":type pid"));
+    assert!(worker_type.contains("type: PID<MyWorker>"), "{worker_type}");
+    assert!(
+        !worker_type.contains("<pid>") && !worker_type.contains("pid: <"),
+        "{worker_type}"
+    );
+
+    let worker_info = rendered_text(&engine.handle_line(":info pid"));
+    assert!(
+        worker_info.contains("defined: PID<MyWorker>"),
+        "{worker_info}"
+    );
+    assert!(worker_info.contains("instance: Worker"), "{worker_info}");
+    assert!(worker_info.contains("runtime kind:"), "{worker_info}");
+    assert!(!worker_info.contains("process:"), "{worker_info}");
+    assert!(!worker_info.contains("<pid>"), "{worker_info}");
+
+    let singleton_pid_binding = rendered_text(&engine.handle_line("server = MyServer::pid()"));
+    assert!(
+        singleton_pid_binding.contains("server: PID<MyServer>"),
+        "{singleton_pid_binding}"
+    );
+
+    let singleton_pid_info = rendered_text(&engine.handle_line(":info server"));
+    assert!(
+        singleton_pid_info.contains("kind: process pid"),
+        "{singleton_pid_info}"
+    );
+    assert!(
+        singleton_pid_info.contains("defined: PID<MyServer>"),
+        "{singleton_pid_info}"
+    );
+}
+
+#[test]
 fn core_sig_expression_queries_support_operator_forms() {
     let mut engine = engine();
 
@@ -1093,7 +1641,7 @@ fn core_sig_typed_call_queries_specialize_polymorphic_returns() {
     let sig = engine.handle_line(":sig id(Int)");
     let sig = signature_text(&sig);
     assert!(
-        sig.contains("defined:\n  Kernel::id(value: $A) -> $A"),
+        sig.contains("defined:\n  Function::id(value: $A) -> $A"),
         "{sig}"
     );
     assert!(sig.contains("specialized:\n  id(Int) -> Int"), "{sig}");
@@ -1170,8 +1718,9 @@ fn core_callable_refs_and_signature_errors_are_ui_independent() {
     let trait_helper = engine.handle_line("&concat");
     assert!(!trait_helper.should_exit);
     assert!(matches!(trait_helper.output, ReplOutput::EvalError { .. }));
-    assert!(rendered_text(&trait_helper)
-        .contains("Trait helper `concat` cannot be referenced directly"));
+    assert!(rendered_text(&trait_helper).contains(
+        "Trait helper `concat` needs expected callable type or same-expression inference evidence"
+    ));
 
     let builtin_call = engine.handle_line("print()");
     assert!(!builtin_call.should_exit);
@@ -1313,11 +1862,11 @@ fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
     assert!(tuple_doc.contains("Tuple._1"), "{tuple_doc}");
     assert!(tuple_doc.contains("pair._1"), "{tuple_doc}");
     assert!(
-        tuple_doc.contains("Lens::view(Tuple._1, pair)"),
+        tuple_doc.contains("Facet::view(Tuple._1, pair)"),
         "{tuple_doc}"
     );
     assert!(
-        tuple_doc.contains("Lens::set(Tuple._1, pair, 3)"),
+        tuple_doc.contains("Facet::set(Tuple._1, pair, 3)"),
         "{tuple_doc}"
     );
 
@@ -1381,7 +1930,7 @@ fn core_doc_typed_call_supports_qualified_inherent_impl_methods() {
 }
 
 #[test]
-fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
+fn core_sig_supports_tuple_field_sugar_and_facet_expression_queries() {
     let mut engine = engine();
 
     let pair = engine.handle_line("pair = (\"alice\", 2)");
@@ -1392,7 +1941,7 @@ fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
     let field_sig = signature_text(&field_sig);
     assert!(field_sig.contains("defined:"), "{field_sig}");
     assert!(
-        field_sig.contains("Lens::view(Tuple._1, pair)"),
+        field_sig.contains("Facet::view(Tuple._1, pair)"),
         "{field_sig}"
     );
     assert!(field_sig.contains("specialized:"), "{field_sig}");
@@ -1401,7 +1950,7 @@ fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
     let view_sig = engine.handle_line(":sig pair._1");
     let view_sig = signature_text(&view_sig);
     assert!(view_sig.contains("defined:"), "{view_sig}");
-    assert!(view_sig.contains("Lens::view("), "{view_sig}");
+    assert!(view_sig.contains("Facet::view("), "{view_sig}");
     assert!(view_sig.contains("specialized:"), "{view_sig}");
     assert!(view_sig.contains("pair._1: Int"), "{view_sig}");
 
@@ -1413,7 +1962,7 @@ fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
     );
 
     let compose_sig =
-        engine.handle_line(":sig Lens::compose(StyledDocSegment.style, StyledDocStyle.bold)");
+        engine.handle_line(":sig Facet::compose(StyledDocSegment.style, StyledDocStyle.bold)");
     let compose_sig = rendered_text(&compose_sig);
     assert!(
         compose_sig.contains("Unsupported command query argument `StyledDocSegment.style`"),
@@ -1421,7 +1970,7 @@ fn core_sig_supports_tuple_field_sugar_and_lens_expression_queries() {
     );
 
     let over_result_sig = engine.handle_line(
-        ":sig Lens::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})",
+        ":sig Facet::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})",
     );
     let over_result_sig = rendered_text(&over_result_sig);
     assert!(

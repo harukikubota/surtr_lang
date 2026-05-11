@@ -1,2 +1,0 @@
-pid =? Counter::spawn()
-print(inspect(Clock::get(pid, "tick")))

@@ -42,7 +42,7 @@ pattern position の `[head, ..tail]` は sequence decomposition として読ま
 - guard があっても、全体として取りこぼしがあると compile error
 - `Boolean`, `Result`, enum では特に exhaustiveness が重要
 
-具体例は `../../tests/spec/control/` と `../../tests/compile_errors/exhaustiveness/` が参考になります。
+具体例は `../../tests/fixtures/script/pass/control/` と `../../tests/fixtures/script/fail/exhaustiveness/` が参考になります。
 
 ## 関連ページ
 

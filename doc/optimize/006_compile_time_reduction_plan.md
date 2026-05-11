@@ -127,7 +127,7 @@ regex = { version = "1.11.1", default-features = false, features = ["std", "unic
 確認:
 
 - `eldr::builtin` の regex unit tests
-- `tests/spec` / `tests/integration` の regex 関連 fixture
+- `tests/fixtures` / `tests/integration` の regex 関連 fixture
 - runtime regex workload がある場合は before / after benchmark を取る
 
 rollback 条件:

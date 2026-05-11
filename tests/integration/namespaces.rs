@@ -6,7 +6,7 @@ use crate::support;
 use xldr::ModuleInput;
 
 fn find_module_spec_case(name: &str) -> crate::common::ModuleSpecFixtureCase {
-    let case_dir = repo_root().join(format!("tests/spec/modules/{name}"));
+    let case_dir = repo_root().join(format!("tests/fixtures/modules/pass/{name}"));
     module_spec_fixtures()
         .into_iter()
         .find(|fixture| fixture.case.case_dir == case_dir)
@@ -14,7 +14,7 @@ fn find_module_spec_case(name: &str) -> crate::common::ModuleSpecFixtureCase {
 }
 
 fn find_module_compile_error_case(name: &str) -> crate::common::ModuleCompileErrorFixtureCase {
-    let case_dir = repo_root().join(format!("tests/compile_errors/modules/{name}"));
+    let case_dir = repo_root().join(format!("tests/fixtures/modules/fail/{name}"));
     module_compile_error_fixtures()
         .into_iter()
         .find(|fixture| fixture.case.case_dir == case_dir)
@@ -118,6 +118,7 @@ fn process_context_out_handler_can_target_stderr() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
     handlers {
       err: OutHandler = StdErr
     }
@@ -149,6 +150,7 @@ fn process_context_out_handler_can_target_file() {
   meta {{
     instance: Singleton
     init_policy: Eager
+    state: Int
     handlers {{
       out: OutHandler = StdOut
     }}
@@ -164,7 +166,7 @@ fn process_context_out_handler_can_target_file() {
 }}
 
 supervisor_init {{
-  singleton Logger {{
+  Logger {{
     handlers {{
       out: FileOutHandler(path: "{}")
     }}

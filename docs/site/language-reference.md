@@ -12,6 +12,11 @@ name: Ty = expr
 name =? expr
 ```
 
+- `expr;` はその式を `Unit` として扱う
+- `;` は改行区切りと同様に扱われ、同じ行で次の式を書ける
+- `=` と `=?` 自体の結果型も `Unit`
+- `Unit` を返す closure が期待される場所では、最後の式に `;` を付ければよい
+
 ### 関数
 
 ```surtr
@@ -365,9 +370,12 @@ value: Int =? parse_int("1")
   `FnCapture(module: M, name: f, signature: sig)` 形式で表示する
 - `Result` と `List` を `|*>`, `|>=`, `>*`, `>=>` で混在させない
 - `|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度・左結合
-- 結合優先度は `Bind < Apply=Compose < Logical < Expr`
+- unqualified infix `` `on` `` と `` `Function::on` `` は flow より低優先度
+- 結合優先度は `Bind < StdOn < Apply=Compose < Logical < Expr`
 - `Expr` クラスの `+`, `-`, `*`, `++` は同列・左結合
 - comparison 系 (`==`, `!=`, `<`, `>`, `<=`, `>=`) は `Logical` クラス
+- ``left `on` right`` は scope に見えている `on` ではなく、常に `Function::on(left, right)` として解釈される
+- ``left `Other::on` right`` はその qualified path を使い、通常の `Expr` クラスに留まる
 
 ## 5. パターン
 
@@ -422,6 +430,7 @@ private field と property access を含む構造体全体の契約は `./struct
 | `ensure` | `($A, ($A -> Boolean), Error) -> Result<$A>` |
 | `and` | `(Boolean, Boolean) -> Boolean` |
 | `or` | `(Boolean, Boolean) -> Boolean` |
+| `on` | `(($B, $B -> $C), ($A -> $B) -> ($A, $A -> $C))` |
 | `eq` | `($A, $A) -> Boolean` |
 | `neq` | `($A, $A) -> Boolean` |
 | `lt` | `($A, $A) -> Boolean` |
@@ -486,7 +495,7 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 現在の標準定義ソース層は次の順序でロードされます。
 
 ```text
-Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Option, Task, Lens, Float, Config, Project, Random, IO] -> ユーザ拡張
+Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Option, Task, Facet, Float, Config, Project, Random, IO] -> ユーザ拡張
 ```
 
 ### auto import

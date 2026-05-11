@@ -43,6 +43,54 @@ score: Int = 10
 ok = True
 ```
 
+### 3.1 セミコロン
+
+Surtr のセミコロン `;` には、単なる文区切り以上の意味があります。
+
+- 行末に付けた式は `Unit` として扱われる
+- 改行 1 つ分の区切りとして扱われる
+- `Unit` を返す closure が求められる場所では、最後に `;` を置くだけで合わせやすい
+
+もっとも基本的な形は「値を返す式を、あえて `Unit` 扱いにする」使い方です。
+
+```surtr
+print("hello");          # この式全体は Unit
+name = "taro";           # `=` 自体も Unit を返す
+```
+
+束縛式 `name = "taro"` 自体が `Unit` を返すので、`Unit` を返す式としてさらに重ねられます。
+
+```surtr
+{
+  name = "taro";
+  print(name);
+}
+```
+
+セミコロンは `InsertNewLine` としても扱われるため、改行しなくても次の式を続けて書けます。
+
+```surtr
+name = "taro"; print(name)
+```
+
+この性質は、`Unit` を返す closure を受け取る API と相性がよいです。  
+最後の式に `;` を付けるだけで、closure 全体を `Unit` 戻り値として読ませられます。
+
+```surtr
+tap("taro", {|name|
+  print(name);
+})
+```
+
+複数式の closure でも同じです。
+
+```surtr
+tap("taro", {|name|
+  label = "user=#{name}";
+  print(label);
+})
+```
+
 `print` は文字列を表示します。数値や複合値を表示するときは、まず `to_string(...)` を通します。
 
 ```surtr
@@ -742,7 +790,7 @@ not_fn = &`Boolean::not`
 現在の Surtr では、標準定義ソースを次の順で先に読み込みます。
 
 ```text
-Bootstrap -> [SpecialTypes, Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> user source
+Bootstrap -> [SpecialTypes, Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Facet, Float] -> user source
 ```
 
 役割の分け方は次のとおりです。

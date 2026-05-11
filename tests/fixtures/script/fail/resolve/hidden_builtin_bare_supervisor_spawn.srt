@@ -1,0 +1,1 @@
+__supervisor_spawn("sup", {|| Ok(1)})

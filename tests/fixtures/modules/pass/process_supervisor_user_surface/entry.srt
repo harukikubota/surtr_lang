@@ -1,0 +1,44 @@
+defsupervisor AppSup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+
+defsupervisor SlowSup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 3
+    max_seconds: 30
+    child_restart_default: Temporary
+    allow_adopt: False
+    shutdown_timeout: 250ms
+  }
+}
+
+defsupervisor OverrideSup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 2
+    max_seconds: 20
+    child_restart_default: Transient
+    allow_adopt: True
+    shutdown_timeout: 100ms
+  }
+}
+
+supervisor_init {
+  AppSup {}
+  SlowSup {}
+  OverrideSup {
+    shutdown_timeout: 750ms
+  }
+}
+
+print(to_string(AppSup::status()))
+print(to_string(SlowSup::status()))
+print(to_string(OverrideSup::status()))
+print(to_string(DynamicSupervisor::status()))

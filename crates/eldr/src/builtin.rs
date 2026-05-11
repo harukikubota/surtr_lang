@@ -1,19 +1,23 @@
 use crate::error::RuntimeError;
 use crate::value::Value;
-use crate::vm::{TaskMode, VM};
+use crate::vm::{TaskMode, VmFileError, VmFileMode, VM};
 use num_bigint::{BigInt, BigUint, Sign};
 use regex::Regex;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
-    Callable, HashMapHandle, ListHandle, Location, RandomGeneratorHandle, RegexCapturesHandle,
-    RegexHandle, RegexMatchHandle, RichError,
+    Callable, FileHandleValue, HashMapHandle, ListHandle, Location, RandomGeneratorHandle,
+    RegexCapturesHandle, RegexHandle, RegexMatchHandle, RichError,
 };
 use std::collections::HashMap;
+use std::fs;
 use std::io::{self, IsTerminal, Read};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::thread;
-use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Function pointer type for built-in implementations.
 pub type BuiltinFn = fn(&mut VM, Vec<Value>) -> Result<Value, RuntimeError>;
@@ -199,23 +203,31 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     },
     BuiltinImpl {
         name: "view",
-        func: builtin_lens_view,
+        func: builtin_facet_view,
+    },
+    BuiltinImpl {
+        name: "preview",
+        func: builtin_facet_preview,
     },
     BuiltinImpl {
         name: "compose",
-        func: builtin_lens_compose,
+        func: builtin_facet_compose,
+    },
+    BuiltinImpl {
+        name: "__facet_replace",
+        func: builtin_facet_replace,
     },
     BuiltinImpl {
         name: "set",
-        func: builtin_lens_set,
+        func: builtin_facet_set,
     },
     BuiltinImpl {
         name: "over",
-        func: builtin_lens_over,
+        func: builtin_facet_over,
     },
     BuiltinImpl {
         name: "over_result",
-        func: builtin_lens_over_result,
+        func: builtin_facet_over_result,
     },
     BuiltinImpl {
         name: "__test_capture_stdout",
@@ -274,7 +286,7 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_regex_split,
     },
     BuiltinImpl {
-        name: "replace",
+        name: "__regex_replace",
         func: builtin_regex_replace,
     },
     BuiltinImpl {
@@ -312,6 +324,110 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "io_get_line",
         func: builtin_io_get_line,
+    },
+    BuiltinImpl {
+        name: "file_read",
+        func: builtin_file_read,
+    },
+    BuiltinImpl {
+        name: "file_write",
+        func: builtin_file_write,
+    },
+    BuiltinImpl {
+        name: "file_append",
+        func: builtin_file_append,
+    },
+    BuiltinImpl {
+        name: "file_exists",
+        func: builtin_file_exists,
+    },
+    BuiltinImpl {
+        name: "file_delete",
+        func: builtin_file_delete,
+    },
+    BuiltinImpl {
+        name: "file_with_open",
+        func: builtin_file_with_open,
+    },
+    BuiltinImpl {
+        name: "file_read_chunk",
+        func: builtin_file_read_chunk,
+    },
+    BuiltinImpl {
+        name: "file_write_chunk",
+        func: builtin_file_write_chunk,
+    },
+    BuiltinImpl {
+        name: "file_flush",
+        func: builtin_file_flush,
+    },
+    BuiltinImpl {
+        name: "filesystem_path",
+        func: builtin_filesystem_path,
+    },
+    BuiltinImpl {
+        name: "filesystem_join",
+        func: builtin_filesystem_join,
+    },
+    BuiltinImpl {
+        name: "filesystem_parent",
+        func: builtin_filesystem_parent,
+    },
+    BuiltinImpl {
+        name: "filesystem_name",
+        func: builtin_filesystem_name,
+    },
+    BuiltinImpl {
+        name: "filesystem_extension",
+        func: builtin_filesystem_extension,
+    },
+    BuiltinImpl {
+        name: "filesystem_exists",
+        func: builtin_filesystem_exists,
+    },
+    BuiltinImpl {
+        name: "filesystem_stat",
+        func: builtin_filesystem_stat,
+    },
+    BuiltinImpl {
+        name: "filesystem_ls",
+        func: builtin_filesystem_ls,
+    },
+    BuiltinImpl {
+        name: "filesystem_tree_depth",
+        func: builtin_filesystem_tree_depth,
+    },
+    BuiltinImpl {
+        name: "filesystem_mkdir",
+        func: builtin_filesystem_mkdir,
+    },
+    BuiltinImpl {
+        name: "filesystem_mkdir_all",
+        func: builtin_filesystem_mkdir_all,
+    },
+    BuiltinImpl {
+        name: "filesystem_rm",
+        func: builtin_filesystem_rm,
+    },
+    BuiltinImpl {
+        name: "filesystem_mv",
+        func: builtin_filesystem_mv,
+    },
+    BuiltinImpl {
+        name: "filesystem_cp",
+        func: builtin_filesystem_cp,
+    },
+    BuiltinImpl {
+        name: "shell_pwd",
+        func: builtin_shell_pwd,
+    },
+    BuiltinImpl {
+        name: "shell_cd",
+        func: builtin_shell_cd,
+    },
+    BuiltinImpl {
+        name: "shell_exec",
+        func: builtin_shell_exec,
     },
     BuiltinImpl {
         name: "seed",
@@ -390,6 +506,34 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_process_store,
     },
     BuiltinImpl {
+        name: "__genserver_call_reply",
+        func: builtin_genserver_call_reply,
+    },
+    BuiltinImpl {
+        name: "__genserver_call_reply_later",
+        func: builtin_genserver_call_reply_later,
+    },
+    BuiltinImpl {
+        name: "__genserver_call_stop_normal",
+        func: builtin_genserver_call_stop_normal,
+    },
+    BuiltinImpl {
+        name: "__genserver_call_stop_error",
+        func: builtin_genserver_call_stop_error,
+    },
+    BuiltinImpl {
+        name: "__genserver_cast_next",
+        func: builtin_genserver_cast_next,
+    },
+    BuiltinImpl {
+        name: "__genserver_cast_stop_normal",
+        func: builtin_genserver_cast_stop_normal,
+    },
+    BuiltinImpl {
+        name: "__genserver_cast_stop_error",
+        func: builtin_genserver_cast_stop_error,
+    },
+    BuiltinImpl {
         name: "__process_self",
         func: builtin_process_self,
     },
@@ -426,6 +570,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_task_async,
     },
     BuiltinImpl {
+        name: "__task_await",
+        func: builtin_task_await,
+    },
+    BuiltinImpl {
         name: "__task_launch",
         func: builtin_task_launch,
     },
@@ -442,6 +590,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_task_async_timeout,
     },
     BuiltinImpl {
+        name: "__task_await_timeout",
+        func: builtin_task_await_timeout,
+    },
+    BuiltinImpl {
         name: "__task_launch_timeout",
         func: builtin_task_launch_timeout,
     },
@@ -454,8 +606,16 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_workers_submit,
     },
     BuiltinImpl {
+        name: "__workers_submit_timeout",
+        func: builtin_workers_submit_timeout,
+    },
+    BuiltinImpl {
         name: "__workers_broadcast",
         func: builtin_workers_broadcast,
+    },
+    BuiltinImpl {
+        name: "__workers_broadcast_timeout",
+        func: builtin_workers_broadcast_timeout,
     },
     BuiltinImpl {
         name: "__workers_reserve",
@@ -557,6 +717,38 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         name: "__operator_string_concat",
         func: builtin_operator_string_concat,
     },
+    BuiltinImpl {
+        name: "json_parse",
+        func: builtin_json_parse,
+    },
+    BuiltinImpl {
+        name: "json_stringify",
+        func: builtin_json_stringify,
+    },
+    BuiltinImpl {
+        name: "string_len",
+        func: builtin_string_len,
+    },
+    BuiltinImpl {
+        name: "string_contains",
+        func: builtin_string_contains,
+    },
+    BuiltinImpl {
+        name: "string_starts_with",
+        func: builtin_string_starts_with,
+    },
+    BuiltinImpl {
+        name: "string_ends_with",
+        func: builtin_string_ends_with,
+    },
+    BuiltinImpl {
+        name: "string_split",
+        func: builtin_string_split,
+    },
+    BuiltinImpl {
+        name: "string_replace",
+        func: builtin_string_replace,
+    },
 ];
 
 const _: () = {
@@ -619,7 +811,12 @@ fn builtin_inspect(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError>
 
 fn builtin_error_kind(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let rich = decode_error_arg(&args[0], "kind", "err")?;
-    Ok(Value::Str(rich.kind))
+    Ok(Value::Str(
+        rich.kind
+            .strip_prefix("Global::")
+            .unwrap_or(&rich.kind)
+            .to_string(),
+    ))
 }
 
 fn builtin_error_message(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -734,34 +931,29 @@ fn builtin_supervisor_workers(vm: &mut VM, args: Vec<Value>) -> Result<Value, Ru
         ));
     };
     match args.as_slice() {
-        [_, Value::Callable(init), Value::Int(size)] => {
+        [_, Value::Callable(init), strategy] => {
             let Some(worker_name) = vm.infer_worker_process_name_from_callable(init) else {
                 return Err(RuntimeError::new(
                     "__supervisor_workers could not infer worker process from init callable",
                 ));
             };
-            let Some(size) = size.to_i64() else {
-                return Err(RuntimeError::new(
-                    "__supervisor_workers expects size representable as i64",
-                ));
-            };
-            vm.supervisor_workers(supervisor_name.clone(), worker_name, init.clone(), size)
+            vm.supervisor_workers(
+                supervisor_name.clone(),
+                worker_name,
+                init.clone(),
+                strategy.clone(),
+            )
         }
-        [_, Value::Str(worker_name), Value::Callable(init), Value::Int(size)] => {
-            let Some(size) = size.to_i64() else {
-                return Err(RuntimeError::new(
-                    "__supervisor_workers expects size representable as i64",
-                ));
-            };
+        [_, Value::Str(worker_name), Value::Callable(init), strategy] => {
             vm.supervisor_workers(
                 supervisor_name.clone(),
                 worker_name.clone(),
                 init.clone(),
-                size,
+                strategy.clone(),
             )
         }
         _ => Err(RuntimeError::new(
-            "__supervisor_workers expects supervisor name, worker init callable, and Int size",
+            "__supervisor_workers expects supervisor name, worker init callable, and WorkerStrategy",
         )),
     }
 }
@@ -778,6 +970,85 @@ fn builtin_process_store(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
         return Err(RuntimeError::new("__process_store expects PID"));
     };
     vm.process_store(&pid, args[1].clone())
+}
+
+fn builtin_genserver_call_reply(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Some(pid) = vm.pid_handle_like(&args[0]) else {
+        return Err(RuntimeError::new("__genserver_call_reply expects PID"));
+    };
+    vm.genserver_call_reply(&pid, args[1].clone(), args[2].clone())
+}
+
+fn builtin_genserver_call_reply_later(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let Some(pid) = vm.pid_handle_like(&args[0]) else {
+        return Err(RuntimeError::new(
+            "__genserver_call_reply_later expects PID",
+        ));
+    };
+    let Value::Callable(callback) = args[2].clone() else {
+        return Err(RuntimeError::new(
+            "__genserver_call_reply_later expects callback callable",
+        ));
+    };
+    vm.genserver_call_reply_later(&pid, args[1].clone(), callback)
+}
+
+fn builtin_genserver_call_stop_normal(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let Some(pid) = vm.pid_handle_like(&args[0]) else {
+        return Err(RuntimeError::new(
+            "__genserver_call_stop_normal expects PID",
+        ));
+    };
+    vm.genserver_call_stop_normal(&pid, args[1].clone())
+}
+
+fn builtin_genserver_call_stop_error(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Some(pid) = vm.pid_handle_like(&args[0]) else {
+        return Err(RuntimeError::new("__genserver_call_stop_error expects PID"));
+    };
+    let Value::Error(err) = args[1].clone() else {
+        return Err(RuntimeError::new(
+            "__genserver_call_stop_error expects Error",
+        ));
+    };
+    vm.genserver_call_stop_error(&pid, *err)
+}
+
+fn builtin_genserver_cast_next(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Some(pid) = vm.pid_handle_like(&args[0]) else {
+        return Err(RuntimeError::new("__genserver_cast_next expects PID"));
+    };
+    vm.genserver_cast_next(&pid, args[1].clone())
+}
+
+fn builtin_genserver_cast_stop_normal(
+    vm: &mut VM,
+    args: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let Some(pid) = vm.pid_handle_like(&args[0]) else {
+        return Err(RuntimeError::new(
+            "__genserver_cast_stop_normal expects PID",
+        ));
+    };
+    vm.genserver_cast_stop_normal(&pid)
+}
+
+fn builtin_genserver_cast_stop_error(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Some(pid) = vm.pid_handle_like(&args[0]) else {
+        return Err(RuntimeError::new("__genserver_cast_stop_error expects PID"));
+    };
+    let Value::Error(err) = args[1].clone() else {
+        return Err(RuntimeError::new(
+            "__genserver_cast_stop_error expects Error",
+        ));
+    };
+    vm.genserver_cast_stop_error(&pid, *err)
 }
 
 fn builtin_process_self(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -800,10 +1071,9 @@ fn builtin_out_handler_write(vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
     vm.out_handler_write(pid, text.to_string())
 }
 
-fn builtin_process_sleep(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    let millis = duration_to_u64(_vm, &args[0], "__process_sleep", "duration")?;
-    thread::sleep(StdDuration::from_millis(millis));
-    Ok(ok_result(Value::Unit))
+fn builtin_process_sleep(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let millis = duration_to_u64(vm, &args[0], "__process_sleep", "duration")?;
+    vm.process_sleep(millis)
 }
 
 fn builtin_process_init_pending(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -839,6 +1109,10 @@ fn builtin_task_async(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErr
     invoke_task_body(vm, &args[0], "__task_async", TaskMode::Async)
 }
 
+fn builtin_task_await(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    vm.await_task_handle(&args[0], None)
+}
+
 fn builtin_task_launch(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     invoke_task_body(vm, &args[0], "__task_launch", TaskMode::Launch)
 }
@@ -865,6 +1139,11 @@ fn builtin_task_async_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, Ru
         "__task_async_timeout",
         TaskMode::Async,
     )
+}
+
+fn builtin_task_await_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let timeout_ms = duration_to_u64(vm, &args[0], "__task_await_timeout", "timeout")?;
+    vm.await_task_handle(&args[1], Some(timeout_ms))
 }
 
 fn builtin_task_launch_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -896,6 +1175,16 @@ fn builtin_workers_submit(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtim
     vm.workers_submit(handle, message.clone())
 }
 
+fn builtin_workers_submit_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let [timeout, Value::Workers(handle), Value::Callable(message)] = args.as_slice() else {
+        return Err(RuntimeError::new(
+            "__workers_submit_timeout expects Duration, Workers handle, and callable template",
+        ));
+    };
+    let timeout_ms = duration_to_u64(vm, timeout, "__workers_submit_timeout", "timeout")?;
+    vm.workers_submit_with_timeout(handle, message.clone(), timeout_ms)
+}
+
 fn builtin_workers_broadcast(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let [Value::Workers(handle), Value::Callable(message)] = args.as_slice() else {
         return Err(RuntimeError::new(
@@ -903,6 +1192,16 @@ fn builtin_workers_broadcast(vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
         ));
     };
     vm.workers_broadcast(handle, message.clone())
+}
+
+fn builtin_workers_broadcast_timeout(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let [timeout, Value::Workers(handle), Value::Callable(message)] = args.as_slice() else {
+        return Err(RuntimeError::new(
+            "__workers_broadcast_timeout expects Duration, Workers handle, and callable template",
+        ));
+    };
+    let timeout_ms = duration_to_u64(vm, timeout, "__workers_broadcast_timeout", "timeout")?;
+    vm.workers_broadcast_with_timeout(handle, message.clone(), timeout_ms)
 }
 
 fn builtin_workers_reserve(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -1218,6 +1517,69 @@ fn builtin_list_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeErro
         return Err(RuntimeError::new("len expects List as first argument"));
     };
     Ok(Value::Int(list.len.into()))
+}
+
+fn builtin_string_len(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::Str(value) = &args[0] else {
+        return Err(RuntimeError::new(
+            "string_len expects String as first argument",
+        ));
+    };
+    Ok(Value::Int(value.chars().count().into()))
+}
+
+fn expect_string_pair(args: &[Value], name: &str) -> Result<(String, String), RuntimeError> {
+    let (Value::Str(left), Value::Str(right)) = (&args[0], &args[1]) else {
+        return Err(RuntimeError::new(format!(
+            "{name} expects (String, String)"
+        )));
+    };
+    Ok((left.clone(), right.clone()))
+}
+
+fn builtin_string_contains(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (value, needle) = expect_string_pair(&args, "string_contains")?;
+    Ok(Value::Bool(value.contains(&needle)))
+}
+
+fn builtin_string_starts_with(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (value, prefix) = expect_string_pair(&args, "string_starts_with")?;
+    Ok(Value::Bool(value.starts_with(&prefix)))
+}
+
+fn builtin_string_ends_with(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (value, suffix) = expect_string_pair(&args, "string_ends_with")?;
+    Ok(Value::Bool(value.ends_with(&suffix)))
+}
+
+fn builtin_string_split(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (value, separator) = expect_string_pair(&args, "string_split")?;
+    let items = if separator.is_empty() {
+        value
+            .chars()
+            .map(|ch| Value::Str(ch.to_string()))
+            .collect::<Vec<_>>()
+    } else {
+        value
+            .split(&separator)
+            .map(|part| Value::Str(part.to_string()))
+            .collect::<Vec<_>>()
+    };
+    Ok(Value::List(ListHandle::from_items(items)))
+}
+
+fn builtin_string_replace(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (Value::Str(value), Value::Str(from), Value::Str(to)) = (&args[0], &args[1], &args[2])
+    else {
+        return Err(RuntimeError::new(
+            "string_replace expects (String, String, String)",
+        ));
+    };
+    if from.is_empty() {
+        Ok(Value::Str(value.clone()))
+    } else {
+        Ok(Value::Str(value.replace(from, to)))
+    }
 }
 
 fn builtin_gen_make(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -1668,33 +2030,45 @@ fn builtin_map_values_list(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runt
     Ok(Value::List(ListHandle::from_items(map.values())))
 }
 
-fn builtin_lens_view(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_view(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
-        "Lens::view should be lowered in Forge (runtime builtin call indicates lowering bug)",
+        "Facet::view should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
-fn builtin_lens_compose(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_preview(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
-        "Lens::compose should be lowered in Forge (runtime builtin call indicates lowering bug)",
+        "Facet::preview should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
-fn builtin_lens_set(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_compose(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
-        "Lens::set should be lowered in Forge (runtime builtin call indicates lowering bug)",
+        "Facet::compose should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
-fn builtin_lens_over(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_replace(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
-        "Lens::over should be lowered in Forge (runtime builtin call indicates lowering bug)",
+        "Facet::replace should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
-fn builtin_lens_over_result(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn builtin_facet_set(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
-        "Lens::over_result should be lowered in Forge (runtime builtin call indicates lowering bug)",
+        "Facet::set should be lowered in Forge (runtime builtin call indicates lowering bug)",
+    ))
+}
+
+fn builtin_facet_over(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Facet::over should be lowered in Forge (runtime builtin call indicates lowering bug)",
+    ))
+}
+
+fn builtin_facet_over_result(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Facet::over_result should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
@@ -1968,6 +2342,317 @@ fn builtin_io_get_line(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeEr
     })
 }
 
+fn builtin_file_read(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_string_arg(&args[0], "file_read", "path")?;
+    let host_path = vm.resolve_host_path(path);
+    match fs::read_to_string(&host_path) {
+        Ok(text) => Ok(ok_result(Value::Str(text))),
+        Err(err) => Ok(file_path_error_result(vm, path, err)),
+    }
+}
+
+fn builtin_file_write(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_string_arg(&args[0], "file_write", "path")?;
+    let text = decode_string_arg(&args[1], "file_write", "text")?;
+    let host_path = vm.resolve_host_path(path);
+    match fs::write(&host_path, text) {
+        Ok(()) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(file_path_error_result(vm, path, err)),
+    }
+}
+
+fn builtin_file_append(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_string_arg(&args[0], "file_append", "path")?;
+    let text = decode_string_arg(&args[1], "file_append", "text")?;
+    let handle = match vm.open_file_resource(path, VmFileMode::Append) {
+        Ok(handle) => handle,
+        Err(err) => return Ok(file_handle_error_result(vm, Some(path), err)),
+    };
+    let write_result = vm.write_file_chunk(handle.id, text);
+    let close_result = vm.close_file_resource(handle.id);
+    match (write_result, close_result) {
+        (Ok(()), Ok(())) => Ok(ok_result(Value::Unit)),
+        (Err(err), _) => Ok(file_handle_error_result(vm, Some(path), err)),
+        (Ok(()), Err(err)) => Ok(file_handle_error_result(vm, Some(path), err)),
+    }
+}
+
+fn builtin_file_exists(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_string_arg(&args[0], "file_exists", "path")?;
+    Ok(Value::Bool(_vm.resolve_host_path(path).exists()))
+}
+
+fn builtin_file_delete(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_string_arg(&args[0], "file_delete", "path")?;
+    let host_path = vm.resolve_host_path(path);
+    match fs::remove_file(&host_path) {
+        Ok(()) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(file_path_error_result(vm, path, err)),
+    }
+}
+
+fn builtin_file_with_open(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_string_arg(&args[0], "file_with_open", "path")?;
+    let mode = decode_file_mode(vm, &args[1], "file_with_open", "mode")?;
+    let body = decode_callable_arg(&args[2], "file_with_open", "body")?;
+    let handle = match vm.open_file_resource(path, mode) {
+        Ok(handle) => handle,
+        Err(err) => return Ok(file_handle_error_result(vm, Some(path), err)),
+    };
+
+    let call_result = vm.invoke_callable_sync(body, vec![Value::FileHandle(handle.clone())]);
+    let flush_result = vm.flush_file_resource(handle.id);
+    let close_result = vm.close_file_resource(handle.id);
+
+    if let Err(err) = flush_result {
+        return Ok(file_handle_error_result(vm, Some(path), err));
+    }
+    if let Err(err) = close_result {
+        return Ok(file_handle_error_result(vm, Some(path), err));
+    }
+
+    match call_result {
+        Ok(value) => Ok(value),
+        Err(err) => Err(err),
+    }
+}
+
+fn builtin_file_read_chunk(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let handle = decode_file_handle_arg(&args[0], "file_read_chunk", "file")?;
+    let max_chars = decode_non_negative_int_arg(&args[1], "file_read_chunk", "max_chars")?;
+    match vm.read_file_chunk(handle.id, max_chars) {
+        Ok(text) => Ok(ok_result(Value::Str(text))),
+        Err(err) => Ok(file_handle_error_result(vm, None, err)),
+    }
+}
+
+fn builtin_file_write_chunk(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let handle = decode_file_handle_arg(&args[0], "file_write_chunk", "file")?;
+    let text = decode_string_arg(&args[1], "file_write_chunk", "text")?;
+    match vm.write_file_chunk(handle.id, text) {
+        Ok(()) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(file_handle_error_result(vm, None, err)),
+    }
+}
+
+fn builtin_file_flush(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let handle = decode_file_handle_arg(&args[0], "file_flush", "file")?;
+    match vm.flush_file_resource(handle.id) {
+        Ok(()) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(file_handle_error_result(vm, None, err)),
+    }
+}
+
+fn builtin_filesystem_path(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let raw = decode_string_arg(&args[0], "filesystem_path", "raw")?;
+    Ok(ok_result(filesystem_file_path(vm, raw)?))
+}
+
+fn builtin_filesystem_join(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let base = decode_file_path_arg(vm, &args[0], "filesystem_join", "base")?;
+    let child = decode_string_arg(&args[1], "filesystem_join", "child")?;
+    let joined = Path::new(base).join(child).to_string_lossy().into_owned();
+    Ok(ok_result(filesystem_file_path(vm, &joined)?))
+}
+
+fn builtin_filesystem_parent(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_parent", "path")?;
+    let Some(parent) = Path::new(path).parent() else {
+        return Ok(filesystem_error(vm, "FileSystemInvalidPath", path));
+    };
+    Ok(ok_result(filesystem_file_path(
+        vm,
+        &parent.to_string_lossy(),
+    )?))
+}
+
+fn builtin_filesystem_name(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_name", "path")?;
+    let Some(name) = Path::new(path).file_name().and_then(|name| name.to_str()) else {
+        return Ok(filesystem_error(vm, "FileSystemInvalidPath", path));
+    };
+    Ok(ok_result(Value::Str(name.to_string())))
+}
+
+fn builtin_filesystem_extension(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_extension", "path")?;
+    Ok(
+        match Path::new(path).extension().and_then(|ext| ext.to_str()) {
+            Some(ext) => option_some(vm, Value::Str(ext.to_string()))?,
+            None => option_none(vm)?,
+        },
+    )
+}
+
+fn builtin_filesystem_exists(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_exists", "path")?;
+    Ok(ok_result(Value::Bool(vm.resolve_host_path(path).exists())))
+}
+
+fn builtin_filesystem_stat(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_stat", "path")?;
+    match filesystem_entry(vm, path)? {
+        Ok(entry) => Ok(ok_result(entry)),
+        Err(err) => Ok(err),
+    }
+}
+
+fn builtin_filesystem_ls(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_ls", "path")?;
+    filesystem_snapshot(vm, path, Some(1))
+}
+
+fn builtin_filesystem_tree_depth(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_tree_depth", "path")?;
+    let depth = decode_int_i64_arg(&args[1], "filesystem_tree_depth", "depth")?;
+    if depth < 0 {
+        return Ok(filesystem_error_with_message(
+            vm,
+            "FileSystemInvalidDepth",
+            &format!("invalid filesystem tree depth: {depth}"),
+        ));
+    }
+    filesystem_snapshot(vm, path, Some(depth as usize))
+}
+
+fn builtin_filesystem_mkdir(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_mkdir", "path")?;
+    let host_path = vm.resolve_host_path(path);
+    match fs::create_dir(&host_path) {
+        Ok(()) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(filesystem_io_error(vm, path, err)),
+    }
+}
+
+fn builtin_filesystem_mkdir_all(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_mkdir_all", "path")?;
+    let host_path = vm.resolve_host_path(path);
+    match fs::create_dir_all(&host_path) {
+        Ok(()) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(filesystem_io_error(vm, path, err)),
+    }
+}
+
+fn builtin_filesystem_rm(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "filesystem_rm", "path")?;
+    let host_path = vm.resolve_host_path(path);
+    let result = match fs::symlink_metadata(&host_path) {
+        Ok(meta) if meta.is_dir() => fs::remove_dir(&host_path),
+        Ok(_) => fs::remove_file(&host_path),
+        Err(err) => Err(err),
+    };
+    match result {
+        Ok(()) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(filesystem_io_error(vm, path, err)),
+    }
+}
+
+fn builtin_filesystem_mv(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let from = decode_file_path_arg(vm, &args[0], "filesystem_mv", "from")?;
+    let to = decode_file_path_arg(vm, &args[1], "filesystem_mv", "to")?;
+    match fs::rename(vm.resolve_host_path(from), vm.resolve_host_path(to)) {
+        Ok(()) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(filesystem_io_error(vm, from, err)),
+    }
+}
+
+fn builtin_filesystem_cp(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let from = decode_file_path_arg(vm, &args[0], "filesystem_cp", "from")?;
+    let to = decode_file_path_arg(vm, &args[1], "filesystem_cp", "to")?;
+    let from_host = vm.resolve_host_path(from);
+    if from_host.is_dir() {
+        return Ok(filesystem_error_with_message(
+            vm,
+            "FileSystemUnsupported",
+            "directory copy is not supported",
+        ));
+    }
+    match fs::copy(from_host, vm.resolve_host_path(to)) {
+        Ok(_) => Ok(ok_result(Value::Unit)),
+        Err(err) => Ok(filesystem_io_error(vm, from, err)),
+    }
+}
+
+fn builtin_shell_pwd(vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let raw = vm.cwd().to_string_lossy().into_owned();
+    Ok(ok_result(filesystem_file_path(vm, &raw)?))
+}
+
+fn builtin_shell_cd(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let path = decode_file_path_arg(vm, &args[0], "shell_cd", "path")?;
+    let host_path = vm.resolve_host_path(path);
+    if !host_path.is_dir() {
+        return Ok(shell_error_with_message(
+            vm,
+            "ShellWorkingDirectoryNotFound",
+            &format!("shell working directory not found: {path}"),
+        ));
+    }
+    let cwd = fs::canonicalize(&host_path).unwrap_or(host_path);
+    vm.set_cwd(cwd);
+    Ok(ok_result(Value::Unit))
+}
+
+fn builtin_shell_exec(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let command = decode_string_arg(&args[0], "shell_exec", "command")?;
+    let argv = decode_string_list_arg(&args[1], "shell_exec", "args")?;
+    let output = match Command::new(command)
+        .args(&argv)
+        .current_dir(vm.cwd())
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Ok(shell_error_with_message(
+                vm,
+                "ShellCommandNotFound",
+                &format!("shell command not found: {command}"),
+            ));
+        }
+        Err(err) => {
+            return Ok(shell_error_with_message(
+                vm,
+                "ShellSpawnFailed",
+                &format!("shell spawn failed for {command}: {err}"),
+            ));
+        }
+    };
+    let stdout = match String::from_utf8(output.stdout) {
+        Ok(text) => text,
+        Err(err) => {
+            return Ok(shell_error_with_message(
+                vm,
+                "ShellIoError",
+                &format!("shell stdout is not valid UTF-8: {err}"),
+            ));
+        }
+    };
+    let stderr = match String::from_utf8(output.stderr) {
+        Ok(text) => text,
+        Err(err) => {
+            return Ok(shell_error_with_message(
+                vm,
+                "ShellIoError",
+                &format!("shell stderr is not valid UTF-8: {err}"),
+            ));
+        }
+    };
+    let result = tagged_by_name(
+        vm,
+        "CommandResult",
+        vec![
+            Value::Str(command.to_string()),
+            Value::List(ListHandle::from_items(
+                argv.into_iter().map(Value::Str).collect(),
+            )),
+            Value::Int(int(output.status.code().unwrap_or(-1))),
+            Value::Str(stdout),
+            Value::Str(stderr),
+        ],
+    )?;
+    Ok(ok_result(result))
+}
+
 fn builtin_random_seed(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let Value::Int(seed) = &args[0] else {
         return Err(RuntimeError::new("seed expects Int as seed"));
@@ -2137,12 +2822,13 @@ fn inspect_non_callable_value(vm: &VM, value: &Value) -> String {
 
 fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
     if let Some(entry) = vm.type_registry().lookup(tag) {
-        if entry.name == "Duration" {
+        if entry.name == "Duration" || entry.name == "Global::Duration" {
             if let Some(Value::Int(ms)) = fields.first() {
                 return format!("{ms}ms");
             }
         }
         let render_named_value = || {
+            let display_name = entry.name.strip_prefix("Global::").unwrap_or(&entry.name);
             let hidden_field_count = entry.private_flags.iter().filter(|flag| **flag).count();
             let mut parts = entry
                 .field_names
@@ -2163,7 +2849,7 @@ fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
             if hidden_field_count > 0 {
                 parts.push("..private".to_string());
             }
-            format!("{}({})", entry.name, parts.join(", "))
+            format!("{}({})", display_name, parts.join(", "))
         };
 
         return match entry.kind {
@@ -2178,9 +2864,16 @@ fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
                     .collect::<Vec<_>>()
                     .join(", ");
                 if payload.is_empty() {
-                    entry.name.clone()
+                    entry
+                        .name
+                        .strip_prefix("Global::")
+                        .unwrap_or(&entry.name)
+                        .to_string()
                 } else {
-                    format!("{}({payload})", entry.name)
+                    format!(
+                        "{}({payload})",
+                        entry.name.strip_prefix("Global::").unwrap_or(&entry.name)
+                    )
                 }
             }
         };
@@ -2618,6 +3311,167 @@ fn decode_string_arg<'a>(
     }
 }
 
+fn decode_string_list_arg(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<Vec<String>, RuntimeError> {
+    let Value::List(list) = value else {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} expects List<String> as {arg_name}, got {:?}",
+            value
+        )));
+    };
+    list.iter()
+        .enumerate()
+        .map(|(idx, item)| match item {
+            Value::Str(text) => Ok(text),
+            other => Err(RuntimeError::new(format!(
+                "{builtin_name} expects String at {arg_name}[{idx}], got {:?}",
+                other
+            ))),
+        })
+        .collect()
+}
+
+fn decode_file_path_arg<'a>(
+    vm: &VM,
+    value: &'a Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<&'a str, RuntimeError> {
+    let Value::Tagged { tag, fields } = value else {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} expects FilePath as {arg_name}, got {:?}",
+            value
+        )));
+    };
+    let Some(entry) = vm.type_registry().lookup(*tag) else {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} observed unknown FilePath tag {tag}"
+        )));
+    };
+    if entry.name.strip_prefix("Global::").unwrap_or(&entry.name) != "FilePath" {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} expects FilePath as {arg_name}, got {}",
+            entry.name
+        )));
+    }
+    match fields.as_slice() {
+        [Value::Str(raw)] => Ok(raw),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects FilePath.raw String field for {arg_name}, got {} fields",
+            other.len()
+        ))),
+    }
+}
+
+fn decode_int_i64_arg(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<i64, RuntimeError> {
+    match value {
+        Value::Int(num) => num.to_i64().ok_or_else(|| {
+            RuntimeError::new(format!(
+                "{builtin_name} Int argument {arg_name} is out of range for i64: {num}"
+            ))
+        }),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects Int as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn decode_file_handle_arg(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<FileHandleValue, RuntimeError> {
+    match value {
+        Value::FileHandle(handle) => Ok(handle.clone()),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects FileHandle as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn decode_non_negative_int_arg(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<usize, RuntimeError> {
+    match value {
+        Value::Int(num) => {
+            if num < &int(0) {
+                return Err(RuntimeError::new(format!(
+                    "{builtin_name} expects non-negative Int as {arg_name}, got {num}"
+                )));
+            }
+            num.to_usize().ok_or_else(|| {
+                RuntimeError::new(format!(
+                    "{builtin_name} Int argument {arg_name} is out of range for usize: {num}"
+                ))
+            })
+        }
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects Int as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn decode_callable_arg(
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<Callable, RuntimeError> {
+    match value {
+        Value::Callable(callable) => Ok(callable.clone()),
+        other => Err(RuntimeError::new(format!(
+            "{builtin_name} expects callable value as {arg_name}, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn decode_file_mode(
+    vm: &VM,
+    value: &Value,
+    builtin_name: &str,
+    arg_name: &str,
+) -> Result<VmFileMode, RuntimeError> {
+    let Value::Tagged { tag, .. } = value else {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} expects FileMode as {arg_name}, got {:?}",
+            value
+        )));
+    };
+    let Some(entry) = vm.type_registry().lookup(*tag) else {
+        return Err(RuntimeError::new(format!(
+            "{builtin_name} observed unknown FileMode tag {tag}"
+        )));
+    };
+    match entry
+        .name
+        .rsplit("::")
+        .next()
+        .unwrap_or(entry.name.as_str())
+    {
+        "Read" => Ok(VmFileMode::Read),
+        "Write" => Ok(VmFileMode::Write),
+        "Append" => Ok(VmFileMode::Append),
+        "ReadWrite" => Ok(VmFileMode::ReadWrite),
+        "ReadAppend" => Ok(VmFileMode::ReadAppend),
+        _ => Err(RuntimeError::new(format!(
+            "{builtin_name} expects FileMode as {arg_name}, got {}",
+            entry.name
+        ))),
+    }
+}
+
 fn compile_cached_regex(pattern: &str, builtin_name: &str) -> Result<Regex, RuntimeError> {
     Regex::new(pattern).map_err(|err| {
         RuntimeError::new(format!(
@@ -2696,7 +3550,7 @@ fn duration_payload<'a>(vm: &'a VM, value: &'a Value) -> Result<&'a SurtrInt, Ru
                     tag
                 )));
             };
-            if entry.name != "Duration" {
+            if entry.name != "Duration" && entry.name != "Global::Duration" {
                 return Err(RuntimeError::new(format!(
                     "expected Duration struct tag, got {}",
                     entry.name
@@ -2736,11 +3590,455 @@ fn duration_to_u64(
     })
 }
 
+#[derive(Debug, Clone)]
+struct JsonRuntimeConstructors {
+    null: u32,
+    bool_: u32,
+    int: u32,
+    float: u32,
+    string: u32,
+    array: u32,
+    object: u32,
+}
+
+#[derive(Debug)]
+enum JsonStringifyError {
+    Recoverable(String),
+    Internal(String),
+}
+
+impl JsonStringifyError {
+    fn recoverable(message: impl Into<String>) -> Self {
+        Self::Recoverable(message.into())
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self::Internal(message.into())
+    }
+}
+
+fn json_constructors(vm: &VM) -> Result<JsonRuntimeConstructors, RuntimeError> {
+    Ok(JsonRuntimeConstructors {
+        null: find_variant_tag(vm, "JsonValue::Null")?,
+        bool_: find_variant_tag(vm, "JsonValue::Bool")?,
+        int: find_variant_tag(vm, "JsonValue::Int")?,
+        float: find_variant_tag(vm, "JsonValue::Float")?,
+        string: find_variant_tag(vm, "JsonValue::String")?,
+        array: find_variant_tag(vm, "JsonValue::Array")?,
+        object: find_variant_tag(vm, "JsonValue::Object")?,
+    })
+}
+
+fn find_variant_tag(vm: &VM, qualified_variant: &str) -> Result<u32, RuntimeError> {
+    vm.type_registry()
+        .tag_by_name(qualified_variant)
+        .ok_or_else(|| {
+            RuntimeError::new(format!("missing Json runtime variant {qualified_variant}"))
+        })
+}
+
+fn json_discriminant(index: i64) -> Value {
+    Value::Int(BigInt::from(index))
+}
+
+fn json_variant(tag: u32, discriminant: i64, payload: Vec<Value>) -> Value {
+    let mut fields = Vec::with_capacity(payload.len() + 1);
+    fields.push(json_discriminant(discriminant));
+    fields.extend(payload);
+    Value::Tagged { tag, fields }
+}
+
+fn json_value_to_surtr(
+    ctors: &JsonRuntimeConstructors,
+    value: serde_json::Value,
+) -> Result<Value, RuntimeError> {
+    match value {
+        serde_json::Value::Null => Ok(json_variant(ctors.null, 0, Vec::new())),
+        serde_json::Value::Bool(value) => {
+            Ok(json_variant(ctors.bool_, 1, vec![Value::Bool(value)]))
+        }
+        serde_json::Value::Number(number) => {
+            if let Some(value) = number.as_i64() {
+                Ok(json_variant(
+                    ctors.int,
+                    2,
+                    vec![Value::Int(BigInt::from(value))],
+                ))
+            } else if let Some(value) = number.as_u64() {
+                Ok(json_variant(
+                    ctors.int,
+                    2,
+                    vec![Value::Int(BigInt::from(value))],
+                ))
+            } else if let Some(value) = number.as_f64() {
+                Ok(json_variant(ctors.float, 3, vec![Value::Float(value)]))
+            } else {
+                Err(RuntimeError::new(
+                    "serde_json number could not be represented",
+                ))
+            }
+        }
+        serde_json::Value::String(text) => {
+            Ok(json_variant(ctors.string, 4, vec![Value::Str(text)]))
+        }
+        serde_json::Value::Array(values) => {
+            let items = values
+                .into_iter()
+                .map(|item| json_value_to_surtr(ctors, item))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(json_variant(
+                ctors.array,
+                5,
+                vec![Value::List(ListHandle::from_items(items))],
+            ))
+        }
+        serde_json::Value::Object(entries) => {
+            let mut map = HashMapHandle::empty();
+            for (key, value) in entries {
+                let converted = json_value_to_surtr(ctors, value)?;
+                map = map.insert(key, converted);
+            }
+            Ok(json_variant(ctors.object, 6, vec![Value::HashMap(map)]))
+        }
+    }
+}
+
+fn builtin_json_parse(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let [Value::Str(text)] = args.as_slice() else {
+        return Err(RuntimeError::new("json_parse expects String"));
+    };
+    match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(value) => {
+            let ctors = json_constructors(vm)?;
+            let converted = json_value_to_surtr(&ctors, value)?;
+            Ok(ok_result(converted))
+        }
+        Err(err) => {
+            let detail = err.to_string();
+            Ok(err_result(
+                vm,
+                "JsonParseError",
+                &format!(
+                    "json parse error at {}:{}: {}",
+                    err.line(),
+                    err.column(),
+                    detail
+                ),
+            ))
+        }
+    }
+}
+
+fn bigint_to_json_number(value: &BigInt) -> Result<serde_json::Number, JsonStringifyError> {
+    if let Some(value) = value.to_i64() {
+        Ok(serde_json::Number::from(value))
+    } else if let Some(value) = value.to_u64() {
+        Ok(serde_json::Number::from(value))
+    } else {
+        Err(JsonStringifyError::recoverable(format!(
+            "JsonValue::Int cannot be represented as a JSON number: {value}"
+        )))
+    }
+}
+
+fn surtr_json_to_serde(
+    ctors: &JsonRuntimeConstructors,
+    value: &Value,
+) -> Result<serde_json::Value, JsonStringifyError> {
+    match value {
+        Value::Tagged { tag, fields } if *tag == ctors.null && fields.len() == 1 => {
+            Ok(serde_json::Value::Null)
+        }
+        Value::Tagged { tag, fields } if *tag == ctors.bool_ && fields.len() == 2 => {
+            match &fields[1] {
+                Value::Bool(value) => Ok(serde_json::Value::Bool(*value)),
+                got => Err(JsonStringifyError::internal(format!(
+                    "JsonValue::Bool expected Boolean, got {got:?}"
+                ))),
+            }
+        }
+        Value::Tagged { tag, fields } if *tag == ctors.int && fields.len() == 2 => {
+            match &fields[1] {
+                Value::Int(value) => bigint_to_json_number(value).map(serde_json::Value::Number),
+                got => Err(JsonStringifyError::internal(format!(
+                    "JsonValue::Int expected Int, got {got:?}"
+                ))),
+            }
+        }
+        Value::Tagged { tag, fields } if *tag == ctors.float && fields.len() == 2 => {
+            match &fields[1] {
+                Value::Float(value) => serde_json::Number::from_f64(*value)
+                    .map(serde_json::Value::Number)
+                    .ok_or_else(|| {
+                        JsonStringifyError::recoverable(
+                            "JsonValue::Float cannot represent NaN or infinity",
+                        )
+                    }),
+                got => Err(JsonStringifyError::internal(format!(
+                    "JsonValue::Float expected Float, got {got:?}"
+                ))),
+            }
+        }
+        Value::Tagged { tag, fields } if *tag == ctors.string && fields.len() == 2 => {
+            match &fields[1] {
+                Value::Str(text) => Ok(serde_json::Value::String(text.clone())),
+                got => Err(JsonStringifyError::internal(format!(
+                    "JsonValue::String expected String, got {got:?}"
+                ))),
+            }
+        }
+        Value::Tagged { tag, fields } if *tag == ctors.array && fields.len() == 2 => {
+            match &fields[1] {
+                Value::List(values) => values
+                    .iter()
+                    .map(|item| surtr_json_to_serde(ctors, &item))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(serde_json::Value::Array),
+                got => Err(JsonStringifyError::internal(format!(
+                    "JsonValue::Array expected List, got {got:?}"
+                ))),
+            }
+        }
+        Value::Tagged { tag, fields } if *tag == ctors.object && fields.len() == 2 => {
+            match &fields[1] {
+                Value::HashMap(map) => {
+                    let mut object = serde_json::Map::new();
+                    for (key, item) in map.sorted_entries() {
+                        object.insert(key, surtr_json_to_serde(ctors, &item)?);
+                    }
+                    Ok(serde_json::Value::Object(object))
+                }
+                got => Err(JsonStringifyError::internal(format!(
+                    "JsonValue::Object expected HashMap, got {got:?}"
+                ))),
+            }
+        }
+        Value::Tagged { tag, fields }
+            if [
+                ctors.bool_,
+                ctors.int,
+                ctors.float,
+                ctors.string,
+                ctors.array,
+                ctors.object,
+            ]
+            .contains(tag) =>
+        {
+            Err(JsonStringifyError::internal(format!(
+                "JsonValue variant has invalid arity: tag {tag}, fields {fields:?}"
+            )))
+        }
+        other => Err(JsonStringifyError::recoverable(format!(
+            "json_stringify expects JsonValue, got {other:?}"
+        ))),
+    }
+}
+
+fn builtin_json_stringify(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let [value] = args.as_slice() else {
+        return Err(RuntimeError::new("json_stringify expects JsonValue"));
+    };
+    let ctors = json_constructors(vm)?;
+    match surtr_json_to_serde(&ctors, value) {
+        Ok(json) => Ok(ok_result(Value::Str(json.to_string()))),
+        Err(JsonStringifyError::Recoverable(detail)) => Ok(err_result(
+            vm,
+            "JsonEncodeError",
+            &format!("json encode error: {detail}"),
+        )),
+        Err(JsonStringifyError::Internal(message)) => Err(RuntimeError::new(message)),
+    }
+}
+
 fn ok_result(value: Value) -> Value {
     Value::Tagged {
         tag: 0,
         fields: vec![value],
     }
+}
+
+fn tagged_by_name(vm: &VM, name: &str, fields: Vec<Value>) -> Result<Value, RuntimeError> {
+    let tag = vm
+        .type_registry()
+        .tag_by_name(name)
+        .ok_or_else(|| RuntimeError::new(format!("missing runtime type {name}")))?;
+    Ok(Value::Tagged { tag, fields })
+}
+
+fn enum_variant_by_name(
+    vm: &VM,
+    name: &str,
+    discriminant: i64,
+    payload: Vec<Value>,
+) -> Result<Value, RuntimeError> {
+    let mut fields = Vec::with_capacity(payload.len() + 1);
+    fields.push(Value::Int(int(discriminant)));
+    fields.extend(payload);
+    tagged_by_name(vm, name, fields)
+}
+
+fn option_none(vm: &VM) -> Result<Value, RuntimeError> {
+    enum_variant_by_name(vm, "Option::None", 0, Vec::new())
+}
+
+fn option_some(vm: &VM, value: Value) -> Result<Value, RuntimeError> {
+    enum_variant_by_name(vm, "Option::Some", 1, vec![value])
+}
+
+fn option_int(vm: &VM, value: Option<i128>) -> Result<Value, RuntimeError> {
+    match value {
+        Some(value) => option_some(vm, Value::Int(int(value))),
+        None => option_none(vm),
+    }
+}
+
+fn filesystem_file_path(vm: &VM, raw: &str) -> Result<Value, RuntimeError> {
+    tagged_by_name(vm, "FilePath", vec![Value::Str(raw.to_string())])
+}
+
+fn filesystem_permissions(vm: &VM, permissions: &fs::Permissions) -> Result<Value, RuntimeError> {
+    #[cfg(unix)]
+    let executable = permissions.mode() & 0o111 != 0;
+    #[cfg(not(unix))]
+    let executable = false;
+
+    tagged_by_name(
+        vm,
+        "FileSystemPermissions",
+        vec![Value::Bool(permissions.readonly()), Value::Bool(executable)],
+    )
+}
+
+fn system_time_epoch_ms(value: io::Result<SystemTime>) -> Option<i128> {
+    value
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as i128)
+}
+
+fn filesystem_metadata(vm: &VM, metadata: &fs::Metadata) -> Result<Value, RuntimeError> {
+    tagged_by_name(
+        vm,
+        "FileSystemMetadata",
+        vec![
+            option_int(vm, Some(metadata.len() as i128))?,
+            option_int(vm, system_time_epoch_ms(metadata.modified()))?,
+            option_int(vm, system_time_epoch_ms(metadata.accessed()))?,
+            option_int(vm, system_time_epoch_ms(metadata.created()))?,
+            option_some(vm, filesystem_permissions(vm, &metadata.permissions())?)?,
+        ],
+    )
+}
+
+fn filesystem_entry_kind(vm: &VM, metadata: &fs::Metadata) -> Result<Value, RuntimeError> {
+    let (name, discriminant) = if metadata.file_type().is_symlink() {
+        ("FileSystemEntryKind::Symlink", 2)
+    } else if metadata.is_file() {
+        ("FileSystemEntryKind::File", 0)
+    } else if metadata.is_dir() {
+        ("FileSystemEntryKind::Directory", 1)
+    } else {
+        ("FileSystemEntryKind::Other", 3)
+    };
+    enum_variant_by_name(vm, name, discriminant, Vec::new())
+}
+
+fn filesystem_entry(vm: &VM, raw_path: &str) -> Result<Result<Value, Value>, RuntimeError> {
+    let host_path = vm.resolve_host_path(raw_path);
+    let metadata = match fs::symlink_metadata(&host_path) {
+        Ok(metadata) => metadata,
+        Err(err) => return Ok(Err(filesystem_io_error(vm, raw_path, err))),
+    };
+    let name = Path::new(raw_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .or_else(|| {
+            host_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| raw_path.to_string());
+    Ok(Ok(tagged_by_name(
+        vm,
+        "FileSystemEntry",
+        vec![
+            filesystem_file_path(vm, raw_path)?,
+            Value::Str(name),
+            filesystem_entry_kind(vm, &metadata)?,
+            filesystem_metadata(vm, &metadata)?,
+        ],
+    )?))
+}
+
+fn filesystem_snapshot(
+    vm: &VM,
+    root_raw: &str,
+    max_depth: Option<usize>,
+) -> Result<Value, RuntimeError> {
+    let root_host = vm.resolve_host_path(root_raw);
+    if !root_host.is_dir() {
+        return Ok(filesystem_error(vm, "FileSystemNotDirectory", root_raw));
+    }
+
+    let mut paths = Vec::new();
+    collect_filesystem_entries(vm, root_raw, 1, max_depth.unwrap_or(1), &mut paths)?;
+    paths.sort();
+
+    let mut entries = Vec::with_capacity(paths.len());
+    for path in paths {
+        match filesystem_entry(vm, &path)? {
+            Ok(entry) => entries.push(entry),
+            Err(err) => return Ok(err),
+        }
+    }
+
+    Ok(ok_result(tagged_by_name(
+        vm,
+        "FileSystemSnapshot",
+        vec![
+            filesystem_file_path(vm, root_raw)?,
+            Value::List(ListHandle::from_items(entries)),
+        ],
+    )?))
+}
+
+fn collect_filesystem_entries(
+    vm: &VM,
+    raw_path: &str,
+    current_depth: usize,
+    max_depth: usize,
+    out: &mut Vec<String>,
+) -> Result<(), RuntimeError> {
+    if max_depth == 0 || current_depth > max_depth {
+        return Ok(());
+    }
+    let host_path = vm.resolve_host_path(raw_path);
+    let read_dir = match fs::read_dir(&host_path) {
+        Ok(read_dir) => read_dir,
+        Err(_) => return Ok(()),
+    };
+    let mut children = Vec::new();
+    for entry in read_dir {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let raw_child = Path::new(raw_path)
+            .join(entry.file_name())
+            .to_string_lossy()
+            .into_owned();
+        children.push(raw_child);
+    }
+    children.sort();
+    for child in children {
+        let is_dir = vm.resolve_host_path(&child).is_dir();
+        out.push(child.clone());
+        if is_dir {
+            collect_filesystem_entries(vm, &child, current_depth + 1, max_depth, out)?;
+        }
+    }
+    Ok(())
 }
 
 fn err_value(rich: RichError) -> Value {
@@ -2814,6 +4112,80 @@ fn decode_unit_result_arg(
     }
 }
 
+fn file_path_error_result(vm: &VM, path: &str, err: io::Error) -> Value {
+    let kind = match err.kind() {
+        io::ErrorKind::NotFound => "FileNotFound",
+        io::ErrorKind::PermissionDenied => "FilePermissionDenied",
+        io::ErrorKind::AlreadyExists => "FileAlreadyExists",
+        io::ErrorKind::InvalidInput => "FileInvalidPath",
+        io::ErrorKind::InvalidData => "FileEncodingError",
+        _ => "FileIoError",
+    };
+    let message = match kind {
+        "FileNotFound" => format!("file not found: {path}"),
+        "FilePermissionDenied" => format!("permission denied: {path}"),
+        "FileAlreadyExists" => format!("file already exists: {path}"),
+        "FileInvalidPath" => format!("invalid path: {path}"),
+        "FileEncodingError" => format!("invalid UTF-8 while reading {path}: {err}"),
+        _ => format!("file I/O failed for {path}: {err}"),
+    };
+    err_result(vm, kind, &message)
+}
+
+fn filesystem_io_error(vm: &VM, path: &str, err: io::Error) -> Value {
+    let kind = match err.kind() {
+        io::ErrorKind::NotFound => "FileSystemNotFound",
+        io::ErrorKind::PermissionDenied => "FileSystemPermissionDenied",
+        io::ErrorKind::AlreadyExists => "FileSystemAlreadyExists",
+        io::ErrorKind::InvalidInput => "FileSystemInvalidPath",
+        _ => "FileSystemIoError",
+    };
+    let message = match kind {
+        "FileSystemNotFound" => format!("filesystem path not found: {path}"),
+        "FileSystemPermissionDenied" => format!("filesystem permission denied: {path}"),
+        "FileSystemAlreadyExists" => format!("filesystem path already exists: {path}"),
+        "FileSystemInvalidPath" => format!("invalid filesystem path: {path}"),
+        _ => format!("filesystem I/O failed for {path}: {err}"),
+    };
+    filesystem_error_with_message(vm, kind, &message)
+}
+
+fn filesystem_error(vm: &VM, kind: &str, path: &str) -> Value {
+    let message = match kind {
+        "FileSystemNotFound" => format!("filesystem path not found: {path}"),
+        "FileSystemAlreadyExists" => format!("filesystem path already exists: {path}"),
+        "FileSystemPermissionDenied" => format!("filesystem permission denied: {path}"),
+        "FileSystemNotDirectory" => format!("filesystem path is not a directory: {path}"),
+        "FileSystemIsDirectory" => format!("filesystem path is a directory: {path}"),
+        "FileSystemInvalidPath" => format!("invalid filesystem path: {path}"),
+        _ => path.to_string(),
+    };
+    filesystem_error_with_message(vm, kind, &message)
+}
+
+fn filesystem_error_with_message(vm: &VM, kind: &str, message: &str) -> Value {
+    err_result(vm, kind, message)
+}
+
+fn shell_error_with_message(vm: &VM, kind: &str, message: &str) -> Value {
+    err_result(vm, kind, message)
+}
+
+fn file_handle_error_result(vm: &VM, path: Option<&str>, err: VmFileError) -> Value {
+    match err {
+        VmFileError::Closed => err_result(vm, "FileClosed", "file is already closed"),
+        VmFileError::Io(io_err) => {
+            if let Some(path) = path {
+                file_path_error_result(vm, path, io_err)
+            } else {
+                err_result(vm, "FileIoError", &format!("file I/O failed: {io_err}"))
+            }
+        }
+        VmFileError::Encoding(message) => err_result(vm, "FileEncodingError", &message),
+        VmFileError::Message(message) => err_result(vm, "FileIoError", &message),
+    }
+}
+
 fn err_result(vm: &VM, kind: &str, message: &str) -> Value {
     let location = vm.runtime_error_location().unwrap_or_else(|| Location {
         file: vm.source_file().unwrap_or("<runtime>").to_string(),
@@ -2839,15 +4211,20 @@ fn none_result(vm: &VM) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{call_builtin, err_result_from_rich_error, inspect_value, BUILTIN_IMPLS};
+    use super::{
+        call_builtin, err_result_from_rich_error, inspect_value, json_variant, ok_result,
+        BUILTIN_IMPLS,
+    };
     use crate::vm::VM;
     use sindr::builtin::{builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name};
-    use sindr::ir::{Bytecode, DocEntry, DocKind, FunctionEntry, FunctionFlags};
+    use sindr::ir::{Bytecode, Constant, DocEntry, DocKind, FunctionEntry, FunctionFlags, Opcode};
     use sindr::primitives::int;
     use sindr::runtime::{
         Callable, CallableMetadata, CallableOrigin, CallableTarget, HashMapHandle, ListHandle,
         Location, RichError, TypeEntry, TypeKind, TypeRegistry, Value,
     };
+    use std::fs;
+    use std::path::PathBuf;
 
     fn test_vm() -> VM {
         let mut registry = TypeRegistry::new();
@@ -2902,12 +4279,290 @@ mod tests {
         builtin_id_by_name(name).unwrap_or_else(|| panic!("missing builtin metadata for {name}"))
     }
 
+    fn json_type_entries() -> Vec<TypeEntry> {
+        vec![
+            TypeEntry {
+                tag: 10,
+                name: "JsonValue::Null".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec![],
+                private_flags: vec![],
+            },
+            TypeEntry {
+                tag: 11,
+                name: "JsonValue::Bool".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["value".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 12,
+                name: "JsonValue::Int".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["value".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 13,
+                name: "JsonValue::Float".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["value".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 14,
+                name: "JsonValue::String".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["value".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 15,
+                name: "JsonValue::Array".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["values".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 16,
+                name: "JsonValue::Object".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["map".into()],
+                private_flags: vec![false],
+            },
+        ]
+    }
+
+    fn json_vm() -> VM {
+        test_vm_with_types(json_type_entries())
+    }
+
+    fn parse_json_ok(text: &str) -> Value {
+        let mut vm = json_vm();
+        let result = call_builtin(
+            &mut vm,
+            builtin_id("json_parse"),
+            vec![Value::Str(text.into())],
+        )
+        .expect("json_parse should execute");
+        match result {
+            Value::Tagged { tag: 0, fields } => fields
+                .into_iter()
+                .next()
+                .expect("Ok result should carry a value"),
+            other => panic!("expected Ok result, got {:?}", other),
+        }
+    }
+
+    fn assert_json_variant(value: &Value, name: &str) {
+        let vm = json_vm();
+        let Value::Tagged { tag, .. } = value else {
+            panic!("expected tagged JsonValue, got {:?}", value);
+        };
+        let entry = vm
+            .type_registry()
+            .lookup(*tag)
+            .unwrap_or_else(|| panic!("missing type entry for tag {tag}"));
+        assert_eq!(entry.name, name);
+    }
+
+    fn json_int_value(value: i64) -> Value {
+        json_variant(12, 2, vec![Value::Int(int(value))])
+    }
+
+    fn json_object_value(entries: Vec<(&str, Value)>) -> Value {
+        json_variant(
+            16,
+            6,
+            vec![Value::HashMap(HashMapHandle::from_entries(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key.to_string(), value))
+                    .collect(),
+            ))],
+        )
+    }
+
+    fn ok_string(value: &Value) -> &str {
+        match value {
+            Value::Tagged { tag: 0, fields } => match fields.as_slice() {
+                [Value::Str(text)] => text,
+                other => panic!("expected Ok(String), got {:?}", other),
+            },
+            other => panic!("expected Ok result, got {:?}", other),
+        }
+    }
+
+    fn sandbox_dir(prefix: &str) -> PathBuf {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("tmp/sandbox")
+            .join(format!("{prefix}-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("sandbox dir should be creatable");
+        dir
+    }
+
+    fn ok_payload(value: Value) -> Value {
+        match value {
+            Value::Tagged { tag: 0, fields } => fields
+                .into_iter()
+                .next()
+                .expect("Ok result should carry a payload"),
+            other => panic!("expected Ok result, got {:?}", other),
+        }
+    }
+
+    fn filesystem_vm() -> VM {
+        test_vm_with_types(vec![
+            TypeEntry {
+                tag: 20,
+                name: "Option::None".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec![],
+                private_flags: vec![],
+            },
+            TypeEntry {
+                tag: 21,
+                name: "Option::Some".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec!["value".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 30,
+                name: "FilePath".into(),
+                kind: TypeKind::Struct,
+                field_names: vec!["raw".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 31,
+                name: "FileSystemPermissions".into(),
+                kind: TypeKind::Struct,
+                field_names: vec!["read_only".into(), "executable".into()],
+                private_flags: vec![false, false],
+            },
+            TypeEntry {
+                tag: 32,
+                name: "FileSystemMetadata".into(),
+                kind: TypeKind::Struct,
+                field_names: vec![
+                    "size".into(),
+                    "modified_at_epoch_ms".into(),
+                    "accessed_at_epoch_ms".into(),
+                    "created_at_epoch_ms".into(),
+                    "permissions".into(),
+                ],
+                private_flags: vec![false, false, false, false, false],
+            },
+            TypeEntry {
+                tag: 33,
+                name: "FileSystemEntry".into(),
+                kind: TypeKind::Struct,
+                field_names: vec![
+                    "path".into(),
+                    "name".into(),
+                    "kind".into(),
+                    "metadata".into(),
+                ],
+                private_flags: vec![false, false, false, false],
+            },
+            TypeEntry {
+                tag: 34,
+                name: "FileSystemSnapshot".into(),
+                kind: TypeKind::Struct,
+                field_names: vec!["root".into(), "entries".into()],
+                private_flags: vec![false, false],
+            },
+            TypeEntry {
+                tag: 35,
+                name: "FileSystemEntryKind::File".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec![],
+                private_flags: vec![],
+            },
+            TypeEntry {
+                tag: 36,
+                name: "FileSystemEntryKind::Directory".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec![],
+                private_flags: vec![],
+            },
+            TypeEntry {
+                tag: 37,
+                name: "FileSystemEntryKind::Symlink".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec![],
+                private_flags: vec![],
+            },
+            TypeEntry {
+                tag: 38,
+                name: "FileSystemEntryKind::Other".into(),
+                kind: TypeKind::EnumVariant,
+                field_names: vec![],
+                private_flags: vec![],
+            },
+            TypeEntry {
+                tag: 39,
+                name: "CommandResult".into(),
+                kind: TypeKind::Struct,
+                field_names: vec![
+                    "command".into(),
+                    "args".into(),
+                    "exit_code".into(),
+                    "stdout".into(),
+                    "stderr".into(),
+                ],
+                private_flags: vec![false, false, false, false, false],
+            },
+        ])
+    }
+
     #[test]
     fn builtin_impl_order_matches_metadata() {
         for (id, builtin) in BUILTIN_IMPLS.iter().enumerate() {
             let meta = builtin_meta_by_id(id as u16).expect("builtin metadata by id");
             assert_eq!(builtin.name, meta.name, "builtin impl mismatch at id {id}");
         }
+    }
+
+    #[test]
+    fn json_parse_returns_err_for_malformed_json() {
+        let mut vm = json_vm();
+        let result = call_builtin(
+            &mut vm,
+            builtin_id("json_parse"),
+            vec![Value::Str("{".into())],
+        )
+        .expect("json_parse itself should not raise RuntimeError for malformed user JSON");
+        match result {
+            Value::Tagged { tag: 1, fields } => match fields.as_slice() {
+                [Value::Error(rich)] => assert_eq!(rich.kind, "JsonParseError"),
+                other => panic!("expected JsonParseError value, got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn json_parse_classifies_int_and_float_numbers() {
+        let int_value = parse_json_ok("1");
+        assert_json_variant(&int_value, "JsonValue::Int");
+
+        let decimal_value = parse_json_ok("1.5");
+        assert_json_variant(&decimal_value, "JsonValue::Float");
+
+        let exponent_value = parse_json_ok("1e2");
+        assert_json_variant(&exponent_value, "JsonValue::Float");
+    }
+
+    #[test]
+    fn json_stringify_uses_deterministic_object_key_order() {
+        let mut vm = json_vm();
+        let value = json_object_value(vec![("b", json_int_value(2)), ("a", json_int_value(1))]);
+        let result = call_builtin(&mut vm, builtin_id("json_stringify"), vec![value])
+            .expect("json_stringify should execute");
+        assert_eq!(ok_string(&result), "{\"a\":1,\"b\":2}");
     }
 
     #[test]
@@ -3007,10 +4662,13 @@ mod tests {
             include_str!("../../../lib/types/generator.srt"),
             include_str!("../../../lib/types/hash_map.srt"),
             include_str!("../../../lib/types/result.srt"),
-            include_str!("../../../lib/lens.srt"),
+            include_str!("../../../lib/facet.srt"),
             include_str!("../../../lib/types/string.srt"),
             include_str!("../../../lib/types/regex.srt"),
             include_str!("../../../lib/Random.srt"),
+            include_str!("../../../lib/file.srt"),
+            include_str!("../../../lib/FileSystem.srt"),
+            include_str!("../../../lib/Shell.srt"),
         ];
 
         // Collect all lines across the std-module files that currently declare
@@ -3333,6 +4991,70 @@ mod tests {
         )
         .expect_err("safe_mod must reject non-int inputs");
         assert!(err.message.contains("safe_mod expects (Int, Int)"));
+    }
+
+    #[test]
+    fn string_split_builtin_preserves_string_contract() {
+        let mut vm = test_vm();
+        let parts = call_builtin(
+            &mut vm,
+            builtin_id("string_split"),
+            vec![Value::Str("あ|b|".into()), Value::Str("|".into())],
+        )
+        .expect("string_split should succeed");
+        match parts {
+            Value::List(list) => assert_eq!(
+                list.iter().collect::<Vec<_>>(),
+                vec![
+                    Value::Str("あ".into()),
+                    Value::Str("b".into()),
+                    Value::Str("".into()),
+                ]
+            ),
+            other => panic!("expected List, got {other:?}"),
+        }
+
+        let chars = call_builtin(
+            &mut vm,
+            builtin_id("string_split"),
+            vec![Value::Str("あb".into()), Value::Str("".into())],
+        )
+        .expect("string_split should split empty separator into chars");
+        match chars {
+            Value::List(list) => assert_eq!(
+                list.iter().collect::<Vec<_>>(),
+                vec![Value::Str("あ".into()), Value::Str("b".into())]
+            ),
+            other => panic!("expected List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn string_replace_builtin_preserves_string_contract() {
+        let mut vm = test_vm();
+        let replaced = call_builtin(
+            &mut vm,
+            builtin_id("string_replace"),
+            vec![
+                Value::Str("banana".into()),
+                Value::Str("na".into()),
+                Value::Str("NA".into()),
+            ],
+        )
+        .expect("string_replace should succeed");
+        assert_eq!(replaced, Value::Str("baNANA".into()));
+
+        let unchanged = call_builtin(
+            &mut vm,
+            builtin_id("string_replace"),
+            vec![
+                Value::Str("surtr".into()),
+                Value::Str("".into()),
+                Value::Str("-".into()),
+            ],
+        )
+        .expect("string_replace should leave empty pattern unchanged");
+        assert_eq!(unchanged, Value::Str("surtr".into()));
     }
 
     #[test]
@@ -3840,6 +5562,283 @@ mod tests {
             },
             other => panic!("expected Err result, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn file_read_write_append_exists_and_delete_work() {
+        let dir = sandbox_dir("builtin-file");
+        let path = dir.join("sample.txt");
+        let path_text = path.to_string_lossy().into_owned();
+        let mut vm = test_vm();
+
+        let write = call_builtin(
+            &mut vm,
+            builtin_id("file_write"),
+            vec![Value::Str(path_text.clone()), Value::Str("alpha".into())],
+        )
+        .expect("file_write should run");
+        assert_eq!(write, ok_result(Value::Unit));
+
+        let read = call_builtin(
+            &mut vm,
+            builtin_id("file_read"),
+            vec![Value::Str(path_text.clone())],
+        )
+        .expect("file_read should run");
+        assert_eq!(read, ok_result(Value::Str("alpha".into())));
+
+        let append = call_builtin(
+            &mut vm,
+            builtin_id("file_append"),
+            vec![Value::Str(path_text.clone()), Value::Str("beta".into())],
+        )
+        .expect("file_append should run");
+        assert_eq!(append, ok_result(Value::Unit));
+        assert_eq!(
+            fs::read_to_string(&path).expect("appended file should be readable"),
+            "alphabeta"
+        );
+
+        let exists = call_builtin(
+            &mut vm,
+            builtin_id("file_exists"),
+            vec![Value::Str(path_text.clone())],
+        )
+        .expect("file_exists should run");
+        assert_eq!(exists, Value::Bool(true));
+
+        let delete = call_builtin(
+            &mut vm,
+            builtin_id("file_delete"),
+            vec![Value::Str(path_text.clone())],
+        )
+        .expect("file_delete should run");
+        assert_eq!(delete, ok_result(Value::Unit));
+        assert!(!path.exists(), "file_delete should remove the target file");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn filesystem_path_join_name_parent_and_extension_work() {
+        let dir = sandbox_dir("builtin-filesystem-paths");
+        let base = dir.to_string_lossy().into_owned();
+        let mut vm = filesystem_vm();
+
+        let base_path = ok_payload(
+            call_builtin(
+                &mut vm,
+                builtin_id("filesystem_path"),
+                vec![Value::Str(base.clone())],
+            )
+            .expect("filesystem_path should run"),
+        );
+        let joined = ok_payload(
+            call_builtin(
+                &mut vm,
+                builtin_id("filesystem_join"),
+                vec![base_path.clone(), Value::Str("sample.srt".into())],
+            )
+            .expect("filesystem_join should run"),
+        );
+
+        assert_eq!(
+            ok_payload(
+                call_builtin(&mut vm, builtin_id("filesystem_name"), vec![joined.clone()],)
+                    .expect("filesystem_name should run"),
+            ),
+            Value::Str("sample.srt".into())
+        );
+        assert!(matches!(
+            call_builtin(
+                &mut vm,
+                builtin_id("filesystem_extension"),
+                vec![joined.clone()],
+            )
+            .expect("filesystem_extension should run"),
+            Value::Tagged { tag: 21, fields } if matches!(fields.as_slice(), [Value::Int(_), Value::Str(ext)] if ext == "srt")
+        ));
+        assert_eq!(
+            ok_payload(
+                call_builtin(&mut vm, builtin_id("filesystem_parent"), vec![joined])
+                    .expect("filesystem_parent should run")
+            ),
+            base_path
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn shell_exec_returns_ok_for_launched_nonzero_exit() {
+        let mut vm = filesystem_vm();
+        let result = ok_payload(
+            call_builtin(
+                &mut vm,
+                builtin_id("shell_exec"),
+                vec![
+                    Value::Str("sh".into()),
+                    Value::List(ListHandle::from_items(vec![
+                        Value::Str("-c".into()),
+                        Value::Str("printf out; printf err >&2; exit 7".into()),
+                    ])),
+                ],
+            )
+            .expect("shell_exec should run"),
+        );
+
+        let entry = vm
+            .type_registry()
+            .lookup_by_name("CommandResult")
+            .expect("CommandResult should be registered");
+        assert!(matches!(
+            result,
+            Value::Tagged { tag, fields }
+                if tag == entry.tag
+                    && matches!(fields.as_slice(), [
+                        Value::Str(command),
+                        Value::List(_),
+                        Value::Int(exit_code),
+                        Value::Str(stdout),
+                        Value::Str(stderr),
+                    ] if command == "sh" && exit_code == &int(7) && stdout == "out" && stderr == "err")
+        ));
+    }
+
+    #[test]
+    fn file_with_open_closes_handle_after_ok_callback() {
+        let dir = sandbox_dir("builtin-file-with-open-ok");
+        let path = dir.join("ok.txt");
+        let path_text = path.to_string_lossy().into_owned();
+        let mut registry = TypeRegistry::new();
+        registry.register(TypeEntry {
+            tag: 10,
+            name: "Write".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: vec![],
+            private_flags: vec![],
+        });
+        let mut vm = VM::new(Bytecode {
+            opcodes: vec![
+                Opcode::LoadConst(0),
+                Opcode::LoadConst(1),
+                Opcode::StructNew { field_count: 1 },
+                Opcode::Return,
+            ],
+            constants: vec![Constant::Tag(0), Constant::Unit],
+            type_registry: registry,
+            functions: vec![FunctionEntry {
+                fun_idx: 0,
+                entry_pc: 0,
+                num_locals: 1,
+                arity: 1,
+                qualified_name: Some("Test::ok".into()),
+                signature: None,
+                end_pc: 0,
+                span_start: 0,
+                span_end: 0,
+                flags: Default::default(),
+            }],
+            ..Bytecode::default()
+        })
+        .with_error_capture();
+
+        let result = call_builtin(
+            &mut vm,
+            builtin_id("file_with_open"),
+            vec![
+                Value::Str(path_text.clone()),
+                Value::Tagged {
+                    tag: 10,
+                    fields: Vec::new(),
+                },
+                Value::Callable(Callable {
+                    target: CallableTarget::Function(0),
+                    lexical_captures: Vec::new(),
+                    metadata: CallableMetadata::default(),
+                }),
+            ],
+        )
+        .expect("file_with_open should run");
+        assert_eq!(result, ok_result(Value::Unit));
+        assert_eq!(vm.open_file_count(), 0, "with_open should close handles");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn file_with_open_closes_handle_after_err_callback() {
+        let dir = sandbox_dir("builtin-file-with-open-err");
+        let path = dir.join("err.txt");
+        let path_text = path.to_string_lossy().into_owned();
+        let mut registry = TypeRegistry::new();
+        registry.register(TypeEntry {
+            tag: 11,
+            name: "Read".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: vec![],
+            private_flags: vec![],
+        });
+        let mut vm = VM::new(Bytecode {
+            opcodes: vec![
+                Opcode::LoadConst(0),
+                Opcode::MakeErrorLiteral {
+                    kind_const_idx: 1,
+                    message_const_idx: 2,
+                },
+                Opcode::StructNew { field_count: 1 },
+                Opcode::Return,
+            ],
+            constants: vec![
+                Constant::Tag(1),
+                Constant::Str("FileIoError".into()),
+                Constant::Str("boom".into()),
+            ],
+            type_registry: registry,
+            functions: vec![FunctionEntry {
+                fun_idx: 0,
+                entry_pc: 0,
+                num_locals: 1,
+                arity: 1,
+                qualified_name: Some("Test::err".into()),
+                signature: None,
+                end_pc: 0,
+                span_start: 0,
+                span_end: 0,
+                flags: Default::default(),
+            }],
+            ..Bytecode::default()
+        })
+        .with_error_capture();
+
+        let result = call_builtin(
+            &mut vm,
+            builtin_id("file_with_open"),
+            vec![
+                Value::Str(path_text.clone()),
+                Value::Tagged {
+                    tag: 11,
+                    fields: Vec::new(),
+                },
+                Value::Callable(Callable {
+                    target: CallableTarget::Function(0),
+                    lexical_captures: Vec::new(),
+                    metadata: CallableMetadata::default(),
+                }),
+            ],
+        )
+        .expect("file_with_open should run");
+        match result {
+            Value::Tagged { tag: 1, .. } => {}
+            other => panic!("expected Err result from callback, got {other:?}"),
+        }
+        assert_eq!(
+            vm.open_file_count(),
+            0,
+            "with_open should close handles on Err"
+        );
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

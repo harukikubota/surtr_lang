@@ -1,0 +1,17 @@
+def tick(n: Int, max: Int) -> Result<Unit> {
+  if(n > max, Ok(()), run_tick(n, max))
+}
+
+def run_tick(n: Int, max: Int) -> Result<Unit> {
+  print("tick " ++ to_string(n))
+  _ =? Process::sleep(5ms)
+  tick(n + 1, max)
+}
+
+_ =? Task::launch({||
+  tick(1, 3)
+})
+
+print("main:before")
+_ =? Process::sleep(30ms)
+print("main:after")

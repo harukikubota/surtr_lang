@@ -23,6 +23,7 @@ enum AgentInstance {
 struct AgentMeta {
     kind: AgentKind,
     instance: AgentInstance,
+    state: AstTy,
     boot: bool,
     registry: bool,
     lazy: bool,
@@ -50,6 +51,7 @@ impl AgentMeta {
             process_name,
             kind: self.kind.into_process_kind(),
             instance: self.instance.into_process_instance(),
+            state: self.state,
             boot: self.boot,
             registry: self.registry,
             lazy: self.lazy,
@@ -57,6 +59,80 @@ impl AgentMeta {
             handler_specs: Vec::new(),
             supervisor_policy: None,
         }
+    }
+}
+
+fn validate_doc_visibility(attrs: &DeclAttrs, span: &Span) -> Result<(), ParseError> {
+    if attrs.doc.is_some() && attrs.visibility == Visibility::Private {
+        return Err(private_doc_forbidden_error(span.clone()));
+    }
+    Ok(())
+}
+
+fn parse_doc_attr_in_place(parser: &mut Parser, attrs: &mut DeclAttrs) -> Result<(), ParseError> {
+    if attrs.doc.is_some() {
+        return Err(ParseError::syntax(
+            "@doc may only appear once before a declaration",
+            parser.peek_span(),
+        ));
+    }
+    match parser.peek().clone() {
+        Token::DocString(text) => {
+            if Parser::string_has_interpolation(&text) {
+                return Err(ParseError::syntax(
+                    "@doc does not allow string interpolation",
+                    parser.peek_span(),
+                ));
+            }
+            parser.advance();
+            attrs.doc = Some(text);
+            Ok(())
+        }
+        Token::Eof => Err(ParseError::incomplete("doc string", parser.peek_span())),
+        _ => Err(ParseError::syntax(
+            "@doc expects a triple-quoted doc string",
+            parser.peek_span(),
+        )),
+    }
+}
+
+fn make_process_helper_private(def: Ast) -> Ast {
+    match def {
+        Ast::Def(span, name, type_params, params, ret_ty, body, mut attrs) => {
+            attrs.visibility = Visibility::Private;
+            Ast::Def(span, name, type_params, params, ret_ty, body, attrs)
+        }
+        other => other,
+    }
+}
+
+fn private_doc_forbidden_error(span: Span) -> ParseError {
+    ParseError::syntax("@doc is only allowed on public declarations", span)
+}
+
+fn ast_decl_attrs(ast: &Ast) -> Option<&DeclAttrs> {
+    match ast {
+        Ast::Def(_, _, _, _, _, _, attrs)
+        | Ast::ConstDef(_, _, _, _, attrs)
+        | Ast::ExtractorDef(_, _, _, _, _, _, attrs)
+        | Ast::BuiltinDecl(_, _, _, _, attrs)
+        | Ast::IntrinsicDecl(_, _, _, attrs)
+        | Ast::BuiltinExtractorDecl(_, _, _, _, attrs)
+        | Ast::BuiltinTypeDecl(_, _, attrs)
+        | Ast::ResultCtorDecl(_, _, _, _, attrs)
+        | Ast::StructDef(_, _, _, attrs)
+        | Ast::RecordDef(_, _, _, attrs)
+        | Ast::DeferrorDef(_, _, _, _, attrs)
+        | Ast::EnumDef(_, _, _, _, attrs)
+        | Ast::Defmod(_, _, _, attrs)
+        | Ast::Defagent(_, _, _, _, attrs)
+        | Ast::Defgenserver(_, _, _, _, attrs)
+        | Ast::Defsupervisor(_, _, _, _, attrs)
+        | Ast::DefdynamicSupervisor(_, _, _, _, attrs)
+        | Ast::TraitDef(_, _, _, _, attrs)
+        | Ast::ImplDef(_, _, _, attrs)
+        | Ast::TraitImplDef(_, _, _, _, _, attrs) => Some(attrs),
+        _ => None,
     }
 }
 
@@ -77,6 +153,7 @@ enum InitPolicy {
 struct ProcessMeta {
     instance: AgentInstance,
     init_policy: InitPolicy,
+    state: AstTy,
     handlers: Vec<ProcessHandlerDependency>,
 }
 
@@ -232,6 +309,9 @@ fn rewrite_process_self_refs(node: Ast) -> Ast {
         ),
         Ast::FieldAccess(span, expr, field) => {
             Ast::FieldAccess(span, Box::new(rewrite_process_self_refs(*expr)), field)
+        }
+        Ast::FacetCapture(span, expr) => {
+            Ast::FacetCapture(span, Box::new(rewrite_process_self_refs(*expr)))
         }
         Ast::StructLit(span, name, fields) => Ast::StructLit(
             span,
@@ -395,10 +475,16 @@ fn internal_qualified_call(span: &Span, segments: &[&str], args: Vec<Ast>) -> As
     )
 }
 
-fn constructor_call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
-    Ast::ConstructorCall(
+fn hidden_runtime_call(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
+    Ast::App(
         span.clone(),
-        name.to_string(),
+        Box::new(Ast::InternalVar(
+            Span {
+                start: span.start,
+                end: span.start,
+            },
+            name.to_string(),
+        )),
         args.into_iter().map(positional).collect(),
     )
 }
@@ -457,6 +543,14 @@ fn result_named_ty(span: &Span, type_name: &str) -> AstTy {
     )
 }
 
+fn process_route_attrs(user_importable: bool, user_callable: bool) -> DeclAttrs {
+    DeclAttrs {
+        user_importable,
+        user_callable,
+        ..DeclAttrs::default()
+    }
+}
+
 fn param_vars(span: &Span, params: &[FunParam]) -> Vec<Ast> {
     params
         .iter()
@@ -502,35 +596,38 @@ fn process_state_bind(span: &Span, lower_module: &str) -> Ast {
     )
 }
 
-fn init_wrapper_ret_ty(span: &Span, init_def: &Ast) -> Result<Option<AstTy>, ParseError> {
-    let ret_ty = def_ret_ty(init_def)?.ok_or_else(|| {
-        ParseError::syntax("worker init wrapper requires return type", span.clone())
-    })?;
-    Ok(Some(AstTy::Func(
+fn init_spawn_closure(span: &Span, init_def: &Ast) -> Result<Ast, ParseError> {
+    let params = def_params(init_def)?.clone();
+    Ok(Ast::Closure(
         span.clone(),
         Vec::new(),
-        Box::new(ret_ty),
-    )))
+        Box::new(call(span, "__agent_init", param_vars(span, &params))),
+    ))
 }
 
-fn build_init_wrapper(span: &Span, init_def: &Ast) -> Result<Ast, ParseError> {
+fn build_worker_init_route_wrapper(
+    span: &Span,
+    process_name: &str,
+    wrapper_name: &str,
+    init_def: &Ast,
+) -> Result<Ast, ParseError> {
     let params = def_params(init_def)?.clone();
     let body = Ast::Block(
         span.clone(),
-        vec![Ast::Closure(
-            span.clone(),
-            Vec::new(),
-            Box::new(call(span, "__agent_init", param_vars(span, &params))),
+        vec![path_call(
+            span,
+            &["DynamicSupervisor", "spawn"],
+            vec![init_spawn_closure(span, init_def)?],
         )],
     );
     Ok(Ast::Def(
         span.clone(),
-        "init".to_string(),
+        wrapper_name.to_string(),
         def_type_params(init_def)?,
         params,
-        init_wrapper_ret_ty(span, init_def)?,
+        Some(result_pid_ty(span, process_name)),
         Box::new(body),
-        DeclAttrs::default(),
+        process_route_attrs(true, true),
     ))
 }
 
@@ -559,7 +656,7 @@ fn build_readonly_get_wrapper(
         surface_params,
         def_ret_ty(get_def)?,
         Box::new(body),
-        DeclAttrs::default(),
+        process_route_attrs(true, true),
     ))
 }
 
@@ -571,7 +668,7 @@ fn pid_param(span: &Span, agent_name: &str) -> FunParam {
     }
 }
 
-fn build_pid_wrapper(span: &Span, agent_name: &str) -> Ast {
+fn build_pid_wrapper(span: &Span, lower_module: &str, agent_name: &str) -> Ast {
     Ast::Def(
         span.clone(),
         "pid".to_string(),
@@ -580,31 +677,30 @@ fn build_pid_wrapper(span: &Span, agent_name: &str) -> Ast {
         Some(pid_ty(span, agent_name)),
         Box::new(Ast::Block(
             span.clone(),
-            vec![process_pid_call(span, "Agent", agent_name)],
+            vec![process_pid_call(span, lower_module, agent_name)],
         )),
-        DeclAttrs::default(),
+        process_route_attrs(true, true),
     )
 }
 
-fn build_spawn_wrapper(span: &Span, agent_name: &str, init_def: &Ast) -> Result<Ast, ParseError> {
-    let params = def_params(init_def)?.clone();
-    let body = Ast::Block(
+fn build_singleton_init_route_wrapper(
+    span: &Span,
+    lower_module: &str,
+    process_name: &str,
+    wrapper_name: &str,
+) -> Ast {
+    Ast::Def(
         span.clone(),
-        vec![path_call(
-            span,
-            &["DynamicSupervisor", "spawn"],
-            vec![call(span, "init", param_vars(span, &params))],
-        )],
-    );
-    Ok(Ast::Def(
-        span.clone(),
-        "spawn".to_string(),
-        def_type_params(init_def)?,
-        params,
-        Some(result_pid_ty(span, agent_name)),
-        Box::new(body),
-        DeclAttrs::default(),
-    ))
+        wrapper_name.to_string(),
+        Vec::new(),
+        Vec::new(),
+        Some(pid_ty(span, process_name)),
+        Box::new(Ast::Block(
+            span.clone(),
+            vec![process_pid_call(span, lower_module, process_name)],
+        )),
+        process_route_attrs(false, false),
+    )
 }
 
 fn build_supervisor_spawn_wrapper(span: &Span, supervisor_name: &str) -> Ast {
@@ -700,8 +796,8 @@ fn build_supervisor_workers_wrapper(span: &Span, supervisor_name: &str) -> Ast {
                 span: span.clone(),
             },
             FunParam {
-                name: "size".to_string(),
-                ty: AstTy::Named(span.clone(), "Int".to_string()),
+                name: "strategy".to_string(),
+                ty: AstTy::Named(span.clone(), "WorkerStrategy".to_string()),
                 span: span.clone(),
             },
         ],
@@ -722,7 +818,7 @@ fn build_supervisor_workers_wrapper(span: &Span, supervisor_name: &str) -> Ast {
                 vec![
                     string_lit(span, supervisor_name),
                     var(span, "worker_init"),
-                    var(span, "size"),
+                    var(span, "strategy"),
                 ],
             )],
         )),
@@ -809,7 +905,7 @@ fn build_state_get_wrapper(
         surface_params,
         def_ret_ty(get_def)?,
         Box::new(body),
-        DeclAttrs::default(),
+        process_route_attrs(true, true),
     ))
 }
 
@@ -858,7 +954,7 @@ fn build_state_set_wrapper(
         surface_params,
         Some(result_unit_ty(span)),
         Box::new(body),
-        DeclAttrs::default(),
+        process_route_attrs(true, true),
     ))
 }
 
@@ -866,6 +962,15 @@ fn result_reply_ty_from_call_ret(span: &Span, ret_ty: Option<AstTy>) -> Option<A
     match ret_ty {
         Some(AstTy::Generic(result_span, name, args)) if name == "Result" => {
             match args.as_slice() {
+                [AstTy::Generic(_, call_result, items)]
+                    if call_result == "CallResult" && !items.is_empty() =>
+                {
+                    Some(AstTy::Generic(
+                        result_span,
+                        "Result".to_string(),
+                        vec![items[0].clone()],
+                    ))
+                }
                 [AstTy::Tuple(_, items)] if !items.is_empty() => Some(AstTy::Generic(
                     result_span,
                     "Result".to_string(),
@@ -883,12 +988,8 @@ fn result_reply_ty_from_call_ret(span: &Span, ret_ty: Option<AstTy>) -> Option<A
     }
 }
 
-fn genserver_pair_field(span: &Span, field: &str) -> Ast {
-    Ast::FieldAccess(
-        span.clone(),
-        Box::new(var(span, "reply_state")),
-        field.to_string(),
-    )
+fn ctor_pattern(span: &Span, name: &str, args: Vec<AstPattern>) -> AstPattern {
+    AstPattern::Constructor(span.clone(), name.to_string(), args)
 }
 
 fn build_genserver_call_wrapper(
@@ -897,33 +998,114 @@ fn build_genserver_call_wrapper(
     wrapper_name: &str,
     internal_handler_name: &str,
     call_def: &Ast,
+    singleton: bool,
 ) -> Result<Ast, ParseError> {
     let params = def_params(call_def)?;
-    let surface_params = params.iter().skip(2).cloned().collect::<Vec<_>>();
+    let surface_params = if singleton {
+        params.iter().skip(2).cloned().collect::<Vec<_>>()
+    } else {
+        let mut surface_params = vec![pid_param(span, process_name)];
+        surface_params.extend(params.iter().skip(2).cloned());
+        surface_params
+    };
+    let forwarded_params = if singleton {
+        surface_params.as_slice()
+    } else {
+        &surface_params[1..]
+    };
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
-    call_args.extend(param_vars(span, &surface_params));
-    let body = Ast::Block(
+    call_args.extend(param_vars(span, forwarded_params));
+    let mut stmts = Vec::new();
+    if singleton {
+        stmts.push(pid_bind(span, "GenServer", process_name));
+    }
+    stmts.push(process_state_bind(span, "GenServer"));
+    stmts.push(Ast::SafeBind(
         span.clone(),
+        AstPattern::Var(span.clone(), "call_result".to_string()),
+        Box::new(call(span, internal_handler_name, call_args)),
+    ));
+    stmts.push(Ast::Match(
+        span.clone(),
+        Box::new(var(span, "call_result")),
         vec![
-            pid_bind(span, "GenServer", process_name),
-            process_state_bind(span, "GenServer"),
-            Ast::SafeBind(
-                span.clone(),
-                AstPattern::Var(span.clone(), "reply_state".to_string()),
-                Box::new(call(span, internal_handler_name, call_args)),
-            ),
-            Ast::SafeBind(
-                span.clone(),
-                AstPattern::Wildcard(span.clone()),
-                Box::new(internal_qualified_call(
+            AstMatchArm {
+                pattern: ctor_pattern(
                     span,
-                    &["GenServer", "store"],
-                    vec![var(span, "pid"), genserver_pair_field(span, "_1")],
-                )),
-            ),
-            constructor_call(span, "Ok", vec![genserver_pair_field(span, "_0")]),
+                    "CallResult::Reply",
+                    vec![
+                        AstPattern::Var(span.clone(), "reply".to_string()),
+                        AstPattern::Var(span.clone(), "next_state".to_string()),
+                    ],
+                ),
+                guard: None,
+                body: hidden_runtime_call(
+                    span,
+                    "__genserver_call_reply",
+                    vec![
+                        var(span, "pid"),
+                        var(span, "next_state"),
+                        var(span, "reply"),
+                    ],
+                ),
+            },
+            AstMatchArm {
+                pattern: ctor_pattern(
+                    span,
+                    "CallResult::ReplyLater",
+                    vec![
+                        AstPattern::Var(span.clone(), "next_state".to_string()),
+                        AstPattern::Var(span.clone(), "callback".to_string()),
+                    ],
+                ),
+                guard: None,
+                body: hidden_runtime_call(
+                    span,
+                    "__genserver_call_reply_later",
+                    vec![
+                        var(span, "pid"),
+                        var(span, "next_state"),
+                        var(span, "callback"),
+                    ],
+                ),
+            },
+            AstMatchArm {
+                pattern: ctor_pattern(
+                    span,
+                    "CallResult::Stop",
+                    vec![ctor_pattern(
+                        span,
+                        "StopReply::Normal",
+                        vec![AstPattern::Var(span.clone(), "reply".to_string())],
+                    )],
+                ),
+                guard: None,
+                body: hidden_runtime_call(
+                    span,
+                    "__genserver_call_stop_normal",
+                    vec![var(span, "pid"), var(span, "reply")],
+                ),
+            },
+            AstMatchArm {
+                pattern: ctor_pattern(
+                    span,
+                    "CallResult::Stop",
+                    vec![ctor_pattern(
+                        span,
+                        "StopReply::Error",
+                        vec![AstPattern::Var(span.clone(), "err".to_string())],
+                    )],
+                ),
+                guard: None,
+                body: hidden_runtime_call(
+                    span,
+                    "__genserver_call_stop_error",
+                    vec![var(span, "pid"), var(span, "err")],
+                ),
+            },
         ],
-    );
+    ));
+    let body = Ast::Block(span.clone(), stmts);
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
@@ -931,7 +1113,7 @@ fn build_genserver_call_wrapper(
         surface_params,
         result_reply_ty_from_call_ret(span, def_ret_ty(call_def)?),
         Box::new(body),
-        DeclAttrs::default(),
+        process_route_attrs(true, true),
     ))
 }
 
@@ -941,28 +1123,83 @@ fn build_genserver_cast_wrapper(
     wrapper_name: &str,
     internal_handler_name: &str,
     cast_def: &Ast,
+    singleton: bool,
 ) -> Result<Ast, ParseError> {
     let params = def_params(cast_def)?;
-    let surface_params = params.iter().skip(2).cloned().collect::<Vec<_>>();
+    let surface_params = if singleton {
+        params.iter().skip(2).cloned().collect::<Vec<_>>()
+    } else {
+        let mut surface_params = vec![pid_param(span, process_name)];
+        surface_params.extend(params.iter().skip(2).cloned());
+        surface_params
+    };
+    let forwarded_params = if singleton {
+        surface_params.as_slice()
+    } else {
+        &surface_params[1..]
+    };
     let mut call_args = vec![var(span, "pid"), var(span, "state")];
-    call_args.extend(param_vars(span, &surface_params));
-    let body = Ast::Block(
+    call_args.extend(param_vars(span, forwarded_params));
+    let mut stmts = Vec::new();
+    if singleton {
+        stmts.push(pid_bind(span, "GenServer", process_name));
+    }
+    stmts.push(process_state_bind(span, "GenServer"));
+    stmts.push(Ast::SafeBind(
         span.clone(),
+        AstPattern::Var(span.clone(), "cast_result".to_string()),
+        Box::new(call(span, internal_handler_name, call_args)),
+    ));
+    stmts.push(Ast::Match(
+        span.clone(),
+        Box::new(var(span, "cast_result")),
         vec![
-            pid_bind(span, "GenServer", process_name),
-            process_state_bind(span, "GenServer"),
-            Ast::SafeBind(
-                span.clone(),
-                AstPattern::Var(span.clone(), "next_state".to_string()),
-                Box::new(call(span, internal_handler_name, call_args)),
-            ),
-            internal_qualified_call(
-                span,
-                &["GenServer", "store"],
-                vec![var(span, "pid"), var(span, "next_state")],
-            ),
+            AstMatchArm {
+                pattern: ctor_pattern(
+                    span,
+                    "CastResult::Next",
+                    vec![AstPattern::Var(span.clone(), "next_state".to_string())],
+                ),
+                guard: None,
+                body: hidden_runtime_call(
+                    span,
+                    "__genserver_cast_next",
+                    vec![var(span, "pid"), var(span, "next_state")],
+                ),
+            },
+            AstMatchArm {
+                pattern: ctor_pattern(
+                    span,
+                    "CastResult::Stop",
+                    vec![ctor_pattern(span, "StopReason::Normal", vec![])],
+                ),
+                guard: None,
+                body: hidden_runtime_call(
+                    span,
+                    "__genserver_cast_stop_normal",
+                    vec![var(span, "pid")],
+                ),
+            },
+            AstMatchArm {
+                pattern: ctor_pattern(
+                    span,
+                    "CastResult::Stop",
+                    vec![ctor_pattern(
+                        span,
+                        "StopReason::Error",
+                        vec![AstPattern::Var(span.clone(), "err".to_string())],
+                    )],
+                ),
+                guard: None,
+                body: hidden_runtime_call(
+                    span,
+                    "__genserver_cast_stop_error",
+                    vec![var(span, "pid"), var(span, "err")],
+                ),
+            },
         ],
-    );
+    ));
+    let body = Ast::Block(span.clone(), stmts);
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
@@ -970,11 +1207,34 @@ fn build_genserver_cast_wrapper(
         surface_params,
         Some(result_unit_ty(span)),
         Box::new(body),
-        DeclAttrs::default(),
+        process_route_attrs(true, true),
     ))
 }
 
 impl Parser<'_> {
+    fn canonicalize_impl_target_name(name: String) -> String {
+        if name.contains("::") {
+            name
+        } else {
+            format!("Global::{name}")
+        }
+    }
+
+    fn canonicalize_impl_target_ty(ty: AstTy) -> AstTy {
+        match ty {
+            AstTy::Named(span, name) if !name.starts_with('$') && name != "Self" && name != "_" => {
+                AstTy::Named(span, Self::canonicalize_impl_target_name(name))
+            }
+            AstTy::ImplTrait(span, name) => {
+                AstTy::ImplTrait(span, Self::canonicalize_impl_target_name(name))
+            }
+            AstTy::Generic(span, name, args) => {
+                AstTy::Generic(span, Self::canonicalize_impl_target_name(name), args)
+            }
+            other => other,
+        }
+    }
+
     fn is_cap_pattern(name: &str) -> bool {
         let mut chars = name.chars();
         let Some(first) = chars.next() else {
@@ -1017,17 +1277,50 @@ impl Parser<'_> {
         Ok(())
     }
 
-    pub(super) fn parse_field_visibility(&mut self) -> Visibility {
-        if matches!(self.peek(), Token::Private) {
-            self.advance();
-            self.skip_newlines();
-            Visibility::Private
-        } else if matches!(self.peek(), Token::Public) {
-            self.advance();
-            self.skip_newlines();
-            Visibility::Public
-        } else {
-            Visibility::Public
+    pub(super) fn parse_field_modifiers(&mut self) -> Result<(Visibility, bool), ParseError> {
+        let mut visibility = Visibility::Public;
+        let mut saw_visibility = false;
+        let mut readonly = false;
+
+        loop {
+            match self.peek() {
+                Token::Private => {
+                    if saw_visibility {
+                        return Err(ParseError::syntax(
+                            "field visibility may only be specified once",
+                            self.peek_span(),
+                        ));
+                    }
+                    saw_visibility = true;
+                    visibility = Visibility::Private;
+                    self.advance();
+                    self.skip_newlines();
+                }
+                Token::Public => {
+                    if saw_visibility {
+                        return Err(ParseError::syntax(
+                            "field visibility may only be specified once",
+                            self.peek_span(),
+                        ));
+                    }
+                    saw_visibility = true;
+                    visibility = Visibility::Public;
+                    self.advance();
+                    self.skip_newlines();
+                }
+                Token::Readonly => {
+                    if readonly {
+                        return Err(ParseError::syntax(
+                            "readonly field modifier may only be specified once",
+                            self.peek_span(),
+                        ));
+                    }
+                    readonly = true;
+                    self.advance();
+                    self.skip_newlines();
+                }
+                _ => return Ok((visibility, readonly)),
+            }
         }
     }
 
@@ -1174,6 +1467,12 @@ impl Parser<'_> {
         let sp = self.peek_span();
         self.expect(&Token::Namespace)?;
         let (name, _) = self.expect_ident()?;
+        if name == "Global" {
+            return Err(ParseError::syntax(
+                "`Global` is reserved for the implicit root namespace",
+                sp,
+            ));
+        }
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         let body = self.parse_namespace_body_stmts()?;
@@ -1236,7 +1535,8 @@ impl Parser<'_> {
         if matches!(self.peek(), Token::For) {
             self.advance();
             self.skip_newlines();
-            let target_ty = self.parse_type_in_impl_context(None)?;
+            let target_ty =
+                Self::canonicalize_impl_target_ty(self.parse_type_in_impl_context(None)?);
             let self_target = self.trait_impl_self_target_name(&target_ty)?;
             self.skip_newlines();
             self.expect(&Token::LBrace)?;
@@ -1347,6 +1647,7 @@ impl Parser<'_> {
         }
 
         let end = self.expect(&Token::RBrace)?;
+        let head = Self::canonicalize_impl_target_name(head);
         Ok(Ast::ImplDef(
             Span {
                 start,
@@ -1484,7 +1785,7 @@ impl Parser<'_> {
             body_stmts,
         );
 
-        Ok(Ast::Def(
+        let ast = Ast::Def(
             Span {
                 start: sp.start,
                 end: end.end,
@@ -1495,13 +1796,18 @@ impl Parser<'_> {
             ret_ty,
             Box::new(body),
             DeclAttrs {
-                visibility,
                 doc: attrs.doc,
                 auto_import: attrs.auto_import,
                 hidden: attrs.hidden,
-                process_state_owner: attrs.process_state_owner,
+                readonly: attrs.readonly,
+                visibility,
+                user_importable: attrs.user_importable,
+                user_callable: attrs.user_callable,
             },
-        ))
+        );
+        let attrs = ast_decl_attrs(&ast).expect("impl method is a declaration");
+        validate_doc_visibility(attrs, ast.span())?;
+        Ok(ast)
     }
 
     pub(super) fn parse_builtin_impl_method_decl(
@@ -1672,6 +1978,7 @@ impl Parser<'_> {
         let mut attrs = DeclAttrs::default();
         let mut saw_annotator = false;
         let mut saw_builtin = false;
+        let mut saw_intrinsic = false;
         let mut start_span: Option<Span> = None;
 
         while let Token::Annotator(name) = self.peek().clone() {
@@ -1691,6 +1998,21 @@ impl Parser<'_> {
                         ));
                     }
                     saw_builtin = true;
+                }
+                "intrinsic" => {
+                    if saw_intrinsic {
+                        return Err(ParseError::syntax(
+                            "@intrinsic may only appear once before an impl member",
+                            annotator_span,
+                        ));
+                    }
+                    if saw_builtin {
+                        return Err(ParseError::syntax(
+                            "@builtin and @intrinsic cannot be combined",
+                            annotator_span,
+                        ));
+                    }
+                    saw_intrinsic = true;
                 }
                 "doc" => {
                     if attrs.doc.is_some() {
@@ -1732,7 +2054,7 @@ impl Parser<'_> {
                 }
                 _ => {
                     return Err(ParseError::syntax(
-                        "Only @doc / @hidden / @builtin are allowed before impl members",
+                        "Only @doc / @hidden / @builtin / @intrinsic are allowed before impl members",
                         annotator_span,
                     ));
                 }
@@ -1787,6 +2109,24 @@ impl Parser<'_> {
             };
         }
 
+        if saw_intrinsic {
+            let start = start_span
+                .as_ref()
+                .map(|span| span.start)
+                .unwrap_or_else(|| self.peek_span().start);
+            return match self.peek() {
+                Token::Def => self.parse_intrinsic_decl(start, attrs),
+                Token::Defp => Err(ParseError::syntax(
+                    "@intrinsic is not allowed before `defp` impl members",
+                    self.peek_span(),
+                )),
+                _ => Err(ParseError::syntax(
+                    "impl body may only contain `@intrinsic def` declarations for intrinsic members",
+                    self.peek_span(),
+                )),
+            };
+        }
+
         if trait_impl_only {
             if !matches!(self.peek(), Token::Def) {
                 return Err(ParseError::syntax(
@@ -1809,11 +2149,71 @@ impl Parser<'_> {
             AstTy::Named(_, name) => Ok(name.clone()),
             AstTy::Generic(_, name, _) => Ok(name.clone()),
             AstTy::Func(_, _, _) => Ok("Function".to_string()),
+            AstTy::Tuple(_, items) if items.len() >= 2 => Ok(format!("Tuple{}", items.len())),
             _ => Err(ParseError::syntax(
-                "trait impl target must be a concrete named type or function type in V1",
+                "trait impl target must be a concrete named type, tuple type, or function type in V1",
                 ast_ty_span(ty).clone(),
             )),
         }
+    }
+
+    fn parse_agent_member_prefixes(
+        &mut self,
+    ) -> Result<(Option<AgentHandlerKind>, DeclAttrs), ParseError> {
+        let mut marker = None;
+        let mut attrs = DeclAttrs::default();
+        while let Token::Annotator(name) = self.peek().clone() {
+            match name.as_str() {
+                "doc" => {
+                    self.advance();
+                    self.skip_newlines();
+                    parse_doc_attr_in_place(self, &mut attrs)?;
+                }
+                "init" | "get" | "set" => {
+                    if marker.is_some() {
+                        return Err(ParseError::syntax(
+                            "process member may only have one handler marker",
+                            self.peek_span(),
+                        ));
+                    }
+                    marker = Some(self.parse_agent_handler_marker()?);
+                }
+                _ => break,
+            }
+            self.skip_newlines();
+        }
+        Ok((marker, attrs))
+    }
+
+    fn parse_genserver_member_prefixes(
+        &mut self,
+    ) -> Result<(Option<(String, Span)>, DeclAttrs), ParseError> {
+        let mut marker = None;
+        let mut attrs = DeclAttrs::default();
+        while let Token::Annotator(name) = self.peek().clone() {
+            match name.as_str() {
+                "doc" => {
+                    self.advance();
+                    self.skip_newlines();
+                    parse_doc_attr_in_place(self, &mut attrs)?;
+                }
+                "init" | "call" | "cast" => {
+                    if marker.is_some() {
+                        return Err(ParseError::syntax(
+                            "process member may only have one handler marker",
+                            self.peek_span(),
+                        ));
+                    }
+                    let span = self.peek_span();
+                    self.advance();
+                    self.skip_newlines();
+                    marker = Some((name, span));
+                }
+                _ => break,
+            }
+            self.skip_newlines();
+        }
+        Ok((marker, attrs))
     }
 
     pub(super) fn parse_defmod_with_attrs(
@@ -1830,11 +2230,14 @@ impl Parser<'_> {
         }
         self.expect(&Token::Defmod)?;
         let (name, _) = self.expect_qualified_ident(2, "module")?;
-        if name != "ProcessInit" && builtin_type_meta_by_name(&name).is_some() {
+        let reserved_check_name = name.rsplit("::").next().unwrap_or(&name);
+        if reserved_check_name != "ProcessInit"
+            && builtin_type_meta_by_name(reserved_check_name).is_some()
+        {
             return Err(ParseError::syntax(
                 format!(
                     "Module name `{}` is reserved by a canonical builtin type declaration",
-                    name
+                    reserved_check_name
                 ),
                 sp,
             ));
@@ -2035,7 +2438,7 @@ impl Parser<'_> {
     ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Defstruct)?;
-        let (name, _) = self.expect_ident()?;
+        let (name, _) = self.expect_qualified_ident(2, "type")?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -2046,7 +2449,7 @@ impl Parser<'_> {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
             self.skip_newlines();
-            let visibility = self.parse_field_visibility();
+            let (visibility, readonly) = self.parse_field_modifiers()?;
             let (fname, fspan) = self.expect_ident()?;
             self.expect(&Token::Colon)?;
             let fty = self.parse_type()?;
@@ -2055,6 +2458,7 @@ impl Parser<'_> {
                 ty: fty,
                 span: fspan,
                 visibility,
+                readonly,
             });
             self.skip_newlines();
             if matches!(self.peek(), Token::Comma) {
@@ -2086,7 +2490,7 @@ impl Parser<'_> {
     ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Defrecord)?;
-        let (name, _) = self.expect_ident()?;
+        let (name, _) = self.expect_qualified_ident(2, "type")?;
         self.expect(&Token::LParen)?;
         self.skip_newlines();
 
@@ -2097,7 +2501,13 @@ impl Parser<'_> {
                     return Err(ParseError::incomplete(")", self.peek_span()));
                 }
                 self.skip_newlines();
-                let visibility = self.parse_field_visibility();
+                let (visibility, readonly) = self.parse_field_modifiers()?;
+                if readonly {
+                    return Err(ParseError::syntax(
+                        "readonly field modifier is only supported on `defstruct` fields",
+                        self.peek_span(),
+                    ));
+                }
                 let (fname, fspan) = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let fty = self.parse_type()?;
@@ -2106,6 +2516,7 @@ impl Parser<'_> {
                     ty: fty,
                     span: fspan,
                     visibility,
+                    readonly,
                 });
                 self.skip_newlines();
                 if matches!(self.peek(), Token::Comma) {
@@ -2142,7 +2553,7 @@ impl Parser<'_> {
     ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Defenum)?;
-        let (name, _name_span) = self.expect_ident()?;
+        let (name, _name_span) = self.expect_qualified_ident(2, "type")?;
         let type_params = self.parse_decl_type_params()?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
@@ -2331,7 +2742,7 @@ impl Parser<'_> {
     ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Deferror)?;
-        let (name, _) = self.expect_ident()?;
+        let (name, _) = self.expect_qualified_ident(2, "type")?;
 
         // Optional fields: (field: Type, ...)
         let mut fields = Vec::new();
@@ -2344,7 +2755,13 @@ impl Parser<'_> {
                         return Err(ParseError::incomplete(")", self.peek_span()));
                     }
                     self.skip_newlines();
-                    let visibility = self.parse_field_visibility();
+                    let (visibility, readonly) = self.parse_field_modifiers()?;
+                    if readonly {
+                        return Err(ParseError::syntax(
+                            "readonly field modifier is only supported on `defstruct` fields",
+                            self.peek_span(),
+                        ));
+                    }
                     let (fname, fspan) = self.expect_ident()?;
                     self.expect(&Token::Colon)?;
                     let fty = self.parse_type()?;
@@ -2353,6 +2770,7 @@ impl Parser<'_> {
                         ty: fty,
                         span: fspan,
                         visibility,
+                        readonly,
                     });
                     self.skip_newlines();
                     if matches!(self.peek(), Token::Comma) {
@@ -2619,23 +3037,15 @@ impl Parser<'_> {
                 }
                 "agent" => {
                     return Err(ParseError::syntax(
-                        "@agent(...) metadata is no longer supported. Use `meta { instance, init_policy }` inside the process definition.",
+                        "@agent(...) metadata is no longer supported. Use `meta { instance, init_policy, state }` inside the process definition.",
                         annotator_span,
                     ));
                 }
                 "process_state" => {
-                    if attrs.process_state_owner.is_some() {
-                        return Err(ParseError::syntax(
-                            "@process_state may only appear once before a declaration",
-                            annotator_span,
-                        ));
-                    }
-                    self.expect(&Token::LParen)?;
-                    self.skip_newlines();
-                    let (owner, _) = self.expect_ident()?;
-                    self.skip_newlines();
-                    self.expect(&Token::RParen)?;
-                    attrs.process_state_owner = Some(owner);
+                    return Err(ParseError::syntax(
+                        "@process_state has been removed. Declare process state with `meta { state: StateTy }` inside the process definition.",
+                        annotator_span,
+                    ));
                 }
                 "doc" => {
                     if attrs.doc.is_some() {
@@ -2684,6 +3094,15 @@ impl Parser<'_> {
                         ));
                     }
                     attrs.hidden = true;
+                }
+                "readonly" => {
+                    if attrs.readonly {
+                        return Err(ParseError::syntax(
+                            "@readonly may only appear once before a declaration",
+                            annotator_span,
+                        ));
+                    }
+                    attrs.readonly = true;
                 }
                 "entrypoint" => {
                     return Err(ParseError::syntax(
@@ -2756,16 +3175,14 @@ impl Parser<'_> {
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
             }
-            if attrs.process_state_owner.is_some()
-                && !matches!(self.peek(), Token::Defstruct | Token::Defenum)
-            {
+            if attrs.readonly && !matches!(self.peek(), Token::Defstruct) {
                 return Err(ParseError::syntax(
-                    "@process_state may only annotate `defstruct` or `defenum` declarations",
+                    "@readonly may only annotate `defstruct` declarations",
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
             }
             match self.peek() {
-                Token::Def => self.parse_def_with_attrs(attrs, Some(start)),
+                Token::Def | Token::Defp => self.parse_def_with_attrs(attrs, Some(start)),
                 Token::Defmod => self.parse_defmod_with_attrs(attrs, Some(start)),
                 Token::Deftrait => self.parse_trait_def_with_attrs(attrs, Some(start)),
                 Token::Impl => self.parse_impl_def_with_attrs(attrs, Some(start)),
@@ -2809,37 +3226,30 @@ impl Parser<'_> {
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
-        let mut singletons = Vec::new();
-        let mut supervisors = Vec::new();
+        let mut entries = Vec::new();
 
         while !matches!(self.peek(), Token::RBrace) {
             if matches!(self.peek(), Token::Eof) {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
-            let (entry_kind, entry_span) = self.expect_ident()?;
-            if entry_kind == "singleton" {
-                let singleton = self.parse_supervisor_init_singleton()?;
-                if singletons.iter().any(|entry: &SupervisorInitSingleton| {
-                    entry.process_name == singleton.process_name
-                }) {
-                    return Err(ParseError::syntax(
-                        "singleton boot entry is duplicated",
-                        singleton.span,
-                    ));
-                }
-                singletons.push(singleton);
-            } else {
-                let supervisor = self.parse_supervisor_init_override(entry_kind, entry_span)?;
-                if supervisors.iter().any(|entry: &SupervisorInitOverride| {
-                    entry.process_name == supervisor.process_name
-                }) {
-                    return Err(ParseError::syntax(
-                        "supervisor override entry is duplicated",
-                        supervisor.span,
-                    ));
-                }
-                supervisors.push(supervisor);
+            let (entry_name, entry_span) = self.expect_ident()?;
+            if entry_name == "singleton" {
+                return Err(ParseError::syntax(
+                    "supervisor_init `singleton` keyword is no longer used",
+                    entry_span,
+                ));
             }
+            let entry = self.parse_supervisor_init_entry(entry_name, entry_span)?;
+            if entries
+                .iter()
+                .any(|existing: &SupervisorInitEntry| existing.process_name == entry.process_name)
+            {
+                return Err(ParseError::syntax(
+                    "supervisor_init entry is duplicated",
+                    entry.span,
+                ));
+            }
+            entries.push(entry);
             self.skip_newlines();
         }
         let end = self.expect(&Token::RBrace)?;
@@ -2850,19 +3260,24 @@ impl Parser<'_> {
         Ok(Ast::SupervisorInit(
             span,
             SupervisorInitSpec {
-                singletons,
-                supervisors,
+                entries,
+                singletons: Vec::new(),
+                supervisors: Vec::new(),
             },
         ))
     }
 
-    fn parse_supervisor_init_singleton(&mut self) -> Result<SupervisorInitSingleton, ParseError> {
-        let (process_name, name_span) = self.expect_ident()?;
+    fn parse_supervisor_init_entry(
+        &mut self,
+        process_name: String,
+        name_span: Span,
+    ) -> Result<SupervisorInitEntry, ParseError> {
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
         let mut timeout_ms = None;
         let mut handlers = Vec::new();
+        let mut overrides = SupervisorPolicyOverride::default();
 
         while !matches!(self.peek(), Token::RBrace) {
             if matches!(self.peek(), Token::Eof) {
@@ -2890,6 +3305,81 @@ impl Parser<'_> {
                 "handlers" => {
                     handlers = self.parse_supervisor_init_handlers()?;
                 }
+                "strategy" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    if overrides.strategy.is_some() {
+                        return Err(ParseError::syntax(
+                            "strategy override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.strategy = Some(self.parse_supervisor_strategy()?);
+                }
+                "max_restarts" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    if overrides.max_restarts.is_some() {
+                        return Err(ParseError::syntax(
+                            "max_restarts override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.max_restarts = Some(self.parse_non_negative_int_literal()?);
+                }
+                "max_seconds" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    if overrides.max_seconds.is_some() {
+                        return Err(ParseError::syntax(
+                            "max_seconds override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.max_seconds = Some(self.parse_non_negative_int_literal()?);
+                }
+                "child_restart_default" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    if overrides.child_restart_default.is_some() {
+                        return Err(ParseError::syntax(
+                            "child_restart_default override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.child_restart_default = Some(self.parse_child_restart_policy()?);
+                }
+                "allow_adopt" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    if overrides.allow_adopt.is_some() {
+                        return Err(ParseError::syntax(
+                            "allow_adopt override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.allow_adopt = Some(self.parse_bool_literal()?);
+                }
+                "shutdown_timeout" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    if overrides.shutdown_timeout_ms.is_some() {
+                        return Err(ParseError::syntax(
+                            "shutdown_timeout override is duplicated",
+                            key_span,
+                        ));
+                    }
+                    overrides.shutdown_timeout_ms =
+                        Some(self.parse_duration_literal_ms("shutdown_timeout")?);
+                }
+                "parent" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    return Err(ParseError::syntax(
+                        "supervisor parent override is fixed in the initial phase",
+                        key_span,
+                    ));
+                }
                 "init_policy" => {
                     return Err(ParseError::syntax(
                         "init policy belongs to process definition",
@@ -2904,7 +3394,7 @@ impl Parser<'_> {
                 }
                 _ => {
                     return Err(ParseError::syntax(
-                        format!("Unknown supervisor_init singleton key: {key}"),
+                        format!("Unknown supervisor_init key: {key}"),
                         key_span,
                     ));
                 }
@@ -2917,114 +3407,10 @@ impl Parser<'_> {
         }
 
         let end = self.expect(&Token::RBrace)?;
-        Ok(SupervisorInitSingleton {
+        Ok(SupervisorInitEntry {
             process_name,
             timeout_ms,
             handlers,
-            span: Span {
-                start: name_span.start,
-                end: end.end,
-            },
-        })
-    }
-
-    fn parse_supervisor_init_override(
-        &mut self,
-        process_name: String,
-        name_span: Span,
-    ) -> Result<SupervisorInitOverride, ParseError> {
-        self.skip_newlines();
-        self.expect(&Token::LBrace)?;
-        self.skip_newlines();
-        let mut overrides = SupervisorPolicyOverride::default();
-
-        while !matches!(self.peek(), Token::RBrace) {
-            if matches!(self.peek(), Token::Eof) {
-                return Err(ParseError::incomplete("}", self.peek_span()));
-            }
-            let (key, key_span) = self.expect_ident()?;
-            self.skip_newlines();
-            self.expect(&Token::Colon)?;
-            self.skip_newlines();
-            match key.as_str() {
-                "strategy" => {
-                    if overrides.strategy.is_some() {
-                        return Err(ParseError::syntax(
-                            "strategy override is duplicated",
-                            key_span,
-                        ));
-                    }
-                    overrides.strategy = Some(self.parse_supervisor_strategy()?);
-                }
-                "max_restarts" => {
-                    if overrides.max_restarts.is_some() {
-                        return Err(ParseError::syntax(
-                            "max_restarts override is duplicated",
-                            key_span,
-                        ));
-                    }
-                    overrides.max_restarts = Some(self.parse_non_negative_int_literal()?);
-                }
-                "max_seconds" => {
-                    if overrides.max_seconds.is_some() {
-                        return Err(ParseError::syntax(
-                            "max_seconds override is duplicated",
-                            key_span,
-                        ));
-                    }
-                    overrides.max_seconds = Some(self.parse_non_negative_int_literal()?);
-                }
-                "child_restart_default" => {
-                    if overrides.child_restart_default.is_some() {
-                        return Err(ParseError::syntax(
-                            "child_restart_default override is duplicated",
-                            key_span,
-                        ));
-                    }
-                    overrides.child_restart_default = Some(self.parse_child_restart_policy()?);
-                }
-                "allow_adopt" => {
-                    if overrides.allow_adopt.is_some() {
-                        return Err(ParseError::syntax(
-                            "allow_adopt override is duplicated",
-                            key_span,
-                        ));
-                    }
-                    overrides.allow_adopt = Some(self.parse_bool_literal()?);
-                }
-                "shutdown_timeout" => {
-                    if overrides.shutdown_timeout_ms.is_some() {
-                        return Err(ParseError::syntax(
-                            "shutdown_timeout override is duplicated",
-                            key_span,
-                        ));
-                    }
-                    overrides.shutdown_timeout_ms =
-                        Some(self.parse_duration_literal_ms("shutdown_timeout")?);
-                }
-                "parent" => {
-                    return Err(ParseError::syntax(
-                        "supervisor parent override is fixed in the initial phase",
-                        key_span,
-                    ));
-                }
-                _ => {
-                    return Err(ParseError::syntax(
-                        format!("Unknown supervisor override key: {key}"),
-                        key_span,
-                    ));
-                }
-            }
-            self.skip_newlines();
-            if matches!(self.peek(), Token::Comma) {
-                self.advance();
-                self.skip_newlines();
-            }
-        }
-
-        let end = self.expect(&Token::RBrace)?;
-        Ok(SupervisorInitOverride {
-            process_name,
             overrides,
             span: Span {
                 start: name_span.start,
@@ -3261,7 +3647,7 @@ impl Parser<'_> {
             Token::Defsupervisor
         };
         self.expect(&token)?;
-        let (name, _) = self.expect_ident()?;
+        let (name, _) = self.expect_qualified_ident(2, "process")?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -3291,6 +3677,7 @@ impl Parser<'_> {
             process_name: name.clone(),
             kind: runtime_kind,
             instance: ProcessInstance::Singleton,
+            state: AstTy::Named(span.clone(), "Unit".to_string()),
             boot: false,
             registry: true,
             lazy: false,
@@ -3430,11 +3817,16 @@ impl Parser<'_> {
             ));
         }
         self.skip_newlines();
-        self.expect(&Token::LBrace)?;
+        let lbrace_span = self.expect(&Token::LBrace)?;
         self.skip_newlines();
+        let meta_span = Span {
+            start: head_span.start,
+            end: lbrace_span.end,
+        };
 
         let mut instance = None;
         let mut init_policy = None;
+        let mut state = None;
         let mut handlers = Vec::new();
 
         while !matches!(self.peek(), Token::RBrace) {
@@ -3474,6 +3866,11 @@ impl Parser<'_> {
                         }
                     });
                 }
+                "state" => {
+                    self.expect(&Token::Colon)?;
+                    self.skip_newlines();
+                    state = Some(self.parse_type()?);
+                }
                 "handlers" => {
                     handlers = self.parse_process_meta_handlers()?;
                 }
@@ -3494,8 +3891,9 @@ impl Parser<'_> {
 
         Ok(ProcessMeta {
             instance: instance
-                .ok_or_else(|| ParseError::syntax("meta requires instance", self.peek_span()))?,
+                .ok_or_else(|| ParseError::syntax("meta requires instance", meta_span.clone()))?,
             init_policy: init_policy.unwrap_or(InitPolicy::Eager),
+            state: state.ok_or_else(|| ParseError::syntax("meta requires state", meta_span))?,
             handlers,
         })
     }
@@ -3552,7 +3950,7 @@ impl Parser<'_> {
         start: usize,
     ) -> Result<Ast, ParseError> {
         self.expect(&Token::Defagent)?;
-        let (name, _name_span) = self.expect_ident()?;
+        let (name, _name_span) = self.expect_qualified_ident(2, "process")?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -3573,20 +3971,14 @@ impl Parser<'_> {
             if matches!(self.peek(), Token::Eof) {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
-            let marker = if matches!(self.peek(), Token::Annotator(name) if matches!(name.as_str(), "init" | "get" | "set"))
-            {
-                Some(self.parse_agent_handler_marker()?)
-            } else {
-                None
-            };
-            self.skip_newlines();
+            let (marker, member_attrs) = self.parse_agent_member_prefixes()?;
             if marker.is_some() && !matches!(self.peek(), Token::Def) {
                 return Err(ParseError::syntax(
                     "Agent handler marker must be followed by def inside defagent",
                     self.peek_span(),
                 ));
             }
-            let def = self.parse_def_with_attrs(DeclAttrs::default(), None)?;
+            let def = self.parse_def_with_attrs(member_attrs, None)?;
             self.ensure_stmt_boundary(&def, true)?;
             match marker {
                 Some(AgentHandlerKind::Init) => {
@@ -3616,7 +4008,13 @@ impl Parser<'_> {
                     }
                     set = Some(AgentHandler { def });
                 }
-                None => helpers.push(def),
+                None => {
+                    let def = make_process_helper_private(def);
+                    let attrs = ast_decl_attrs(&def)
+                        .expect("process helper lowering always produces a declaration");
+                    validate_doc_visibility(attrs, def.span())?;
+                    helpers.push(def);
+                }
             }
             self.skip_newlines();
         }
@@ -3650,6 +4048,7 @@ impl Parser<'_> {
                     AgentKind::ReadOnly
                 },
                 instance: process_meta.instance,
+                state: process_meta.state,
                 boot: false,
                 registry: process_meta.instance == AgentInstance::Singleton,
                 lazy: process_meta.init_policy == InitPolicy::Lazy,
@@ -3686,7 +4085,7 @@ impl Parser<'_> {
         start: usize,
     ) -> Result<Ast, ParseError> {
         self.expect(&Token::Defgenserver)?;
-        let (name, _) = self.expect_ident()?;
+        let (name, _) = self.expect_qualified_ident(2, "process")?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -3702,18 +4101,7 @@ impl Parser<'_> {
             if matches!(self.peek(), Token::Eof) {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
-            let marker = if let Token::Annotator(marker) = self.peek().clone() {
-                if matches!(marker.as_str(), "init" | "call" | "cast") {
-                    let span = self.peek_span();
-                    self.advance();
-                    self.skip_newlines();
-                    Some((marker, span))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+            let (marker, member_attrs) = self.parse_genserver_member_prefixes()?;
 
             if marker.is_some() && !matches!(self.peek(), Token::Def) {
                 return Err(ParseError::syntax(
@@ -3727,7 +4115,7 @@ impl Parser<'_> {
                     self.peek_span(),
                 ));
             }
-            let def = self.parse_def_with_attrs(DeclAttrs::default(), None)?;
+            let def = self.parse_def_with_attrs(member_attrs, None)?;
             self.ensure_stmt_boundary(&def, true)?;
             match marker {
                 Some((marker, marker_span)) if marker == "init" => {
@@ -3752,7 +4140,13 @@ impl Parser<'_> {
                         marker_span,
                     ));
                 }
-                None => helpers.push(def),
+                None => {
+                    let def = make_process_helper_private(def);
+                    let attrs = ast_decl_attrs(&def)
+                        .expect("process helper lowering always produces a declaration");
+                    validate_doc_visibility(attrs, def.span())?;
+                    helpers.push(def);
+                }
             }
             self.skip_newlines();
         }
@@ -3829,6 +4223,7 @@ impl Parser<'_> {
                 call_name,
                 internal_name,
                 call_def,
+                process_meta.instance == AgentInstance::Singleton,
             )?);
         }
         for (cast_name, internal_name, cast_def) in &lowered_casts {
@@ -3838,7 +4233,22 @@ impl Parser<'_> {
                 cast_name,
                 internal_name,
                 cast_def,
+                process_meta.instance == AgentInstance::Singleton,
             )?);
+        }
+
+        if process_meta.instance == AgentInstance::Worker {
+            body.push(build_worker_init_route_wrapper(
+                &span, &name, &init_name, &init_def,
+            )?);
+        } else {
+            body.push(build_pid_wrapper(&span, "GenServer", &name));
+            body.push(build_singleton_init_route_wrapper(
+                &span,
+                "GenServer",
+                &name,
+                &init_name,
+            ));
         }
 
         let process_spec =
@@ -3846,6 +4256,7 @@ impl Parser<'_> {
                 process_name: name.clone(),
                 kind: ProcessKind::GenServer,
                 instance: process_meta.instance.into_process_instance(),
+                state: process_meta.state,
                 boot: false,
                 registry: process_meta.instance == AgentInstance::Singleton,
                 lazy: process_meta.init_policy == InitPolicy::Lazy,
@@ -4004,10 +4415,14 @@ impl Parser<'_> {
             }
             AgentKind::State => {
                 if meta.instance == AgentInstance::Worker {
-                    body.push(build_init_wrapper(&span, &init_def)?);
-                    body.push(build_spawn_wrapper(&span, &name, &init_def)?);
+                    body.push(build_worker_init_route_wrapper(
+                        &span, &name, &init_name, &init_def,
+                    )?);
                 } else {
-                    body.push(build_pid_wrapper(&span, &name));
+                    body.push(build_pid_wrapper(&span, "Agent", &name));
+                    body.push(build_singleton_init_route_wrapper(
+                        &span, "Agent", &name, &init_name,
+                    ));
                 }
                 let singleton = meta.instance == AgentInstance::Singleton;
                 body.push(build_state_get_wrapper(
@@ -4407,6 +4822,13 @@ impl Parser<'_> {
         let (sp, name, type_params, params, ret_ty, visibility) = self.parse_def_signature()?;
         let mut attrs = attrs;
         attrs.visibility = visibility;
+        validate_doc_visibility(
+            &attrs,
+            &Span {
+                start: annotator_start.unwrap_or(sp.start),
+                end: sp.end,
+            },
+        )?;
 
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
@@ -4426,7 +4848,7 @@ impl Parser<'_> {
             body_stmts,
         );
 
-        Ok(Ast::Def(
+        let ast = Ast::Def(
             Span {
                 start: annotator_start.unwrap_or(sp.start),
                 end: end.end,
@@ -4437,7 +4859,8 @@ impl Parser<'_> {
             ret_ty,
             Box::new(body),
             attrs,
-        ))
+        );
+        Ok(ast)
     }
 
     pub(super) fn parse_extractor_def_with_attrs(

@@ -416,19 +416,19 @@ struct TraitImplInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum ConstKind {
     PrimitiveLiteral,
-    LensPath,
+    FacetPath,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 enum StoredConstValue {
     Literal(Lit),
-    LensPath(TypedLensPath),
+    FacetPath(TypedFacetPath),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-enum StoredLensPath {
-    Concrete(TypedLensPath),
-    Pending(PendingLensPath),
+enum StoredFacetPath {
+    Concrete(TypedFacetPath),
+    Pending(PendingFacetPath),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -480,6 +480,31 @@ pub fn typecheck_with_context(
     checker.check_program(resolved)
 }
 
+pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
+    match ty {
+        Ty::Var(_) => true,
+        Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
+            type_contains_unresolved_vars(inner)
+        }
+        Ty::Tuple(items) | Ty::Enum(_, items) => items.iter().any(type_contains_unresolved_vars),
+        Ty::Func(params, ret) => {
+            params.iter().any(type_contains_unresolved_vars) || type_contains_unresolved_vars(ret)
+        }
+        Ty::Facet(source, focus) | Ty::Result(source, focus) => {
+            type_contains_unresolved_vars(source) || type_contains_unresolved_vars(focus)
+        }
+        Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
+            params.iter().any(type_contains_unresolved_vars) || type_contains_unresolved_vars(ret)
+        }
+        Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
+            .iter()
+            .any(|(_, field_ty)| type_contains_unresolved_vars(field_ty)),
+        Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Pid(_) | Ty::Hole | Ty::Error => {
+            false
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypecheckContext {
     pub runtime_policy: RuntimeSourcePolicy,
@@ -502,12 +527,24 @@ fn initialize_env() -> TypeEnv {
     // `Duration` is a stdlib-defined struct, but builtin signatures mention it
     // before stdlib declarations are typechecked. Reserve its type head here so
     // builtin signature parsing can treat it as the same struct identity.
-    env.predeclare_type_def("Duration".into(), crate::env::TypeKind::Struct, Vec::new());
     env.predeclare_type_def(
-        "SupervisorStatus".into(),
+        "Global::Duration".into(),
         crate::env::TypeKind::Struct,
         Vec::new(),
     );
+    env.predeclare_type_def(
+        "Global::SupervisorStatus".into(),
+        crate::env::TypeKind::Struct,
+        Vec::new(),
+    );
+    for name in [
+        "Global::FilePath",
+        "Global::FileSystemEntry",
+        "Global::FileSystemSnapshot",
+        "Global::CommandResult",
+    ] {
+        env.predeclare_type_def(name.into(), crate::env::TypeKind::Struct, Vec::new());
+    }
 
     // Ok constructor: ($A) -> Result<$A, $E>
     let ok_a = env.fresh_tyvar();
@@ -710,11 +747,11 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
                 };
                 Ty::Lazy(Box::new(inner.clone()))
             }
-            "Lens" => {
+            "Facet" => {
                 let [source, focus] = args.as_slice() else {
-                    return Err("Lens requires exactly 2 type arguments".into());
+                    return Err("Facet requires exactly 2 type arguments".into());
                 };
-                Ty::Lens(Box::new(source.clone()), Box::new(focus.clone()))
+                Ty::Facet(Box::new(source.clone()), Box::new(focus.clone()))
             }
             "TypeRef" => {
                 let [inner] = args.as_slice() else {
@@ -835,27 +872,11 @@ fn format_builtin_type_param_suffix(params: &[&str]) -> String {
 type TraitImplKey = (String, String);
 type TraitImplIndex = HashMap<String, Vec<TraitImplKey>>;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScarCheckpoint {
-    env: TypeEnv,
-    consts: HashMap<u32, ConstMeta>,
-    lens_bindings: HashMap<u32, StoredLensPath>,
-    user_func_params: HashMap<u32, Vec<String>>,
-    impl_method_uids: HashMap<String, u32>,
-    function_ids_by_name: HashMap<String, ResolvedId>,
-    specializable_defs: HashMap<u32, TypedNode>,
-    traits: HashMap<String, TraitInfo>,
-    trait_impls: HashMap<(String, String), TraitImplInfo>,
-    trait_impl_index_by_base_trait: TraitImplIndex,
-    trait_methods_by_qualified_name: HashMap<String, (String, String)>,
-    tyvar_bounds: HashMap<u32, Vec<String>>,
-}
-
 #[derive(Debug, Clone)]
-pub struct ScarSession {
+struct PersistentCheckerState {
     env: TypeEnv,
     consts: HashMap<u32, ConstMeta>,
-    lens_bindings: HashMap<u32, StoredLensPath>,
+    facet_bindings: HashMap<u32, StoredFacetPath>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
@@ -867,27 +888,12 @@ pub struct ScarSession {
     tyvar_bounds: HashMap<u32, Vec<String>>,
 }
 
-struct CheckerParts {
-    env: TypeEnv,
-    consts: HashMap<u32, ConstMeta>,
-    lens_bindings: HashMap<u32, StoredLensPath>,
-    user_func_params: HashMap<u32, Vec<String>>,
-    impl_method_uids: HashMap<String, u32>,
-    function_ids_by_name: HashMap<String, ResolvedId>,
-    specializable_defs: HashMap<u32, TypedNode>,
-    traits: HashMap<String, TraitInfo>,
-    trait_impls: HashMap<(String, String), TraitImplInfo>,
-    trait_impl_index_by_base_trait: TraitImplIndex,
-    trait_methods_by_qualified_name: HashMap<String, (String, String)>,
-    tyvar_bounds: HashMap<u32, Vec<String>>,
-}
-
-impl ScarSession {
-    pub fn new() -> Self {
+impl PersistentCheckerState {
+    fn new() -> Self {
         Self {
             env: initialize_env(),
             consts: HashMap::new(),
-            lens_bindings: HashMap::new(),
+            facet_bindings: HashMap::new(),
             user_func_params: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
@@ -897,6 +903,75 @@ impl ScarSession {
             trait_impl_index_by_base_trait: HashMap::new(),
             trait_methods_by_qualified_name: HashMap::new(),
             tyvar_bounds: HashMap::new(),
+        }
+    }
+
+    fn checkpoint(&self, process_specs: Vec<TypedProcessSpec>) -> ScarCheckpoint {
+        ScarCheckpoint {
+            env: self.env.clone(),
+            consts: self.consts.clone(),
+            facet_bindings: self.facet_bindings.clone(),
+            user_func_params: self.user_func_params.clone(),
+            impl_method_uids: self.impl_method_uids.clone(),
+            function_ids_by_name: self.function_ids_by_name.clone(),
+            specializable_defs: self.specializable_defs.clone(),
+            traits: self.traits.clone(),
+            trait_impls: self.trait_impls.clone(),
+            trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
+            trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
+            tyvar_bounds: self.tyvar_bounds.clone(),
+            process_specs,
+        }
+    }
+}
+
+impl From<ScarCheckpoint> for PersistentCheckerState {
+    fn from(checkpoint: ScarCheckpoint) -> Self {
+        Self {
+            env: checkpoint.env,
+            consts: checkpoint.consts,
+            facet_bindings: checkpoint.facet_bindings,
+            user_func_params: checkpoint.user_func_params,
+            impl_method_uids: checkpoint.impl_method_uids,
+            function_ids_by_name: checkpoint.function_ids_by_name,
+            specializable_defs: checkpoint.specializable_defs,
+            traits: checkpoint.traits,
+            trait_impls: checkpoint.trait_impls,
+            trait_impl_index_by_base_trait: checkpoint.trait_impl_index_by_base_trait,
+            trait_methods_by_qualified_name: checkpoint.trait_methods_by_qualified_name,
+            tyvar_bounds: checkpoint.tyvar_bounds,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScarCheckpoint {
+    env: TypeEnv,
+    consts: HashMap<u32, ConstMeta>,
+    facet_bindings: HashMap<u32, StoredFacetPath>,
+    user_func_params: HashMap<u32, Vec<String>>,
+    impl_method_uids: HashMap<String, u32>,
+    function_ids_by_name: HashMap<String, ResolvedId>,
+    specializable_defs: HashMap<u32, TypedNode>,
+    traits: HashMap<String, TraitInfo>,
+    trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_impl_index_by_base_trait: TraitImplIndex,
+    trait_methods_by_qualified_name: HashMap<String, (String, String)>,
+    tyvar_bounds: HashMap<u32, Vec<String>>,
+    process_specs: Vec<TypedProcessSpec>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScarSession {
+    state: PersistentCheckerState,
+    process_specs: Vec<TypedProcessSpec>,
+}
+
+impl ScarSession {
+    pub fn new() -> Self {
+        Self {
+            state: PersistentCheckerState::new(),
+            process_specs: Vec::new(),
         }
     }
 
@@ -921,49 +996,13 @@ impl ScarSession {
             .into_iter()
             .map(Into::into)
             .collect::<Vec<TypedProcessSpec>>();
-        let mut checker = Checker::with_env_and_params(
-            self.env.clone(),
-            self.consts.clone(),
-            self.lens_bindings.clone(),
-            self.user_func_params.clone(),
-            self.impl_method_uids.clone(),
-            self.function_ids_by_name.clone(),
-            self.specializable_defs.clone(),
-            self.traits.clone(),
-            self.trait_impls.clone(),
-            self.trait_impl_index_by_base_trait.clone(),
-            self.trait_methods_by_qualified_name.clone(),
-            self.tyvar_bounds.clone(),
-            context,
-        );
+        let mut checker = Checker::with_persistent_state(self.state.clone(), context);
         checker.set_process_handler_dependencies(&process_specs);
+        checker.boot_plan = program.boot_plan.clone();
         let nodes = checker.check_program(program.resolved)?;
-        let CheckerParts {
-            env,
-            consts,
-            lens_bindings,
-            user_func_params,
-            impl_method_uids,
-            function_ids_by_name,
-            specializable_defs,
-            traits,
-            trait_impls,
-            trait_impl_index_by_base_trait,
-            trait_methods_by_qualified_name,
-            tyvar_bounds,
-        } = checker.into_parts();
-        self.env = env;
-        self.consts = consts;
-        self.lens_bindings = lens_bindings;
-        self.user_func_params = user_func_params;
-        self.impl_method_uids = impl_method_uids;
-        self.function_ids_by_name = function_ids_by_name;
-        self.specializable_defs = specializable_defs;
-        self.traits = traits;
-        self.trait_impls = trait_impls;
-        self.trait_impl_index_by_base_trait = trait_impl_index_by_base_trait;
-        self.trait_methods_by_qualified_name = trait_methods_by_qualified_name;
-        self.tyvar_bounds = tyvar_bounds;
+        let persisted_process_specs = checker.process_specs.clone();
+        self.state = checker.into_persistent_state();
+        self.process_specs = persisted_process_specs;
         Ok(TypedProgram {
             nodes,
             process_specs,
@@ -976,96 +1015,38 @@ impl ScarSession {
         resolved: Vec<Resolved>,
         context: TypecheckContext,
     ) -> Result<Vec<TypedNode>, TypeError> {
-        let mut checker = Checker::with_env_and_params(
-            self.env.clone(),
-            self.consts.clone(),
-            self.lens_bindings.clone(),
-            self.user_func_params.clone(),
-            self.impl_method_uids.clone(),
-            self.function_ids_by_name.clone(),
-            self.specializable_defs.clone(),
-            self.traits.clone(),
-            self.trait_impls.clone(),
-            self.trait_impl_index_by_base_trait.clone(),
-            self.trait_methods_by_qualified_name.clone(),
-            self.tyvar_bounds.clone(),
-            context,
-        );
+        let mut checker = Checker::with_persistent_state(self.state.clone(), context);
+        checker.set_process_handler_dependencies(self.process_specs.as_slice());
         let typed = checker.check_program(resolved)?;
-        let CheckerParts {
-            env,
-            consts,
-            lens_bindings,
-            user_func_params,
-            impl_method_uids,
-            function_ids_by_name,
-            specializable_defs,
-            traits,
-            trait_impls,
-            trait_impl_index_by_base_trait,
-            trait_methods_by_qualified_name,
-            tyvar_bounds,
-        } = checker.into_parts();
-        self.env = env;
-        self.consts = consts;
-        self.lens_bindings = lens_bindings;
-        self.user_func_params = user_func_params;
-        self.impl_method_uids = impl_method_uids;
-        self.function_ids_by_name = function_ids_by_name;
-        self.specializable_defs = specializable_defs;
-        self.traits = traits;
-        self.trait_impls = trait_impls;
-        self.trait_impl_index_by_base_trait = trait_impl_index_by_base_trait;
-        self.trait_methods_by_qualified_name = trait_methods_by_qualified_name;
-        self.tyvar_bounds = tyvar_bounds;
+        let persisted_process_specs = checker.process_specs.clone();
+        self.state = checker.into_persistent_state();
+        self.process_specs = persisted_process_specs;
         Ok(typed)
     }
 
     pub fn checkpoint(&self) -> ScarCheckpoint {
-        ScarCheckpoint {
-            env: self.env.clone(),
-            consts: self.consts.clone(),
-            lens_bindings: self.lens_bindings.clone(),
-            user_func_params: self.user_func_params.clone(),
-            impl_method_uids: self.impl_method_uids.clone(),
-            function_ids_by_name: self.function_ids_by_name.clone(),
-            specializable_defs: self.specializable_defs.clone(),
-            traits: self.traits.clone(),
-            trait_impls: self.trait_impls.clone(),
-            trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
-            trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
-            tyvar_bounds: self.tyvar_bounds.clone(),
-        }
+        self.state.checkpoint(self.process_specs.clone())
     }
 
     pub fn lookup_type_def(&self, name: &str) -> Option<&crate::env::TypeDefInfo> {
-        self.env.lookup_type_def(name)
+        self.state.env.lookup_type_def(name)
     }
 
     pub fn enum_variants_of(&self, enum_name: &str) -> Option<&Vec<crate::env::EnumVariantInfo>> {
-        self.env.enum_variants_of(enum_name)
+        self.state.env.enum_variants_of(enum_name)
     }
 
     pub fn rollback(&mut self, checkpoint: ScarCheckpoint) {
-        self.env = checkpoint.env;
-        self.consts = checkpoint.consts;
-        self.lens_bindings = checkpoint.lens_bindings;
-        self.user_func_params = checkpoint.user_func_params;
-        self.impl_method_uids = checkpoint.impl_method_uids;
-        self.function_ids_by_name = checkpoint.function_ids_by_name;
-        self.specializable_defs = checkpoint.specializable_defs;
-        self.traits = checkpoint.traits;
-        self.trait_impls = checkpoint.trait_impls;
-        self.trait_impl_index_by_base_trait = checkpoint.trait_impl_index_by_base_trait;
-        self.trait_methods_by_qualified_name = checkpoint.trait_methods_by_qualified_name;
-        self.tyvar_bounds = checkpoint.tyvar_bounds;
+        let process_specs = checkpoint.process_specs.clone();
+        self.state = checkpoint.into();
+        self.process_specs = process_specs;
     }
 
     pub fn ensure_next_fun_idx_at_least(&mut self, next_fun_idx: u32) {
         // REPL runtime is the source of truth for currently materialized
         // function indices. Never move Scar backwards because stdlib
         // checkpoints may also reserve indices for delayed specializations.
-        self.env.next_fun_idx = self.env.next_fun_idx.max(next_fun_idx);
+        self.state.env.next_fun_idx = self.state.env.next_fun_idx.max(next_fun_idx);
     }
 
     pub fn reconcile_function_indices<'a, I>(&mut self, functions: I)
@@ -1078,11 +1059,11 @@ impl ScarSession {
             .copied()
             .max()
             .map(|idx| idx + 1)
-            .unwrap_or(self.env.next_fun_idx);
+            .unwrap_or(self.state.env.next_fun_idx);
         let mut specializable_rekeys = Vec::new();
         let mut fun_idx_rewrites = HashMap::new();
-        for (qualified_name, id) in &self.function_ids_by_name {
-            let old_fun_idx = match self.env.vars.get(&id.unique_id) {
+        for (qualified_name, id) in &self.state.function_ids_by_name {
+            let old_fun_idx = match self.state.env.vars.get(&id.unique_id) {
                 Some(Ty::UserFunc { fun_idx, .. }) => Some(*fun_idx),
                 _ => None,
             };
@@ -1099,7 +1080,7 @@ impl ScarSession {
             if let Some(Ty::UserFunc {
                 fun_idx: stored_fun_idx,
                 ..
-            }) = self.env.vars.get_mut(&id.unique_id)
+            }) = self.state.env.vars.get_mut(&id.unique_id)
             {
                 if let Some(old_fun_idx) = old_fun_idx {
                     fun_idx_rewrites.insert(old_fun_idx, fun_idx);
@@ -1108,34 +1089,34 @@ impl ScarSession {
             }
         }
         for (old_fun_idx, new_fun_idx) in specializable_rekeys {
-            if let Some(mut def) = self.specializable_defs.remove(&old_fun_idx) {
+            if let Some(mut def) = self.state.specializable_defs.remove(&old_fun_idx) {
                 Self::set_def_fun_idx(&mut def, new_fun_idx);
-                self.specializable_defs.insert(new_fun_idx, def);
+                self.state.specializable_defs.insert(new_fun_idx, def);
             }
         }
-        for def in self.specializable_defs.values_mut() {
+        for def in self.state.specializable_defs.values_mut() {
             Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
         }
-        self.env.next_fun_idx = self.env.next_fun_idx.max(next_fun_idx);
+        self.state.env.next_fun_idx = self.state.env.next_fun_idx.max(next_fun_idx);
     }
 
     pub fn reconcile_visible_function_indices<I>(&mut self, functions: I)
     where
         I: IntoIterator<Item = (u32, u32)>,
     {
-        let mut next_fun_idx = self.env.next_fun_idx;
+        let mut next_fun_idx = self.state.env.next_fun_idx;
         let mut specializable_rekeys = Vec::new();
         let mut fun_idx_rewrites = HashMap::new();
 
         for (uid, fun_idx) in functions {
-            let old_fun_idx = match self.env.vars.get(&uid) {
+            let old_fun_idx = match self.state.env.vars.get(&uid) {
                 Some(Ty::UserFunc { fun_idx, .. }) => Some(*fun_idx),
                 _ => None,
             };
             if let Some(Ty::UserFunc {
                 fun_idx: stored_fun_idx,
                 ..
-            }) = self.env.vars.get_mut(&uid)
+            }) = self.state.env.vars.get_mut(&uid)
             {
                 if let Some(old_fun_idx) = old_fun_idx {
                     fun_idx_rewrites.insert(old_fun_idx, fun_idx);
@@ -1147,21 +1128,25 @@ impl ScarSession {
         }
 
         for (old_fun_idx, new_fun_idx) in specializable_rekeys {
-            if let Some(mut def) = self.specializable_defs.remove(&old_fun_idx) {
+            if let Some(mut def) = self.state.specializable_defs.remove(&old_fun_idx) {
                 Self::set_def_fun_idx(&mut def, new_fun_idx);
-                self.specializable_defs.insert(new_fun_idx, def);
+                self.state.specializable_defs.insert(new_fun_idx, def);
             }
         }
-        for def in self.specializable_defs.values_mut() {
+        for def in self.state.specializable_defs.values_mut() {
             Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
         }
-        self.env.next_fun_idx = self.env.next_fun_idx.max(next_fun_idx);
+        self.state.env.next_fun_idx = self.state.env.next_fun_idx.max(next_fun_idx);
     }
 
     fn specializable_fun_idx_for_name(&self, qualified_name: &str) -> Option<u32> {
-        self.specializable_defs.iter().find_map(|(fun_idx, def)| {
-            (Self::def_qualified_name(def).as_deref() == Some(qualified_name)).then_some(*fun_idx)
-        })
+        self.state
+            .specializable_defs
+            .iter()
+            .find_map(|(fun_idx, def)| {
+                (Self::def_qualified_name(def).as_deref() == Some(qualified_name))
+                    .then_some(*fun_idx)
+            })
     }
 
     fn def_qualified_name(def: &TypedNode) -> Option<String> {
@@ -1198,7 +1183,7 @@ impl ScarSession {
                 }
                 Self::rewrite_fun_indices_in_ty(ret, rewrites);
             }
-            Ty::Lens(source, focus) => {
+            Ty::Facet(source, focus) => {
                 Self::rewrite_fun_indices_in_ty(source, rewrites);
                 Self::rewrite_fun_indices_in_ty(focus, rewrites);
             }
@@ -1256,13 +1241,13 @@ impl ScarSession {
         }
     }
 
-    fn rewrite_fun_indices_in_lens_path(path: &mut TypedLensPath, rewrites: &HashMap<u32, u32>) {
+    fn rewrite_fun_indices_in_facet_path(path: &mut TypedFacetPath, rewrites: &HashMap<u32, u32>) {
         Self::rewrite_fun_indices_in_ty(&mut path.source_ty, rewrites);
         Self::rewrite_fun_indices_in_ty(&mut path.focus_ty, rewrites);
     }
 
-    fn rewrite_fun_indices_in_pending_lens_path(
-        path: &mut PendingLensPath,
+    fn rewrite_fun_indices_in_pending_facet_path(
+        path: &mut PendingFacetPath,
         rewrites: &HashMap<u32, u32>,
     ) {
         if let Some(source_ty_hint) = &mut path.source_ty_hint {
@@ -1281,9 +1266,9 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_node(pid, rewrites);
             }
             TypedInner::SupervisorStatus { .. } => {}
-            TypedInner::SupervisorWorkers { init, size, .. } => {
+            TypedInner::SupervisorWorkers { init, strategy, .. } => {
                 Self::rewrite_fun_indices_in_node(init, rewrites);
-                Self::rewrite_fun_indices_in_node(size, rewrites);
+                Self::rewrite_fun_indices_in_node(strategy, rewrites);
             }
             TypedInner::App(func, args) => {
                 Self::rewrite_fun_indices_in_node(func, rewrites);
@@ -1381,19 +1366,19 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_node(value, rewrites);
             }
             TypedInner::ProcessContextHandler { .. } => {}
-            TypedInner::LensPath(path) => Self::rewrite_fun_indices_in_lens_path(path, rewrites),
-            TypedInner::PendingLensPath(path) => {
-                Self::rewrite_fun_indices_in_pending_lens_path(path, rewrites);
+            TypedInner::FacetPath(path) => Self::rewrite_fun_indices_in_facet_path(path, rewrites),
+            TypedInner::PendingFacetPath(path) => {
+                Self::rewrite_fun_indices_in_pending_facet_path(path, rewrites);
             }
-            TypedInner::LensView {
+            TypedInner::FacetView {
                 source,
                 path,
                 source_is_result: _,
             } => {
                 Self::rewrite_fun_indices_in_node(source, rewrites);
-                Self::rewrite_fun_indices_in_lens_path(path, rewrites);
+                Self::rewrite_fun_indices_in_facet_path(path, rewrites);
             }
-            TypedInner::LensSet {
+            TypedInner::FacetSet {
                 source,
                 path,
                 value,
@@ -1401,10 +1386,10 @@ impl ScarSession {
                 mode: _,
             } => {
                 Self::rewrite_fun_indices_in_node(source, rewrites);
-                Self::rewrite_fun_indices_in_lens_path(path, rewrites);
+                Self::rewrite_fun_indices_in_facet_path(path, rewrites);
                 Self::rewrite_fun_indices_in_node(value, rewrites);
             }
-            TypedInner::LensOver {
+            TypedInner::FacetOver {
                 source,
                 path,
                 update_fun,
@@ -1412,7 +1397,7 @@ impl ScarSession {
                 mode: _,
             } => {
                 Self::rewrite_fun_indices_in_node(source, rewrites);
-                Self::rewrite_fun_indices_in_lens_path(path, rewrites);
+                Self::rewrite_fun_indices_in_facet_path(path, rewrites);
                 Self::rewrite_fun_indices_in_node(update_fun, rewrites);
             }
             TypedInner::StructLit(_, fields) | TypedInner::ConstructorCall(_, fields) => {
@@ -1454,8 +1439,8 @@ impl ScarSession {
             | TypedInner::TraitDef(_, _)
             | TypedInner::TraitImplDef(_, _)
             | TypedInner::BuiltinExtractorDecl(_, _, _)
-            | TypedInner::StructDef(_, _, _, _)
-            | TypedInner::RecordDef(_, _, _, _) => {}
+            | TypedInner::StructDef(_, _, _, _, _)
+            | TypedInner::RecordDef(_, _, _, _, _) => {}
         }
     }
 
@@ -1576,11 +1561,12 @@ impl Default for ScarSession {
 struct Checker {
     env: TypeEnv,
     function_return_ty: Option<Ty>,
+    local_annotation_tyvars: HashMap<String, Ty>,
     current_function_symbol: Option<String>,
     current_impl_struct_target: Option<String>,
     in_extractor_body: bool,
     closure_depth: usize,
-    lens_bindings: HashMap<u32, StoredLensPath>,
+    facet_bindings: HashMap<u32, StoredFacetPath>,
     consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
@@ -1603,75 +1589,74 @@ struct Checker {
 }
 
 impl Checker {
-    fn new(context: TypecheckContext) -> Self {
-        Self {
-            env: initialize_env(),
-            function_return_ty: None,
-            current_function_symbol: None,
-            current_impl_struct_target: None,
-            in_extractor_body: false,
-            closure_depth: 0,
-            lens_bindings: HashMap::new(),
-            consts: HashMap::new(),
-            user_func_params: HashMap::new(),
-            impl_method_uids: HashMap::new(),
-            function_ids_by_name: HashMap::new(),
-            specializable_defs: HashMap::new(),
-            substitutions: HashMap::new(),
-            tyvar_bounds: HashMap::new(),
-            runtime_policy: context.runtime_policy,
-            enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
-            allow_error_function_params: context.allow_error_function_params,
-            seen_builtin_type_decls: HashMap::new(),
-            traits: HashMap::new(),
-            trait_impls: HashMap::new(),
-            trait_impl_index_by_base_trait: HashMap::new(),
-            trait_methods_by_qualified_name: HashMap::new(),
-            profiler: TypecheckProfiler::new_from_env(),
-            process_handler_dependencies: HashMap::new(),
-            process_specs: Vec::new(),
-            boot_plan: spire::ast::SupervisorInitSpec::default(),
+    pub(super) fn surface_name<'a>(name: &'a str) -> &'a str {
+        name.strip_prefix("Global::").unwrap_or(name)
+    }
+
+    fn surface_ast_ty(ast_ty: &AstTy) -> String {
+        match ast_ty {
+            AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => Self::surface_name(name).into(),
+            AstTy::Generic(_, name, args) => format!(
+                "{}<{}>",
+                Self::surface_name(name),
+                args.iter()
+                    .map(Self::surface_ast_ty)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Tuple(_, items) => format!(
+                "({})",
+                items
+                    .iter()
+                    .map(Self::surface_ast_ty)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Func(_, params, ret) => format!(
+                "({} -> {})",
+                params
+                    .iter()
+                    .map(Self::surface_ast_ty)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                Self::surface_ast_ty(ret)
+            ),
         }
     }
 
-    fn with_env_and_params(
-        env: TypeEnv,
-        consts: HashMap<u32, ConstMeta>,
-        lens_bindings: HashMap<u32, StoredLensPath>,
-        user_func_params: HashMap<u32, Vec<String>>,
-        impl_method_uids: HashMap<String, u32>,
-        function_ids_by_name: HashMap<String, ResolvedId>,
-        specializable_defs: HashMap<u32, TypedNode>,
-        traits: HashMap<String, TraitInfo>,
-        trait_impls: HashMap<(String, String), TraitImplInfo>,
-        trait_impl_index_by_base_trait: TraitImplIndex,
-        trait_methods_by_qualified_name: HashMap<String, (String, String)>,
-        tyvar_bounds: HashMap<u32, Vec<String>>,
-        context: TypecheckContext,
-    ) -> Self {
+    pub(super) fn surface_qualified_name<'a>(name: Option<&'a str>) -> Option<&'a str> {
+        name.map(Self::surface_name)
+    }
+
+    fn new(context: TypecheckContext) -> Self {
+        Self::with_persistent_state(PersistentCheckerState::new(), context)
+    }
+
+    fn with_persistent_state(state: PersistentCheckerState, context: TypecheckContext) -> Self {
         Self {
-            env,
+            env: state.env,
             function_return_ty: None,
+            local_annotation_tyvars: HashMap::new(),
             current_function_symbol: None,
             current_impl_struct_target: None,
             in_extractor_body: false,
             closure_depth: 0,
-            lens_bindings,
-            consts,
-            user_func_params,
-            impl_method_uids,
-            function_ids_by_name,
-            specializable_defs,
+            facet_bindings: state.facet_bindings,
+            consts: state.consts,
+            user_func_params: state.user_func_params,
+            impl_method_uids: state.impl_method_uids,
+            function_ids_by_name: state.function_ids_by_name,
+            specializable_defs: state.specializable_defs,
             substitutions: HashMap::new(),
-            tyvar_bounds,
+            tyvar_bounds: state.tyvar_bounds,
             runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
             allow_error_function_params: context.allow_error_function_params,
             seen_builtin_type_decls: HashMap::new(),
-            traits,
-            trait_impls,
-            trait_impl_index_by_base_trait,
-            trait_methods_by_qualified_name,
+            traits: state.traits,
+            trait_impls: state.trait_impls,
+            trait_impl_index_by_base_trait: state.trait_impl_index_by_base_trait,
+            trait_methods_by_qualified_name: state.trait_methods_by_qualified_name,
             profiler: TypecheckProfiler::new_from_env(),
             process_handler_dependencies: HashMap::new(),
             process_specs: Vec::new(),
@@ -1681,19 +1666,10 @@ impl Checker {
 
     fn spawn_child_checker(&self, env: TypeEnv) -> Self {
         let profile = self.profiler.start();
-        let mut checker = Checker::with_env_and_params(
-            env,
-            self.consts.clone(),
-            self.lens_bindings.clone(),
-            self.user_func_params.clone(),
-            self.impl_method_uids.clone(),
-            self.function_ids_by_name.clone(),
-            self.specializable_defs.clone(),
-            self.traits.clone(),
-            self.trait_impls.clone(),
-            self.trait_impl_index_by_base_trait.clone(),
-            self.trait_methods_by_qualified_name.clone(),
-            self.tyvar_bounds.clone(),
+        let mut state = self.persistent_state();
+        state.env = env;
+        let mut checker = Checker::with_persistent_state(
+            state,
             TypecheckContext {
                 runtime_policy: self.runtime_policy.clone(),
                 enforce_builtin_type_contracts: self.enforce_builtin_type_contracts,
@@ -1701,11 +1677,12 @@ impl Checker {
             },
         );
         checker.function_return_ty = self.function_return_ty.clone();
+        checker.local_annotation_tyvars = self.local_annotation_tyvars.clone();
         checker.current_function_symbol = self.current_function_symbol.clone();
         checker.current_impl_struct_target = self.current_impl_struct_target.clone();
         checker.in_extractor_body = self.in_extractor_body;
         checker.closure_depth = self.closure_depth;
-        checker.lens_bindings = self.lens_bindings.clone();
+        checker.facet_bindings = self.facet_bindings.clone();
         checker.substitutions = self.substitutions.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
         checker.process_handler_dependencies = self.process_handler_dependencies.clone();
@@ -1780,7 +1757,7 @@ impl Checker {
             | Ty::Hole
             | Ty::Var(_)
             | Ty::Error
-            | Ty::Lens(_, _) => false,
+            | Ty::Facet(_, _) => false,
         }
     }
 
@@ -1793,61 +1770,156 @@ impl Checker {
         }
     }
 
-    pub(super) fn ty_contains_process_state_type(&self, ty: &Ty) -> Option<(String, String)> {
-        match self.resolve_ty(ty) {
-            Ty::Struct(name, fields) | Ty::Record(name, fields) => {
-                if let Some(owner) = self
-                    .env
-                    .lookup_type_def(&name)
-                    .and_then(|def| def.process_state_owner.clone())
-                {
-                    return Some((name, owner));
-                }
-                fields
-                    .iter()
-                    .find_map(|(_, field_ty)| self.ty_contains_process_state_type(field_ty))
+    fn process_handler_function_ty(&self, uid: u32) -> Option<(Vec<Ty>, Ty)> {
+        match self.env.lookup_var(uid)? {
+            Ty::UserFunc { params, ret, .. } | Ty::BuiltinFunc { params, ret, .. } => {
+                Some((params.clone(), ret.as_ref().clone()))
             }
-            Ty::Enum(name, args) => {
-                if let Some(owner) = self
-                    .env
-                    .lookup_type_def(&name)
-                    .and_then(|def| def.process_state_owner.clone())
-                {
-                    return Some((name, owner));
-                }
-                args.iter()
-                    .find_map(|arg| self.ty_contains_process_state_type(arg))
-            }
-            Ty::Result(ok, err) => self
-                .ty_contains_process_state_type(&ok)
-                .or_else(|| self.ty_contains_process_state_type(&err)),
-            Ty::List(inner) | Ty::Lazy(inner) | Ty::TypeRef(inner) => {
-                self.ty_contains_process_state_type(&inner)
-            }
-            Ty::Lens(root, focus) => self
-                .ty_contains_process_state_type(&root)
-                .or_else(|| self.ty_contains_process_state_type(&focus)),
-            Ty::Tuple(items) => items
-                .iter()
-                .find_map(|item| self.ty_contains_process_state_type(item)),
-            Ty::Func(params, ret) => params
-                .iter()
-                .find_map(|param| self.ty_contains_process_state_type(param))
-                .or_else(|| self.ty_contains_process_state_type(&ret)),
-            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => params
-                .iter()
-                .find_map(|param| self.ty_contains_process_state_type(param))
-                .or_else(|| self.ty_contains_process_state_type(&ret)),
-            Ty::Int
-            | Ty::Float
-            | Ty::Str
-            | Ty::Bool
-            | Ty::Unit
-            | Ty::Pid(_)
-            | Ty::Hole
-            | Ty::Var(_)
-            | Ty::Error => None,
+            _ => None,
         }
+    }
+
+    fn process_result_ok_ty(&self, ty: &Ty) -> Option<Ty> {
+        match self.resolve_ty(ty) {
+            Ty::Result(ok, _) => Some(ok.as_ref().clone()),
+            _ => None,
+        }
+    }
+
+    fn process_handler_public_name(process: &TypedProcessSpec, handler_name: &str) -> String {
+        format!(
+            "{}::{}",
+            Self::surface_name(&process.process_name),
+            handler_name
+        )
+    }
+
+    fn validate_handler_first_param_state(
+        &self,
+        process: &TypedProcessSpec,
+        handler_kind: &str,
+        handler_name: &str,
+        params: &[Ty],
+        state_ty: &Ty,
+        state_name: &str,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        let state_param = match params.first() {
+            Some(first)
+                if matches!(
+                    self.resolve_ty(first),
+                    Ty::Pid(name)
+                        if Self::surface_name(&name)
+                            == Self::surface_name(&process.process_name)
+                ) =>
+            {
+                params.get(1)
+            }
+            _ => params.first(),
+        };
+        if state_param.is_some_and(|param| self.resolve_ty(param) == *state_ty) {
+            return Ok(());
+        }
+
+        Err(TypeError {
+            message: format!(
+                "@{} handler `{}` first parameter must match process state type `{}`",
+                handler_kind,
+                Self::process_handler_public_name(process, handler_name),
+                Self::surface_name(state_name)
+            ),
+            span,
+            hint: None,
+        })
+    }
+
+    fn validate_handler_result_ok_state(
+        &self,
+        process: &TypedProcessSpec,
+        handler_kind: &str,
+        handler_name: &str,
+        ret: &Ty,
+        state_ty: &Ty,
+        state_name: &str,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        if self
+            .process_result_ok_ty(ret)
+            .is_some_and(|ok| self.resolve_ty(&ok) == *state_ty)
+        {
+            return Ok(());
+        }
+
+        Err(TypeError {
+            message: format!(
+                "@{} handler `{}` Result ok type must match process state type `{}`",
+                handler_kind,
+                Self::process_handler_public_name(process, handler_name),
+                Self::surface_name(state_name)
+            ),
+            span,
+            hint: None,
+        })
+    }
+
+    fn validate_call_handler_result_state(
+        &self,
+        process: &TypedProcessSpec,
+        handler_name: &str,
+        ret: &Ty,
+        state_ty: &Ty,
+        state_name: &str,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        let has_state = self.process_result_ok_ty(ret).is_some_and(|ok| {
+            matches!(self.resolve_ty(&ok), Ty::Enum(name, items)
+                if Self::surface_name(&name) == "CallResult"
+                    && items.len() == 2
+                    && self.resolve_ty(&items[1]) == *state_ty)
+        });
+        if has_state {
+            return Ok(());
+        }
+
+        Err(TypeError {
+            message: format!(
+                "@call handler `{}` Result ok type must be CallResult<Reply, {}>",
+                Self::process_handler_public_name(process, handler_name),
+                Self::surface_name(state_name)
+            ),
+            span,
+            hint: None,
+        })
+    }
+
+    fn validate_cast_handler_result_state(
+        &self,
+        process: &TypedProcessSpec,
+        handler_name: &str,
+        ret: &Ty,
+        state_ty: &Ty,
+        state_name: &str,
+        span: Span,
+    ) -> Result<(), TypeError> {
+        let has_state = self.process_result_ok_ty(ret).is_some_and(|ok| {
+            matches!(self.resolve_ty(&ok), Ty::Enum(name, items)
+                if Self::surface_name(&name) == "CastResult"
+                    && items.len() == 1
+                    && self.resolve_ty(&items[0]) == *state_ty)
+        });
+        if has_state {
+            return Ok(());
+        }
+
+        Err(TypeError {
+            message: format!(
+                "@cast handler `{}` Result ok type must be CastResult<{}>",
+                Self::process_handler_public_name(process, handler_name),
+                Self::surface_name(state_name)
+            ),
+            span,
+            hint: None,
+        })
     }
 
     fn validate_process_state_contracts(&self) -> Result<(), TypeError> {
@@ -1858,6 +1930,8 @@ impl Checker {
             ) {
                 continue;
             }
+            let state_ty =
+                self.resolve_ast_ty_in_context(&process.spec.state, TypeSyntaxContext::General)?;
             let Some(Ty::UserFunc { ret, .. } | Ty::BuiltinFunc { ret, .. }) =
                 self.env.lookup_var(process.init_uid)
             else {
@@ -1867,7 +1941,7 @@ impl Checker {
                 Ty::Result(ok, _) => ok.as_ref().clone(),
                 other => other,
             };
-            let state_ty = if process.spec.lazy {
+            let init_state_ty = if process.spec.lazy {
                 self.process_init_state_ty(&init_ok_ty)
                     .ok_or_else(|| TypeError {
                         message: format!(
@@ -1888,22 +1962,104 @@ impl Checker {
                 init_ok_ty
             };
 
-            let state_name = match self.resolve_ty(&state_ty) {
-                Ty::Struct(name, _) | Ty::Enum(name, _) | Ty::Record(name, _) => name,
-                _ => continue,
-            };
-            let Some(def) = self.env.lookup_type_def(&state_name) else {
-                continue;
-            };
-            if def.process_state_owner.as_deref() != Some(process.process_name.as_str()) {
+            let init_state_ty = self.resolve_ty(&init_state_ty);
+            let state_ty = self.resolve_ty(&state_ty);
+            let state_name = Self::surface_ast_ty(&process.spec.state);
+            if init_state_ty != state_ty {
                 return Err(TypeError {
                     message: format!(
-                        "process state type `{}` must be annotated with @process_state({})",
-                        state_name, process.process_name
+                        "@init handler `{}::init` Result ok type must match process state type `{}`",
+                        Self::surface_name(&process.process_name),
+                        state_name,
                     ),
                     span: Span { start: 0, end: 0 },
                     hint: None,
                 });
+            }
+            let handler_uids = process
+                .handler_uids
+                .iter()
+                .map(|handler| (handler.internal_name.as_str(), handler.uid))
+                .collect::<HashMap<_, _>>();
+            for handler in &process.spec.handler_specs {
+                let Some(uid) = handler_uids.get(handler.internal_name.as_str()).copied() else {
+                    continue;
+                };
+                let Some((params, ret)) = self.process_handler_function_ty(uid) else {
+                    continue;
+                };
+                match handler.kind {
+                    spire::ast::ProcessRuntimeHandlerKind::Init => {}
+                    spire::ast::ProcessRuntimeHandlerKind::Get => {
+                        self.validate_handler_first_param_state(
+                            process,
+                            "get",
+                            &handler.name,
+                            &params,
+                            &state_ty,
+                            &state_name,
+                            handler.span.clone(),
+                        )?;
+                    }
+                    spire::ast::ProcessRuntimeHandlerKind::Set => {
+                        self.validate_handler_first_param_state(
+                            process,
+                            "set",
+                            &handler.name,
+                            &params,
+                            &state_ty,
+                            &state_name,
+                            handler.span.clone(),
+                        )?;
+                        self.validate_handler_result_ok_state(
+                            process,
+                            "set",
+                            &handler.name,
+                            &ret,
+                            &state_ty,
+                            &state_name,
+                            handler.span.clone(),
+                        )?;
+                    }
+                    spire::ast::ProcessRuntimeHandlerKind::Call => {
+                        self.validate_handler_first_param_state(
+                            process,
+                            "call",
+                            &handler.name,
+                            &params,
+                            &state_ty,
+                            &state_name,
+                            handler.span.clone(),
+                        )?;
+                        self.validate_call_handler_result_state(
+                            process,
+                            &handler.name,
+                            &ret,
+                            &state_ty,
+                            &state_name,
+                            handler.span.clone(),
+                        )?;
+                    }
+                    spire::ast::ProcessRuntimeHandlerKind::Cast => {
+                        self.validate_handler_first_param_state(
+                            process,
+                            "cast",
+                            &handler.name,
+                            &params,
+                            &state_ty,
+                            &state_name,
+                            handler.span.clone(),
+                        )?;
+                        self.validate_cast_handler_result_state(
+                            process,
+                            &handler.name,
+                            &ret,
+                            &state_ty,
+                            &state_name,
+                            handler.span.clone(),
+                        )?;
+                    }
+                }
             }
         }
         Ok(())
@@ -1926,6 +2082,46 @@ impl Checker {
         matches!(handler, "__agent_init" | "__agent_get" | "__agent_set")
             || handler.starts_with("__agent_call_")
             || handler.starts_with("__agent_cast_")
+    }
+
+    pub(super) fn current_process_spec(&self) -> Option<&TypedProcessSpec> {
+        let symbol = self.current_function_symbol.as_deref()?;
+        let (module, _) = symbol.rsplit_once("::")?;
+        self.process_specs
+            .iter()
+            .find(|spec| spec.module_path == module || spec.process_name == module)
+    }
+
+    pub(super) fn stop_constructor_allowed(&self) -> bool {
+        let Some(spec) = self.current_process_spec() else {
+            return false;
+        };
+        if spec.spec.kind != spire::ast::ProcessKind::GenServer
+            || spec.spec.instance != spire::ast::ProcessInstance::Worker
+        {
+            return false;
+        }
+        let Some(symbol) = self.current_function_symbol.as_deref() else {
+            return false;
+        };
+        let Some((_, function_name)) = symbol.rsplit_once("::") else {
+            return false;
+        };
+        function_name != "__agent_init"
+    }
+
+    pub(super) fn stop_constructor_error(&self, span: &Span, enum_name: &str) -> TypeError {
+        TypeError {
+            message: format!(
+                "{} can only be used inside Worker GenServer @call/@cast handlers or local helper functions",
+                enum_name
+            ),
+            span: span.clone(),
+            hint: Some(
+                "Use Stop(...) only from Worker defgenserver handlers or helper defs in the same process block."
+                    .into(),
+            ),
+        }
     }
 
     fn ty_contains_handler_capability_pid(&self, ty: &Ty, slots: &HashMap<String, String>) -> bool {
@@ -1967,7 +2163,7 @@ impl Checker {
             | Ty::Unit
             | Ty::Error
             | Ty::Hole => false,
-            Ty::Lens(source, focus) => {
+            Ty::Facet(source, focus) => {
                 self.ty_contains_handler_capability_pid(&source, slots)
                     || self.ty_contains_handler_capability_pid(&focus, slots)
             }
@@ -2043,11 +2239,28 @@ impl Checker {
         variant
     }
 
-    fn into_parts(self) -> CheckerParts {
-        CheckerParts {
+    fn persistent_state(&self) -> PersistentCheckerState {
+        PersistentCheckerState {
+            env: self.env.clone(),
+            consts: self.consts.clone(),
+            facet_bindings: self.facet_bindings.clone(),
+            user_func_params: self.user_func_params.clone(),
+            impl_method_uids: self.impl_method_uids.clone(),
+            function_ids_by_name: self.function_ids_by_name.clone(),
+            specializable_defs: self.specializable_defs.clone(),
+            traits: self.traits.clone(),
+            trait_impls: self.trait_impls.clone(),
+            trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
+            trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
+            tyvar_bounds: self.tyvar_bounds.clone(),
+        }
+    }
+
+    fn into_persistent_state(self) -> PersistentCheckerState {
+        PersistentCheckerState {
             env: self.env,
             consts: self.consts,
-            lens_bindings: self.lens_bindings,
+            facet_bindings: self.facet_bindings,
             user_func_params: self.user_func_params,
             impl_method_uids: self.impl_method_uids,
             function_ids_by_name: self.function_ids_by_name,

@@ -19,6 +19,7 @@
 - `--vm-dump <path>`
 - `--vm-dump-on error|always`
 - `--vm-stats`
+- `--vm-stats-json`
 - `--trace-call`
 - `--trace-opcode`
 - `--trace-limit <n>`
@@ -32,6 +33,7 @@
 - `--format viewer-json`
 - `--entry <name>`
 - `--opcode-histogram`
+- `--peephole-candidates`
 
 ---
 
@@ -61,20 +63,72 @@
 - `tail_calls_optimized`
 - `max_stack_depth`
 - `max_frame_depth`
+- conditional branch outcome counters
 - opcode 別実行回数
 
 `tail_calls_optimized` は current frame を再利用した user-function tail call 回数を表す。
 TCO が効いた実行では `return_count` や `max_frame_depth` が非最適化時より小さくなりうる。
 
-### 3.1.1 `--vm-dump <path>`
+### 3.1.1 `--vm-stats-json`
+
+実行完了後、compact JSON を `stderr` に 1 行出力する。`stdout` はユーザプログラム用のまま保持する。
+`--vm-stats` と同時指定した場合は human-readable stats を先に出し、JSON を最後に出す。
+
+```json
+{
+  "schema_version": 1,
+  "stats": {
+    "executed_opcodes": 12,
+    "builtin_calls": 2,
+    "function_calls": 1,
+    "closure_calls": 0,
+    "return_count": 1,
+    "tail_calls_optimized": 0,
+    "max_stack_depth": 3,
+    "max_frame_depth": 2,
+    "per_opcode": {
+      "LoadConst": 3,
+      "JumpIfFalse": 1
+    },
+    "branch": {
+      "jump_if_true_taken": 0,
+      "jump_if_true_not_taken": 0,
+      "jump_if_false_taken": 1,
+      "jump_if_false_not_taken": 0
+    }
+  },
+  "trace": {
+    "dropped_events": 0,
+    "lines": []
+  }
+}
+```
+
+### 3.1.2 `--vm-dump <path>`
 
 実行終了時に VM dump JSON を指定パスへ保存する。
 
 - `stdout` / `stderr` とは分離し、既存の run 契約を壊さない
-- dump には終了状態、exit code、最終 `pc` / opcode、stack / frame 深さ、VM observation を含む
+- dump には終了状態、exit code、最終 `pc` / opcode、stack / frame 深さ、VM observation、process runtime snapshot を含む
+- `stats.branch` に conditional branch outcome counters を含む
 - compile error で VM 実行に到達しなかった場合は dump を生成しない
 
-### 3.1.2 `--vm-dump-on error|always`
+process runtime snapshot の `worker_sets` は次の JSON 形状を持つ。
+
+```json
+{
+  "id": 0,
+  "worker_process": "ImageWorker",
+  "supervisor": "ImageWorkerSupervisor",
+  "target": 2,
+  "min": 2,
+  "max": 2,
+  "member_pids": [3, 4],
+  "live_count": 2
+}
+```
+
+### 3.1.3 `--vm-dump-on error|always`
 
 `--vm-dump` の保存条件を指定する。
 
@@ -94,6 +148,9 @@ opcode 単位より低ノイズな call-flow 確認を主目的とする。
 - `opcode`
 - `stack_depth`
 - `frame_depth`
+
+`JumpIfFalse` / `JumpIfTrue` は opcode trace に加えて、条件評価後の分岐 outcome を
+`branch pc=<pc> opcode=<kind> target=<target> taken=<bool>` として記録する。
 
 ### 3.4 `--trace-limit <n>`
 
@@ -118,25 +175,100 @@ trace 対象の kind 名を CSV で指定する。
 - `resolve`
 - `typecheck`
 - `codegen`
+- `compile` (`.srt` 入力時)
+- `decode` (`.eldr` 入力時)
 - `execute`
 - `total`
 
-`.eldr` 入力では compile phase は `n/a` を許容する。
+現在の Rune compile helper は parse / resolve / typecheck / codegen の内訳を外部に公開していないため、
+それらは `n/a` を許容する。`.srt` は `compile`、`.eldr` は `decode` を実測する。
 
 ### 3.7 `--error-context verbose`
 
-runtime error 表示に以下を追加する。
+runtime error または `run` entrypoint が返した `Err(...)` の表示に以下を追加する。
 
 - `pc`
 - `opcode`
 - `function`
-- `call_site`
 - stack / frame / locals 関連 detail
 
 ### 3.8 `--opcode-histogram`
 
 `dump --format json` の出力に static opcode histogram を追加する。
 これは実行回数ではなく、bytecode 上の命令内訳である。
+`--opcode-histogram` または `--peephole-candidates` の指定時は、top-level に
+`function_summary` も追加する。
+
+`function_summary` は関数ごとの opcode histogram と call counts を持つ。
+
+```json
+{
+  "summary": {
+    "generated_function_count": 4,
+    "partial_apply_wrapper_count": 1,
+    "functions_with_call_closure": 2
+  },
+  "functions": [
+    {
+      "fun_idx": 3,
+      "name": "compose#0",
+      "arity": 1,
+      "entry_pc": 200,
+      "end_pc": 218,
+      "flags": {
+        "generated": true,
+        "partial_apply_wrapper": false,
+        "closure": false
+      },
+      "opcode_count": 18,
+      "opcode_histogram": {
+        "Call": 2,
+        "Return": 1
+      },
+      "call_counts": {
+        "call": 2,
+        "call_builtin": 0,
+        "call_closure": 0,
+        "capture_closure": 0,
+        "capture_closure_zero": 0
+      }
+    }
+  ]
+}
+```
+
+### 3.9 `--peephole-candidates`
+
+`dump --format json` の出力に、現在の lowering 後にも残っている peephole 最適化候補に一致する
+opcode window を追加する。各候補は `pc` / `function` / `source` /
+`opcode_window` / `operands` を持つ。主用途は VM 命令圧縮の次手を選ぶための静的レポートであり、
+実行意味には影響しない。
+
+`operands` は window 内 opcode の機械可読な operand summary である。
+すでに専用 opcode へ畳み込み済みの箇所は候補としては現れない。たとえば
+`EqLocalTag + JumpIfFalse/JumpIfTrue` が `JumpIfLocalTagEq/JumpIfLocalTagNe` へ
+lowering 済みの場合、`branch_fusion` は報告されず、専用 opcode の出現数は
+`--opcode-histogram` / `optimization_summary` 側で観測する。
+
+```json
+{
+  "kind": "branch_fusion",
+  "pc": 123,
+  "opcode_window": ["EqLocalTag", "JumpIfFalse"],
+  "operands": [
+    {
+      "opcode": "EqLocalTag",
+      "local_idx": 4,
+      "tag_const_idx": 0,
+      "tag": 0
+    },
+    {
+      "opcode": "JumpIfFalse",
+      "target": 140
+    }
+  ]
+}
+```
 
 ---
 
@@ -148,11 +280,12 @@ runtime error 表示に以下を追加する。
 - VM dump の保存条件判定と JSON 書き出し
 - compile phase timing 計測
 - 観測結果の整形と `stderr` 出力
-- `dump` JSON の histogram 追加
+- `dump` JSON の histogram / peephole operand / function summary 追加
 
 ### 4.2 `Eldr`
 
 - 実行中の opcode / call 統計収集
+- conditional branch outcome 統計収集
 - trace event 収集
 - runtime error detail の verbose 表示
 
@@ -179,6 +312,10 @@ runtime error 表示に以下を追加する。
 - `run` option parser の正常系 / 異常系
 - `--vm-dump` の success / failure 保存条件
 - `dump --opcode-histogram` の JSON 形状
+- `dump --peephole-candidates` の JSON 形状と operand detail
+- `--vm-stats-json` の JSON 形状
+- branch outcome counters と branch trace
+- `--phase-times` の stderr 出力
 - VM stats の opcode 集計
 - call trace の件数と kind
 - runtime error verbose の出力形

@@ -1,0 +1,3 @@
+import Workers::idle_count
+
+print(to_string(idle_count))

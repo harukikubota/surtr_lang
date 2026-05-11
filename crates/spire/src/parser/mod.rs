@@ -2,7 +2,7 @@ use crate::ast::*;
 use crate::error::ParseError;
 use crate::lexer::tokenize;
 use crate::token::{Spanned, Token};
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 mod chumsky_program;
 mod completion;
@@ -29,6 +29,7 @@ pub use diagnostic::{
 
 pub const MAX_PARSE_NESTING: usize = 32;
 pub const MAX_PARSE_NESTING_MESSAGE: &str = "maximum parse nesting depth exceeded";
+const IMPLICIT_ROOT_NAMESPACE: &str = "Global";
 
 /// Parse Surtr source text into an abstract syntax tree.
 pub fn parse(source: &str) -> Result<Vec<Ast>, ParseError> {
@@ -41,7 +42,8 @@ pub fn parse_with_context(source: &str, context: ParserContext) -> Result<Vec<As
     reject_excessive_delimiter_nesting(&tokens)?;
     let ast = chumsky_program::parse_program_with_chumsky(source, &tokens, context.clone())?;
     validate::validate_program_by_context(&context, &ast)?;
-    lower_namespaces(ast)
+    let ast = lower_namespaces(ast)?;
+    canonicalize_root_owner_heads(ast)
 }
 
 /// Parse Surtr source with parser diagnostic metadata for editor tooling.
@@ -55,7 +57,8 @@ pub fn parse_with_context_diagnostic(
         chumsky_program::parse_program_with_chumsky_diagnostic(source, &tokens, context.clone())
             .map_err(ParseDiagnostic::from)?;
     validate::validate_program_by_context(&context, &ast).map_err(ParseDiagnostic::from)?;
-    lower_namespaces(ast).map_err(ParseDiagnostic::from)
+    let ast = lower_namespaces(ast).map_err(ParseDiagnostic::from)?;
+    canonicalize_root_owner_heads(ast).map_err(ParseDiagnostic::from)
 }
 
 fn reject_excessive_delimiter_nesting(tokens: &[Spanned<Token>]) -> Result<(), ParseError> {
@@ -280,6 +283,7 @@ impl<'a> Parser<'a> {
                 Self::anonymous_callable_call_target(rhs)
             }
             Ast::Capture(_, _, _)
+            | Ast::FacetCapture(_, _)
             | Ast::Closure(_, _, _)
             | Ast::Grouped(_, _)
             | Ast::App(_, _, _) => Some(stmt),
@@ -354,6 +358,14 @@ impl<'a> Parser<'a> {
                 ));
             }
         }
+        if segments.len() > 1 && segments[0] == IMPLICIT_ROOT_NAMESPACE {
+            return Err(ParseError::syntax(
+                format!(
+                    "{label} path must not explicitly use reserved root namespace `{IMPLICIT_ROOT_NAMESPACE}`"
+                ),
+                Span { start, end },
+            ));
+        }
         Ok((segments.join("::"), Span { start, end }))
     }
 }
@@ -366,6 +378,7 @@ fn shift_span(span: Span, delta: usize) -> Span {
 }
 
 fn lower_namespaces(ast: Vec<Ast>) -> Result<Vec<Ast>, ParseError> {
+    validate_top_level_namespace_owner_collisions(&ast)?;
     let mut out = Vec::new();
     for node in ast {
         lower_namespace_node(node, None, &mut out)?;
@@ -405,57 +418,67 @@ fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, Pa
     match node {
         Ast::Defmod(span, name, body, attrs) => Ok(Ast::Defmod(
             span.clone(),
-            qualify_namespace_head(namespace, &name, 2, &span, "module")?,
+            qualify_namespace_head(namespace, &name, 2, &span, "module", true)?,
             body,
             attrs,
         )),
         Ast::Defagent(span, name, body, mut process_spec, attrs) => {
-            let qualified = qualify_namespace_head(namespace, &name, 2, &span, "process")?;
+            let qualified = qualify_namespace_head(namespace, &name, 2, &span, "process", true)?;
             process_spec.process_name = qualified.clone();
-            Ok(Ast::Defagent(span, qualified, body, process_spec, attrs))
+            process_spec.state = qualify_namespace_type(process_spec.state, namespace)?;
+            Ok(Ast::Defagent(
+                span,
+                qualified.clone(),
+                rewrite_process_owner_refs_in_body(body, &name, &qualified),
+                process_spec,
+                attrs,
+            ))
         }
         Ast::Defgenserver(span, name, body, mut process_spec, attrs) => {
-            let qualified = qualify_namespace_head(namespace, &name, 2, &span, "process")?;
+            let qualified = qualify_namespace_head(namespace, &name, 2, &span, "process", true)?;
             process_spec.process_name = qualified.clone();
+            process_spec.state = qualify_namespace_type(process_spec.state, namespace)?;
             Ok(Ast::Defgenserver(
                 span,
-                qualified,
-                body,
+                qualified.clone(),
+                rewrite_process_owner_refs_in_body(body, &name, &qualified),
                 process_spec,
                 attrs,
             ))
         }
         Ast::Defsupervisor(span, name, body, mut process_spec, attrs) => {
-            let qualified = qualify_namespace_head(namespace, &name, 2, &span, "process")?;
+            let qualified = qualify_namespace_head(namespace, &name, 2, &span, "process", true)?;
             process_spec.process_name = qualified.clone();
+            process_spec.state = qualify_namespace_type(process_spec.state, namespace)?;
             Ok(Ast::Defsupervisor(
                 span,
-                qualified,
-                body,
+                qualified.clone(),
+                rewrite_process_owner_refs_in_body(body, &name, &qualified),
                 process_spec,
                 attrs,
             ))
         }
         Ast::DefdynamicSupervisor(span, name, body, mut process_spec, attrs) => {
-            let qualified = qualify_namespace_head(namespace, &name, 2, &span, "process")?;
+            let qualified = qualify_namespace_head(namespace, &name, 2, &span, "process", true)?;
             process_spec.process_name = qualified.clone();
+            process_spec.state = qualify_namespace_type(process_spec.state, namespace)?;
             Ok(Ast::DefdynamicSupervisor(
                 span,
-                qualified,
-                body,
+                qualified.clone(),
+                rewrite_process_owner_refs_in_body(body, &name, &qualified),
                 process_spec,
                 attrs,
             ))
         }
         Ast::ImplDef(span, target, methods, attrs) => Ok(Ast::ImplDef(
             span.clone(),
-            qualify_namespace_head(namespace, &target, 2, &span, "impl target")?,
+            qualify_namespace_head(namespace, &target, 2, &span, "impl target", false)?,
             methods,
             attrs,
         )),
         Ast::TraitDef(span, name, type_params, methods, attrs) => Ok(Ast::TraitDef(
             span.clone(),
-            qualify_namespace_head(namespace, &name, 2, &span, "trait")?,
+            qualify_namespace_head(namespace, &name, 2, &span, "trait", false)?,
             type_params,
             methods,
             attrs,
@@ -463,7 +486,7 @@ fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, Pa
         Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
             Ok(Ast::TraitImplDef(
                 span.clone(),
-                qualify_namespace_head(namespace, &trait_name, 2, &span, "trait")?,
+                qualify_namespace_head(namespace, &trait_name, 2, &span, "trait", false)?,
                 trait_args,
                 qualify_namespace_type(target_ty, namespace)?,
                 methods,
@@ -472,32 +495,32 @@ fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, Pa
         }
         Ast::StructDef(span, name, fields, attrs) => Ok(Ast::StructDef(
             span.clone(),
-            qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+            qualify_namespace_head(namespace, &name, 2, &span, "type", true)?,
             fields,
             attrs,
         )),
         Ast::RecordDef(span, name, fields, attrs) => Ok(Ast::RecordDef(
             span.clone(),
-            qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+            qualify_namespace_head(namespace, &name, 2, &span, "type", true)?,
             fields,
             attrs,
         )),
         Ast::DeferrorDef(span, name, fields, show_expr, attrs) => Ok(Ast::DeferrorDef(
             span.clone(),
-            qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+            qualify_namespace_head(namespace, &name, 2, &span, "type", true)?,
             fields,
             show_expr,
             attrs,
         )),
         Ast::EnumDef(span, name, type_params, variants, attrs) => Ok(Ast::EnumDef(
             span.clone(),
-            qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+            qualify_namespace_head(namespace, &name, 2, &span, "type", true)?,
             type_params,
             variants,
             attrs,
         )),
         Ast::BuiltinTypeDecl(span, mut head, attrs) => {
-            head.name = qualify_namespace_head(namespace, &head.name, 2, &span, "type")?;
+            head.name = qualify_namespace_head(namespace, &head.name, 2, &span, "type", true)?;
             Ok(Ast::BuiltinTypeDecl(span, head, attrs))
         }
         Ast::Namespace(span, _, _) => Err(ParseError::syntax(
@@ -514,11 +537,18 @@ fn qualify_namespace_head(
     max_segments: usize,
     span: &Span,
     label: &str,
+    reject_same_tail_as_namespace: bool,
 ) -> Result<String, ParseError> {
     let segments = name.split("::").collect::<Vec<_>>();
     if segments.len() > max_segments {
         return Err(ParseError::syntax(
             format!("{label} path must not exceed {max_segments} segments"),
+            span.clone(),
+        ));
+    }
+    if reject_same_tail_as_namespace && segments.len() == 1 && segments[0] == namespace {
+        return Err(ParseError::syntax(
+            format!("{label} name `{name}` conflicts with active namespace `{namespace}`"),
             span.clone(),
         ));
     }
@@ -536,17 +566,17 @@ fn qualify_namespace_type(ty: AstTy, namespace: &str) -> Result<AstTy, ParseErro
             } else {
                 Ok(AstTy::Named(
                     span.clone(),
-                    qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+                    qualify_namespace_head(namespace, &name, 2, &span, "type", false)?,
                 ))
             }
         }
         AstTy::ImplTrait(span, name) => Ok(AstTy::ImplTrait(
             span.clone(),
-            qualify_namespace_head(namespace, &name, 2, &span, "trait")?,
+            qualify_namespace_head(namespace, &name, 2, &span, "trait", false)?,
         )),
         AstTy::Generic(span, name, args) => Ok(AstTy::Generic(
             span.clone(),
-            qualify_namespace_head(namespace, &name, 2, &span, "type")?,
+            qualify_namespace_head(namespace, &name, 2, &span, "type", false)?,
             args.into_iter()
                 .map(|arg| qualify_namespace_type(arg, namespace))
                 .collect::<Result<Vec<_>, ParseError>>()?,
@@ -567,6 +597,640 @@ fn qualify_namespace_type(ty: AstTy, namespace: &str) -> Result<AstTy, ParseErro
             Box::new(qualify_namespace_type(*ret, namespace)?),
         )),
     }
+}
+
+fn owner_head_name(node: &Ast) -> Option<&str> {
+    match node {
+        Ast::Defmod(_, name, _, _)
+        | Ast::Defagent(_, name, _, _, _)
+        | Ast::Defgenserver(_, name, _, _, _)
+        | Ast::Defsupervisor(_, name, _, _, _)
+        | Ast::DefdynamicSupervisor(_, name, _, _, _)
+        | Ast::StructDef(_, name, _, _)
+        | Ast::RecordDef(_, name, _, _)
+        | Ast::DeferrorDef(_, name, _, _, _)
+        | Ast::EnumDef(_, name, _, _, _) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+fn canonicalize_root_owner_name(name: &str) -> String {
+    if name.contains("::") {
+        name.to_string()
+    } else {
+        format!("{IMPLICIT_ROOT_NAMESPACE}::{name}")
+    }
+}
+
+fn canonicalize_root_owner_heads(ast: Vec<Ast>) -> Result<Vec<Ast>, ParseError> {
+    ast.into_iter()
+        .map(|node| match node {
+            Ast::Defmod(span, name, body, attrs) => Ok(Ast::Defmod(
+                span,
+                canonicalize_root_owner_name(&name),
+                body,
+                attrs,
+            )),
+            Ast::Defagent(span, name, body, mut process_spec, attrs) => {
+                let canonical_name = canonicalize_root_owner_name(&name);
+                process_spec.process_name = canonical_name.clone();
+                process_spec.state =
+                    rewrite_process_owner_ty(process_spec.state, &name, &canonical_name);
+                Ok(Ast::Defagent(
+                    span,
+                    canonical_name.clone(),
+                    rewrite_process_owner_refs_in_body(body, &name, &canonical_name),
+                    process_spec,
+                    attrs,
+                ))
+            }
+            Ast::Defgenserver(span, name, body, mut process_spec, attrs) => {
+                let canonical_name = canonicalize_root_owner_name(&name);
+                process_spec.process_name = canonical_name.clone();
+                process_spec.state =
+                    rewrite_process_owner_ty(process_spec.state, &name, &canonical_name);
+                Ok(Ast::Defgenserver(
+                    span,
+                    canonical_name.clone(),
+                    rewrite_process_owner_refs_in_body(body, &name, &canonical_name),
+                    process_spec,
+                    attrs,
+                ))
+            }
+            Ast::Defsupervisor(span, name, body, mut process_spec, attrs) => {
+                let canonical_name = canonicalize_root_owner_name(&name);
+                process_spec.process_name = canonical_name.clone();
+                process_spec.state =
+                    rewrite_process_owner_ty(process_spec.state, &name, &canonical_name);
+                Ok(Ast::Defsupervisor(
+                    span,
+                    canonical_name.clone(),
+                    rewrite_process_owner_refs_in_body(body, &name, &canonical_name),
+                    process_spec,
+                    attrs,
+                ))
+            }
+            Ast::DefdynamicSupervisor(span, name, body, mut process_spec, attrs) => {
+                let canonical_name = canonicalize_root_owner_name(&name);
+                process_spec.process_name = canonical_name.clone();
+                process_spec.state =
+                    rewrite_process_owner_ty(process_spec.state, &name, &canonical_name);
+                Ok(Ast::DefdynamicSupervisor(
+                    span,
+                    canonical_name.clone(),
+                    rewrite_process_owner_refs_in_body(body, &name, &canonical_name),
+                    process_spec,
+                    attrs,
+                ))
+            }
+            Ast::StructDef(span, name, fields, attrs) => Ok(Ast::StructDef(
+                span,
+                canonicalize_root_owner_name(&name),
+                fields,
+                attrs,
+            )),
+            Ast::RecordDef(span, name, fields, attrs) => Ok(Ast::RecordDef(
+                span,
+                canonicalize_root_owner_name(&name),
+                fields,
+                attrs,
+            )),
+            Ast::DeferrorDef(span, name, fields, show_expr, attrs) => Ok(Ast::DeferrorDef(
+                span,
+                canonicalize_root_owner_name(&name),
+                fields,
+                show_expr,
+                attrs,
+            )),
+            Ast::EnumDef(span, name, type_params, variants, attrs) => Ok(Ast::EnumDef(
+                span,
+                canonicalize_root_owner_name(&name),
+                type_params,
+                variants,
+                attrs,
+            )),
+            other => Ok(other),
+        })
+        .collect()
+}
+
+fn rewrite_process_owner_refs_in_body(body: Vec<Ast>, old_name: &str, new_name: &str) -> Vec<Ast> {
+    body.into_iter()
+        .map(|node| rewrite_process_owner_refs(node, old_name, new_name))
+        .collect()
+}
+
+fn rewrite_process_owner_bulk_entries(
+    entries: Vec<BulkUpdateEntry>,
+    old_name: &str,
+    new_name: &str,
+) -> Vec<BulkUpdateEntry> {
+    entries
+        .into_iter()
+        .map(|entry| BulkUpdateEntry {
+            span: entry.span,
+            path: entry.path,
+            kind: match entry.kind {
+                BulkUpdateEntryKind::Set(expr) => {
+                    BulkUpdateEntryKind::Set(rewrite_process_owner_refs(expr, old_name, new_name))
+                }
+                BulkUpdateEntryKind::Over(expr) => {
+                    BulkUpdateEntryKind::Over(rewrite_process_owner_refs(expr, old_name, new_name))
+                }
+                BulkUpdateEntryKind::OverResult(expr) => BulkUpdateEntryKind::OverResult(
+                    rewrite_process_owner_refs(expr, old_name, new_name),
+                ),
+                BulkUpdateEntryKind::Nested(entries) => BulkUpdateEntryKind::Nested(
+                    rewrite_process_owner_bulk_entries(entries, old_name, new_name),
+                ),
+            },
+        })
+        .collect()
+}
+
+fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast {
+    match node {
+        Ast::App(span, func, args) => {
+            let func = Box::new(rewrite_process_owner_refs(*func, old_name, new_name));
+            let args = rewrite_process_owner_call_args(
+                func.as_ref(),
+                args.into_iter()
+                    .map(|arg| rewrite_process_owner_record_lit_arg(arg, old_name, new_name))
+                    .collect(),
+                old_name,
+                new_name,
+            );
+            Ast::App(span, func, args)
+        }
+        Ast::Block(span, body) => Ast::Block(
+            span,
+            rewrite_process_owner_refs_in_body(body, old_name, new_name),
+        ),
+        Ast::Bind(span, pattern, expr) => Ast::Bind(
+            span,
+            rewrite_process_owner_pattern(pattern, old_name, new_name),
+            Box::new(rewrite_process_owner_refs(*expr, old_name, new_name)),
+        ),
+        Ast::SafeBind(span, pattern, expr) => Ast::SafeBind(
+            span,
+            rewrite_process_owner_pattern(pattern, old_name, new_name),
+            Box::new(rewrite_process_owner_refs(*expr, old_name, new_name)),
+        ),
+        Ast::BinOp(span, op, lhs, rhs) => Ast::BinOp(
+            span,
+            op,
+            Box::new(rewrite_process_owner_refs(*lhs, old_name, new_name)),
+            Box::new(rewrite_process_owner_refs(*rhs, old_name, new_name)),
+        ),
+        Ast::Pipe(span, lhs, rhs) => Ast::Pipe(
+            span,
+            Box::new(rewrite_process_owner_refs(*lhs, old_name, new_name)),
+            Box::new(rewrite_process_owner_refs(*rhs, old_name, new_name)),
+        ),
+        Ast::ContextMap(span, lhs, rhs) => Ast::ContextMap(
+            span,
+            Box::new(rewrite_process_owner_refs(*lhs, old_name, new_name)),
+            Box::new(rewrite_process_owner_refs(*rhs, old_name, new_name)),
+        ),
+        Ast::ContextBind(span, lhs, rhs) => Ast::ContextBind(
+            span,
+            Box::new(rewrite_process_owner_refs(*lhs, old_name, new_name)),
+            Box::new(rewrite_process_owner_refs(*rhs, old_name, new_name)),
+        ),
+        Ast::Compose(span, lhs, rhs) => Ast::Compose(
+            span,
+            Box::new(rewrite_process_owner_refs(*lhs, old_name, new_name)),
+            Box::new(rewrite_process_owner_refs(*rhs, old_name, new_name)),
+        ),
+        Ast::LiftedCompose(span, lhs, rhs) => Ast::LiftedCompose(
+            span,
+            Box::new(rewrite_process_owner_refs(*lhs, old_name, new_name)),
+            Box::new(rewrite_process_owner_refs(*rhs, old_name, new_name)),
+        ),
+        Ast::KleisliCompose(span, lhs, rhs) => Ast::KleisliCompose(
+            span,
+            Box::new(rewrite_process_owner_refs(*lhs, old_name, new_name)),
+            Box::new(rewrite_process_owner_refs(*rhs, old_name, new_name)),
+        ),
+        Ast::ListCons(span, head, tail) => Ast::ListCons(
+            span,
+            Box::new(rewrite_process_owner_refs(*head, old_name, new_name)),
+            Box::new(rewrite_process_owner_refs(*tail, old_name, new_name)),
+        ),
+        Ast::ListLiteral(span, items) => Ast::ListLiteral(
+            span,
+            items
+                .into_iter()
+                .map(|item| rewrite_process_owner_refs(item, old_name, new_name))
+                .collect(),
+        ),
+        Ast::RangeLiteral(span, start, end) => Ast::RangeLiteral(
+            span,
+            Box::new(rewrite_process_owner_refs(*start, old_name, new_name)),
+            Box::new(rewrite_process_owner_refs(*end, old_name, new_name)),
+        ),
+        Ast::TupleLiteral(span, items) => Ast::TupleLiteral(
+            span,
+            items
+                .into_iter()
+                .map(|item| rewrite_process_owner_refs(item, old_name, new_name))
+                .collect(),
+        ),
+        Ast::Grouped(span, expr) => Ast::Grouped(
+            span,
+            Box::new(rewrite_process_owner_refs(*expr, old_name, new_name)),
+        ),
+        Ast::InterpolatedStr(span, parts) => Ast::InterpolatedStr(
+            span,
+            parts
+                .into_iter()
+                .map(|part| match part {
+                    InterpolatedPart::Expr(expr) => InterpolatedPart::Expr(Box::new(
+                        rewrite_process_owner_refs(*expr, old_name, new_name),
+                    )),
+                    other => other,
+                })
+                .collect(),
+        ),
+        Ast::Dbg(span, args) => Ast::Dbg(
+            span,
+            args.into_iter()
+                .map(|arg| DbgArg {
+                    span: arg.span,
+                    expr: rewrite_process_owner_refs(arg.expr, old_name, new_name),
+                })
+                .collect(),
+        ),
+        Ast::Match(span, expr, arms) => Ast::Match(
+            span,
+            Box::new(rewrite_process_owner_refs(*expr, old_name, new_name)),
+            arms.into_iter()
+                .map(|arm| AstMatchArm {
+                    pattern: rewrite_process_owner_pattern(arm.pattern, old_name, new_name),
+                    guard: arm
+                        .guard
+                        .map(|guard| rewrite_process_owner_refs(guard, old_name, new_name)),
+                    body: rewrite_process_owner_refs(arm.body, old_name, new_name),
+                })
+                .collect(),
+        ),
+        Ast::BulkUpdate(span, source, entries) => Ast::BulkUpdate(
+            span,
+            Box::new(rewrite_process_owner_refs(*source, old_name, new_name)),
+            rewrite_process_owner_bulk_entries(entries, old_name, new_name),
+        ),
+        Ast::FieldAccess(span, expr, field) => Ast::FieldAccess(
+            span,
+            Box::new(rewrite_process_owner_refs(*expr, old_name, new_name)),
+            field,
+        ),
+        Ast::StructLit(span, name, fields) => Ast::StructLit(
+            span,
+            rewrite_process_owner_symbol(name, old_name, new_name),
+            fields
+                .into_iter()
+                .map(|field| match field {
+                    StructLitField::Explicit(name, value) => StructLitField::Explicit(
+                        name,
+                        rewrite_process_owner_refs(value, old_name, new_name),
+                    ),
+                    StructLitField::Shorthand(name) => StructLitField::Shorthand(name),
+                })
+                .collect(),
+        ),
+        Ast::InternalStructLit(span, name, fields) => Ast::InternalStructLit(
+            span,
+            rewrite_process_owner_symbol(name, old_name, new_name),
+            fields
+                .into_iter()
+                .map(|field| match field {
+                    StructLitField::Explicit(name, value) => StructLitField::Explicit(
+                        name,
+                        rewrite_process_owner_refs(value, old_name, new_name),
+                    ),
+                    StructLitField::Shorthand(name) => StructLitField::Shorthand(name),
+                })
+                .collect(),
+        ),
+        Ast::ConstructorCall(span, name, args) => Ast::ConstructorCall(
+            span,
+            rewrite_process_owner_symbol(name, old_name, new_name),
+            args.into_iter()
+                .map(|arg| rewrite_process_owner_record_lit_arg(arg, old_name, new_name))
+                .collect(),
+        ),
+        Ast::DeferrorDef(span, name, fields, show_expr, attrs) => Ast::DeferrorDef(
+            span,
+            name,
+            fields,
+            Box::new(rewrite_process_owner_refs(*show_expr, old_name, new_name)),
+            attrs,
+        ),
+        Ast::Def(span, name, type_params, params, ret_ty, body, attrs) => Ast::Def(
+            span,
+            name,
+            type_params,
+            params
+                .into_iter()
+                .map(|param| FunParam {
+                    name: param.name,
+                    ty: rewrite_process_owner_ty(param.ty, old_name, new_name),
+                    span: param.span,
+                })
+                .collect(),
+            ret_ty.map(|ty| rewrite_process_owner_ty(ty, old_name, new_name)),
+            Box::new(rewrite_process_owner_refs(*body, old_name, new_name)),
+            attrs,
+        ),
+        Ast::ConstDef(span, name, ty, expr, attrs) => Ast::ConstDef(
+            span,
+            name,
+            ty.map(|ty| rewrite_process_owner_ty(ty, old_name, new_name)),
+            Box::new(rewrite_process_owner_refs(*expr, old_name, new_name)),
+            attrs,
+        ),
+        Ast::SupervisorInit(span, mut spec) => {
+            for entry in &mut spec.entries {
+                if entry.process_name == old_name {
+                    entry.process_name = new_name.to_string();
+                }
+            }
+            for singleton in &mut spec.singletons {
+                if singleton.process_name == old_name {
+                    singleton.process_name = new_name.to_string();
+                }
+            }
+            for supervisor in &mut spec.supervisors {
+                if supervisor.process_name == old_name {
+                    supervisor.process_name = new_name.to_string();
+                }
+            }
+            Ast::SupervisorInit(span, spec)
+        }
+        Ast::ExtractorDef(span, name, type_params, param, ret_ty, body, attrs) => {
+            Ast::ExtractorDef(
+                span,
+                name,
+                type_params,
+                ExtractorParam {
+                    name: param.name,
+                    ty: param
+                        .ty
+                        .map(|ty| rewrite_process_owner_ty(ty, old_name, new_name)),
+                    span: param.span,
+                },
+                rewrite_process_owner_ty(ret_ty, old_name, new_name),
+                Box::new(rewrite_process_owner_refs(*body, old_name, new_name)),
+                attrs,
+            )
+        }
+        Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => Ast::BuiltinDecl(
+            span,
+            name,
+            params
+                .into_iter()
+                .map(|param| FunParam {
+                    name: param.name,
+                    ty: rewrite_process_owner_ty(param.ty, old_name, new_name),
+                    span: param.span,
+                })
+                .collect(),
+            ret_ty.map(|ty| rewrite_process_owner_ty(ty, old_name, new_name)),
+            attrs,
+        ),
+        Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => Ast::BuiltinExtractorDecl(
+            span,
+            name,
+            ExtractorParam {
+                name: param.name,
+                ty: param
+                    .ty
+                    .map(|ty| rewrite_process_owner_ty(ty, old_name, new_name)),
+                span: param.span,
+            },
+            rewrite_process_owner_ty(ret_ty, old_name, new_name),
+            attrs,
+        ),
+        Ast::ResultCtorDecl(span, name, param_ty, ret_ty, attrs) => Ast::ResultCtorDecl(
+            span,
+            name,
+            rewrite_process_owner_ty(param_ty, old_name, new_name),
+            rewrite_process_owner_ty(ret_ty, old_name, new_name),
+            attrs,
+        ),
+        Ast::ImplDef(span, target, methods, attrs) => Ast::ImplDef(
+            span,
+            rewrite_process_owner_symbol(target, old_name, new_name),
+            rewrite_process_owner_refs_in_body(methods, old_name, new_name),
+            attrs,
+        ),
+        Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
+            Ast::TraitImplDef(
+                span,
+                trait_name,
+                trait_args
+                    .into_iter()
+                    .map(|ty| rewrite_process_owner_ty(ty, old_name, new_name))
+                    .collect(),
+                rewrite_process_owner_ty(target_ty, old_name, new_name),
+                rewrite_process_owner_refs_in_body(methods, old_name, new_name),
+                attrs,
+            )
+        }
+        Ast::Closure(span, params, body) => Ast::Closure(
+            span,
+            params
+                .into_iter()
+                .map(|param| ClosureParam {
+                    name: param.name,
+                    ty: param
+                        .ty
+                        .map(|ty| rewrite_process_owner_ty(ty, old_name, new_name)),
+                    span: param.span,
+                })
+                .collect(),
+            Box::new(rewrite_process_owner_refs(*body, old_name, new_name)),
+        ),
+        Ast::Semi(span, expr) => Ast::Semi(
+            span,
+            Box::new(rewrite_process_owner_refs(*expr, old_name, new_name)),
+        ),
+        other => other,
+    }
+}
+
+fn rewrite_process_owner_record_lit_arg(
+    arg: RecordLitArg,
+    old_name: &str,
+    new_name: &str,
+) -> RecordLitArg {
+    match arg {
+        RecordLitArg::Positional(expr) => {
+            RecordLitArg::Positional(rewrite_process_owner_refs(expr, old_name, new_name))
+        }
+        RecordLitArg::Named(name, expr) => {
+            RecordLitArg::Named(name, rewrite_process_owner_refs(expr, old_name, new_name))
+        }
+    }
+}
+
+fn rewrite_process_owner_pattern(
+    pattern: AstPattern,
+    old_name: &str,
+    new_name: &str,
+) -> AstPattern {
+    match pattern {
+        AstPattern::Constructor(span, name, args) => AstPattern::Constructor(
+            span,
+            rewrite_process_owner_symbol(name, old_name, new_name),
+            args.into_iter()
+                .map(|arg| rewrite_process_owner_pattern(arg, old_name, new_name))
+                .collect(),
+        ),
+        AstPattern::Tuple(span, items) => AstPattern::Tuple(
+            span,
+            items
+                .into_iter()
+                .map(|item| rewrite_process_owner_pattern(item, old_name, new_name))
+                .collect(),
+        ),
+        AstPattern::ListCons(span, head, tail) => AstPattern::ListCons(
+            span,
+            Box::new(rewrite_process_owner_pattern(*head, old_name, new_name)),
+            Box::new(rewrite_process_owner_pattern(*tail, old_name, new_name)),
+        ),
+        other => other,
+    }
+}
+
+fn rewrite_process_owner_ty(ty: AstTy, old_name: &str, new_name: &str) -> AstTy {
+    match ty {
+        AstTy::Named(span, name) => {
+            AstTy::Named(span, rewrite_process_owner_symbol(name, old_name, new_name))
+        }
+        AstTy::ImplTrait(span, name) => {
+            AstTy::ImplTrait(span, rewrite_process_owner_symbol(name, old_name, new_name))
+        }
+        AstTy::Generic(span, name, args) => AstTy::Generic(
+            span,
+            rewrite_process_owner_symbol(name, old_name, new_name),
+            args.into_iter()
+                .map(|arg| rewrite_process_owner_ty(arg, old_name, new_name))
+                .collect(),
+        ),
+        AstTy::Tuple(span, items) => AstTy::Tuple(
+            span,
+            items
+                .into_iter()
+                .map(|item| rewrite_process_owner_ty(item, old_name, new_name))
+                .collect(),
+        ),
+        AstTy::Func(span, params, ret_ty) => AstTy::Func(
+            span,
+            params
+                .into_iter()
+                .map(|param| rewrite_process_owner_ty(param, old_name, new_name))
+                .collect(),
+            Box::new(rewrite_process_owner_ty(*ret_ty, old_name, new_name)),
+        ),
+    }
+}
+
+fn rewrite_process_owner_symbol(name: Symbol, old_name: &str, new_name: &str) -> Symbol {
+    if name == old_name {
+        new_name.to_string()
+    } else {
+        name
+    }
+}
+
+fn rewrite_process_owner_call_args(
+    func: &Ast,
+    mut args: Vec<RecordLitArg>,
+    old_name: &str,
+    new_name: &str,
+) -> Vec<RecordLitArg> {
+    let Some(target) = process_owner_call_target(func) else {
+        return args;
+    };
+    if !matches!(
+        target.as_str(),
+        "Agent::pid"
+            | "GenServer::pid"
+            | "Supervisor::spawn"
+            | "Supervisor::adopt"
+            | "Supervisor::status"
+            | "Supervisor::workers"
+            | "DynamicSupervisor::spawn"
+    ) {
+        return args;
+    }
+    if let Some(RecordLitArg::Positional(Ast::Lit(_, Lit::Str(value)))) = args.first_mut() {
+        if value == old_name {
+            *value = new_name.to_string();
+        }
+    }
+    args
+}
+
+fn process_owner_call_target(func: &Ast) -> Option<String> {
+    match func {
+        Ast::InternalVar(_, name) | Ast::Var(_, name) => Some(name.clone()),
+        Ast::Path(_, path) if path.segments.len() == 2 => Some(path.segments.join("::")),
+        _ => None,
+    }
+}
+
+fn validate_top_level_namespace_owner_collisions(ast: &[Ast]) -> Result<(), ParseError> {
+    let mut namespaces = HashMap::<String, Span>::new();
+    let mut owner_roots = HashSet::<String>::new();
+
+    for node in ast {
+        if let Ast::Namespace(span, name, _) = node {
+            if name == IMPLICIT_ROOT_NAMESPACE {
+                return Err(ParseError::syntax(
+                    format!(
+                        "`{IMPLICIT_ROOT_NAMESPACE}` is reserved for the implicit root namespace"
+                    ),
+                    span.clone(),
+                ));
+            }
+            if let Some(existing) = namespaces.get(name) {
+                return Err(ParseError::syntax(
+                    format!("namespace `{name}` is already defined in this scope"),
+                    Span {
+                        start: existing.start,
+                        end: span.end,
+                    },
+                ));
+            }
+            namespaces.insert(name.clone(), span.clone());
+        }
+    }
+
+    for node in ast {
+        let Some(owner_name) = owner_head_name(node) else {
+            continue;
+        };
+        let owner_root = owner_name.split("::").next().unwrap_or(owner_name);
+        if owner_root == IMPLICIT_ROOT_NAMESPACE {
+            return Err(ParseError::syntax(
+                format!("`{IMPLICIT_ROOT_NAMESPACE}` is reserved for the implicit root namespace"),
+                node.span().clone(),
+            ));
+        }
+        if !owner_name.contains("::") {
+            owner_roots.insert(owner_root.to_string());
+        }
+        if namespaces.contains_key(owner_root) && !owner_name.contains("::") {
+            return Err(ParseError::syntax(
+                format!("owner name `{owner_name}` conflicts with namespace `{owner_root}`"),
+                node.span().clone(),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 pub fn rebase_ast_spans(ast: Vec<Ast>, delta: usize) -> Vec<Ast> {
@@ -733,6 +1397,7 @@ fn shift_decl_attrs(attrs: DeclAttrs) -> DeclAttrs {
 }
 
 fn shift_process_spec(mut spec: ProcessSpec, delta: usize) -> ProcessSpec {
+    spec.state = shift_ast_ty(spec.state, delta);
     spec.handlers = spec
         .handlers
         .into_iter()
@@ -782,6 +1447,30 @@ fn shift_ast_path(path: AstPath, delta: usize) -> AstPath {
         span: shift_span(path.span, delta),
         segments: path.segments,
     }
+}
+
+fn shift_bulk_update_entries(entries: Vec<BulkUpdateEntry>, delta: usize) -> Vec<BulkUpdateEntry> {
+    entries
+        .into_iter()
+        .map(|entry| BulkUpdateEntry {
+            span: shift_span(entry.span, delta),
+            path: entry.path,
+            kind: match entry.kind {
+                BulkUpdateEntryKind::Set(expr) => {
+                    BulkUpdateEntryKind::Set(shift_ast_span(expr, delta))
+                }
+                BulkUpdateEntryKind::Over(expr) => {
+                    BulkUpdateEntryKind::Over(shift_ast_span(expr, delta))
+                }
+                BulkUpdateEntryKind::OverResult(expr) => {
+                    BulkUpdateEntryKind::OverResult(shift_ast_span(expr, delta))
+                }
+                BulkUpdateEntryKind::Nested(entries) => {
+                    BulkUpdateEntryKind::Nested(shift_bulk_update_entries(entries, delta))
+                }
+            },
+        })
+        .collect()
 }
 
 fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
@@ -911,10 +1600,19 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 })
                 .collect(),
         ),
+        Ast::BulkUpdate(span, source, entries) => Ast::BulkUpdate(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*source, delta)),
+            shift_bulk_update_entries(entries, delta),
+        ),
         Ast::FieldAccess(span, expr, field) => Ast::FieldAccess(
             shift_span(span, delta),
             Box::new(shift_ast_span(*expr, delta)),
             field,
+        ),
+        Ast::FacetCapture(span, expr) => Ast::FacetCapture(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*expr, delta)),
         ),
         Ast::StructDef(span, name, fields, attrs) => Ast::StructDef(
             shift_span(span, delta),
@@ -926,6 +1624,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     ty: shift_ast_ty(f.ty, delta),
                     span: shift_span(f.span, delta),
                     visibility: f.visibility,
+                    readonly: f.readonly,
                 })
                 .collect(),
             shift_decl_attrs(attrs),
@@ -940,6 +1639,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     ty: shift_ast_ty(f.ty, delta),
                     span: shift_span(f.span, delta),
                     visibility: f.visibility,
+                    readonly: f.readonly,
                 })
                 .collect(),
             shift_decl_attrs(attrs),
@@ -987,6 +1687,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     ty: shift_ast_ty(f.ty, delta),
                     span: shift_span(f.span, delta),
                     visibility: f.visibility,
+                    readonly: f.readonly,
                 })
                 .collect(),
             Box::new(shift_ast_span(*show_expr, delta)),
@@ -1047,6 +1748,38 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
         Ast::SupervisorInit(span, spec) => Ast::SupervisorInit(
             shift_span(span, delta),
             SupervisorInitSpec {
+                entries: spec
+                    .entries
+                    .into_iter()
+                    .map(|entry| SupervisorInitEntry {
+                        process_name: entry.process_name,
+                        timeout_ms: entry.timeout_ms,
+                        handlers: entry
+                            .handlers
+                            .into_iter()
+                            .map(|handler| SupervisorInitHandlerOverride {
+                                slot: handler.slot,
+                                target: SupervisorInitHandlerTarget {
+                                    name: handler.target.name,
+                                    named_args: handler
+                                        .target
+                                        .named_args
+                                        .into_iter()
+                                        .map(|arg| SupervisorInitHandlerArg {
+                                            name: arg.name,
+                                            value: arg.value,
+                                            span: shift_span(arg.span, delta),
+                                        })
+                                        .collect(),
+                                    span: shift_span(handler.target.span, delta),
+                                },
+                                span: shift_span(handler.span, delta),
+                            })
+                            .collect(),
+                        overrides: entry.overrides,
+                        span: shift_span(entry.span, delta),
+                    })
+                    .collect(),
                 singletons: spec
                     .singletons
                     .into_iter()
@@ -1313,7 +2046,9 @@ impl Ast {
             | Ast::InterpolatedStr(s, _)
             | Ast::Dbg(s, _)
             | Ast::Match(s, _, _)
+            | Ast::BulkUpdate(s, _, _)
             | Ast::FieldAccess(s, _, _)
+            | Ast::FacetCapture(s, _)
             | Ast::StructDef(s, _, _, _)
             | Ast::RecordDef(s, _, _, _)
             | Ast::StructLit(s, _, _)

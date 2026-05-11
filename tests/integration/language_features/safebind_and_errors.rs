@@ -235,6 +235,117 @@ match err {
     assert_eq!(stderr, vec!["Error: Oops: oops"]);
 }
 
+fn safebind_closure_returns_ok_and_propagates_err() {
+    assert_output(
+        r#"deferror Oops {
+  "oops"
+}
+
+def gen(flag: Boolean) -> Result<Int, Oops> {
+  if(flag, Ok(10), Err(Oops))
+}
+
+handler: (Boolean -> Result<Int>) = {|flag|
+  value =? gen(flag)
+  Ok(value + 1)
+}
+
+print(inspect(handler(True)))
+print(inspect(handler(False)))"#,
+        &["Ok(11)", "Err(Oops(\"oops\"))"],
+    );
+}
+
+fn safebind_closure_rejects_non_result_return() {
+    assert_compile_error(
+        r#"bad: (Int -> Int) = {|x|
+  value =? Ok(x)
+  value
+}"#,
+        "can only be used in functions returning Result",
+    );
+}
+
+fn safebind_nested_closure_stops_at_nearest_callable() {
+    assert_output(
+        r#"deferror Inner {
+  "inner"
+}
+
+def outer() -> Result<String, Inner> {
+  handler: (Int -> Result<Int>) = {|x|
+    value =? Err(Inner)
+    Ok(value + x)
+  }
+
+  match handler(1) {
+    Ok(_) => Ok("bad"),
+    Err(_) => Ok("inner stopped here"),
+  }
+}
+
+print(inspect(outer()))"#,
+        &["Ok(\"inner stopped here\")"],
+    );
+}
+
+fn safebind_closure_local_ok_and_err_propagation() {
+    let (stdout, stderr) = run_surtr_with_stderr(
+        r#"deferror BadInput {
+  "bad input"
+}
+
+ok_handler: (Int -> Result<Int>) = {|x|
+  value =? Ok(x + 1)
+  Ok(value)
+}
+
+checked: (Int -> Result<Int>) = {|x|
+  value =? if(x > 0, Ok(x), Err(BadInput))
+  Ok(value + 10)
+}
+
+print(inspect(ok_handler(1)))
+match checked(0) {
+  Ok(v) => print("bad:" ++ to_string(v)),
+  Err(e) => eprint(e),
+}"#,
+    )
+    .expect("program should run");
+    assert_eq!(stdout, vec!["Ok(2)"]);
+    assert_eq!(stderr, vec!["Error: BadInput: bad input"]);
+}
+
+fn safebind_nested_closure_propagates_to_nearest_callable() {
+    let (stdout, stderr) = run_surtr_with_stderr(
+        r#"deferror InnerStop {
+  "inner stop"
+}
+
+def outer() -> Result<String> {
+  inner: (Int -> Result<Int>) = {|x|
+    value =? if(x > 0, Ok(x), Err(InnerStop))
+    Ok(value + 1)
+  }
+
+  result: Result<Int> = inner(0)
+  print("after inner")
+  Ok(inspect(result))
+}
+
+match outer() {
+  Ok(v) => print(v),
+  Err(e) => eprint(e),
+}"#,
+    )
+    .expect("program should run");
+    assert_eq!(
+        stdout,
+        vec!["after inner", "Err(InnerStop(\"inner stop\"))"]
+    );
+    assert_eq!(stderr, Vec::<String>::new());
+}
+
 fn safebind_script_error_eprints() {
     let (stdout, stderr) = run_surtr_with_stderr(
         r#"deferror Oops {
@@ -539,6 +650,26 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "safebind_function_early_return_on_err",
             safebind_function_early_return_on_err as fn(),
+        ),
+        (
+            "safebind_closure_returns_ok_and_propagates_err",
+            safebind_closure_returns_ok_and_propagates_err as fn(),
+        ),
+        (
+            "safebind_closure_rejects_non_result_return",
+            safebind_closure_rejects_non_result_return as fn(),
+        ),
+        (
+            "safebind_nested_closure_stops_at_nearest_callable",
+            safebind_nested_closure_stops_at_nearest_callable as fn(),
+        ),
+        (
+            "safebind_closure_local_ok_and_err_propagation",
+            safebind_closure_local_ok_and_err_propagation as fn(),
+        ),
+        (
+            "safebind_nested_closure_propagates_to_nearest_callable",
+            safebind_nested_closure_propagates_to_nearest_callable as fn(),
         ),
         (
             "safebind_script_error_eprints",

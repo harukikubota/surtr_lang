@@ -439,7 +439,7 @@ fn error_spec_from_value_error_with_source(
     };
     diagnostics::runtime_value_error_spec(
         source,
-        value.kind.clone(),
+        crate::surface_path_name(&value.kind).to_string(),
         message,
         value.location.span_start as usize,
         value.location.span_end as usize,
@@ -454,7 +454,11 @@ pub fn runtime_value_error_text_from_vm(vm: &eldr::VM, value: &Value) -> String 
                 let spec = error_spec_from_value_error_with_source(rich, source);
                 diagnostic_text(file_name, source, &spec)
             } else {
-                format!("Error: {}: {}", rich.kind, rich.visible_message())
+                format!(
+                    "Error: {}: {}",
+                    crate::surface_path_name(&rich.kind),
+                    rich.visible_message()
+                )
             }
         }
         other => format!("Error: {}", inspect_value(vm, other)),

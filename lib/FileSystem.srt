@@ -1,0 +1,161 @@
+@doc """
+Path value used by FS and Shell.
+"""
+defstruct FilePath {
+  raw: String,
+}
+
+impl FilePath {
+  def new(raw: String) -> Self {
+    FilePath { raw: raw }
+  }
+}
+
+@doc """
+Portable filesystem entry category.
+"""
+defenum FileSystemEntryKind {
+  File,
+  Directory,
+  Symlink,
+  Other,
+}
+
+@doc """
+Portable permission view.
+"""
+defstruct FileSystemPermissions {
+  read_only: Boolean,
+  executable: Boolean,
+}
+
+impl FileSystemPermissions {
+  def new(read_only: Boolean, executable: Boolean) -> Self {
+    FileSystemPermissions { read_only: read_only, executable: executable }
+  }
+}
+
+@doc """
+Best-effort filesystem metadata snapshot.
+"""
+defstruct FileSystemMetadata {
+  size: Option<Int>,
+  modified_at_epoch_ms: Option<Int>,
+  accessed_at_epoch_ms: Option<Int>,
+  created_at_epoch_ms: Option<Int>,
+  permissions: Option<FileSystemPermissions>,
+}
+
+impl FileSystemMetadata {
+  def new(
+    size: Option<Int>,
+    modified_at_epoch_ms: Option<Int>,
+    accessed_at_epoch_ms: Option<Int>,
+    created_at_epoch_ms: Option<Int>,
+    permissions: Option<FileSystemPermissions>,
+  ) -> Self {
+    FileSystemMetadata {
+      size: size,
+      modified_at_epoch_ms: modified_at_epoch_ms,
+      accessed_at_epoch_ms: accessed_at_epoch_ms,
+      created_at_epoch_ms: created_at_epoch_ms,
+      permissions: permissions,
+    }
+  }
+}
+
+@doc """
+One observed filesystem entry.
+"""
+defstruct FileSystemEntry {
+  path: FilePath,
+  name: String,
+  kind: FileSystemEntryKind,
+  metadata: FileSystemMetadata,
+}
+
+impl FileSystemEntry {
+  def new(
+    path: FilePath,
+    name: String,
+    kind: FileSystemEntryKind,
+    metadata: FileSystemMetadata,
+  ) -> Self {
+    FileSystemEntry { path: path, name: name, kind: kind, metadata: metadata }
+  }
+}
+
+@doc """
+Directory snapshot returned by FS listing operations.
+"""
+defstruct FileSystemSnapshot {
+  root: FilePath,
+  entries: List<FileSystemEntry>,
+}
+
+impl FileSystemSnapshot {
+  def new(root: FilePath, entries: List<FileSystemEntry>) -> Self {
+    FileSystemSnapshot { root: root, entries: entries }
+  }
+}
+
+deferror FileSystemNotFound(path: String) {
+  "filesystem path not found: #{path}"
+}
+
+deferror FileSystemAlreadyExists(path: String) {
+  "filesystem path already exists: #{path}"
+}
+
+deferror FileSystemPermissionDenied(path: String) {
+  "filesystem permission denied: #{path}"
+}
+
+deferror FileSystemNotDirectory(path: String) {
+  "filesystem path is not a directory: #{path}"
+}
+
+deferror FileSystemIsDirectory(path: String) {
+  "filesystem path is a directory: #{path}"
+}
+
+deferror FileSystemInvalidPath(path: String) {
+  "invalid filesystem path: #{path}"
+}
+
+deferror FileSystemInvalidDepth(depth: Int) {
+  "invalid filesystem tree depth: #{depth}"
+}
+
+deferror FileSystemUnsupported(detail: String) {
+  detail
+}
+
+deferror FileSystemIoError(detail: String) {
+  detail
+}
+
+@doc """
+Filesystem path helpers, metadata snapshots, and minimal mutation.
+
+File content I/O remains on `File`; FS handles structured path,
+directory, metadata, and file/directory management operations.
+"""
+defmod FS {
+  @builtin def path(raw: String) -> Result<FilePath, Error>
+  @builtin def join(base: FilePath, child: String) -> Result<FilePath, Error>
+  @builtin def parent(path: FilePath) -> Result<FilePath, Error>
+  @builtin def name(path: FilePath) -> Result<String, Error>
+  @builtin def extension(path: FilePath) -> Option<String>
+
+  @builtin def exists(path: FilePath) -> Result<Boolean, Error>
+  @builtin def stat(path: FilePath) -> Result<FileSystemEntry, Error>
+  @builtin def ls(path: FilePath) -> Result<FileSystemSnapshot, Error>
+  @builtin def tree_depth(path: FilePath, depth: Int) -> Result<FileSystemSnapshot, Error>
+
+  @builtin def mkdir(path: FilePath) -> Result<Unit, Error>
+  @builtin def mkdir_all(path: FilePath) -> Result<Unit, Error>
+  @builtin def rm(path: FilePath) -> Result<Unit, Error>
+  @builtin def mv(from: FilePath, to: FilePath) -> Result<Unit, Error>
+  @builtin def cp(from: FilePath, to: FilePath) -> Result<Unit, Error>
+}

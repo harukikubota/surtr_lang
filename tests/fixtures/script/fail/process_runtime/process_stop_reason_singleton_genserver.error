@@ -1,0 +1,2 @@
+phase: typecheck
+contains: StopReason can only be used inside Worker GenServer @call/@cast handlers or local helper functions

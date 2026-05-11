@@ -1,0 +1,12 @@
+defstruct User {
+  name: String,
+}
+
+impl User {
+  @doc """
+  Private normalize helper.
+  """
+  defp normalize(self) -> Self {
+    self
+  }
+}

@@ -23,6 +23,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 
 use crate::repl::logic::core::ReplEngine;
 use crate::repl::logic::PresentedResultKind;
+use crate::{CommandError, CommandResult};
 
 use app::App;
 
@@ -37,21 +38,16 @@ pub struct TuiOptions {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 /// Launch the TUI REPL.
-pub fn run_command(options: TuiOptions) -> Result<(), i32> {
+pub fn run_command(options: TuiOptions) -> CommandResult<()> {
     let mut engine = match &options.eldr_path {
         Some(path) => {
             let bytes = std::fs::read(path).map_err(|e| {
-                eprintln!("tui: cannot read {}: {}", path, e);
-                1i32
+                CommandError::message(1, format!("tui: cannot read {}: {}", path, e))
             })?;
-            ReplEngine::from_eldr(&bytes).map_err(|e| {
-                eprintln!("tui: {}", e);
-                1i32
-            })?
+            ReplEngine::from_eldr(&bytes).map_err(CommandError::from)?
         }
         None => ReplEngine::new().map_err(|e| {
-            eprintln!("tui: failed to initialise engine: {}", e);
-            1i32
+            CommandError::message(1, format!("tui: failed to initialise engine: {}", e))
         })?,
     };
 
@@ -59,28 +55,26 @@ pub fn run_command(options: TuiOptions) -> Result<(), i32> {
     if let Some(path) = &options.eldr_path {
         app.push_result(
             path.clone(),
+            Vec::new(),
             vec![format!("loaded {path}")],
+            Vec::new(),
             PresentedResultKind::Info,
         );
     }
 
-    enable_raw_mode().map_err(|e| {
-        eprintln!("tui: terminal init failed: {}", e);
-        1i32
-    })?;
+    enable_raw_mode()
+        .map_err(|e| CommandError::message(1, format!("tui: terminal init failed: {}", e)))?;
 
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen).map_err(|e| {
-        eprintln!("tui: {}", e);
         let _ = disable_raw_mode();
-        1i32
+        CommandError::message(1, format!("tui: {}", e))
     })?;
 
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).map_err(|e| {
-        eprintln!("tui: {}", e);
         let _ = disable_raw_mode();
-        1i32
+        CommandError::message(1, format!("tui: {}", e))
     })?;
 
     let result = run_loop(&mut terminal, &mut app, &mut engine);
@@ -96,12 +90,11 @@ fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     engine: &mut ReplEngine,
-) -> Result<(), i32> {
+) -> CommandResult<()> {
     while !app.should_quit {
-        terminal.draw(|f| widgets::draw(f, app)).map_err(|e| {
-            eprintln!("tui: draw error: {}", e);
-            1i32
-        })?;
+        terminal
+            .draw(|f| widgets::draw(f, app))
+            .map_err(|e| CommandError::message(1, format!("tui: draw error: {}", e)))?;
 
         let timeout = Duration::from_millis(100);
         if event::poll(timeout).unwrap_or(false) {
@@ -109,8 +102,7 @@ fn run_loop(
                 Ok(CrosstermEvent::Key(key)) => update::handle_key(app, engine, key),
                 Ok(_) => {}
                 Err(e) => {
-                    eprintln!("tui: event error: {}", e);
-                    return Err(1);
+                    return Err(CommandError::message(1, format!("tui: event error: {}", e)));
                 }
             }
         }

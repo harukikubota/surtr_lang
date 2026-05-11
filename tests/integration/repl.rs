@@ -146,8 +146,40 @@ fn repl_fails_fast_when_additional_stdlib_bootstrap_fails() {
     );
 
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.status.code(), Some(1));
     assert!(stderr.contains("bootstrap failed during parse"));
     assert!(stderr.contains("lib/bad.srt"));
+}
+
+#[test]
+fn repl_preload_diagnostic_stays_on_stderr_and_exits_non_zero() {
+    let dir = unique_temp_dir("repl-preload-diagnostic");
+    let script_path = dir.join("bad.srt");
+    fs::write(&script_path, "defmod Broken { }\n").expect("failed to write bad preload script");
+
+    let output = run_repl_session_with_args(
+        &[
+            "--quiet",
+            "--script",
+            script_path.to_string_lossy().as_ref(),
+        ],
+        "",
+    );
+    assert!(
+        !output.status.success(),
+        "repl preload should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr.contains("ParseError"), "{stderr}");
+    assert!(
+        stderr.contains("defmod is not allowed at script top-level"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("bad.srt"), "{stderr}");
 }
 
 #[test]
@@ -282,6 +314,75 @@ fn repl_sig_expression_query_flows_through_cli_presentation() {
 }
 
 #[test]
+fn repl_rejects_persisting_unresolved_result_callable_binding() {
+    let output = run_repl_session("todo = {|| Err(NoneError)}\n:quit\n");
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    let combined = format!("{stdout}\n{stderr}");
+
+    assert!(
+        combined.contains("Cannot persist binding with unresolved type variable."),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Add a type annotation or use the value in a context that determines the success type."),
+        "{combined}"
+    );
+    assert!(!combined.contains("todo: (-> Result<_, Error>)"), "{combined}");
+}
+
+#[test]
+fn repl_rejects_persisting_unresolved_result_value_binding() {
+    let output = run_repl_session("todo = {|| Err(NoneError)}\nret = todo()\n:quit\n");
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    let combined = format!("{stdout}\n{stderr}");
+
+    assert!(
+        combined.contains("Cannot persist binding with unresolved type variable."),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("ret = todo()"),
+        "{combined}"
+    );
+    assert!(!combined.contains("ret: Result<_, Error>"), "{combined}");
+}
+
+#[test]
+fn repl_accepts_explicitly_constrained_result_binding() {
+    let output = run_repl_session("todo: (-> Result<Int>) = {|| Err(NoneError)}\nret: Result<Int> = todo()\n:type ret\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("ret: Result<Int, Error> = Err(NoneError"), "{stdout}");
+    assert!(stdout.contains("type: Result<Int, Error>"), "{stdout}");
+}
+
+#[test]
+fn repl_accepts_result_mapping_when_chunk_constrains_type() {
+    let output = run_repl_session(
+        "todo: (-> Result<Int>) = {|| Err(NoneError)}\nmapped = todo() |*> inspect()\n:type mapped\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("mapped: Result<String, Error> = Err(NoneError"), "{stdout}");
+    assert!(stdout.contains("type: Result<String, Error>"), "{stdout}");
+}
+
+
+#[test]
 fn repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli() {
     let output = run_repl_session(":sig |>\n:sig id(Int)\n:quit\n");
     assert!(
@@ -414,6 +515,35 @@ fn repl_info_renders_styled_summary_for_queries() {
 }
 
 #[test]
+fn repl_supports_session_listing_and_reload_commands() {
+    let output = run_repl_session(
+        "seed = 41\ndef keep() -> Int { 42 }\n:vars\n:defs\n:history\n:clear\n:reload\nkeep()\nseed\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(stdout.contains("line | name | type"), "{stdout}");
+    assert!(stdout.contains("seed"), "{stdout}");
+    assert!(stdout.contains("line | name | arity"), "{stdout}");
+    assert!(stdout.contains("keep/0"), "{stdout}");
+    assert!(stdout.contains("line | input"), "{stdout}");
+    assert!(stdout.contains("seed = 41"), "{stdout}");
+    assert!(
+        stdout.contains("clear is not available in this host"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("reload complete: all"), "{stdout}");
+    assert!(stdout.contains("42"), "{stdout}");
+    assert!(stderr.contains("Undefined variable: seed"), "{stderr}");
+}
+
+#[test]
 fn repl_sig_missing_symbol_prints_guidance() {
     let output = run_repl_session(":sig a\n:quit\n");
     assert!(
@@ -445,6 +575,35 @@ fn repl_colorizes_doc_for_qualified_kernel_if() {
     assert!(stdout.contains("\u{1b}[1;96mBoolean\u{1b}[0m"));
     assert!(stdout.contains("\u{1b}[1;33m$A\u{1b}[0m"));
     assert!(strip_ansi(&stdout).contains("xldr(1)> if(True, \"ok\", \"ng\")"));
+}
+
+#[test]
+fn repl_keeps_print_output_plain_while_coloring_bindings_and_values() {
+    let output = run_repl_session_with_color(
+        "print(\"tick 1\")\nprint(inspect(Ok(True)))\nx = 1\nStringEncoding::Utf8\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines = stdout.lines().collect::<Vec<_>>();
+    let print_line = lines.get(1).expect("expected first print output line");
+    assert_eq!(strip_ansi(print_line), "xldr(1)> tick 1", "{stdout}");
+    assert!(!print_line.contains("\u{1b}["), "{stdout}");
+
+    let inspect_line = lines.get(2).expect("expected inspect output line");
+    assert_eq!(strip_ansi(inspect_line), "xldr(2)> Ok(True)", "{stdout}");
+    assert!(!inspect_line.contains("\u{1b}["), "{stdout}");
+
+    assert!(stdout.contains("xldr(3)> \u{1b}[36mx\u{1b}[0m"), "{stdout}");
+    assert!(
+        stdout.contains("xldr(4)> \u{1b}[96mStringEncoding::Utf8\u{1b}[0m"),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -547,6 +706,41 @@ def greet() -> String { "hello" }
 }
 
 #[test]
+fn repl_script_preload_flag_prints_preload_runtime_output_before_prompt() {
+    let temp = unique_temp_dir("repl-script-preload-output");
+    let source_path = temp.join("preload_output.srt");
+    fs::write(
+        &source_path,
+        r#"
+print("boot message")
+value = 42
+"#,
+    )
+    .expect("failed to write preload script");
+
+    let output = run_repl_session_with_args(
+        &[
+            "--quiet",
+            "--script",
+            source_path.to_str().expect("source path must be utf-8"),
+        ],
+        ":quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("boot message"), "{stdout}");
+    assert!(stdout.contains("value: Int = 42"), "{stdout}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn repl_script_preload_flag_resolves_include_and_keeps_preloaded_binding() {
     let temp = unique_temp_dir("repl-script-preload-include");
     let module_path = temp.join("m.srt");
@@ -586,6 +780,139 @@ answer = one()
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(stdout.contains("1"), "{stdout}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn repl_process_script_preload_survives_live_repl_process_declaration_rejection() {
+    let temp = unique_temp_dir("repl-process-script-preload");
+    let script_path = temp.join("process_preload.srt");
+    fs::write(
+        &script_path,
+        r#"
+defgenserver MyServer {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(1) }
+
+  @call
+  def size(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}
+
+supervisor_init {
+  MyServer {}
+}
+"#,
+    )
+    .expect("failed to write process preload script");
+
+    let output = run_repl_session_with_args(
+        &[
+            "--script",
+            script_path.to_str().expect("script path must be utf-8"),
+        ],
+        ":sig MyServer::size\nsupervisor_init { MyServer {} }\n:sig MyServer::size\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert_eq!(
+        stdout
+            .matches("MyServer::size() -> Result<Int, Error>")
+            .count(),
+        2,
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains("This top-level declaration is not allowed in REPL chunks"),
+        "{stderr}"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn repl_process_pid_queries_cover_hidden_and_concrete_singleton_surfaces() {
+    let temp = unique_temp_dir("repl-process-pid-query");
+    let script_path = temp.join("process_pid_query.srt");
+    fs::write(
+        &script_path,
+        r#"
+defgenserver MyServer {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(1) }
+
+  @call
+  def size(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}
+
+supervisor_init {
+  MyServer {}
+}
+"#,
+    )
+    .expect("failed to write process preload script");
+
+    let output = run_repl_session_with_args(
+        &[
+            "--script",
+            script_path.to_str().expect("script path must be utf-8"),
+        ],
+        ":doc MyServer::pid\n:sig MyServer::pid\n:sig MyServer\nserver = MyServer::pid()\n:sig $server\n:type server\n:info server\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("MyServer::pid"), "{stdout}");
+    assert!(
+        stdout.contains("Compiler-managed lower target for GenServer singleton PID lookup."),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("MyServer::pid() -> PID<MyServer>"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("GenServer MyServer"), "{stdout}");
+    assert!(
+        stdout.contains("@init init() -> Result<PID<MyServer>>"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("@pid pid() -> PID<MyServer>"), "{stdout}");
+    assert!(
+        stdout.contains("@call size(pid: PID<MyServer>) -> Result<Int, Error>"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("PID<MyServer> messaging"), "{stdout}");
+    assert!(stdout.contains("server: PID<MyServer>"), "{stdout}");
+    assert!(stdout.contains("type: PID<MyServer>"), "{stdout}");
+    assert!(stdout.contains("kind: process pid"), "{stdout}");
 
     let _ = fs::remove_dir_all(temp);
 }
@@ -639,7 +966,7 @@ def from_script() -> Int { inc(1) }
 #[test]
 fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     let output = run_repl_session(
-        ":doc Tuple\n:sig Tuple\n:doc Config\n:doc StyledDocStyle\n:doc add\nimport Add::add\n:doc add\npair = (\"alice\", 2)\nresult_pair = (Ok(2), \"ok\")\n:sig pair._1\n:sig Lens::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})\n:quit\n",
+        ":doc Tuple\n:sig Tuple\n:doc Config\n:doc StyledDocStyle\n:doc add\nimport Add::add\n:doc add\npair = (\"alice\", 2)\nresult_pair = (Ok(2), \"ok\")\n:sig pair._1\n:sig Facet::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -687,7 +1014,7 @@ fn repl_colorizes_closure_doc_footer_and_type_output() {
 #[test]
 fn repl_supports_deferred_lens_bindings_and_lens_command() {
     let output = run_repl_session(
-        "a = Tuple._1\npair = (\"alice\", 2)\nLens::view(a, pair)\n:lens a\n:lens BitWidth.Any\n:quit\n",
+        "a = Tuple._1\npair = (\"alice\", 2)\nFacet::view(a, pair)\n:facet a\n:facet BitWidth.Any\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -697,9 +1024,9 @@ fn repl_supports_deferred_lens_bindings_and_lens_command() {
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("a: Lens<_, _> = Tuple._1"), "{stdout}");
+    assert!(stdout.contains("a: Facet<_, _> = Tuple._1"), "{stdout}");
     assert!(stdout.contains("2"), "{stdout}");
-    assert!(stdout.contains("LensPath"), "{stdout}");
+    assert!(stdout.contains("FacetPath"), "{stdout}");
     assert!(stdout.contains("view result: _"), "{stdout}");
     assert!(stdout.contains("full path: Tuple._1"), "{stdout}");
     assert!(stdout.contains("Flow"), "{stdout}");
@@ -719,7 +1046,7 @@ fn repl_supports_deferred_lens_bindings_and_lens_command() {
 #[test]
 fn repl_renders_top_level_lens_compose_expressions() {
     let output =
-        run_repl_session("ep = IntBase.Oct\na = Tuple._1\na / ep\nLens::compose(a, ep)\n:quit\n");
+        run_repl_session("ep = IntBase.Oct\na = Tuple._1\na / ep\nFacet::compose(a, ep)\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -729,15 +1056,15 @@ fn repl_renders_top_level_lens_compose_expressions() {
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(
-        stdout.contains("ep: Lens<IntBase, Unit> = IntBase.Oct"),
+        stdout.contains("ep: Facet<IntBase, Unit> = IntBase.Oct"),
         "{stdout}"
     );
-    assert!(stdout.contains("a: Lens<_, _> = Tuple._1"), "{stdout}");
-    assert!(stdout.contains("Lens<_, _> = Tuple._1.Oct"), "{stdout}");
+    assert!(stdout.contains("a: Facet<_, _> = Tuple._1"), "{stdout}");
+    assert!(stdout.contains("Facet<_, _> = Tuple._1.Oct"), "{stdout}");
 }
 
 #[test]
-fn repl_reports_actionable_trait_helper_inference_error_for_annotated_closure() {
+fn repl_reports_return_mismatch_for_concretized_trait_helper_closure() {
     let output = run_repl_session(
         "f: (String, String -> Unit) = {|x: String, y: String| concat(x, y)}\n:quit\n",
     );
@@ -755,15 +1082,104 @@ fn repl_reports_actionable_trait_helper_inference_error_for_annotated_closure() 
     );
     let combined = strip_ansi(&combined);
     assert!(
-        combined.contains(
-            "REPL could not use the current closure constraints to resolve trait helper `concat`."
-        ),
-        "expected actionable REPL helper inference error, got:\n{}",
+        combined.contains("Argument type mismatch: expected Unit, got String"),
+        "expected return mismatch, got:\n{}",
         combined
     );
     assert!(
-        combined.contains("Known here: x: String, y: String, expected return: Unit."),
-        "expected inferred constraint details in REPL error, got:\n{}",
+        !combined.contains("could not use the current closure constraints"),
+        "trait helper should have concretized before return mismatch:\n{}",
+        combined
+    );
+}
+
+#[test]
+fn repl_allows_trait_helper_capture_with_expected_callable_annotation() {
+    let output = run_repl_session(
+        "cmp: (Int, Int -> Ordering) = &compare\njoin: (String, String -> String) = &concat\ncmp(1, 2)\njoin(\"sur\", \"tr\")\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(
+        stdout.contains("cmp: (Int, Int -> Ordering) = Closure(Int, Int -> Ordering)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("join: (String, String -> String) = Closure(String, String -> String)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Ordering::Less"), "{stdout}");
+    assert!(stdout.contains("\"surtr\""), "{stdout}");
+}
+
+#[test]
+fn repl_allows_trait_helper_capture_when_function_on_supplies_same_expression_evidence() {
+    let output = run_repl_session(
+        "by_len = &compare `Function::on` &String::len\nby_len(\"a\", \"abcd\")\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(
+        stdout.contains("by_len: (String, String -> Ordering) = Closure(_, _ -> _)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Ordering::Less"), "{stdout}");
+}
+
+#[test]
+fn repl_rejects_function_on_inferred_facet_capture_without_source_evidence() {
+    let output = run_repl_session("by_age = &compare `Function::on` _.age\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let combined = strip_ansi(&combined);
+    assert!(
+        combined.contains("Cannot access field on"),
+        "expected missing source evidence diagnostic, got:\n{}",
+        combined
+    );
+}
+
+#[test]
+fn repl_keeps_bare_trait_helper_capture_unresolved_without_same_expression_evidence() {
+    let output = run_repl_session("cmp = &compare\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let combined = strip_ansi(&combined);
+    assert!(
+        combined.contains("Trait helper `compare` needs expected callable type or same-expression inference evidence"),
+        "expected unresolved capture diagnostic, got:\n{}",
         combined
     );
 }

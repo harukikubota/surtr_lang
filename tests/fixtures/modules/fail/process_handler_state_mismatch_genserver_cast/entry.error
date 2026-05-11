@@ -1,0 +1,2 @@
+phase: typecheck
+contains: @cast handler `CounterServer::set` first parameter must match process state type `CounterState`

@@ -1,0 +1,2 @@
+phase: parse
+contains: namespace `Auth` is already defined in this scope

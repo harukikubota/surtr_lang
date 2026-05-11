@@ -1,0 +1,2 @@
+phase: typecheck
+contains: @call handler `CounterServer::get` Result ok type must be CallResult<Reply, CounterState>

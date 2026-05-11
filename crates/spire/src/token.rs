@@ -61,6 +61,7 @@ pub enum Token {
     DotDot,         // ..
     FatArrow,       // =>
     Arrow,          // ->
+    LeftArrow,      // <-
     Semicolon,      // ;
     Pipe,           // |
     PipeApply,      // |>
@@ -70,6 +71,7 @@ pub enum Token {
     LiftCompose,    // >*
     KleisliCompose, // >=>
     Amp,            // &
+    Tilde,          // ~
     Dollar,         // $
 
     // ── Statement separators ──
@@ -102,6 +104,7 @@ pub enum Token {
     Cond,
     Private,
     Public,
+    Readonly,
     Const,
     Type,
     Where,

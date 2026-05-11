@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sigil::resolved::{ResolvedId, ResolvedProcessSpec};
+use sigil::resolved::{ResolvedId, ResolvedProcessHandlerUid, ResolvedProcessSpec};
 use sindr::primitives::SurtrInt;
 use spire::ast::{BinOp, Lit, ProcessSpec, Span, SupervisorInitSpec, Visibility};
 
@@ -28,6 +28,22 @@ pub struct TypedProcessSpec {
     pub init_uid: u32,
     pub get_uid: u32,
     pub set_uid: Option<u32>,
+    pub handler_uids: Vec<TypedProcessHandlerUid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypedProcessHandlerUid {
+    pub internal_name: String,
+    pub uid: u32,
+}
+
+impl From<ResolvedProcessHandlerUid> for TypedProcessHandlerUid {
+    fn from(value: ResolvedProcessHandlerUid) -> Self {
+        Self {
+            internal_name: value.internal_name,
+            uid: value.uid,
+        }
+    }
 }
 
 impl From<ResolvedProcessSpec> for TypedProcessSpec {
@@ -39,6 +55,7 @@ impl From<ResolvedProcessSpec> for TypedProcessSpec {
             init_uid: value.init_uid,
             get_uid: value.get_uid,
             set_uid: value.set_uid,
+            handler_uids: value.handler_uids.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -107,46 +124,85 @@ pub enum OperatorTraitOp {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum TypedLensSegment {
+pub enum TypedFacetSegment {
     Field {
         field_name: String,
         field_index: u32,
         container_field_count: u32,
+        container_type_name: String,
+        readonly: bool,
+        focus_readonly_root: bool,
+        focus_type_name: Option<String>,
     },
     Tuple {
         field_index: u32,
         tuple_len: u32,
+        focus_readonly_root: bool,
+        focus_type_name: Option<String>,
     },
     Variant {
         enum_name: String,
         variant_name: String,
         variant_tag: u32,
         payload_arity: u32,
+        focus_readonly_root: bool,
+        focus_type_name: Option<String>,
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TypedLensPath {
-    pub source_ty: Ty,
-    pub focus_ty: Ty,
-    pub may_fail: bool,
-    pub segments: Vec<TypedLensSegment>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypedFieldPolicy {
+    pub private: bool,
+    pub readonly: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TypedFacetPathKind {
+    Structural,
+    Variant,
+}
+
+impl TypedFacetPathKind {
+    pub fn from_may_fail(may_fail: bool) -> Self {
+        if may_fail {
+            Self::Variant
+        } else {
+            Self::Structural
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Structural => "structural",
+            Self::Variant => "variant",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PendingLensPath {
+pub struct TypedFacetPath {
+    pub source_ty: Ty,
+    pub focus_ty: Ty,
+    pub path_kind: TypedFacetPathKind,
+    pub may_fail: bool,
+    pub source_readonly_root: bool,
+    pub segments: Vec<TypedFacetSegment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingFacetPath {
     pub source_ty_hint: Option<Ty>,
     pub segments: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TypedLensSetMode {
+pub enum TypedFacetSetMode {
     Exact,
     WrapPlainResult,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TypedLensOverMode {
+pub enum TypedFacetOverMode {
     FocusValue,
     FocusResult,
 }
@@ -218,40 +274,40 @@ pub enum TypedInner {
         supervisor_process: String,
         worker_process: String,
         init: Box<TypedNode>,
-        size: Box<TypedNode>,
+        strategy: Box<TypedNode>,
     },
 
-    /// Compile-time lens constant path value. Stage 1 does not allow
-    /// first-class runtime transport of lens values.
-    LensPath(TypedLensPath),
+    /// Compile-time facet constant path value. Stage 1 does not allow
+    /// first-class runtime transport of facet values.
+    FacetPath(TypedFacetPath),
 
-    /// Deferred compile-time lens path value. Used for path bindings that need
+    /// Deferred compile-time facet path value. Used for path bindings that need
     /// later source/focus context before they can be fully specialized.
-    PendingLensPath(PendingLensPath),
+    PendingFacetPath(PendingFacetPath),
 
-    /// Lens view application with compile-time path metadata.
-    LensView {
+    /// Facet view application with compile-time path metadata.
+    FacetView {
         source: Box<TypedNode>,
-        path: TypedLensPath,
+        path: TypedFacetPath,
         source_is_result: bool,
     },
 
-    /// Lens set application with compile-time path metadata.
-    LensSet {
+    /// Facet set application with compile-time path metadata.
+    FacetSet {
         source: Box<TypedNode>,
-        path: TypedLensPath,
+        path: TypedFacetPath,
         value: Box<TypedNode>,
         source_is_result: bool,
-        mode: TypedLensSetMode,
+        mode: TypedFacetSetMode,
     },
 
-    /// Lens over application with compile-time path metadata.
-    LensOver {
+    /// Facet over application with compile-time path metadata.
+    FacetOver {
         source: Box<TypedNode>,
-        path: TypedLensPath,
+        path: TypedFacetPath,
         update_fun: Box<TypedNode>,
         source_is_result: bool,
-        mode: TypedLensOverMode,
+        mode: TypedFacetOverMode,
     },
 
     /// Struct literal — tag + field values (in definition order)
@@ -303,11 +359,11 @@ pub enum TypedInner {
     /// Captured function value
     Capture(Box<TypedNode>, Vec<TypedNode>),
 
-    /// Struct definition — tag + name + field names + private flags (for TypeRegistry)
-    StructDef(u32, String, Vec<String>, Vec<bool>),
+    /// Struct definition — tag + name + field names + field policies + readonly-root flag
+    StructDef(u32, String, Vec<String>, Vec<TypedFieldPolicy>, bool),
 
-    /// Record definition — tag + name + field names + private flags (for TypeRegistry)
-    RecordDef(u32, String, Vec<String>, Vec<bool>),
+    /// Record definition — tag + name + field names + field policies + readonly-root flag
+    RecordDef(u32, String, Vec<String>, Vec<TypedFieldPolicy>, bool),
 
     /// Semicolon — explicit Unit coercion
     Semi(Box<TypedNode>),

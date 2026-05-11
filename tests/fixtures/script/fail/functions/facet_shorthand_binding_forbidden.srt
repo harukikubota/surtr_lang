@@ -1,0 +1,4 @@
+defrecord User(name: String)
+
+user = User("alice")
+path = ~user.name

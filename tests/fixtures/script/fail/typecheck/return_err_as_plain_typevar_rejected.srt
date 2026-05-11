@@ -1,0 +1,5 @@
+def bad() -> $T {
+  Err(NoneError)
+}
+
+print(inspect(bad()))

@@ -108,11 +108,13 @@ test("String") {
   describe("contains") {
     it("matches an inner substring") { assert_true(contains("surtr", "urt")) }
     it("rejects a missing substring") { assert_false(contains("surtr", "zzz")) }
+    it("matches an empty needle") { assert_true(contains("surtr", "")) }
   }
 
   describe("replace") {
     it("replaces each matched substring") { assert_eq("baNANA", replace("banana", "na", "NA")) }
     it("leaves input unchanged for an empty separator") { assert_eq("surtr", replace("surtr", "", "-")) }
+    it("uses non-overlapping matches") { assert_eq("bb", replace("aaaa", "aa", "b")) }
   }
 
   describe("split") {
@@ -126,6 +128,10 @@ test("String") {
 
     it("returns the original string when the separator is absent") {
       assert_eq("[\"surtr\"]", inspect(split("surtr", "/")))
+    }
+
+    it("splits on unicode separators") {
+      assert_eq("[\"a\", \"b\", \"\"]", inspect(split("aあbあ", "あ")))
     }
   }
 

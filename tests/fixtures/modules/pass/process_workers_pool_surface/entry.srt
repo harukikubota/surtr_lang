@@ -1,0 +1,80 @@
+defagent MyWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> {
+    Ok(seed)
+  }
+
+  @get
+  def value(state: Int) -> Result<Int> {
+    Ok(state)
+  }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> {
+    Ok(next)
+  }
+}
+
+defsupervisor MySup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+
+defgenserver MyPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Workers<MyWorker>
+  }
+
+  @init
+  def init() -> Result<Workers<MyWorker>> {
+    MySup::workers(MyWorker::init(1), WorkerStrategy::fixed(2))
+  }
+
+  @cast
+  def submit(workers: Workers<MyWorker>, next: Int) -> Result<CastResult<Workers<MyWorker>>> {
+    _ =? Workers::submit(workers, MyWorker::set(next))
+    Ok(CastResult::Next(workers))
+  }
+
+  @cast
+  def reserve_set(workers: Workers<MyWorker>, next: Int) -> Result<CastResult<Workers<MyWorker>>> {
+    lease =? Workers::reserve(workers)
+    _ =? MyWorker::set(lease, next)
+    Ok(CastResult::Next(workers))
+  }
+
+  @call
+  def values(workers: Workers<MyWorker>) -> Result<CallResult<List<Result<Int>>, Workers<MyWorker>>> {
+    Ok(CallResult::Reply(Workers::broadcast(workers, MyWorker::value()), workers))
+  }
+
+  @call
+  def count(workers: Workers<MyWorker>) -> Result<CallResult<Int, Workers<MyWorker>>> {
+    Ok(CallResult::Reply(Workers::size(workers), workers))
+  }
+}
+
+supervisor_init {
+  MySup {}
+  MyPool {}
+}
+
+print(to_string(MyPool::count()))
+_ =? MyPool::submit(7)
+_ =? MyPool::submit(9)
+print(to_string(MyPool::values()))
+_ =? MyPool::reserve_set(11)
+print(to_string(MyPool::values()))

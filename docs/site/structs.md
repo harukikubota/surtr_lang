@@ -1,7 +1,7 @@
 # Structs
 
 `defstruct` の利用者向けルールをこのページに集約します。  
-正本の surface 契約は `../../doc/要件定義v9.md`、Lens の詳細は `./lens.md` を参照してください。
+正本の surface 契約は `../../doc/要件定義v9.md`、Facet の詳細は `./facet.md` を参照してください。
 
 ## 定義
 
@@ -22,7 +22,7 @@ impl User {
 `impl User` は `User` 専用の namespace で、構築 helper や分解 helper を置きます。
 
 欠損可能 field を持たせるときは、まず `T?` を検討してください。
-`T?` は `Option<T>` ではなく `Result<T, NoneError>` に下がるため、Lens 更新や
+`T?` は `Option<T>` ではなく `Result<T, NoneError>` に下がるため、Facet 更新や
 `Result` を返す helper 関数と直接つながります。
 
 ## 構築ルール
@@ -149,18 +149,23 @@ defstruct User {
 このときの可視性ルールは少し特徴的です。
 
 - `User.password` のような type-root access は `impl User` / `impl Trait for User` の外では不可
-- `user.password` のような value access 自体は許可される
-- ただし `user.password` を外側 closure の中で直接読むことは不可
+- `user.password` のような value access も同じく `impl User` / `impl Trait for User` の外では不可
+- closure の中かどうかで特別扱いはされず、field access が path segment を作る時点で同じ規則が適用される
 
 ```surtr
-password = user.password
-reader = {|| password}
+impl User {
+  def password_via_reader(self) -> String {
+    password = self.password
+    reader = {|| password}
+    reader()
+  }
+}
 ```
 
-上のように、一度 plain value として取り出してから closure に渡す形は許可されます。  
-一方で `{|| user.password}` は compile error です。
+上のように owner impl の内側で一度 plain value として取り出してから closure に渡す形は許可されます。  
+一方で impl の外側にある `{|| user.password}` は compile error です。
 
-Lens の `User.password` path も同じ private 境界に従います。path と更新 API の詳細は `./lens.md` を参照してください。
+Facet の `User.password` path も同じ private 境界に従います。path と更新 API の詳細は `./facet.md` を参照してください。
 
 ## プロパティアクセス
 
@@ -173,12 +178,12 @@ print(to_string(user.age))
 
 - `value.field` は `defstruct` / `defrecord` で使える
 - enum 値に対する field access はない
-- field の更新は代入ではなく、新しい値を組み立てる helper か Lens API で扱う
+- field の更新は代入ではなく、新しい値を組み立てる helper か Facet API で扱う
 
 ### `Option<T>` field と `T?` field の使い分け
 
 field を「値として optional に持つだけ」なら `Option<T>` でも問題ありません。
-ただし、構造体 field を `Lens` で取り出して `Result`-returning helper へ流したい場合は
+ただし、構造体 field を `Facet` で取り出して `Result`-returning helper へ流したい場合は
 `T?` の方が更新パイプを短く保てます。
 
 ```surtr
@@ -201,11 +206,11 @@ defstruct User {
   nickname: String?,
 }
 
-next =? Lens::over(User.nickname, user, normalize_name)
+next =? Facet::over(User.nickname, user, normalize_name)
 ```
 
 `nickname: String?` なら field 自体が `Result<String, NoneError>` と同じなので、
-`Lens::set` / `Lens::over` / `Lens::over_result` とそのまま噛み合います。
+`Facet::set` / `Facet::over` / `Facet::over_result` とそのまま噛み合います。
 
 たとえば `impl User` 内で `with_age` を定義して再構築できます。
 
@@ -217,7 +222,7 @@ impl User {
 }
 ```
 
-ネストした path や `Lens::set` / `Lens::over` は、このページでは重複させず `./lens.md` へ委ねます。
+ネストした path や `Facet::set` / `Facet::over` は、このページでは重複させず `./facet.md` へ委ねます。
 
 ## パターンマッチ
 
@@ -241,7 +246,7 @@ match user {
 
 ## 関連ページ
 
-- Lens と path update は `./lens.md`
+- Facet と path update は `./facet.md`
 - extractor 契約は `./extractors.md`
 - pattern 全体は `./pattern-matching.md`
 - compact な一覧は `./language-reference.md`
@@ -251,5 +256,5 @@ match user {
 - ソース
   - `../../doc/要件定義v9.md`
   - `../../tests/integration/language_features/core_language.rs`
-  - `../../tests/spec/modules/private_visibility_*`
-  - `../../tests/compile_errors/modules/private_field_*`
+  - `../../tests/fixtures/modules/pass/private_visibility_*`
+  - `../../tests/fixtures/modules/fail/private_field_*`

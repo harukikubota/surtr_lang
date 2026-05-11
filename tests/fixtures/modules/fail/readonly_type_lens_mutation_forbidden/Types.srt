@@ -1,0 +1,10 @@
+@readonly
+defstruct Profile {
+  name: String,
+}
+
+impl Profile {
+  def new(name: String) -> Self {
+    Profile { name: name }
+  }
+}

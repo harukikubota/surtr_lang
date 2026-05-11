@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Output;
 
-use crate::common::{surtr_command, unique_temp_dir, write_source};
+use crate::common::{repo_root, surtr_command, unique_temp_dir, write_source};
 
 fn run_surtr(temp: &Path, args: &[&str]) -> Output {
     surtr_command()
@@ -622,6 +622,75 @@ test("IO isolation") {
     assert!(stdout.contains("[PASS] IO isolation > leaves unread io behind"));
     assert!(stdout.contains("[PASS] IO isolation > starts with fresh io buffers"));
     assert!(stdout.contains("test result: passed=2, failed=0, total=2"));
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_runs_file_module_tests_and_writes_real_files() {
+    let temp = unique_temp_dir("surtr_test_command_file_module");
+    let sandbox_dir = temp.join("tmp/sandbox");
+    fs::create_dir_all(&sandbox_dir).expect("sandbox dir should be creatable");
+
+    let repo_file_test = repo_root().join("lib/tests/file.srt");
+    write_source(
+        &temp.join("lib/tests/file.srt"),
+        &fs::read_to_string(&repo_file_test).expect("repo file test fixture should exist"),
+    );
+
+    let repo_file_module = repo_root().join("lib/file.srt");
+    if repo_file_module.exists() {
+        write_source(
+            &temp.join("lib/file.srt"),
+            &fs::read_to_string(&repo_file_module).expect("repo file module should be readable"),
+        );
+    }
+
+    let output = run_surtr(&temp, &["test", "file"]);
+    assert!(
+        output.status.success(),
+        "file test command should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[PASS] File > writes and reads text"));
+    assert!(stdout.contains("[PASS] File > appends text"));
+    assert!(stdout.contains("[PASS] File > checks exists and delete"));
+    assert!(stdout.contains("[PASS] File > writes and flushes through with_open"));
+    assert!(stdout.contains("[PASS] File > reads chunks until eof"));
+    assert!(stdout.contains("[PASS] File > reports missing path"));
+    assert!(stdout.contains("test result: passed=6, failed=0, total=6"));
+
+    assert_eq!(
+        fs::read_to_string(sandbox_dir.join("write_read.txt"))
+            .expect("write_read file should exist after test"),
+        "alpha"
+    );
+    assert_eq!(
+        fs::read_to_string(sandbox_dir.join("append.txt"))
+            .expect("append file should exist after test"),
+        "onetwo"
+    );
+    assert!(
+        !sandbox_dir.join("delete.txt").exists(),
+        "delete.txt should have been removed by the File test"
+    );
+    assert_eq!(
+        fs::read_to_string(sandbox_dir.join("with_open_write.txt"))
+            .expect("with_open_write file should exist after test"),
+        "chunk-a"
+    );
+    assert_eq!(
+        fs::read_to_string(sandbox_dir.join("read_chunk.txt"))
+            .expect("read_chunk file should exist after test"),
+        "abcdef"
+    );
+    assert!(
+        !sandbox_dir.join("missing/nope.txt").exists(),
+        "missing-path assertion should not materialize the absent file"
+    );
 
     let _ = fs::remove_dir_all(temp);
 }

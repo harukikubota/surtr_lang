@@ -1,0 +1,2 @@
+user = User(Profile("alice"))
+print(Facet::view(User.profile / Profile.name, user))

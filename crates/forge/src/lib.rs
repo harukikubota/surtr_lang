@@ -6,8 +6,8 @@ pub mod registry;
 
 pub use codegen::{
     codegen, codegen_typed_program, compose_bytecode_with_chunk, BindingInfo, ChunkMeta,
-    ForgeCheckpoint, ForgeSession, ReplCallableDisplay, ReplCallableKind, ReplLensInfo,
-    ReplLensSegmentInfo, ReplTypeKind, TypeDefDisplay,
+    ForgeCheckpoint, ForgeSession, ReplCallableDisplay, ReplCallableKind, ReplFacetInfo,
+    ReplFacetSegmentInfo, ReplTypeKind, TypeDefDisplay,
 };
 
 #[cfg(test)]
@@ -19,7 +19,8 @@ mod tests {
     use crate::opcode::Opcode;
     use crate::registry::TypeKind;
     use scar::typed::{
-        TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode, TypedPattern,
+        ComposeFlavor, TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode,
+        TypedPattern,
     };
     use scar::types::Ty;
     use sigil::resolved::ResolvedId;
@@ -46,6 +47,8 @@ mod tests {
     const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/concat.srt");
     const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/traits/from.srt");
     const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../lib/traits/try_from.srt");
+    const ENCODE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/encode.srt");
+    const DECODE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/decode.srt");
     const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/functor.srt");
     const CHAINABLE_MODULE_SOURCE: &str =
         include_str!("../../../lib/traits/operator/chainable.srt");
@@ -71,8 +74,9 @@ mod tests {
     const DURATION_MODULE_SOURCE: &str = include_str!("../../../lib/types/duration.srt");
     const PROCESS_MODULE_SOURCE: &str = include_str!("../../../lib/process.srt");
     const OPTION_MODULE_SOURCE: &str = include_str!("../../../lib/types/option.srt");
-    const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/lens.srt");
+    const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/facet.srt");
     const FLOAT_MODULE_SOURCE: &str = include_str!("../../../lib/types/float.srt");
+    const JSON_MODULE_SOURCE: &str = include_str!("../../../lib/types/json.srt");
     const RANDOM_MODULE_SOURCE: &str = include_str!("../../../lib/Random.srt");
     const STYLED_DOC_MODULE_SOURCE: &str = include_str!("../../../lib/styled_doc.srt");
     const TEST_MODULE_SOURCE: &str = include_str!("../../../lib/test.srt");
@@ -210,6 +214,8 @@ mod tests {
                 ("Ord", ORD_MODULE_SOURCE),
                 ("From", FROM_MODULE_SOURCE),
                 ("TryFrom", TRY_FROM_MODULE_SOURCE),
+                ("Encode", ENCODE_MODULE_SOURCE),
+                ("Decode", DECODE_MODULE_SOURCE),
                 ("Functor", FUNCTOR_MODULE_SOURCE),
                 ("Chainable", CHAINABLE_MODULE_SOURCE),
                 ("PipeApply", PIPE_APPLY_MODULE_SOURCE),
@@ -229,8 +235,9 @@ mod tests {
                 ("Duration", DURATION_MODULE_SOURCE),
                 ("Process", PROCESS_MODULE_SOURCE),
                 ("Option", OPTION_MODULE_SOURCE),
-                ("Lens", LENS_MODULE_SOURCE),
+                ("Facet", LENS_MODULE_SOURCE),
                 ("Float", FLOAT_MODULE_SOURCE),
+                ("Json", JSON_MODULE_SOURCE),
                 ("Random", RANDOM_MODULE_SOURCE),
                 ("StyledDoc", STYLED_DOC_MODULE_SOURCE),
             ]
@@ -350,6 +357,140 @@ mod tests {
             compiler_generated: false,
             span: test_span(),
         }
+    }
+
+    fn fun_param(name: &str, unique_id: u32, ty: Ty) -> TypedFunParam {
+        TypedFunParam {
+            id: resolved_id(name, unique_id),
+            ty,
+        }
+    }
+
+    fn local_var(name: &str, unique_id: u32, ty: Ty) -> TypedNode {
+        TypedNode {
+            ty,
+            span: test_span(),
+            node: TypedInner::Var(resolved_id(name, unique_id)),
+        }
+    }
+
+    fn user_func_var(
+        name: &str,
+        unique_id: u32,
+        fun_idx: u32,
+        params: Vec<Ty>,
+        ret: Ty,
+    ) -> TypedNode {
+        TypedNode {
+            ty: Ty::UserFunc {
+                fun_idx,
+                type_params: Vec::new(),
+                params,
+                ret: Box::new(ret),
+            },
+            span: test_span(),
+            node: TypedInner::Var(resolved_id(name, unique_id)),
+        }
+    }
+
+    fn builtin_func_var(name: &str, unique_id: u32, params: Vec<Ty>, ret: Ty) -> TypedNode {
+        TypedNode {
+            ty: Ty::BuiltinFunc {
+                name: name.to_string(),
+                params,
+                ret: Box::new(ret),
+            },
+            span: test_span(),
+            node: TypedInner::Var(resolved_id(name, unique_id)),
+        }
+    }
+
+    fn user_capture(
+        name: &str,
+        unique_id: u32,
+        fun_idx: u32,
+        params: Vec<Ty>,
+        ret: Ty,
+    ) -> TypedNode {
+        TypedNode {
+            ty: Ty::Func(params.clone(), Box::new(ret.clone())),
+            span: test_span(),
+            node: TypedInner::Capture(
+                Box::new(user_func_var(name, unique_id, fun_idx, params, ret)),
+                Vec::new(),
+            ),
+        }
+    }
+
+    fn builtin_capture(name: &str, unique_id: u32, params: Vec<Ty>, ret: Ty) -> TypedNode {
+        TypedNode {
+            ty: Ty::Func(params.clone(), Box::new(ret.clone())),
+            span: test_span(),
+            node: TypedInner::Capture(
+                Box::new(builtin_func_var(name, unique_id, params, ret)),
+                Vec::new(),
+            ),
+        }
+    }
+
+    fn identity_def(name: &str, fun_idx: u32, fun_uid: u32, param_uid: u32, ty: Ty) -> TypedNode {
+        let param = fun_param("value", param_uid, ty.clone());
+        TypedNode {
+            ty: Ty::Unit,
+            span: test_span(),
+            node: TypedInner::Def(
+                fun_idx,
+                resolved_id(name, fun_uid),
+                Vec::new(),
+                vec![param.clone()],
+                ty.clone(),
+                Box::new(local_var("value", param.id.unique_id, ty)),
+                Visibility::Public,
+            ),
+        }
+    }
+
+    fn binary_first_def(name: &str, fun_idx: u32, fun_uid: u32) -> TypedNode {
+        let left = fun_param("left", fun_uid + 1, Ty::Int);
+        let right = fun_param("right", fun_uid + 2, Ty::Int);
+        TypedNode {
+            ty: Ty::Unit,
+            span: test_span(),
+            node: TypedInner::Def(
+                fun_idx,
+                resolved_id(name, fun_uid),
+                Vec::new(),
+                vec![left.clone(), right],
+                Ty::Int,
+                Box::new(local_var("left", left.id.unique_id, Ty::Int)),
+                Visibility::Public,
+            ),
+        }
+    }
+
+    fn top_level_opcodes(bytecode: &sindr::ir::Bytecode) -> Vec<&Opcode> {
+        bytecode
+            .opcodes
+            .iter()
+            .take_while(|opcode| !matches!(opcode, Opcode::Halt))
+            .collect()
+    }
+
+    fn function_body_opcodes<'a>(
+        bytecode: &'a sindr::ir::Bytecode,
+        fun_idx: u32,
+    ) -> Vec<&'a Opcode> {
+        let entry_pc = bytecode.functions[fun_idx as usize].entry_pc as usize;
+        let end_pc = bytecode
+            .functions
+            .iter()
+            .filter_map(|entry| {
+                let pc = entry.entry_pc as usize;
+                (pc > entry_pc).then_some(pc)
+            })
+            .min()
+            .unwrap_or(bytecode.opcodes.len());
+        bytecode.opcodes[entry_pc..end_pc].iter().collect()
     }
 
     fn int_lit(value: i64) -> TypedNode {
@@ -533,6 +674,186 @@ print(to_string(add(1, 2)))"#,
     }
 
     #[test]
+    fn zero_capture_closure_literal_omits_capture_closure_zero() {
+        let bytecode = codegen_source(
+            r#"add1: (Int -> Int) = {|x| x + 1}
+print(to_string(add1(2)))"#,
+        );
+
+        assert!(!bytecode
+            .opcodes
+            .windows(2)
+            .any(|ops| matches!(ops, [Opcode::LoadFunctionRef(_), Opcode::CaptureClosure(0)])));
+    }
+
+    #[test]
+    fn capturing_closure_literal_still_emits_capture_closure() {
+        let bytecode = codegen_source(
+            r#"base = 10
+add_base: (Int -> Int) = {|x| x + base}
+print(to_string(add_base(2)))"#,
+        );
+
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::CaptureClosure(count) if *count > 0)));
+    }
+
+    #[test]
+    fn pipe_direct_user_capture_lowers_to_call_without_callclosure() {
+        let bytecode = codegen_typed(vec![
+            identity_def("id_int", 0, 10, 11, Ty::Int),
+            TypedNode {
+                ty: Ty::Int,
+                span: test_span(),
+                node: TypedInner::Pipe(
+                    Box::new(int_lit(7)),
+                    Box::new(user_capture("id_int", 12, 0, vec![Ty::Int], Ty::Int)),
+                ),
+            },
+        ]);
+        let top_level = top_level_opcodes(&bytecode);
+
+        assert!(top_level.iter().any(|op| matches!(
+            op,
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 1,
+                ..
+            }
+        )));
+        assert!(!top_level
+            .iter()
+            .any(|op| matches!(op, Opcode::CallClosure { .. })));
+    }
+
+    #[test]
+    fn pipe_direct_builtin_capture_lowers_to_callbuiltin_without_callclosure() {
+        let builtin_id = builtin_id_by_name("to_string").expect("to_string builtin exists");
+        let bytecode = codegen_typed(vec![TypedNode {
+            ty: Ty::Str,
+            span: test_span(),
+            node: TypedInner::Pipe(
+                Box::new(int_lit(7)),
+                Box::new(builtin_capture("to_string", 12, vec![Ty::Int], Ty::Str)),
+            ),
+        }]);
+        let top_level = top_level_opcodes(&bytecode);
+
+        assert!(top_level.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id: id,
+                    arity: 1,
+                    ..
+                } if *id == builtin_id
+            )
+        }));
+        assert!(!top_level
+            .iter()
+            .any(|op| matches!(op, Opcode::CallClosure { .. })));
+    }
+
+    #[test]
+    fn pipe_direct_injected_user_call_lowers_without_partial_wrapper() {
+        let bytecode = codegen_typed(vec![
+            binary_first_def("first_int", 0, 20),
+            TypedNode {
+                ty: Ty::Int,
+                span: test_span(),
+                node: TypedInner::Pipe(
+                    Box::new(int_lit(7)),
+                    Box::new(TypedNode {
+                        ty: Ty::Func(vec![Ty::Int], Box::new(Ty::Int)),
+                        span: test_span(),
+                        node: TypedInner::InjectCall(
+                            Box::new(user_func_var(
+                                "first_int",
+                                23,
+                                0,
+                                vec![Ty::Int, Ty::Int],
+                                Ty::Int,
+                            )),
+                            vec![int_lit(9)],
+                        ),
+                    }),
+                ),
+            },
+        ]);
+        let top_level = top_level_opcodes(&bytecode);
+
+        assert!(top_level.iter().any(|op| matches!(
+            op,
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 2,
+                ..
+            }
+        )));
+        assert!(!bytecode
+            .functions
+            .iter()
+            .any(|entry| entry.flags.partial_apply_wrapper));
+        assert!(!top_level
+            .iter()
+            .any(|op| matches!(op, Opcode::CallClosure { .. } | Opcode::CaptureClosure(_))));
+    }
+
+    #[test]
+    fn direct_compose_wrapper_embeds_user_calls_without_captured_callables() {
+        let bytecode = codegen_typed(vec![
+            identity_def("left_int", 0, 30, 31, Ty::Int),
+            identity_def("right_int", 1, 32, 33, Ty::Int),
+            TypedNode {
+                ty: Ty::Func(vec![Ty::Int], Box::new(Ty::Int)),
+                span: test_span(),
+                node: TypedInner::Compose(
+                    ComposeFlavor::Plain,
+                    Box::new(user_capture("left_int", 34, 0, vec![Ty::Int], Ty::Int)),
+                    Box::new(user_capture("right_int", 35, 1, vec![Ty::Int], Ty::Int)),
+                ),
+            },
+        ]);
+        let compose_entry = bytecode
+            .functions
+            .iter()
+            .find(|entry| {
+                entry.flags.generated
+                    && !entry.flags.closure
+                    && entry.qualified_name.is_none()
+                    && entry.arity == 1
+            })
+            .expect("direct compose wrapper should take only the input");
+        let compose_body = function_body_opcodes(&bytecode, compose_entry.fun_idx);
+        let top_level = top_level_opcodes(&bytecode);
+
+        assert!(compose_body.iter().any(|op| matches!(
+            op,
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 1,
+                ..
+            }
+        )));
+        assert!(compose_body.iter().any(|op| matches!(
+            op,
+            Opcode::Call {
+                fun_idx: 1,
+                arity: 1,
+                ..
+            }
+        )));
+        assert!(!compose_body
+            .iter()
+            .any(|op| matches!(op, Opcode::CallClosure { .. })));
+        assert!(!top_level
+            .iter()
+            .any(|op| matches!(op, Opcode::CaptureClosure(2))));
+    }
+
+    #[test]
     fn field_access_emits_getfield_with_resolved_index() {
         let bytecode = codegen_source(
             r#"defstruct User {
@@ -576,18 +897,18 @@ print("ok")"#,
         );
 
         assert_eq!(
-            bytecode.type_registry.entries.len(),
-            baseline.type_registry.entries.len() + 2
+            bytecode.type_registry.entries().len(),
+            baseline.type_registry.entries().len() + 2
         );
 
-        let user = &bytecode.type_registry.entries[baseline.type_registry.entries.len()];
+        let user = &bytecode.type_registry.entries()[baseline.type_registry.entries().len()];
         assert!(user.tag >= 2);
-        assert_eq!(user.name, "User");
+        assert_eq!(user.name, "Global::User");
         assert_eq!(user.kind, TypeKind::Struct);
 
-        let point = &bytecode.type_registry.entries[baseline.type_registry.entries.len() + 1];
+        let point = &bytecode.type_registry.entries()[baseline.type_registry.entries().len() + 1];
         assert_eq!(point.tag, user.tag + 1);
-        assert_eq!(point.name, "Point");
+        assert_eq!(point.name, "Global::Point");
         assert_eq!(point.kind, TypeKind::Record);
     }
 
@@ -637,6 +958,130 @@ right = Int::bit_xor(6, 3)"#,
                     || *builtin_id == bit_xor_id
             )
         }));
+    }
+
+    #[test]
+    fn direct_string_len_builtin_call_lowers_to_specialized_opcode() {
+        let bytecode = codegen_source(r#"size = String::len("あb")"#);
+
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::StringLen)));
+
+        let string_len_id =
+            builtin_id_by_name("string_len").expect("string_len builtin metadata must exist");
+        assert!(!bytecode.opcodes.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    ..
+                } if *builtin_id == string_len_id
+            )
+        }));
+    }
+
+    #[test]
+    fn direct_list_len_builtin_call_lowers_to_specialized_opcode() {
+        let bytecode = codegen_source(r#"size = List::len([1, 2, 3])"#);
+
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::ListLen)));
+
+        let len_id = builtin_id_by_name("len").expect("len builtin metadata must exist");
+        assert!(!bytecode.opcodes.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    ..
+                } if *builtin_id == len_id
+            )
+        }));
+    }
+
+    #[test]
+    fn direct_safe_mod_builtin_call_lowers_to_specialized_opcode() {
+        let bytecode = codegen_source(r#"rem = Int::safe_mod(7, 3)"#);
+
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::SafeModInt)));
+
+        let safe_mod_id =
+            builtin_id_by_name("safe_mod").expect("safe_mod builtin metadata must exist");
+        assert!(!bytecode.opcodes.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    ..
+                } if *builtin_id == safe_mod_id
+            )
+        }));
+    }
+
+    #[test]
+    fn direct_string_predicate_builtin_calls_lower_to_specialized_opcodes() {
+        let bytecode = codegen_source(
+            r#"has = String::contains("surtr", "urt")
+starts = String::starts_with("surtr", "sur")
+ends = String::ends_with("surtr", "tr")"#,
+        );
+
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::StringContains)));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::StringStartsWith)));
+        assert!(bytecode
+            .opcodes
+            .iter()
+            .any(|op| matches!(op, Opcode::StringEndsWith)));
+
+        for name in ["string_contains", "string_starts_with", "string_ends_with"] {
+            let builtin_id = builtin_id_by_name(name)
+                .unwrap_or_else(|| panic!("{name} builtin metadata must exist"));
+            assert!(!bytecode.opcodes.iter().any(|op| {
+                matches!(
+                    op,
+                    Opcode::CallBuiltin {
+                        builtin_id: id,
+                        ..
+                    } if *id == builtin_id
+                )
+            }));
+        }
+    }
+
+    #[test]
+    fn direct_string_split_and_replace_stay_as_builtin_calls() {
+        let bytecode = codegen_source(
+            r#"parts = String::split("a,b", ",")
+text = String::replace("banana", "na", "NA")"#,
+        );
+
+        for (name, arity) in [("string_split", 2), ("string_replace", 3)] {
+            let builtin_id = builtin_id_by_name(name)
+                .unwrap_or_else(|| panic!("{name} builtin metadata must exist"));
+            assert!(bytecode.opcodes.iter().any(|op| {
+                matches!(
+                    op,
+                    Opcode::CallBuiltin {
+                        builtin_id: id,
+                        arity: actual_arity,
+                        ..
+                    } if *id == builtin_id && *actual_arity == arity
+                )
+            }));
+        }
     }
 
     #[test]
@@ -696,16 +1141,16 @@ largest = Numeric::max(1.5, 2.5)"#,
     }
 
     #[test]
-    fn lens_set_and_over_are_lowered_without_runtime_builtin_calls() {
+    fn facet_set_and_over_are_lowered_without_runtime_builtin_calls() {
         let bytecode = codegen_source(
             r#"defrecord User(name: String)
 user = User("alice")
-user2 = Lens::set(User.name, user, "bob")
-user3 = Lens::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
+user2 = Facet::set(User.name, user, "bob")
+user3 = Facet::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
         );
 
-        let lens_set_id = builtin_id_by_name("set").expect("set builtin metadata must exist");
-        let lens_over_id = builtin_id_by_name("over").expect("over builtin metadata must exist");
+        let facet_set_id = builtin_id_by_name("set").expect("set builtin metadata must exist");
+        let facet_over_id = builtin_id_by_name("over").expect("over builtin metadata must exist");
 
         assert!(!bytecode.opcodes.iter().any(|op| {
             matches!(
@@ -713,7 +1158,7 @@ user3 = Lens::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
                 Opcode::CallBuiltin {
                     builtin_id,
                     ..
-                } if *builtin_id == lens_set_id || *builtin_id == lens_over_id
+                } if *builtin_id == facet_set_id || *builtin_id == facet_over_id
             )
         }));
         assert!(bytecode
@@ -723,17 +1168,17 @@ user3 = Lens::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
     }
 
     #[test]
-    fn lens_bindings_are_erased_and_only_viewed_values_are_captured() {
+    fn facet_bindings_are_erased_and_only_viewed_values_are_captured() {
         let bytecode = codegen_source(
             r#"defrecord User(name: String)
-lens = User.name
-name = Lens::view(lens, User("alice"))
+facet = User.name
+name = Facet::view(facet, User("alice"))
 getter = {|| name}
 result = getter()"#,
         );
 
-        let lens_view_id = builtin_id_by_name("view").expect("view builtin metadata must exist");
-        let lens_compose_id =
+        let facet_view_id = builtin_id_by_name("view").expect("view builtin metadata must exist");
+        let facet_compose_id =
             builtin_id_by_name("compose").expect("compose builtin metadata must exist");
 
         assert!(!bytecode.opcodes.iter().any(|op| {
@@ -742,7 +1187,7 @@ result = getter()"#,
                 Opcode::CallBuiltin {
                     builtin_id,
                     ..
-                } if *builtin_id == lens_view_id || *builtin_id == lens_compose_id
+                } if *builtin_id == facet_view_id || *builtin_id == facet_compose_id
             )
         }));
         assert!(bytecode
@@ -752,14 +1197,14 @@ result = getter()"#,
     }
 
     #[test]
-    fn lens_variant_mismatch_detail_includes_segment_context() {
+    fn facet_variant_mismatch_detail_includes_segment_context() {
         let bytecode = codegen_source(
             r#"defenum Expr {
   Add(Int, Int),
   Halt,
 }
 expr = Expr::Halt
-Lens::view(Expr.Add, expr)"#,
+Facet::view(Expr.Add, expr)"#,
         );
 
         let has_segment_detail = bytecode.constants.iter().any(|constant| {
@@ -815,9 +1260,9 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
             .filter_map(|entry| entry.qualified_name.as_deref())
             .collect::<Vec<_>>();
 
-        assert!(function_names.contains(&"List::max"));
-        assert!(function_names.contains(&"List::min"));
-        assert!(function_names.contains(&"List::sort"));
+        assert!(function_names.contains(&"Global::List::max"));
+        assert!(function_names.contains(&"Global::List::min"));
+        assert!(function_names.contains(&"Global::List::sort"));
     }
 
     #[test]
@@ -827,6 +1272,7 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
     handlers {
       out: OutHandler = StdOut
     }
@@ -853,9 +1299,9 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
             .runtime_process_specs
             .entries
             .iter()
-            .find(|entry| entry.type_name == "Counter")
+            .find(|entry| entry.type_name == "Global::Counter")
             .expect("Counter runtime process spec");
-        assert_eq!(spec.type_name, "Counter");
+        assert_eq!(spec.type_name, "Global::Counter");
         assert_eq!(spec.state.state_type.name, "Int");
         assert_eq!(spec.init.policy, sindr::ir::RuntimeInitPolicy::Eager);
         assert_eq!(spec.handlers.len(), 3);
@@ -872,6 +1318,7 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
     handlers {
       out: OutHandler = StdOut
     }
@@ -885,7 +1332,7 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
 }
 
 supervisor_init {
-  singleton Logger {
+  Logger {
     timeout: 5s
     handlers {
       out: FileOutHandler(path: "./logs/app.log")
@@ -902,11 +1349,11 @@ supervisor_init {
         let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
         assert_eq!(bytecode.runtime_boot_plan.singletons.len(), 1);
         let entry = &bytecode.runtime_boot_plan.singletons[0];
-        assert_eq!(entry.process_name, "Logger");
+        assert_eq!(entry.process_name, "Global::Logger");
         assert_eq!(entry.init_timeout_ms, 5_000);
         assert_eq!(bytecode.runtime_boot_plan.handler_overrides.len(), 1);
         let handler = &bytecode.runtime_boot_plan.handler_overrides[0];
-        assert_eq!(handler.target_process, "Logger");
+        assert_eq!(handler.target_process, "Global::Logger");
         assert_eq!(handler.slot, "out");
         assert_eq!(handler.handler_target.name, "FileOutHandler");
         assert_eq!(handler.handler_target.named_args[0].name, "path");
@@ -925,6 +1372,7 @@ supervisor_init {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
     handlers {
       out: OutHandler = StdOut
     }
@@ -938,7 +1386,7 @@ supervisor_init {
 }
 
 supervisor_init {
-  singleton Logger {
+  Logger {
     handlers {
       missing: NullOutHandler
     }
@@ -959,18 +1407,19 @@ supervisor_init {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
   def init() -> Result<Int> { Ok(0) }
 
   @call
-  def info(state: Int, message: String) -> Result<(String, Int)> {
-    Ok((message, state))
+  def info(state: Int, message: String) -> Result<CallResult<String, Int>> {
+    Ok(CallResult::Reply(message, state))
   }
 
   @cast
-  def reset(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+  def reset(_state: Int, next: Int) -> Result<CastResult<Int>> { Ok(CastResult::Next(next)) }
 }"#,
         );
 
@@ -980,7 +1429,7 @@ supervisor_init {
             .runtime_process_specs
             .entries
             .iter()
-            .find(|entry| entry.type_name == "Logger")
+            .find(|entry| entry.type_name == "Global::Logger")
             .expect("Logger runtime process spec");
         assert_eq!(spec.kind, sindr::ir::RuntimeProcessKind::GenServer);
         assert_eq!(spec.handlers.len(), 3);
@@ -1003,6 +1452,7 @@ supervisor_init {
   meta {
     instance: Singleton
     init_policy: Lazy
+    state: Int
   }
 
   @init
@@ -1011,8 +1461,8 @@ supervisor_init {
   }
 
   @call
-  def value(state: Int) -> Result<(Int, Int)> {
-    Ok((state, state))
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
   }
 }"#,
         );
@@ -1023,9 +1473,9 @@ supervisor_init {
             .runtime_process_specs
             .entries
             .iter()
-            .find(|entry| entry.type_name == "LazyCache")
+            .find(|entry| entry.type_name == "Global::LazyCache")
             .expect("LazyCache runtime process spec");
-        assert_eq!(spec.type_name, "LazyCache");
+        assert_eq!(spec.type_name, "Global::LazyCache");
         assert_eq!(spec.state.state_type.name, "Int");
         assert_eq!(spec.init.policy, sindr::ir::RuntimeInitPolicy::Lazy);
         assert!(matches!(

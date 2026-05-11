@@ -1,0 +1,2 @@
+user = User("alice", "s3cr3t")
+print(User::password_of(user))

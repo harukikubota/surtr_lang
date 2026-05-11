@@ -295,6 +295,14 @@ empty.
 deferror EmptyList { "Empty List." }
 
 @doc """
+Concrete bootstrap error for placeholder code paths that are intentionally
+unfinished.
+Use this with `todo()` when a function should type-check before the final
+implementation is ready.
+"""
+deferror NotImplemented { "not implemented" }
+
+@doc """
 Concrete bootstrap error for index-based access outside the valid range.
 The `detail` field keeps the user-facing message flexible so the runtime can
 attach the relevant bounds information.
@@ -302,8 +310,8 @@ attach the relevant bounds information.
 deferror IndexOutOfBounds(detail: String) { detail }
 
 @doc """
-Concrete bootstrap error for enum-variant selector mismatch in lens access.
-`Lens::view` returns this when a variant segment does not match the runtime
+Concrete bootstrap error for enum-variant selector mismatch in Facet access.
+`Facet::view` returns this when a variant segment does not match the runtime
 value's tag.
 """
 deferror VariantMismatch(detail: String) { detail }

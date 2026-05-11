@@ -48,6 +48,17 @@ targets, or module/type declarations.
 @builtin type CondClauses<$Result>
 
 @doc """
+Compiler-reserved `Facet::bulk_update` entry-block marker.
+Use level: intrinsic-signature-only marker.
+`BulkUpdateEntries<$State>` does not describe an ordinary first-class value.
+It exists only to name the special update block consumed by the
+`Facet::bulk_update` surface.
+Do not use it in user-defined parameters, return types, fields, bindings, impl
+targets, or module/type declarations.
+"""
+@builtin type BulkUpdateEntries<$State>
+
+@doc """
 Compiler-reserved delayed-evaluation marker for special forms.
 Use level: std builtin declaration marker only.
 `Lazy<$T>` exists so builtin signatures can describe operands that the

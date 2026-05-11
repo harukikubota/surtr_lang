@@ -1,0 +1,2 @@
+pid =? Counter::init()
+print(inspect(Counter::get(pid)))

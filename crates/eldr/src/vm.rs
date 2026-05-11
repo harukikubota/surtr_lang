@@ -4,18 +4,21 @@ use sindr::ir::{
     RuntimeHandlerTarget, RuntimeInitPolicy, RuntimeProcessInstance, RuntimeProcessSpec,
     RuntimeProcessSpecTable, RuntimeSupervisorPolicy, SourceMap,
 };
-use sindr::primitives::{int, SurtrInt};
+use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
-    Callable, CallableMetadata, CallableOrigin, CallableTarget, ListHandle, Location, PidHandle,
-    RichError, TypeRegistry, Value, WorkerLeaseHandle, WorkersHandle,
+    Callable, CallableMetadata, CallableOrigin, CallableTarget, FileHandleValue, ListHandle,
+    Location, PidHandle, RichError, TypeRegistry, Value, WorkerLeaseHandle, WorkersHandle,
 };
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::fs::{File, OpenOptions};
 
 use crate::builtin::call_builtin;
 use crate::dbg_display::{render_dbg_report, DbgRenderArg};
 use crate::error::{RuntimeError, RuntimeErrorContext};
-use std::io::{self, Write};
-use std::time::Instant;
+use std::env;
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VmTestEventKind {
@@ -27,6 +30,33 @@ pub enum VmTestEventKind {
 pub struct VmCapturedIo {
     pub stdout: Vec<String>,
     pub stderr: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeOutputEvent {
+    StdOut(String),
+    StdErr(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmRuntimeOutputEventSnapshot {
+    pub stream: String,
+    pub text: String,
+}
+
+impl RuntimeOutputEvent {
+    fn snapshot(&self) -> VmRuntimeOutputEventSnapshot {
+        match self {
+            Self::StdOut(text) => VmRuntimeOutputEventSnapshot {
+                stream: "stdout".into(),
+                text: text.clone(),
+            },
+            Self::StdErr(text) => VmRuntimeOutputEventSnapshot {
+                stream: "stderr".into(),
+                text: text.clone(),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +139,59 @@ struct VmCheckpoint {
     process_spec_len: usize,
     source_map_len: Option<usize>,
     overwritten_functions: Vec<(usize, FunctionEntry)>,
+    open_file_ids: BTreeSet<u64>,
+    next_file_handle_id: u64,
+    cwd: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VmFileMode {
+    Read,
+    Write,
+    Append,
+    ReadWrite,
+    ReadAppend,
+}
+
+impl VmFileMode {
+    fn can_read(self) -> bool {
+        matches!(self, Self::Read | Self::ReadWrite | Self::ReadAppend)
+    }
+
+    fn can_write(self) -> bool {
+        matches!(
+            self,
+            Self::Write | Self::Append | Self::ReadWrite | Self::ReadAppend
+        )
+    }
+}
+
+#[derive(Debug)]
+struct VmOpenFile {
+    path: String,
+    mode: VmFileMode,
+    file: File,
+}
+
+impl Clone for VmOpenFile {
+    fn clone(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            mode: self.mode,
+            file: self
+                .file
+                .try_clone()
+                .expect("open file handle should be clonable"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum VmFileError {
+    Closed,
+    Io(io::Error),
+    Encoding(String),
+    Message(String),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -117,6 +200,14 @@ pub struct VmObservationOptions {
     pub trace_calls: bool,
     pub trace_limit: Option<usize>,
     pub trace_filter: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VmBranchStats {
+    pub jump_if_true_taken: usize,
+    pub jump_if_true_not_taken: usize,
+    pub jump_if_false_taken: usize,
+    pub jump_if_false_not_taken: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -130,6 +221,7 @@ pub struct VmStats {
     pub closure_calls: usize,
     pub return_count: usize,
     pub tail_calls_optimized: usize,
+    pub branch: VmBranchStats,
     pub process: VmProcessCounters,
 }
 
@@ -157,6 +249,7 @@ pub struct VmProcessCounters {
     pub waiting_table_count: usize,
     pub reply_waiter_count: usize,
     pub deadline_queue_count: usize,
+    pub runtime_output_event_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,10 +310,23 @@ pub struct VmProcessRuntimeSnapshot {
     pub specs: Vec<VmProcessSpecSnapshot>,
     pub singleton_slots: BTreeMap<String, u64>,
     pub processes: Vec<VmProcessInstanceSnapshot>,
+    pub worker_sets: Vec<VmWorkerSetSnapshot>,
     pub waiting: BTreeMap<u64, String>,
     pub replies: BTreeMap<u64, u64>,
     pub deadlines: Vec<VmDeadlineSnapshot>,
     pub futures: Vec<VmFutureSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmWorkerSetSnapshot {
+    pub id: u64,
+    pub worker_process: String,
+    pub supervisor: String,
+    pub target: i64,
+    pub min: i64,
+    pub max: i64,
+    pub member_pids: Vec<u64>,
+    pub live_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -297,15 +403,33 @@ impl VmObserver {
             self.push_trace(line);
         }
     }
+
+    fn record_branch_outcome(&mut self, kind: &str, pc: usize, target: u32, taken: bool) {
+        match (kind, taken) {
+            ("JumpIfTrue", true) => self.stats.branch.jump_if_true_taken += 1,
+            ("JumpIfTrue", false) => self.stats.branch.jump_if_true_not_taken += 1,
+            ("JumpIfFalse", true) => self.stats.branch.jump_if_false_taken += 1,
+            ("JumpIfFalse", false) => self.stats.branch.jump_if_false_not_taken += 1,
+            _ => {}
+        }
+        if self.options.trace_opcodes && self.trace_enabled_for(kind) {
+            self.push_trace(format!(
+                "branch pc={} opcode={} target={} taken={}",
+                pc, kind, target, taken
+            ));
+        }
+    }
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 struct ProcessRuntime {
+    current_tick_ms: u64,
     next_pid: u64,
     next_workers_id: u64,
     next_future_id: FutureId,
     next_correlation_id: CorrelationId,
+    next_detached_task_id: u64,
     specs_by_id: Vec<RuntimeProcessSpec>,
     spec_id_by_name: BTreeMap<String, u32>,
     specs_by_name: BTreeMap<String, RuntimeProcessSpec>,
@@ -316,16 +440,43 @@ struct ProcessRuntime {
     reply_table: BTreeMap<CorrelationId, FutureId>,
     waiting_table: BTreeMap<u64, ProcessWaitReason>,
     deadline_queue: VecDeque<DeadlineEntry>,
+    run_queue: VecDeque<u64>,
+    output_events: VecDeque<RuntimeOutputEvent>,
+    detached_tasks: BTreeMap<u64, DetachedTask>,
     root_supervisor: RootSupervisorState,
     worker_sets: BTreeMap<u64, WorkerSetState>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct WorkerSetState {
-    _worker_process: String,
-    _supervisor_name: String,
+    supervisor_name: String,
+    worker_process: String,
+    init_callable: Callable,
+    strategy: WorkerStrategyState,
+    target: i64,
     members: Vec<u64>,
     next_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkerStrategyState {
+    init: i64,
+    min: i64,
+    max: i64,
+    scale: WorkerScaleState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WorkerScaleState {
+    Fix(i64),
+}
+
+impl WorkerStrategyState {
+    fn target(&self) -> i64 {
+        match self.scale {
+            WorkerScaleState::Fix(size) => size,
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -335,7 +486,7 @@ struct ProcessInstance {
     spec_id: u32,
     status: ProcessStatus,
     mailbox: VecDeque<ProcessMailboxMessage>,
-    execution_context: Option<ProcessExecutionContext>,
+    execution_context: Option<ExecutionContext>,
     state_value: Option<Value>,
     owner: Option<u64>,
     lifecycle_sink: Option<LifecycleSink>,
@@ -382,12 +533,14 @@ enum ProcessMailboxMessage {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-struct ProcessExecutionContext {
+struct ExecutionContext {
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
     pc: usize,
     target: ExecutionTarget,
 }
+
+type ProcessExecutionContext = ExecutionContext;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -453,11 +606,52 @@ enum StepOutcome {
     RuntimeError(RuntimeError),
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Budget {
+    max_reductions: u64,
+    reductions: u64,
+}
+
+#[allow(dead_code)]
+impl Budget {
+    fn new(max_reductions: u64) -> Self {
+        Self {
+            max_reductions,
+            reductions: 0,
+        }
+    }
+
+    fn consume(&mut self, cost: u64) {
+        self.reductions = self.reductions.saturating_add(cost);
+    }
+
+    fn expired(&self) -> bool {
+        self.reductions >= self.max_reductions
+    }
+
+    fn reductions(&self) -> u64 {
+        self.reductions
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+enum ProcessRunOutcome {
+    QuantumExpired,
+    Halted(Value),
+    Pending(FutureId),
+    Failed(RuntimeError),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpcodeControl {
     Continue,
     Halt,
-    Pending(FutureId),
+    Pending {
+        future_id: FutureId,
+        resume_pc: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -495,6 +689,31 @@ struct DeadlineEntry {
     future_id: FutureId,
 }
 
+#[derive(Debug, Clone)]
+struct DetachedTask {
+    owner_pid: Option<u64>,
+    awaiting_future: FutureId,
+    continuation: DetachedTaskContinuation,
+}
+
+#[derive(Debug, Clone)]
+enum DetachedTaskContinuation {
+    AwaitValue {
+        completion_future: Option<FutureId>,
+    },
+    Resume {
+        resume: ProcessExecutionContext,
+        completion_future: Option<FutureId>,
+    },
+    ResolveReply {
+        correlation_id: CorrelationId,
+    },
+    ResumeReply {
+        resume: ProcessExecutionContext,
+        correlation_id: CorrelationId,
+    },
+}
+
 #[derive(Debug, Clone, Default)]
 struct RootSupervisorState {
     boot_completed: bool,
@@ -518,6 +737,7 @@ impl ProcessRuntime {
             waiting_table_count: self.waiting_table.len(),
             reply_waiter_count: self.reply_table.len(),
             deadline_queue_count: self.deadline_queue.len(),
+            runtime_output_event_count: self.output_events.len(),
             ..VmProcessCounters::default()
         };
 
@@ -607,6 +827,11 @@ pub struct VM {
     pub error_output: Option<Vec<String>>,
     /// Runtime I/O policy for stdout/stderr.
     io_policy: VmIoPolicy,
+    /// REPL-owned host stdout buffer. This protects the active input line without
+    /// changing DSL-visible handler targets or test capture policy.
+    repl_host_stdout: Option<Vec<String>>,
+    /// REPL-owned host stderr buffer.
+    repl_host_stderr: Option<Vec<String>>,
     /// Optional stdin fixture used by Rust tests and non-interactive harnesses.
     stdin_input: Option<String>,
     stdin_input_cursor: usize,
@@ -623,6 +848,9 @@ pub struct VM {
     /// Cursor tracking for test-event I/O slices.
     test_stdout_cursor: usize,
     test_stderr_cursor: usize,
+    open_files: HashMap<u64, VmOpenFile>,
+    next_file_handle_id: u64,
+    cwd: PathBuf,
     /// VM-owned process table for the initial actor/agent runtime.
     process_runtime: ProcessRuntime,
 }
@@ -631,7 +859,7 @@ impl VM {
     pub fn new(bytecode: Bytecode) -> Self {
         let num_locals = bytecode.num_locals;
         let process_runtime = ProcessRuntime::from_spec_table(&bytecode.runtime_process_specs);
-        Self {
+        let mut vm = Self {
             bytecode,
             stack: Vec::new(),
             frames: vec![CallFrame {
@@ -647,6 +875,8 @@ impl VM {
             output: None,
             error_output: None,
             io_policy: VmIoPolicy::default(),
+            repl_host_stdout: None,
+            repl_host_stderr: None,
             stdin_input: None,
             stdin_input_cursor: 0,
             exit_code: 0,
@@ -656,12 +886,17 @@ impl VM {
             test_events: Vec::new(),
             test_stdout_cursor: 0,
             test_stderr_cursor: 0,
+            open_files: HashMap::new(),
+            next_file_handle_id: 1,
+            cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             process_runtime,
-        }
+        };
+        vm.apply_runtime_supervisor_overrides();
+        vm
     }
 
     /// Create an empty VM intended for REPL/incremental execution.
-    pub fn new_interactive(type_registry: TypeRegistry) -> Self {
+    pub(crate) fn new_interactive(type_registry: TypeRegistry) -> Self {
         Self::new(Bytecode {
             type_registry,
             ..Bytecode::default()
@@ -1003,6 +1238,34 @@ impl VM {
         }
     }
 
+    /// Route host terminal stdout/stderr through REPL-owned buffers.
+    ///
+    /// This is intentionally separate from `VmIoPolicy`: REPL terminal
+    /// protection must not override DSL-visible standard I/O handler targets or
+    /// test capture behavior.
+    pub fn enable_repl_host_io_buffering(&mut self) {
+        if self.repl_host_stdout.is_none() {
+            self.repl_host_stdout = Some(Vec::new());
+        }
+        if self.repl_host_stderr.is_none() {
+            self.repl_host_stderr = Some(Vec::new());
+        }
+    }
+
+    pub fn take_repl_host_stdout(&mut self) -> Vec<String> {
+        match self.repl_host_stdout.as_mut() {
+            Some(buffer) => std::mem::take(buffer),
+            None => Vec::new(),
+        }
+    }
+
+    pub fn take_repl_host_stderr(&mut self) -> Vec<String> {
+        match self.repl_host_stderr.as_mut() {
+            Some(buffer) => std::mem::take(buffer),
+            None => Vec::new(),
+        }
+    }
+
     pub fn reset_captured_io(&mut self) {
         if let Some(stdout) = self.output.as_mut() {
             stdout.clear();
@@ -1020,18 +1283,61 @@ impl VM {
         self.stdin_input_cursor = 0;
     }
 
+    fn emit_host_stdout_line(&mut self, line: String) {
+        if let Some(buffer) = self.repl_host_stdout.as_mut() {
+            buffer.push(line);
+        } else {
+            println!("{}", line);
+        }
+    }
+
+    fn emit_host_stdout_text(&mut self, text: String) -> io::Result<()> {
+        if let Some(buffer) = self.repl_host_stdout.as_mut() {
+            if !text.is_empty() {
+                buffer.push(text);
+            }
+            Ok(())
+        } else {
+            print!("{}", text);
+            io::stdout().flush()
+        }
+    }
+
+    fn emit_host_stderr_line(&mut self, line: String) {
+        if let Some(buffer) = self.repl_host_stderr.as_mut() {
+            buffer.push(line);
+        } else {
+            eprintln!("{}", line);
+        }
+    }
+
+    fn emit_host_stderr_text(&mut self, text: String) -> io::Result<()> {
+        if let Some(buffer) = self.repl_host_stderr.as_mut() {
+            if !text.is_empty() {
+                buffer.push(text);
+            }
+            Ok(())
+        } else {
+            eprint!("{}", text);
+            io::stderr().flush()
+        }
+    }
+
     pub(crate) fn emit_stdout_line(&mut self, line: String) {
+        self.process_runtime
+            .output_events
+            .push_back(RuntimeOutputEvent::StdOut(format!("{line}\n")));
         match self.io_policy.stdout {
-            IoMode::Passthrough => println!("{}", line),
+            IoMode::Passthrough => self.emit_host_stdout_line(line),
             IoMode::Capture => {
                 if let Some(buffer) = self.output.as_mut() {
                     buffer.push(line);
                 } else {
-                    println!("{}", line);
+                    self.emit_host_stdout_line(line);
                 }
             }
             IoMode::Tee => {
-                println!("{}", line);
+                self.emit_host_stdout_line(line.clone());
                 if let Some(buffer) = self.output.as_mut() {
                     buffer.push(line);
                 }
@@ -1040,11 +1346,13 @@ impl VM {
     }
 
     pub(crate) fn emit_stdout_text(&mut self, text: String) -> io::Result<()> {
+        if !text.is_empty() {
+            self.process_runtime
+                .output_events
+                .push_back(RuntimeOutputEvent::StdOut(text.clone()));
+        }
         match self.io_policy.stdout {
-            IoMode::Passthrough => {
-                print!("{}", text);
-                io::stdout().flush()
-            }
+            IoMode::Passthrough => self.emit_host_stdout_text(text),
             IoMode::Capture => {
                 if let Some(buffer) = self.output.as_mut() {
                     if !text.is_empty() {
@@ -1052,13 +1360,11 @@ impl VM {
                     }
                     Ok(())
                 } else {
-                    print!("{}", text);
-                    io::stdout().flush()
+                    self.emit_host_stdout_text(text)
                 }
             }
             IoMode::Tee => {
-                print!("{}", text);
-                io::stdout().flush()?;
+                self.emit_host_stdout_text(text.clone())?;
                 if let Some(buffer) = self.output.as_mut() {
                     if !text.is_empty() {
                         buffer.push(text);
@@ -1070,17 +1376,20 @@ impl VM {
     }
 
     pub(crate) fn emit_stderr_line(&mut self, line: String) {
+        self.process_runtime
+            .output_events
+            .push_back(RuntimeOutputEvent::StdErr(format!("{line}\n")));
         match self.io_policy.stderr {
-            IoMode::Passthrough => eprintln!("{}", line),
+            IoMode::Passthrough => self.emit_host_stderr_line(line),
             IoMode::Capture => {
                 if let Some(buffer) = self.error_output.as_mut() {
                     buffer.push(line);
                 } else {
-                    eprintln!("{}", line);
+                    self.emit_host_stderr_line(line);
                 }
             }
             IoMode::Tee => {
-                eprintln!("{}", line);
+                self.emit_host_stderr_line(line.clone());
                 if let Some(buffer) = self.error_output.as_mut() {
                     buffer.push(line);
                 }
@@ -1089,11 +1398,13 @@ impl VM {
     }
 
     pub(crate) fn emit_stderr_text(&mut self, text: String) -> io::Result<()> {
+        if !text.is_empty() {
+            self.process_runtime
+                .output_events
+                .push_back(RuntimeOutputEvent::StdErr(text.clone()));
+        }
         match self.io_policy.stderr {
-            IoMode::Passthrough => {
-                eprint!("{}", text);
-                io::stderr().flush()
-            }
+            IoMode::Passthrough => self.emit_host_stderr_text(text),
             IoMode::Capture => {
                 if let Some(buffer) = self.error_output.as_mut() {
                     if !text.is_empty() {
@@ -1101,13 +1412,11 @@ impl VM {
                     }
                     Ok(())
                 } else {
-                    eprint!("{}", text);
-                    io::stderr().flush()
+                    self.emit_host_stderr_text(text)
                 }
             }
             IoMode::Tee => {
-                eprint!("{}", text);
-                io::stderr().flush()?;
+                self.emit_host_stderr_text(text.clone())?;
                 if let Some(buffer) = self.error_output.as_mut() {
                     if !text.is_empty() {
                         buffer.push(text);
@@ -1210,6 +1519,23 @@ impl VM {
         &self.bytecode.type_registry
     }
 
+    pub(crate) fn cwd(&self) -> &Path {
+        &self.cwd
+    }
+
+    pub(crate) fn set_cwd(&mut self, cwd: PathBuf) {
+        self.cwd = cwd;
+    }
+
+    pub(crate) fn resolve_host_path(&self, path: &str) -> PathBuf {
+        let path = Path::new(path);
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.cwd.join(path)
+        }
+    }
+
     fn boot_failure_error(&self, process_name: &str, detail: &str) -> RuntimeError {
         RuntimeError::new(format!("process `{process_name}` failed to boot: {detail}"))
     }
@@ -1220,15 +1546,7 @@ impl VM {
         }
 
         self.apply_runtime_handler_overrides()?;
-        for override_entry in &self.bytecode.runtime_boot_plan.supervisor_overrides {
-            self.process_runtime
-                .root_supervisor
-                .effective_supervisors
-                .insert(
-                    override_entry.process_name.clone(),
-                    override_entry.policy.clone(),
-                );
-        }
+        self.apply_runtime_supervisor_overrides();
         let limits = self.bytecode.runtime_boot_plan.runtime_limits.clone();
         let boot_specs = if self.bytecode.runtime_boot_plan.has_explicit_entries() {
             for entry in &self.bytecode.runtime_boot_plan.singletons {
@@ -1341,6 +1659,29 @@ impl VM {
         Ok(())
     }
 
+    fn apply_runtime_supervisor_overrides(&mut self) {
+        for override_entry in &self.bytecode.runtime_boot_plan.supervisor_overrides {
+            self.process_runtime
+                .root_supervisor
+                .effective_supervisors
+                .insert(
+                    override_entry.process_name.clone(),
+                    override_entry.policy.clone(),
+                );
+            if override_entry
+                .process_name
+                .rsplit("::")
+                .next()
+                .is_some_and(|name| name == "DynamicSupervisor")
+            {
+                self.process_runtime
+                    .root_supervisor
+                    .effective_supervisors
+                    .insert("DynamicSupervisor".into(), override_entry.policy.clone());
+            }
+        }
+    }
+
     fn ensure_singleton_available(&mut self, process_name: &str) -> Result<u64, RuntimeError> {
         self.ensure_singleton_available_with_timeout(process_name, None)
     }
@@ -1350,14 +1691,22 @@ impl VM {
         process_name: &str,
         timeout_ms: Option<u64>,
     ) -> Result<u64, RuntimeError> {
-        if let Some(pid) = self.process_runtime.singleton_by_name.get(process_name) {
-            return Ok(*pid);
+        let canonical_name = self
+            .process_runtime
+            .canonical_process_name(process_name)
+            .unwrap_or(process_name)
+            .to_string();
+        if let Some(pid) = self
+            .process_runtime
+            .singleton_pid_by_process_name(&canonical_name)
+        {
+            return Ok(pid);
         }
         if let Some(detail) = self
             .process_runtime
             .root_supervisor
             .boot_failures
-            .get(process_name)
+            .get(&canonical_name)
             .cloned()
         {
             return Err(self.boot_failure_error(process_name, &detail));
@@ -1365,8 +1714,7 @@ impl VM {
 
         let Some(spec) = self
             .process_runtime
-            .specs_by_name
-            .get(process_name)
+            .spec_by_process_name(&canonical_name)
             .cloned()
         else {
             return Err(RuntimeError::new(format!(
@@ -1391,7 +1739,7 @@ impl VM {
                 self.process_runtime
                     .root_supervisor
                     .boot_failures
-                    .insert(process_name.to_string(), detail.clone());
+                    .insert(canonical_name.clone(), detail.clone());
                 return Err(self.boot_failure_error(process_name, &detail));
             }
         }
@@ -1403,7 +1751,7 @@ impl VM {
                     self.process_runtime
                         .root_supervisor
                         .boot_failures
-                        .insert(process_name.to_string(), detail.clone());
+                        .insert(canonical_name.clone(), detail.clone());
                     return Err(RuntimeError::process_init_timeout(format!(
                         "process `{process_name}` failed to boot: {detail}"
                     )));
@@ -1415,17 +1763,17 @@ impl VM {
                 self.process_runtime
                     .root_supervisor
                     .boot_failures
-                    .insert(process_name.to_string(), detail.clone());
+                    .insert(canonical_name.clone(), detail.clone());
                 return Err(RuntimeError::process_init_failed(format!(
                     "process `{process_name}` failed to boot: {detail}"
                 )));
             }
         };
 
-        let pid = self.allocate_process_state(process_name.to_string(), Some(state))?;
+        let pid = self.allocate_process_state(canonical_name.clone(), Some(state))?;
         self.process_runtime
             .singleton_by_name
-            .insert(process_name.to_string(), pid);
+            .insert(canonical_name, pid);
         Ok(pid)
     }
 
@@ -1476,9 +1824,14 @@ impl VM {
     ) -> Result<Value, RuntimeError> {
         self.ensure_root_supervisor_booted()?;
         let pid = self.ensure_singleton_available(&process_name)?;
+        let canonical_name = self
+            .process_runtime
+            .canonical_process_name(&process_name)
+            .unwrap_or(process_name.as_str())
+            .to_string();
         Ok(Value::Pid(PidHandle {
             id: pid,
-            process_name,
+            process_name: canonical_name,
         }))
     }
 
@@ -1489,8 +1842,7 @@ impl VM {
     ) -> Result<Value, RuntimeError> {
         let Some(target) = self
             .process_runtime
-            .handler_contexts
-            .get(&process_name)
+            .handler_targets_for_process(&process_name)
             .and_then(|slots| slots.get(&slot))
         else {
             return Err(RuntimeError::new(format!(
@@ -1566,8 +1918,24 @@ impl VM {
         let init_result = self.invoke_callable_sync(init, Vec::new())?;
         match decode_vm_result(init_result, "__process_spawn", "init")? {
             Ok(state) => {
-                let pid =
-                    self.allocate_process_instance(process_name.clone(), Some(state), None, None)?;
+                let pid = match self
+                    .process_runtime
+                    .specs_by_name
+                    .get(&process_name)
+                    .map(|spec| spec.instance)
+                {
+                    Some(RuntimeProcessInstance::Worker) => self.allocate_supervised_worker(
+                        process_name.clone(),
+                        Some(state),
+                        "DynamicSupervisor".into(),
+                    )?,
+                    _ => self.allocate_process_instance(
+                        process_name.clone(),
+                        Some(state),
+                        None,
+                        None,
+                    )?,
+                };
                 Ok(ok_vm_result(Value::Pid(PidHandle {
                     id: pid,
                     process_name,
@@ -1623,36 +1991,46 @@ impl VM {
         pid: PidHandle,
     ) -> Result<Value, RuntimeError> {
         self.ensure_root_supervisor_booted()?;
-        let Some(policy) = self
-            .process_runtime
-            .root_supervisor
-            .effective_supervisors
-            .get(&supervisor_name)
-            .cloned()
-        else {
-            return Err(RuntimeError::new(format!(
-                "unknown supervisor `{supervisor_name}`"
-            )));
-        };
+        let policy = self.effective_supervisor_policy(&supervisor_name)?;
         if !policy.allow_adopt {
             return Ok(err_vm_result(self.process_error(
                 "SupervisorAdoptForbidden",
                 &format!("{supervisor_name} does not allow adopt"),
             )));
         }
-        let Some(entry) = self.process_runtime.processes.get_mut(&pid.id) else {
+        let Some(entry) = self.process_runtime.processes.get(&pid.id) else {
             return Ok(err_vm_result(self.process_error(
                 "InvalidPid",
                 &format!("unknown pid {} for {}", pid.id, pid.process_name),
             )));
         };
+        if !self.is_adoptable_worker(entry) {
+            return Ok(err_vm_result(self.process_error(
+                "SupervisorAdoptInvalidPid",
+                &format!(
+                    "supervisor adopt accepts only Worker PID with live state, got {}",
+                    pid.process_name
+                ),
+            )));
+        }
+
+        let old_supervisor = match &entry.lifecycle_sink {
+            Some(LifecycleSink::Supervisor(old_supervisor)) => Some(old_supervisor.clone()),
+            None => None,
+        };
+        if old_supervisor.as_deref() != Some(supervisor_name.as_str()) {
+            if let Some(old_supervisor) = old_supervisor {
+                self.remove_supervisor_child(&old_supervisor, pid.id);
+            }
+        }
+        let Some(entry) = self.process_runtime.processes.get_mut(&pid.id) else {
+            return Err(RuntimeError::new(format!(
+                "process {} disappeared during supervisor adopt",
+                pid.id
+            )));
+        };
         entry.lifecycle_sink = Some(LifecycleSink::Supervisor(supervisor_name.clone()));
-        self.process_runtime
-            .root_supervisor
-            .child_table
-            .entry(supervisor_name)
-            .or_default()
-            .push(pid.id);
+        self.add_supervisor_child(&supervisor_name, pid.id);
         Ok(ok_vm_result(Value::Unit))
     }
 
@@ -1661,44 +2039,102 @@ impl VM {
         supervisor_name: String,
     ) -> Result<Value, RuntimeError> {
         self.ensure_root_supervisor_booted()?;
-        let Some(policy) = self
-            .process_runtime
-            .root_supervisor
-            .effective_supervisors
-            .get(&supervisor_name)
-            .cloned()
-        else {
-            return Err(RuntimeError::new(format!(
-                "unknown supervisor `{supervisor_name}`"
-            )));
-        };
-        let child_count = self
-            .process_runtime
-            .root_supervisor
-            .child_table
-            .get(&supervisor_name)
-            .map(|children| children.len() as i64)
-            .unwrap_or(0);
-        let Some(tag) = self
-            .type_registry()
-            .entries
-            .iter()
-            .find(|entry| entry.name == "SupervisorStatus")
-            .map(|entry| entry.tag)
-        else {
+        let policy = self.effective_supervisor_policy(&supervisor_name)?;
+        let child_count = self.unique_live_supervisor_child_count(&supervisor_name);
+        let shutdown_timeout =
+            self.supervisor_shutdown_timeout_value(policy.shutdown_timeout_ms)?;
+        let Some(tag) = self.type_registry().tag_by_name("SupervisorStatus") else {
             return Err(RuntimeError::new("SupervisorStatus type is not registered"));
         };
         Ok(ok_vm_result(Value::Tagged {
             tag,
             fields: vec![
-                Value::Str(supervisor_name),
+                Value::Str(
+                    supervisor_name
+                        .strip_prefix("Global::")
+                        .unwrap_or(&supervisor_name)
+                        .to_string(),
+                ),
                 Value::Int(int(child_count)),
                 Value::Str(policy.strategy),
                 Value::Int(int(policy.max_restarts as i64)),
                 Value::Int(int(policy.max_seconds as i64)),
                 Value::Bool(policy.allow_adopt),
+                shutdown_timeout,
             ],
         }))
+    }
+
+    fn effective_supervisor_policy(
+        &self,
+        supervisor_name: &str,
+    ) -> Result<RuntimeSupervisorPolicy, RuntimeError> {
+        let supervisor_short_name = supervisor_name
+            .rsplit("::")
+            .next()
+            .unwrap_or(supervisor_name);
+        if let Some(override_entry) = self
+            .bytecode
+            .runtime_boot_plan
+            .supervisor_overrides
+            .iter()
+            .rev()
+            .find(|entry| {
+                entry.process_name == supervisor_name
+                    || entry
+                        .process_name
+                        .rsplit("::")
+                        .next()
+                        .is_some_and(|name| name == supervisor_short_name)
+            })
+        {
+            return Ok(override_entry.policy.clone());
+        }
+        self.process_runtime
+            .root_supervisor
+            .effective_supervisors
+            .get(supervisor_name)
+            .cloned()
+            .ok_or_else(|| RuntimeError::new(format!("unknown supervisor `{supervisor_name}`")))
+    }
+
+    fn supervisor_shutdown_timeout_value(
+        &self,
+        timeout_ms: Option<u64>,
+    ) -> Result<Value, RuntimeError> {
+        let Some(none_tag) = self.type_registry().tag_by_name("Option::None") else {
+            return Err(RuntimeError::new(
+                "Option::None type is not registered for SupervisorStatus",
+            ));
+        };
+        let Some(some_tag) = self.type_registry().tag_by_name("Option::Some") else {
+            return Err(RuntimeError::new(
+                "Option::Some type is not registered for SupervisorStatus",
+            ));
+        };
+        match timeout_ms {
+            Some(ms) => {
+                let Some(duration_tag) = self.type_registry().tag_by_name("Duration") else {
+                    return Err(RuntimeError::new(
+                        "Duration type is not registered for SupervisorStatus",
+                    ));
+                };
+                Ok(Value::Tagged {
+                    tag: some_tag,
+                    fields: vec![
+                        Value::Int(int(1)),
+                        Value::Tagged {
+                            tag: duration_tag,
+                            fields: vec![Value::Int(int(ms))],
+                        },
+                    ],
+                })
+            }
+            None => Ok(Value::Tagged {
+                tag: none_tag,
+                fields: vec![Value::Int(int(0))],
+            }),
+        }
     }
 
     pub(crate) fn supervisor_workers(
@@ -1706,16 +2142,29 @@ impl VM {
         supervisor_name: String,
         worker_name: String,
         init: Callable,
-        size: i64,
+        strategy_value: Value,
     ) -> Result<Value, RuntimeError> {
-        if size < 0 {
+        let strategy = match self.decode_worker_strategy(&strategy_value) {
+            Ok(strategy) => strategy,
+            Err(message) => {
+                return Ok(err_vm_result(
+                    self.process_error("InvalidWorkerStrategy", &message),
+                ));
+            }
+        };
+        let target = strategy.target();
+        if strategy.init != target
+            || strategy.min < 0
+            || strategy.min > target
+            || target > strategy.max
+        {
             return Ok(err_vm_result(self.process_error(
-                "InvalidWorkerCount",
-                "worker count must be non-negative",
+                "InvalidWorkerStrategy",
+                "worker strategy must satisfy init == Fix(n) and 0 <= min <= n <= max",
             )));
         }
         let mut members = Vec::new();
-        for _ in 0..size {
+        for _ in 0..target {
             let spawned = self.supervisor_spawn(
                 supervisor_name.clone(),
                 Some(worker_name.clone()),
@@ -1732,8 +2181,11 @@ impl VM {
         self.process_runtime.worker_sets.insert(
             workers_id,
             WorkerSetState {
-                _worker_process: worker_name.clone(),
-                _supervisor_name: supervisor_name,
+                supervisor_name,
+                worker_process: worker_name.clone(),
+                init_callable: init,
+                strategy,
+                target,
                 members,
                 next_index: 0,
             },
@@ -1742,6 +2194,80 @@ impl VM {
             id: workers_id,
             process_name: worker_name,
         })))
+    }
+
+    fn decode_worker_strategy(&self, value: &Value) -> Result<WorkerStrategyState, String> {
+        let Value::Tagged { tag, fields } = value else {
+            return Err("worker strategy must be a WorkerStrategy value".into());
+        };
+        let Some(entry) = self.type_registry().lookup(*tag) else {
+            return Err("worker strategy has unknown runtime tag".into());
+        };
+        if !Self::runtime_type_named(&entry.name, "WorkerStrategy") {
+            return Err("worker strategy must be a WorkerStrategy value".into());
+        }
+        let init = Self::worker_strategy_int_field(entry, fields, "init")?;
+        let min = Self::worker_strategy_int_field(entry, fields, "min")?;
+        let max = Self::worker_strategy_int_field(entry, fields, "max")?;
+        let scale_value = Self::worker_strategy_field(entry, fields, "scale")
+            .ok_or_else(|| "worker strategy missing scale".to_string())?;
+        let scale = self.decode_worker_scale(scale_value)?;
+        Ok(WorkerStrategyState {
+            init,
+            min,
+            max,
+            scale,
+        })
+    }
+
+    fn decode_worker_scale(&self, value: &Value) -> Result<WorkerScaleState, String> {
+        let Value::Tagged { tag, fields } = value else {
+            return Err("worker scale must be WorkerScale::Fix".into());
+        };
+        let Some(entry) = self.type_registry().lookup(*tag) else {
+            return Err("worker scale has unknown runtime tag".into());
+        };
+        if !Self::runtime_type_named(&entry.name, "WorkerScale::Fix") {
+            return Err("worker scale must be WorkerScale::Fix".into());
+        }
+        let Some(Value::Int(size)) = fields.get(1) else {
+            return Err("WorkerScale::Fix must contain an Int size".into());
+        };
+        let Some(size) = size.to_i64() else {
+            return Err("WorkerScale::Fix size must be representable as i64".into());
+        };
+        Ok(WorkerScaleState::Fix(size))
+    }
+
+    fn worker_strategy_int_field(
+        entry: &sindr::runtime::TypeEntry,
+        fields: &[Value],
+        name: &str,
+    ) -> Result<i64, String> {
+        let Some(Value::Int(value)) = Self::worker_strategy_field(entry, fields, name) else {
+            return Err(format!("worker strategy missing Int field `{name}`"));
+        };
+        value
+            .to_i64()
+            .ok_or_else(|| format!("worker strategy field `{name}` must be representable as i64"))
+    }
+
+    fn worker_strategy_field<'a>(
+        entry: &sindr::runtime::TypeEntry,
+        fields: &'a [Value],
+        name: &str,
+    ) -> Option<&'a Value> {
+        let index = entry.field_names.iter().position(|field| field == name)?;
+        fields.get(index)
+    }
+
+    fn runtime_type_named(actual: &str, expected: &str) -> bool {
+        let actual = actual.strip_prefix("Global::").unwrap_or(actual);
+        actual == expected
+            || actual
+                .strip_suffix(expected)
+                .map(|prefix| prefix.ends_with("::"))
+                .unwrap_or(false)
     }
 
     pub(crate) fn process_state(&mut self, pid: &PidHandle) -> Result<Value, RuntimeError> {
@@ -1824,6 +2350,266 @@ impl VM {
         Ok(ok_vm_result(Value::Unit))
     }
 
+    pub(crate) fn genserver_call_reply(
+        &mut self,
+        pid: &PidHandle,
+        next_state: Value,
+        reply: Value,
+    ) -> Result<Value, RuntimeError> {
+        let _ = self.process_store(pid, next_state)?;
+        Ok(ok_vm_result(reply))
+    }
+
+    pub(crate) fn genserver_call_reply_later(
+        &mut self,
+        pid: &PidHandle,
+        next_state: Value,
+        callback: Callable,
+    ) -> Result<Value, RuntimeError> {
+        let _ = self.process_store(pid, next_state)?;
+        let future_id = self
+            .process_runtime
+            .allocate_future(Some(pid.id), None, false);
+        let correlation_id = self.process_runtime.allocate_correlation_id();
+        self.process_runtime
+            .register_reply_waiter(correlation_id, future_id);
+        let outcome = self.invoke_callable_isolated_step(callback, Vec::new());
+        if let Some((awaiting_future, continuation)) =
+            self.reply_waiting_from_outcome(outcome, correlation_id)?
+        {
+            self.process_runtime.register_detached_task(
+                Some(pid.id),
+                awaiting_future,
+                continuation,
+            );
+        }
+        Ok(Value::PendingFuture(future_id))
+    }
+
+    pub(crate) fn genserver_call_stop_normal(
+        &mut self,
+        pid: &PidHandle,
+        reply: Value,
+    ) -> Result<Value, RuntimeError> {
+        let _ = self.finalize_process_stop(pid.id, Some(ok_vm_result(reply.clone())), false);
+        Ok(ok_vm_result(reply))
+    }
+
+    pub(crate) fn genserver_call_stop_error(
+        &mut self,
+        pid: &PidHandle,
+        err: RichError,
+    ) -> Result<Value, RuntimeError> {
+        let err_value = err_vm_result(err.clone());
+        let _ = self.finalize_process_stop(pid.id, Some(err_value.clone()), false);
+        Ok(err_value)
+    }
+
+    pub(crate) fn genserver_cast_next(
+        &mut self,
+        pid: &PidHandle,
+        next_state: Value,
+    ) -> Result<Value, RuntimeError> {
+        let _ = self.process_store(pid, next_state)?;
+        Ok(ok_vm_result(Value::Unit))
+    }
+
+    pub(crate) fn genserver_cast_stop_normal(
+        &mut self,
+        pid: &PidHandle,
+    ) -> Result<Value, RuntimeError> {
+        let _ = self.finalize_process_stop(pid.id, None, false);
+        Ok(ok_vm_result(Value::Unit))
+    }
+
+    pub(crate) fn genserver_cast_stop_error(
+        &mut self,
+        pid: &PidHandle,
+        err: RichError,
+    ) -> Result<Value, RuntimeError> {
+        let _ = self.finalize_process_stop(pid.id, Some(err_vm_result(err)), false);
+        Ok(ok_vm_result(Value::Unit))
+    }
+
+    fn remove_worker_from_sets(&mut self, pid: u64) {
+        let mut refill_ids = Vec::new();
+        for (workers_id, state) in &mut self.process_runtime.worker_sets {
+            let before = state.members.len();
+            state.members.retain(|member| *member != pid);
+            if state.next_index >= state.members.len() {
+                state.next_index = 0;
+            }
+            if state.members.len() != before && state.members.len() < state.target as usize {
+                refill_ids.push(*workers_id);
+            }
+        }
+        for workers_id in refill_ids {
+            let _ = self.refill_worker_set(workers_id);
+        }
+    }
+
+    fn refill_worker_set(&mut self, workers_id: u64) -> Result<(), RuntimeError> {
+        loop {
+            let Some((supervisor_name, worker_process, init_callable, target, current_len)) = self
+                .process_runtime
+                .worker_sets
+                .get(&workers_id)
+                .map(|state| {
+                    (
+                        state.supervisor_name.clone(),
+                        state.worker_process.clone(),
+                        state.init_callable.clone(),
+                        state.target,
+                        state.members.len(),
+                    )
+                })
+            else {
+                return Ok(());
+            };
+            if current_len >= target as usize {
+                return Ok(());
+            }
+            let spawned = self.supervisor_spawn(
+                supervisor_name,
+                Some(worker_process.clone()),
+                init_callable,
+            )?;
+            let pid = match self.pid_handle_like_from_result(spawned) {
+                Ok(pid) => pid,
+                Err(_) => return Ok(()),
+            };
+            let Some(state) = self.process_runtime.worker_sets.get_mut(&workers_id) else {
+                return Ok(());
+            };
+            if !state.members.contains(&pid.id) {
+                state.members.push(pid.id);
+            }
+        }
+    }
+
+    fn remove_process_deadlines(&mut self, pid: u64) {
+        self.process_runtime.deadline_queue.retain(|entry| {
+            self.process_runtime
+                .futures
+                .get(&entry.future_id)
+                .is_some_and(|future| future.owner != Some(pid))
+        });
+    }
+
+    fn remove_process_detached_tasks(&mut self, pid: u64) {
+        self.process_runtime
+            .detached_tasks
+            .retain(|_, task| task.owner_pid != Some(pid));
+    }
+
+    fn resolve_owned_process_futures(&mut self, pid: u64, skip_future_id: Option<FutureId>) {
+        let owned_futures = self
+            .process_runtime
+            .futures
+            .iter()
+            .filter_map(|(future_id, future)| {
+                (future.owner == Some(pid)
+                    && matches!(future.state, FutureState::Running)
+                    && Some(*future_id) != skip_future_id)
+                    .then_some(*future_id)
+            })
+            .collect::<Vec<_>>();
+        for future_id in owned_futures {
+            self.resolve_future_process_down(future_id, pid);
+        }
+    }
+
+    fn process_reply_future_for_pid(&self, pid: u64) -> Option<(CorrelationId, FutureId)> {
+        let ProcessStatus::Waiting(ProcessWaitReason::Reply(correlation_id)) = self
+            .process_runtime
+            .processes
+            .get(&pid)
+            .map(|entry| entry.status.clone())?
+        else {
+            return None;
+        };
+        self.process_runtime
+            .reply_table
+            .get(&correlation_id)
+            .copied()
+            .map(|future_id| (correlation_id, future_id))
+    }
+
+    fn finalize_process_stop(
+        &mut self,
+        pid: u64,
+        reply_value: Option<Value>,
+        _from_callback_timeout: bool,
+    ) -> Vec<u64> {
+        let primary_reply = self.process_reply_future_for_pid(pid);
+        let resumed = if let (Some(value), Some((correlation_id, _))) = (reply_value, primary_reply)
+        {
+            self.process_runtime.resolve_reply(correlation_id, value)
+        } else {
+            Vec::new()
+        };
+        let skip_future_id = primary_reply.map(|(_, future_id)| future_id);
+        self.resolve_owned_process_futures(pid, skip_future_id);
+        self.remove_process_deadlines(pid);
+        self.remove_process_detached_tasks(pid);
+        self.remove_worker_from_sets(pid);
+        let supervisor_name = self
+            .process_runtime
+            .processes
+            .get(&pid)
+            .and_then(|entry| entry.lifecycle_sink.clone())
+            .and_then(|sink| match sink {
+                LifecycleSink::Supervisor(name) => Some(name),
+            });
+        if let Some(supervisor_name) = supervisor_name {
+            self.remove_supervisor_child(&supervisor_name, pid);
+        }
+        self.process_runtime.waiting_table.remove(&pid);
+        if let Some(entry) = self.process_runtime.processes.get_mut(&pid) {
+            entry.status = ProcessStatus::Stopped;
+            entry.mailbox.clear();
+            entry.execution_context = None;
+            entry.state_value = None;
+            entry.lazy_state_pending = false;
+        }
+        resumed
+    }
+
+    fn invoke_callable_with_existing_future_timeout(
+        &mut self,
+        callable: Callable,
+        args: Vec<Value>,
+        timeout_ms: u64,
+    ) -> Result<Value, RuntimeError> {
+        let outcome = self.invoke_callable_step(callable, args);
+        match outcome {
+            StepOutcome::Halt(Value::PendingFuture(future_id)) => {
+                self.process_runtime.attach_future_deadline(
+                    future_id,
+                    self.process_runtime.current_tick_ms,
+                    timeout_ms,
+                    true,
+                );
+                self.wait_for_any_future(&[future_id])?;
+                self.ready_future_value(future_id).ok_or_else(|| {
+                    RuntimeError::new(format!("future {} did not resolve", future_id))
+                })
+            }
+            StepOutcome::Pending { future_id, resume } => {
+                let completion_future = self
+                    .process_runtime
+                    .allocate_future_after(None, timeout_ms, true);
+                self.await_task_completion(
+                    completion_future,
+                    StepOutcome::Pending { future_id, resume },
+                )
+            }
+            StepOutcome::Halt(value) => Ok(value),
+            StepOutcome::RuntimeError(err) => Err(err),
+            StepOutcome::Continue => Err(RuntimeError::new("callable execution did not finish")),
+        }
+    }
+
     pub(crate) fn workers_size(&self, handle: &WorkersHandle) -> Result<Value, RuntimeError> {
         let Some(state) = self.process_runtime.worker_sets.get(&handle.id) else {
             return Err(RuntimeError::new(format!(
@@ -1842,6 +2628,20 @@ impl VM {
         let pid = self.next_workers_pid(handle)?;
         let result = self.invoke_callable_sync(message, vec![Value::Pid(pid)])?;
         Ok(result)
+    }
+
+    pub(crate) fn workers_submit_with_timeout(
+        &mut self,
+        handle: &WorkersHandle,
+        message: Callable,
+        timeout_ms: u64,
+    ) -> Result<Value, RuntimeError> {
+        let pid = self.next_workers_pid(handle)?;
+        self.invoke_callable_with_existing_future_timeout(
+            message,
+            vec![Value::Pid(pid)],
+            timeout_ms,
+        )
     }
 
     pub(crate) fn workers_broadcast(
@@ -1874,6 +2674,45 @@ impl VM {
                 process_name: spec.type_name.clone(),
             };
             results.push(self.invoke_callable_sync(message.clone(), vec![Value::Pid(pid)])?);
+        }
+        Ok(Value::List(ListHandle::from_items(results)))
+    }
+
+    pub(crate) fn workers_broadcast_with_timeout(
+        &mut self,
+        handle: &WorkersHandle,
+        message: Callable,
+        timeout_ms: u64,
+    ) -> Result<Value, RuntimeError> {
+        let member_ids = self
+            .process_runtime
+            .worker_sets
+            .get(&handle.id)
+            .ok_or_else(|| {
+                RuntimeError::new(format!(
+                    "unknown workers handle {} for {}",
+                    handle.id, handle.process_name
+                ))
+            })?
+            .members
+            .clone();
+        let mut results = Vec::with_capacity(member_ids.len());
+        for pid_id in member_ids {
+            let Some(process) = self.process_runtime.processes.get(&pid_id) else {
+                continue;
+            };
+            let Some(spec) = self.process_runtime.spec_for_id(process.spec_id) else {
+                continue;
+            };
+            let pid = PidHandle {
+                id: pid_id,
+                process_name: spec.type_name.clone(),
+            };
+            results.push(self.invoke_callable_with_existing_future_timeout(
+                message.clone(),
+                vec![Value::Pid(pid)],
+                timeout_ms,
+            )?);
         }
         Ok(Value::List(ListHandle::from_items(results)))
     }
@@ -1965,14 +2804,69 @@ impl VM {
             .get(&pid)
             .and_then(|entry| entry.lifecycle_sink.clone())
         {
-            self.process_runtime
-                .root_supervisor
-                .child_table
-                .entry(supervisor_name)
-                .or_default()
-                .push(pid);
+            self.add_supervisor_child(&supervisor_name, pid);
         }
         Ok(pid)
+    }
+
+    fn add_supervisor_child(&mut self, supervisor_name: &str, pid: u64) {
+        let children = self
+            .process_runtime
+            .root_supervisor
+            .child_table
+            .entry(supervisor_name.to_string())
+            .or_default();
+        if !children.contains(&pid) {
+            children.push(pid);
+        }
+    }
+
+    fn remove_supervisor_child(&mut self, supervisor_name: &str, pid: u64) {
+        if let Some(children) = self
+            .process_runtime
+            .root_supervisor
+            .child_table
+            .get_mut(supervisor_name)
+        {
+            children.retain(|child_pid| *child_pid != pid);
+        }
+    }
+
+    fn is_adoptable_worker(&self, entry: &ProcessInstance) -> bool {
+        let Some(spec) = self.process_runtime.spec_for_id(entry.spec_id) else {
+            return false;
+        };
+        matches!(
+            entry.status,
+            ProcessStatus::Runnable | ProcessStatus::Waiting(_)
+        ) && spec.instance == RuntimeProcessInstance::Worker
+    }
+
+    fn unique_live_supervisor_child_count(&self, supervisor_name: &str) -> i64 {
+        let Some(children) = self
+            .process_runtime
+            .root_supervisor
+            .child_table
+            .get(supervisor_name)
+        else {
+            return 0;
+        };
+        children
+            .iter()
+            .filter(|pid| {
+                self.process_runtime
+                    .processes
+                    .get(pid)
+                    .is_some_and(|entry| {
+                        matches!(
+                            entry.status,
+                            ProcessStatus::Runnable | ProcessStatus::Waiting(_)
+                        )
+                    })
+            })
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len() as i64
     }
 
     pub(crate) fn infer_worker_process_name_from_callable(
@@ -2055,6 +2949,23 @@ impl VM {
             .resolve_future(future_id, timeout_value);
     }
 
+    pub(crate) fn process_sleep(&mut self, millis: u64) -> Result<Value, RuntimeError> {
+        if millis == 0 {
+            return Ok(ok_vm_result(Value::Unit));
+        }
+        let future_id = self
+            .process_runtime
+            .allocate_future_after(None, millis, false);
+        Ok(Value::PendingFuture(future_id))
+    }
+
+    #[allow(dead_code)]
+    fn resolve_sleep_future(&mut self, future_id: FutureId) -> Result<(), RuntimeError> {
+        let value = ok_vm_result(Value::Unit);
+        let _ = self.process_runtime.resolve_future(future_id, value);
+        Ok(())
+    }
+
     #[allow(dead_code)]
     fn resolve_future_process_down(&mut self, future_id: FutureId, pid: u64) {
         let process_down = self.process_err_value(
@@ -2068,7 +2979,16 @@ impl VM {
     fn expire_process_deadlines(&mut self, now_tick: u64) -> Vec<FutureId> {
         let expired = self.process_runtime.collect_expired_futures(now_tick);
         for future_id in &expired {
-            self.resolve_future_timeout(*future_id);
+            let cancel_on_timeout = self
+                .process_runtime
+                .futures
+                .get(future_id)
+                .is_some_and(|future| future.cancel_on_timeout);
+            if cancel_on_timeout {
+                self.resolve_future_timeout(*future_id);
+            } else {
+                let _ = self.resolve_sleep_future(*future_id);
+            }
         }
         expired
     }
@@ -2196,6 +3116,14 @@ impl VM {
         })
     }
 
+    pub fn runtime_output_events_snapshot(&self) -> Vec<VmRuntimeOutputEventSnapshot> {
+        self.process_runtime
+            .output_events
+            .iter()
+            .map(RuntimeOutputEvent::snapshot)
+            .collect()
+    }
+
     pub fn process_runtime_snapshot(&self) -> VmProcessRuntimeSnapshot {
         let specs = self
             .process_runtime
@@ -2248,6 +3176,41 @@ impl VM {
                     }
                 })
                 .collect();
+        let worker_sets = self
+            .process_runtime
+            .worker_sets
+            .iter()
+            .map(|(id, state)| {
+                let live_count = state
+                    .members
+                    .iter()
+                    .filter(|pid| {
+                        self.process_runtime
+                            .processes
+                            .get(pid)
+                            .map(|process| {
+                                matches!(
+                                    process.status,
+                                    ProcessStatus::Runnable
+                                        | ProcessStatus::Waiting(_)
+                                        | ProcessStatus::Restarting
+                                )
+                            })
+                            .unwrap_or(false)
+                    })
+                    .count();
+                VmWorkerSetSnapshot {
+                    id: *id,
+                    worker_process: state.worker_process.clone(),
+                    supervisor: state.supervisor_name.clone(),
+                    target: state.target,
+                    min: state.strategy.min,
+                    max: state.strategy.max,
+                    member_pids: state.members.clone(),
+                    live_count,
+                }
+            })
+            .collect();
         let waiting = self
             .process_runtime
             .waiting_table
@@ -2295,6 +3258,7 @@ impl VM {
             specs,
             singleton_slots: self.process_runtime.singleton_by_name.clone(),
             processes,
+            worker_sets,
             waiting,
             replies,
             deadlines,
@@ -2318,17 +3282,24 @@ impl VM {
         self.test_events.clear();
         self.test_stdout_cursor = self.current_output_len();
         self.test_stderr_cursor = self.current_error_output_len();
-        match self.run_until_outcome(self.pc, ExecutionTarget::TopLevel) {
+        let result = match self.run_until_outcome(self.pc, ExecutionTarget::TopLevel) {
             StepOutcome::Halt(_) => {
                 self.last_result = Some(self.stack.last().cloned().unwrap_or(Value::Unit));
                 Ok(())
             }
-            StepOutcome::Pending { .. } => Err(RuntimeError::new(
-                "top-level execution suspended without scheduler support",
-            )),
+            pending @ StepOutcome::Pending { .. } => match self.drive_pending_to_halt(pending)? {
+                StepOutcome::Halt(_) => {
+                    self.last_result = Some(self.stack.last().cloned().unwrap_or(Value::Unit));
+                    Ok(())
+                }
+                StepOutcome::RuntimeError(err) => Err(err),
+                _ => Err(RuntimeError::new("top-level execution did not finish")),
+            },
             StepOutcome::RuntimeError(err) => Err(err),
             StepOutcome::Continue => Err(RuntimeError::new("top-level execution did not finish")),
-        }
+        };
+        self.shutdown_file_resources();
+        result
     }
 
     /// Execute an incremental bytecode chunk and return the final stack top.
@@ -2388,7 +3359,7 @@ impl VM {
             dbg_template_base,
         )?;
         self.bytecode.constants.extend(constants);
-        self.bytecode.type_registry.entries.extend(type_entries);
+        self.bytecode.type_registry.extend(type_entries);
         self.bytecode.error_templates.extend(error_templates);
         self.bytecode.dbg_templates.extend(dbg_templates);
         self.extend_docs_unique(docs);
@@ -2410,6 +3381,7 @@ impl VM {
             .extend(runtime_boot_plan.handler_overrides);
         self.process_runtime
             .register_spec_table(&self.bytecode.runtime_process_specs);
+        self.apply_runtime_supervisor_overrides();
         self.bytecode.opcodes.extend(chunk_opcodes);
         self.relocate_and_extend_source_map(source_map, code_base)?;
         // Invariant: runtime uses O(1) lookup `functions[fun_idx as usize]`.
@@ -2451,16 +3423,23 @@ impl VM {
                 self.stack.clear();
                 Ok(result)
             }
-            StepOutcome::Pending { .. } => Err(RuntimeError::new(
-                "chunk execution suspended without scheduler support",
-            )),
+            pending @ StepOutcome::Pending { .. } => match self.drive_pending_to_halt(pending)? {
+                StepOutcome::Halt(_) => {
+                    let result = self.stack.pop().unwrap_or(Value::Unit);
+                    self.last_result = Some(result.clone());
+                    self.stack.clear();
+                    Ok(result)
+                }
+                StepOutcome::RuntimeError(err) => Err(err),
+                _ => Err(RuntimeError::new("chunk execution did not finish")),
+            },
             StepOutcome::RuntimeError(err) => Err(err),
             StepOutcome::Continue => Err(RuntimeError::new("chunk execution did not finish")),
         }
     }
 
     /// Execute a chunk atomically, preserving the existing VM state on failure.
-    pub fn push_atomic(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError> {
+    pub(crate) fn push_atomic(&mut self, chunk: BytecodeChunk) -> Result<Value, RuntimeError> {
         self.verify_chunk(&chunk)?;
         let checkpoint = self.checkpoint_for_chunk(&chunk);
         let result = match self.execute_chunk(chunk) {
@@ -2509,7 +3488,7 @@ impl VM {
             process_runtime: self.process_runtime.clone(),
             opcode_len: self.bytecode.opcodes.len(),
             constant_len: self.bytecode.constants.len(),
-            type_entry_len: self.bytecode.type_registry.entries.len(),
+            type_entry_len: self.bytecode.type_registry.entries().len(),
             error_template_len: self.bytecode.error_templates.len(),
             function_len: self.bytecode.functions.len(),
             doc_len: self.bytecode.docs.len(),
@@ -2520,6 +3499,9 @@ impl VM {
                 .as_ref()
                 .map(|map| map.entries.len()),
             overwritten_functions,
+            open_file_ids: self.open_files.keys().copied().collect(),
+            next_file_handle_id: self.next_file_handle_id,
+            cwd: self.cwd.clone(),
         }
     }
 
@@ -2542,12 +3524,14 @@ impl VM {
         self.test_stderr_cursor = checkpoint.test_stderr_cursor;
         self.stdin_input_cursor = checkpoint.stdin_input_cursor;
         self.process_runtime = checkpoint.process_runtime;
+        self.rollback_open_files(&checkpoint.open_file_ids);
+        self.next_file_handle_id = checkpoint.next_file_handle_id;
+        self.cwd = checkpoint.cwd;
 
         self.bytecode.opcodes.truncate(checkpoint.opcode_len);
         self.bytecode.constants.truncate(checkpoint.constant_len);
         self.bytecode
             .type_registry
-            .entries
             .truncate(checkpoint.type_entry_len);
         self.bytecode
             .error_templates
@@ -2572,6 +3556,42 @@ impl VM {
             }
             None => self.bytecode.source_map = None,
         }
+    }
+
+    fn rollback_open_files(&mut self, keep_ids: &BTreeSet<u64>) {
+        let to_close = self
+            .open_files
+            .keys()
+            .copied()
+            .filter(|id| !keep_ids.contains(id))
+            .collect::<Vec<_>>();
+        for handle_id in to_close {
+            if let Err(err) = self.close_file_resource(handle_id) {
+                self.report_file_shutdown_error(handle_id, &err);
+            }
+        }
+    }
+
+    fn shutdown_file_resources(&mut self) {
+        let handle_ids = self.open_files.keys().copied().collect::<Vec<_>>();
+        for handle_id in handle_ids {
+            if let Err(err) = self.close_file_resource(handle_id) {
+                self.report_file_shutdown_error(handle_id, &err);
+            }
+        }
+    }
+
+    fn report_file_shutdown_error(&mut self, handle_id: u64, err: &VmFileError) {
+        let detail = match err {
+            VmFileError::Closed => format!("File shutdown skipped for closed handle #{handle_id}"),
+            VmFileError::Io(io_err) => {
+                format!("File shutdown failed for handle #{handle_id}: {io_err}")
+            }
+            VmFileError::Encoding(message) | VmFileError::Message(message) => {
+                format!("File shutdown failed for handle #{handle_id}: {message}")
+            }
+        };
+        let _ = self.emit_stderr_text(detail);
     }
 
     fn verify_loaded_bytecode(&self) -> Result<(), RuntimeError> {
@@ -2622,6 +3642,12 @@ impl VM {
         }
     }
 
+    fn observe_branch_outcome(&mut self, kind: &str, pc: usize, target: u32, taken: bool) {
+        if let Some(observer) = self.observer.as_mut() {
+            observer.record_branch_outcome(kind, pc, target, taken);
+        }
+    }
+
     fn capture_execution_context(
         &self,
         pc: usize,
@@ -2653,7 +3679,22 @@ impl VM {
         result
     }
 
-    fn load_local_or_pending(&mut self, slot: u32) -> Result<OpcodeControl, RuntimeError> {
+    fn invoke_callable_isolated_step(
+        &mut self,
+        callable: Callable,
+        args: Vec<Value>,
+    ) -> StepOutcome {
+        let saved = self.capture_execution_context(self.pc, ExecutionTarget::TopLevel);
+        let outcome = self.invoke_callable_step(callable, args);
+        self.restore_execution_context(saved);
+        outcome
+    }
+
+    fn load_local_or_pending(
+        &mut self,
+        slot: u32,
+        resume_pc: usize,
+    ) -> Result<OpcodeControl, RuntimeError> {
         let slot_index = slot as usize;
         let value = self
             .current_frame()?
@@ -2680,7 +3721,10 @@ impl VM {
                     self.stack.push(value);
                     Ok(OpcodeControl::Continue)
                 } else {
-                    Ok(OpcodeControl::Pending(future_id))
+                    Ok(OpcodeControl::Pending {
+                        future_id,
+                        resume_pc,
+                    })
                 }
             }
             value => {
@@ -2706,52 +3750,174 @@ impl VM {
         }
     }
 
-    fn run_until_outcome(&mut self, mut pc: usize, target: ExecutionTarget) -> StepOutcome {
-        loop {
-            if pc >= self.bytecode.opcodes.len() {
-                return StepOutcome::RuntimeError(RuntimeError::new("PC out of bounds"));
-            }
-            self.pc = pc;
-            let current_pc = pc;
-            let op = self.bytecode.opcodes[current_pc].clone();
-            self.observe_opcode_step(current_pc, &op);
-            let mut next_pc = current_pc + 1;
-            let control = match self.execute_opcode(op.clone(), &mut next_pc) {
-                Ok(control) => control,
-                Err(err) => {
-                    return StepOutcome::RuntimeError(
-                        self.enrich_runtime_error(err, current_pc, &op),
-                    );
-                }
+    fn resolve_ready_pending_stack_values(&mut self) {
+        let futures = &self.process_runtime.futures;
+        for value in &mut self.stack {
+            let Value::PendingFuture(future_id) = value else {
+                continue;
             };
-            self.observe_current_depths();
+            let Some(resolved) = futures
+                .get(future_id)
+                .and_then(|future| match &future.state {
+                    FutureState::Ready(value) | FutureState::Cancelled(value) => {
+                        Some(value.clone())
+                    }
+                    FutureState::Running => None,
+                })
+            else {
+                continue;
+            };
+            *value = resolved;
+        }
+    }
 
-            match control {
-                OpcodeControl::Continue => {
-                    pc = next_pc;
-                    self.pc = pc;
-                    match self.complete_execution_target(&target) {
-                        Ok(Some(value)) => return StepOutcome::Halt(value),
-                        Ok(None) => {}
-                        Err(err) => {
-                            return StepOutcome::RuntimeError(
-                                self.enrich_runtime_error(err, current_pc, &op),
-                            );
-                        }
+    fn step_context(&mut self, context: &mut ExecutionContext) -> StepOutcome {
+        self.restore_execution_context(context.clone());
+        let target = context.target.clone();
+        let outcome = self.step_active_context(target);
+        match &outcome {
+            StepOutcome::Pending { resume, .. } => {
+                *context = resume.clone();
+            }
+            _ => {
+                *context = self.capture_execution_context(self.pc, context.target.clone());
+            }
+        }
+        outcome
+    }
+
+    fn step_active_context(&mut self, target: ExecutionTarget) -> StepOutcome {
+        let pc = self.pc;
+        if pc >= self.bytecode.opcodes.len() {
+            return StepOutcome::RuntimeError(RuntimeError::new("PC out of bounds"));
+        }
+        self.resolve_ready_pending_stack_values();
+        let current_pc = pc;
+        let op = self.bytecode.opcodes[current_pc].clone();
+        self.observe_opcode_step(current_pc, &op);
+        let mut next_pc = current_pc + 1;
+        let control = match self.execute_opcode(op.clone(), &mut next_pc) {
+            Ok(control) => control,
+            Err(err) => {
+                return StepOutcome::RuntimeError(self.enrich_runtime_error(err, current_pc, &op));
+            }
+        };
+        self.observe_current_depths();
+
+        match control {
+            OpcodeControl::Continue => {
+                self.pc = next_pc;
+                match self.complete_execution_target(&target) {
+                    Ok(Some(value)) => StepOutcome::Halt(value),
+                    Ok(None) => StepOutcome::Continue,
+                    Err(err) => {
+                        StepOutcome::RuntimeError(self.enrich_runtime_error(err, current_pc, &op))
                     }
                 }
-                OpcodeControl::Halt => {
-                    self.pc = next_pc;
-                    return StepOutcome::Halt(self.stack.last().cloned().unwrap_or(Value::Unit));
+            }
+            OpcodeControl::Halt => {
+                self.pc = next_pc;
+                StepOutcome::Halt(self.stack.last().cloned().unwrap_or(Value::Unit))
+            }
+            OpcodeControl::Pending {
+                future_id,
+                resume_pc,
+            } => StepOutcome::Pending {
+                future_id,
+                resume: self.capture_execution_context(resume_pc, target),
+            },
+        }
+    }
+
+    fn run_until_outcome(&mut self, pc: usize, target: ExecutionTarget) -> StepOutcome {
+        let mut context = self.capture_execution_context(pc, target);
+        loop {
+            match self.step_context(&mut context) {
+                StepOutcome::Continue => {}
+                other => return other,
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    fn run_quantum(
+        &mut self,
+        context: &mut ExecutionContext,
+        budget: &mut Budget,
+    ) -> ProcessRunOutcome {
+        loop {
+            if budget.expired() {
+                return ProcessRunOutcome::QuantumExpired;
+            }
+            match self.step_context(context) {
+                StepOutcome::Continue => {
+                    budget.consume(1);
+                    if budget.expired() {
+                        return ProcessRunOutcome::QuantumExpired;
+                    }
                 }
-                OpcodeControl::Pending(future_id) => {
-                    return StepOutcome::Pending {
-                        future_id,
-                        resume: self.capture_execution_context(current_pc, target),
-                    };
+                StepOutcome::Halt(value) => return ProcessRunOutcome::Halted(value),
+                StepOutcome::Pending { future_id, .. } => {
+                    budget.consume(1);
+                    return ProcessRunOutcome::Pending(future_id);
+                }
+                StepOutcome::RuntimeError(err) => {
+                    budget.consume(1);
+                    return ProcessRunOutcome::Failed(err);
                 }
             }
         }
+    }
+
+    #[allow(dead_code)]
+    fn scheduler_tick(
+        &mut self,
+        max_reductions: u64,
+    ) -> Result<Option<ProcessRunOutcome>, RuntimeError> {
+        let Some(pid) = self.process_runtime.run_queue.pop_front() else {
+            return Ok(None);
+        };
+        let mut context = self
+            .process_runtime
+            .processes
+            .get_mut(&pid)
+            .and_then(|process| process.execution_context.take())
+            .ok_or_else(|| {
+                RuntimeError::new(format!("process {pid} has no execution context to run"))
+            })?;
+        let mut budget = Budget::new(max_reductions);
+        let outcome = self.run_quantum(&mut context, &mut budget);
+
+        match &outcome {
+            ProcessRunOutcome::QuantumExpired => {
+                if let Some(process) = self.process_runtime.processes.get_mut(&pid) {
+                    process.status = ProcessStatus::Runnable;
+                    process.execution_context = Some(context);
+                }
+                self.process_runtime.enqueue_runnable(pid);
+            }
+            ProcessRunOutcome::Halted(_) => {
+                if let Some(process) = self.process_runtime.processes.get_mut(&pid) {
+                    process.status = ProcessStatus::Completed;
+                    process.execution_context = Some(context);
+                }
+            }
+            ProcessRunOutcome::Pending(future_id) => {
+                if let Some(process) = self.process_runtime.processes.get_mut(&pid) {
+                    process.execution_context = Some(context);
+                }
+                self.process_runtime
+                    .mark_process_waiting(pid, ProcessWaitReason::Future(*future_id));
+            }
+            ProcessRunOutcome::Failed(_) => {
+                if let Some(process) = self.process_runtime.processes.get_mut(&pid) {
+                    process.status = ProcessStatus::Failed;
+                    process.execution_context = Some(context);
+                }
+            }
+        }
+
+        Ok(Some(outcome))
     }
 
     #[allow(dead_code)]
@@ -2760,6 +3926,246 @@ impl VM {
         let target = context.target.clone();
         self.restore_execution_context(context);
         self.run_until_outcome(pc, target)
+    }
+
+    fn resume_execution_isolated(&mut self, context: ProcessExecutionContext) -> StepOutcome {
+        let saved = self.capture_execution_context(self.pc, ExecutionTarget::TopLevel);
+        let outcome = self.resume_execution(context);
+        self.restore_execution_context(saved);
+        outcome
+    }
+
+    fn wait_for_any_future(&mut self, future_ids: &[FutureId]) -> Result<(), RuntimeError> {
+        loop {
+            self.drive_ready_detached_tasks()?;
+            if future_ids
+                .iter()
+                .any(|future_id| self.ready_future_value(*future_id).is_some())
+            {
+                return Ok(());
+            }
+
+            let Some(next_deadline) = self.process_runtime.next_running_deadline() else {
+                let blocked = future_ids.first().copied().unwrap_or_default();
+                return Err(RuntimeError::new(format!(
+                    "execution suspended on unresolved future {}",
+                    blocked
+                )));
+            };
+
+            let sleep_ms = next_deadline.saturating_sub(self.process_runtime.current_tick_ms);
+            if sleep_ms > 0 {
+                std::thread::sleep(Duration::from_millis(sleep_ms));
+            }
+            self.process_runtime.current_tick_ms = next_deadline;
+            self.expire_process_deadlines(next_deadline);
+        }
+    }
+
+    fn drive_ready_detached_tasks(&mut self) -> Result<(), RuntimeError> {
+        loop {
+            let ready_task_ids = self
+                .process_runtime
+                .detached_tasks
+                .iter()
+                .filter_map(|(task_id, task)| {
+                    self.ready_future_value(task.awaiting_future)
+                        .map(|_| *task_id)
+                })
+                .collect::<Vec<_>>();
+            if ready_task_ids.is_empty() {
+                return Ok(());
+            }
+
+            for task_id in ready_task_ids {
+                let Some(task) = self.process_runtime.detached_tasks.remove(&task_id) else {
+                    continue;
+                };
+                let ready_value = self.ready_future_value(task.awaiting_future);
+                match task.continuation {
+                    DetachedTaskContinuation::AwaitValue { completion_future } => {
+                        if let (Some(completion_future), Some(value)) =
+                            (completion_future, ready_value)
+                        {
+                            let _ = self
+                                .process_runtime
+                                .resolve_future(completion_future, value);
+                        }
+                    }
+                    DetachedTaskContinuation::Resume {
+                        resume,
+                        completion_future,
+                    } => {
+                        let resumed = self.resume_execution_isolated(resume);
+                        if let Ok(Some((awaiting_future, continuation))) =
+                            self.detached_waiting_from_outcome(resumed, completion_future)
+                        {
+                            self.process_runtime.register_detached_task(
+                                task.owner_pid,
+                                awaiting_future,
+                                continuation,
+                            );
+                        }
+                    }
+                    DetachedTaskContinuation::ResolveReply { correlation_id } => {
+                        if let Some(value) = ready_value {
+                            let _ = self.process_runtime.resolve_reply(correlation_id, value);
+                        }
+                    }
+                    DetachedTaskContinuation::ResumeReply {
+                        resume,
+                        correlation_id,
+                    } => {
+                        let resumed = self.resume_execution_isolated(resume);
+                        if let Ok(Some((awaiting_future, continuation))) =
+                            self.reply_waiting_from_outcome(resumed, correlation_id)
+                        {
+                            self.process_runtime.register_detached_task(
+                                task.owner_pid,
+                                awaiting_future,
+                                continuation,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn has_pending_background_work(&self) -> bool {
+        !self.process_runtime.detached_tasks.is_empty()
+    }
+
+    pub fn next_background_deadline_delay(&self) -> Option<Duration> {
+        let next_deadline = self.process_runtime.next_running_deadline()?;
+        Some(Duration::from_millis(
+            next_deadline.saturating_sub(self.process_runtime.current_tick_ms),
+        ))
+    }
+
+    pub fn pump_background_ready(&mut self) -> Result<(), RuntimeError> {
+        self.drive_ready_detached_tasks()
+    }
+
+    pub fn advance_background_time(&mut self, elapsed: Duration) -> Result<(), RuntimeError> {
+        let elapsed_ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
+        if elapsed_ms == 0 {
+            return self.drive_ready_detached_tasks();
+        }
+
+        self.process_runtime.current_tick_ms = self
+            .process_runtime
+            .current_tick_ms
+            .saturating_add(elapsed_ms);
+        self.expire_process_deadlines(self.process_runtime.current_tick_ms);
+        self.drive_ready_detached_tasks()
+    }
+
+    pub fn pump_background_to_next_deadline(&mut self) -> Result<bool, RuntimeError> {
+        let Some(next_deadline) = self.process_runtime.next_running_deadline() else {
+            return Ok(false);
+        };
+        self.process_runtime.current_tick_ms = next_deadline;
+        self.expire_process_deadlines(next_deadline);
+        self.drive_ready_detached_tasks()?;
+        Ok(true)
+    }
+
+    pub fn drain_background_tasks(&mut self) -> Result<(), RuntimeError> {
+        while self.has_pending_background_work() {
+            self.drive_ready_detached_tasks()?;
+            if !self.has_pending_background_work() {
+                break;
+            }
+            let Some(next_deadline) = self.process_runtime.next_running_deadline() else {
+                break;
+            };
+            let sleep_ms = next_deadline.saturating_sub(self.process_runtime.current_tick_ms);
+            if sleep_ms > 0 {
+                std::thread::sleep(Duration::from_millis(sleep_ms));
+            }
+            self.process_runtime.current_tick_ms = next_deadline;
+            self.expire_process_deadlines(next_deadline);
+        }
+        Ok(())
+    }
+
+    fn detached_waiting_from_outcome(
+        &mut self,
+        outcome: StepOutcome,
+        completion_future: Option<FutureId>,
+    ) -> Result<Option<(FutureId, DetachedTaskContinuation)>, RuntimeError> {
+        match outcome {
+            StepOutcome::Halt(Value::PendingFuture(future_id)) => Ok(Some((
+                future_id,
+                DetachedTaskContinuation::AwaitValue { completion_future },
+            ))),
+            StepOutcome::Pending { future_id, resume } => Ok(Some((
+                future_id,
+                DetachedTaskContinuation::Resume {
+                    resume,
+                    completion_future,
+                },
+            ))),
+            StepOutcome::Halt(value) => {
+                if let Some(completion_future) = completion_future {
+                    let _ = self
+                        .process_runtime
+                        .resolve_future(completion_future, value);
+                }
+                Ok(None)
+            }
+            StepOutcome::RuntimeError(err) => Err(err),
+            StepOutcome::Continue => Err(RuntimeError::new("detached task did not finish")),
+        }
+    }
+
+    fn reply_waiting_from_outcome(
+        &mut self,
+        outcome: StepOutcome,
+        correlation_id: CorrelationId,
+    ) -> Result<Option<(FutureId, DetachedTaskContinuation)>, RuntimeError> {
+        match outcome {
+            StepOutcome::Halt(Value::PendingFuture(future_id)) => Ok(Some((
+                future_id,
+                DetachedTaskContinuation::ResolveReply { correlation_id },
+            ))),
+            StepOutcome::Pending { future_id, resume } => Ok(Some((
+                future_id,
+                DetachedTaskContinuation::ResumeReply {
+                    resume,
+                    correlation_id,
+                },
+            ))),
+            StepOutcome::Halt(value) => {
+                let _ = self.process_runtime.resolve_reply(correlation_id, value);
+                Ok(None)
+            }
+            StepOutcome::RuntimeError(err) => Err(err),
+            StepOutcome::Continue => Err(RuntimeError::new("reply continuation did not finish")),
+        }
+    }
+
+    fn drive_pending_to_halt(
+        &mut self,
+        mut outcome: StepOutcome,
+    ) -> Result<StepOutcome, RuntimeError> {
+        loop {
+            match outcome {
+                StepOutcome::Halt(Value::PendingFuture(future_id)) => {
+                    self.wait_for_any_future(&[future_id])?;
+                    let value = self.ready_future_value(future_id).ok_or_else(|| {
+                        RuntimeError::new(format!("future {} did not resolve", future_id))
+                    })?;
+                    outcome = StepOutcome::Halt(value);
+                }
+                StepOutcome::Pending { future_id, resume } => {
+                    self.wait_for_any_future(&[future_id])?;
+                    outcome = self.resume_execution(resume);
+                }
+                other => return Ok(other),
+            }
+        }
     }
 
     fn invoke_callable_step(&mut self, callable: Callable, args: Vec<Value>) -> StepOutcome {
@@ -2820,12 +4226,135 @@ impl VM {
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
         match self.invoke_callable_step(callable, args) {
+            StepOutcome::Halt(Value::PendingFuture(future_id)) => {
+                self.wait_for_any_future(&[future_id])?;
+                self.ready_future_value(future_id).ok_or_else(|| {
+                    RuntimeError::new(format!("future {} did not resolve", future_id))
+                })
+            }
             StepOutcome::Halt(value) => Ok(value),
-            StepOutcome::Pending { .. } => Err(RuntimeError::new(
-                "callable suspended without scheduler support",
-            )),
+            pending @ StepOutcome::Pending { .. } => match self.drive_pending_to_halt(pending)? {
+                StepOutcome::Halt(value) => Ok(value),
+                StepOutcome::RuntimeError(err) => Err(err),
+                _ => Err(RuntimeError::new("callable execution did not finish")),
+            },
             StepOutcome::RuntimeError(err) => Err(err),
             StepOutcome::Continue => Err(RuntimeError::new("callable execution did not finish")),
+        }
+    }
+
+    pub(crate) fn open_file_resource(
+        &mut self,
+        path: &str,
+        mode: VmFileMode,
+    ) -> Result<FileHandleValue, VmFileError> {
+        let host_path = self.resolve_host_path(path);
+        let file = Self::open_file_for_mode(&host_path, mode).map_err(VmFileError::Io)?;
+        let handle = FileHandleValue {
+            id: self.next_file_handle_id,
+        };
+        self.next_file_handle_id += 1;
+        self.open_files.insert(
+            handle.id,
+            VmOpenFile {
+                path: host_path.to_string_lossy().into_owned(),
+                mode,
+                file,
+            },
+        );
+        Ok(handle)
+    }
+
+    pub(crate) fn read_file_chunk(
+        &mut self,
+        handle_id: u64,
+        max_chars: usize,
+    ) -> Result<String, VmFileError> {
+        let open_file = self
+            .open_files
+            .get_mut(&handle_id)
+            .ok_or(VmFileError::Closed)?;
+        if !open_file.mode.can_read() {
+            return Err(VmFileError::Message(format!(
+                "file handle for {} is not readable in {:?} mode",
+                open_file.path, open_file.mode
+            )));
+        }
+        Self::read_utf8_chunk(&mut open_file.file, max_chars)
+    }
+
+    pub(crate) fn write_file_chunk(
+        &mut self,
+        handle_id: u64,
+        text: &str,
+    ) -> Result<(), VmFileError> {
+        let open_file = self
+            .open_files
+            .get_mut(&handle_id)
+            .ok_or(VmFileError::Closed)?;
+        if !open_file.mode.can_write() {
+            return Err(VmFileError::Message(format!(
+                "file handle for {} is not writable in {:?} mode",
+                open_file.path, open_file.mode
+            )));
+        }
+        open_file
+            .file
+            .write_all(text.as_bytes())
+            .map_err(VmFileError::Io)
+    }
+
+    pub(crate) fn flush_file_resource(&mut self, handle_id: u64) -> Result<(), VmFileError> {
+        let open_file = self
+            .open_files
+            .get_mut(&handle_id)
+            .ok_or(VmFileError::Closed)?;
+        open_file.file.flush().map_err(VmFileError::Io)
+    }
+
+    pub(crate) fn close_file_resource(&mut self, handle_id: u64) -> Result<(), VmFileError> {
+        let Some(mut open_file) = self.open_files.remove(&handle_id) else {
+            return Err(VmFileError::Closed);
+        };
+        open_file.file.flush().map_err(VmFileError::Io)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn open_file_count(&self) -> usize {
+        self.open_files.len()
+    }
+
+    pub(crate) fn await_task_handle(
+        &mut self,
+        value: &Value,
+        timeout_ms: Option<u64>,
+    ) -> Result<Value, RuntimeError> {
+        match value {
+            Value::TaskHandle(future_id) => {
+                let completion_future = match timeout_ms {
+                    Some(timeout_ms) => self
+                        .process_runtime
+                        .allocate_future_after(None, timeout_ms, true),
+                    None => self.process_runtime.allocate_future(None, None, false),
+                };
+                self.await_task_completion(
+                    completion_future,
+                    StepOutcome::Halt(Value::PendingFuture(*future_id)),
+                )
+            }
+            Value::PendingFuture(future_id) => {
+                let completion_future = match timeout_ms {
+                    Some(timeout_ms) => self
+                        .process_runtime
+                        .allocate_future_after(None, timeout_ms, true),
+                    None => self.process_runtime.allocate_future(None, None, false),
+                };
+                self.await_task_completion(
+                    completion_future,
+                    StepOutcome::Halt(Value::PendingFuture(*future_id)),
+                )
+            }
+            other => Ok(other.clone()),
         }
     }
 
@@ -2846,6 +4375,16 @@ impl VM {
     ) -> Result<Value, RuntimeError> {
         loop {
             match outcome {
+                StepOutcome::Halt(Value::PendingFuture(awaited_future)) => {
+                    self.wait_for_any_future(&[future_id, awaited_future])?;
+                    if let Some(value) = self.ready_future_value(future_id) {
+                        return Ok(value);
+                    }
+                    let value = self.ready_future_value(awaited_future).ok_or_else(|| {
+                        RuntimeError::new(format!("future {} did not resolve", awaited_future))
+                    })?;
+                    outcome = StepOutcome::Halt(value);
+                }
                 StepOutcome::Halt(value) => {
                     self.process_runtime
                         .resolve_future(future_id, value.clone());
@@ -2860,11 +4399,9 @@ impl VM {
                     future_id: awaited_future,
                     resume,
                 } => {
-                    if self.ready_future_value(awaited_future).is_none() {
-                        return Err(RuntimeError::new(format!(
-                            "task suspended on unresolved future {}",
-                            awaited_future
-                        )));
+                    self.wait_for_any_future(&[future_id, awaited_future])?;
+                    if let Some(value) = self.ready_future_value(future_id) {
+                        return Ok(value);
                     }
                     outcome = self.resume_execution(resume);
                 }
@@ -2890,35 +4427,82 @@ impl VM {
         mode: TaskMode,
         timeout_ms: Option<u64>,
     ) -> Result<Value, RuntimeError> {
-        let started = Instant::now();
         match mode {
-            TaskMode::Call | TaskMode::Async => {
-                let completion_future = self.process_runtime.allocate_future(None, None, false);
+            TaskMode::Call => {
+                let completion_future = match timeout_ms {
+                    Some(timeout_ms) => self
+                        .process_runtime
+                        .allocate_future_after(None, timeout_ms, true),
+                    None => self.process_runtime.allocate_future(None, None, false),
+                };
                 let outcome = self.invoke_callable_step(callable, Vec::new());
-                let result = self.await_task_completion(completion_future, outcome)?;
-                Ok(self.apply_task_timeout(timeout_ms, started, result))
+                self.await_task_completion(completion_future, outcome)
+            }
+            TaskMode::Async => {
+                let completion_future = match timeout_ms {
+                    Some(timeout_ms) => self
+                        .process_runtime
+                        .allocate_future_after(None, timeout_ms, true),
+                    None => self.process_runtime.allocate_future(None, None, false),
+                };
+                let outcome = self.invoke_callable_isolated_step(callable, Vec::new());
+                if let Some((awaiting_future, continuation)) =
+                    self.detached_waiting_from_outcome(outcome, Some(completion_future))?
+                {
+                    self.process_runtime.register_detached_task(
+                        None,
+                        awaiting_future,
+                        continuation,
+                    );
+                }
+                Ok(Value::TaskHandle(completion_future))
             }
             TaskMode::Launch => {
-                let _ = self.invoke_callable_sync(callable, Vec::new())?;
-                Ok(self.apply_task_timeout(timeout_ms, started, ok_vm_result(Value::Unit)))
+                if timeout_ms.is_none() {
+                    let outcome = self.invoke_callable_isolated_step(callable, Vec::new());
+                    if let Some((awaiting_future, continuation)) =
+                        self.detached_waiting_from_outcome(outcome, None)?
+                    {
+                        self.process_runtime.register_detached_task(
+                            None,
+                            awaiting_future,
+                            continuation,
+                        );
+                    }
+                    return Ok(ok_vm_result(Value::Unit));
+                }
+                let completion_future = self.process_runtime.allocate_future_after(
+                    None,
+                    timeout_ms.expect("checked is_some"),
+                    true,
+                );
+                let outcome = self.invoke_callable_step(callable, Vec::new());
+                let _ = self.await_task_completion(completion_future, outcome)?;
+                Ok(ok_vm_result(Value::Unit))
             }
             TaskMode::Cast => {
-                let _ = self.invoke_callable_sync(callable, Vec::new())?;
-                Ok(self.apply_task_timeout(timeout_ms, started, ok_vm_result(Value::Unit)))
+                if timeout_ms.is_none() {
+                    let outcome = self.invoke_callable_isolated_step(callable, Vec::new());
+                    if let Some((awaiting_future, continuation)) =
+                        self.detached_waiting_from_outcome(outcome, None)?
+                    {
+                        self.process_runtime.register_detached_task(
+                            None,
+                            awaiting_future,
+                            continuation,
+                        );
+                    }
+                    return Ok(ok_vm_result(Value::Unit));
+                }
+                let completion_future = self.process_runtime.allocate_future_after(
+                    None,
+                    timeout_ms.expect("checked is_some"),
+                    true,
+                );
+                let outcome = self.invoke_callable_step(callable, Vec::new());
+                let _ = self.await_task_completion(completion_future, outcome)?;
+                Ok(ok_vm_result(Value::Unit))
             }
-        }
-    }
-
-    fn apply_task_timeout(&self, timeout_ms: Option<u64>, started: Instant, value: Value) -> Value {
-        let Some(timeout_ms) = timeout_ms else {
-            return value;
-        };
-        if started.elapsed().as_millis() > u128::from(timeout_ms) {
-            err_vm_result(
-                self.process_error("Timeout", &format!("task timed out after {}ms", timeout_ms)),
-            )
-        } else {
-            value
         }
     }
 
@@ -2938,7 +4522,7 @@ impl VM {
     }
 
     fn verify_program(bytecode: &Bytecode) -> Result<(), RuntimeError> {
-        Self::verify_type_registry_entries(&bytecode.type_registry.entries, None)?;
+        Self::verify_type_registry_entries(bytecode.type_registry.entries(), None)?;
         Self::verify_source_map_entries(bytecode.source_map.as_ref(), bytecode.opcodes.len(), "")?;
 
         let halt_pos = if let Some(pos) = bytecode
@@ -2959,12 +4543,36 @@ impl VM {
 
         for (idx, op) in bytecode.opcodes.iter().enumerate() {
             match op {
+                Opcode::JumpIfLocalTagEq {
+                    tag_const_idx,
+                    target_pc: addr,
+                    ..
+                }
+                | Opcode::JumpIfLocalTagNe {
+                    tag_const_idx,
+                    target_pc: addr,
+                    ..
+                } => {
+                    if *tag_const_idx as usize >= bytecode.constants.len() {
+                        return Err(RuntimeError::new(format!(
+                            "LoadConst index out of bounds: {}",
+                            tag_const_idx
+                        )));
+                    }
+                    if *addr as usize >= bytecode.opcodes.len() {
+                        return Err(RuntimeError::new(format!("Invalid jump target: {}", addr)));
+                    }
+                }
                 Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
                     if *addr as usize >= bytecode.opcodes.len() {
                         return Err(RuntimeError::new(format!("Invalid jump target: {}", addr)));
                     }
                 }
-                Opcode::LoadConst(idx) => {
+                Opcode::LoadConst(idx)
+                | Opcode::StoreConstLocal { const_idx: idx, .. }
+                | Opcode::EqLocalTag {
+                    tag_const_idx: idx, ..
+                } => {
                     if *idx as usize >= bytecode.constants.len() {
                         return Err(RuntimeError::new(format!(
                             "LoadConst index out of bounds: {}",
@@ -3014,7 +4622,7 @@ impl VM {
     fn verify_chunk(&self, chunk: &BytecodeChunk) -> Result<(), RuntimeError> {
         Self::verify_type_registry_entries(
             &chunk.type_entries,
-            Some(&self.bytecode.type_registry.entries),
+            Some(self.bytecode.type_registry.entries()),
         )?;
         Self::verify_source_map_entries(chunk.source_map.as_ref(), chunk.opcodes.len(), "chunk")?;
 
@@ -3042,6 +4650,29 @@ impl VM {
 
         for (idx, op) in chunk.opcodes.iter().enumerate() {
             match op {
+                Opcode::JumpIfLocalTagEq {
+                    tag_const_idx,
+                    target_pc: addr,
+                    ..
+                }
+                | Opcode::JumpIfLocalTagNe {
+                    tag_const_idx,
+                    target_pc: addr,
+                    ..
+                } => {
+                    if *tag_const_idx as usize >= chunk.constants.len() {
+                        return Err(RuntimeError::new(format!(
+                            "Bytecode verifier: chunk LoadConst index out of bounds: {}",
+                            tag_const_idx
+                        )));
+                    }
+                    if *addr as usize >= chunk.opcodes.len() {
+                        return Err(RuntimeError::new(format!(
+                            "Bytecode verifier: chunk jump target out of bounds: {}",
+                            addr
+                        )));
+                    }
+                }
                 Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
                     if *addr as usize >= chunk.opcodes.len() {
                         return Err(RuntimeError::new(format!(
@@ -3050,7 +4681,11 @@ impl VM {
                         )));
                     }
                 }
-                Opcode::LoadConst(idx) => {
+                Opcode::LoadConst(idx)
+                | Opcode::StoreConstLocal { const_idx: idx, .. }
+                | Opcode::EqLocalTag {
+                    tag_const_idx: idx, ..
+                } => {
                     if *idx as usize >= chunk.constants.len() {
                         return Err(RuntimeError::new(format!(
                             "Bytecode verifier: chunk LoadConst index out of bounds: {}",
@@ -3232,6 +4867,29 @@ impl VM {
 
         for op in opcodes.iter_mut() {
             match op {
+                Opcode::JumpIfLocalTagEq {
+                    tag_const_idx,
+                    target_pc: addr,
+                    ..
+                }
+                | Opcode::JumpIfLocalTagNe {
+                    tag_const_idx,
+                    target_pc: addr,
+                    ..
+                } => {
+                    *tag_const_idx = tag_const_idx.checked_add(const_base).ok_or_else(|| {
+                        RuntimeError::new(format!(
+                            "Const relocation overflow: index {} + base {}",
+                            *tag_const_idx, const_base
+                        ))
+                    })?;
+                    *addr = addr.checked_add(code_base).ok_or_else(|| {
+                        RuntimeError::new(format!(
+                            "Jump relocation overflow: target {} + base {}",
+                            *addr, code_base
+                        ))
+                    })?;
+                }
                 Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
                     *addr = addr.checked_add(code_base).ok_or_else(|| {
                         RuntimeError::new(format!(
@@ -3240,7 +4898,11 @@ impl VM {
                         ))
                     })?;
                 }
-                Opcode::LoadConst(idx) => {
+                Opcode::LoadConst(idx)
+                | Opcode::StoreConstLocal { const_idx: idx, .. }
+                | Opcode::EqLocalTag {
+                    tag_const_idx: idx, ..
+                } => {
                     *idx = idx.checked_add(const_base).ok_or_else(|| {
                         RuntimeError::new(format!(
                             "Const relocation overflow: index {} + base {}",
@@ -3326,17 +4988,7 @@ impl VM {
             Opcode::Halt => return Ok(OpcodeControl::Halt),
 
             Opcode::LoadConst(idx) => {
-                let c = self.bytecode.constants.get(idx as usize).ok_or_else(|| {
-                    RuntimeError::new(format!("LoadConst index out of bounds: {}", idx))
-                })?;
-                let val = match c {
-                    Constant::Int(n) => Value::Int(n.clone()),
-                    Constant::Tag(tag) => Value::Tag(*tag),
-                    Constant::Float(f) => Value::Float(*f),
-                    Constant::Str(s) => Value::Str(s.clone()),
-                    Constant::Bool(b) => Value::Bool(*b),
-                    Constant::Unit => Value::Unit,
-                };
+                let val = self.constant_value(idx)?;
                 self.stack.push(val);
             }
 
@@ -3357,7 +5009,7 @@ impl VM {
             }
 
             Opcode::LoadLocal(slot) => {
-                return self.load_local_or_pending(slot);
+                return self.load_local_or_pending(slot, (*pc).saturating_sub(1));
             }
 
             Opcode::StoreLocal(slot) => {
@@ -3370,6 +5022,49 @@ impl VM {
                         RuntimeError::new(format!("StoreLocal out of bounds: {}", slot))
                     })?;
                 *target = val;
+            }
+
+            Opcode::StoreConstLocal {
+                const_idx,
+                local_idx,
+            } => {
+                let val = self.constant_value(const_idx)?;
+                let target = self
+                    .current_frame_mut()?
+                    .locals
+                    .get_mut(local_idx as usize)
+                    .ok_or_else(|| {
+                        RuntimeError::new(format!("StoreConstLocal out of bounds: {}", local_idx))
+                    })?;
+                *target = val;
+            }
+
+            Opcode::CopyLocal {
+                src_local_idx,
+                dst_local_idx,
+            } => {
+                let value = self
+                    .current_frame()?
+                    .locals
+                    .get(src_local_idx as usize)
+                    .cloned()
+                    .ok_or_else(|| {
+                        RuntimeError::new(format!(
+                            "CopyLocal source out of bounds: {}",
+                            src_local_idx
+                        ))
+                    })?;
+                let target = self
+                    .current_frame_mut()?
+                    .locals
+                    .get_mut(dst_local_idx as usize)
+                    .ok_or_else(|| {
+                        RuntimeError::new(format!(
+                            "CopyLocal destination out of bounds: {}",
+                            dst_local_idx
+                        ))
+                    })?;
+                *target = value;
             }
 
             Opcode::Pop => {
@@ -3387,6 +5082,17 @@ impl VM {
             Opcode::BitAndInt => self.int_binop(|a, b| Ok(Value::Int(a & b)))?,
             Opcode::BitOrInt => self.int_binop(|a, b| Ok(Value::Int(a | b)))?,
             Opcode::BitXorInt => self.int_binop(|a, b| Ok(Value::Int(a ^ b)))?,
+            Opcode::SafeModInt => {
+                let b = self.pop_int()?;
+                let a = self.pop_int()?;
+                if b.is_zero() {
+                    self.stack.push(err_vm_result(
+                        self.process_error("ZeroDivisionError", "division by zero"),
+                    ));
+                } else {
+                    self.stack.push(ok_vm_result(Value::Int(a % b)));
+                }
+            }
 
             // Arithmetic (Float)
             Opcode::AddFloat => self.float_binop(|a, b| Value::Float(a + b))?,
@@ -3438,6 +5144,25 @@ impl VM {
                 let b = self.pop_str()?;
                 let a = self.pop_str()?;
                 self.stack.push(Value::Str(a + &b));
+            }
+            Opcode::StringLen => {
+                let value = self.pop_str()?;
+                self.stack.push(Value::Int(value.chars().count().into()));
+            }
+            Opcode::StringContains => {
+                let needle = self.pop_str()?;
+                let value = self.pop_str()?;
+                self.stack.push(Value::Bool(value.contains(&needle)));
+            }
+            Opcode::StringStartsWith => {
+                let prefix = self.pop_str()?;
+                let value = self.pop_str()?;
+                self.stack.push(Value::Bool(value.starts_with(&prefix)));
+            }
+            Opcode::StringEndsWith => {
+                let suffix = self.pop_str()?;
+                let value = self.pop_str()?;
+                self.stack.push(Value::Bool(value.ends_with(&suffix)));
             }
             Opcode::StringIsEmpty => {
                 let value = self.pop_str()?;
@@ -3512,6 +5237,18 @@ impl VM {
                     other => {
                         return Err(RuntimeError::new(format!(
                             "ListIsEmpty expects List, got {:?}",
+                            other
+                        )));
+                    }
+                }
+            }
+            Opcode::ListLen => {
+                let list = self.pop_stack()?;
+                match list {
+                    Value::List(handle) => self.stack.push(Value::Int(handle.len.into())),
+                    other => {
+                        return Err(RuntimeError::new(format!(
+                            "ListLen expects List, got {:?}",
                             other
                         )));
                     }
@@ -3634,6 +5371,67 @@ impl VM {
                 let a = self.pop_tag()?;
                 self.stack.push(Value::Bool(a == b));
             }
+            Opcode::MakeOk => {
+                let payload = self.pop_stack()?;
+                self.stack.push(Value::Tagged {
+                    tag: 0,
+                    fields: vec![payload],
+                });
+            }
+            Opcode::MakeErr => {
+                let payload = self.pop_stack()?;
+                match payload {
+                    Value::Error(_) => {
+                        self.stack.push(Value::Tagged {
+                            tag: 1,
+                            fields: vec![payload],
+                        });
+                    }
+                    other => {
+                        return Err(RuntimeError::new(format!(
+                            "MakeErr: expected Error, got {:?}",
+                            other
+                        )));
+                    }
+                }
+            }
+            Opcode::EqLocalTag {
+                local_idx,
+                tag_const_idx,
+            } => {
+                let expected = self.constant_tag(tag_const_idx)?;
+                let actual = match self
+                    .current_frame()?
+                    .locals
+                    .get(local_idx as usize)
+                    .ok_or_else(|| {
+                        RuntimeError::new(format!("EqLocalTag local out of bounds: {}", local_idx))
+                    })? {
+                    Value::Tagged { tag, .. } => *tag,
+                    _ => return Err(RuntimeError::new("GetTag on non-tagged value")),
+                };
+                self.stack.push(Value::Bool(actual == expected));
+            }
+            Opcode::JumpIfLocalTagEq {
+                local_idx,
+                tag_const_idx,
+                target_pc,
+            } => {
+                let expected = self.constant_tag(tag_const_idx)?;
+                if self.local_tag(local_idx, "JumpIfLocalTagEq")? == expected {
+                    *pc = self.validate_jump_target(target_pc)?;
+                }
+            }
+            Opcode::JumpIfLocalTagNe {
+                local_idx,
+                tag_const_idx,
+                target_pc,
+            } => {
+                let expected = self.constant_tag(tag_const_idx)?;
+                if self.local_tag(local_idx, "JumpIfLocalTagNe")? != expected {
+                    *pc = self.validate_jump_target(target_pc)?;
+                }
+            }
             Opcode::Dbg {
                 template_id,
                 arg_count,
@@ -3679,7 +5477,17 @@ impl VM {
                 let result = self.with_call_site(Some((span_start, span_end)), |vm| {
                     call_builtin(vm, builtin_id, args)
                 })?;
+                let pending_future = match result {
+                    Value::PendingFuture(future_id) => Some(future_id),
+                    _ => None,
+                };
                 self.stack.push(result);
+                if let Some(future_id) = pending_future {
+                    return Ok(OpcodeControl::Pending {
+                        future_id,
+                        resume_pc: *pc,
+                    });
+                }
             }
 
             Opcode::Call {
@@ -3907,7 +5715,17 @@ impl VM {
                         let result = self.with_call_site(Some((span_start, span_end)), |vm| {
                             call_builtin(vm, builtin_id, full_args)
                         })?;
+                        let pending_future = match result {
+                            Value::PendingFuture(future_id) => Some(future_id),
+                            _ => None,
+                        };
                         self.stack.push(result);
+                        if let Some(future_id) = pending_future {
+                            return Ok(OpcodeControl::Pending {
+                                future_id,
+                                resume_pc: *pc,
+                            });
+                        }
                     }
                     CallableTarget::Function(fun_idx) => {
                         let entry = self.function_entry(fun_idx)?.clone();
@@ -3970,24 +5788,32 @@ impl VM {
                 *pc = self.validate_jump_target(addr)?;
             }
             Opcode::JumpIfFalse(addr) => {
+                let branch_pc = (*pc).saturating_sub(1);
                 let val = self.pop_stack()?;
                 match val {
                     Value::Bool(false) => {
+                        self.observe_branch_outcome("JumpIfFalse", branch_pc, addr, true);
                         *pc = self.validate_jump_target(addr)?;
                     }
-                    Value::Bool(true) => {}
+                    Value::Bool(true) => {
+                        self.observe_branch_outcome("JumpIfFalse", branch_pc, addr, false);
+                    }
                     _ => {
                         return Err(RuntimeError::new("JumpIfFalse: expected Bool"));
                     }
                 }
             }
             Opcode::JumpIfTrue(addr) => {
+                let branch_pc = (*pc).saturating_sub(1);
                 let val = self.pop_stack()?;
                 match val {
                     Value::Bool(true) => {
+                        self.observe_branch_outcome("JumpIfTrue", branch_pc, addr, true);
                         *pc = self.validate_jump_target(addr)?;
                     }
-                    Value::Bool(false) => {}
+                    Value::Bool(false) => {
+                        self.observe_branch_outcome("JumpIfTrue", branch_pc, addr, false);
+                    }
                     _ => {
                         return Err(RuntimeError::new("JumpIfTrue: expected Bool"));
                     }
@@ -4070,7 +5896,42 @@ impl VM {
         Ok(target)
     }
 
+    fn local_tag(&self, local_idx: u32, op_name: &str) -> Result<u32, RuntimeError> {
+        match self
+            .current_frame()?
+            .locals
+            .get(local_idx as usize)
+            .ok_or_else(|| {
+                RuntimeError::new(format!("{op_name} local out of bounds: {local_idx}"))
+            })? {
+            Value::Tagged { tag, .. } => Ok(*tag),
+            _ => Err(RuntimeError::new("GetTag on non-tagged value")),
+        }
+    }
+
     // Stack helpers
+
+    fn constant_value(&self, idx: u32) -> Result<Value, RuntimeError> {
+        let constant =
+            self.bytecode.constants.get(idx as usize).ok_or_else(|| {
+                RuntimeError::new(format!("LoadConst index out of bounds: {}", idx))
+            })?;
+        Ok(match constant {
+            Constant::Int(n) => Value::Int(n.clone()),
+            Constant::Tag(tag) => Value::Tag(*tag),
+            Constant::Float(f) => Value::Float(*f),
+            Constant::Str(s) => Value::Str(s.clone()),
+            Constant::Bool(b) => Value::Bool(*b),
+            Constant::Unit => Value::Unit,
+        })
+    }
+
+    fn constant_tag(&self, idx: u32) -> Result<u32, RuntimeError> {
+        match self.constant_value(idx)? {
+            Value::Tag(tag) => Ok(tag),
+            other => Err(RuntimeError::new(format!("Expected Tag, got {:?}", other))),
+        }
+    }
 
     fn pop_stack(&mut self) -> Result<Value, RuntimeError> {
         self.stack
@@ -4088,6 +5949,76 @@ impl VM {
         self.frames
             .last_mut()
             .ok_or_else(|| RuntimeError::new("Frame stack underflow"))
+    }
+
+    fn open_file_for_mode(path: impl AsRef<Path>, mode: VmFileMode) -> io::Result<File> {
+        let mut options = OpenOptions::new();
+        match mode {
+            VmFileMode::Read => {
+                options.read(true);
+            }
+            VmFileMode::Write => {
+                options.write(true).create(true).truncate(true);
+            }
+            VmFileMode::Append => {
+                options.append(true).create(true);
+            }
+            VmFileMode::ReadWrite => {
+                options.read(true).write(true).create(true);
+            }
+            VmFileMode::ReadAppend => {
+                options.read(true).append(true).create(true);
+            }
+        }
+        options.open(path)
+    }
+
+    fn read_utf8_chunk(file: &mut File, max_chars: usize) -> Result<String, VmFileError> {
+        let mut out = String::new();
+        for _ in 0..max_chars {
+            let Some(ch) = Self::read_one_utf8_char(file)? else {
+                break;
+            };
+            out.push(ch);
+        }
+        Ok(out)
+    }
+
+    fn read_one_utf8_char(file: &mut File) -> Result<Option<char>, VmFileError> {
+        let mut first = [0u8; 1];
+        match file.read(&mut first) {
+            Ok(0) => return Ok(None),
+            Ok(_) => {}
+            Err(err) => return Err(VmFileError::Io(err)),
+        }
+
+        let width = Self::utf8_char_width(first[0]);
+        if width == 0 {
+            return Err(VmFileError::Encoding(
+                "invalid UTF-8 leading byte while reading file".into(),
+            ));
+        }
+
+        let mut bytes = vec![first[0]];
+        if width > 1 {
+            let mut rest = vec![0u8; width - 1];
+            file.read_exact(&mut rest).map_err(VmFileError::Io)?;
+            bytes.extend(rest);
+        }
+
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|err| VmFileError::Encoding(format!("invalid UTF-8 sequence: {err}")))?;
+        Ok(text.chars().next())
+    }
+
+    fn utf8_char_width(first: u8) -> usize {
+        match first {
+            0x00..=0x7f => 1,
+            0xc2..=0xdf => 2,
+            0xe0..=0xef => 3,
+            0xf0..=0xf4 => 4,
+            _ => 0,
+        }
     }
 
     fn with_call_site<T>(
@@ -4181,6 +6112,12 @@ impl ProcessRuntime {
         runtime
     }
 
+    fn enqueue_runnable(&mut self, pid: u64) {
+        if !self.run_queue.contains(&pid) {
+            self.run_queue.push_back(pid);
+        }
+    }
+
     fn register_spec_table(&mut self, spec_table: &RuntimeProcessSpecTable) {
         self.specs_by_id = spec_table.entries.clone();
         self.spec_id_by_name = spec_table
@@ -4195,7 +6132,7 @@ impl ProcessRuntime {
             .cloned()
             .map(|spec| (spec.type_name.clone(), spec))
             .collect();
-        self.root_supervisor.effective_supervisors = spec_table
+        let mut effective_supervisors: BTreeMap<String, RuntimeSupervisorPolicy> = spec_table
             .entries
             .iter()
             .filter_map(|spec| {
@@ -4205,6 +6142,19 @@ impl ProcessRuntime {
                     .map(|policy| (spec.type_name.clone(), policy))
             })
             .collect();
+        for spec in &spec_table.entries {
+            if spec
+                .type_name
+                .rsplit("::")
+                .next()
+                .is_some_and(|name| name == "DynamicSupervisor")
+            {
+                if let Some(policy) = spec.supervision.policy.clone() {
+                    effective_supervisors.insert("DynamicSupervisor".into(), policy);
+                }
+            }
+        }
+        self.root_supervisor.effective_supervisors = effective_supervisors;
         self.handler_contexts = spec_table
             .entries
             .iter()
@@ -4218,6 +6168,46 @@ impl ProcessRuntime {
                 (spec.type_name.clone(), slots)
             })
             .collect();
+    }
+
+    fn canonical_process_name<'a>(&'a self, process_name: &'a str) -> Option<&'a str> {
+        if self.specs_by_name.contains_key(process_name) {
+            return Some(process_name);
+        }
+        if let Some(surface_name) = process_name.strip_prefix("Global::") {
+            if self.specs_by_name.contains_key(surface_name) {
+                return Some(surface_name);
+            }
+        } else {
+            let canonical_name = format!("Global::{process_name}");
+            if self.specs_by_name.contains_key(&canonical_name) {
+                return self
+                    .specs_by_name
+                    .get_key_value(&canonical_name)
+                    .map(|(name, _)| name.as_str());
+            }
+        }
+        None
+    }
+
+    fn spec_by_process_name(&self, process_name: &str) -> Option<&RuntimeProcessSpec> {
+        self.canonical_process_name(process_name)
+            .and_then(|canonical_name| self.specs_by_name.get(canonical_name))
+    }
+
+    fn singleton_pid_by_process_name(&self, process_name: &str) -> Option<u64> {
+        self.canonical_process_name(process_name)
+            .and_then(|canonical_name| self.singleton_by_name.get(canonical_name).copied())
+            .or_else(|| self.singleton_by_name.get(process_name).copied())
+    }
+
+    fn handler_targets_for_process(
+        &self,
+        process_name: &str,
+    ) -> Option<&BTreeMap<String, RuntimeHandlerTarget>> {
+        self.canonical_process_name(process_name)
+            .and_then(|canonical_name| self.handler_contexts.get(canonical_name))
+            .or_else(|| self.handler_contexts.get(process_name))
     }
 
     fn spec_for_id(&self, spec_id: u32) -> Option<&RuntimeProcessSpec> {
@@ -4253,6 +6243,47 @@ impl ProcessRuntime {
         future_id
     }
 
+    fn allocate_future_after(
+        &mut self,
+        owner: Option<u64>,
+        delay_ms: u64,
+        cancel_on_timeout: bool,
+    ) -> FutureId {
+        self.allocate_future(
+            owner,
+            Some(self.current_tick_ms.saturating_add(delay_ms)),
+            cancel_on_timeout,
+        )
+    }
+
+    fn next_running_deadline(&self) -> Option<u64> {
+        self.futures
+            .values()
+            .filter_map(|future| match future.state {
+                FutureState::Running => future.deadline_tick,
+                FutureState::Ready(_) | FutureState::Cancelled(_) => None,
+            })
+            .min()
+    }
+
+    fn register_detached_task(
+        &mut self,
+        owner_pid: Option<u64>,
+        awaiting_future: FutureId,
+        continuation: DetachedTaskContinuation,
+    ) {
+        let task_id = self.next_detached_task_id;
+        self.next_detached_task_id += 1;
+        self.detached_tasks.insert(
+            task_id,
+            DetachedTask {
+                owner_pid,
+                awaiting_future,
+                continuation,
+            },
+        );
+    }
+
     fn allocate_correlation_id(&mut self) -> CorrelationId {
         let correlation_id = self.next_correlation_id;
         self.next_correlation_id += 1;
@@ -4284,6 +6315,9 @@ impl ProcessRuntime {
         let Some(future) = self.futures.get_mut(&future_id) else {
             return Vec::new();
         };
+        if !matches!(future.state, FutureState::Running) {
+            return Vec::new();
+        }
         future.state = FutureState::Ready(value);
         if let Some(correlation_id) = future.correlation_id.take() {
             self.reply_table.remove(&correlation_id);
@@ -4291,8 +6325,14 @@ impl ProcessRuntime {
         let waiters = std::mem::take(&mut future.waiters);
         for waiter in &waiters {
             self.waiting_table.remove(waiter);
-            if let Some(process) = self.processes.get_mut(waiter) {
+            let should_enqueue = if let Some(process) = self.processes.get_mut(waiter) {
                 process.status = ProcessStatus::Runnable;
+                true
+            } else {
+                false
+            };
+            if should_enqueue {
+                self.enqueue_runnable(*waiter);
             }
         }
         waiters
@@ -4328,6 +6368,38 @@ impl ProcessRuntime {
         }
         self.deadline_queue = retained;
         expired
+    }
+
+    fn attach_future_deadline(
+        &mut self,
+        future_id: FutureId,
+        now_tick: u64,
+        timeout_ms: u64,
+        cancel_on_timeout: bool,
+    ) {
+        let deadline_tick = now_tick.saturating_add(timeout_ms);
+        let Some(future) = self.futures.get_mut(&future_id) else {
+            return;
+        };
+        if !matches!(future.state, FutureState::Running) {
+            return;
+        }
+        future.cancel_on_timeout = future.cancel_on_timeout || cancel_on_timeout;
+        future.deadline_tick = match future.deadline_tick {
+            Some(current) => Some(current.min(deadline_tick)),
+            None => Some(deadline_tick),
+        };
+        let deadline_tick = future.deadline_tick.expect("set above");
+        if !self
+            .deadline_queue
+            .iter()
+            .any(|entry| entry.future_id == future_id && entry.deadline_tick == deadline_tick)
+        {
+            self.deadline_queue.push_back(DeadlineEntry {
+                future_id,
+                deadline_tick,
+            });
+        }
     }
 }
 
@@ -4433,7 +6505,9 @@ fn split_qualified_name_owned(qualified_name: &str) -> (Option<String>, Option<S
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_vm_result, ProcessWaitReason, StepOutcome, TaskMode, VmObservationOptions, VM,
+        decode_vm_result, ok_vm_result, Budget, CallFrame, ExecutionContext, ExecutionTarget,
+        ProcessRunOutcome, ProcessStatus, ProcessWaitReason, RuntimeOutputEvent, StepOutcome,
+        TaskMode, VmFileError, VmFileMode, VmObservationOptions, VmRuntimeOutputEventSnapshot, VM,
     };
     use sindr::ir::{
         BootEntrySource, Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode,
@@ -4446,16 +6520,33 @@ mod tests {
     };
     use sindr::primitives::int;
     use sindr::runtime::{
-        Callable, CallableMetadata, CallableTarget, PidHandle, TypeEntry, TypeKind, TypeRegistry,
-        Value,
+        Callable, CallableMetadata, CallableTarget, Location, PidHandle, RichError, TypeEntry,
+        TypeKind, TypeRegistry, Value,
     };
-
+    use std::fs;
+    use std::path::PathBuf;
     fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
         Bytecode {
             opcodes,
             type_registry: TypeRegistry::new(),
             ..Bytecode::default()
         }
+    }
+
+    fn builtin_id(name: &str) -> u16 {
+        sindr::builtin::BUILTIN_METAS
+            .iter()
+            .position(|meta| meta.name == name)
+            .unwrap_or_else(|| panic!("missing builtin `{name}`")) as u16
+    }
+
+    fn sandbox_dir(prefix: &str) -> PathBuf {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("tmp/sandbox")
+            .join(format!("{prefix}-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("sandbox dir should be creatable");
+        dir
     }
 
     fn test_runtime_process_spec(
@@ -4517,7 +6608,6 @@ mod tests {
             instance,
             state: RuntimeStateSpec {
                 state_type: state_type.clone(),
-                owner_process: Some(process_name.into()),
             },
             init: RuntimeInitSpec {
                 callable: RuntimeCallableRef {
@@ -4576,6 +6666,917 @@ mod tests {
             bytecode.runtime_boot_plan = RuntimeBootPlan::explicit_singleton(process_name);
         }
         bytecode
+    }
+
+    fn allow_adopt_policy() -> RuntimeSupervisorPolicy {
+        RuntimeSupervisorPolicy {
+            strategy: "OneForOne".into(),
+            max_restarts: 5,
+            max_seconds: 10,
+            child_restart_default: "Transient".into(),
+            allow_adopt: true,
+            shutdown_timeout_ms: None,
+        }
+    }
+
+    fn root_frame(num_locals: usize) -> CallFrame {
+        CallFrame {
+            return_pc: 0,
+            stack_base: 0,
+            call_site: None,
+            locals: vec![Value::Unit; num_locals],
+        }
+    }
+
+    fn top_level_context(pc: usize, num_locals: usize) -> ExecutionContext {
+        ExecutionContext {
+            stack: Vec::new(),
+            frames: vec![root_frame(num_locals)],
+            pc,
+            target: ExecutionTarget::TopLevel,
+        }
+    }
+
+    fn test_process_bytecode(process_name: &str, opcodes: Vec<Opcode>) -> Bytecode {
+        let mut bytecode = base_bytecode(opcodes);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![test_runtime_process_spec(
+                0,
+                process_name,
+                RuntimeProcessKind::Agent,
+                RuntimeProcessInstance::Worker,
+                false,
+                0,
+                0,
+                None,
+            )],
+        };
+        bytecode
+    }
+
+    #[test]
+    fn step_context_executes_one_opcode() {
+        let mut bytecode = base_bytecode(vec![Opcode::LoadConst(0), Opcode::Halt]);
+        bytecode.constants = vec![Constant::Int(int(7))];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected one opcode to continue, got {other:?}"),
+        }
+
+        assert_eq!(ctx.pc, 1);
+        assert_eq!(ctx.stack, vec![Value::Int(int(7))]);
+        assert_eq!(vm.pc, 1);
+    }
+
+    #[test]
+    fn store_const_local_executes_as_one_opcode() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::StoreConstLocal {
+                const_idx: 0,
+                local_idx: 1,
+            },
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(7))];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 2);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected one opcode to continue, got {other:?}"),
+        }
+
+        assert_eq!(ctx.pc, 1);
+        assert_eq!(ctx.stack, Vec::<Value>::new());
+        assert_eq!(ctx.frames[0].locals[1], Value::Int(int(7)));
+    }
+
+    #[test]
+    fn copy_local_executes_as_one_opcode() {
+        let bytecode = base_bytecode(vec![
+            Opcode::CopyLocal {
+                src_local_idx: 0,
+                dst_local_idx: 1,
+            },
+            Opcode::Halt,
+        ]);
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 2);
+        ctx.frames[0].locals[0] = Value::Int(int(7));
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected one opcode to continue, got {other:?}"),
+        }
+
+        assert_eq!(ctx.pc, 1);
+        assert_eq!(ctx.stack, Vec::<Value>::new());
+        assert_eq!(ctx.frames[0].locals[1], Value::Int(int(7)));
+    }
+
+    #[test]
+    fn eq_local_tag_executes_as_one_opcode() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::EqLocalTag {
+                local_idx: 0,
+                tag_const_idx: 0,
+            },
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Tag(3)];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 1);
+        ctx.frames[0].locals[0] = Value::Tagged {
+            tag: 3,
+            fields: Vec::new(),
+        };
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected one opcode to continue, got {other:?}"),
+        }
+
+        assert_eq!(ctx.pc, 1);
+        assert_eq!(ctx.stack, vec![Value::Bool(true)]);
+    }
+
+    #[test]
+    fn make_ok_and_make_err_execute_as_one_opcode() {
+        let mut ok_bytecode =
+            base_bytecode(vec![Opcode::LoadConst(0), Opcode::MakeOk, Opcode::Halt]);
+        ok_bytecode.constants = vec![Constant::Int(int(7))];
+        let mut ok_vm = VM::new(ok_bytecode);
+        let mut ok_ctx = top_level_context(0, 0);
+
+        match ok_vm.step_context(&mut ok_ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected load const to continue, got {other:?}"),
+        }
+        match ok_vm.step_context(&mut ok_ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected make ok to continue, got {other:?}"),
+        }
+
+        assert_eq!(
+            ok_ctx.stack,
+            vec![Value::Tagged {
+                tag: 0,
+                fields: vec![Value::Int(int(7))],
+            }]
+        );
+
+        let err_bytecode = base_bytecode(vec![Opcode::MakeErr, Opcode::Halt]);
+        let mut err_vm = VM::new(err_bytecode);
+        let mut err_ctx = top_level_context(0, 0);
+        err_ctx.stack.push(Value::Error(Box::new(RichError::new(
+            "NoneError",
+            "boom",
+            Location {
+                file: "<test>".into(),
+                func: "make_err".into(),
+                line: 1,
+                column: 1,
+                span_start: 0,
+                span_end: 0,
+            },
+            None,
+        ))));
+        match err_vm.step_context(&mut err_ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected make err to continue, got {other:?}"),
+        }
+
+        match &err_ctx.stack[..] {
+            [Value::Tagged { tag, fields }] => {
+                assert_eq!(*tag, 1);
+                assert!(matches!(&fields[..], [Value::Error(_)]));
+            }
+            other => panic!("expected Err tagged value, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn make_err_rejects_non_error_payload() {
+        let mut bytecode = base_bytecode(vec![Opcode::LoadConst(0), Opcode::MakeErr, Opcode::Halt]);
+        bytecode.constants = vec![Constant::Int(int(1))];
+
+        let err = VM::new(bytecode).run().expect_err("must fail");
+        assert!(err.message.contains("MakeErr: expected Error"));
+    }
+
+    #[test]
+    fn result_branch_opcodes_execute_as_one_opcode() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::JumpIfLocalTagEq {
+                local_idx: 0,
+                tag_const_idx: 0,
+                target_pc: 1,
+            },
+            Opcode::JumpIfLocalTagNe {
+                local_idx: 1,
+                tag_const_idx: 1,
+                target_pc: 3,
+            },
+            Opcode::Halt,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Tag(3), Constant::Tag(4)];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 2);
+        ctx.frames[0].locals[0] = Value::Tagged {
+            tag: 3,
+            fields: Vec::new(),
+        };
+        ctx.frames[0].locals[1] = Value::Tagged {
+            tag: 3,
+            fields: Vec::new(),
+        };
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected one opcode to continue, got {other:?}"),
+        }
+        assert_eq!(ctx.pc, 1);
+        assert_eq!(ctx.stack, Vec::<Value>::new());
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected one opcode to continue, got {other:?}"),
+        }
+        assert_eq!(ctx.pc, 3);
+        assert_eq!(ctx.stack, Vec::<Value>::new());
+    }
+
+    #[test]
+    fn string_len_executes_as_one_opcode() {
+        let mut bytecode =
+            base_bytecode(vec![Opcode::LoadConst(0), Opcode::StringLen, Opcode::Halt]);
+        bytecode.constants = vec![Constant::Str("あb".into())];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected load const to continue, got {other:?}"),
+        }
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected string len to continue, got {other:?}"),
+        }
+
+        assert_eq!(ctx.pc, 2);
+        assert_eq!(ctx.stack, vec![Value::Int(int(2))]);
+    }
+
+    #[test]
+    fn list_len_executes_as_one_opcode() {
+        let bytecode = base_bytecode(vec![Opcode::ListEmpty, Opcode::ListLen, Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected list empty to continue, got {other:?}"),
+        }
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected list len to continue, got {other:?}"),
+        }
+
+        assert_eq!(ctx.pc, 2);
+        assert_eq!(ctx.stack, vec![Value::Int(int(0))]);
+    }
+
+    #[test]
+    fn safe_mod_int_executes_as_one_opcode() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::SafeModInt,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(7)), Constant::Int(int(3))];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+
+        assert_eq!(
+            ctx.stack,
+            vec![Value::Tagged {
+                tag: 0,
+                fields: vec![Value::Int(int(1))],
+            }]
+        );
+    }
+
+    #[test]
+    fn safe_mod_int_returns_zero_division_error_result() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::SafeModInt,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(7)), Constant::Int(int(0))];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+
+        match ctx.stack.as_slice() {
+            [Value::Tagged { tag: 1, fields }] => match fields.first() {
+                Some(Value::Error(rich)) => assert_eq!(rich.kind, "ZeroDivisionError"),
+                other => panic!("expected Err(Value::Error), got {other:?}"),
+            },
+            other => panic!("expected Err result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn string_predicates_execute_as_one_opcode() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::StringContains,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(2),
+            Opcode::StringStartsWith,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(3),
+            Opcode::StringEndsWith,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![
+            Constant::Str("surtr".into()),
+            Constant::Str("urt".into()),
+            Constant::Str("sur".into()),
+            Constant::Str("tr".into()),
+        ];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        for _ in 0..9 {
+            assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        }
+
+        assert_eq!(
+            ctx.stack,
+            vec![Value::Bool(true), Value::Bool(true), Value::Bool(true)]
+        );
+    }
+
+    #[test]
+    fn step_context_halts_on_halt() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let mut ctx = top_level_context(0, 0);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Halt(Value::Unit) => {}
+            other => panic!("expected halt unit, got {other:?}"),
+        }
+
+        assert_eq!(ctx.pc, 1);
+    }
+
+    #[test]
+    fn step_context_preserves_runtime_error_context() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::LoadLocal(9), Opcode::Halt]));
+        let mut ctx = top_level_context(0, 0);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::RuntimeError(err) => {
+                assert_eq!(err.context.pc, Some(0));
+                assert!(err
+                    .context
+                    .opcode
+                    .as_deref()
+                    .is_some_and(|opcode| opcode.contains("LoadLocal")));
+            }
+            other => panic!("expected runtime error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn execution_context_round_trips_pending_future_resume() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt, Opcode::LoadLocal(0), Opcode::Return]);
+        bytecode.functions = vec![function_entry(0, 1, 1, 1, Some("Main::await_value"))];
+        let mut vm = VM::new(bytecode);
+        let future_id = vm.process_runtime.allocate_future(None, None, false);
+        let callable = Callable {
+            target: CallableTarget::Function(0),
+            lexical_captures: Vec::new(),
+            metadata: CallableMetadata::default(),
+        };
+
+        let resume = match vm.invoke_callable_step(callable, vec![Value::PendingFuture(future_id)])
+        {
+            StepOutcome::Pending { resume, .. } => resume,
+            other => panic!("expected pending outcome, got {other:?}"),
+        };
+        assert_eq!(resume.pc, 1);
+
+        vm.process_runtime
+            .resolve_future(future_id, Value::Int(int(99)));
+        match vm.resume_execution(resume) {
+            StepOutcome::Halt(Value::Int(value)) => assert_eq!(value, int(99)),
+            other => panic!("expected resumed value, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_quantum_expires_on_tail_recursive_loop() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Halt,
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 0,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::Return,
+        ]);
+        bytecode.functions = vec![function_entry(0, 1, 0, 0, Some("Main::loop"))];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = ExecutionContext {
+            stack: Vec::new(),
+            frames: vec![
+                root_frame(0),
+                CallFrame {
+                    return_pc: usize::MAX,
+                    stack_base: 0,
+                    call_site: None,
+                    locals: Vec::new(),
+                },
+            ],
+            pc: 1,
+            target: ExecutionTarget::FrameDepth(1),
+        };
+        let mut budget = Budget::new(3);
+
+        match vm.run_quantum(&mut ctx, &mut budget) {
+            ProcessRunOutcome::QuantumExpired => {}
+            other => panic!("expected quantum expiry, got {other:?}"),
+        }
+
+        assert_eq!(budget.reductions(), 3);
+        assert_eq!(ctx.pc, 1);
+    }
+
+    #[test]
+    fn run_quantum_resume_continues_after_expiry() {
+        let mut bytecode = base_bytecode(vec![Opcode::LoadConst(0), Opcode::Halt]);
+        bytecode.constants = vec![Constant::Int(int(42))];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+        let mut first_budget = Budget::new(1);
+
+        assert!(matches!(
+            vm.run_quantum(&mut ctx, &mut first_budget),
+            ProcessRunOutcome::QuantumExpired
+        ));
+        assert_eq!(ctx.pc, 1);
+        assert_eq!(ctx.stack, vec![Value::Int(int(42))]);
+
+        let mut second_budget = Budget::new(1);
+        match vm.run_quantum(&mut ctx, &mut second_budget) {
+            ProcessRunOutcome::Halted(Value::Int(value)) => assert_eq!(value, int(42)),
+            other => panic!("expected halt with stack top, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scheduler_requeues_quantum_expired_process() {
+        let bytecode = test_process_bytecode("Worker", vec![Opcode::Jump(0), Opcode::Halt]);
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process_instance("Worker".into(), Some(Value::Unit), None, None)
+            .expect("process allocation should succeed");
+        vm.process_runtime
+            .processes
+            .get_mut(&pid)
+            .unwrap()
+            .execution_context = Some(top_level_context(0, 0));
+        vm.process_runtime.enqueue_runnable(pid);
+
+        assert!(matches!(
+            vm.scheduler_tick(1).expect("scheduler tick should run"),
+            Some(ProcessRunOutcome::QuantumExpired)
+        ));
+        assert_eq!(vm.process_runtime.run_queue.front(), Some(&pid));
+        assert!(matches!(
+            vm.process_runtime.processes.get(&pid).unwrap().status,
+            ProcessStatus::Runnable
+        ));
+    }
+
+    #[test]
+    fn scheduler_marks_sleeping_process_waiting_without_blocking_host() {
+        let mut bytecode = test_process_bytecode(
+            "Sleeper",
+            vec![
+                Opcode::LoadConst(0),
+                Opcode::LoadConst(1),
+                Opcode::StructNew { field_count: 1 },
+                Opcode::CallBuiltin {
+                    builtin_id: builtin_id("__process_sleep"),
+                    arity: 1,
+                    span_start: 0,
+                    span_end: 0,
+                },
+                Opcode::Halt,
+            ],
+        );
+        let duration_tag = 0;
+        bytecode.type_registry.register(TypeEntry {
+            tag: duration_tag,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: Vec::new(),
+        });
+        bytecode.constants = vec![Constant::Tag(duration_tag), Constant::Int(int(10))];
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process_instance("Sleeper".into(), Some(Value::Unit), None, None)
+            .expect("process allocation should succeed");
+        vm.process_runtime
+            .processes
+            .get_mut(&pid)
+            .unwrap()
+            .execution_context = Some(top_level_context(0, 0));
+        vm.process_runtime.enqueue_runnable(pid);
+
+        match vm.scheduler_tick(4).expect("scheduler tick should run") {
+            Some(ProcessRunOutcome::Pending(future_id)) => {
+                assert!(vm.process_runtime.futures.contains_key(&future_id));
+            }
+            other => panic!("expected sleeping process pending future, got {other:?}"),
+        }
+        assert!(matches!(
+            vm.process_runtime.processes.get(&pid).unwrap().status,
+            ProcessStatus::Waiting(ProcessWaitReason::Future(_))
+        ));
+        assert!(vm.process_runtime.run_queue.is_empty());
+    }
+
+    #[test]
+    fn due_timer_requeues_sleeping_process_without_host_sleep() {
+        let mut bytecode = test_process_bytecode(
+            "Sleeper",
+            vec![
+                Opcode::LoadConst(0),
+                Opcode::LoadConst(1),
+                Opcode::StructNew { field_count: 1 },
+                Opcode::CallBuiltin {
+                    builtin_id: builtin_id("__process_sleep"),
+                    arity: 1,
+                    span_start: 0,
+                    span_end: 0,
+                },
+                Opcode::Halt,
+            ],
+        );
+        bytecode.type_registry.register(TypeEntry {
+            tag: 0,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: Vec::new(),
+        });
+        bytecode.constants = vec![Constant::Tag(0), Constant::Int(int(10))];
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process_instance("Sleeper".into(), Some(Value::Unit), None, None)
+            .expect("process allocation should succeed");
+        vm.process_runtime
+            .processes
+            .get_mut(&pid)
+            .unwrap()
+            .execution_context = Some(top_level_context(0, 0));
+        vm.process_runtime.enqueue_runnable(pid);
+
+        assert!(matches!(
+            vm.scheduler_tick(4).expect("scheduler tick should run"),
+            Some(ProcessRunOutcome::Pending(_))
+        ));
+        let expired = vm.expire_process_deadlines(10);
+
+        assert_eq!(expired.len(), 1);
+        assert_eq!(vm.process_runtime.run_queue.front(), Some(&pid));
+        assert!(matches!(
+            vm.process_runtime.processes.get(&pid).unwrap().status,
+            ProcessStatus::Runnable
+        ));
+    }
+
+    #[test]
+    fn scheduler_preserves_stack_and_frames_per_process() {
+        let mut bytecode = test_process_bytecode(
+            "Worker",
+            vec![Opcode::LoadConst(0), Opcode::LoadConst(1), Opcode::Halt],
+        );
+        bytecode.constants = vec![Constant::Int(int(1)), Constant::Int(int(2))];
+        let mut vm = VM::new(bytecode);
+        let first = vm
+            .allocate_process_instance("Worker".into(), Some(Value::Unit), None, None)
+            .expect("first process allocation should succeed");
+        let second = vm
+            .allocate_process_instance("Worker".into(), Some(Value::Unit), None, None)
+            .expect("second process allocation should succeed");
+        vm.process_runtime
+            .processes
+            .get_mut(&first)
+            .unwrap()
+            .execution_context = Some(top_level_context(0, 0));
+        vm.process_runtime
+            .processes
+            .get_mut(&second)
+            .unwrap()
+            .execution_context = Some(top_level_context(1, 0));
+        vm.process_runtime.enqueue_runnable(first);
+        vm.process_runtime.enqueue_runnable(second);
+
+        assert!(matches!(
+            vm.scheduler_tick(1).expect("first tick should run"),
+            Some(ProcessRunOutcome::QuantumExpired)
+        ));
+        assert!(matches!(
+            vm.scheduler_tick(1).expect("second tick should run"),
+            Some(ProcessRunOutcome::QuantumExpired)
+        ));
+
+        let first_stack = &vm
+            .process_runtime
+            .processes
+            .get(&first)
+            .unwrap()
+            .execution_context
+            .as_ref()
+            .unwrap()
+            .stack;
+        let second_stack = &vm
+            .process_runtime
+            .processes
+            .get(&second)
+            .unwrap()
+            .execution_context
+            .as_ref()
+            .unwrap()
+            .stack;
+        assert_eq!(first_stack, &vec![Value::Int(int(1))]);
+        assert_eq!(second_stack, &vec![Value::Int(int(2))]);
+    }
+
+    #[test]
+    fn print_enqueues_runtime_output_event_and_preserves_capture() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt])).with_output_capture();
+
+        vm.emit_stdout_line("hello".into());
+
+        assert_eq!(vm.captured_stdout(), Some(["hello".to_string()].as_slice()));
+        assert_eq!(
+            vm.process_runtime.output_events.pop_front(),
+            Some(RuntimeOutputEvent::StdOut("hello\n".into()))
+        );
+    }
+
+    #[test]
+    fn runtime_output_events_snapshot_preserves_streams_and_order() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]))
+            .with_output_capture()
+            .with_error_capture();
+
+        vm.emit_stdout_text("out".into())
+            .expect("stdout emit should succeed");
+        vm.emit_stderr_text("err".into())
+            .expect("stderr emit should succeed");
+
+        assert_eq!(
+            vm.runtime_output_events_snapshot(),
+            vec![
+                VmRuntimeOutputEventSnapshot {
+                    stream: "stdout".into(),
+                    text: "out".into(),
+                },
+                VmRuntimeOutputEventSnapshot {
+                    stream: "stderr".into(),
+                    text: "err".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn out_handler_write_records_runtime_output_events() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]))
+            .with_output_capture()
+            .with_error_capture();
+
+        vm.out_handler_write(&handler_pid("StdOut"), "stdout-handler".into())
+            .expect("stdout handler should run");
+        vm.out_handler_write(&handler_pid("StdErr"), "stderr-handler".into())
+            .expect("stderr handler should run");
+
+        assert_eq!(
+            vm.runtime_output_events_snapshot(),
+            vec![
+                VmRuntimeOutputEventSnapshot {
+                    stream: "stdout".into(),
+                    text: "stdout-handler".into(),
+                },
+                VmRuntimeOutputEventSnapshot {
+                    stream: "stderr".into(),
+                    text: "stderr-handler".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn runtime_output_counter_tracks_output_events() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        vm.enable_observation(VmObservationOptions::default());
+
+        vm.emit_stdout_text("one".into())
+            .expect("stdout emit should succeed");
+        vm.emit_stderr_text("two".into())
+            .expect("stderr emit should succeed");
+
+        assert_eq!(
+            vm.observation()
+                .expect("observation should be enabled")
+                .stats
+                .process
+                .runtime_output_event_count,
+            2
+        );
+    }
+
+    #[test]
+    fn push_atomic_rolls_back_runtime_output_events() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt])).with_output_capture();
+        let chunk = BytecodeChunk {
+            opcodes: vec![
+                Opcode::LoadConst(0),
+                Opcode::CallBuiltin {
+                    builtin_id: builtin_id("print"),
+                    arity: 1,
+                    span_start: 0,
+                    span_end: 0,
+                },
+                Opcode::LoadLocal(9),
+                Opcode::Halt,
+            ],
+            source_map: None,
+            const_base: 0,
+            constants: vec![Constant::Str("rolled back".into())],
+            new_locals: 0,
+            type_entries: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            functions: Vec::new(),
+            docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
+        };
+
+        let err = vm.push_atomic(chunk).expect_err("chunk should fail");
+
+        assert!(err.message.contains("LoadLocal out of bounds"));
+        assert!(vm.runtime_output_events_snapshot().is_empty());
+        assert_eq!(vm.captured_stdout(), Some([].as_slice()));
+    }
+
+    #[test]
+    fn supervisor_overrides_survive_context_split() {
+        let mut bytecode = base_bytecode(vec![Opcode::LoadConst(0), Opcode::Halt]);
+        bytecode.constants = vec![Constant::Int(int(1))];
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![supervisor_spec(0, "MySup")],
+        };
+        bytecode
+            .runtime_boot_plan
+            .supervisor_overrides
+            .push(RuntimeSupervisorOverrideEntry {
+                process_name: "MySup".into(),
+                policy: RuntimeSupervisorPolicy {
+                    allow_adopt: false,
+                    max_restarts: 77,
+                    ..allow_adopt_policy()
+                },
+            });
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+
+        let policy = vm
+            .process_runtime
+            .root_supervisor
+            .effective_supervisors
+            .get("MySup")
+            .expect("supervisor override should remain runtime-global");
+        assert!(!policy.allow_adopt);
+        assert_eq!(policy.max_restarts, 77);
+    }
+
+    #[test]
+    fn dynamic_supervisor_policy_remains_available_without_singleton_boot() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![supervisor_spec(0, "Global::DynamicSupervisor")],
+        };
+        bytecode
+            .runtime_boot_plan
+            .supervisor_overrides
+            .push(RuntimeSupervisorOverrideEntry {
+                process_name: "DynamicSupervisor".into(),
+                policy: RuntimeSupervisorPolicy {
+                    max_restarts: 33,
+                    ..allow_adopt_policy()
+                },
+            });
+        let vm = VM::new(bytecode);
+
+        assert_eq!(
+            vm.process_runtime
+                .root_supervisor
+                .effective_supervisors
+                .get("DynamicSupervisor")
+                .map(|policy| policy.max_restarts),
+            Some(33)
+        );
+        assert!(vm.process_runtime.singleton_by_name.is_empty());
+    }
+
+    fn supervisor_spec(process_id: u32, process_name: &str) -> RuntimeProcessSpec {
+        RuntimeProcessSpec {
+            supervision: RuntimeSupervisionSpec {
+                policy: Some(allow_adopt_policy()),
+                ..RuntimeSupervisionSpec::default()
+            },
+            ..test_runtime_process_spec(
+                process_id,
+                process_name,
+                RuntimeProcessKind::Supervisor,
+                RuntimeProcessInstance::Singleton,
+                false,
+                0,
+                1,
+                None,
+            )
+        }
+    }
+
+    fn supervisor_status_type_registry() -> TypeRegistry {
+        let mut registry = TypeRegistry::new();
+        registry.register(TypeEntry {
+            tag: 10,
+            name: "SupervisorStatus".into(),
+            kind: TypeKind::Struct,
+            field_names: vec![
+                "name".into(),
+                "child_count".into(),
+                "strategy".into(),
+                "max_restarts".into(),
+                "max_seconds".into(),
+                "allow_adopt".into(),
+                "shutdown_timeout".into(),
+            ],
+            private_flags: vec![false; 7],
+        });
+        registry.register(TypeEntry {
+            tag: 11,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: vec![true],
+        });
+        registry.register(TypeEntry {
+            tag: 12,
+            name: "Option::None".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: Vec::new(),
+            private_flags: Vec::new(),
+        });
+        registry.register(TypeEntry {
+            tag: 13,
+            name: "Option::Some".into(),
+            kind: TypeKind::EnumVariant,
+            field_names: vec!["value".into()],
+            private_flags: vec![false],
+        });
+        registry
     }
 
     #[test]
@@ -4688,33 +7689,70 @@ mod tests {
     }
 
     #[test]
+    fn process_spawn_registers_top_level_worker_under_dynamic_supervisor() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Halt,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::StructNew { field_count: 1 },
+            Opcode::Return,
+        ]);
+        bytecode.constants = vec![Constant::Tag(0), Constant::Int(int(7))];
+        bytecode.functions = vec![function_entry(0, 1, 0, 0, Some("Worker::init"))];
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![test_runtime_process_spec(
+                0,
+                "Worker",
+                RuntimeProcessKind::Agent,
+                RuntimeProcessInstance::Worker,
+                false,
+                0,
+                1,
+                None,
+            )],
+        };
+
+        let mut vm = VM::new(bytecode);
+        let value = vm
+            .process_spawn(
+                "Worker".into(),
+                Callable {
+                    target: CallableTarget::Function(0),
+                    lexical_captures: Vec::new(),
+                    metadata: CallableMetadata::default(),
+                },
+            )
+            .expect("spawn should return a Result value");
+        let pid = match decode_vm_result(value, "test", "spawn") {
+            Ok(Ok(Value::Pid(pid))) => pid,
+            other => panic!("expected Ok(pid), got {other:?}"),
+        };
+        let instance = vm
+            .process_runtime
+            .processes
+            .get(&pid.id)
+            .expect("spawned worker should be stored");
+
+        assert_eq!(instance.owner, None);
+        assert_eq!(
+            instance.lifecycle_sink,
+            Some(super::LifecycleSink::Supervisor("DynamicSupervisor".into()))
+        );
+        assert_eq!(
+            vm.process_runtime
+                .root_supervisor
+                .child_table
+                .get("DynamicSupervisor"),
+            Some(&vec![pid.id])
+        );
+    }
+
+    #[test]
     fn supervisor_adopt_reassigns_lifecycle_sink() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
             entries: vec![
-                RuntimeProcessSpec {
-                    supervision: RuntimeSupervisionSpec {
-                        policy: Some(RuntimeSupervisorPolicy {
-                            strategy: "OneForOne".into(),
-                            max_restarts: 5,
-                            max_seconds: 10,
-                            child_restart_default: "Transient".into(),
-                            allow_adopt: true,
-                            shutdown_timeout_ms: None,
-                        }),
-                        ..RuntimeSupervisionSpec::default()
-                    },
-                    ..test_runtime_process_spec(
-                        0,
-                        "MySup",
-                        RuntimeProcessKind::Supervisor,
-                        RuntimeProcessInstance::Singleton,
-                        false,
-                        0,
-                        1,
-                        None,
-                    )
-                },
+                supervisor_spec(0, "MySup"),
                 test_runtime_process_spec(
                     1,
                     "Worker",
@@ -4732,14 +7770,7 @@ mod tests {
             .supervisor_overrides
             .push(RuntimeSupervisorOverrideEntry {
                 process_name: "MySup".into(),
-                policy: RuntimeSupervisorPolicy {
-                    strategy: "OneForOne".into(),
-                    max_restarts: 5,
-                    max_seconds: 10,
-                    child_restart_default: "Transient".into(),
-                    allow_adopt: true,
-                    shutdown_timeout_ms: None,
-                },
+                policy: allow_adopt_policy(),
             });
         let mut vm = VM::new(bytecode);
         let pid = vm
@@ -4767,6 +7798,252 @@ mod tests {
             instance.lifecycle_sink,
             Some(super::LifecycleSink::Supervisor("MySup".into()))
         );
+    }
+
+    #[test]
+    fn supervisor_adopt_is_idempotent_for_same_supervisor() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![
+                supervisor_spec(0, "MySup"),
+                test_runtime_process_spec(
+                    1,
+                    "Worker",
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Worker,
+                    false,
+                    0,
+                    1,
+                    None,
+                ),
+            ],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process_state("Worker".into(), Some(Value::Int(int(7))))
+            .expect("worker should allocate");
+        let handle = PidHandle {
+            id: pid,
+            process_name: "Worker".into(),
+        };
+
+        for _ in 0..2 {
+            assert!(matches!(
+                decode_vm_result(
+                    vm.supervisor_adopt("MySup".into(), handle.clone())
+                        .expect("adopt should return Result"),
+                    "test",
+                    "adopt",
+                ),
+                Ok(Ok(Value::Unit))
+            ));
+        }
+
+        assert_eq!(
+            vm.process_runtime.root_supervisor.child_table.get("MySup"),
+            Some(&vec![pid])
+        );
+    }
+
+    #[test]
+    fn supervisor_adopt_handoff_removes_worker_from_old_supervisor() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![
+                supervisor_spec(0, "SupA"),
+                supervisor_spec(1, "SupB"),
+                test_runtime_process_spec(
+                    2,
+                    "Worker",
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Worker,
+                    false,
+                    0,
+                    1,
+                    None,
+                ),
+            ],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_supervised_worker("Worker".into(), Some(Value::Int(int(7))), "SupA".into())
+            .expect("worker should allocate under SupA");
+
+        let value = vm
+            .supervisor_adopt(
+                "SupB".into(),
+                PidHandle {
+                    id: pid,
+                    process_name: "Worker".into(),
+                },
+            )
+            .expect("handoff adopt should return Result");
+
+        assert!(matches!(
+            decode_vm_result(value, "test", "adopt"),
+            Ok(Ok(Value::Unit))
+        ));
+        assert_eq!(
+            vm.process_runtime.root_supervisor.child_table.get("SupA"),
+            Some(&Vec::<u64>::new())
+        );
+        assert_eq!(
+            vm.process_runtime.root_supervisor.child_table.get("SupB"),
+            Some(&vec![pid])
+        );
+    }
+
+    #[test]
+    fn supervisor_adopt_rejects_singleton_pid_with_process_error_result() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![
+                supervisor_spec(0, "MySup"),
+                test_runtime_process_spec(
+                    1,
+                    "Counter",
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Singleton,
+                    false,
+                    0,
+                    1,
+                    None,
+                ),
+            ],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process_state("Counter".into(), Some(Value::Int(int(7))))
+            .expect("singleton process should allocate");
+
+        let value = vm
+            .supervisor_adopt(
+                "MySup".into(),
+                PidHandle {
+                    id: pid,
+                    process_name: "Counter".into(),
+                },
+            )
+            .expect("adopt rejection should be encoded as Result::Err");
+
+        assert_err_result(value, "SupervisorAdoptInvalidPid", "only Worker");
+    }
+
+    #[test]
+    fn supervisor_status_counts_unique_live_children() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry = supervisor_status_type_registry();
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![
+                supervisor_spec(0, "MySup"),
+                test_runtime_process_spec(
+                    1,
+                    "Worker",
+                    RuntimeProcessKind::Agent,
+                    RuntimeProcessInstance::Worker,
+                    false,
+                    0,
+                    1,
+                    None,
+                ),
+            ],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_process_state("Worker".into(), Some(Value::Int(int(7))))
+            .expect("worker process should allocate");
+        vm.process_runtime
+            .root_supervisor
+            .child_table
+            .insert("MySup".into(), vec![pid, pid, pid + 999]);
+
+        let value = vm
+            .supervisor_status("MySup".into())
+            .expect("status should return Result");
+
+        match decode_vm_result(value, "test", "status") {
+            Ok(Ok(Value::Tagged { fields, .. })) => {
+                assert_eq!(fields.get(1), Some(&Value::Int(int(1))));
+            }
+            other => panic!("expected Ok(SupervisorStatus), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn supervisor_status_reports_missing_shutdown_timeout_as_option_none() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry = supervisor_status_type_registry();
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![supervisor_spec(0, "MySup")],
+        };
+        let mut vm = VM::new(bytecode);
+
+        let value = vm
+            .supervisor_status("MySup".into())
+            .expect("status should return Result");
+
+        match decode_vm_result(value, "test", "status") {
+            Ok(Ok(Value::Tagged { fields, .. })) => {
+                assert_eq!(
+                    fields.get(6),
+                    Some(&Value::Tagged {
+                        tag: 12,
+                        fields: vec![Value::Int(int(0))],
+                    })
+                );
+            }
+            other => panic!("expected Ok(SupervisorStatus), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn supervisor_status_reports_configured_shutdown_timeout_as_option_duration() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry = supervisor_status_type_registry();
+        let mut policy = allow_adopt_policy();
+        policy.shutdown_timeout_ms = Some(250);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![RuntimeProcessSpec {
+                supervision: RuntimeSupervisionSpec {
+                    policy: Some(policy),
+                    ..RuntimeSupervisionSpec::default()
+                },
+                ..test_runtime_process_spec(
+                    0,
+                    "MySup",
+                    RuntimeProcessKind::Supervisor,
+                    RuntimeProcessInstance::Singleton,
+                    false,
+                    0,
+                    1,
+                    None,
+                )
+            }],
+        };
+        let mut vm = VM::new(bytecode);
+
+        let value = vm
+            .supervisor_status("MySup".into())
+            .expect("status should return Result");
+
+        match decode_vm_result(value, "test", "status") {
+            Ok(Ok(Value::Tagged { fields, .. })) => {
+                assert_eq!(
+                    fields.get(6),
+                    Some(&Value::Tagged {
+                        tag: 13,
+                        fields: vec![
+                            Value::Int(int(1)),
+                            Value::Tagged {
+                                tag: 11,
+                                fields: vec![Value::Int(int(250))],
+                            },
+                        ],
+                    })
+                );
+            }
+            other => panic!("expected Ok(SupervisorStatus), got {other:?}"),
+        }
     }
 
     #[test]
@@ -4891,6 +8168,57 @@ mod tests {
     }
 
     #[test]
+    fn repl_host_io_buffering_captures_standard_handlers_without_overriding_other_targets() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        vm.enable_repl_host_io_buffering();
+
+        let stdout = vm
+            .out_handler_write(&handler_pid("StdOut"), "stdout-host".into())
+            .expect("stdout handler should run");
+        assert_ok_unit_result(stdout);
+        assert_eq!(vm.take_repl_host_stdout(), vec!["stdout-host".to_string()]);
+        assert_eq!(vm.take_repl_host_stderr(), Vec::<String>::new());
+        assert_eq!(vm.take_stdout(), Vec::<String>::new());
+
+        let stderr = vm
+            .out_handler_write(&handler_pid("StdErr"), "stderr-host".into())
+            .expect("stderr handler should run");
+        assert_ok_unit_result(stderr);
+        assert_eq!(vm.take_repl_host_stdout(), Vec::<String>::new());
+        assert_eq!(vm.take_repl_host_stderr(), vec!["stderr-host".to_string()]);
+        assert_eq!(vm.take_stderr(), Vec::<String>::new());
+
+        let null = vm
+            .out_handler_write(&handler_pid("NullOutHandler"), "muted".into())
+            .expect("null handler should run");
+        assert_ok_unit_result(null);
+        assert_eq!(vm.take_repl_host_stdout(), Vec::<String>::new());
+        assert_eq!(vm.take_repl_host_stderr(), Vec::<String>::new());
+
+        let dir = std::env::temp_dir().join(format!(
+            "surtr-eldr-repl-host-buffer-file-out-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir should be created");
+        let path = dir.join("process.log");
+        let _ = std::fs::remove_file(&path);
+        let file = vm
+            .out_handler_write(
+                &handler_pid(&format!("FileOutHandler(path={})", path.display())),
+                "file-host\n".into(),
+            )
+            .expect("file handler should run");
+        assert_ok_unit_result(file);
+        assert_eq!(vm.take_repl_host_stdout(), Vec::<String>::new());
+        assert_eq!(vm.take_repl_host_stderr(), Vec::<String>::new());
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("file output should exist"),
+            "file-host\n"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn out_handler_write_appends_to_file_target() {
         let dir = std::env::temp_dir().join(format!(
             "surtr-eldr-file-out-handler-{}",
@@ -4960,6 +8288,69 @@ mod tests {
     }
 
     #[test]
+    fn rollback_to_checkpoint_closes_new_file_resources() {
+        let dir = sandbox_dir("vm-file-rollback");
+        let path = dir.join("rollback.txt");
+        let path_text = path.to_string_lossy().into_owned();
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let chunk = BytecodeChunk {
+            opcodes: Vec::new(),
+            source_map: None,
+            const_base: 0,
+            constants: Vec::new(),
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
+            functions: Vec::new(),
+            docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
+            runtime_boot_plan: RuntimeBootPlan::default(),
+        };
+        let checkpoint = vm.checkpoint_for_chunk(&chunk);
+        let handle = vm
+            .open_file_resource(&path_text, VmFileMode::Write)
+            .expect("file handle should open");
+        assert_eq!(vm.open_file_count(), 1);
+        vm.rollback_to_checkpoint(checkpoint);
+        assert_eq!(
+            vm.open_file_count(),
+            0,
+            "rollback should close new file handles"
+        );
+        assert!(
+            matches!(vm.flush_file_resource(handle.id), Err(VmFileError::Closed)),
+            "rolled back handle should be closed"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn run_shutdown_closes_remaining_file_resources() {
+        let dir = sandbox_dir("vm-file-run-shutdown");
+        let path = dir.join("run.txt");
+        let path_text = path.to_string_lossy().into_owned();
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let handle = vm
+            .open_file_resource(&path_text, VmFileMode::Write)
+            .expect("file handle should open");
+        assert_eq!(vm.open_file_count(), 1);
+        vm.run().expect("halt-only bytecode should run");
+        assert_eq!(
+            vm.open_file_count(),
+            0,
+            "run should shutdown file resources"
+        );
+        assert!(
+            matches!(vm.flush_file_resource(handle.id), Err(VmFileError::Closed)),
+            "run shutdown should close the handle"
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn vm_new_initializes_empty_future_runtime_tables() {
         let vm = VM::new(base_bytecode(vec![Opcode::Halt]));
         assert!(vm.process_runtime.futures.is_empty());
@@ -4988,6 +8379,195 @@ mod tests {
                 deadline_tick: 42,
                 future_id,
             })
+        );
+    }
+
+    #[test]
+    fn process_sleep_suspends_with_deadline_future_and_resumes_ok() {
+        let mut vm = VM::new(base_bytecode(vec![Opcode::Halt]));
+        let value = vm.process_sleep(10).expect("sleep should schedule");
+        let Value::PendingFuture(future_id) = value else {
+            panic!("expected pending sleep future, got {value:?}");
+        };
+        let future = vm
+            .process_runtime
+            .futures
+            .get(&future_id)
+            .expect("sleep future should be tracked");
+        assert_eq!(future.deadline_tick, Some(10));
+        assert_eq!(future.state, super::FutureState::Running);
+        assert_eq!(
+            vm.process_runtime.deadline_queue.front(),
+            Some(&super::DeadlineEntry {
+                deadline_tick: 10,
+                future_id,
+            })
+        );
+
+        vm.resolve_sleep_future(future_id)
+            .expect("sleep future should resolve");
+        assert_eq!(
+            vm.ready_future_value(future_id),
+            Some(super::ok_vm_result(Value::Unit))
+        );
+    }
+
+    #[test]
+    fn invoke_callable_sync_waits_for_sleep_future_and_returns_ok() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry.register(TypeEntry {
+            tag: 2,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: vec![true],
+        });
+        let mut vm = VM::new(bytecode);
+        let callable = Callable {
+            target: CallableTarget::Builtin(builtin_id("__process_sleep")),
+            lexical_captures: vec![Value::Tagged {
+                tag: 2,
+                fields: vec![Value::Int(int(20))],
+            }],
+            metadata: CallableMetadata::default(),
+        };
+
+        let value = vm
+            .invoke_callable_sync(callable, Vec::new())
+            .expect("sync call should await sleep");
+
+        assert_eq!(value, ok_vm_result(Value::Unit));
+        assert_eq!(vm.process_runtime.current_tick_ms, 20);
+    }
+
+    #[test]
+    fn task_async_returns_handle_and_await_completes_after_sleep() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry.register(TypeEntry {
+            tag: 2,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: vec![true],
+        });
+        let mut vm = VM::new(bytecode);
+        let callable = Callable {
+            target: CallableTarget::Builtin(builtin_id("__process_sleep")),
+            lexical_captures: vec![Value::Tagged {
+                tag: 2,
+                fields: vec![Value::Int(int(20))],
+            }],
+            metadata: CallableMetadata::default(),
+        };
+
+        let task = vm
+            .invoke_task(callable, TaskMode::Async)
+            .expect("task async should return a handle");
+
+        assert!(matches!(task, Value::TaskHandle(_)));
+        let value = vm
+            .await_task_handle(&task, None)
+            .expect("awaiting task handle should finish");
+        assert_eq!(value, ok_vm_result(Value::Unit));
+        assert_eq!(vm.process_runtime.current_tick_ms, 20);
+    }
+
+    #[test]
+    fn task_launch_returns_before_sleep_future_resolves() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Halt,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::StructNew { field_count: 1 },
+            Opcode::CallBuiltin {
+                builtin_id: builtin_id("__process_sleep"),
+                arity: 1,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::Return,
+        ]);
+        bytecode.type_registry.register(TypeEntry {
+            tag: 2,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: vec![true],
+        });
+        bytecode.constants = vec![Constant::Tag(2), Constant::Int(int(20))];
+        bytecode.functions = vec![function_entry(0, 1, 0, 0, Some("Main::sleep_then_return"))];
+        let mut vm = VM::new(bytecode);
+        let callable = Callable {
+            target: CallableTarget::Function(0),
+            lexical_captures: Vec::new(),
+            metadata: CallableMetadata::default(),
+        };
+
+        let value = vm
+            .invoke_task(callable, TaskMode::Launch)
+            .expect("task launch should accept sleep body");
+
+        assert_eq!(value, ok_vm_result(Value::Unit));
+        assert_eq!(vm.process_runtime.futures.len(), 1);
+        assert_eq!(
+            vm.process_runtime
+                .futures
+                .values()
+                .filter(|future| matches!(future.state, super::FutureState::Running))
+                .count(),
+            1
+        );
+        assert_eq!(vm.process_runtime.detached_tasks.len(), 1);
+
+        vm.process_runtime.current_tick_ms = 20;
+        let expired = vm.expire_process_deadlines(20);
+        assert_eq!(expired.len(), 1);
+        vm.drive_ready_detached_tasks()
+            .expect("detached task should resume cleanly");
+        assert!(vm.process_runtime.detached_tasks.is_empty());
+    }
+
+    #[test]
+    fn task_timeout_deadline_wins_before_unresolved_sleep_completion() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry.register(TypeEntry {
+            tag: 2,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: vec![true],
+        });
+        let mut vm = VM::new(bytecode);
+        let callable = Callable {
+            target: CallableTarget::Builtin(builtin_id("__process_sleep")),
+            lexical_captures: vec![Value::Tagged {
+                tag: 2,
+                fields: vec![Value::Int(int(100))],
+            }],
+            metadata: CallableMetadata::default(),
+        };
+
+        let task = vm
+            .invoke_task_with_timeout(callable, TaskMode::Async, Some(1))
+            .expect("task async with timeout should return a handle");
+        assert!(matches!(task, Value::TaskHandle(_)));
+        let value = vm
+            .await_task_handle(&task, None)
+            .expect("awaiting timed task should resolve timeout result");
+        assert!(matches!(
+            value,
+            Value::Tagged { tag: 1, fields } if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Timeout")
+        ));
+        assert!(
+            vm.process_runtime.reply_table.is_empty(),
+            "timeout should not leave reply waiters"
+        );
+        assert!(
+            vm.process_runtime
+                .deadline_queue
+                .iter()
+                .all(|entry| entry.deadline_tick > 1),
+            "completion timeout deadline should be consumed"
         );
     }
 
@@ -6463,22 +10043,58 @@ mod tests {
     fn observation_collects_opcode_stats() {
         let mut bytecode = base_bytecode(vec![
             Opcode::LoadConst(0),
-            Opcode::LoadConst(1),
-            Opcode::BitAndInt,
+            Opcode::MakeOk,
+            Opcode::JumpIfLocalTagEq {
+                local_idx: 0,
+                tag_const_idx: 1,
+                target_pc: 3,
+            },
             Opcode::Halt,
         ]);
-        bytecode.constants = vec![Constant::Int(int(6)), Constant::Int(int(3))];
+        bytecode.constants = vec![Constant::Int(int(6)), Constant::Tag(0)];
 
         let mut vm = VM::new(bytecode);
         vm.enable_observation(VmObservationOptions::default());
-        vm.run().expect("run should succeed");
+        let mut ctx = top_level_context(0, 1);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected load const to continue, got {other:?}"),
+        }
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected make ok to continue, got {other:?}"),
+        }
+        ctx.frames[0].locals[0] = ctx
+            .stack
+            .last()
+            .cloned()
+            .expect("make ok should leave a tagged result on the stack");
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Continue => {}
+            other => panic!("expected fused local tag jump to continue, got {other:?}"),
+        }
+        match vm.step_context(&mut ctx) {
+            StepOutcome::Halt(value) => assert_eq!(
+                value,
+                Value::Tagged {
+                    tag: 0,
+                    fields: vec![Value::Int(int(6))],
+                }
+            ),
+            other => panic!("expected halt, got {other:?}"),
+        }
 
         let observation = vm.observation().expect("observation should exist");
         assert_eq!(observation.stats.executed_opcodes, 4);
-        assert_eq!(observation.stats.per_opcode.get("LoadConst"), Some(&2));
-        assert_eq!(observation.stats.per_opcode.get("BitAndInt"), Some(&1));
+        assert_eq!(observation.stats.per_opcode.get("LoadConst"), Some(&1));
+        assert_eq!(observation.stats.per_opcode.get("MakeOk"), Some(&1));
+        assert_eq!(
+            observation.stats.per_opcode.get("JumpIfLocalTagEq"),
+            Some(&1)
+        );
         assert_eq!(observation.stats.per_opcode.get("Halt"), Some(&1));
-        assert_eq!(observation.stats.max_stack_depth, 2);
+        assert_eq!(observation.stats.max_stack_depth, 1);
         assert_eq!(observation.stats.max_frame_depth, 1);
     }
 
@@ -6605,6 +10221,226 @@ mod tests {
         assert_eq!(snapshot.futures.len(), 1);
         assert_eq!(snapshot.futures[0].state, "running");
         assert_eq!(snapshot.futures[0].owner, Some(pid));
+    }
+
+    #[test]
+    fn finalize_worker_stop_cleans_reply_waiters_and_supervisor_membership() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![test_runtime_process_spec(
+                0,
+                "Worker",
+                RuntimeProcessKind::GenServer,
+                RuntimeProcessInstance::Worker,
+                false,
+                0,
+                0,
+                None,
+            )],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = vm
+            .allocate_supervised_worker(
+                "Worker".into(),
+                Some(Value::Int(int(41))),
+                "DynamicSupervisor".into(),
+            )
+            .expect("worker allocation should succeed");
+        let future_id = vm.process_runtime.allocate_future(Some(pid), Some(3), true);
+        let correlation_id = vm.process_runtime.allocate_correlation_id();
+        vm.process_runtime
+            .register_reply_waiter(correlation_id, future_id);
+        vm.process_runtime
+            .mark_process_waiting(pid, super::ProcessWaitReason::Reply(correlation_id));
+
+        let resumed =
+            vm.finalize_process_stop(pid, Some(super::ok_vm_result(Value::Int(int(99)))), false);
+
+        assert!(resumed.is_empty());
+        assert!(matches!(
+            vm.process_runtime
+                .processes
+                .get(&pid)
+                .expect("process exists")
+                .status,
+            super::ProcessStatus::Stopped
+        ));
+        assert!(vm.process_runtime.reply_table.is_empty());
+        assert!(!vm.process_runtime.waiting_table.contains_key(&pid));
+        assert!(vm.process_runtime.deadline_queue.is_empty());
+        assert!(vm
+            .process_runtime
+            .root_supervisor
+            .child_table
+            .get("DynamicSupervisor")
+            .is_none_or(|children| !children.contains(&pid)));
+        assert!(matches!(
+            vm.process_runtime
+                .futures
+                .get(&future_id)
+                .expect("future remains tracked")
+                .state,
+            super::FutureState::Ready(Value::Tagged { tag: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn genserver_call_stop_error_returns_err_and_stops_worker() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![test_runtime_process_spec(
+                0,
+                "Worker",
+                RuntimeProcessKind::GenServer,
+                RuntimeProcessInstance::Worker,
+                false,
+                0,
+                0,
+                None,
+            )],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = PidHandle {
+            id: vm
+                .allocate_supervised_worker(
+                    "Worker".into(),
+                    Some(Value::Int(int(41))),
+                    "DynamicSupervisor".into(),
+                )
+                .expect("worker allocation should succeed"),
+            process_name: "Worker".into(),
+        };
+
+        let value = vm
+            .genserver_call_stop_error(&pid, vm.process_error("Boom", "boom"))
+            .expect("stop error should return a result value");
+
+        assert!(matches!(
+            value,
+            Value::Tagged { tag: 1, fields } if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Boom")
+        ));
+        assert!(matches!(
+            vm.process_runtime
+                .processes
+                .get(&pid.id)
+                .expect("process exists")
+                .status,
+            super::ProcessStatus::Stopped
+        ));
+        assert_eq!(
+            vm.process_runtime
+                .processes
+                .get(&pid.id)
+                .expect("process exists")
+                .state_value,
+            None
+        );
+    }
+
+    #[test]
+    fn genserver_cast_stop_normal_stops_worker_and_clears_state() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![test_runtime_process_spec(
+                0,
+                "Worker",
+                RuntimeProcessKind::GenServer,
+                RuntimeProcessInstance::Worker,
+                false,
+                0,
+                0,
+                None,
+            )],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = PidHandle {
+            id: vm
+                .allocate_supervised_worker(
+                    "Worker".into(),
+                    Some(Value::Int(int(41))),
+                    "DynamicSupervisor".into(),
+                )
+                .expect("worker allocation should succeed"),
+            process_name: "Worker".into(),
+        };
+
+        let value = vm
+            .genserver_cast_stop_normal(&pid)
+            .expect("cast stop should return ok unit");
+
+        assert!(matches!(value, Value::Tagged { tag: 0, .. }));
+        assert!(matches!(
+            vm.process_runtime
+                .processes
+                .get(&pid.id)
+                .expect("process exists")
+                .status,
+            super::ProcessStatus::Stopped
+        ));
+        assert_eq!(
+            vm.process_runtime
+                .processes
+                .get(&pid.id)
+                .expect("process exists")
+                .state_value,
+            None
+        );
+    }
+
+    #[test]
+    fn genserver_reply_later_commits_state_before_reply_resolves() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Halt,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::StructNew { field_count: 1 },
+            Opcode::Return,
+        ]);
+        bytecode.constants = vec![Constant::Tag(0), Constant::Int(int(99))];
+        bytecode.functions = vec![function_entry(0, 1, 0, 0, Some("Worker::callback"))];
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![test_runtime_process_spec(
+                0,
+                "Worker",
+                RuntimeProcessKind::GenServer,
+                RuntimeProcessInstance::Worker,
+                false,
+                0,
+                0,
+                None,
+            )],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = PidHandle {
+            id: vm
+                .allocate_supervised_worker(
+                    "Worker".into(),
+                    Some(Value::Int(int(41))),
+                    "DynamicSupervisor".into(),
+                )
+                .expect("worker allocation should succeed"),
+            process_name: "Worker".into(),
+        };
+
+        let value = vm
+            .genserver_call_reply_later(&pid, Value::Int(int(42)), vm.callable_for_function(0))
+            .expect("reply later should start callback");
+
+        let Value::PendingFuture(future_id) = value else {
+            panic!("reply later should suspend on a future");
+        };
+        assert_eq!(
+            vm.process_runtime
+                .processes
+                .get(&pid.id)
+                .expect("process exists")
+                .state_value,
+            Some(Value::Int(int(42)))
+        );
+        assert!(matches!(
+            vm.ready_future_value(future_id),
+            Some(Value::Tagged { tag: 0, fields }) if matches!(fields.first(), Some(Value::Int(value)) if *value == int(99))
+        ));
     }
 
     #[test]

@@ -1,0 +1,26 @@
+defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> {
+    Ok(7)
+  }
+
+  @get
+  def fetch(state: Int, label: String) -> Result<String> {
+    Ok(label ++ ":" ++ to_string(state))
+  }
+
+  @set
+  def replace(_state: Int, next: Int) -> Result<Int> {
+    Ok(next)
+  }
+}
+
+print(inspect(Counter::fetch("count")))
+print(inspect(Counter::replace(9)))
+print(inspect(Counter::fetch("count")))

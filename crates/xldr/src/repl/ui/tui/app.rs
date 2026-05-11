@@ -39,7 +39,9 @@ impl ReplMode {
 pub(super) struct ResultEntry {
     pub(super) idx: usize,
     pub(super) source: String,
+    pub(super) stdout_lines: Vec<String>,
     pub(super) rendered_lines: Vec<String>,
+    pub(super) stderr_lines: Vec<String>,
     pub(super) kind: PresentedResultKind,
 }
 
@@ -191,14 +193,18 @@ impl App {
     pub(super) fn push_result(
         &mut self,
         source: impl Into<String>,
+        stdout_lines: Vec<String>,
         rendered_lines: Vec<String>,
+        stderr_lines: Vec<String>,
         kind: PresentedResultKind,
     ) {
         let idx = self.results.len() + 1;
         self.results.push_back(ResultEntry {
             idx,
             source: source.into(),
+            stdout_lines,
             rendered_lines,
+            stderr_lines,
             kind,
         });
         // Keep scroll at bottom when new output arrives (line-based).
@@ -206,7 +212,7 @@ impl App {
         let total: usize = self
             .results
             .iter()
-            .map(|e| 3 + e.rendered_lines.len())
+            .map(|e| 3 + e.stdout_lines.len() + e.rendered_lines.len() + e.stderr_lines.len())
             .sum();
         self.results_scroll = total;
     }

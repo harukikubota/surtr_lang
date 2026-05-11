@@ -6,39 +6,273 @@ use super::scope_init::{
 };
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
-use spire::ast::{BinOp, DbgArg, InterpolatedPart};
+use spire::ast::{
+    AstPath, BinOp, BulkUpdateEntry, BulkUpdateEntryKind, DbgArg, InterpolatedPart, Symbol,
+};
 
 const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
 
+#[derive(Debug, Clone, Copy)]
+struct TypeRefHelperSpec {
+    bare_name: &'static str,
+    owner: &'static str,
+    method: &'static str,
+    arity: usize,
+    witness_arg_indices: &'static [usize],
+}
+
+const TYPE_REF_HELPERS: &[TypeRefHelperSpec] = &[
+    TypeRefHelperSpec {
+        bare_name: "from",
+        owner: "From",
+        method: "from",
+        arity: 2,
+        witness_arg_indices: &[1],
+    },
+    TypeRefHelperSpec {
+        bare_name: "try_from",
+        owner: "TryFrom",
+        method: "try_from",
+        arity: 2,
+        witness_arg_indices: &[1],
+    },
+    TypeRefHelperSpec {
+        bare_name: "encode",
+        owner: "Encode",
+        method: "encode",
+        arity: 2,
+        witness_arg_indices: &[1],
+    },
+    TypeRefHelperSpec {
+        bare_name: "decode",
+        owner: "Decode",
+        method: "decode",
+        arity: 3,
+        witness_arg_indices: &[1, 2],
+    },
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CanonicalSpecialForm {
+    If(IfKind),
+    IfLet,
+    IfLetThen,
+    IsMatch,
+    Assert,
+    Ensure,
+    MapErr,
+    Cause,
+    RecoverKind,
+    Logic(LogicKind),
+}
+
 impl Resolver {
-    fn partial_pipeline_special_form_arity(name: &str) -> Option<usize> {
-        match name {
-            "if" => Some(3),
-            "if_then" => Some(2),
-            "if_let" => Some(4),
-            "if_let_then" => Some(3),
-            "is_match" => Some(2),
-            "assert" => Some(2),
-            "ensure" => Some(3),
-            "map_err" | "cause" => Some(2),
-            "and" | "or" => Some(2),
+    fn canonical_special_form_from_qname(qualified_name: &str) -> Option<CanonicalSpecialForm> {
+        match qualified_name
+            .strip_prefix("Global::")
+            .unwrap_or(qualified_name)
+        {
+            "Kernel::if" => Some(CanonicalSpecialForm::If(IfKind::If3)),
+            "Kernel::if_then" => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
+            "Kernel::if_let" => Some(CanonicalSpecialForm::IfLet),
+            "Kernel::if_let_then" => Some(CanonicalSpecialForm::IfLetThen),
+            "Kernel::is_match" => Some(CanonicalSpecialForm::IsMatch),
+            "Kernel::assert" => Some(CanonicalSpecialForm::Assert),
+            "Kernel::ensure" => Some(CanonicalSpecialForm::Ensure),
+            "Kernel::and" => Some(CanonicalSpecialForm::Logic(LogicKind::And)),
+            "Kernel::or" => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
+            "Result::map_err" => Some(CanonicalSpecialForm::MapErr),
+            "Result::cause" => Some(CanonicalSpecialForm::Cause),
+            "Result::recover_kind" => Some(CanonicalSpecialForm::RecoverKind),
             _ => None,
         }
     }
 
-    fn desugar_pipeline_rhs_special_form_partial(&self, rhs: Ast) -> Ast {
+    fn classify_canonical_special_form_callee(
+        &self,
+        resolved_func: &Resolved,
+    ) -> Option<CanonicalSpecialForm> {
+        let Resolved::Var(_, id) = resolved_func else {
+            return None;
+        };
+        if let Some(qualified_name) = id.qualified_name.as_deref() {
+            if let Some(kind) = Self::canonical_special_form_from_qname(qualified_name) {
+                return Some(kind);
+            }
+        }
+        let entry = self.declaration_entry_for_uid(id.unique_id)?;
+        if let Some(kind) = Self::canonical_special_form_from_qname(&entry.fq_name) {
+            return Some(kind);
+        }
+        if entry.auto_import && is_special_form_builtin_decl(entry.name.as_str()) {
+            return Self::fallback_special_form_from_surface(&Ast::Var(
+                id.span.clone(),
+                entry.name.clone(),
+            ));
+        }
+        match (
+            entry
+                .module_path
+                .strip_prefix("Global::")
+                .unwrap_or(entry.module_path.as_str()),
+            entry.name.as_str(),
+        ) {
+            ("Kernel", "if") => Some(CanonicalSpecialForm::If(IfKind::If3)),
+            ("Kernel", "if_then") => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
+            ("Kernel", "if_let") => Some(CanonicalSpecialForm::IfLet),
+            ("Kernel", "if_let_then") => Some(CanonicalSpecialForm::IfLetThen),
+            ("Kernel", "is_match") => Some(CanonicalSpecialForm::IsMatch),
+            ("Kernel", "assert") => Some(CanonicalSpecialForm::Assert),
+            ("Kernel", "ensure") => Some(CanonicalSpecialForm::Ensure),
+            ("Kernel", "and") => Some(CanonicalSpecialForm::Logic(LogicKind::And)),
+            ("Kernel", "or") => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
+            ("Result", "map_err") => Some(CanonicalSpecialForm::MapErr),
+            ("Result", "cause") => Some(CanonicalSpecialForm::Cause),
+            ("Result", "recover_kind") => Some(CanonicalSpecialForm::RecoverKind),
+            _ => None,
+        }
+    }
+
+    fn fallback_special_form_from_surface(func: &Ast) -> Option<CanonicalSpecialForm> {
+        match func {
+            Ast::Var(_, name) | Ast::InternalVar(_, name) => match name.as_str() {
+                "if" => Some(CanonicalSpecialForm::If(IfKind::If3)),
+                "if_then" => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
+                "if_let" => Some(CanonicalSpecialForm::IfLet),
+                "if_let_then" => Some(CanonicalSpecialForm::IfLetThen),
+                "is_match" => Some(CanonicalSpecialForm::IsMatch),
+                "assert" => Some(CanonicalSpecialForm::Assert),
+                "ensure" => Some(CanonicalSpecialForm::Ensure),
+                "map_err" => Some(CanonicalSpecialForm::MapErr),
+                "cause" => Some(CanonicalSpecialForm::Cause),
+                "recover_kind" => Some(CanonicalSpecialForm::RecoverKind),
+                "and" => Some(CanonicalSpecialForm::Logic(LogicKind::And)),
+                "or" => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
+                _ => None,
+            },
+            Ast::Path(_, path)
+                if path.segments.len() == 2
+                    && path.segments[0] == "Result"
+                    && path.segments[1] == "map_err" =>
+            {
+                Some(CanonicalSpecialForm::MapErr)
+            }
+            Ast::Path(_, path)
+                if path.segments.len() == 2
+                    && path.segments[0] == "Result"
+                    && path.segments[1] == "cause" =>
+            {
+                Some(CanonicalSpecialForm::Cause)
+            }
+            Ast::Path(_, path)
+                if path.segments.len() == 2
+                    && path.segments[0] == "Result"
+                    && path.segments[1] == "recover_kind" =>
+            {
+                Some(CanonicalSpecialForm::RecoverKind)
+            }
+            _ => None,
+        }
+    }
+
+    fn fallback_partial_pipeline_special_form_from_surface(
+        func: &Ast,
+    ) -> Option<CanonicalSpecialForm> {
+        match func {
+            Ast::Var(_, name) | Ast::InternalVar(_, name) => match name.as_str() {
+                "if" => Some(CanonicalSpecialForm::If(IfKind::If3)),
+                "if_then" => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
+                "if_let" => Some(CanonicalSpecialForm::IfLet),
+                "if_let_then" => Some(CanonicalSpecialForm::IfLetThen),
+                "is_match" => Some(CanonicalSpecialForm::IsMatch),
+                "assert" => Some(CanonicalSpecialForm::Assert),
+                "ensure" => Some(CanonicalSpecialForm::Ensure),
+                "map_err" => Some(CanonicalSpecialForm::MapErr),
+                "cause" => Some(CanonicalSpecialForm::Cause),
+                "and" => Some(CanonicalSpecialForm::Logic(LogicKind::And)),
+                "or" => Some(CanonicalSpecialForm::Logic(LogicKind::Or)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn canonical_special_form_arity(kind: CanonicalSpecialForm) -> usize {
+        match kind {
+            CanonicalSpecialForm::If(IfKind::If3) => 3,
+            CanonicalSpecialForm::If(IfKind::IfThen2) => 2,
+            CanonicalSpecialForm::IfLet => 4,
+            CanonicalSpecialForm::IfLetThen => 3,
+            CanonicalSpecialForm::IsMatch => 2,
+            CanonicalSpecialForm::Assert => 2,
+            CanonicalSpecialForm::Ensure => 3,
+            CanonicalSpecialForm::MapErr => 2,
+            CanonicalSpecialForm::Cause => 2,
+            CanonicalSpecialForm::RecoverKind => 3,
+            CanonicalSpecialForm::Logic(LogicKind::And) => 2,
+            CanonicalSpecialForm::Logic(LogicKind::Or) => 2,
+        }
+    }
+
+    fn partial_pipeline_special_form_arity(kind: CanonicalSpecialForm) -> Option<usize> {
+        match kind {
+            CanonicalSpecialForm::If(IfKind::If3)
+            | CanonicalSpecialForm::If(IfKind::IfThen2)
+            | CanonicalSpecialForm::IfLet
+            | CanonicalSpecialForm::IfLetThen
+            | CanonicalSpecialForm::IsMatch
+            | CanonicalSpecialForm::Assert
+            | CanonicalSpecialForm::Ensure
+            | CanonicalSpecialForm::MapErr
+            | CanonicalSpecialForm::Cause
+            | CanonicalSpecialForm::Logic(_) => Some(Self::canonical_special_form_arity(kind)),
+            CanonicalSpecialForm::RecoverKind => None,
+        }
+    }
+
+    fn resolve_canonical_special_form_call(
+        &mut self,
+        span: Span,
+        args: Vec<RecordLitArg>,
+        kind: CanonicalSpecialForm,
+    ) -> Result<Resolved, ResolveError> {
+        match kind {
+            CanonicalSpecialForm::If(if_kind) => self.resolve_if(span, args, if_kind),
+            CanonicalSpecialForm::IfLet => self.resolve_if_let(span, args),
+            CanonicalSpecialForm::IfLetThen => self.resolve_if_let_then(span, args),
+            CanonicalSpecialForm::IsMatch => self.resolve_is_match(span, args),
+            CanonicalSpecialForm::Assert => self.resolve_assert(span, args),
+            CanonicalSpecialForm::Ensure => self.resolve_ensure(span, args),
+            CanonicalSpecialForm::MapErr => self.resolve_map_err(span, args),
+            CanonicalSpecialForm::Cause => self.resolve_cause(span, args),
+            CanonicalSpecialForm::RecoverKind => self.resolve_recover_kind(span, args),
+            CanonicalSpecialForm::Logic(logic_kind) => {
+                self.resolve_logic_call(span, args, logic_kind)
+            }
+        }
+    }
+
+    fn desugar_pipeline_rhs_special_form_partial(&mut self, rhs: Ast) -> Result<Ast, ResolveError> {
         let Ast::App(span, func, args) = rhs else {
-            return rhs;
+            return Ok(rhs);
         };
 
-        let Ast::Var(_, ref name) = *func else {
-            return Ast::App(span, func, args);
+        if !matches!(func.as_ref(), Ast::Var(_, _) | Ast::InternalVar(_, _)) {
+            return Ok(Ast::App(span, func, args));
+        }
+
+        let kind = match self.resolve_node(*func.clone()) {
+            Ok(resolved_func) => self.classify_canonical_special_form_callee(&resolved_func),
+            Err(_) => Self::fallback_partial_pipeline_special_form_from_surface(func.as_ref()),
         };
-        let Some(expected_arity) = Self::partial_pipeline_special_form_arity(name) else {
-            return Ast::App(span, func, args);
+        let Some(kind) = kind else {
+            return Ok(Ast::App(span, func, args));
+        };
+        let Some(expected_arity) = Self::partial_pipeline_special_form_arity(kind) else {
+            return Ok(Ast::App(span, func, args));
         };
         if args.len() + 1 != expected_arity {
-            return Ast::App(span, func, args);
+            return Ok(Ast::App(span, func, args));
         }
 
         let param_name = format!("__pipe_injected_{}_{}", span.start, span.end);
@@ -51,7 +285,7 @@ impl Resolver {
         injected_args.extend(args);
 
         let call = Ast::App(span.clone(), func, injected_args);
-        Ast::Closure(
+        Ok(Ast::Closure(
             span.clone(),
             vec![ClosureParam {
                 name: param_name,
@@ -59,7 +293,7 @@ impl Resolver {
                 span: param_span,
             }],
             Box::new(call),
-        )
+        ))
     }
 
     fn capture_placeholder_param_name(span: &Span, index: usize) -> String {
@@ -159,6 +393,37 @@ impl Resolver {
         inside_placeholder_capture: bool,
         used: &mut HashSet<usize>,
     ) -> Result<(), ResolveError> {
+        fn walk_bulk_entries(
+            resolver: &Resolver,
+            entries: &[BulkUpdateEntry],
+            allow_placeholders: bool,
+            inside_placeholder_capture: bool,
+            used: &mut HashSet<usize>,
+        ) -> Result<(), ResolveError> {
+            for entry in entries {
+                match &entry.kind {
+                    BulkUpdateEntryKind::Set(expr)
+                    | BulkUpdateEntryKind::Over(expr)
+                    | BulkUpdateEntryKind::OverResult(expr) => {
+                        resolver.collect_capture_placeholders(
+                            expr,
+                            allow_placeholders,
+                            inside_placeholder_capture,
+                            used,
+                        )?;
+                    }
+                    BulkUpdateEntryKind::Nested(entries) => walk_bulk_entries(
+                        resolver,
+                        entries,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                        used,
+                    )?,
+                }
+            }
+            Ok(())
+        }
+
         match expr {
             Ast::CapturePlaceholder(span, index) => {
                 if !allow_placeholders {
@@ -222,7 +487,8 @@ impl Resolver {
             | Ast::SafeBind(_, _, rhs)
             | Ast::Grouped(_, rhs)
             | Ast::Semi(_, rhs)
-            | Ast::FieldAccess(_, rhs, _) => self.collect_capture_placeholders(
+            | Ast::FieldAccess(_, rhs, _)
+            | Ast::FacetCapture(_, rhs) => self.collect_capture_placeholders(
                 rhs,
                 allow_placeholders,
                 inside_placeholder_capture,
@@ -297,6 +563,21 @@ impl Resolver {
                     )?;
                 }
                 Ok(())
+            }
+            Ast::BulkUpdate(_, source, entries) => {
+                self.collect_capture_placeholders(
+                    source,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                    used,
+                )?;
+                walk_bulk_entries(
+                    self,
+                    entries,
+                    allow_placeholders,
+                    inside_placeholder_capture,
+                    used,
+                )
             }
             Ast::StructLit(_, _, fields) | Ast::InternalStructLit(_, _, fields) => {
                 for field in fields {
@@ -907,6 +1188,27 @@ impl Resolver {
         Ok(self.make_closure_from_call(&span, params, target, rewritten_args))
     }
 
+    fn inferred_facet_capture_segments(expr: &Ast) -> Option<Vec<String>> {
+        let mut segments = Vec::new();
+        let mut current = expr;
+        loop {
+            match current {
+                Ast::FieldAccess(_, inner, field) => {
+                    segments.push(field.clone());
+                    current = inner.as_ref();
+                }
+                Ast::Grouped(_, inner) => {
+                    current = inner.as_ref();
+                }
+                Ast::Var(_, name) if name == "_" => {
+                    segments.reverse();
+                    return (!segments.is_empty()).then_some(segments);
+                }
+                _ => return None,
+            }
+        }
+    }
+
     fn pipe_slot_span(expr: &Ast) -> Option<Span> {
         match expr {
             Ast::Var(span, name) if name == "_1" => Some(span.clone()),
@@ -1048,26 +1350,53 @@ impl Resolver {
         ))
     }
 
-    fn prepare_pipe_rhs(&self, rhs: Ast) -> Result<Ast, ResolveError> {
+    fn prepare_pipe_rhs(&mut self, rhs: Ast) -> Result<Ast, ResolveError> {
         let rhs = self.lower_pipe_rhs_slots(rhs)?;
-        Ok(self.desugar_pipeline_rhs_special_form_partial(rhs))
+        self.desugar_pipeline_rhs_special_form_partial(rhs)
     }
 
-    fn conversion_call_head(func: &Ast) -> Option<&'static str> {
+    fn type_ref_helper_for_call(func: &Ast) -> Option<&'static TypeRefHelperSpec> {
         match func {
-            Ast::Var(_, name) if name == "from" => Some("from"),
-            Ast::Var(_, name) if name == "try_from" => Some("try_from"),
+            Ast::Var(_, name) => TYPE_REF_HELPERS
+                .iter()
+                .find(|spec| spec.bare_name == name.as_str()),
             Ast::Path(_, path) if path.segments.len() >= 2 => {
                 let method = path.segments.last()?;
                 let owner = path.segments.get(path.segments.len() - 2)?;
-                match (owner.as_str(), method.as_str()) {
-                    ("From", "from") => Some("from"),
-                    ("TryFrom", "try_from") => Some("try_from"),
-                    _ => None,
-                }
+                TYPE_REF_HELPERS
+                    .iter()
+                    .find(|spec| spec.owner == owner.as_str() && spec.method == method.as_str())
             }
             _ => None,
         }
+    }
+
+    fn resolve_type_ref_helper_func(
+        &self,
+        span: Span,
+        spec: &TypeRefHelperSpec,
+    ) -> Option<Resolved> {
+        let method_alias = format!("{}::{}", spec.owner, spec.method);
+        let uid = self
+            .scope
+            .lookup(&method_alias)
+            .or_else(|| self.declaration_uids.get(&method_alias).copied())?;
+        let fq_name = self
+            .declaration_fq_name_for_uid(uid)
+            .unwrap_or(method_alias);
+        let entry = self.declaration_entries.get(&fq_name)?;
+        (entry.kind == DeclarationKind::TraitMethod).then(|| {
+            Resolved::Var(
+                span.clone(),
+                ResolvedId {
+                    name: spec.method.into(),
+                    qualified_name: Some(fq_name),
+                    unique_id: uid,
+                    compiler_generated: false,
+                    span,
+                },
+            )
+        })
     }
 
     fn undefined_callable_arity_message(func: &Ast, arity: usize) -> Option<String> {
@@ -1082,12 +1411,103 @@ impl Resolver {
         }
     }
 
-    fn map_undefined_callable_error(err: ResolveError, func: &Ast, arity: usize) -> ResolveError {
+    fn callable_entry_for_name(&self, name: &str) -> Option<&DeclarationEntry> {
+        self.declaration_entries.get(name).filter(|entry| {
+            matches!(
+                entry.kind,
+                DeclarationKind::Def
+                    | DeclarationKind::Extractor
+                    | DeclarationKind::TraitMethod
+                    | DeclarationKind::ImplMethod
+            )
+        })
+    }
+
+    fn private_callable_error_message(&self, fq_name: &str, arity: usize) -> String {
+        format!("Function `{fq_name}/{arity}` is private")
+    }
+
+    fn restricted_callable_error_message(&self, fq_name: &str, arity: usize) -> String {
+        format!("Function `{fq_name}/{arity}` cannot be called from user code")
+    }
+
+    fn declaration_entry_for_uid(&self, uid: u32) -> Option<&DeclarationEntry> {
+        self.declaration_uids
+            .iter()
+            .find_map(|(fq_name, entry_uid)| (*entry_uid == uid).then_some(fq_name))
+            .and_then(|fq_name| self.declaration_entries.get(fq_name))
+    }
+
+    fn ensure_user_callable_surface(
+        &self,
+        resolved_func: &Resolved,
+        span: &Span,
+        arity: usize,
+    ) -> Result<(), ResolveError> {
+        let Resolved::Var(_, id) = resolved_func else {
+            return Ok(());
+        };
+        if id.compiler_generated {
+            return Ok(());
+        }
+        let Some(entry) = self.declaration_entry_for_uid(id.unique_id) else {
+            return Ok(());
+        };
+        if entry.user_callable {
+            return Ok(());
+        }
+        Err(ResolveError {
+            message: self.restricted_callable_error_message(&entry.fq_name, arity),
+            span: span.clone(),
+            related_labels: Vec::new(),
+        })
+    }
+
+    fn private_callable_hint_for_bare_name(&self, name: &str, arity: usize) -> Option<String> {
+        let matches = self
+            .explicit_module_imports
+            .iter()
+            .filter_map(|module_name| {
+                let fq_name = format!("{module_name}::{name}");
+                self.callable_entry_for_name(&fq_name)
+                    .and_then(|entry| (entry.visibility == Visibility::Private).then_some(fq_name))
+            })
+            .collect::<Vec<_>>();
+        if matches.len() == 1 {
+            Some(format!(" Help: `{}/{}` is private.", matches[0], arity))
+        } else {
+            None
+        }
+    }
+
+    fn map_undefined_callable_error(
+        &self,
+        err: ResolveError,
+        func: &Ast,
+        arity: usize,
+    ) -> ResolveError {
+        if let Ast::Path(_, path) = func {
+            let fq_name = path.segments.join("::");
+            if self
+                .callable_entry_for_name(&fq_name)
+                .is_some_and(|entry| entry.visibility == Visibility::Private)
+            {
+                return ResolveError {
+                    message: self.private_callable_error_message(&fq_name, arity),
+                    span: err.span,
+                    related_labels: Vec::new(),
+                };
+            }
+        }
         match func {
             Ast::Var(_, name) if err.message == format!("Undefined variable: {}", name) => {
+                let message = Self::undefined_callable_arity_message(func, arity)
+                    .unwrap_or_else(|| format!("Undefined variable or function: {}", name));
                 ResolveError {
-                    message: Self::undefined_callable_arity_message(func, arity)
-                        .unwrap_or_else(|| format!("Undefined variable or function: {}", name)),
+                    message: match self.private_callable_hint_for_bare_name(name, arity) {
+                        Some(hint) => format!("{message}{hint}"),
+                        None => message,
+                    },
                     span: err.span,
                     related_labels: Vec::new(),
                 }
@@ -1160,15 +1580,19 @@ impl Resolver {
         Self {
             scope: initialize_scope(),
             predeclared_ids: HashMap::new(),
+            declaration_entries: HashMap::new(),
             declaration_uids: HashMap::new(),
             declaration_uid_kinds: HashMap::from([
                 (0, DeclarationKind::ResultCtor),
                 (1, DeclarationKind::ResultCtor),
             ]),
             declaration_hidden_by_uid: HashMap::new(),
+            explicit_module_imports: HashSet::new(),
             current_module_path: None,
             current_stage_impl_targets: None,
             allow_top_level_shadowing: false,
+            forbidden_top_level_value_bindings: HashMap::new(),
+            current_top_level_def_name: None,
         }
     }
 
@@ -1176,15 +1600,19 @@ impl Resolver {
         Self {
             scope,
             predeclared_ids: HashMap::new(),
+            declaration_entries: HashMap::new(),
             declaration_uids: HashMap::new(),
             declaration_uid_kinds: HashMap::from([
                 (0, DeclarationKind::ResultCtor),
                 (1, DeclarationKind::ResultCtor),
             ]),
             declaration_hidden_by_uid: HashMap::new(),
+            explicit_module_imports: HashSet::new(),
             current_module_path: None,
             current_stage_impl_targets: None,
             allow_top_level_shadowing: false,
+            forbidden_top_level_value_bindings: HashMap::new(),
+            current_top_level_def_name: None,
         }
     }
 
@@ -1193,8 +1621,11 @@ impl Resolver {
     }
 
     pub(super) fn qualify_current_declaration_name(&self, name: &str) -> String {
+        if name.contains("::") {
+            return name.to_string();
+        }
         match self.current_module_path.as_deref() {
-            Some(module_path) if !module_path.is_empty() => format!("{}::{}", module_path, name),
+            Some(module_path) if !module_path.is_empty() => format!("{module_path}::{name}"),
             _ => name.to_string(),
         }
     }
@@ -1207,12 +1638,33 @@ impl Resolver {
         child.declaration_uids = self.declaration_uids.clone();
         child.declaration_uid_kinds = self.declaration_uid_kinds.clone();
         child.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
+        child.declaration_entries = self.declaration_entries.clone();
+        child.explicit_module_imports = self.explicit_module_imports.clone();
         child.current_module_path = self.current_module_path.clone();
         child.current_stage_impl_targets = self.current_stage_impl_targets.clone();
         child.allow_top_level_shadowing = self.allow_top_level_shadowing;
+        child.forbidden_top_level_value_bindings = self.forbidden_top_level_value_bindings.clone();
+        child.current_top_level_def_name = self.current_top_level_def_name.clone();
         let out = f(&mut child)?;
         self.scope.advance_next_id_to(child.scope.next_id());
         Ok(out)
+    }
+
+    fn top_level_value_bindings(&self) -> HashMap<u32, String> {
+        self.scope
+            .bindings()
+            .filter(|(_, uid)| !self.declaration_uid_kinds.contains_key(uid))
+            .map(|(name, uid)| (uid, name.to_string()))
+            .collect()
+    }
+
+    fn forbids_top_level_value_capture_in_defs(&self) -> bool {
+        match self.current_module_path.as_deref() {
+            None => true,
+            Some("__Repl::Session") => true,
+            Some(path) if path.starts_with("__Script::") => true,
+            _ => false,
+        }
     }
 
     pub(super) fn is_constructor_style_head(name: &str) -> bool {
@@ -1282,12 +1734,18 @@ impl Resolver {
             "__process_sleep" => "Use `Process::sleep(...)` instead.",
             "__task_call" => "Use `Task::call(...)` instead.",
             "__task_async" => "Use `Task::async(...)` instead.",
+            "__task_await" => "Use `Task::await(...)` instead.",
             "__task_launch" => "Use `Task::launch(...)` instead.",
             "__task_cast" => "Use `Task::cast(...)` instead.",
             "__task_call_timeout"
             | "__task_async_timeout"
+            | "__task_await_timeout"
             | "__task_launch_timeout"
-            | "__task_cast_timeout" => "Use the public Task API with `@timeout(...)` instead.",
+            | "__task_cast_timeout"
+            | "__workers_submit_timeout"
+            | "__workers_broadcast_timeout" => {
+                "Use the public Task/Workers API with `@timeout(...)` instead."
+            }
             "__process_pid" | "__process_spawn" | "__process_state" | "__process_store" => {
                 "This helper is compiler-managed; use `defagent`, `defgenserver`, or the public process surface instead."
             }
@@ -1327,6 +1785,16 @@ impl Resolver {
             .scope
             .lookup(&name)
             .or_else(|| {
+                if compiler_generated && is_runtime_builtin_decl(&name) {
+                    BUILTIN_METAS
+                        .iter()
+                        .position(|meta| meta.name == name)
+                        .map(|idx| builtin_uid(idx as u16))
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
                 if name == "Tuple" {
                     Some(TUPLE_TYPE_ROOT_UID)
                 } else {
@@ -1350,6 +1818,19 @@ impl Resolver {
                 message: format!(
                     "Extractor '{}' can only be used in MatchBlock/LHS positions. Use it on the left side of match, =?, or =. If you need a value-level API, write a normal def that returns Result or Option explicitly.",
                     name
+                ),
+                span,
+                related_labels: Vec::new(),
+            });
+        }
+        if let Some(binding_name) = self.forbidden_top_level_value_bindings.get(&uid) {
+            let def_name = self
+                .current_top_level_def_name
+                .as_deref()
+                .unwrap_or("<top-level>");
+            return Err(ResolveError {
+                message: format!(
+                    "Top-level definition `{def_name}` cannot reference value binding `{binding_name}`"
                 ),
                 span,
                 related_labels: Vec::new(),
@@ -1396,6 +1877,7 @@ impl Resolver {
         stmts: Vec<Ast>,
     ) -> Result<Vec<Resolved>, ResolveError> {
         let stmts = self.lower_impl_defs(stmts)?;
+        self.explicit_module_imports = Self::collect_explicit_module_imports(&stmts);
         self.validate_auto_import_conflicts(&stmts)?;
         self.predeclare_functions(&stmts)?;
         let mut resolved = Vec::new();
@@ -1415,9 +1897,129 @@ impl Resolver {
         self.predeclared_ids.clear();
         Ok(resolved)
     }
+
+    fn collect_explicit_module_imports(stmts: &[Ast]) -> HashSet<String> {
+        stmts
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Ast::Import(_, path, spire::ast::ImportSpec::All) => Some(path.segments.join("::")),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 impl Resolver {
+    fn flatten_bulk_update_entries(
+        prefix: &[Symbol],
+        entries: Vec<BulkUpdateEntry>,
+        out: &mut Vec<(Span, Vec<Symbol>, BulkUpdateEntryKind)>,
+    ) {
+        for entry in entries {
+            let mut path = prefix.to_vec();
+            path.extend(entry.path);
+            match entry.kind {
+                BulkUpdateEntryKind::Nested(children) => {
+                    Self::flatten_bulk_update_entries(&path, children, out);
+                }
+                kind => out.push((entry.span, path, kind)),
+            }
+        }
+    }
+
+    fn make_bulk_update_capture_path(
+        span: &Span,
+        root_name: &str,
+        path: &[Symbol],
+    ) -> Result<Ast, ResolveError> {
+        let mut expr = Ast::Var(span.clone(), root_name.to_string());
+        for segment in path {
+            expr = Ast::FieldAccess(span.clone(), Box::new(expr), segment.clone());
+        }
+        Ok(Ast::FacetCapture(span.clone(), Box::new(expr)))
+    }
+
+    fn make_facet_intrinsic_call(
+        span: &Span,
+        method: &str,
+        path_expr: Ast,
+        value_expr: Ast,
+    ) -> Ast {
+        Ast::App(
+            span.clone(),
+            Box::new(Ast::Path(
+                span.clone(),
+                AstPath {
+                    span: span.clone(),
+                    segments: vec!["Facet".into(), method.into()],
+                },
+            )),
+            vec![
+                RecordLitArg::Positional(path_expr),
+                RecordLitArg::Positional(value_expr),
+            ],
+        )
+    }
+
+    fn lower_bulk_update_special_form(
+        &mut self,
+        span: Span,
+        source: Ast,
+        entries: Vec<BulkUpdateEntry>,
+    ) -> Result<Resolved, ResolveError> {
+        let mut flat_entries = Vec::new();
+        Self::flatten_bulk_update_entries(&[], entries, &mut flat_entries);
+
+        let mut expr = Ast::ConstructorCall(
+            source.span().clone(),
+            "Ok".into(),
+            vec![RecordLitArg::Positional(source)],
+        );
+
+        for (index, entry_span, path, kind) in flat_entries
+            .into_iter()
+            .enumerate()
+            .map(|(index, (span, path, kind))| (index, span, path, kind))
+        {
+            let param_name = format!("__bulk_state_{}_{}", span.start, index);
+            let capture = Self::make_bulk_update_capture_path(&entry_span, &param_name, &path)?;
+            let body = match kind {
+                BulkUpdateEntryKind::Set(value) => {
+                    Self::make_facet_intrinsic_call(&entry_span, "set", capture, value)
+                }
+                BulkUpdateEntryKind::Over(update_fun) => {
+                    Self::make_facet_intrinsic_call(&entry_span, "over", capture, update_fun)
+                }
+                BulkUpdateEntryKind::OverResult(update_fun) => Self::make_facet_intrinsic_call(
+                    &entry_span,
+                    "over_result",
+                    capture,
+                    update_fun,
+                ),
+                BulkUpdateEntryKind::Nested(_) => unreachable!("nested entries must be flattened"),
+            };
+            let closure = Ast::Closure(
+                entry_span.clone(),
+                vec![ClosureParam {
+                    name: param_name,
+                    ty: None,
+                    span: entry_span.clone(),
+                }],
+                Box::new(body),
+            );
+            expr = Ast::ContextBind(
+                Span {
+                    start: span.start,
+                    end: entry_span.end,
+                },
+                Box::new(expr),
+                Box::new(closure),
+            );
+        }
+
+        self.resolve_node(expr)
+    }
+
     pub(super) fn resolve_node(&mut self, node: Ast) -> Result<Resolved, ResolveError> {
         match node {
             Ast::Lit(span, lit) => Ok(Resolved::Lit(span, lit)),
@@ -1438,44 +2040,7 @@ impl Resolver {
             }),
 
             Ast::App(span, func, args) => {
-                // Check for special forms
                 if let Ast::Var(_, ref name) = *func {
-                    if name == "if" {
-                        return self.resolve_if(span, args, IfKind::If3);
-                    }
-                    if name == "if_then" {
-                        return self.resolve_if(span, args, IfKind::IfThen2);
-                    }
-                    if name == "if_let" {
-                        return self.resolve_if_let(span, args);
-                    }
-                    if name == "if_let_then" {
-                        return self.resolve_if_let_then(span, args);
-                    }
-                    if name == "is_match" {
-                        return self.resolve_is_match(span, args);
-                    }
-                    if name == "assert" {
-                        return self.resolve_assert(span, args);
-                    }
-                    if name == "ensure" {
-                        return self.resolve_ensure(span, args);
-                    }
-                    if name == "map_err" {
-                        return self.resolve_map_err(span, args);
-                    }
-                    if name == "cause" {
-                        return self.resolve_cause(span, args);
-                    }
-                    if name == "recover_kind" {
-                        return self.resolve_recover_kind(span, args);
-                    }
-                    if name == "and" {
-                        return self.resolve_logic_call(span, args, LogicKind::And);
-                    }
-                    if name == "or" {
-                        return self.resolve_logic_call(span, args, LogicKind::Or);
-                    }
                     if name == "&&" {
                         return self.resolve_logic_call(span, args, LogicKind::And);
                     }
@@ -1483,42 +2048,34 @@ impl Resolver {
                         return self.resolve_logic_call(span, args, LogicKind::Or);
                     }
                 }
-                if let Ast::Path(_, ref path) = *func {
-                    if path.segments.len() == 2
-                        && path.segments[0] == "Result"
-                        && path.segments[1] == "map_err"
-                    {
-                        return self.resolve_map_err(span, args);
-                    }
-                    if path.segments.len() == 2
-                        && path.segments[0] == "Result"
-                        && path.segments[1] == "cause"
-                    {
-                        return self.resolve_cause(span, args);
-                    }
-                    if path.segments.len() == 2
-                        && path.segments[0] == "Result"
-                        && path.segments[1] == "recover_kind"
-                    {
-                        return self.resolve_recover_kind(span, args);
-                    }
-                }
 
-                if Self::conversion_call_head(&func).is_some() {
-                    let resolved_func = self.resolve_node(*func.clone()).map_err(|err| {
-                        Self::map_undefined_callable_error(err, &func, args.len())
-                    })?;
-                    if args.len() != 2 {
+                if let Some(spec) = Self::type_ref_helper_for_call(&func) {
+                    let resolved_func = self
+                        .resolve_type_ref_helper_func(func.span().clone(), spec)
+                        .map(Ok)
+                        .unwrap_or_else(|| {
+                            self.resolve_node(*func.clone()).map_err(|err| {
+                                self.map_undefined_callable_error(err, &func, args.len())
+                            })
+                        })?;
+                    let injected_receiver = args.len() + 1 == spec.arity;
+                    if args.len() != spec.arity && !injected_receiver {
                         return Err(ResolveError {
-                            message: "from/try_from expects exactly 2 positional arguments".into(),
+                            message: format!(
+                                "{} expects exactly {} positional arguments",
+                                spec.bare_name, spec.arity
+                            ),
                             span,
                             related_labels: Vec::new(),
                         });
                     }
-                    let mut resolved_args = Vec::with_capacity(2);
+                    let mut resolved_args = Vec::with_capacity(spec.arity);
                     for (idx, arg) in args.into_iter().enumerate() {
+                        let effective_idx = if injected_receiver { idx + 1 } else { idx };
                         match arg {
-                            RecordLitArg::Positional(expr) if idx == 1 => {
+                            RecordLitArg::Positional(expr)
+                                if spec.witness_arg_indices.contains(&effective_idx) =>
+                            {
                                 let witness_ty = Self::type_witness_from_expr(expr)?;
                                 resolved_args.push(ResolvedRecordLitArg::Positional(
                                     Resolved::TypeRefWitness(
@@ -1531,7 +2088,10 @@ impl Resolver {
                                 .push(ResolvedRecordLitArg::Positional(self.resolve_node(expr)?)),
                             RecordLitArg::Named(_, expr) => {
                                 return Err(ResolveError {
-                                    message: "from/try_from does not accept named arguments".into(),
+                                    message: format!(
+                                        "{} does not accept named arguments",
+                                        spec.bare_name
+                                    ),
                                     span: expr.span().clone(),
                                     related_labels: Vec::new(),
                                 });
@@ -1541,9 +2101,24 @@ impl Resolver {
                     return Ok(Resolved::App(span, Box::new(resolved_func), resolved_args));
                 }
 
-                let resolved_func = self
-                    .resolve_node(*func.clone())
-                    .map_err(|err| Self::map_undefined_callable_error(err, &func, args.len()))?;
+                let resolved_func = match self.resolve_node(*func.clone()) {
+                    Ok(resolved_func) => {
+                        if let Some(kind) =
+                            self.classify_canonical_special_form_callee(&resolved_func)
+                        {
+                            return self.resolve_canonical_special_form_call(span, args, kind);
+                        }
+                        resolved_func
+                    }
+                    Err(err) => {
+                        if let Some(kind) = Self::fallback_special_form_from_surface(func.as_ref())
+                        {
+                            return self.resolve_canonical_special_form_call(span, args, kind);
+                        }
+                        return Err(self.map_undefined_callable_error(err, &func, args.len()));
+                    }
+                };
+                self.ensure_user_callable_surface(&resolved_func, &span, args.len())?;
                 let resolved_args = args
                     .into_iter()
                     .map(|arg| match arg {
@@ -1683,12 +2258,24 @@ impl Resolver {
                     .collect::<Result<Vec<_>, _>>()?,
             )),
 
+            Ast::BulkUpdate(span, source, entries) => {
+                self.lower_bulk_update_special_form(span, *source, entries)
+            }
+
             Ast::FieldAccess(span, expr, field) => {
+                let original = Ast::FieldAccess(span.clone(), expr.clone(), field.clone());
+                if let Some(segments) = Self::inferred_facet_capture_segments(&original) {
+                    return Ok(Resolved::InferredFacetCapture(span, segments));
+                }
                 if matches!(expr.as_ref(), Ast::Var(_, name) if name == "ctx") {
                     return Ok(Resolved::ProcessContextHandler(span, field));
                 }
                 let resolved_expr = self.resolve_node(*expr)?;
                 Ok(Resolved::FieldAccess(span, Box::new(resolved_expr), field))
+            }
+            Ast::FacetCapture(span, expr) => {
+                let resolved_expr = self.resolve_node(*expr)?;
+                Ok(Resolved::FacetCapture(span, Box::new(resolved_expr)))
             }
 
             Ast::Block(span, stmts) => {
@@ -1713,6 +2300,9 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
+                if let Some(surface_name) = name.strip_prefix("Global::") {
+                    self.scope.define_with_id(surface_name, uid);
+                }
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
@@ -1730,6 +2320,7 @@ impl Resolver {
                             ty: self.resolve_type_annotation(f.ty)?,
                             span: f.span,
                             visibility: f.visibility,
+                            readonly: f.readonly,
                         })
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?;
@@ -1747,6 +2338,9 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
+                if let Some(surface_name) = name.strip_prefix("Global::") {
+                    self.scope.define_with_id(surface_name, uid);
+                }
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
@@ -1764,6 +2358,7 @@ impl Resolver {
                             ty: self.resolve_type_annotation(f.ty)?,
                             span: f.span,
                             visibility: f.visibility,
+                            readonly: f.readonly,
                         })
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?;
@@ -1776,6 +2371,9 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
+                if let Some(surface_name) = name.strip_prefix("Global::") {
+                    self.scope.define_with_id(surface_name, uid);
+                }
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
@@ -1800,6 +2398,7 @@ impl Resolver {
                         ty: self.resolve_type_annotation(f.ty)?,
                         span: f.span,
                         visibility: f.visibility,
+                        readonly: f.readonly,
                     });
                 }
                 let mut show_resolver = Resolver::with_scope(error_scope);
@@ -1824,6 +2423,9 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
+                if let Some(surface_name) = name.strip_prefix("Global::") {
+                    self.scope.define_with_id(surface_name, uid);
+                }
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name: name.clone(),
@@ -1845,6 +2447,9 @@ impl Resolver {
                         .or_else(|| self.scope.lookup(&ctor_name))
                         .unwrap_or_else(|| self.scope.reserve_id());
                     self.scope.define_with_id(&ctor_name, ctor_uid);
+                    if let Some(surface_ctor_name) = ctor_name.strip_prefix("Global::") {
+                        self.scope.define_with_id(surface_ctor_name, ctor_uid);
+                    }
                     let qualified_ctor_name = self.qualify_current_declaration_name(&ctor_name);
                     resolved_variants.push(ResolvedEnumVariant {
                         id: ResolvedId {
@@ -1888,6 +2493,11 @@ impl Resolver {
                 body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 body_resolver.current_module_path = self.current_module_path.clone();
                 body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
+                if self.forbids_top_level_value_capture_in_defs() {
+                    body_resolver.forbidden_top_level_value_bindings =
+                        self.top_level_value_bindings();
+                    body_resolver.current_top_level_def_name = Some(name.clone());
+                }
                 let resolved_type_params = self.resolve_type_params(type_params)?;
                 let resolved_params = params
                     .into_iter()
@@ -1898,6 +2508,9 @@ impl Resolver {
                 self.scope.advance_next_id_to(body_resolver.scope.next_id());
                 self.scope.define_with_id(&name, fun_uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
+                if let Some(surface_name) = qualified_name.strip_prefix("Global::") {
+                    self.scope.define_with_id(surface_name, fun_uid);
+                }
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),
@@ -1930,6 +2543,12 @@ impl Resolver {
                 } else {
                     Some(self.qualify_current_declaration_name(&format!("__const__::{}", name)))
                 };
+                if let Some(surface_name) = qualified_name
+                    .as_deref()
+                    .and_then(|name| name.strip_prefix("Global::"))
+                {
+                    self.scope.define_with_id(surface_name, uid);
+                }
                 let rid = ResolvedId {
                     name,
                     qualified_name,
@@ -1965,6 +2584,9 @@ impl Resolver {
                 self.scope.advance_next_id_to(body_resolver.scope.next_id());
                 self.scope.define_with_id(&name, fun_uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
+                if let Some(surface_name) = qualified_name.strip_prefix("Global::") {
+                    self.scope.define_with_id(surface_name, fun_uid);
+                }
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),
@@ -2062,34 +2684,7 @@ impl Resolver {
                     span: span.clone(),
                 };
                 let resolved_target_ty = self.resolve_type_annotation(target_ty)?;
-                let target_key = match &resolved_target_ty {
-                    AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => name.clone(),
-                    AstTy::Generic(_, name, args) => format!(
-                        "{}<{}>",
-                        name,
-                        args.iter()
-                            .map(Self::ast_ty_symbol_key)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                    AstTy::Tuple(_, items) => format!(
-                        "({})",
-                        items
-                            .iter()
-                            .map(Self::ast_ty_symbol_key)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                    AstTy::Func(_, params, ret) => format!(
-                        "({} -> {})",
-                        params
-                            .iter()
-                            .map(Self::ast_ty_symbol_key)
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        Self::ast_ty_symbol_key(ret)
-                    ),
-                };
+                let target_key = ast_ty_key(&resolved_target_ty);
                 let mut resolved_methods = Vec::new();
                 for method in methods {
                     let (
@@ -2233,7 +2828,9 @@ impl Resolver {
                 }
 
                 let builtin_uid = self
-                    .take_predeclared_id(&name)
+                    .take_predeclared_id(&qualified_name)
+                    .or_else(|| self.take_predeclared_id(&name))
+                    .or_else(|| self.declaration_uids.get(&qualified_name).copied())
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 let mut decl_resolver = Resolver::with_scope(self.scope.clone());
@@ -2273,12 +2870,14 @@ impl Resolver {
                 related_labels: Vec::new(),
             }),
             Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => {
+                let qualified_name = self.qualify_current_declaration_name(&name);
                 let uid = self
-                    .take_predeclared_id(&name)
+                    .take_predeclared_id(&qualified_name)
+                    .or_else(|| self.take_predeclared_id(&name))
+                    .or_else(|| self.declaration_uids.get(&qualified_name).copied())
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
-                let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),
@@ -2299,6 +2898,10 @@ impl Resolver {
                 let builtin_type_uid = self
                     .take_predeclared_id(&head.name)
                     .unwrap_or_else(|| self.scope.reserve_id());
+                self.scope.define_with_id(&head.name, builtin_type_uid);
+                if let Some(surface_name) = head.name.strip_prefix("Global::") {
+                    self.scope.define_with_id(surface_name, builtin_type_uid);
+                }
                 let qualified_name = self.qualify_current_declaration_name(&head.name);
                 let rid = ResolvedId {
                     name: head.name,
@@ -2320,6 +2923,9 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
+                if let Some(surface_name) = name.strip_prefix("Global::") {
+                    self.scope.define_with_id(surface_name, uid);
+                }
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
@@ -2711,37 +3317,6 @@ impl Resolver {
         self.resolve_trait_reference(trait_name, span)
             .map(|(_, qualified_name)| qualified_name)
     }
-
-    fn ast_ty_symbol_key(ty: &AstTy) -> String {
-        match ty {
-            AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => name.clone(),
-            AstTy::Generic(_, name, args) => format!(
-                "{}<{}>",
-                name,
-                args.iter()
-                    .map(Self::ast_ty_symbol_key)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            AstTy::Tuple(_, items) => format!(
-                "({})",
-                items
-                    .iter()
-                    .map(Self::ast_ty_symbol_key)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            AstTy::Func(_, params, ret) => format!(
-                "({} -> {})",
-                params
-                    .iter()
-                    .map(Self::ast_ty_symbol_key)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                Self::ast_ty_symbol_key(ret)
-            ),
-        }
-    }
 }
 
 pub(super) fn validate_trait_impl_pairs_in_nodes(
@@ -2756,11 +3331,7 @@ pub(super) fn validate_trait_impl_pairs_in_nodes(
             trait_id.qualified_name.as_deref().unwrap_or(&trait_id.name),
             trait_args,
         );
-        let pair_key = format!(
-            "{} for {}",
-            trait_name,
-            Resolver::ast_ty_symbol_key(target_ty)
-        );
+        let pair_key = format!("{} for {}", trait_name, ast_ty_key(target_ty));
         if let Some(first_span) = seen_pairs.get(&pair_key) {
             return Err(ResolveError {
                 message: format!(

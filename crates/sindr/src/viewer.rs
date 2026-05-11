@@ -104,6 +104,36 @@ pub enum OpcodeView {
     StoreLocal {
         local_idx: u32,
     },
+    StoreConstLocal {
+        const_idx: u32,
+        local_idx: u32,
+    },
+    CopyLocal {
+        src_local_idx: u32,
+        dst_local_idx: u32,
+    },
+    EqLocalTag {
+        local_idx: u32,
+        tag_const_idx: u32,
+    },
+    StringLen,
+    ListLen,
+    SafeModInt,
+    StringContains,
+    StringStartsWith,
+    StringEndsWith,
+    MakeOk,
+    MakeErr,
+    JumpIfLocalTagEq {
+        local_idx: u32,
+        tag_const_idx: u32,
+        target_pc: u32,
+    },
+    JumpIfLocalTagNe {
+        local_idx: u32,
+        tag_const_idx: u32,
+        target_pc: u32,
+    },
     AddInt,
     SubInt,
     MulInt,
@@ -458,6 +488,53 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
         Opcode::StoreLocal(local_idx) => OpcodeView::StoreLocal {
             local_idx: *local_idx,
         },
+        Opcode::StoreConstLocal {
+            const_idx,
+            local_idx,
+        } => OpcodeView::StoreConstLocal {
+            const_idx: *const_idx,
+            local_idx: *local_idx,
+        },
+        Opcode::CopyLocal {
+            src_local_idx,
+            dst_local_idx,
+        } => OpcodeView::CopyLocal {
+            src_local_idx: *src_local_idx,
+            dst_local_idx: *dst_local_idx,
+        },
+        Opcode::EqLocalTag {
+            local_idx,
+            tag_const_idx,
+        } => OpcodeView::EqLocalTag {
+            local_idx: *local_idx,
+            tag_const_idx: *tag_const_idx,
+        },
+        Opcode::StringLen => OpcodeView::StringLen,
+        Opcode::ListLen => OpcodeView::ListLen,
+        Opcode::SafeModInt => OpcodeView::SafeModInt,
+        Opcode::StringContains => OpcodeView::StringContains,
+        Opcode::StringStartsWith => OpcodeView::StringStartsWith,
+        Opcode::StringEndsWith => OpcodeView::StringEndsWith,
+        Opcode::MakeOk => OpcodeView::MakeOk,
+        Opcode::MakeErr => OpcodeView::MakeErr,
+        Opcode::JumpIfLocalTagEq {
+            local_idx,
+            tag_const_idx,
+            target_pc,
+        } => OpcodeView::JumpIfLocalTagEq {
+            local_idx: *local_idx,
+            tag_const_idx: *tag_const_idx,
+            target_pc: *target_pc,
+        },
+        Opcode::JumpIfLocalTagNe {
+            local_idx,
+            tag_const_idx,
+            target_pc,
+        } => OpcodeView::JumpIfLocalTagNe {
+            local_idx: *local_idx,
+            tag_const_idx: *tag_const_idx,
+            target_pc: *target_pc,
+        },
         Opcode::AddInt => OpcodeView::AddInt,
         Opcode::SubInt => OpcodeView::SubInt,
         Opcode::MulInt => OpcodeView::MulInt,
@@ -798,7 +875,6 @@ mod tests {
                     instance: RuntimeProcessInstance::Worker,
                     state: crate::ir::RuntimeStateSpec {
                         state_type: crate::ir::RuntimeTypeRef { name: "Int".into() },
-                        owner_process: Some("Counter".into()),
                     },
                     init: crate::ir::RuntimeInitSpec {
                         callable: crate::ir::RuntimeCallableRef { fun_idx: 0 },

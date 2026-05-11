@@ -13,8 +13,11 @@ REPL は起動時に標準定義ソースと preload を読み切る OnceRead un
 - [型注釈](./type-annotations.md)
 - [トレイト実装](./trait-impls.md)
 - [構造体](./structs.md)
-- [Lens](./lens.md)
+- [Facet](./facet.md)
 - [Kernel](./kernel.md)
+- [JSON](./json.md)
+- [File I/O](./file-io.md)
+- [FS and Shell](./shell.md)
 - [Regex](./regex.md)
 - [パターンマッチ](./pattern-matching.md)
 - [関数コールと関数値](./callables.md)
@@ -23,7 +26,7 @@ REPL は起動時に標準定義ソースと preload を読み切る OnceRead un
 - [関数演算子](./function-operators.md)
 - [エラーハンドリング](./error-handling.md)
 - [Extractor](./extractors.md)
-- [Agents](./agents.md)
+- [Process](./process.md)
 - [言語機能 (`import`, `include`, `@autoimport`)](./language-features.md)
 
 ## 補助ページ

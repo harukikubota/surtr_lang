@@ -1,0 +1,133 @@
+@doc """
+Function module.
+
+Provides the small auto-imported standard surface for pure callable
+combinators and tuple-oriented helper functions.
+Use this layer when you want to reshape callables, build new callables from
+existing ones, or thread tuple state without introducing ad-hoc closures.
+
+## REPL
+xldr(1)> apply(&id, 42)
+42
+xldr(2)> dup("ok")
+("ok", "ok")
+"""
+@autoimport
+defmod Function {
+  @doc """
+  Lift a binary callable through a key function.
+
+  `on(f, key)` turns a callable like `f: ($B, $B -> $C)` into
+  `($A, $A -> $C)` by applying `key` to both inputs before calling `f`.
+
+  This is useful for keyed comparisons and grouping logic.
+
+  ## REPL
+  xldr(1)> by_len = on({|left, right| compare(left, right)}, &String::len)
+  > by_len: (String, String -> Ordering)
+  xldr(2)> by_len("a", "abcd")
+  Ordering::Less
+  """
+  def on(f: ($B, $B -> $C), key: ($A -> $B)) -> ($A, $A -> $C) {
+    {|left, right| f(key(left), key(right)) }
+  }
+
+  @doc """
+  Return `value` unchanged.
+
+  This is the smallest possible identity helper and is mainly useful when a
+  named callable reads better than an inline closure.
+
+  ## REPL
+  xldr(1)> id(42)
+  42
+  """
+  def id(value: $A) -> $A { value }
+
+  @doc """
+  Return a callable that ignores its input and always yields `value`.
+
+  This is a small pure helper for constant-like closure behavior in pipelines
+  and composition.
+
+  ## REPL
+  xldr(1)> keep_one = always(1)
+  > keep_one: (_ -> Int)
+  xldr(2)> keep_one("ignored")
+  1
+  """
+  def always(value: $A) -> (_ -> $A) { {|_| value} }
+
+  @doc """
+  Return a zero-argument callable that does nothing and yields `()`.
+
+  This is useful when a callback surface needs an explicit no-op function value
+  rather than an omitted branch.
+
+  ## REPL
+  xldr(1)> idle = noop()
+  > idle: (-> Unit)
+  xldr(2)> idle()
+  ()
+  """
+  def noop() -> (-> Unit) { {|| ()} }
+
+  @doc """
+  Swap the argument order of a binary callable.
+
+  ## REPL
+  xldr(1)> sub = {|left: Int, right: Int| left - right}
+  xldr(2)> flipped = flip(sub)
+  xldr(3)> flipped(2, 10)
+  8
+  """
+  def flip(f: ($A, $B -> $C)) -> ($B, $A -> $C) {
+    {|right, left| f(left, right) }
+  }
+
+  @doc """
+  Apply `value` to `f`.
+
+  This is useful when a callable should be passed around as a value before the
+  final application step.
+
+  ## REPL
+  xldr(1)> apply(&id, 42)
+  42
+  """
+  def apply(f: ($A -> $B), value: $A) -> $B { f(value) }
+
+  @doc """
+  Convert a binary callable into a curried callable.
+
+  ## REPL
+  xldr(1)> add = {|left: Int, right: Int| left + right}
+  xldr(2)> curried = curry(add)
+  xldr(3)> add_two = curried(2)
+  xldr(4)> add_two(5)
+  7
+  """
+  def curry(f: ($A, $B -> $C)) -> ($A -> ($B -> $C)) {
+    {|left|
+      {|right|
+        f(left, right)
+      }
+    }
+  }
+
+  @doc """
+  Convert a curried callable into a binary callable.
+
+  ## REPL
+  xldr(1)> add = {|left: Int| {|right: Int| left + right}}
+  xldr(2)> binary = uncurry(add)
+  xldr(3)> binary(3, 4)
+  7
+  """
+  def uncurry(f: ($A -> ($B -> $C))) -> ($A, $B -> $C) {
+    {|left, right|
+      step = f(left)
+      step(right)
+    }
+  }
+}

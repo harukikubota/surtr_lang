@@ -1,0 +1,3 @@
+defrecord User(name: String)
+users = [User("alice")]
+bad = users |*> _.missing

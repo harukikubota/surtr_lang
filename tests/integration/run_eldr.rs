@@ -376,6 +376,265 @@ fn run_vm_dump_writes_json_on_success_when_always_enabled() {
 }
 
 #[test]
+fn run_vm_stats_writes_observation_to_stderr_without_polluting_stdout() {
+    let temp = unique_temp_dir("surtr_vm_stats");
+    let source_path = temp.join("sample.srt");
+    write_source(&source_path, "print(to_string(1 + 2))\n");
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--vm-stats",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("VM stats:"), "{stderr}");
+    assert!(stderr.contains("executed_opcodes:"), "{stderr}");
+    assert!(stderr.contains("LoadConst"), "{stderr}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_vm_stats_json_writes_machine_readable_observation_to_stderr() {
+    let temp = unique_temp_dir("surtr_vm_stats_json");
+    let source_path = temp.join("sample.srt");
+    write_source(&source_path, "print(to_string(1 + 2))\n");
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--vm-stats-json",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json: Value = serde_json::from_str(stderr.trim()).expect("stderr must be stats json");
+    assert_eq!(json["schema_version"], 1);
+    assert!(json["stats"]["executed_opcodes"].as_u64().unwrap_or(0) > 0);
+    assert!(
+        json["stats"]["per_opcode"]["LoadConst"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0
+    );
+    assert!(json["trace"]["lines"].as_array().is_some());
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_vm_stats_json_includes_branch_outcomes() {
+    let temp = unique_temp_dir("surtr_branch_stats_json");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"if(1 == 1, print("yes"), print("no"))
+"#,
+    );
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--vm-stats-json",
+            "--trace-opcode",
+            "--trace-filter",
+            "JumpIfFalse",
+            "--trace-limit",
+            "10",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "yes\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let json_line = stderr
+        .lines()
+        .last()
+        .expect("stats json should be the final stderr line");
+    let json: Value =
+        serde_json::from_str(json_line).expect("final stderr line must be stats json");
+    let branch = &json["stats"]["branch"];
+    let total = branch["jump_if_false_taken"].as_u64().unwrap_or(0)
+        + branch["jump_if_false_not_taken"].as_u64().unwrap_or(0)
+        + branch["jump_if_true_taken"].as_u64().unwrap_or(0)
+        + branch["jump_if_true_not_taken"].as_u64().unwrap_or(0);
+    assert!(total > 0, "expected branch counters in {json}");
+    assert!(
+        stderr.contains("taken="),
+        "trace should include branch outcome detail: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_phase_times_writes_timing_report_to_stderr() {
+    let temp = unique_temp_dir("surtr_phase_times");
+    let source_path = temp.join("sample.srt");
+    write_source(&source_path, "print(\"ok\")\n");
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--phase-times",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "ok\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Phase times:"), "{stderr}");
+    assert!(stderr.contains("parse:"), "{stderr}");
+    assert!(stderr.contains("execute:"), "{stderr}");
+    assert!(stderr.contains("total:"), "{stderr}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_vm_stats_json_remains_final_stderr_line_with_phase_times() {
+    let temp = unique_temp_dir("surtr_vm_stats_json_phase_times");
+    let source_path = temp.join("sample.srt");
+    write_source(&source_path, "print(\"ok\")\n");
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--phase-times",
+            "--vm-stats-json",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "ok\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Phase times:"), "{stderr}");
+    let json_line = stderr
+        .lines()
+        .last()
+        .expect("stats json should be the final stderr line");
+    let json: Value =
+        serde_json::from_str(json_line).expect("final stderr line must be stats json");
+    assert_eq!(json["schema_version"], 1);
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_error_context_verbose_adds_vm_details_to_runtime_error() {
+    let temp = unique_temp_dir("surtr_error_context_verbose");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"def main() -> Result<()> {
+  Err(NoneError)
+}
+
+main()
+"#,
+    );
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--error-context",
+            "verbose",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Runtime context:"), "{stderr}");
+    assert!(stderr.contains("pc:"), "{stderr}");
+    assert!(stderr.contains("opcode:"), "{stderr}");
+    assert!(stderr.contains("function:"), "{stderr}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_trace_opcode_filter_writes_matching_trace_to_stderr() {
+    let temp = unique_temp_dir("surtr_trace_opcode_filter");
+    let source_path = temp.join("sample.srt");
+    write_source(&source_path, "print(to_string(1 + 2))\n");
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--trace-opcode",
+            "--trace-filter",
+            "LoadConst",
+            "--trace-limit",
+            "2",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        output.status.success(),
+        "run source should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "3\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("op pc="), "{stderr}");
+    assert!(stderr.contains("LoadConst"), "{stderr}");
+    assert!(!stderr.contains("AddInt"), "{stderr}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn run_vm_dump_includes_process_runtime_tables_for_agents() {
     let temp = unique_temp_dir("surtr_vm_dump_process_runtime");
     let eldr_path = temp.join("sample.eldr");
@@ -384,7 +643,8 @@ fn run_vm_dump_includes_process_runtime_tables_for_agents() {
         .into_iter()
         .find(|fixture| {
             fixture.case.case_dir
-                == repo_root().join("tests/spec/modules/process_state_agent_singleton_surface")
+                == repo_root()
+                    .join("tests/fixtures/modules/pass/process_state_agent_singleton_surface")
         })
         .expect("process_state_agent_singleton_surface fixture should exist");
     let module_sources =

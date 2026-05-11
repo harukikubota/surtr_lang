@@ -1,0 +1,55 @@
+defagent MyWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> {
+    Ok(seed)
+  }
+
+  @get
+  def value(state: Int) -> Result<Int> {
+    Ok(state)
+  }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> {
+    Ok(next)
+  }
+}
+
+defsupervisor MySup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+
+supervisor_init {
+  MySup {}
+  MyPool {}
+}
+
+defgenserver MyPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Workers<MyWorker>
+  }
+
+  @init
+  def init() -> Result<Workers<MyWorker>> {
+    MySup::workers(MyWorker::init(1), 2)
+  }
+
+  @call
+  def count(workers: Workers<MyWorker>) -> Result<CallResult<Int, Workers<MyWorker>>> {
+    Ok(CallResult::Reply(Workers::size(workers), workers))
+  }
+}

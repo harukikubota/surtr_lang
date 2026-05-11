@@ -1,0 +1,2 @@
+phase: typecheck
+contains: implementing Compare, got (Int, Int, Int, Int, Int, Int, Int, Int, Int)

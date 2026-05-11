@@ -56,6 +56,37 @@ fn staged_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
     }
 }
 
+fn staged_process_module(ast: Vec<Ast>) -> StagedModuleAst {
+    match ast.into_iter().next().expect("process module should exist") {
+        Ast::Defagent(_, module_path, ast, process_spec, attrs) => StagedModuleAst {
+            module_path,
+            doc_module_path: None,
+            ast,
+            module_doc: attrs.doc,
+            auto_import: attrs.auto_import,
+            process_spec: Some(process_spec),
+        },
+        Ast::Defgenserver(_, module_path, ast, process_spec, attrs) => StagedModuleAst {
+            module_path,
+            doc_module_path: None,
+            ast,
+            module_doc: attrs.doc,
+            auto_import: attrs.auto_import,
+            process_spec: Some(process_spec),
+        },
+        Ast::Defsupervisor(_, module_path, ast, process_spec, attrs)
+        | Ast::DefdynamicSupervisor(_, module_path, ast, process_spec, attrs) => StagedModuleAst {
+            module_path,
+            doc_module_path: None,
+            ast,
+            module_doc: attrs.doc,
+            auto_import: attrs.auto_import,
+            process_spec: Some(process_spec),
+        },
+        other => panic!("expected process module, got {other:?}"),
+    }
+}
+
 fn staged_auto_import_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
     StagedModuleAst {
         module_path: module_path.to_string(),
@@ -90,6 +121,39 @@ deferror IndexOutOfBounds(detail: String) { detail }"#,
             "Bootstrap",
         ),
     )]];
+    full_stages.push(vec![
+        staged_module(
+            "Agent",
+            parse_module_ast(
+                r#"@hidden
+@builtin def pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>
+@hidden
+@builtin def state(pid: PID<$Process>) -> Result<$State>
+@hidden
+@builtin def store(pid: PID<$Process>, state: $State) -> Result<Unit>"#,
+                "Agent",
+            ),
+        ),
+        staged_module(
+            "GenServer",
+            parse_module_ast(
+                r#"@hidden
+@builtin def pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>
+@hidden
+@builtin def state(pid: PID<$Process>) -> Result<$State>
+@hidden
+@builtin def store(pid: PID<$Process>, state: $State) -> Result<Unit>"#,
+                "GenServer",
+            ),
+        ),
+        staged_module(
+            "DynamicSupervisor",
+            parse_module_ast(
+                r#"@builtin def spawn(worker_init: (-> Result<$State>)) -> Result<PID<$Process>>"#,
+                "DynamicSupervisor",
+            ),
+        ),
+    ]);
     full_stages.extend(module_stages.iter().cloned());
     let declaration_index =
         precollect_declaration_index(&full_stages).expect("precollect should succeed");
@@ -115,8 +179,8 @@ deferror Oops(reason: String) { reason }"#,
 
     let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
     assert!(index.contains_key("Bootstrap::to_int"));
-    assert!(index.contains_key("Pair"));
-    assert!(index.contains_key("Oops"));
+    assert!(index.contains_key("Global::Pair"));
+    assert!(index.contains_key("Global::Oops"));
 }
 
 #[test]
@@ -154,6 +218,7 @@ fn test_resolve_staged_program_keeps_process_specs() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -190,8 +255,8 @@ fn test_resolve_staged_program_keeps_process_specs() {
 
     assert_eq!(resolved.process_specs.len(), 1);
     let spec = &resolved.process_specs[0];
-    assert_eq!(spec.module_path, "Counter");
-    assert_eq!(spec.process_name, "Counter");
+    assert_eq!(spec.module_path, "Global::Counter");
+    assert_eq!(spec.process_name, "Global::Counter");
 }
 
 #[test]
@@ -235,8 +300,10 @@ fn test_precollect_namespaced_duplicate_type_is_rejected() {
     let module_stages = vec![vec![staged_module(
         "",
         parse_module_ast(
-            r#"namespace Auth { defrecord User(name: String) }
-namespace Auth { defrecord User(name: String) }"#,
+            r#"namespace Auth {
+  defrecord User(name: String)
+  defrecord User(name: String)
+}"#,
             "",
         ),
     )]];
@@ -286,7 +353,7 @@ fn test_precollect_declaration_index_tracks_bootstrap_std_user_stage_split() {
     ];
 
     let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
-    assert_eq!(index["NoneError"].stage_index, 0);
+    assert_eq!(index["Global::NoneError"].stage_index, 0);
     assert_eq!(index["Std::Math::add"].stage_index, 1);
     assert_eq!(index["User::Main::main"].stage_index, 2);
 }
@@ -318,22 +385,24 @@ impl User {
     )]];
 
     let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
-    let ctor = index.get("User::new").expect("new should be indexed");
-    assert_eq!(ctor.module_path, "User");
+    let ctor = index
+        .get("Global::User::new")
+        .expect("new should be indexed");
+    assert_eq!(ctor.module_path, "Global::User");
     assert_eq!(ctor.name, "new");
     assert_eq!(ctor.kind, DeclarationKind::ImplCtorNew);
 
     let normalize = index
-        .get("User::normalize")
+        .get("Global::User::normalize")
         .expect("normalize should be indexed");
-    assert_eq!(normalize.module_path, "User");
+    assert_eq!(normalize.module_path, "Global::User");
     assert_eq!(normalize.name, "normalize");
     assert_eq!(normalize.kind, DeclarationKind::ImplMethod);
 
     let deconstruct = index
-        .get("User::deconstruct")
+        .get("Global::User::deconstruct")
         .expect("deconstruct should be indexed");
-    assert_eq!(deconstruct.module_path, "User");
+    assert_eq!(deconstruct.module_path, "Global::User");
     assert_eq!(deconstruct.name, "deconstruct");
     assert_eq!(deconstruct.kind, DeclarationKind::Extractor);
 }
@@ -359,9 +428,9 @@ impl Light {
 
     let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
     let stop_code = index
-        .get("Light::stop_code")
+        .get("Global::Light::stop_code")
         .expect("enum extractor should be indexed");
-    assert_eq!(stop_code.module_path, "Light");
+    assert_eq!(stop_code.module_path, "Global::Light");
     assert_eq!(stop_code.name, "stop_code");
     assert_eq!(stop_code.kind, DeclarationKind::Extractor);
 }
@@ -424,9 +493,9 @@ fn test_precollect_allows_impl_target_defined_in_another_file_same_stage() {
 
     let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
     let normalize = index
-        .get("User::normalize")
+        .get("Global::User::normalize")
         .expect("impl method should be indexed");
-    assert_eq!(normalize.module_path, "User");
+    assert_eq!(normalize.module_path, "Global::User");
     assert_eq!(normalize.kind, DeclarationKind::ImplMethod);
 }
 
@@ -457,9 +526,9 @@ fn test_resolve_allows_impl_target_defined_in_another_file_same_stage() {
 
     let resolved = resolve_user_with_modules("value = 0", &module_stages)
         .expect("split impl in same stage should resolve");
-    assert!(resolved
-        .iter()
-        .any(|node| matches!(node, Resolved::Def(_, id, ..) if id.name == "User::normalize")));
+    assert!(resolved.iter().any(
+        |node| matches!(node, Resolved::Def(_, id, ..) if id.name == "Global::User::normalize")
+    ));
 }
 
 #[test]
@@ -619,9 +688,9 @@ fn test_precollect_allows_impl_for_builtin_type_owner() {
 
     let index = precollect_declaration_index(&module_stages).expect("builtin impl should succeed");
     let method = index
-        .get("Int::abs_alias")
+        .get("Global::Int::abs_alias")
         .expect("builtin impl method should be indexed");
-    assert_eq!(method.module_path, "Int");
+    assert_eq!(method.module_path, "Global::Int");
     assert_eq!(method.kind, DeclarationKind::ImplMethod);
 }
 
@@ -647,8 +716,8 @@ impl User {
 
     let declaration_index =
         precollect_declaration_index(&module_stages).expect("precollect should succeed");
-    assert!(declaration_index.contains_key("User::new"));
-    assert!(declaration_index.contains_key("User::normalize"));
+    assert!(declaration_index.contains_key("Global::User::new"));
+    assert!(declaration_index.contains_key("Global::User::normalize"));
     assert!(!declaration_index.contains_key("Types::User::normalize"));
 
     let resolved = resolve_user_with_modules(
@@ -657,9 +726,9 @@ normalized = User::normalize(user)"#,
         &module_stages,
     )
     .expect("qualified impl calls should resolve through type owner");
-    assert!(resolved
-        .iter()
-        .any(|node| matches!(node, Resolved::Def(_, id, ..) if id.name == "User::normalize")));
+    assert!(resolved.iter().any(
+        |node| matches!(node, Resolved::Def(_, id, ..) if id.name == "Global::User::normalize")
+    ));
 }
 
 #[test]
@@ -747,7 +816,7 @@ impl Pair {
         precollect_declaration_index(&module_stages).expect_err("record impl should be rejected");
     assert!(err
         .message
-        .contains("impl target `Pair` must be a standard type, struct, or enum"));
+        .contains("impl target `Global::Pair` must be a standard type, struct, or enum"));
 }
 
 #[test]
@@ -766,7 +835,7 @@ fn test_precollect_rejects_impl_target_for_cond_clauses_builtin_type() {
         .expect_err("CondClauses builtin clause type should reject inherent impl");
     assert!(err
         .message
-        .contains("impl target `CondClauses` must be a standard type owner or a struct/enum defined in the current stage"));
+        .contains("impl target `Global::CondClauses` must be a standard type owner or a struct/enum defined in the current stage"));
 }
 
 #[test]
@@ -883,7 +952,7 @@ impl Add for Int {
     assert!(matches!(
         &resolved[1],
         Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), methods)
-            if id.name == "Add" && target == "Int" && methods.len() == 1
+            if id.name == "Add" && target == "Global::Int" && methods.len() == 1
     ));
 }
 
@@ -905,7 +974,7 @@ impl Add for Int {
         &resolved[1],
         Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), methods)
             if id.name == "Add"
-                && target == "Int"
+                && target == "Global::Int"
                 && methods.len() == 1
                 && methods[0].is_builtin
                 && methods[0].function_id.qualified_name.as_deref().is_some_and(|name| {
@@ -1096,7 +1165,7 @@ impl User {
         .iter()
         .find_map(|node| match node {
             Resolved::Def(_, id, _, _, _, body, _)
-                if id.qualified_name.as_deref() == Some("User::new") =>
+                if id.qualified_name.as_deref() == Some("Global::User::new") =>
             {
                 Some(body.as_ref())
             }
@@ -1142,6 +1211,33 @@ fn test_builtin_type_decl_resolution() {
 }
 
 #[test]
+fn test_struct_readonly_metadata_and_fields_resolve() {
+    let ast = spire::parse_with_context(
+        "@readonly\ndefstruct User { private readonly password: String, readonly name: String }",
+        spire::ParserContext::project(0),
+    )
+    .expect("readonly struct should parse");
+    let mut resolver = Resolver::new();
+    let resolved = resolver
+        .resolve_program(ast)
+        .expect("readonly struct should resolve");
+
+    match &resolved[0] {
+        Resolved::StructDef(_, id, fields, attrs) => {
+            assert_eq!(id.name, "Global::User");
+            assert!(attrs.readonly);
+            assert_eq!(fields[0].name, "password");
+            assert_eq!(fields[0].visibility, spire::ast::Visibility::Private);
+            assert!(fields[0].readonly);
+            assert_eq!(fields[1].name, "name");
+            assert_eq!(fields[1].visibility, spire::ast::Visibility::Public);
+            assert!(fields[1].readonly);
+        }
+        other => panic!("Expected StructDef, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_module_builtin_can_be_resolved_by_qualified_name() {
     let module_stages = vec![vec![staged_module(
         "Int",
@@ -1170,6 +1266,85 @@ fn test_module_builtin_can_be_resolved_by_qualified_name() {
         },
         _ => panic!("Expected bind"),
     }
+}
+
+#[test]
+fn test_impl_method_in_canonical_module_keeps_same_uid_for_qualified_calls() {
+    let module_stages = vec![vec![staged_module(
+        "Global::Int",
+        parse_module_ast(
+            r#"defenum IntBase {
+  Dec,
+}
+
+impl IntBase {
+  def radix(self: Self) -> Int {
+    10
+  }
+}
+
+def parse_base(base: IntBase) -> Int {
+  IntBase::radix(base)
+}"#,
+            "Global::Int",
+        ),
+    )]];
+
+    let resolved =
+        resolve_user_with_modules("", &module_stages).expect("impl method module should resolve");
+
+    let decl_uid = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, _, _)
+                if id.qualified_name.as_deref() == Some("Global::IntBase::radix") =>
+            {
+                Some(id.unique_id)
+            }
+            _ => None,
+        })
+        .expect("expected impl method declaration");
+
+    let call_uid = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, body, _) if id.name == "parse_base" => {
+                assert_eq!(
+                    id.qualified_name.as_deref(),
+                    Some("Global::Int::parse_base")
+                );
+                match body.as_ref() {
+                    Resolved::Block(_, stmts) => stmts.iter().find_map(|stmt| match stmt {
+                        Resolved::App(_, func, _) => match func.as_ref() {
+                            Resolved::Var(_, id)
+                                if id.name == "IntBase::radix"
+                                    && id.qualified_name.as_deref()
+                                        == Some("Global::IntBase::radix") =>
+                            {
+                                Some(id.unique_id)
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    }),
+                    Resolved::App(_, func, _) => match func.as_ref() {
+                        Resolved::Var(_, id)
+                            if id.name == "IntBase::radix"
+                                && id.qualified_name.as_deref()
+                                    == Some("Global::IntBase::radix") =>
+                        {
+                            Some(id.unique_id)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .expect("expected qualified impl method call");
+
+    assert_eq!(call_uid, decl_uid);
 }
 
 #[test]
@@ -1746,7 +1921,7 @@ deftrait TryFrom<$To> {
         .expect_err("named args must fail");
     assert!(err
         .message
-        .contains("from/try_from does not accept named arguments"));
+        .contains("try_from does not accept named arguments"));
 }
 
 #[test]
@@ -1792,6 +1967,116 @@ deftrait TryFrom<$To> {
             other => panic!("expected closure, got {:?}", other),
         },
         other => panic!("expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_decode_helper_lowers_format_and_target_args_to_type_ref_witnesses() {
+    let module_stages = vec![vec![staged_module(
+        "Decode",
+        parse_module_ast(
+            r#"@autoimport
+deftrait Decode<$Format, $To> {
+  def decode(self: Self, format: TypeRef<$Format>, to: TypeRef<$To>) -> Result<$To, Error>
+}"#,
+            "Decode",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules(
+        r#"json = "{}"
+value = decode(json, JsonFormat, Config)"#,
+        &module_stages,
+    )
+    .expect("decode helper should resolve");
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "value"))
+        .expect("value bind should exist");
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, args) => {
+                assert_eq!(args.len(), 3);
+                match func.as_ref() {
+                    Resolved::Var(_, id) => {
+                        assert_eq!(id.name, "decode");
+                        assert_eq!(id.qualified_name.as_deref(), Some("Decode::Decode::decode"));
+                    }
+                    other => panic!("expected helper var, got {:?}", other),
+                }
+                assert!(matches!(
+                    &args[0],
+                    ResolvedRecordLitArg::Positional(Resolved::Var(_, id)) if id.name == "json"
+                ));
+                match &args[1] {
+                    ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, ty)) => {
+                        assert!(matches!(ty, AstTy::Named(_, name) if name == "JsonFormat"));
+                    }
+                    other => panic!("expected format type witness, got {:?}", other),
+                }
+                match &args[2] {
+                    ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, ty)) => {
+                        assert!(matches!(ty, AstTy::Named(_, name) if name == "Config"));
+                    }
+                    other => panic!("expected target type witness, got {:?}", other),
+                }
+            }
+            other => panic!("expected app, got {:?}", other),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn test_encode_helper_lowers_pipeline_partial_format_arg_to_type_ref_witness() {
+    let module_stages = vec![vec![staged_module(
+        "Encode",
+        parse_module_ast(
+            r#"@autoimport
+deftrait Encode<$Format> {
+  def encode(self: Self, format: TypeRef<$Format>) -> Result<String, Error>
+}"#,
+            "Encode",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules(
+        r#"value = "hello"
+text = value |> encode(JsonFormat)"#,
+        &module_stages,
+    )
+    .expect("encode pipeline helper should resolve");
+    let bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "text"))
+        .expect("text bind should exist");
+    match bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Pipe(_, _, right) => match right.as_ref() {
+                Resolved::App(_, func, args) => {
+                    assert_eq!(args.len(), 1);
+                    match func.as_ref() {
+                        Resolved::Var(_, id) => {
+                            assert_eq!(id.name, "encode");
+                            assert_eq!(
+                                id.qualified_name.as_deref(),
+                                Some("Encode::Encode::encode")
+                            );
+                        }
+                        other => panic!("expected helper var, got {:?}", other),
+                    }
+                    match &args[0] {
+                        ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, ty)) => {
+                            assert!(matches!(ty, AstTy::Named(_, name) if name == "JsonFormat"));
+                        }
+                        other => panic!("expected format type witness, got {:?}", other),
+                    }
+                }
+                other => panic!("expected app on pipeline rhs, got {:?}", other),
+            },
+            other => panic!("expected pipe, got {:?}", other),
+        },
+        _ => panic!("Expected Bind"),
     }
 }
 
@@ -2050,6 +2335,24 @@ fn test_shadowing() {
         }
         _ => panic!("Expected two Binds"),
     }
+}
+
+#[test]
+fn test_top_level_def_cannot_capture_top_level_value_binding() {
+    let err = parse_and_resolve("x = 1\ndef f() -> Int { x }")
+        .expect_err("top-level def capture must fail");
+    assert!(
+        err.message
+            .contains("Top-level definition `f` cannot reference value binding `x`"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn test_top_level_def_param_shadowing_still_resolves() {
+    parse_and_resolve("x = 1\ndef f(x: Int) -> Int { x }")
+        .expect("function params should shadow top-level bindings");
 }
 
 #[test]
@@ -2496,7 +2799,7 @@ impl User {
             Resolved::App(_, func, _) => match func.as_ref() {
                 Resolved::Var(_, id) => {
                     assert_eq!(id.name, "greet");
-                    assert_eq!(id.qualified_name.as_deref(), Some("User::greet"));
+                    assert_eq!(id.qualified_name.as_deref(), Some("Global::User::greet"));
                 }
                 other => panic!("expected imported impl helper var, got {:?}", other),
             },
@@ -2911,6 +3214,24 @@ fn test_sigil_session_scope_persists_across_calls() {
 }
 
 #[test]
+fn test_sigil_session_top_level_def_cannot_capture_prior_value_binding() {
+    let mut session = SigilSession::with_module_path(Some("__Repl::Session".to_string()));
+    let first = spire::parse("x = 1").expect("parse failed");
+    session.resolve(first).expect("bind should resolve");
+
+    let second = spire::parse("def f() -> Int { x }").expect("parse failed");
+    let err = session
+        .resolve(second)
+        .expect_err("top-level def capture must fail across session chunks");
+    assert!(
+        err.message
+            .contains("Top-level definition `f` cannot reference value binding `x`"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
 fn test_sigil_session_lookup_uid_returns_bound_id() {
     let mut session = SigilSession::new();
     let ast = spire::parse("answer = 42").expect("parse failed");
@@ -3066,7 +3387,7 @@ val = p.x"#,
 
 #[test]
 fn test_tuple_type_root_resolves_in_field_access() {
-    let resolved = parse_and_resolve("lens = Tuple._0").unwrap();
+    let resolved = parse_and_resolve("facet = Tuple._0").unwrap();
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::FieldAccess(_, expr, field) => {
@@ -3152,6 +3473,187 @@ print("ok")"#,
     );
     assert!(
         err.message.contains("Helper::nonexistent"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_import_list_groups_private_not_importable_and_unknown_members() {
+    let module_stages = vec![vec![
+        staged_module(
+            "User",
+            parse_module_ast(
+                r#"defstruct User { name: String }
+impl User {
+  def new(name: String) -> Self { User(name: name) }
+  defextractor deconstruct(self: Self) -> User { self }
+}"#,
+                "User",
+            ),
+        ),
+        staged_module(
+            "Secrets",
+            parse_module_ast(
+                r#"defp secret_suffix() -> String { "::private" }
+def public_secret() -> String { "module" ++ secret_suffix() }"#,
+                "Secrets",
+            ),
+        ),
+    ]];
+
+    let err = resolve_user_with_modules(
+        r#"import User::{new, deconstruct}
+import Secrets::{secret_suffix, missing_fun}
+print("ok")"#,
+        &module_stages,
+    )
+    .expect_err("invalid list import should fail");
+
+    assert!(
+        err.message.contains("Invalid import members in `User`."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Error: not importable members."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("User::new"),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("User::deconstruct"),
+        "actual error: {}",
+        err.message
+    );
+
+    let err = resolve_user_with_modules(
+        r#"import Secrets::{secret_suffix, missing_fun}
+print("ok")"#,
+        &module_stages,
+    )
+    .expect_err("private and unknown list import should fail");
+
+    assert!(
+        err.message.contains("Invalid import members in `Secrets`."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Error: private functions."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Secrets::secret_suffix"),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Error: unknown import members."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Secrets::missing_fun"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_import_list_groups_hidden_builtin_members() {
+    let module_stages = vec![vec![staged_module(
+        "Process",
+        parse_module_ast(
+            r#"@hidden
+@builtin def __process_self() -> PID<$Process>
+
+def visible() -> Int { 1 }"#,
+            "Process",
+        ),
+    )]];
+
+    let err = resolve_user_with_modules(
+        r#"import Process::{visible, __process_self}
+print("ok")"#,
+        &module_stages,
+    )
+    .expect_err("hidden builtin in list import should fail");
+
+    assert!(
+        err.message.contains("Invalid import members in `Process`."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Error: hidden builtins."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Process::__process_self"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_import_list_groups_future_stage_members() {
+    let consumer = staged_module(
+        "Consumer",
+        parse_module_ast(
+            r#"import Provider::{value, missing};
+
+def use_value() -> Int {
+  value()
+}"#,
+            "Consumer",
+        ),
+    );
+    let provider = staged_module(
+        "Provider",
+        parse_module_ast(
+            r#"def value() -> Int {
+  41
+}"#,
+            "Provider",
+        ),
+    );
+
+    let err = resolve_user_with_modules(
+        "print(to_string(Consumer::use_value()))",
+        &[vec![consumer], vec![provider]],
+    )
+    .expect_err("future-stage list import should fail");
+
+    assert!(
+        err.message
+            .contains("Invalid import members in `Provider`."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Error: unavailable import members."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Provider::value"),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Error: unknown import members."),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Provider::missing"),
         "actual error: {}",
         err.message
     );
@@ -3451,6 +3953,405 @@ print(Show::Show::to_string(value))"#,
 }
 
 #[test]
+fn test_private_function_direct_qualified_call_reports_private() {
+    let module_stages = vec![vec![staged_module(
+        "OuterMod",
+        parse_module_ast(r#"defp priv_fun(x: Int) -> Int { x }"#, "OuterMod"),
+    )]];
+
+    let err = resolve_user_with_modules("print(OuterMod::priv_fun(1))", &module_stages)
+        .expect_err("qualified private function call should fail");
+
+    assert!(err.message.contains("OuterMod::priv_fun/1"));
+    assert!(
+        err.message.contains("is private"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_private_function_from_imported_module_suggests_private_candidate() {
+    let module_stages = vec![vec![staged_module(
+        "OuterMod",
+        parse_module_ast(
+            r#"def keep(x: Int) -> Int { x }
+defp priv_fun(x: Int) -> Int { x }"#,
+            "OuterMod",
+        ),
+    )]];
+
+    let err = resolve_user_with_modules(
+        r#"import OuterMod
+print(priv_fun(1))"#,
+        &module_stages,
+    )
+    .expect_err("bare private function call should fail with guidance");
+
+    assert!(err.message.contains("Undefined function priv_fun/1"));
+    assert!(
+        err.message
+            .contains("Help: `OuterMod::priv_fun/1` is private"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_worker_process_init_surface_is_importable() {
+    let module_stages = vec![vec![staged_process_module(parse_module_ast(
+        r#"defagent FibWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        "FibWorker",
+    ))]];
+
+    resolve_user_with_modules(
+        r#"import FibWorker::init
+worker =? init(1)
+print(inspect(worker))"#,
+        &module_stages,
+    )
+    .expect("worker init route should be importable");
+}
+
+#[test]
+fn test_singleton_agent_pid_surface_is_visible_to_user_code() {
+    let module_stages = vec![vec![staged_process_module(parse_module_ast(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        "Counter",
+    ))]];
+
+    resolve_user_with_modules("pid = Counter::pid()", &module_stages)
+        .expect("singleton agent pid surface should resolve");
+}
+
+#[test]
+fn test_singleton_agent_pid_surface_can_be_imported() {
+    let module_stages = vec![vec![staged_process_module(parse_module_ast(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        "Counter",
+    ))]];
+
+    resolve_user_with_modules(
+        r#"import Counter::pid
+handle = pid()"#,
+        &module_stages,
+    )
+    .expect("singleton agent pid surface should be importable");
+}
+
+#[test]
+fn test_singleton_process_init_surface_is_not_importable() {
+    let module_stages = vec![vec![staged_process_module(parse_module_ast(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        "Counter",
+    ))]];
+
+    let err = resolve_user_with_modules(
+        r#"import Counter::init
+print("ok")"#,
+        &module_stages,
+    )
+    .expect_err("singleton init route import should fail");
+
+    assert!(
+        err.message.contains("Counter::init"),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("cannot be imported"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_compiler_generated_spawn_surface_is_not_exposed_to_user_imports() {
+    let module_stages = vec![vec![staged_process_module(parse_module_ast(
+        r#"defagent FibWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        "FibWorker",
+    ))]];
+
+    let err = resolve_user_with_modules(
+        r#"import FibWorker::spawn
+print("ok")"#,
+        &module_stages,
+    )
+    .expect_err("compiler-generated spawn should not be exposed for import");
+
+    assert!(
+        err.message.contains("FibWorker::spawn"),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Unknown import member"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_worker_genserver_init_surface_is_importable() {
+    let module_stages = vec![vec![
+        staged_module(
+            "ProcessTypes",
+            parse_module_ast(
+                r#"defenum CallResult<$Reply, $State> {
+  Reply($Reply, $State),
+  ReplyLater($State, (-> Result<$Reply>)),
+  Stop(StopReply<$Reply>),
+}
+
+defenum StopReply<$Reply> {
+  Normal($Reply),
+  Error(Error),
+}
+
+defenum CastResult<$State> {
+  Next($State),
+  Stop(StopReason),
+}
+
+defenum StopReason {
+  Normal,
+  Error(Error),
+}"#,
+                "ProcessTypes",
+            ),
+        ),
+        staged_process_module(parse_module_ast(
+            r#"defgenserver QueueServer {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def boot(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @call
+  def size(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}"#,
+            "QueueServer",
+        )),
+    ]];
+
+    resolve_user_with_modules(
+        r#"import QueueServer::boot
+pid =? boot(1)
+print(inspect(pid))"#,
+        &module_stages,
+    )
+    .expect("worker genserver init route should be importable");
+}
+
+#[test]
+fn test_singleton_genserver_pid_surface_is_visible_to_user_code() {
+    let module_stages = vec![vec![
+        staged_module(
+            "ProcessTypes",
+            parse_module_ast(
+                r#"defenum CallResult<$Reply, $State> {
+  Reply($Reply, $State),
+  ReplyLater($State, (-> Result<$Reply>)),
+  Stop(StopReply<$Reply>),
+}
+
+defenum StopReply<$Reply> {
+  Normal($Reply),
+  Error(Error),
+}"#,
+                "ProcessTypes",
+            ),
+        ),
+        staged_process_module(parse_module_ast(
+            r#"defgenserver QueueServer {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def size(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}"#,
+            "QueueServer",
+        )),
+    ]];
+
+    resolve_user_with_modules("pid = QueueServer::pid()", &module_stages)
+        .expect("singleton genserver pid surface should resolve");
+}
+
+#[test]
+fn test_singleton_genserver_pid_surface_can_be_imported() {
+    let module_stages = vec![vec![
+        staged_module(
+            "ProcessTypes",
+            parse_module_ast(
+                r#"defenum CallResult<$Reply, $State> {
+  Reply($Reply, $State),
+  ReplyLater($State, (-> Result<$Reply>)),
+  Stop(StopReply<$Reply>),
+}
+
+defenum StopReply<$Reply> {
+  Normal($Reply),
+  Error(Error),
+}"#,
+                "ProcessTypes",
+            ),
+        ),
+        staged_process_module(parse_module_ast(
+            r#"defgenserver QueueServer {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def size(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}"#,
+            "QueueServer",
+        )),
+    ]];
+
+    resolve_user_with_modules(
+        r#"import QueueServer::pid
+handle = pid()"#,
+        &module_stages,
+    )
+    .expect("singleton genserver pid surface should be importable");
+}
+
+#[test]
+fn test_singleton_process_init_surface_is_not_callable_from_user_code() {
+    let module_stages = vec![vec![staged_process_module(parse_module_ast(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+
+  @set
+  def set(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        "Counter",
+    ))]];
+
+    let err = resolve_user_with_modules("print(inspect(Counter::init()))", &module_stages)
+        .expect_err("singleton init route call should fail");
+
+    assert!(
+        err.message.contains("Counter::init/0"),
+        "actual error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("cannot be called"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
 fn test_nested_import_duplicate_conflict_still_errors() {
     let module_stages = vec![vec![
         staged_module(
@@ -3555,13 +4456,17 @@ def pred(n: Int) -> Boolean {
 
 checked = Ok(3) |>= ensure(&pred, GuardError)
 flagged = True |> and(False)
-verified = Ok(True) |>= assert(GuardError)"#,
+verified = Ok(True) |>= assert(GuardError)
+replaced = Err(GuardError) |> map_err(GuardError)
+wrapped = Err(GuardError) |> cause(GuardError)"#,
     )
     .expect("pipeline partial special forms should resolve");
 
     let mut checked_ok = false;
     let mut flagged_ok = false;
     let mut verified_ok = false;
+    let mut replaced_ok = false;
+    let mut wrapped_ok = false;
 
     for node in resolved {
         let Resolved::Bind(_, pat, rhs) = node else {
@@ -3613,6 +4518,34 @@ verified = Ok(True) |>= assert(GuardError)"#,
                 },
                 other => panic!("expected context bind for verified, got {:?}", other),
             },
+            "replaced" => match rhs.as_ref() {
+                Resolved::Pipe(_, _, right) => match right.as_ref() {
+                    Resolved::Closure(_, params, _, body) => {
+                        assert_eq!(params.len(), 1, "partial map_err must become unary closure");
+                        assert!(
+                            matches!(body.as_ref(), Resolved::MapErr(_, _, _)),
+                            "partial map_err closure body must resolve to MapErr"
+                        );
+                        replaced_ok = true;
+                    }
+                    other => panic!("expected closure on replaced rhs, got {:?}", other),
+                },
+                other => panic!("expected pipe for replaced, got {:?}", other),
+            },
+            "wrapped" => match rhs.as_ref() {
+                Resolved::Pipe(_, _, right) => match right.as_ref() {
+                    Resolved::Closure(_, params, _, body) => {
+                        assert_eq!(params.len(), 1, "partial cause must become unary closure");
+                        assert!(
+                            matches!(body.as_ref(), Resolved::Cause(_, _, _)),
+                            "partial cause closure body must resolve to Cause"
+                        );
+                        wrapped_ok = true;
+                    }
+                    other => panic!("expected closure on wrapped rhs, got {:?}", other),
+                },
+                other => panic!("expected pipe for wrapped, got {:?}", other),
+            },
             _ => {}
         }
     }
@@ -3620,4 +4553,75 @@ verified = Ok(True) |>= assert(GuardError)"#,
     assert!(checked_ok, "missing checked bind assertion");
     assert!(flagged_ok, "missing flagged bind assertion");
     assert!(verified_ok, "missing verified bind assertion");
+    assert!(replaced_ok, "missing replaced bind assertion");
+    assert!(wrapped_ok, "missing wrapped bind assertion");
+}
+
+#[test]
+fn test_pipeline_partial_special_form_does_not_trigger_for_shadowed_local_binding() {
+    let resolved = parse_and_resolve(
+        r#"map_err = {|value: Int, suffix: Int| value + suffix}
+out = 1 |> map_err(2)"#,
+    )
+    .expect("shadowed local map_err should resolve like an ordinary pipe call");
+
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Pipe(_, _, right) => match right.as_ref() {
+                Resolved::App(_, func, args) => {
+                    assert!(matches!(func.as_ref(), Resolved::Var(_, id) if id.name == "map_err"));
+                    assert_eq!(
+                        args.len(),
+                        1,
+                        "ordinary shadowed call should keep its explicit arg"
+                    );
+                }
+                other => panic!("expected ordinary app on shadowed rhs, got {:?}", other),
+            },
+            other => panic!("expected pipe on shadowed binding, got {:?}", other),
+        },
+        other => panic!("expected bind for shadowed pipeline, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_pipeline_partial_special_form_does_not_trigger_for_shadowed_parameter() {
+    fn find_pipe_rhs(node: &Resolved) -> Option<&Resolved> {
+        match node {
+            Resolved::Pipe(_, _, right) => Some(right.as_ref()),
+            Resolved::Block(_, nodes) => nodes.iter().find_map(find_pipe_rhs),
+            Resolved::Bind(_, _, rhs) | Resolved::SafeBind(_, _, rhs) => find_pipe_rhs(rhs),
+            _ => None,
+        }
+    }
+
+    let resolved = parse_and_resolve(
+        r#"def apply(map_err: (Int -> Int)) -> Int {
+  1 |> map_err(2)
+}"#,
+    )
+    .expect("shadowed parameter map_err should resolve like an ordinary pipe call");
+
+    let pipe_rhs = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, body, _) if id.name == "apply" => find_pipe_rhs(body),
+            _ => None,
+        })
+        .expect("expected pipe rhs inside apply body");
+
+    match pipe_rhs {
+        Resolved::App(_, func, args) => {
+            assert!(matches!(func.as_ref(), Resolved::Var(_, id) if id.name == "map_err"));
+            assert_eq!(
+                args.len(),
+                1,
+                "ordinary shadowed parameter call should keep its explicit arg"
+            );
+        }
+        other => panic!(
+            "expected ordinary app on shadowed parameter rhs, got {:?}",
+            other
+        ),
+    }
 }

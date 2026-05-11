@@ -124,6 +124,13 @@ test("Spec") {
         ),
       )
     }
+
+    it("provides a typed todo placeholder") {
+      assert_eq(
+        "Err(NotImplemented(\"not implemented\"))",
+        inspect(todo()),
+      )
+    }
   }
 
   describe("binding and type surface") {

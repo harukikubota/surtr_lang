@@ -1,2 +1,0 @@
-user = User(Profile("alice"))
-print(Lens::view(Lens::compose(User.profile, Profile.name), user))

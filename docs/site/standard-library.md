@@ -17,7 +17,7 @@ Surtr 全体では、関数は常に何らかの namespace に属します。標
 標準定義ソースの初期ロード順は次で固定されています。
 
 ```text
-Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float] -> user source
+Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Facet, Float] -> user source
 ```
 
 このうち auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@autoimport` が付いた標準 trait です。  
@@ -73,7 +73,7 @@ primitive module をまたぐ読みやすさを優先して `Kernel` に置き�
 - `List`
 - `HashMap`
 - `Result`
-- `Lens`
+- `Facet`
 - `Float`
 
 各 type module には 2 つの層があります。
@@ -234,9 +234,9 @@ defmod String {
   - `inspect` / `to_string` は `HashMap("key" => value, ...)` 形式
 - `Result`
   - `Ok` / `Err` を中心にした Either 指向の失敗表現
-- `Lens`
+- `Facet`
   - compile-time path capability
-  - `Type.segment` / `value.segment` / `Lens::view` / `Lens::set` / `Lens::over`
+  - `Type.segment` / `value.segment` / `Facet::view` / `Facet::set` / `Facet::over`
 - `Float`
   - 実装はあるが契約整理を継続中の型
 
@@ -406,7 +406,7 @@ REPL は起動時に標準定義ソースと preload script を読み切った O
 - trait impl 候補一覧や diagnostics は、その起動時 universe を前提に固定される
 
 データ型の field で欠損を表したい場合は、`Option<T>` より `T?` を先に検討してください。
-`T?` は `Result<T, NoneError>` に下がるので、Lens 更新や `Result` を返す helper と直接つながります。
+`T?` は `Result<T, NoneError>` に下がるので、Facet 更新や `Result` を返す helper と直接つながります。
 
 ```surtr
 user.nickname
@@ -418,20 +418,20 @@ user.nickname
 `Option<T>` field を `Result` パイプへ流すと、上のような往復変換が必要です。
 `nickname: String?` なら field 自体が `Result` 系なので、この変換を省けます。
 
-## 12. `Lens` module の位置づけ
+## 12. `Facet` module の位置づけ
 
-`Lens` は runtime の first-class value ではなく、compile-time にだけ存在する
+`Facet` は runtime の first-class value ではなく、compile-time にだけ存在する
 path capability です。
 
 ```surtr
-@builtin type Lens<$S, $A>
+@builtin type Facet<$S, $A>
 ```
 
 読み方は次です。
 
 - `S` は source の型
 - `A` は focus の型
-- `Lens<S, A>` は「`S` の中の `A` を指す path」
+- `Facet<S, A>` は「`S` の中の `A` を指す path」
 
 ### path の書き方
 
@@ -453,7 +453,7 @@ Tuple._1
 ```
 
 - `.0`, `.1` ではなく `._0`, `._1`
-- `Tuple._N` は `Lens<(...), ...>` が期待される場所で使うほか、同一スコープの local binding として deferred path に束縛できる
+- `Tuple._N` は `Facet<(...), ...>` が期待される場所で使うほか、同一スコープの local binding として deferred path に束縛できる
 - `_0` 単体は使わない
 
 enum variant path は `Enum.Variant` です。
@@ -466,11 +466,11 @@ Token.Ident
 - selector は PascalCase 固定
 - 実行時の値がその variant でなければ `Err(VariantMismatch(...))` になる
 
-ネストした path は `/` または `Lens::compose` でつなぎます。
+ネストした path は `/` または `Facet::compose` でつなぎます。
 
 ```surtr
 User.profile / Profile.name
-Lens::compose(User.profile, Profile.name)
+Facet::compose(User.profile, Profile.name)
 ```
 
 compose 後の表示は canonical path に正規化されます。
@@ -489,18 +489,18 @@ first = pair._0
 これは概念的には次と同じです。
 
 ```surtr
-name = Lens::view(User.name, user)
-first = Lens::view(Tuple._0, pair)
+name = Facet::view(User.name, user)
+first = Facet::view(Tuple._0, pair)
 ```
 
-### `Lens::view`
+### `Facet::view`
 
-`Lens::view(lens, source)` は path の先を読みます。
+`Facet::view(facet, source)` は path の先を読みます。
 
 ```surtr
-name = Lens::view(User.name, user)
-first = Lens::view(Tuple._0, pair)
-profile_name = Lens::view(User.profile / Profile.name, user)
+name = Facet::view(User.name, user)
+first = Facet::view(Tuple._0, pair)
+profile_name = Facet::view(User.profile / Profile.name, user)
 ```
 
 返り値は path と source に応じて変わります。
@@ -512,36 +512,38 @@ profile_name = Lens::view(User.profile / Profile.name, user)
 例:
 
 ```surtr
-match Lens::view(Expr.Add, expr) {
+match Facet::view(Expr.Add, expr) {
   Ok(add_expr) => ...,
   Err(err) => ...,
 }
 ```
 
-### `Lens::set`
+### `Facet::set`
 
-`Lens::set(lens, source, value)` は focus を置き換え、常に `Result<S>` を返します。
+`Facet::set(facet, source, value)` は focus を置き換え、常に `Result<S>` を返します。
 
 ```surtr
-user2 =? Lens::set(User.name, user, "bob")
-pair2 =? Lens::set(Tuple._1, pair, 4)
+user2 =? Facet::set(User.name, user, "bob")
+pair2 =? Facet::set(Tuple._1, pair, 4)
+user3 =? Facet::set(~user.name, "carol")
 ```
 
 ネストした値も同じです。
 
 ```surtr
 profile_name = User.profile / Profile.name
-user2 =? Lens::set(profile_name, user, "bob")
+user2 =? Facet::set(profile_name, user, "bob")
 ```
 
-### `Lens::over`
+### `Facet::over`
 
-`Lens::over(lens, source, update_fun)` は現在値を見てから更新します。
+`Facet::over(facet, source, update_fun)` は現在値を見てから更新します。
 
 ```surtr
-user2 =? Lens::over(User.name, user, {|name|
+user2 =? Facet::over(User.name, user, {|name|
   Ok(name ++ "!")
 })
+user3 =? Facet::over(~user.name, {|name| Ok(name ++ "!")})
 ```
 
 - `update_fun` は `A -> Result<A>` を返す必要がある
@@ -551,39 +553,59 @@ user2 =? Lens::over(User.name, user, {|name|
 focus が `Result<A>` のとき、`over` は `Ok(value)` の payload だけを更新します。
 `Err(err)` の場合は updater を呼ばず、その field をそのまま残します。
 
-### `Lens::over_result`
+### `Facet::over_result`
 
-`Lens::over_result(lens, source, update_fun)` は `Result<A>` focus 全体を更新します。
+`Facet::over_result(facet, source, update_fun)` は `Result<A>` focus 全体を更新します。
 
 - `update_fun` は `Result<A> -> Result<Result<A>>`
 - `Ok(...)` と `Err(...)` の両方を明示的に作り直したい場面向け
 - successful payload だけ触りたいなら `over` の方が軽い
+- `~source.path` shorthand は source を伴う `Facet` API の第1引数だけで使える
 
-### `Lens::compose`
+### `Facet::bulk_update`
 
-`Lens::compose(outer, inner)` は 2 つの path を順につなぎます。`outer / inner` は同じ意味の operator sugar です。
+`Facet::bulk_update(source) { ... }` は、relative path ごとの Facet 更新を
+改行区切りで並べる special form です。
+
+- 返り値: `Result<S>`
+- 許可される update 形: `set`, `over`, `over_result`
+- nested path 形: `path { ... }`
+- 通常 block ではないため、任意の式や `S -> Result<S>` updater は置けない
 
 ```surtr
-profile_name = Lens::compose(User.profile, Profile.name)
-name = Lens::view(profile_name, user)
+updated =? Facet::bulk_update(user) {
+  name <- set("taro")
+  profile {
+    nickname <- over_result({|name: Result<String>| Ok(name)})
+  }
+}
+```
+
+### `Facet::compose`
+
+`Facet::compose(outer, inner)` は 2 つの path を順につなぎます。`outer / inner` は同じ意味の operator sugar です。
+
+```surtr
+profile_name = Facet::compose(User.profile, Profile.name)
+name = Facet::view(profile_name, user)
 ```
 
 型の並びは次です。
 
-- `outer: Lens<S, A>`
-- `inner: Lens<A, B>`
-- result: `Lens<S, B>`
+- `outer: Facet<S, A>`
+- `inner: Facet<A, B>`
+- result: `Facet<S, B>`
 
-### Stage1 の制約
+### Facet のスコープ規約
 
-`Lens` は compile-time only なので、同一スコープで消費します。
+`Facet` は同一スコープ内でのみ使用可能です。
 
 ```surtr
-lens = User.name
-name = Lens::view(lens, user)
+facet = User.name
+name = Facet::view(facet, user)
 ```
 
-REPL では `:type` / `:info` に加えて `:lens <binding|expr>` が使えます。
+REPL では `:type` / `:info` に加えて `:facet <binding|expr>` が使えます。
 `type` と `full path` の確認に加えて、variant selector や `Result` source を含む
 path の停止点をまとめて見たいときに使います。
 
@@ -594,7 +616,7 @@ path の停止点をまとめて見たいときに使います。
 - closure で capture する
 - `List`, tuple, `Ok(...)`, `Err(...)` などの runtime container に入れる
 
-関数境界を越えたいときは `Lens` 自体ではなく、`Lens::view(...)` 済みの値を渡します。
+関数境界を越えたいときは `Facet` 自体ではなく、`Facet::view(...)` 済みの値を渡します。
 
 ## 13. パイプ / bind 系と標準定義ソースの関係
 

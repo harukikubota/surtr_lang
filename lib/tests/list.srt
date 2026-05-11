@@ -4,6 +4,22 @@ import ListSchema::{add_one, list_pure, list_step1, list_step2, list_step3};
 import Test;
 
 test("List") {
+  describe("helpers") {
+    it("each runs callbacks from left to right") {
+      capture_stdout()
+      result = List::each([1, 2, 3], {|n| print("n=#{to_string(n)}")})
+      assert_eq((), result)
+      assert_stdout_eq(["n=1", "n=2", "n=3"])
+    }
+
+    it("each returns Unit and does nothing for empty lists") {
+      capture_stdout()
+      result = List::each([], {|n: Int| print("n=#{to_string(n)}")})
+      assert_eq((), result)
+      assert_stdout_eq([])
+    }
+  }
+
   describe("monad laws") {
     # ghci> let pureL x = [x]
     # ghci> let f x = [x, x + 10]

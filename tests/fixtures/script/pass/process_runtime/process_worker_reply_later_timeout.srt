@@ -1,0 +1,69 @@
+defgenserver MyWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> {
+    Ok(seed)
+  }
+
+  @call
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+
+  @call
+  def delayed(state: Int) -> Result<CallResult<Int, Int>> {
+    next = state + 1
+    Ok(CallResult::ReplyLater(next, {||
+      Process::sleep(100ms)
+      Ok(next)
+    }))
+  }
+}
+
+defsupervisor MySup {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}
+
+defgenserver MyPool {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Workers<MyWorker>
+  }
+
+  @init
+  def init() -> Result<Workers<MyWorker>> {
+    MySup::workers(MyWorker::init(1), WorkerStrategy::fixed(1))
+  }
+
+  @call
+  def delayed(workers: Workers<MyWorker>) -> Result<CallResult<List<Result<Int>>, Workers<MyWorker>>> {
+    Ok(CallResult::Reply(Workers::broadcast(workers, MyWorker::delayed()), workers))
+  }
+
+  @call
+  def value(workers: Workers<MyWorker>) -> Result<CallResult<List<Result<Int>>, Workers<MyWorker>>> {
+    Ok(CallResult::Reply(Workers::broadcast(workers, MyWorker::value()), workers))
+  }
+}
+
+supervisor_init {
+  MySup {}
+  MyPool {}
+}
+
+delayed =? MyPool::delayed()
+print(inspect(delayed))
+value =? MyPool::value()
+print(inspect(value))

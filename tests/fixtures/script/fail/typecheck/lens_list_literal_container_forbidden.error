@@ -1,0 +1,2 @@
+phase: typecheck
+contains: List literal cannot contain Facet values

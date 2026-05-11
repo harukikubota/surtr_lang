@@ -1,0 +1,2 @@
+lens: Facet<(Int, Int), Int> = Tuple._0
+(lens, 1)

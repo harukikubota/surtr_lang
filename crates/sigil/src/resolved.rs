@@ -2,12 +2,27 @@ use serde::{Deserialize, Serialize};
 use sindr::primitives::SurtrInt;
 use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, Symbol, Visibility};
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedDeclAttrs {
     pub doc: Option<String>,
     pub hidden: bool,
+    pub readonly: bool,
     pub visibility: Visibility,
-    pub process_state_owner: Option<Symbol>,
+    pub user_importable: bool,
+    pub user_callable: bool,
+}
+
+impl Default for ResolvedDeclAttrs {
+    fn default() -> Self {
+        Self {
+            doc: None,
+            hidden: false,
+            readonly: false,
+            visibility: Visibility::Public,
+            user_importable: true,
+            user_callable: true,
+        }
+    }
 }
 
 /// A resolved identifier — name + unique id + source location.
@@ -28,6 +43,13 @@ pub struct ResolvedProcessSpec {
     pub init_uid: u32,
     pub get_uid: u32,
     pub set_uid: Option<u32>,
+    pub handler_uids: Vec<ResolvedProcessHandlerUid>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedProcessHandlerUid {
+    pub internal_name: Symbol,
+    pub uid: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -125,6 +147,12 @@ pub enum Resolved {
 
     /// Field access: `expr.field`
     FieldAccess(Span, Box<Resolved>, Symbol),
+
+    /// Inferred field/facet capture: `_.field` / `_.field.subfield`
+    InferredFacetCapture(Span, Vec<Symbol>),
+
+    /// Compiler-managed Facet shorthand capture: `~source.path`
+    FacetCapture(Span, Box<Resolved>),
 
     /// Process-local handler dependency access: `ctx.<slot>`.
     ProcessContextHandler(Span, Symbol),
@@ -296,6 +324,7 @@ pub struct ResolvedField {
     pub ty: AstTy,
     pub span: Span,
     pub visibility: Visibility,
+    pub readonly: bool,
 }
 
 /// Function parameter (resolved).

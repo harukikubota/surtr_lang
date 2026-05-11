@@ -1,0 +1,23 @@
+defagent Logger {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> {
+    Ok(0)
+  }
+
+  @get
+  def value(state: Int) -> Result<Int> {
+    Ok(state)
+  }
+}
+
+supervisor_init {
+  Logger {
+    max_restarts: 2
+  }
+}

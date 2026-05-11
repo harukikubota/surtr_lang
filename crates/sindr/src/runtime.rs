@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -24,24 +24,95 @@ pub struct TypeEntry {
 }
 
 /// Registry of all user-defined types in a compiled program.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TypeRegistry {
-    pub entries: Vec<TypeEntry>,
+    entries: Vec<TypeEntry>,
+    tag_to_index: HashMap<RuntimeTag, usize>,
 }
 
 impl TypeRegistry {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            tag_to_index: HashMap::new(),
         }
     }
 
+    pub fn from_entries(entries: Vec<TypeEntry>) -> Self {
+        let mut registry = Self::new();
+        registry.extend(entries);
+        registry
+    }
+
     pub fn register(&mut self, entry: TypeEntry) {
+        self.tag_to_index.insert(entry.tag, self.entries.len());
         self.entries.push(entry);
     }
 
+    pub fn extend<I>(&mut self, entries: I)
+    where
+        I: IntoIterator<Item = TypeEntry>,
+    {
+        for entry in entries {
+            self.register(entry);
+        }
+    }
+
+    pub fn entries(&self) -> &[TypeEntry] {
+        &self.entries
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.entries.truncate(len);
+        self.tag_to_index = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| (entry.tag, idx))
+            .collect();
+    }
+
     pub fn lookup(&self, tag: RuntimeTag) -> Option<&TypeEntry> {
-        self.entries.iter().find(|entry| entry.tag == tag)
+        self.tag_to_index
+            .get(&tag)
+            .and_then(|idx| self.entries.get(*idx))
+    }
+
+    pub fn lookup_by_name(&self, qualified_name: &str) -> Option<&TypeEntry> {
+        self.entries.iter().find(|entry| {
+            entry.name == qualified_name
+                || entry.name.strip_prefix("Global::") == Some(qualified_name)
+                || qualified_name.strip_prefix("Global::") == Some(entry.name.as_str())
+        })
+    }
+
+    pub fn tag_by_name(&self, qualified_name: &str) -> Option<RuntimeTag> {
+        self.lookup_by_name(qualified_name).map(|entry| entry.tag)
+    }
+}
+
+impl Default for TypeRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Serialize for TypeRegistry {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.entries.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TypeRegistry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let entries = Vec::<TypeEntry>::deserialize(deserializer)?;
+        Ok(Self::from_entries(entries))
     }
 }
 
@@ -65,8 +136,10 @@ pub enum Value {
     RegexMatch(RegexMatchHandle),
     RandomGenerator(RandomGeneratorHandle),
     Pid(PidHandle),
+    FileHandle(FileHandleValue),
     Workers(WorkersHandle),
     WorkerLease(WorkerLeaseHandle),
+    TaskHandle(u64),
     PendingFuture(u64),
 }
 
@@ -101,6 +174,11 @@ pub struct PidHandle {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileHandleValue {
+    pub id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkersHandle {
     pub id: u64,
     pub process_name: String,
@@ -121,6 +199,10 @@ pub struct HashMapHandle {
 pub type ListRef = Option<Rc<ListNode>>;
 
 /// Shared runtime handle for persistent cons-list values.
+///
+/// Invariant:
+/// - `len == 0` if and only if `head == None`
+/// - `len > 0` if and only if `head` points at the first cons cell
 #[derive(Debug, Clone, PartialEq)]
 pub struct ListHandle {
     pub head: ListRef,
@@ -129,8 +211,9 @@ pub struct ListHandle {
 
 /// Persistent list node for O(1) cons/uncons sharing.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ListNode {
-    Cons(Value, ListRef),
+pub struct ListNode {
+    pub value: Value,
+    pub next: ListRef,
 }
 
 /// Callable runtime value.
@@ -177,6 +260,10 @@ pub enum CallableOrigin {
 }
 
 impl Value {
+    fn surface_type_name(type_name: &str) -> &str {
+        type_name.strip_prefix("Global::").unwrap_or(type_name)
+    }
+
     fn render_named_value(
         type_name: &str,
         field_names: &[String],
@@ -203,7 +290,11 @@ impl Value {
             parts.push("..private".to_string());
         }
 
-        format!("{}({})", type_name, parts.join(", "))
+        format!(
+            "{}({})",
+            Self::surface_type_name(type_name),
+            parts.join(", ")
+        )
     }
 
     /// Display string for `to_string` built-in.
@@ -264,7 +355,7 @@ impl Value {
             }
             Value::Tagged { tag, fields } => {
                 if let Some(entry) = registry.lookup(*tag) {
-                    if entry.name == "Duration" {
+                    if Self::surface_type_name(&entry.name) == "Duration" {
                         if let Some(Value::Int(ms)) = fields.first() {
                             return format!("{ms}ms");
                         }
@@ -285,9 +376,9 @@ impl Value {
                                 .collect::<Vec<_>>()
                                 .join(", ");
                             if payload.is_empty() {
-                                entry.name.clone()
+                                Self::surface_type_name(&entry.name).to_string()
                             } else {
-                                format!("{}({})", entry.name, payload)
+                                format!("{}({})", Self::surface_type_name(&entry.name), payload)
                             }
                         }
                     }
@@ -332,11 +423,17 @@ impl Value {
             }
             Value::RegexMatch(handle) => format!("RegexMatch({}..{})", handle.start, handle.end),
             Value::RandomGenerator(_) => "RandomGenerator(<opaque>)".to_string(),
-            Value::Pid(handle) => format!("PID({}#{})", handle.process_name, handle.id),
+            Value::Pid(handle) => format!(
+                "PID({}#{})",
+                Self::surface_type_name(&handle.process_name),
+                handle.id
+            ),
+            Value::FileHandle(handle) => format!("FileHandle#{}", handle.id),
             Value::Workers(handle) => format!("Workers<{}>#{}", handle.process_name, handle.id),
             Value::WorkerLease(handle) => {
                 format!("WorkerLease<{}>#{}", handle.pid.process_name, handle.pid.id)
             }
+            Value::TaskHandle(future_id) => format!("TaskHandle#{future_id}"),
             Value::PendingFuture(future_id) => format!("<pending:future#{future_id}>"),
         }
     }
@@ -461,7 +558,10 @@ impl ListHandle {
 
     pub fn cons(head: Value, tail: &ListHandle) -> Self {
         Self {
-            head: Some(Rc::new(ListNode::Cons(head, tail.head.clone()))),
+            head: Some(Rc::new(ListNode {
+                value: head,
+                next: tail.head.clone(),
+            })),
             len: tail.len + 1,
         }
     }
@@ -478,25 +578,19 @@ impl ListHandle {
         self.len == 0
     }
 
+    fn non_empty_head(&self) -> Option<&Rc<ListNode>> {
+        self.head.as_ref()
+    }
+
     pub fn head_value(&self) -> Option<Value> {
-        match &self.head {
-            Some(node) => match node.as_ref() {
-                ListNode::Cons(value, _) => Some(value.clone()),
-            },
-            None => None,
-        }
+        self.non_empty_head().map(|node| node.value.clone())
     }
 
     pub fn tail_handle(&self) -> Option<Self> {
-        match &self.head {
-            Some(node) => match node.as_ref() {
-                ListNode::Cons(_, next) => Some(Self {
-                    head: next.clone(),
-                    len: self.len.saturating_sub(1),
-                }),
-            },
-            None => None,
-        }
+        self.non_empty_head().map(|node| Self {
+            head: node.next.clone(),
+            len: self.len.saturating_sub(1),
+        })
     }
 
     pub fn iter(&self) -> ListIter {
@@ -515,12 +609,8 @@ impl Iterator for ListIter {
 
     fn next(&mut self) -> Option<Self::Item> {
         let current = self.next.clone()?;
-        match current.as_ref() {
-            ListNode::Cons(value, next) => {
-                self.next = next.clone();
-                Some(value.clone())
-            }
-        }
+        self.next = current.next.clone();
+        Some(current.value.clone())
     }
 }
 
@@ -581,12 +671,18 @@ impl RichError {
     }
 
     pub fn to_eprint_lines(&self) -> Vec<String> {
-        let mut lines = vec![format!("Error: {}: {}", self.kind, self.visible_message())];
+        let display_kind = self.kind.strip_prefix("Global::").unwrap_or(&self.kind);
+        let mut lines = vec![format!(
+            "Error: {}: {}",
+            display_kind,
+            self.visible_message()
+        )];
         let mut next = self.cause.as_deref();
         while let Some(cause) = next {
+            let cause_kind = cause.kind.strip_prefix("Global::").unwrap_or(&cause.kind);
             lines.push(format!(
                 "Caused by: {}: {}",
-                cause.kind,
+                cause_kind,
                 cause.visible_message()
             ));
             next = cause.cause.as_deref();
@@ -611,7 +707,7 @@ impl RichError {
         lines.push(format!(
             "{}{}({:?})",
             first_prefix,
-            self.kind,
+            Value::surface_type_name(&self.kind),
             self.visible_message()
         ));
         if let Some(cause) = self.cause.as_deref() {
@@ -831,10 +927,118 @@ mod tests {
     }
 
     #[test]
+    fn type_registry_lookup_supports_sparse_tags() {
+        let registry = TypeRegistry::from_entries(vec![
+            TypeEntry {
+                tag: 10,
+                name: "Global::User".into(),
+                kind: TypeKind::Struct,
+                field_names: vec!["name".into()],
+                private_flags: vec![false],
+            },
+            TypeEntry {
+                tag: 42,
+                name: "Global::Profile".into(),
+                kind: TypeKind::Struct,
+                field_names: vec!["id".into()],
+                private_flags: vec![false],
+            },
+        ]);
+
+        assert_eq!(
+            registry.lookup(10).map(|entry| entry.name.as_str()),
+            Some("Global::User")
+        );
+        assert_eq!(
+            registry.lookup(42).map(|entry| entry.name.as_str()),
+            Some("Global::Profile")
+        );
+        assert_eq!(registry.lookup(11), None);
+    }
+
+    #[test]
+    fn type_registry_extend_preserves_existing_and_new_lookups() {
+        let mut registry = TypeRegistry::from_entries(vec![TypeEntry {
+            tag: 10,
+            name: "Global::User".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["name".into()],
+            private_flags: vec![false],
+        }]);
+
+        registry.extend(vec![TypeEntry {
+            tag: 42,
+            name: "Global::Profile".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["id".into()],
+            private_flags: vec![false],
+        }]);
+
+        assert_eq!(registry.entries().len(), 2);
+        assert_eq!(
+            registry.lookup(10).map(|entry| entry.name.as_str()),
+            Some("Global::User")
+        );
+        assert_eq!(
+            registry.lookup(42).map(|entry| entry.name.as_str()),
+            Some("Global::Profile")
+        );
+    }
+
+    #[test]
     fn empty_list_head_and_tail_return_none() {
         let list = ListHandle::empty();
         assert_eq!(list.head_value(), None);
         assert_eq!(list.tail_handle(), None);
+    }
+
+    #[test]
+    fn single_item_list_head_and_tail_preserve_non_empty_contract() {
+        let list = ListHandle::from_items(vec![Value::Int(int(7))]);
+
+        assert_eq!(list.len, 1);
+        assert_eq!(list.head_value(), Some(Value::Int(int(7))));
+
+        let tail = list.tail_handle().expect("single-item list has empty tail");
+        assert_eq!(tail.len, 0);
+        assert_eq!(tail.head_value(), None);
+        assert!(tail.is_empty());
+    }
+
+    #[test]
+    fn multi_item_list_head_and_tail_walk_shared_chain() {
+        let list = ListHandle::from_items(vec![
+            Value::Int(int(1)),
+            Value::Int(int(2)),
+            Value::Int(int(3)),
+        ]);
+
+        assert_eq!(list.len, 3);
+        assert_eq!(list.head_value(), Some(Value::Int(int(1))));
+
+        let tail = list.tail_handle().expect("non-empty list has tail handle");
+        assert_eq!(tail.len, 2);
+        assert_eq!(tail.head_value(), Some(Value::Int(int(2))));
+
+        let tail_tail = tail.tail_handle().expect("tail stays non-empty");
+        assert_eq!(tail_tail.len, 1);
+        assert_eq!(tail_tail.head_value(), Some(Value::Int(int(3))));
+    }
+
+    #[test]
+    fn cons_and_tail_update_len_without_mutating_shared_tail() {
+        let tail = ListHandle::from_items(vec![Value::Int(int(2)), Value::Int(int(3))]);
+        let list = ListHandle::cons(Value::Int(int(1)), &tail);
+
+        assert_eq!(list.len, 3);
+        assert_eq!(list.head_value(), Some(Value::Int(int(1))));
+
+        let derived_tail = list.tail_handle().expect("cons list has tail");
+        assert_eq!(derived_tail.len, 2);
+        assert_eq!(derived_tail.head_value(), Some(Value::Int(int(2))));
+
+        assert_eq!(tail.len, 2);
+        assert_eq!(tail.head_value(), Some(Value::Int(int(2))));
     }
 
     #[test]

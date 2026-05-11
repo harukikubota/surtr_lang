@@ -1,14 +1,16 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::panic;
 use std::path::{Path, PathBuf};
 
 use diagnostics::{DiagnosticSpec, SourceId, SourceRegistry};
 use eldr::builtin::inspect_value;
+use eldr::interactive::InteractiveChunkPolicy;
 use eldr::value::{TypeKind, Value};
 use forge::bytecode::populate_error_template_lines;
 use scar::typed::{
-    TraitCallOrigin, TypedInner, TypedLensOverMode, TypedLensPath, TypedLensSegment, TypedNode,
+    TraitCallOrigin, TypedFacetOverMode, TypedFacetPath, TypedFacetSegment, TypedInner, TypedNode,
+    TypedPattern,
 };
 use scar::types::Ty;
 use sigil::error::ResolveError;
@@ -19,12 +21,13 @@ use spire::ast::{Ast, AstTy, BinOp, ImportSpec, RecordLitArg, Span};
 
 use super::command::{parse_repl_command, ReplCommand};
 use super::output::{ReplOutput, ReplResult};
+use super::preload::PreloadCompileMode;
 use super::query::{
     ast_ty_from_query_arg, format_query_ty, parse_binding_query_type, parse_repl_query,
     parse_signature_type, CaptureQuery, OperatorRhs, QueryArg, QueryArgKind, ReplQuery,
     TypedCallQuery, TypedOperatorQuery,
 };
-use super::render;
+use super::{eval, render, session};
 use crate::loader::{self, StagedModule};
 use crate::ErrorDisplayMode;
 use crate::{
@@ -66,6 +69,10 @@ const METHOD_DOC_TRAIT_ALIASES: &[(&str, &str)] = &[
     ("gte", "Gte"),
     ("concat", "Concat"),
 ];
+const REPL_UNRESOLVED_TYPE_MESSAGE: &str =
+    "Cannot persist binding with unresolved type variable.";
+const REPL_UNRESOLVED_TYPE_HINT: &str =
+    "Add a type annotation or use the value in a context that determines the success type.";
 
 const STAGE_PARSE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
 
@@ -95,6 +102,7 @@ pub enum ReplLoadError {
         message: String,
     },
     Diagnostic {
+        phase: String,
         sources: SourceRegistry,
         source_id: SourceId,
         spec: DiagnosticSpec,
@@ -113,6 +121,7 @@ impl ReplLoadError {
                 eprintln!("repl: cannot read {}: {}", file_name, message);
             }
             Self::Diagnostic {
+                phase: _,
                 sources,
                 source_id,
                 spec,
@@ -170,18 +179,83 @@ struct PreloadedChunkState {
     declaration_index: sigil::DeclarationIndex,
     sigil_session: sigil::SigilSession,
     scar_checkpoint: scar::ScarCheckpoint,
-    vm: eldr::VM,
+    vm: eldr::InteractiveVm,
     docs: Vec<DocEntry>,
+    process_metadata: BTreeMap<String, ReplProcessMetadata>,
     symbols: BTreeSet<String>,
     auto_import_modules: BTreeSet<String>,
     script_runtime_inputs: Vec<String>,
     script_preload_docs: Vec<DocEntry>,
+    import_records: Vec<ReplImportRecord>,
+    def_records: Vec<ReplDefRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ReplProcessMetadata {
+    kind: spire::ast::ProcessKind,
+    instance: spire::ast::ProcessInstance,
+    handler_specs: Vec<spire::ast::ProcessRuntimeHandlerSpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplSessionPhase {
+    Bootstrap,
+    Preload,
+    Live,
+}
+
+impl ReplSessionPhase {
+    fn execution_policy(self) -> InteractiveChunkPolicy {
+        match self {
+            Self::Bootstrap | Self::Preload => InteractiveChunkPolicy::Preload,
+            Self::Live => InteractiveChunkPolicy::ReplAppendOnly,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
 struct ReplImportResult {
     imported_symbols: Vec<String>,
     success_labels: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+enum ReplReloadSeed {
+    #[default]
+    Empty,
+    ProjectModuleStages(Vec<Vec<crate::ModuleInput>>),
+    Sources {
+        module: Option<(String, String)>,
+        script: Option<(String, String)>,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct ReplHistoryEntry {
+    line: usize,
+    source: String,
+}
+
+#[derive(Debug, Clone)]
+struct ReplBindingRecord {
+    line: usize,
+    name: String,
+    ty: String,
+}
+
+#[derive(Debug, Clone)]
+struct ReplImportRecord {
+    line: usize,
+    src: String,
+    item: String,
+    via: String,
+}
+
+#[derive(Debug, Clone)]
+struct ReplDefRecord {
+    line: usize,
+    name: String,
+    arity: usize,
 }
 
 pub struct ReplEngine {
@@ -194,23 +268,39 @@ pub struct ReplEngine {
     sigil_session: sigil::SigilSession,
     scar_session: scar::ScarSession,
     forge_session: forge::ForgeSession,
-    vm: eldr::VM,
+    vm: eldr::InteractiveVm,
     pending: String,
     next_line: usize,
     results: Vec<Option<Value>>,
     result_metas: Vec<Option<forge::ChunkMeta>>,
     symbols: BTreeSet<String>,
     docs: Vec<DocEntry>,
+    process_metadata: BTreeMap<String, ReplProcessMetadata>,
     auto_import_modules: BTreeSet<String>,
+    reload_seed: ReplReloadSeed,
+    replay_inputs: Vec<String>,
+    history_entries: Vec<ReplHistoryEntry>,
+    binding_records: Vec<ReplBindingRecord>,
+    import_records: Vec<ReplImportRecord>,
+    def_records: Vec<ReplDefRecord>,
+    startup_results: Vec<ReplResult>,
     error_display_mode: ErrorDisplayMode,
 }
 
 impl ReplEngine {
+    fn execute_vm_chunk(
+        &mut self,
+        chunk: sindr::ir::BytecodeChunk,
+        phase: ReplSessionPhase,
+    ) -> Result<eldr::interactive::ChunkExecution, eldr::RuntimeError> {
+        self.vm.push_chunk(chunk, phase.execution_policy())
+    }
+
     pub fn new() -> Result<Self, LoadError> {
         let std_module_inputs = collect_additional_default_std_module_inputs()?;
         let repl_sources = loader::collect_repl_sources_with_module_stages(&[std_module_inputs])?;
         let forge_session = forge::ForgeSession::new();
-        let vm = eldr::VM::new_interactive(forge_session.type_registry());
+        let vm = session::empty_interactive_vm(forge_session.type_registry());
         let mut engine = Self {
             sources: repl_sources.sources,
             builtin_source_id: repl_sources.builtin_source_id,
@@ -226,6 +316,7 @@ impl ReplEngine {
             vm,
             pending: String::new(),
             next_line: 1,
+            startup_results: Vec::new(),
             results: Vec::new(),
             result_metas: Vec::new(),
             symbols: ["Ok", "Err"]
@@ -234,7 +325,14 @@ impl ReplEngine {
                 .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
                 .collect(),
             docs: Vec::new(),
+            process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
+            reload_seed: ReplReloadSeed::Empty,
+            replay_inputs: Vec::new(),
+            history_entries: Vec::new(),
+            binding_records: Vec::new(),
+            import_records: Vec::new(),
+            def_records: Vec::new(),
             error_display_mode: ErrorDisplayMode::Full,
         };
         engine.bootstrap_std_modules()?;
@@ -263,7 +361,7 @@ impl ReplEngine {
 
         let docs = bytecode.docs.clone();
         let forge_session = forge::ForgeSession::from_bytecode(&bytecode);
-        let vm = eldr::VM::new(bytecode);
+        let vm = session::bytecode_interactive_vm(bytecode);
 
         // Populate completion symbols from the pre-loaded function table.
         let mut symbols: BTreeSet<String> = ["Ok", "Err"]
@@ -276,7 +374,7 @@ impl ReplEngine {
                 symbols.insert(name.clone());
             }
         }
-        for entry in vm.bytecode().type_registry.entries.iter() {
+        for entry in vm.bytecode().type_registry.entries().iter() {
             symbols.insert(entry.name.clone());
         }
 
@@ -299,7 +397,15 @@ impl ReplEngine {
             result_metas: Vec::new(),
             symbols,
             docs,
+            process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
+            reload_seed: ReplReloadSeed::Empty,
+            replay_inputs: Vec::new(),
+            history_entries: Vec::new(),
+            binding_records: Vec::new(),
+            import_records: Vec::new(),
+            def_records: Vec::new(),
+            startup_results: Vec::new(),
             error_display_mode: ErrorDisplayMode::Full,
         };
         // Set up sigil / scar scope for stdlib without re-executing bytecode.
@@ -323,6 +429,15 @@ impl ReplEngine {
 
     pub fn from_module_source(file_name: &str, source: &str) -> Result<Self, ReplLoadError> {
         Self::from_preload_sources(Some((file_name, source)), None)
+    }
+
+    pub fn from_project_module_stages(
+        module_input_stages: &[Vec<crate::ModuleInput>],
+    ) -> Result<Self, ReplLoadError> {
+        let state = compile_project_repl_chunk(module_input_stages)?;
+        let mut engine = Self::from_preloaded_state(state)?;
+        engine.reload_seed = ReplReloadSeed::ProjectModuleStages(module_input_stages.to_vec());
+        Ok(engine)
     }
 
     pub fn from_preload_files(
@@ -365,6 +480,15 @@ impl ReplEngine {
         script: Option<(&str, &str)>,
     ) -> Result<Self, ReplLoadError> {
         let state = compile_preloaded_repl_chunk(module, script)?;
+        let mut engine = Self::from_preloaded_state(state)?;
+        engine.reload_seed = ReplReloadSeed::Sources {
+            module: module.map(|(file_name, source)| (file_name.to_string(), source.to_string())),
+            script: script.map(|(file_name, source)| (file_name.to_string(), source.to_string())),
+        };
+        Ok(engine)
+    }
+
+    fn from_preloaded_state(state: PreloadedChunkState) -> Result<Self, ReplLoadError> {
         let forge_session = forge::ForgeSession::from_bytecode(&state.vm.snapshot_bytecode());
 
         Ok(Self {
@@ -388,7 +512,15 @@ impl ReplEngine {
             result_metas: Vec::new(),
             symbols: state.symbols,
             docs: state.docs,
+            process_metadata: state.process_metadata,
             auto_import_modules: state.auto_import_modules,
+            reload_seed: ReplReloadSeed::Empty,
+            replay_inputs: Vec::new(),
+            history_entries: Vec::new(),
+            binding_records: Vec::new(),
+            import_records: state.import_records.clone(),
+            def_records: state.def_records.clone(),
+            startup_results: Vec::new(),
             error_display_mode: ErrorDisplayMode::Full,
         })
         .map(|mut engine| {
@@ -410,7 +542,9 @@ impl ReplEngine {
                     ReplOutput::EvalSuccess { .. }
                     | ReplOutput::PlainText { .. }
                     | ReplOutput::StyledDoc { .. }
-                    | ReplOutput::StatusMessage(_) => {}
+                    | ReplOutput::StatusMessage(_) => {
+                        engine.startup_results.push(result);
+                    }
                     ReplOutput::EvalError { rendered, .. } => {
                         return Err(ReplLoadError::Runtime {
                             file_name: "<repl-preload>".to_string(),
@@ -433,8 +567,13 @@ impl ReplEngine {
                     ReplOutput::DocResolved { .. } | ReplOutput::EvalStarted { .. } => {}
                 }
             }
+            engine.vm.enable_repl_host_io_buffering();
             Ok(engine)
         })
+    }
+
+    pub fn take_startup_results(&mut self) -> Vec<ReplResult> {
+        std::mem::take(&mut self.startup_results)
     }
 
     fn bootstrap_std_modules(&mut self) -> Result<(), LoadError> {
@@ -518,6 +657,7 @@ impl ReplEngine {
         };
 
         let docs = crate::collect_doc_entries(&module_stages, &[], None);
+        self.process_metadata = collect_process_metadata(&module_stages);
         let (mut chunk, mut meta) = match self.forge_session.codegen_chunk(typed) {
             Ok(c) => c,
             Err(e) => {
@@ -545,7 +685,7 @@ impl ReplEngine {
             self.vm.set_source(source, file_name);
         }
 
-        if let Err(e) = self.vm.push_atomic(chunk) {
+        if let Err(e) = self.execute_vm_chunk(chunk, ReplSessionPhase::Bootstrap) {
             let file_name = self.vm.source_file().unwrap_or("<runtime>").to_string();
             return Err(LoadError::BootstrapFailed {
                 phase: "runtime".into(),
@@ -596,6 +736,7 @@ impl ReplEngine {
                 self.scar_session.rollback(snapshot.scar_checkpoint.clone());
                 self.sync_scar_fun_index_with_vm();
                 self.append_docs(snapshot.docs.clone());
+                self.process_metadata = collect_process_metadata(&snapshot.module_stages);
 
                 let scope = match sigil::build_scope_for_module(
                     &snapshot.module_stages,
@@ -697,6 +838,7 @@ impl ReplEngine {
             ));
         }
         self.sync_scar_fun_index_with_vm();
+        self.process_metadata = collect_process_metadata(&module_stages);
         self.append_docs(crate::collect_doc_entries(&module_stages, &[], None));
 
         let scope = match sigil::build_scope_for_module(
@@ -762,7 +904,7 @@ impl ReplEngine {
         let entries = self
             .declaration_index
             .values()
-            .filter(|entry| entry.module_path == module_name)
+            .filter(|entry| crate::surface_path_name(&entry.module_path) == module_name)
             .cloned()
             .collect::<Vec<_>>();
 
@@ -807,11 +949,17 @@ impl ReplEngine {
         imported_symbols: &mut Vec<String>,
     ) -> Result<(), ResolveError> {
         let fq_name = format!("{}::{}", module_name, name);
-        let Some(entry) = self.declaration_index.get(&fq_name) else {
+        let Some(entry) = self.declaration_index.get(&fq_name).or_else(|| {
+            self.declaration_index.values().find(|entry| {
+                crate::surface_path_name(&entry.fq_name) == fq_name
+                    || (crate::surface_path_name(&entry.module_path) == module_name
+                        && entry.name == name)
+            })
+        }) else {
             let module_exists = self
                 .declaration_index
                 .values()
-                .any(|entry| entry.module_path == module_name);
+                .any(|entry| crate::surface_path_name(&entry.module_path) == module_name);
             return Err(ResolveError {
                 message: if module_exists {
                     format!("Unknown import member: {}", fq_name)
@@ -947,14 +1095,14 @@ impl ReplEngine {
 
     fn report_error_value(&self, value: &Value) -> Vec<String> {
         error_display::emit_runtime_value_error_with_registry(
-            &self.vm,
+            self.vm.as_vm(),
             value,
             &self.sources,
             self.repl_source_id,
             self.error_display_mode,
         );
         error_display::runtime_value_error_lines_with_registry(
-            &self.vm,
+            self.vm.as_vm(),
             value,
             &self.sources,
             self.repl_source_id,
@@ -973,14 +1121,21 @@ impl ReplEngine {
             "REPL commands:".to_string(),
             ":help, :h [command]  Show REPL help".to_string(),
             ":quit, :exit         Exit the REPL".to_string(),
-            ":doc <symbol|query>  Show documentation for a visible symbol or query".to_string(),
-            ":sig <function|query> Show the signature for a visible function or query".to_string(),
-            ":info <query>        Show derived information for a visible symbol or query"
+            ":doc <symbol|query>  Show documentation for visible symbols, including process surfaces".to_string(),
+            ":sig <function|query> Show the signature for visible functions, including process surfaces".to_string(),
+            ":info <query>        Show derived information for visible symbols, queries, or process handles"
                 .to_string(),
-            ":type <binding>      Show the type and identity for a visible binding".to_string(),
-            ":lens <binding|expr> Inspect a LensPath and its stop points".to_string(),
+            ":type <binding>      Show the type for a visible binding or singleton process owner".to_string(),
+            "                      Unresolved generic bindings must be annotated before persistence.".to_string(),
+            ":facet <binding|expr> Inspect a FacetPath and its API boundaries".to_string(),
             ":error [full|summary]  Show or change error display mode".to_string(),
             ":save <path.eldr>    Save the current session as .eldr".to_string(),
+            ":vars                List visible value bindings".to_string(),
+            ":imported            List imports active in the REPL scope".to_string(),
+            ":defs                List visible top-level REPL defs".to_string(),
+            ":history [selector]  Show committed REPL input history".to_string(),
+            ":reload [all|defs]   Rebuild the REPL session from preload and defs".to_string(),
+            ":clear               Clear the screen when the host supports it".to_string(),
             ":v <line>            Recall a previous result".to_string(),
         ]
     }
@@ -989,7 +1144,7 @@ impl ReplEngine {
         vec![
             "Usage: :doc <symbol|query>".to_string(),
             "Also: :doc $<binding>".to_string(),
-            "Examples: :doc print, :doc Closure, :doc Kernel::if, :doc Add, :doc +, :doc User(), :doc User!(), :doc gt(Int, Int), :doc $formatter"
+            "Examples: :doc print, :doc Closure, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User(), :doc gt(Int, Int), :doc $formatter"
                 .to_string(),
         ]
     }
@@ -998,7 +1153,7 @@ impl ReplEngine {
         vec![
             "Usage: :sig <function|query>".to_string(),
             "Also: :sig $<binding>".to_string(),
-            "Examples: :sig print, :sig User, :sig User!(), :sig gt(Int, Int), :sig ret |>= up, :sig $formatter"
+            "Examples: :sig print, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig gt(Int, Int), :sig ret |>= up, :sig $formatter"
                 .to_string(),
         ]
     }
@@ -1006,26 +1161,34 @@ impl ReplEngine {
     fn info_help_lines() -> Vec<String> {
         vec![
             "Usage: :info <query>".to_string(),
-            "Accepts: symbol | $binding | typed-call | typed-operator".to_string(),
-            "Examples: :info print, :info $value, :info gt(Int, Int), :info ret |>= up".to_string(),
+            "Accepts: symbol | singleton-owner | $binding | typed-call | typed-operator".to_string(),
+            "Examples: :info print, :info Counter, :info pid, :info $value, :info gt(Int, Int), :info ret |>= up".to_string(),
         ]
     }
 
     fn type_help_lines() -> Vec<String> {
         vec![
-            "Usage: :type <binding>".to_string(),
+            "Usage: :type <binding|singleton-owner>".to_string(),
             "Also: :type $<binding>".to_string(),
-            "Examples: :type list, :type $my_closure".to_string(),
-            "Looks up the latest visible binding only; symbols and expressions are not supported."
+            "Examples: :type list, :type Counter, :type pid, :type $my_closure".to_string(),
+            "Worker processes are queried through PID bindings; singleton processes are queried by owner name."
                 .to_string(),
         ]
     }
 
-    fn lens_help_lines() -> Vec<String> {
+    fn facet_help_lines() -> Vec<String> {
         vec![
-            "Usage: :lens <binding|expr>".to_string(),
-            "Examples: :lens path, :lens Tuple._1, :lens BitWidth.Any".to_string(),
-            "Shows canonical path, segment details, and where the path may stop.".to_string(),
+            "Usage: :facet <binding|expr>".to_string(),
+            "Examples: :facet path, :facet Tuple._1, :facet BitWidth.Any".to_string(),
+            "Shows canonical path, API availability, segment details, and where the path may stop."
+                .to_string(),
+        ]
+    }
+
+    fn history_help_lines() -> Vec<String> {
+        vec![
+            "Usage: :history [selector]".to_string(),
+            "Examples: :history, :history 3, :history 1, 3, 5, :history 2..4".to_string(),
         ]
     }
 
@@ -1038,7 +1201,8 @@ impl ReplEngine {
             "sig" => Self::sig_help_lines(),
             "info" => Self::info_help_lines(),
             "type" => Self::type_help_lines(),
-            "lens" => Self::lens_help_lines(),
+            "facet" => Self::facet_help_lines(),
+            "history" => Self::history_help_lines(),
             other => {
                 let mut rendered = vec![format!("No help found for :{}", other)];
                 rendered.push("Type :help for available REPL commands.".to_string());
@@ -1053,6 +1217,13 @@ impl ReplEngine {
 
     fn styled(lines: Vec<String>) -> ReplResult {
         ReplResult::styled(lines)
+    }
+
+    fn take_repl_host_io_lines(&mut self) -> (Vec<String>, Vec<String>) {
+        (
+            self.vm.take_repl_host_stdout(),
+            self.vm.take_repl_host_stderr(),
+        )
     }
 
     fn repl_command_diagnostic(
@@ -1132,45 +1303,57 @@ impl ReplEngine {
         let canonical = self
             .visible_helper_trait_alias(symbol)
             .unwrap_or_else(|| Self::canonical_symbol(symbol).to_string());
+        let preferred_kind = Self::definition_doc_kind(&canonical);
         let matches = if let Some(matches) = self.type_owner_doc_entries(&canonical) {
             matches
-        } else if canonical != symbol || Self::definition_doc_kind(&canonical).is_some() {
-            let preferred_kind = Self::definition_doc_kind(&canonical);
+        } else {
             let visible = self.visible_doc_entries(&canonical, preferred_kind.clone());
             if visible.is_empty() {
-                self.script_preload_doc_entries(&canonical, preferred_kind)
+                if canonical != symbol || preferred_kind.is_some() {
+                    self.script_preload_doc_entries(&canonical, preferred_kind)
+                } else if let Some(decl) = self.visible_declaration(symbol) {
+                    let expected_signature = self.declaration_signature(decl);
+                    let mut matches = self
+                        .docs
+                        .iter()
+                        .filter(|entry| {
+                            crate::surface_path_name(&entry.qualified_name)
+                                == crate::surface_path_name(&decl.fq_name)
+                        })
+                        .filter(|entry| {
+                            expected_signature.as_ref().is_none_or(|signature| {
+                                entry
+                                    .signature
+                                    .as_ref()
+                                    .is_some_and(|entry_sig| entry_sig == signature)
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    matches.dedup_by(|a, b| {
+                        a.qualified_name == b.qualified_name
+                            && a.kind == b.kind
+                            && a.signature == b.signature
+                            && a.doc == b.doc
+                    });
+                    matches
+                } else {
+                    self.script_preload_doc_entries(symbol, None)
+                }
             } else {
                 visible
             }
-        } else if let Some(decl) = self.visible_declaration(symbol) {
-            let expected_signature = self.declaration_signature(decl);
-            let mut matches = self
-                .docs
-                .iter()
-                .filter(|entry| entry.qualified_name == decl.fq_name)
-                .filter(|entry| {
-                    expected_signature.as_ref().is_none_or(|signature| {
-                        entry
-                            .signature
-                            .as_ref()
-                            .is_some_and(|entry_sig| entry_sig == signature)
-                    })
-                })
-                .collect::<Vec<_>>();
-            matches.dedup_by(|a, b| {
-                a.qualified_name == b.qualified_name
-                    && a.kind == b.kind
-                    && a.signature == b.signature
-                    && a.doc == b.doc
-            });
-            matches
-        } else {
-            self.script_preload_doc_entries(symbol, None)
         };
 
         match matches.as_slice() {
             [] => self
-                .undocumented_doc_output(&canonical)
+                .private_declaration(&canonical)
+                .map(Self::private_doc_output)
+                .or_else(|| {
+                    self.private_declaration(symbol)
+                        .map(Self::private_doc_output)
+                })
+                .or_else(|| self.concrete_process_alias_doc_output(&canonical))
+                .or_else(|| self.undocumented_doc_output(&canonical))
                 .map(|output| ReplResult::ok(output))
                 .unwrap_or_else(|| {
                     if let Some(binding) = self.binding_info(source_symbol) {
@@ -1210,7 +1393,11 @@ impl ReplEngine {
         let mut matches = self
             .docs
             .iter()
-            .filter(|entry| entry.kind == DocKind::Type && entry.qualified_name == decl.fq_name)
+            .filter(|entry| {
+                entry.kind == DocKind::Type
+                    && crate::surface_path_name(&entry.qualified_name)
+                        == crate::surface_path_name(&decl.fq_name)
+            })
             .collect::<Vec<_>>();
         matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
         matches.dedup_by(|a, b| {
@@ -1313,6 +1500,8 @@ impl ReplEngine {
     }
 
     fn symbol_matches(qualified_name: &str, symbol: &str) -> bool {
+        let qualified_name = crate::surface_path_name(qualified_name);
+        let symbol = crate::surface_path_name(symbol);
         qualified_name == symbol
             || qualified_name
                 .rsplit("::")
@@ -1367,31 +1556,53 @@ impl ReplEngine {
         if !Self::symbol_matches(&entry.qualified_name, symbol) {
             return false;
         }
+        if entry.kind == DocKind::Module {
+            return crate::surface_path_name(&entry.qualified_name)
+                == crate::surface_path_name(symbol);
+        }
         if Self::is_qualified_symbol(symbol) {
-            return entry.qualified_name == symbol;
+            let Some(decl) = self.qualified_declaration(symbol) else {
+                return crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(symbol);
+            };
+            return crate::surface_path_name(&entry.qualified_name)
+                == crate::surface_path_name(&decl.fq_name)
+                && Self::declaration_is_public_surface(decl);
         }
         self.visible_uid_matches(symbol, &entry.qualified_name)
             || (entry.module_path.starts_with("__Script::")
                 && self.sigil_session.lookup_uid(symbol).is_some())
     }
 
+    fn qualified_declaration<'a>(&'a self, symbol: &str) -> Option<&'a sigil::DeclarationEntry> {
+        self.declaration_index.get(symbol).or_else(|| {
+            self.declaration_index
+                .values()
+                .find(|entry| crate::surface_path_name(&entry.fq_name) == symbol)
+        })
+    }
+
     fn visible_uid_matches(&self, visible_name: &str, qualified_name: &str) -> bool {
-        match (
-            self.sigil_session.lookup_uid(visible_name),
-            self.sigil_session.lookup_uid(qualified_name),
-        ) {
-            (Some(visible_uid), Some(qualified_uid)) => visible_uid == qualified_uid,
-            _ => false,
-        }
+        let Some(visible_uid) = self.sigil_session.lookup_uid(visible_name) else {
+            return false;
+        };
+        self.qualified_declaration(qualified_name)
+            .and_then(|entry| self.sigil_session.lookup_uid(&entry.fq_name))
+            .or_else(|| self.sigil_session.lookup_uid(qualified_name))
+            .or_else(|| {
+                self.sigil_session
+                    .lookup_uid(crate::surface_path_name(qualified_name))
+            })
+            .is_some_and(|qualified_uid| visible_uid == qualified_uid)
     }
 
     fn tuple_doc_output() -> ReplOutput {
         ReplOutput::DocResolved {
             symbol: "Tuple".to_string(),
             signature: None,
-            summary: Some("Tuple doc surface for tuple values and Lens paths.".to_string()),
+            summary: Some("Tuple doc surface for tuple values and Facet paths.".to_string()),
             source_snippet: Some(
-                "Tuple is the doc surface for tuple values and `Tuple._N` lens roots.\nValues use `pair._0`, `pair._1`, ... and lens paths use `Tuple._0`, `Tuple._1`, ...\nExamples:\n- pair: (String, Int)\n- pair._0\n- pair._1\n- Lens::view(Tuple._0, pair)\n- Lens::view(Tuple._1, pair)\n- Lens::set(Tuple._1, pair, 3)"
+                "Tuple is the doc surface for tuple values and `Tuple._N` facet roots.\nValues use `pair._0`, `pair._1`, ... and facet paths use `Tuple._0`, `Tuple._1`, ...\nExamples:\n- pair: (String, Int)\n- pair._0\n- pair._1\n- Facet::view(Tuple._0, pair)\n- Facet::view(Tuple._1, pair)\n- Facet::set(Tuple._1, pair, 3)"
                     .to_string(),
             ),
             details: Vec::new(),
@@ -1401,24 +1612,344 @@ impl ReplEngine {
     fn undocumented_doc_output(&self, symbol: &str) -> Option<ReplOutput> {
         let decl = self.visible_declaration(symbol)?;
         let signature = self.declaration_signature(decl);
+        let display_fq_name = crate::surface_path_name(&decl.fq_name);
+        let display_name = crate::surface_path_name(&decl.name);
         let source_snippet = if let Some(signature) = &signature {
             format!(
                 "`{}` resolves in the current scope, but it does not have an `@doc` entry yet.\nAdd `@doc` immediately before the declaration.\nExample:\n@doc \"\"\"\nDescribe `{}` here.\n\"\"\"\n{}",
-                decl.fq_name, decl.name, signature
+                display_fq_name, display_name, signature
             )
         } else {
             format!(
                 "`{}` resolves in the current scope, but it does not have an `@doc` entry yet.\nAdd `@doc` at the declaration site.\nExample:\n@doc \"\"\"\nDescribe `{}` here.\n\"\"\"",
-                decl.fq_name, decl.name
+                display_fq_name, display_name
             )
         };
         Some(ReplOutput::DocResolved {
-            symbol: decl.fq_name.clone(),
+            symbol: display_fq_name.to_string(),
             signature,
-            summary: Some(format!("`{}` is currently undocumented.", decl.name)),
+            summary: Some(format!("`{}` is currently undocumented.", display_name)),
             source_snippet: Some(source_snippet),
             details: vec!["status: undocumented".to_string()],
         })
+    }
+
+    fn declaration_is_public_surface(entry: &sigil::DeclarationEntry) -> bool {
+        entry.visibility == spire::ast::Visibility::Public
+    }
+
+    fn parse_pid_type_name(ty: &str) -> Option<&str> {
+        ty.strip_prefix("PID<")?.strip_suffix('>')
+    }
+
+    fn process_metadata_for_pid_type<'a>(
+        &self,
+        ty: &'a str,
+    ) -> Option<(&'a str, &ReplProcessMetadata)> {
+        let process_name = Self::parse_pid_type_name(ty)?;
+        Some((process_name, self.lookup_process_metadata(process_name)?))
+    }
+
+    fn process_metadata_for_singleton_owner<'a>(
+        &self,
+        symbol: &'a str,
+    ) -> Option<(&'a str, &ReplProcessMetadata)> {
+        if Self::is_qualified_symbol(symbol) {
+            return None;
+        }
+        let metadata = self.lookup_process_metadata(symbol)?;
+        (metadata.instance == spire::ast::ProcessInstance::Singleton).then_some((symbol, metadata))
+    }
+
+    fn process_metadata_for_owner<'a>(
+        &self,
+        symbol: &'a str,
+    ) -> Option<(&'a str, &ReplProcessMetadata)> {
+        if Self::is_qualified_symbol(symbol) {
+            return None;
+        }
+        Some((symbol, self.lookup_process_metadata(symbol)?))
+    }
+
+    fn pid_type_from_value(value: &Value) -> Option<String> {
+        match value {
+            Value::Pid(pid) => Some(format!(
+                "PID<{}>",
+                crate::surface_rendered_name(&pid.process_name)
+            )),
+            _ => None,
+        }
+    }
+
+    fn process_metadata_for_pid_value<'a>(
+        &self,
+        value: &'a Value,
+    ) -> Option<(&'a str, &ReplProcessMetadata)> {
+        let Value::Pid(pid) = value else {
+            return None;
+        };
+        Some((
+            pid.process_name.as_str(),
+            self.lookup_process_metadata(&pid.process_name)?,
+        ))
+    }
+
+    fn lookup_process_metadata(&self, name: &str) -> Option<&ReplProcessMetadata> {
+        self.process_metadata.get(name).or_else(|| {
+            self.process_metadata
+                .iter()
+                .find(|(key, _)| crate::surface_path_name(key) == crate::surface_path_name(name))
+                .map(|(_, metadata)| metadata)
+        })
+    }
+
+    fn process_hidden_doc_alias(&self, symbol: &str) -> Option<String> {
+        let (owner, method) = symbol.rsplit_once("::")?;
+        let metadata = self.lookup_process_metadata(owner)?;
+        let hidden_owner = match (metadata.kind, method) {
+            (spire::ast::ProcessKind::Agent, "pid") => "Agent",
+            (spire::ast::ProcessKind::Agent, "spawn")
+                if metadata.instance == spire::ast::ProcessInstance::Worker =>
+            {
+                "Agent"
+            }
+            (spire::ast::ProcessKind::GenServer, "pid") => "GenServer",
+            (spire::ast::ProcessKind::GenServer, "spawn")
+                if metadata.instance == spire::ast::ProcessInstance::Worker =>
+            {
+                "GenServer"
+            }
+            (
+                spire::ast::ProcessKind::Supervisor
+                | spire::ast::ProcessKind::RuntimeSupervisor
+                | spire::ast::ProcessKind::DynamicSupervisor,
+                "spawn" | "adopt" | "status" | "workers",
+            ) => "Supervisor",
+            _ => return None,
+        };
+        Some(format!("{hidden_owner}::{method}"))
+    }
+
+    fn doc_output_with_symbol_and_signature(
+        entry: &DocEntry,
+        symbol: String,
+        signature: Option<String>,
+        details: Vec<String>,
+    ) -> ReplOutput {
+        let summary = entry
+            .doc
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(ToString::to_string);
+        ReplOutput::DocResolved {
+            symbol,
+            signature,
+            summary,
+            source_snippet: Some(entry.doc.clone()),
+            details,
+        }
+    }
+
+    fn concrete_process_alias_doc_output(&self, symbol: &str) -> Option<ReplOutput> {
+        let hidden_symbol = self.process_hidden_doc_alias(symbol)?;
+        let entry = self.docs.iter().find(|entry| {
+            entry.kind == DocKind::Function && entry.qualified_name == hidden_symbol
+        })?;
+        let signature = self
+            .find_signature(symbol)
+            .or_else(|| self.concrete_process_alias_signature(symbol))
+            .map(|(_, signature)| signature);
+        Some(Self::doc_output_with_symbol_and_signature(
+            entry,
+            symbol.to_string(),
+            signature,
+            Vec::new(),
+        ))
+    }
+
+    fn concrete_process_alias_signature(&self, symbol: &str) -> Option<(String, String)> {
+        self.process_hidden_doc_alias(symbol)?;
+        if let Some((owner, metadata)) = symbol.rsplit_once("::").and_then(|(owner, method)| {
+            (method == "pid").then_some((owner, self.lookup_process_metadata(owner)?))
+        }) {
+            if metadata.instance == spire::ast::ProcessInstance::Singleton {
+                let owner = crate::surface_rendered_name(owner);
+                return Some((symbol.to_string(), format!("{symbol}() -> PID<{owner}>")));
+            }
+        }
+        self.vm
+            .function_entries()
+            .iter()
+            .rev()
+            .filter_map(|entry| {
+                let qualified_name = entry.qualified_name.as_ref()?;
+                let signature = entry.signature.as_ref()?;
+                (crate::surface_path_name(qualified_name) == crate::surface_path_name(symbol))
+                    .then(|| (qualified_name.clone(), signature.clone()))
+            })
+            .next()
+    }
+
+    fn process_owner_type_lines(
+        &self,
+        owner: &str,
+        _metadata: &ReplProcessMetadata,
+    ) -> Vec<String> {
+        vec![
+            owner.to_string(),
+            format!("type: PID<{}>", crate::surface_rendered_name(owner)),
+            "identity: TypeIdentity::Type".to_string(),
+        ]
+    }
+
+    fn process_owner_info_lines(&self, owner: &str, metadata: &ReplProcessMetadata) -> Vec<String> {
+        let owner = crate::surface_rendered_name(owner);
+        vec![
+            owner.clone(),
+            "kind: process singleton".to_string(),
+            format!("origin: {}", Self::origin_for_name(&owner)),
+            format!("defined: PID<{owner}>"),
+            format!("type: PID<{owner}>"),
+            "identity: TypeIdentity::Type".to_string(),
+            format!("instance: {:?}", metadata.instance),
+            format!("runtime kind: {:?}", metadata.kind),
+        ]
+    }
+
+    fn process_kind_heading(kind: spire::ast::ProcessKind) -> &'static str {
+        match kind {
+            spire::ast::ProcessKind::Agent => "Agent",
+            spire::ast::ProcessKind::GenServer => "GenServer",
+            spire::ast::ProcessKind::Supervisor => "Supervisor",
+            spire::ast::ProcessKind::RuntimeSupervisor => "RuntimeSupervisor",
+            spire::ast::ProcessKind::DynamicSupervisor => "DynamicSupervisor",
+            spire::ast::ProcessKind::Task => "Task",
+        }
+    }
+
+    fn process_handler_label(kind: spire::ast::ProcessRuntimeHandlerKind) -> &'static str {
+        match kind {
+            spire::ast::ProcessRuntimeHandlerKind::Init => "@init",
+            spire::ast::ProcessRuntimeHandlerKind::Get => "@get",
+            spire::ast::ProcessRuntimeHandlerKind::Set => "@set",
+            spire::ast::ProcessRuntimeHandlerKind::Call => "@call",
+            spire::ast::ProcessRuntimeHandlerKind::Cast => "@cast",
+        }
+    }
+
+    fn render_process_surface_signature(&self, owner: &str, method: &str) -> Option<String> {
+        let symbol = format!("{owner}::{method}");
+        let (qualified_name, signature) = self
+            .find_signature(&symbol)
+            .or_else(|| self.concrete_process_alias_signature(&symbol))?;
+        let rendered = Self::render_signature_with_qualified_name(&qualified_name, signature);
+        let owner_prefix = format!("{}::", crate::surface_rendered_name(owner));
+        Some(
+            rendered
+                .strip_prefix(&owner_prefix)
+                .unwrap_or(&rendered)
+                .to_string(),
+        )
+    }
+
+    fn prepend_pid_param_to_signature(signature: &str, owner: &str) -> Option<String> {
+        let (head, tail) = signature.split_once('(')?;
+        let (params, rest) = tail.rsplit_once(')')?;
+        let pid_param = format!("pid: PID<{}>", crate::surface_rendered_name(owner));
+        let params = params.trim();
+        let new_params = if params.is_empty() {
+            pid_param
+        } else {
+            format!("{pid_param}, {params}")
+        };
+        Some(format!("{head}({new_params}){rest}"))
+    }
+
+    fn render_process_message_signature(
+        &self,
+        owner: &str,
+        metadata: &ReplProcessMetadata,
+        method: &str,
+    ) -> Option<String> {
+        let signature = self.render_process_surface_signature(owner, method)?;
+        if metadata.instance == spire::ast::ProcessInstance::Singleton {
+            return Self::prepend_pid_param_to_signature(&signature, owner);
+        }
+        Some(signature)
+    }
+
+    fn render_process_init_summary_signature(&self, owner: &str, method: &str) -> Option<String> {
+        let signature = self.render_process_surface_signature(owner, method)?;
+        let pid_return = format!("PID<{}>", crate::surface_rendered_name(owner));
+        let result_return = format!("Result<{pid_return}>");
+        Some(signature.replace(&format!("-> {pid_return}"), &format!("-> {result_return}")))
+    }
+
+    fn process_owner_sig_summary_lines(
+        &self,
+        owner: &str,
+        metadata: &ReplProcessMetadata,
+    ) -> Option<Vec<String>> {
+        let owner = crate::surface_rendered_name(owner);
+        let mut lines = vec![format!(
+            "{} {}",
+            Self::process_kind_heading(metadata.kind),
+            owner
+        )];
+
+        let init_spec = metadata
+            .handler_specs
+            .iter()
+            .find(|spec| spec.kind == spire::ast::ProcessRuntimeHandlerKind::Init)?;
+        if let Some(init_sig) = self.render_process_init_summary_signature(&owner, &init_spec.name)
+        {
+            lines.push(format!(
+                "{} {}",
+                Self::process_handler_label(init_spec.kind),
+                init_sig
+            ));
+        }
+        if metadata.instance == spire::ast::ProcessInstance::Singleton {
+            if let Some(pid_sig) = self.render_process_surface_signature(&owner, "pid") {
+                lines.push(format!("@pid {pid_sig}"));
+            }
+        }
+        for spec in &metadata.handler_specs {
+            if spec.kind == spire::ast::ProcessRuntimeHandlerKind::Init {
+                continue;
+            }
+            if let Some(sig) = self.render_process_message_signature(&owner, metadata, &spec.name) {
+                lines.push(format!(
+                    "{} {}",
+                    Self::process_handler_label(spec.kind),
+                    sig
+                ));
+            }
+        }
+        Some(lines)
+    }
+
+    fn process_pid_binding_sig_summary_lines(
+        &self,
+        owner: &str,
+        metadata: &ReplProcessMetadata,
+    ) -> Option<Vec<String>> {
+        let owner = crate::surface_rendered_name(owner);
+        let mut lines = vec![format!("PID<{owner}> messaging")];
+        for spec in &metadata.handler_specs {
+            if spec.kind == spire::ast::ProcessRuntimeHandlerKind::Init {
+                continue;
+            }
+            if let Some(sig) = self.render_process_message_signature(&owner, metadata, &spec.name) {
+                lines.push(format!(
+                    "{} {}",
+                    Self::process_handler_label(spec.kind),
+                    sig
+                ));
+            }
+        }
+        (lines.len() > 1).then_some(lines)
     }
 
     fn method_trait_alias(symbol: &str) -> Option<&'static str> {
@@ -1443,27 +1974,79 @@ impl ReplEngine {
 
     fn visible_declaration<'a>(&'a self, symbol: &str) -> Option<&'a sigil::DeclarationEntry> {
         if Self::is_qualified_symbol(symbol) {
-            return self.declaration_index.get(symbol);
+            let entry = self.qualified_declaration(symbol)?;
+            return Self::declaration_is_public_surface(entry).then_some(entry);
         }
         let visible_uid = self.sigil_session.lookup_uid(symbol)?;
         self.declaration_index.values().find(|entry| {
-            (entry.name == symbol
-                || entry
-                    .name
-                    .rsplit("::")
-                    .next()
-                    .is_some_and(|tail| tail == symbol))
+            Self::declaration_is_public_surface(entry)
+                && (entry.name == symbol
+                    || entry
+                        .name
+                        .rsplit("::")
+                        .next()
+                        .is_some_and(|tail| tail == symbol))
                 && self.sigil_session.lookup_uid(&entry.fq_name) == Some(visible_uid)
         })
     }
 
+    fn private_declaration<'a>(&'a self, symbol: &str) -> Option<&'a sigil::DeclarationEntry> {
+        if Self::is_qualified_symbol(symbol) {
+            let entry = self.qualified_declaration(symbol)?;
+            return (!Self::declaration_is_public_surface(entry)).then_some(entry);
+        }
+        let visible_uid = self.sigil_session.lookup_uid(symbol)?;
+        self.declaration_index.values().find(|entry| {
+            !Self::declaration_is_public_surface(entry)
+                && (entry.name == symbol
+                    || entry
+                        .name
+                        .rsplit("::")
+                        .next()
+                        .is_some_and(|tail| tail == symbol))
+                && self.sigil_session.lookup_uid(&entry.fq_name) == Some(visible_uid)
+        })
+    }
+
+    fn private_doc_output(entry: &sigil::DeclarationEntry) -> ReplOutput {
+        Self::plain(vec![
+            format!(
+                "`{}` is private and cannot be queried with `:doc`.",
+                crate::surface_path_name(&entry.fq_name)
+            ),
+            "Add `@doc` only to public declarations.".to_string(),
+        ])
+        .output
+    }
+
+    fn private_sig_output(entry: &sigil::DeclarationEntry) -> ReplOutput {
+        Self::plain(vec![
+            format!(
+                "`{}` is private and cannot be queried with `:sig`.",
+                crate::surface_path_name(&entry.fq_name)
+            ),
+            "Only public declarations are visible to REPL signature lookup.".to_string(),
+        ])
+        .output
+    }
+
     fn declaration_signature(&self, decl: &sigil::DeclarationEntry) -> Option<String> {
         match decl.kind {
-            sigil::DeclarationKind::Struct => Some(crate::format_struct_signature(&decl.name)),
-            sigil::DeclarationKind::Record => Some(crate::format_record_signature(&decl.name)),
-            sigil::DeclarationKind::Deferror => Some(format!("deferror {}", decl.name)),
-            sigil::DeclarationKind::Enum => Some(format!("defenum {}", decl.name)),
-            sigil::DeclarationKind::BuiltinType => Some(format!("type {}", decl.name)),
+            sigil::DeclarationKind::Struct => Some(crate::format_struct_signature(
+                crate::surface_path_name(&decl.name),
+            )),
+            sigil::DeclarationKind::Record => Some(crate::format_record_signature(
+                crate::surface_path_name(&decl.name),
+            )),
+            sigil::DeclarationKind::Deferror => {
+                Some(format!("deferror {}", crate::surface_path_name(&decl.name)))
+            }
+            sigil::DeclarationKind::Enum => {
+                Some(format!("defenum {}", crate::surface_path_name(&decl.name)))
+            }
+            sigil::DeclarationKind::BuiltinType => {
+                Some(format!("type {}", crate::surface_path_name(&decl.name)))
+            }
             _ => self
                 .find_signature(&decl.fq_name)
                 .map(|(_, signature)| signature),
@@ -1482,7 +2065,7 @@ impl ReplEngine {
             .find(|line| !line.is_empty())
             .map(ToString::to_string);
         ReplOutput::DocResolved {
-            symbol: entry.qualified_name.clone(),
+            symbol: crate::surface_path_name(&entry.qualified_name).to_string(),
             signature: Self::display_signature_for_doc_entry(entry),
             summary,
             source_snippet: Some(entry.doc.clone()),
@@ -1491,13 +2074,10 @@ impl ReplEngine {
     }
 
     fn display_signature_for_doc_entry(entry: &DocEntry) -> Option<String> {
-        match entry.qualified_name.as_str() {
-            "Bootstrap::match" => Some("match value { pattern => expr, ... } -> $B".to_string()),
-            "Bootstrap::cond" => {
-                Some("cond { cond1 => expr1, ..., True => exprN } -> $A".to_string())
-            }
-            _ => entry.signature.clone(),
-        }
+        entry
+            .signature
+            .clone()
+            .map(|signature| crate::surface_rendered_name(&signature))
     }
 
     fn handle_doc_binding(&self, symbol: &str) -> Option<ReplResult> {
@@ -1554,7 +2134,10 @@ impl ReplEngine {
         match kind {
             forge::ReplCallableKind::Capture => {
                 let mut details = vec![format!("binding: {symbol}")];
-                details.push(format!("type: {}", binding.ty));
+                details.push(format!(
+                    "type: {}",
+                    crate::surface_rendered_name(&binding.ty)
+                ));
                 if let Value::Callable(callable) = value {
                     let capture_count = callable.lexical_captures.len();
                     if capture_count == 0 {
@@ -1577,8 +2160,9 @@ impl ReplEngine {
         symbol: &str,
         binding: &forge::BindingInfo,
     ) -> Vec<String> {
-        let mut details = vec![format!("type: {}", binding.ty)];
-        if let Some(example) = Self::closure_binding_example(symbol, &binding.ty) {
+        let rendered_ty = crate::surface_rendered_name(&binding.ty);
+        let mut details = vec![format!("type: {rendered_ty}")];
+        if let Some(example) = Self::closure_binding_example(symbol, &rendered_ty) {
             details.push(format!("example: {example}"));
         }
         details
@@ -1650,7 +2234,7 @@ impl ReplEngine {
         rendered.extend(
             entries
                 .iter()
-                .map(|entry| format!("  {}", entry.qualified_name)),
+                .map(|entry| format!("  {}", crate::surface_path_name(&entry.qualified_name))),
         );
         rendered.push(
             "Use a qualified name or add type annotations, for example `:doc gt(3, 2)`."
@@ -1668,7 +2252,12 @@ impl ReplEngine {
         }
         let matches = self.match_typed_call_docs(query);
         match matches.as_slice() {
-            [] => Self::plain(vec![format!("No docs found for {}", source_query)]),
+            [] => self
+                .private_declaration(query.callee.strip_suffix('!').unwrap_or(&query.callee))
+                .map(|entry| ReplResult::ok(Self::private_doc_output(entry)))
+                .unwrap_or_else(|| {
+                    Self::plain(vec![format!("No docs found for {}", source_query)])
+                }),
             [entry] => ReplResult::ok(Self::doc_resolved_output(entry)),
             entries => Self::plain(Self::ambiguous_doc_lines(source_query, entries)),
         }
@@ -1776,7 +2365,10 @@ impl ReplEngine {
                 .docs
                 .iter()
                 .filter(|entry| entry.kind == DocKind::Function)
-                .filter(|entry| entry.qualified_name == qualified_name)
+                .filter(|entry| {
+                    crate::surface_path_name(&entry.qualified_name)
+                        == crate::surface_path_name(&qualified_name)
+                })
                 .filter(|entry| {
                     entry.signature.as_deref().is_none_or(|sig| {
                         arg_types.is_empty() || self.signature_accepts_arg_types(sig, &arg_types)
@@ -1799,7 +2391,10 @@ impl ReplEngine {
             .docs
             .iter()
             .filter(|entry| entry.kind == DocKind::Function)
-            .filter(|entry| entry.qualified_name == qualified_name)
+            .filter(|entry| {
+                crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(&qualified_name)
+            })
             .filter(|entry| {
                 entry
                     .signature
@@ -1850,6 +2445,13 @@ impl ReplEngine {
             .visible_helper_trait_alias(symbol)
             .unwrap_or_else(|| Self::canonical_symbol(symbol).to_string());
         let qualified_lookup = Self::is_qualified_symbol(&canonical);
+        if qualified_lookup
+            && self
+                .qualified_declaration(&canonical)
+                .is_some_and(|entry| !Self::declaration_is_public_surface(entry))
+        {
+            return None;
+        }
         let visible_uid = (!qualified_lookup)
             .then(|| self.sigil_session.lookup_uid(&canonical))
             .flatten();
@@ -1867,7 +2469,9 @@ impl ReplEngine {
                         return None;
                     }
                     if qualified_lookup {
-                        if qualified_name != &canonical {
+                        if crate::surface_path_name(qualified_name)
+                            != crate::surface_path_name(&canonical)
+                        {
                             return None;
                         }
                     } else if let Some(uid) = visible_uid {
@@ -1885,12 +2489,11 @@ impl ReplEngine {
             }
         }
 
-        if let Some(entry) = self
-            .docs
-            .iter()
-            .rev()
-            .find(|entry| qualified_lookup && entry.qualified_name == canonical)
-        {
+        if let Some(entry) = self.docs.iter().rev().find(|entry| {
+            qualified_lookup
+                && crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(&canonical)
+        }) {
             if let Some(signature) = entry.signature.clone() {
                 return Some((entry.qualified_name.clone(), signature));
             }
@@ -1901,7 +2504,8 @@ impl ReplEngine {
                 return false;
             }
             if qualified_lookup {
-                entry.qualified_name == canonical
+                crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(&canonical)
             } else if let Some(uid) = visible_uid {
                 self.sigil_session.lookup_uid(&entry.qualified_name) == Some(uid)
             } else {
@@ -1917,6 +2521,8 @@ impl ReplEngine {
     }
 
     fn render_signature_with_qualified_name(qualified_name: &str, signature: String) -> String {
+        let qualified_name = crate::surface_path_name(qualified_name);
+        let signature = crate::surface_rendered_name(&signature);
         if let Some((module, tail)) = qualified_name.rsplit_once("::") {
             if signature == tail || signature.starts_with(&format!("{tail}(")) {
                 return format!("{module}::{signature}");
@@ -1931,9 +2537,23 @@ impl ReplEngine {
             return Self::plain(Self::sig_help_lines());
         }
         if let Some(binding_name) = trimmed.strip_prefix('$') {
-            let Some(_binding) = self.binding_info(binding_name) else {
+            let Some(binding) = self.binding_info(binding_name) else {
                 return Self::plain(vec![format!("No binding found for {}", trimmed)]);
             };
+            if let Some(value) = self.vm.get_local(binding.slot_id) {
+                if let Some((owner, metadata)) = self.process_metadata_for_pid_value(&value) {
+                    if let Some(lines) = self.process_pid_binding_sig_summary_lines(owner, metadata)
+                    {
+                        return Self::styled(lines);
+                    }
+                }
+            }
+            if let Some((owner, metadata)) = self.process_metadata_for_pid_type(binding.ty.as_str())
+            {
+                if let Some(lines) = self.process_pid_binding_sig_summary_lines(owner, metadata) {
+                    return Self::styled(lines);
+                }
+            }
             if let Some(rendered) = self.binding_callable_sig_summary(binding_name) {
                 return Self::styled(vec![rendered]);
             }
@@ -1956,16 +2576,29 @@ impl ReplEngine {
                 if let Some(message) = self.enum_sig_extra_input_message_for_symbol(&symbol) {
                     return Self::plain(vec![message]);
                 }
+                if let Some((owner, metadata)) =
+                    self.process_metadata_for_owner(symbol.source.as_str())
+                {
+                    if let Some(lines) = self.process_owner_sig_summary_lines(owner, metadata) {
+                        return Self::styled(lines);
+                    }
+                }
                 if let Some(lines) = self.sig_type_owner_summary_lines(&symbol) {
                     return Self::styled(lines);
                 }
-                match self.find_signature(&symbol) {
+                match self
+                    .find_signature(&symbol)
+                    .or_else(|| self.concrete_process_alias_signature(&symbol))
+                {
                     Some((qualified_name, signature)) => {
                         let rendered =
                             Self::render_signature_with_qualified_name(&qualified_name, signature);
                         Self::styled(vec![rendered])
                     }
                     None => {
+                        if let Some(entry) = self.private_declaration(trimmed) {
+                            return ReplResult::ok(Self::private_sig_output(entry));
+                        }
                         if self.binding_info(trimmed).is_some() {
                             Self::plain(vec![
                                 format!("No signature found for {}", trimmed),
@@ -1981,7 +2614,7 @@ impl ReplEngine {
                 }
             }
             Ok(ReplQuery::TypedCall(query)) => {
-                if query.callee.starts_with('&') || query.callee.starts_with("Lens::") {
+                if query.callee.starts_with('&') || query.callee.starts_with("Facet::") {
                     self.handle_sig_expression(trimmed)
                 } else {
                     self.handle_sig_typed_call(trimmed, &query)
@@ -2010,20 +2643,27 @@ impl ReplEngine {
                     start: ":type ".chars().count(),
                     end: format!(":type {trimmed}").chars().count(),
                 },
-                Some("Usage: :type <binding> or :type $<binding>".to_string()),
+                Some("Usage: :type <binding|singleton-owner> or :type $<binding>".to_string()),
                 Vec::new(),
             );
         }
         let binding_name = trimmed.strip_prefix('$').unwrap_or(trimmed);
 
         let Some(binding) = self.binding_info(binding_name) else {
+            if let Some((owner, metadata)) = self.process_metadata_for_singleton_owner(binding_name)
+            {
+                return Self::styled(self.process_owner_type_lines(owner, metadata));
+            }
             return Self::plain(vec![format!("No binding found for {}", trimmed)]);
         };
 
-        if binding.lens_info.is_some() {
+        if binding.facet_info.is_some() {
             return Self::styled(vec![
                 binding_name.to_string(),
-                format!("type: {}", binding.ty.as_str()),
+                format!(
+                    "type: {}",
+                    crate::surface_rendered_name(binding.ty.as_str())
+                ),
                 format!("identity: {}", self.render_type_identity(binding, None)),
             ]);
         }
@@ -2032,9 +2672,12 @@ impl ReplEngine {
             return Self::plain(vec![format!("Binding `{}` has no current value.", trimmed)]);
         };
 
+        let rendered_ty = Self::pid_type_from_value(&value)
+            .unwrap_or_else(|| crate::surface_rendered_name(binding.ty.as_str()));
+
         Self::styled(vec![
             binding_name.to_string(),
-            format!("type: {}", binding.ty.as_str()),
+            format!("type: {rendered_ty}"),
             format!(
                 "identity: {}",
                 self.render_type_identity(binding, Some(&value))
@@ -2060,26 +2703,46 @@ impl ReplEngine {
         }
     }
 
-    fn render_lens_info(info: &forge::ReplLensInfo) -> Vec<String> {
+    fn render_facet_info(info: &forge::ReplFacetInfo) -> Vec<String> {
         let mut lines = vec![
-            "## LensPath".to_string(),
-            format!("type: {}", info.ty),
-            format!("view result: {}", info.view_result_ty),
-            format!("full path: {}", info.full_path),
+            "## FacetPath".to_string(),
+            format!("type: {}", crate::surface_rendered_name(&info.ty)),
+            format!("kind: {}", info.path_kind),
+            "view API: Facet::view".to_string(),
+            format!(
+                "preview API: {}",
+                if info.path_kind == "variant" {
+                    "Facet::preview"
+                } else {
+                    "unavailable"
+                }
+            ),
+            format!(
+                "view result: {}",
+                crate::surface_rendered_name(&info.view_result_ty)
+            ),
+            format!(
+                "full path: {}",
+                crate::surface_rendered_name(&info.full_path)
+            ),
             "## Flow".to_string(),
         ];
 
         let mut previous_terminal = None::<String>;
         for (index, segment) in info.segments.iter().enumerate() {
-            let terminal = Self::lens_segment_terminal_name(&segment.label);
+            let terminal = Self::facet_segment_terminal_name(&segment.label);
             let local_path =
-                Self::render_lens_local_hop(segment, previous_terminal.as_deref(), &terminal);
+                Self::render_facet_local_hop(segment, previous_terminal.as_deref(), &terminal);
             lines.push(format!("hop {}: {}", index + 1, local_path));
             lines.push(format!(
                 "relation: {} -> {}",
-                segment.source_ty, segment.focus_ty
+                crate::surface_rendered_name(&segment.source_ty),
+                crate::surface_rendered_name(&segment.focus_ty)
             ));
-            lines.push(format!("cumulative: {}", segment.label));
+            lines.push(format!(
+                "cumulative: {}",
+                crate::surface_rendered_name(&segment.label)
+            ));
             lines.push(format!(
                 "fallible: {}",
                 if segment.fallible { "yes" } else { "no" }
@@ -2098,12 +2761,12 @@ impl ReplEngine {
         lines
     }
 
-    fn lens_segment_terminal_name(label: &str) -> String {
+    fn facet_segment_terminal_name(label: &str) -> String {
         label.rsplit('.').next().unwrap_or(label).to_string()
     }
 
-    fn render_lens_local_hop(
-        segment: &forge::ReplLensSegmentInfo,
+    fn render_facet_local_hop(
+        segment: &forge::ReplFacetSegmentInfo,
         previous_terminal: Option<&str>,
         terminal: &str,
     ) -> String {
@@ -2119,20 +2782,20 @@ impl ReplEngine {
         segment.label.clone()
     }
 
-    fn handle_lens(&mut self, query: &str) -> ReplResult {
+    fn handle_facet(&mut self, query: &str) -> ReplResult {
         let trimmed = query.trim();
         if trimmed.is_empty() {
-            return Self::plain(Self::lens_help_lines());
+            return Self::plain(Self::facet_help_lines());
         }
         if let Some(binding) = self.binding_info(trimmed) {
-            if let Some(lens_info) = &binding.lens_info {
-                return Self::styled(Self::render_lens_info(lens_info));
+            if let Some(facet_info) = &binding.facet_info {
+                return Self::styled(Self::render_facet_info(facet_info));
             }
         }
-        self.handle_lens_expression(trimmed)
+        self.handle_facet_expression(trimmed)
     }
 
-    fn handle_lens_expression(&mut self, source_query: &str) -> ReplResult {
+    fn handle_facet_expression(&mut self, source_query: &str) -> ReplResult {
         let original_pending = self.pending.clone();
         let original_source = self
             .sources
@@ -2147,7 +2810,7 @@ impl ReplEngine {
         self.sources
             .update_source(self.repl_source_id, query_source.clone());
 
-        let result = self.handle_lens_expression_inner(source_query, &query_source);
+        let result = self.handle_facet_expression_inner(source_query, &query_source);
 
         self.sigil_session.rollback(sigil_cp);
         self.scar_session.rollback(scar_cp);
@@ -2159,7 +2822,7 @@ impl ReplEngine {
         result
     }
 
-    fn handle_lens_expression_inner(
+    fn handle_facet_expression_inner(
         &mut self,
         source_query: &str,
         query_source: &str,
@@ -2181,13 +2844,13 @@ impl ReplEngine {
                 );
                 return ReplResult::ok(ReplOutput::EvalError {
                     idx: self.results.len(),
-                    source: format!(":lens {source_query}"),
+                    source: format!(":facet {source_query}"),
                     rendered,
                 });
             }
         };
 
-        let resolved = match self.sigil_session.resolve(ast) {
+        let resolved = match self.sigil_session.resolve(ast.clone()) {
             Ok(r) => r,
             Err(e) => {
                 let spec =
@@ -2200,7 +2863,7 @@ impl ReplEngine {
                 );
                 return ReplResult::ok(ReplOutput::EvalError {
                     idx: self.results.len(),
-                    source: format!(":lens {source_query}"),
+                    source: format!(":facet {source_query}"),
                     rendered,
                 });
             }
@@ -2231,22 +2894,22 @@ impl ReplEngine {
                 );
                 return ReplResult::ok(ReplOutput::EvalError {
                     idx: self.results.len(),
-                    source: format!(":lens {source_query}"),
+                    source: format!(":facet {source_query}"),
                     rendered,
                 });
             }
         };
 
         let Some(root) = typed.first() else {
-            return Self::plain(Self::lens_help_lines());
+            return Self::plain(Self::facet_help_lines());
         };
-        let Some(info) = Self::lens_info_for_typed_node(root) else {
+        let Some(info) = Self::facet_info_for_typed_node(root) else {
             return Self::plain(vec![format!(
-                "`{source_query}` is not a LensPath binding or expression."
+                "`{source_query}` is not a FacetPath binding or expression."
             )]);
         };
 
-        Self::styled(Self::render_lens_info(&info))
+        Self::styled(Self::render_facet_info(&info))
     }
 
     fn handle_info_symbol(&self, source_query: &str, symbol: &str) -> ReplResult {
@@ -2258,6 +2921,10 @@ impl ReplEngine {
             if let Some(binding) = self.binding_info(binding_lookup) {
                 return self.render_info_binding(binding_lookup, binding);
             }
+        }
+
+        if let Some((owner, metadata)) = self.process_metadata_for_singleton_owner(symbol) {
+            return Self::styled(self.process_owner_info_lines(owner, metadata));
         }
 
         if let Some((qualified_name, signature)) = self.find_signature(symbol) {
@@ -2287,6 +2954,39 @@ impl ReplEngine {
     }
 
     fn render_info_binding(&self, symbol: &str, binding: &forge::BindingInfo) -> ReplResult {
+        if let Some(value) = self.vm.get_local(binding.slot_id) {
+            if let Some((process_name, metadata)) = self.process_metadata_for_pid_value(&value) {
+                let rendered_ty = Self::pid_type_from_value(&value)
+                    .unwrap_or_else(|| crate::surface_rendered_name(&binding.ty));
+                return Self::styled(vec![
+                    symbol.to_string(),
+                    "kind: process pid".to_string(),
+                    "origin: repl".to_string(),
+                    format!("type: {rendered_ty}"),
+                    "identity: TypeIdentity::Type".to_string(),
+                    format!(
+                        "defined: PID<{}>",
+                        crate::surface_rendered_name(process_name)
+                    ),
+                    format!("instance: {:?}", metadata.instance),
+                    format!("runtime kind: {:?}", metadata.kind),
+                ]);
+            }
+        }
+
+        if let Some((_, metadata)) = self.process_metadata_for_pid_type(binding.ty.as_str()) {
+            return Self::styled(vec![
+                symbol.to_string(),
+                "kind: process pid".to_string(),
+                "origin: repl".to_string(),
+                format!("type: {}", crate::surface_rendered_name(&binding.ty)),
+                "identity: TypeIdentity::Type".to_string(),
+                format!("defined: {}", crate::surface_rendered_name(&binding.ty)),
+                format!("instance: {:?}", metadata.instance),
+                format!("runtime kind: {:?}", metadata.kind),
+            ]);
+        }
+
         let mut lines = vec![symbol.to_string()];
         let kind = match self.binding_callable_kind(binding) {
             Some(forge::ReplCallableKind::Closure) => "closure",
@@ -2295,17 +2995,26 @@ impl ReplEngine {
         };
         lines.push(format!("kind: {kind}"));
         lines.push("origin: repl".to_string());
-        if binding.lens_info.is_some() {
-            lines.push(format!("type: {}", binding.ty));
+        if binding.facet_info.is_some() {
+            lines.push(format!(
+                "type: {}",
+                crate::surface_rendered_name(&binding.ty)
+            ));
             lines.push(format!(
                 "identity: {}",
                 self.render_type_identity(binding, None)
             ));
-            if let Some(lens_info) = &binding.lens_info {
-                lines.push(format!("full path: {}", lens_info.full_path));
+            if let Some(facet_info) = &binding.facet_info {
+                lines.push(format!(
+                    "full path: {}",
+                    crate::surface_rendered_name(&facet_info.full_path)
+                ));
             }
         } else if let Some(value) = self.vm.get_local(binding.slot_id) {
-            lines.push(format!("type: {}", binding.ty));
+            lines.push(format!(
+                "type: {}",
+                crate::surface_rendered_name(&binding.ty)
+            ));
             lines.push(format!(
                 "identity: {}",
                 self.render_type_identity(binding, Some(&value))
@@ -2501,7 +3210,7 @@ impl ReplEngine {
         }
         .clone();
 
-        let resolved = match self.sigil_session.resolve(ast) {
+        let resolved = match self.sigil_session.resolve(ast.clone()) {
             Ok(r) => r,
             Err(e) => {
                 let spec =
@@ -2623,28 +3332,28 @@ impl ReplEngine {
     fn defined_signature_for_expr(expr: &Ast, typed: &TypedNode) -> String {
         match &typed.node {
             TypedInner::FieldAccess(source, idx) => format!(
-                "Lens::view({}, {})",
-                Self::tuple_lens_segment(*idx),
+                "Facet::view({}, {})",
+                Self::tuple_facet_segment(*idx),
                 Self::typed_source_expr_name(source)
                     .unwrap_or_else(|| Self::field_access_source(expr))
             ),
-            TypedInner::LensView { source, path, .. } => format!(
-                "Lens::view({}, {})",
-                Self::render_typed_lens_path(path),
+            TypedInner::FacetView { source, path, .. } => format!(
+                "Facet::view({}, {})",
+                Self::render_typed_facet_path(path),
                 Self::typed_source_expr_name(source).unwrap_or("<source>".to_string())
             ),
-            TypedInner::LensSet {
+            TypedInner::FacetSet {
                 source,
                 path,
                 value,
                 ..
             } => format!(
-                "Lens::set({}, {}, {})",
-                Self::render_typed_lens_path(path),
+                "Facet::set({}, {}, {})",
+                Self::render_typed_facet_path(path),
                 Self::typed_source_expr_name(source).unwrap_or("<source>".to_string()),
                 Self::typed_source_expr_name(value).unwrap_or("value".to_string())
             ),
-            TypedInner::LensOver {
+            TypedInner::FacetOver {
                 source,
                 path,
                 update_fun,
@@ -2652,19 +3361,19 @@ impl ReplEngine {
                 ..
             } => format!(
                 "{}({}, {}, {})",
-                if matches!(mode, TypedLensOverMode::FocusResult) {
-                    "Lens::over_result"
+                if matches!(mode, TypedFacetOverMode::FocusResult) {
+                    "Facet::over_result"
                 } else {
-                    "Lens::over"
+                    "Facet::over"
                 },
-                Self::render_typed_lens_path(path),
+                Self::render_typed_facet_path(path),
                 Self::typed_source_expr_name(source).unwrap_or("<source>".to_string()),
                 Self::typed_source_expr_name(update_fun).unwrap_or("<update>".to_string())
             ),
-            TypedInner::LensPath(_path) => {
+            TypedInner::FacetPath(_path) => {
                 let rendered = match expr {
                     Ast::BinOp(_, BinOp::Slash, left, right) => format!(
-                        "Lens::compose({}, {})",
+                        "Facet::compose({}, {})",
                         Self::source_expr_string(left),
                         Self::source_expr_string(right)
                     ),
@@ -2672,11 +3381,11 @@ impl ReplEngine {
                 };
                 format!("{}: {}", rendered, Self::ty_to_string(&typed.ty))
             }
-            TypedInner::PendingLensPath(path) => {
+            TypedInner::PendingFacetPath(path) => {
                 let _ = path;
                 let rendered = match expr {
                     Ast::BinOp(_, BinOp::Slash, left, right) => format!(
-                        "Lens::compose({}, {})",
+                        "Facet::compose({}, {})",
                         Self::source_expr_string(left),
                         Self::source_expr_string(right)
                     ),
@@ -2833,8 +3542,8 @@ impl ReplEngine {
                 Self::typed_source_expr_name(source)?,
                 idx
             )),
-            TypedInner::LensPath(path) => Some(Self::render_typed_lens_path(path)),
-            TypedInner::PendingLensPath(path) => Some(path.segments.iter().enumerate().fold(
+            TypedInner::FacetPath(path) => Some(Self::render_typed_facet_path(path)),
+            TypedInner::PendingFacetPath(path) => Some(path.segments.iter().enumerate().fold(
                 String::new(),
                 |mut acc, (index, segment)| {
                     if index == 0 && segment.starts_with('_') {
@@ -2871,24 +3580,24 @@ impl ReplEngine {
         }
     }
 
-    fn render_typed_lens_path(path: &TypedLensPath) -> String {
+    fn render_typed_facet_path(path: &TypedFacetPath) -> String {
         let mut rendered = String::new();
         for segment in &path.segments {
             match segment {
-                TypedLensSegment::Tuple { field_index, .. } => {
+                TypedFacetSegment::Tuple { field_index, .. } => {
                     if rendered.is_empty() {
                         rendered.push_str("Tuple");
                     }
                     rendered.push_str(&format!("._{field_index}"));
                 }
-                TypedLensSegment::Field { field_name, .. } => {
+                TypedFacetSegment::Field { field_name, .. } => {
                     if rendered.is_empty() {
                         rendered.push_str(&Self::ty_to_string(&path.source_ty));
                     }
                     rendered.push('.');
                     rendered.push_str(field_name);
                 }
-                TypedLensSegment::Variant { variant_name, .. } => {
+                TypedFacetSegment::Variant { variant_name, .. } => {
                     if rendered.is_empty() {
                         rendered.push_str(&Self::ty_to_string(&path.source_ty));
                     }
@@ -2898,25 +3607,25 @@ impl ReplEngine {
             }
         }
         if rendered.is_empty() {
-            "<lens>".to_string()
+            "<facet>".to_string()
         } else {
             rendered
         }
     }
 
-    fn lens_segment_label(segment: &TypedLensSegment) -> String {
+    fn facet_segment_label(segment: &TypedFacetSegment) -> String {
         match segment {
-            TypedLensSegment::Field { field_name, .. } => field_name.clone(),
-            TypedLensSegment::Tuple { field_index, .. } => format!("_{field_index}"),
-            TypedLensSegment::Variant { variant_name, .. } => variant_name.clone(),
+            TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
+            TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
+            TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
         }
     }
 
-    fn lens_info_from_path(
-        path: &TypedLensPath,
+    fn facet_info_from_path(
+        path: &TypedFacetPath,
         ty: &Ty,
         source_is_result: bool,
-    ) -> forge::ReplLensInfo {
+    ) -> forge::ReplFacetInfo {
         let mut current_source = path.source_ty.clone();
         let mut segments = Vec::with_capacity(path.segments.len());
         let mut stop_points = Vec::new();
@@ -2926,9 +3635,9 @@ impl ReplEngine {
         }
         let mut prefix = String::new();
         for segment in &path.segments {
-            let label = Self::lens_segment_label(segment);
+            let label = Self::facet_segment_label(segment);
             let (kind, fallible, reason) = match segment {
-                TypedLensSegment::Field {
+                TypedFacetSegment::Field {
                     field_index,
                     field_name,
                     ..
@@ -2944,7 +3653,7 @@ impl ReplEngine {
                         prefix.push('.');
                     }
                     prefix.push_str(field_name);
-                    segments.push(forge::ReplLensSegmentInfo {
+                    segments.push(forge::ReplFacetSegmentInfo {
                         label: prefix.clone(),
                         kind: "field".to_string(),
                         source_ty: Self::ty_to_string(&current_source),
@@ -2955,7 +3664,7 @@ impl ReplEngine {
                     current_source = focus_ty;
                     ("field", false, "field access")
                 }
-                TypedLensSegment::Tuple { field_index, .. } => {
+                TypedFacetSegment::Tuple { field_index, .. } => {
                     let focus_ty = match &current_source {
                         Ty::Tuple(items) => items
                             .get(*field_index as usize)
@@ -2967,7 +3676,7 @@ impl ReplEngine {
                         prefix.push_str("Tuple");
                     }
                     prefix.push_str(&format!("._{field_index}"));
-                    segments.push(forge::ReplLensSegmentInfo {
+                    segments.push(forge::ReplFacetSegmentInfo {
                         label: prefix.clone(),
                         kind: "tuple".to_string(),
                         source_ty: Self::ty_to_string(&current_source),
@@ -2978,7 +3687,7 @@ impl ReplEngine {
                     current_source = focus_ty;
                     ("tuple", false, "tuple index access")
                 }
-                TypedLensSegment::Variant { variant_name, .. } => {
+                TypedFacetSegment::Variant { variant_name, .. } => {
                     if !prefix.is_empty() {
                         prefix.push('.');
                     }
@@ -2986,7 +3695,7 @@ impl ReplEngine {
                     let focus_ty = path.focus_ty.clone();
                     path_is_fallible = true;
                     stop_points.push(format!("{prefix} - variant mismatch returns Result"));
-                    segments.push(forge::ReplLensSegmentInfo {
+                    segments.push(forge::ReplFacetSegmentInfo {
                         label: prefix.clone(),
                         kind: "variant".to_string(),
                         source_ty: Self::ty_to_string(&current_source),
@@ -3000,25 +3709,26 @@ impl ReplEngine {
             };
             let _ = (kind, fallible, reason, label);
         }
-        forge::ReplLensInfo {
+        forge::ReplFacetInfo {
             ty: Self::ty_to_string(ty),
+            path_kind: path.path_kind.as_str().to_string(),
             view_result_ty: if source_is_result || path_is_fallible {
                 format!("Result<{}, Error>", Self::ty_to_string(&path.focus_ty))
             } else {
                 Self::ty_to_string(&path.focus_ty)
             },
-            full_path: Self::render_typed_lens_path(path),
+            full_path: Self::render_typed_facet_path(path),
             segments,
             stop_points,
         }
     }
 
-    fn lens_info_for_typed_node(node: &TypedNode) -> Option<forge::ReplLensInfo> {
+    fn facet_info_for_typed_node(node: &TypedNode) -> Option<forge::ReplFacetInfo> {
         match &node.node {
-            TypedInner::LensPath(path) => Some(Self::lens_info_from_path(path, &node.ty, false)),
-            TypedInner::PendingLensPath(path) => {
+            TypedInner::FacetPath(path) => Some(Self::facet_info_from_path(path, &node.ty, false)),
+            TypedInner::PendingFacetPath(path) => {
                 let full_path = if path.segments.is_empty() {
-                    "<lens>".to_string()
+                    "<facet>".to_string()
                 } else {
                     let mut rendered = String::new();
                     for (index, segment) in path.segments.iter().enumerate() {
@@ -3034,14 +3744,15 @@ impl ReplEngine {
                     }
                     rendered
                 };
-                Some(forge::ReplLensInfo {
+                Some(forge::ReplFacetInfo {
                     ty: Self::ty_to_string(&node.ty),
+                    path_kind: "structural".to_string(),
                     view_result_ty: "_".to_string(),
                     full_path,
                     segments: path
                         .segments
                         .iter()
-                        .map(|segment| forge::ReplLensSegmentInfo {
+                        .map(|segment| forge::ReplFacetSegmentInfo {
                             label: if segment.starts_with('_') {
                                 format!("Tuple.{segment}")
                             } else {
@@ -3055,19 +3766,19 @@ impl ReplEngine {
                             source_ty: "_".to_string(),
                             focus_ty: "_".to_string(),
                             fallible: false,
-                            reason: "requires Lens context to specialize".to_string(),
+                            reason: "requires Facet context to specialize".to_string(),
                         })
                         .collect(),
                     stop_points: Vec::new(),
                 })
             }
-            TypedInner::LensView {
+            TypedInner::FacetView {
                 path,
                 source_is_result,
                 ..
-            } => Some(Self::lens_info_from_path(
+            } => Some(Self::facet_info_from_path(
                 path,
-                &Ty::Lens(
+                &Ty::Facet(
                     Box::new(path.source_ty.clone()),
                     Box::new(path.focus_ty.clone()),
                 ),
@@ -3077,7 +3788,7 @@ impl ReplEngine {
         }
     }
 
-    fn tuple_lens_segment(index: u32) -> String {
+    fn tuple_facet_segment(index: u32) -> String {
         format!("Tuple._{index}")
     }
 
@@ -3096,10 +3807,10 @@ impl ReplEngine {
             Ty::List(inner) => format!("List<{}>", Self::ty_to_string(inner)),
             Ty::Lazy(inner) => format!("Lazy<{}>", Self::ty_to_string(inner)),
             Ty::TypeRef(inner) => format!("TypeRef<{}>", Self::ty_to_string(inner)),
-            Ty::Pid(name) => format!("PID<{}>", name),
-            Ty::Lens(source, focus) => {
+            Ty::Pid(name) => format!("PID<{}>", crate::surface_rendered_name(name)),
+            Ty::Facet(source, focus) => {
                 format!(
-                    "Lens<{}, {}>",
+                    "Facet<{}, {}>",
                     Self::ty_to_string(source),
                     Self::ty_to_string(focus)
                 )
@@ -3119,7 +3830,20 @@ impl ReplEngine {
                     Self::ty_to_string(err)
                 )
             }
-            Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name, _) => name.clone(),
+            Ty::Struct(name, _) | Ty::Record(name, _) => crate::surface_path_name(name).to_string(),
+            Ty::Enum(name, args) => {
+                let name = crate::surface_path_name(name);
+                if args.is_empty() {
+                    name.to_string()
+                } else {
+                    let args = args
+                        .iter()
+                        .map(Self::ty_to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{name}<{args}>")
+                }
+            }
             Ty::Error => "Error".into(),
             Ty::Var(_) => "_".into(),
             Ty::Func(params, ret) => {
@@ -3196,7 +3920,12 @@ impl ReplEngine {
                 };
                 Self::styled(rendered.lines().map(|line| line.to_string()).collect())
             }
-            [] => Self::plain(vec![format!("No signature found for {}", source_query)]),
+            [] => self
+                .private_declaration(query.callee.strip_suffix('!').unwrap_or(&query.callee))
+                .map(|entry| ReplResult::ok(Self::private_sig_output(entry)))
+                .unwrap_or_else(|| {
+                    Self::plain(vec![format!("No signature found for {}", source_query)])
+                }),
             entries => Self::plain(Self::ambiguous_doc_lines(source_query, entries)),
         }
     }
@@ -3236,7 +3965,8 @@ impl ReplEngine {
         (decl.kind == sigil::DeclarationKind::Enum).then(|| {
             format!(
                 "Enum signatures are only available for bare type owners: use `:sig {}` instead of `:sig {}`.",
-                decl.fq_name, source
+                crate::surface_path_name(&decl.fq_name),
+                source
             )
         })
     }
@@ -3260,7 +3990,10 @@ impl ReplEngine {
             .docs
             .iter()
             .filter(|entry| entry.kind == DocKind::Function)
-            .filter(|entry| entry.qualified_name == qualified_name)
+            .filter(|entry| {
+                crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(&qualified_name)
+            })
             .filter_map(|entry| {
                 entry.signature.clone().map(|signature| {
                     Self::render_signature_with_qualified_name(&entry.qualified_name, signature)
@@ -3284,7 +4017,10 @@ impl ReplEngine {
                         .map(|(name, ty)| format!("{name}: {}", Self::ty_to_string(ty)))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    vec![format!("{}::new({params}) -> Self", decl.fq_name)]
+                    vec![format!(
+                        "{}::new({params}) -> Self",
+                        crate::surface_path_name(&decl.fq_name)
+                    )]
                 });
         }
 
@@ -3292,11 +4028,11 @@ impl ReplEngine {
     }
 
     fn enum_variant_signature_lines(&self, decl: &sigil::DeclarationEntry) -> Option<Vec<String>> {
-        let entry = self
-            .docs
-            .iter()
-            .rev()
-            .find(|entry| entry.kind == DocKind::Type && entry.qualified_name == decl.fq_name);
+        let entry = self.docs.iter().rev().find(|entry| {
+            entry.kind == DocKind::Type
+                && crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(&decl.fq_name)
+        });
         if let Some(entry) = entry {
             if let Some(signature) = entry.signature.as_deref() {
                 if let Some((_owner_surface, variants_src)) =
@@ -3320,7 +4056,11 @@ impl ReplEngine {
                     .iter()
                     .map(|variant| {
                         if variant.payload.is_empty() {
-                            format!("* {}::{}", decl.fq_name, variant.short_name)
+                            format!(
+                                "* {}::{}",
+                                crate::surface_path_name(&decl.fq_name),
+                                variant.short_name
+                            )
                         } else {
                             let payload = variant
                                 .payload
@@ -3328,7 +4068,11 @@ impl ReplEngine {
                                 .map(Self::ty_to_string)
                                 .collect::<Vec<_>>()
                                 .join(", ");
-                            format!("* {}::{}({payload})", decl.fq_name, variant.short_name)
+                            format!(
+                                "* {}::{}({payload})",
+                                crate::surface_path_name(&decl.fq_name),
+                                variant.short_name
+                            )
                         }
                     })
                     .collect::<Vec<_>>();
@@ -3377,8 +4121,9 @@ impl ReplEngine {
     }
 
     fn render_enum_variant_listing(owner_fq: &str, variant: &str) -> String {
+        let owner_fq = crate::surface_path_name(owner_fq);
         if let Some((name, payload)) = variant.split_once('(') {
-            let payload = payload.trim_end_matches(')').trim();
+            let payload = crate::surface_rendered_name(payload.trim_end_matches(')').trim());
             format!("* {}::{}({payload})", owner_fq, name.trim())
         } else {
             format!("* {}::{}", owner_fq, variant.trim())
@@ -3595,20 +4340,34 @@ impl ReplEngine {
     }
 
     fn query_arg_ast_ty(&self, arg: &QueryArg) -> Result<AstTy, String> {
-        match &arg.kind {
+        let ty = match &arg.kind {
             QueryArgKind::Binding(name) => {
                 let Some(ty) = self.binding_type(name) else {
                     return Err(format!("Unknown query binding `{name}`."));
                 };
-                parse_binding_query_type(&ty)
-                    .ok_or_else(|| format!("Binding `{name}` has unsupported query type `{ty}`."))
+                let parsed = parse_binding_query_type(&ty)
+                    .ok_or_else(|| format!("Binding `{name}` has unsupported query type `{ty}`."))?;
+                if ast_ty_contains_query_placeholder(&parsed) {
+                    return Err(format!(
+                        "Cannot use unresolved generic binding in REPL operator query. {}",
+                        REPL_UNRESOLVED_TYPE_HINT
+                    ));
+                }
+                Ok(parsed)
             }
             QueryArgKind::ForcedBinding(name) => {
                 let Some(ty) = self.binding_type(name) else {
                     return Err(format!("Unknown query binding `{name}`."));
                 };
-                parse_binding_query_type(&ty)
-                    .ok_or_else(|| format!("Binding `{name}` has unsupported query type `{ty}`."))
+                let parsed = parse_binding_query_type(&ty)
+                    .ok_or_else(|| format!("Binding `{name}` has unsupported query type `{ty}`."))?;
+                if ast_ty_contains_query_placeholder(&parsed) {
+                    return Err(format!(
+                        "Cannot use unresolved generic binding in REPL operator query. {}",
+                        REPL_UNRESOLVED_TYPE_HINT
+                    ));
+                }
+                Ok(parsed)
             }
             QueryArgKind::Capture(capture) => self.capture_query_type(capture),
             QueryArgKind::PipePlaceholder => Err(
@@ -3621,7 +4380,14 @@ impl ReplEngine {
                     arg.source
                 )
             }),
+        }?;
+        if ast_ty_contains_query_placeholder(&ty) {
+            return Err(format!(
+                "Cannot use unresolved generic binding in REPL operator query. {}",
+                REPL_UNRESOLVED_TYPE_HINT
+            ));
         }
+        Ok(ty)
     }
 
     fn typed_operator_signature(
@@ -3692,8 +4458,8 @@ impl ReplEngine {
                 (
                     AstTy::Generic(_, left_name, left_args),
                     AstTy::Generic(_, right_name, right_args),
-                ) if left_name == "Lens"
-                    && right_name == "Lens"
+                ) if left_name == "Facet"
+                    && right_name == "Facet"
                     && left_args.len() == 2
                     && right_args.len() == 2 =>
                 {
@@ -3704,7 +4470,7 @@ impl ReplEngine {
                     )?;
                     let result_ty = AstTy::Generic(
                         Span { start: 0, end: 0 },
-                        "Lens".to_string(),
+                        "Facet".to_string(),
                         vec![left_args[0].clone(), right_args[1].clone()],
                     );
                     Ok((
@@ -3718,7 +4484,7 @@ impl ReplEngine {
                     ))
                 }
                 _ => Err(
-                    "`/` currently models Lens composition. Use `safe_div(...)` for division."
+                    "`/` currently models Facet composition. Use `safe_div(...)` for division."
                         .to_string(),
                 ),
             },
@@ -4178,7 +4944,7 @@ impl ReplEngine {
             .flatten()
             .flat_map(|meta| meta.bindings.iter().rev())
             .find(|binding| binding.name == name)
-            .map(|binding| binding.ty.clone())
+            .map(|binding| crate::surface_rendered_name(&binding.ty))
     }
 
     fn binding_info(&self, name: &str) -> Option<&forge::BindingInfo> {
@@ -4188,6 +4954,285 @@ impl ReplEngine {
             .flatten()
             .flat_map(|meta| meta.bindings.iter().rev())
             .find(|binding| binding.name == name)
+    }
+
+    fn history_summary(source: &str) -> String {
+        source
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn is_replayable_stmt(stmt: &Ast) -> bool {
+        matches!(
+            stmt,
+            Ast::Import(_, _, _) | Ast::Def(..) | Ast::ExtractorDef(..)
+        )
+    }
+
+    fn chunk_is_replayable(ast: &[Ast]) -> bool {
+        !ast.is_empty() && ast.iter().all(Self::is_replayable_stmt)
+    }
+
+    fn collect_def_records(ast: &[Ast], line: usize) -> Vec<ReplDefRecord> {
+        ast.iter()
+            .filter_map(|stmt| match stmt {
+                Ast::Def(_, name, _, params, ..) => Some(ReplDefRecord {
+                    line,
+                    name: name.clone(),
+                    arity: params.len(),
+                }),
+                Ast::ExtractorDef(_, name, ..) => Some(ReplDefRecord {
+                    line,
+                    name: name.clone(),
+                    arity: 1,
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn collect_import_records(ast: &[Ast], line: usize) -> Vec<ReplImportRecord> {
+        let mut records = Vec::new();
+        for stmt in ast {
+            let Ast::Import(_, path, spec) = stmt else {
+                continue;
+            };
+            let module_name = path.segments.join("::");
+            match spec {
+                ImportSpec::All => records.push(ReplImportRecord {
+                    line,
+                    src: "kwd".to_string(),
+                    item: module_name,
+                    via: "import".to_string(),
+                }),
+                ImportSpec::Single(name) => records.push(ReplImportRecord {
+                    line,
+                    src: "kwd".to_string(),
+                    item: format!("{}::{}", module_name, name),
+                    via: "import".to_string(),
+                }),
+                ImportSpec::List(names) => {
+                    for name in names {
+                        records.push(ReplImportRecord {
+                            line,
+                            src: "kwd".to_string(),
+                            item: format!("{}::{}", module_name, name),
+                            via: "import".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        records
+    }
+
+    fn handle_vars(&self) -> ReplResult {
+        if self.binding_records.is_empty() {
+            return Self::plain(vec!["No visible value bindings.".to_string()]);
+        }
+        let mut lines = vec!["line | name | type".to_string()];
+        lines.extend(
+            self.binding_records
+                .iter()
+                .map(|binding| format!("{}: {}: {}", binding.line, binding.name, binding.ty)),
+        );
+        Self::plain(lines)
+    }
+
+    fn handle_imported(&self) -> ReplResult {
+        let mut lines = vec!["line | src | item | via".to_string()];
+        lines.extend(
+            self.auto_import_modules
+                .iter()
+                .map(|module| format!("0 | auto | {} | @autoimport", module)),
+        );
+        lines.extend(self.import_records.iter().map(|record| {
+            format!(
+                "{} | {} | {} | {}",
+                record.line, record.src, record.item, record.via
+            )
+        }));
+        if lines.len() == 1 {
+            lines.push("No imports are active.".to_string());
+        }
+        Self::plain(lines)
+    }
+
+    fn handle_defs(&self) -> ReplResult {
+        if self.def_records.is_empty() {
+            return Self::plain(vec!["No visible top-level defs.".to_string()]);
+        }
+        let mut lines = vec!["line | name | arity".to_string()];
+        lines.extend(
+            self.def_records
+                .iter()
+                .map(|record| format!("{}: {}/{}", record.line, record.name, record.arity)),
+        );
+        Self::plain(lines)
+    }
+
+    fn parse_history_selector(&self, selector: &str) -> Result<Vec<usize>, String> {
+        let selector = selector.trim();
+        if selector.is_empty() {
+            return Ok(self
+                .history_entries
+                .iter()
+                .map(|entry| entry.line)
+                .collect());
+        }
+        if let Some((start, end)) = selector.split_once("..") {
+            let start = start
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| format!("Invalid history selector `{selector}`."))?;
+            let end = end
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| format!("Invalid history selector `{selector}`."))?;
+            if start > end {
+                return Err(format!("History range `{selector}` is reversed."));
+            }
+            return Ok((start..=end).collect());
+        }
+
+        selector
+            .split(',')
+            .map(|part| {
+                part.trim()
+                    .parse::<usize>()
+                    .map_err(|_| format!("Invalid history selector `{selector}`."))
+            })
+            .collect()
+    }
+
+    fn handle_history(&self, selector: Option<&str>) -> ReplResult {
+        if self.history_entries.is_empty() {
+            return Self::plain(vec!["No REPL history yet.".to_string()]);
+        }
+        let selected = match selector {
+            Some(selector) => match self.parse_history_selector(selector) {
+                Ok(lines) => lines,
+                Err(message) => {
+                    return self.repl_command_diagnostic(
+                        &format!(":history {}", selector.trim()),
+                        message,
+                        Span {
+                            start: ":history ".chars().count(),
+                            end: format!(":history {}", selector.trim()).chars().count(),
+                        },
+                        Some("Usage: :history [selector]".to_string()),
+                        Vec::new(),
+                    );
+                }
+            },
+            None => self
+                .history_entries
+                .iter()
+                .map(|entry| entry.line)
+                .collect(),
+        };
+
+        let mut lines = vec!["line | input".to_string()];
+        for line in selected {
+            let Some(entry) = self.history_entries.iter().find(|entry| entry.line == line) else {
+                return self.repl_command_diagnostic(
+                    &format!(":history {}", selector.unwrap_or_default().trim()),
+                    format!("History line {} is out of range.", line),
+                    Span {
+                        start: ":history ".chars().count(),
+                        end: format!(":history {}", selector.unwrap_or_default().trim())
+                            .chars()
+                            .count(),
+                    },
+                    Some("Usage: :history [selector]".to_string()),
+                    Vec::new(),
+                );
+            };
+            lines.push(format!(
+                "{}: {}",
+                entry.line,
+                Self::history_summary(&entry.source)
+            ));
+        }
+        Self::plain(lines)
+    }
+
+    fn rebuild_for_reload(&self, keep_session_defs: bool) -> Result<Self, ReplResult> {
+        let mut engine = match &self.reload_seed {
+            ReplReloadSeed::Empty => ReplEngine::new()
+                .map_err(|error| Self::plain(vec![format!("reload failed: {}", error)]))?,
+            ReplReloadSeed::ProjectModuleStages(module_input_stages) => {
+                ReplEngine::from_project_module_stages(module_input_stages)
+                    .map_err(|error| Self::plain(vec![format!("reload failed: {}", error)]))?
+            }
+            ReplReloadSeed::Sources { module, script } => ReplEngine::from_preload_sources(
+                module
+                    .as_ref()
+                    .map(|(file_name, source)| (file_name.as_str(), source.as_str())),
+                script
+                    .as_ref()
+                    .map(|(file_name, source)| (file_name.as_str(), source.as_str())),
+            )
+            .map_err(|error| Self::plain(vec![format!("reload failed: {}", error)]))?,
+        };
+        engine.reload_seed = self.reload_seed.clone();
+        engine.error_display_mode = self.error_display_mode;
+        if keep_session_defs {
+            for input in &self.replay_inputs {
+                let result = engine.handle_line(input);
+                if result.should_exit {
+                    return Err(Self::plain(vec![
+                        "reload failed: replay requested REPL exit".to_string(),
+                    ]));
+                }
+                match result.output {
+                    ReplOutput::EvalSuccess { .. }
+                    | ReplOutput::PlainText { .. }
+                    | ReplOutput::StyledDoc { .. }
+                    | ReplOutput::StatusMessage(_) => {}
+                    ReplOutput::EvalError { .. } | ReplOutput::Diagnostic { .. } => {
+                        return Err(result);
+                    }
+                    ReplOutput::DocResolved { .. } | ReplOutput::EvalStarted { .. } => {}
+                }
+            }
+        }
+        Ok(engine)
+    }
+
+    fn handle_reload(&mut self, mode: Option<&str>) -> ReplResult {
+        let keep_session_defs = match mode.map(str::trim).filter(|mode| !mode.is_empty()) {
+            None | Some("all") => true,
+            Some("defs") => false,
+            Some(other) => {
+                return self.repl_command_diagnostic(
+                    &format!(":reload {}", other),
+                    format!("Invalid reload mode `{}`.", other),
+                    Span {
+                        start: ":reload ".chars().count(),
+                        end: format!(":reload {}", other).chars().count(),
+                    },
+                    Some("Usage: :reload [all|defs]".to_string()),
+                    Vec::new(),
+                );
+            }
+        };
+
+        let mode_name = if keep_session_defs { "all" } else { "defs" };
+        match self.rebuild_for_reload(keep_session_defs) {
+            Ok(engine) => {
+                *self = engine;
+                Self::plain(vec![format!("reload complete: {}", mode_name)])
+            }
+            Err(result) => result,
+        }
+    }
+
+    fn handle_clear(&self) -> ReplResult {
+        Self::plain(vec!["clear is not available in this host".to_string()])
     }
 
     fn is_type_lookup_symbol(symbol: &str) -> bool {
@@ -4238,8 +5283,8 @@ impl ReplEngine {
     }
 
     fn render_type_identity(&self, binding: &forge::BindingInfo, value: Option<&Value>) -> String {
-        if binding.lens_info.is_some() {
-            return "TypeIdentity::LensPath".to_string();
+        if binding.facet_info.is_some() {
+            return "TypeIdentity::FacetPath".to_string();
         }
         if let Some(kind) = binding.callable_kind {
             return match kind {
@@ -4341,8 +5386,8 @@ impl ReplEngine {
                     ReplCommand::Type { symbol } => {
                         return self.handle_type(&symbol);
                     }
-                    ReplCommand::Lens { query } => {
-                        return self.handle_lens(&query);
+                    ReplCommand::Facet { query } => {
+                        return self.handle_facet(&query);
                     }
                     ReplCommand::Error { mode } => {
                         return self.handle_error_mode(mode.as_deref());
@@ -4352,6 +5397,24 @@ impl ReplEngine {
                     }
                     ReplCommand::Save { path } => {
                         return self.handle_save(&path);
+                    }
+                    ReplCommand::Vars => {
+                        return self.handle_vars();
+                    }
+                    ReplCommand::Imported => {
+                        return self.handle_imported();
+                    }
+                    ReplCommand::Defs => {
+                        return self.handle_defs();
+                    }
+                    ReplCommand::History { selector } => {
+                        return self.handle_history(selector.as_deref());
+                    }
+                    ReplCommand::Reload { mode } => {
+                        return self.handle_reload(mode.as_deref());
+                    }
+                    ReplCommand::Clear => {
+                        return self.handle_clear();
                     }
                     ReplCommand::Unknown { raw } => {
                         return self.repl_command_diagnostic(
@@ -4371,6 +5434,7 @@ impl ReplEngine {
 
         let idx = self.results.len();
         let source = line.to_string();
+        let committed_line = self.next_line;
 
         self.pending.push_str(line);
         self.pending.push('\n');
@@ -4401,6 +5465,10 @@ impl ReplEngine {
                     &spec,
                     self.error_display_mode,
                 );
+                self.history_entries.push(ReplHistoryEntry {
+                    line: committed_line,
+                    source: self.pending.clone(),
+                });
                 self.pending.clear();
                 self.bump_line(None, None);
                 return ReplResult::ok(ReplOutput::EvalError {
@@ -4440,6 +5508,10 @@ impl ReplEngine {
                     &spec,
                     self.error_display_mode,
                 );
+                self.history_entries.push(ReplHistoryEntry {
+                    line: committed_line,
+                    source: self.pending.clone(),
+                });
                 self.pending.clear();
                 self.bump_line(None, None);
                 return ReplResult::ok(ReplOutput::EvalError {
@@ -4451,7 +5523,7 @@ impl ReplEngine {
         };
 
         let docs = crate::collect_doc_entries(&[], &ast, Some(self.repl_module_path.as_str()));
-        let resolved = match self.sigil_session.resolve(ast) {
+        let resolved = match self.sigil_session.resolve(ast.clone()) {
             Ok(r) => r,
             Err(e) => {
                 self.sigil_session.rollback(sigil_cp);
@@ -4471,6 +5543,10 @@ impl ReplEngine {
                     &spec,
                     self.error_display_mode,
                 );
+                self.history_entries.push(ReplHistoryEntry {
+                    line: committed_line,
+                    source: self.pending.clone(),
+                });
                 self.pending.clear();
                 self.bump_line(None, None);
                 return ReplResult::ok(ReplOutput::EvalError {
@@ -4513,6 +5589,10 @@ impl ReplEngine {
                     &spec,
                     self.error_display_mode,
                 );
+                self.history_entries.push(ReplHistoryEntry {
+                    line: committed_line,
+                    source: self.pending.clone(),
+                });
                 self.pending.clear();
                 self.bump_line(None, None);
                 return ReplResult::ok(ReplOutput::EvalError {
@@ -4522,6 +5602,51 @@ impl ReplEngine {
                 });
             }
         };
+
+        if let Some((span, names)) = unresolved_repl_binding_issue(&typed) {
+            self.sigil_session.rollback(sigil_cp);
+            self.scar_session.rollback(scar_cp);
+            self.forge_session.rollback(forge_cp);
+            let hint = if names.is_empty() {
+                REPL_UNRESOLVED_TYPE_HINT.to_string()
+            } else {
+                format!(
+                    "{} Affected binding(s): {}.",
+                    REPL_UNRESOLVED_TYPE_HINT,
+                    names.join(", ")
+                )
+            };
+            let error = diagnostics::TypeErrorDiagnostic::new(
+                REPL_UNRESOLVED_TYPE_MESSAGE,
+                span,
+                Some(hint),
+            );
+            let spec =
+                diagnostics::type_error_spec_by_id(&self.sources, self.repl_source_id, &error);
+            let rendered = error_display::diagnostic_lines_by_id(
+                &self.sources,
+                self.repl_source_id,
+                &spec,
+                self.error_display_mode,
+            );
+            error_display::emit_diagnostic_by_id(
+                &self.sources,
+                self.repl_source_id,
+                &spec,
+                self.error_display_mode,
+            );
+            self.history_entries.push(ReplHistoryEntry {
+                line: committed_line,
+                source: self.pending.clone(),
+            });
+            self.pending.clear();
+            self.bump_line(None, None);
+            return ReplResult::ok(ReplOutput::EvalError {
+                idx,
+                source,
+                rendered,
+            });
+        }
 
         let (mut chunk, mut meta) = match self.forge_session.codegen_chunk_repl_result(typed) {
             Ok(c) => c,
@@ -4543,6 +5668,10 @@ impl ReplEngine {
                     &spec,
                     self.error_display_mode,
                 );
+                self.history_entries.push(ReplHistoryEntry {
+                    line: committed_line,
+                    source: self.pending.clone(),
+                });
                 self.pending.clear();
                 self.bump_line(None, None);
                 return ReplResult::ok(ReplOutput::EvalError {
@@ -4563,22 +5692,33 @@ impl ReplEngine {
             self.vm.set_source(source_str, file_name);
         }
 
-        match self.vm.push_atomic(chunk) {
-            Ok(value) => {
+        match self.execute_vm_chunk(chunk, ReplSessionPhase::Live) {
+            Ok(execution) => {
+                let committed_source = self.pending.clone();
+                let value = eval::committed_chunk_value(execution);
                 self.sync_scar_fun_index_with_vm();
                 self.sync_repl_chunk_function_indices(&meta.function_defs, &chunk_functions);
                 if let Some(rendered) = self.report_main_result_error_if_any(&value) {
+                    let (stdout, stderr) = self.take_repl_host_io_lines();
+                    self.history_entries.push(ReplHistoryEntry {
+                        line: committed_line,
+                        source: committed_source,
+                    });
                     self.bump_line(None, None);
                     self.pending.clear();
                     return ReplResult::ok(ReplOutput::EvalError {
                         idx,
                         source,
                         rendered,
-                    });
+                    })
+                    .with_stdout(stdout)
+                    .with_stderr(stderr);
                 }
 
-                let rendered = render::format_result_lines(&self.vm, Some(&value), Some(&meta));
+                let rendered =
+                    render::format_result_lines(self.vm.as_vm(), Some(&value), Some(&meta));
 
+                let (stdout, stderr) = self.take_repl_host_io_lines();
                 let mut all_rendered = rendered;
                 if import_only {
                     for label in &import_result.success_labels {
@@ -4595,15 +5735,36 @@ impl ReplEngine {
                     self.symbols.insert(name.clone());
                 }
                 self.append_docs(docs);
-                self.bump_line(Some(value), Some(meta.clone()));
+                self.history_entries.push(ReplHistoryEntry {
+                    line: committed_line,
+                    source: committed_source.clone(),
+                });
+                self.binding_records
+                    .extend(meta.bindings.iter().map(|binding| ReplBindingRecord {
+                        line: committed_line,
+                        name: binding.name.clone(),
+                        ty: crate::surface_rendered_name(&binding.ty),
+                    }));
+                self.import_records
+                    .extend(Self::collect_import_records(&ast, committed_line));
+                self.def_records
+                    .extend(Self::collect_def_records(&ast, committed_line));
+                if Self::chunk_is_replayable(&ast) {
+                    self.replay_inputs.push(committed_source);
+                }
+                let history_value = history_value_for_result(&self.vm, &value, &meta);
+                self.bump_line(Some(history_value), Some(meta.clone()));
                 self.pending.clear();
                 ReplResult::ok(ReplOutput::EvalSuccess {
                     idx,
                     source,
                     rendered: all_rendered,
                 })
+                .with_stdout(stdout)
+                .with_stderr(stderr)
             }
             Err(e) => {
+                let committed_source = self.pending.clone();
                 let location = e
                     .context
                     .call_site
@@ -4616,6 +5777,7 @@ impl ReplEngine {
                     location.clone(),
                     self.error_display_mode,
                 );
+                let (stdout, stderr) = self.take_repl_host_io_lines();
                 error_display::emit_runtime_error_with_registry(
                     &e,
                     &self.sources,
@@ -4623,6 +5785,10 @@ impl ReplEngine {
                     location,
                     self.error_display_mode,
                 );
+                self.history_entries.push(ReplHistoryEntry {
+                    line: committed_line,
+                    source: committed_source,
+                });
                 self.bump_line(None, None);
                 self.pending.clear();
                 ReplResult::exit(ReplOutput::EvalError {
@@ -4630,6 +5796,106 @@ impl ReplEngine {
                     source,
                     rendered,
                 })
+                .with_stdout(stdout)
+                .with_stderr(stderr)
+            }
+        }
+    }
+
+    pub fn has_pending_background_work(&self) -> bool {
+        self.vm.has_pending_background_work()
+    }
+
+    pub fn next_background_deadline_delay(&self) -> Option<std::time::Duration> {
+        self.vm.next_background_deadline_delay()
+    }
+
+    pub fn pump_background_ready(&mut self) -> ReplResult {
+        match self.vm.pump_background_ready() {
+            Ok(()) => {
+                let (stdout, stderr) = self.take_repl_host_io_lines();
+                Self::plain(stdout).with_stderr(stderr)
+            }
+            Err(err) => {
+                let location = err
+                    .context
+                    .call_site
+                    .clone()
+                    .or_else(|| self.vm.runtime_error_location());
+                let rendered = error_display::runtime_error_lines(
+                    &err,
+                    self.vm.source(),
+                    self.vm.source_file(),
+                    location,
+                    self.error_display_mode,
+                );
+                let (stdout, stderr) = self.take_repl_host_io_lines();
+                ReplResult::ok(ReplOutput::EvalError {
+                    idx: self.results.len(),
+                    source: "<background>".to_string(),
+                    rendered,
+                })
+                .with_stdout(stdout)
+                .with_stderr(stderr)
+            }
+        }
+    }
+
+    pub fn advance_background_time(&mut self, elapsed: std::time::Duration) -> ReplResult {
+        match self.vm.advance_background_time(elapsed) {
+            Ok(()) => {
+                let (stdout, stderr) = self.take_repl_host_io_lines();
+                Self::plain(stdout).with_stderr(stderr)
+            }
+            Err(err) => {
+                let location = err
+                    .context
+                    .call_site
+                    .clone()
+                    .or_else(|| self.vm.runtime_error_location());
+                let rendered = error_display::runtime_error_lines(
+                    &err,
+                    self.vm.source(),
+                    self.vm.source_file(),
+                    location,
+                    self.error_display_mode,
+                );
+                let (stdout, stderr) = self.take_repl_host_io_lines();
+                ReplResult::ok(ReplOutput::EvalError {
+                    idx: self.results.len(),
+                    source: "<background>".to_string(),
+                    rendered,
+                })
+                .with_stdout(stdout)
+                .with_stderr(stderr)
+            }
+        }
+    }
+
+    pub fn pump_background_to_next_deadline(&mut self) -> ReplResult {
+        match self.vm.pump_background_to_next_deadline() {
+            Ok(_) => self.pump_background_ready(),
+            Err(err) => {
+                let location = err
+                    .context
+                    .call_site
+                    .clone()
+                    .or_else(|| self.vm.runtime_error_location());
+                let rendered = error_display::runtime_error_lines(
+                    &err,
+                    self.vm.source(),
+                    self.vm.source_file(),
+                    location,
+                    self.error_display_mode,
+                );
+                let (stdout, stderr) = self.take_repl_host_io_lines();
+                ReplResult::ok(ReplOutput::EvalError {
+                    idx: self.results.len(),
+                    source: "<background>".to_string(),
+                    rendered,
+                })
+                .with_stdout(stdout)
+                .with_stderr(stderr)
             }
         }
     }
@@ -4686,7 +5952,7 @@ impl ReplEngine {
 
         match self.results[line_num - 1].clone() {
             Some(value) => {
-                let displayed = inspect_value(&self.vm, &value);
+                let displayed = inspect_value(self.vm.as_vm(), &value);
                 self.bump_line(Some(value), None);
                 Self::plain(vec![displayed])
             }
@@ -4718,6 +5984,28 @@ fn compile_preloaded_repl_chunk(
             module_input_stages.push(vec![module.clone()]);
         }
     }
+    compile_repl_preload_from_module_stages(
+        module_input_stages,
+        prepared_script,
+        PreloadCompileMode::SCRIPT,
+    )
+}
+
+fn compile_project_repl_chunk(
+    project_module_input_stages: &[Vec<crate::ModuleInput>],
+) -> Result<PreloadedChunkState, ReplLoadError> {
+    let std_module_inputs =
+        collect_additional_default_std_module_inputs().map_err(ReplLoadError::Load)?;
+    let mut module_input_stages = vec![std_module_inputs];
+    module_input_stages.extend(project_module_input_stages.iter().cloned());
+    compile_repl_preload_from_module_stages(module_input_stages, None, PreloadCompileMode::PROJECT)
+}
+
+fn compile_repl_preload_from_module_stages(
+    module_input_stages: Vec<Vec<crate::ModuleInput>>,
+    prepared_script: Option<PreparedScriptPreload>,
+    mode: PreloadCompileMode,
+) -> Result<PreloadedChunkState, ReplLoadError> {
     let mut repl_sources = loader::collect_repl_sources_with_module_stages(&module_input_stages)
         .map_err(ReplLoadError::Load)?;
 
@@ -4745,13 +6033,14 @@ fn compile_preloaded_repl_chunk(
     };
     let snapshot = crate::default_stdlib_semantic_snapshot().map_err(ReplLoadError::Load)?;
     let (module_stage_asts, raw_module_stages, user_ast, script_runtime_inputs) =
-        parse_preload_sources(&compile_sources, &snapshot)?;
+        parse_preload_sources(&compile_sources, &snapshot, mode.compile_unit_kind)?;
 
     let script_preload_docs = crate::collect_doc_entries(
         &[],
         &user_ast,
         Some(compile_sources.user_module_path.as_str()),
     );
+    let process_metadata = collect_process_metadata(&module_stage_asts);
     let docs = crate::collect_doc_entries_with_base(
         &snapshot.docs,
         if module_stage_asts.len() > snapshot.default_stage_count {
@@ -4769,6 +6058,7 @@ fn compile_preloaded_repl_chunk(
         sigil::precollect_declaration_index(&module_stage_asts).map_err(|e| {
             let spec = diagnostics::simple_error("ResolveError", &e.message, e.span, None);
             ReplLoadError::Diagnostic {
+                phase: "resolve".to_string(),
                 sources: compile_sources.sources.clone(),
                 source_id: compile_sources.builtin_source_id,
                 spec,
@@ -4776,7 +6066,7 @@ fn compile_preloaded_repl_chunk(
         })?
     };
 
-    let module_resolved = sigil::resolve_staged_program_from_state(
+    let mut staged_program = sigil::resolve_staged_program_from_state(
         &module_stage_asts,
         Vec::new(),
         &declaration_index,
@@ -4794,10 +6084,9 @@ fn compile_preloaded_repl_chunk(
         module_stage_asts.len(),
     )
     .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
-    scope.advance_next_id_to(module_resolved.resume_state.next_local_id);
+    scope.advance_next_id_to(staged_program.resume_state.next_local_id);
     sigil_session.replace_scope_with_declarations(scope, &declaration_index);
 
-    let mut resolved = module_resolved.resolved;
     let mut preload_imported = Vec::new();
     if !user_ast.is_empty() {
         preload_imported = apply_preload_imports(
@@ -4816,7 +6105,7 @@ fn compile_preloaded_repl_chunk(
             &user_ast,
             &compile_sources.user_module_path,
         );
-        resolved.extend(user_resolved);
+        staged_program.resolved.extend(user_resolved);
     }
 
     let mut scar_session = scar::ScarSession::new();
@@ -4830,12 +6119,12 @@ fn compile_preloaded_repl_chunk(
         .unwrap_or(0);
     scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
     let typed = scar_session
-        .typecheck_with_context(
-            resolved,
+        .typecheck_staged_program_with_context(
+            staged_program,
             scar::TypecheckContext {
                 runtime_policy: derive_runtime_policy(
-                    CompileUnitKind::Script,
-                    SourceKind::Script,
+                    mode.compile_unit_kind,
+                    mode.runtime_source_kind,
                     None,
                 ),
                 enforce_builtin_type_contracts: false,
@@ -4843,6 +6132,7 @@ fn compile_preloaded_repl_chunk(
             },
         )
         .map_err(|e| ReplLoadError::Diagnostic {
+            phase: "typecheck".to_string(),
             sources: compile_sources.sources.clone(),
             source_id: diagnostic_source_id(&compile_sources, &e.span),
             spec: diagnostics::type_error_spec_by_id(
@@ -4857,19 +6147,19 @@ fn compile_preloaded_repl_chunk(
         })?;
 
     let mut forge_session = forge::ForgeSession::from_bytecode(&snapshot.bytecode);
-    let (mut chunk, meta) =
-        forge_session
-            .codegen_chunk(typed)
-            .map_err(|e| ReplLoadError::Diagnostic {
-                sources: compile_sources.sources.clone(),
-                source_id: diagnostic_source_id(&compile_sources, &e.span),
-                spec: diagnostics::simple_error(
-                    "CodegenError",
-                    &e.message,
-                    local_diagnostic_span(&compile_sources, &e.span),
-                    None,
-                ),
-            })?;
+    let (mut chunk, meta) = forge_session
+        .codegen_chunk_typed_program(typed)
+        .map_err(|e| ReplLoadError::Diagnostic {
+            phase: "codegen".to_string(),
+            sources: compile_sources.sources.clone(),
+            source_id: diagnostic_source_id(&compile_sources, &e.span),
+            spec: diagnostics::simple_error(
+                "CodegenError",
+                &e.message,
+                local_diagnostic_span(&compile_sources, &e.span),
+                None,
+            ),
+        })?;
     chunk.docs = docs.clone();
     for stage in &raw_module_stages {
         for module in stage {
@@ -4891,19 +6181,19 @@ fn compile_preloaded_repl_chunk(
                 .owned_context(compile_sources.builtin_source_id)
         });
     let mut vm = match source_context {
-        Some((source, file_name)) => {
-            eldr::VM::new(snapshot.bytecode.clone()).with_source(source, file_name)
-        }
-        None => eldr::VM::new(snapshot.bytecode.clone()),
+        Some((source, file_name)) => session::bytecode_interactive_vm(snapshot.bytecode.clone())
+            .with_source(source, file_name),
+        None => session::bytecode_interactive_vm(snapshot.bytecode.clone()),
     };
-    vm.push_atomic(chunk).map_err(|e| ReplLoadError::Runtime {
-        file_name: compile_sources
-            .sources
-            .file_name(user_source_id)
-            .unwrap_or("<repl-preload>")
-            .to_string(),
-        message: e.to_string(),
-    })?;
+    vm.push_chunk(chunk, ReplSessionPhase::Preload.execution_policy())
+        .map_err(|e| ReplLoadError::Runtime {
+            file_name: compile_sources
+                .sources
+                .file_name(user_source_id)
+                .unwrap_or("<repl-preload>")
+                .to_string(),
+            message: e.to_string(),
+        })?;
 
     let mut symbols: BTreeSet<String> = ["Ok", "Err"]
         .into_iter()
@@ -4918,7 +6208,7 @@ fn compile_preloaded_repl_chunk(
             }
         }
     }
-    for entry in vm.bytecode().type_registry.entries.iter() {
+    for entry in vm.bytecode().type_registry.entries().iter() {
         symbols.insert(entry.name.clone());
         if let Some(short) = entry.name.rsplit("::").next() {
             symbols.insert(short.to_string());
@@ -4937,6 +6227,8 @@ fn compile_preloaded_repl_chunk(
         .filter(|module| module.auto_import)
         .map(|module| module.module_path.clone())
         .collect();
+    let import_records = ReplEngine::collect_import_records(&user_ast, 0);
+    let def_records = ReplEngine::collect_def_records(&user_ast, 0);
 
     Ok(PreloadedChunkState {
         sources: repl_sources.sources,
@@ -4949,16 +6241,20 @@ fn compile_preloaded_repl_chunk(
         scar_checkpoint: scar_session.checkpoint(),
         vm,
         docs,
+        process_metadata,
         symbols,
         auto_import_modules,
         script_runtime_inputs,
         script_preload_docs,
+        import_records,
+        def_records,
     })
 }
 
 fn parse_preload_sources(
     compile_sources: &crate::CompileSources,
     snapshot: &crate::DefaultStdlibSnapshot,
+    compile_unit_kind: CompileUnitKind,
 ) -> Result<
     (
         Vec<Vec<sigil::StagedModuleAst>>,
@@ -4972,10 +6268,11 @@ fn parse_preload_sources(
     let raw_module_stages = compile_sources.module_stages.clone();
     let mut suffix_stages = crate::parse_module_stages_from_compile_sources_suffix(
         compile_sources,
-        CompileUnitKind::Script,
+        compile_unit_kind,
         snapshot.default_stage_count,
     )
     .map_err(|e| ReplLoadError::Diagnostic {
+        phase: "parse".to_string(),
         sources: compile_sources.sources.clone(),
         source_id: e.source_id,
         spec: diagnostics::parse_error_spec(
@@ -4998,11 +6295,16 @@ fn parse_preload_sources(
             .with_rules(derive_parse_rules(SourceKind::Script)),
     )
     .map_err(|e| ReplLoadError::Diagnostic {
+        phase: "parse".to_string(),
         sources: compile_sources.sources.clone(),
         source_id: compile_sources.user_source_id,
         spec: diagnostics::parse_error_spec(user_source, e.message(), e.span().clone()),
     })?;
     let (preload_ast, script_runtime_inputs) = split_preload_script_ast(&user_ast, user_source);
+    let (process_stage, preload_ast) = crate::extract_process_modules_from_user_ast(preload_ast);
+    if !process_stage.is_empty() {
+        module_stage_asts.push(process_stage);
+    }
 
     Ok((
         module_stage_asts,
@@ -5031,6 +6333,27 @@ fn preload_module_path(file_name: &str, source: &str) -> String {
                 segments.join("::")
             }
         })
+}
+
+fn collect_process_metadata(
+    module_stages: &[Vec<sigil::StagedModuleAst>],
+) -> BTreeMap<String, ReplProcessMetadata> {
+    let mut out = BTreeMap::new();
+    for stage in module_stages {
+        for module in stage {
+            if let Some(spec) = &module.process_spec {
+                out.insert(
+                    spec.process_name.clone(),
+                    ReplProcessMetadata {
+                        kind: spec.kind,
+                        instance: spec.instance,
+                        handler_specs: spec.handler_specs.clone(),
+                    },
+                );
+            }
+        }
+    }
+    out
 }
 
 fn split_preload_script_ast(ast: &[Ast], source: &str) -> (Vec<Ast>, Vec<String>) {
@@ -5110,7 +6433,9 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::InterpolatedStr(span, _)
         | Ast::Dbg(span, _)
         | Ast::Match(span, _, _)
+        | Ast::BulkUpdate(span, _, _)
         | Ast::FieldAccess(span, _, _)
+        | Ast::FacetCapture(span, _)
         | Ast::StructDef(span, _, _, _)
         | Ast::RecordDef(span, _, _, _)
         | Ast::StructLit(span, _, _)
@@ -5276,6 +6601,7 @@ fn preload_script_diagnostic(
     let mut sources = SourceRegistry::new();
     let source_id = sources.register(file_name, source.to_string());
     ReplLoadError::Diagnostic {
+        phase: "parse".to_string(),
         sources,
         source_id,
         spec,
@@ -5289,6 +6615,7 @@ fn preload_resolve_error(
     let source_id = diagnostic_source_id(compile_sources, &error.span);
     let source = compile_sources.sources.source(source_id).unwrap_or("");
     ReplLoadError::Diagnostic {
+        phase: "resolve".to_string(),
         sources: compile_sources.sources.clone(),
         source_id,
         spec: diagnostics::resolve_error_spec(
@@ -5354,6 +6681,93 @@ fn local_diagnostic_span(compile_sources: &crate::CompileSources, span: &Span) -
     }
 }
 
+fn history_value_for_result(
+    vm: &eldr::InteractiveVm,
+    value: &Value,
+    meta: &forge::ChunkMeta,
+) -> Value {
+    if matches!(value, Value::Unit) {
+        if let Some(binding) = meta.bindings.last() {
+            if let Some(bound) = vm.get_local(binding.slot_id) {
+                return bound;
+            }
+        }
+    }
+    value.clone()
+}
+
+fn ast_ty_contains_query_placeholder(ty: &AstTy) -> bool {
+    match ty {
+        AstTy::Named(_, name) => matches!(name.as_str(), "_" | "Hole"),
+        AstTy::Generic(_, _, args) | AstTy::Tuple(_, args) => {
+            args.iter().any(ast_ty_contains_query_placeholder)
+        }
+        AstTy::Func(_, params, ret) => {
+            params.iter().any(ast_ty_contains_query_placeholder)
+                || ast_ty_contains_query_placeholder(ret)
+        }
+        _ => false,
+    }
+}
+
+fn collect_unresolved_pattern_binding_names(pat: &TypedPattern, names: &mut Vec<String>) {
+    match pat {
+        TypedPattern::Var(ty, id) => {
+            if scar::type_contains_unresolved_vars(ty) {
+                names.push(id.name.clone());
+            }
+        }
+        TypedPattern::As(ty, inner, id) => {
+            if scar::type_contains_unresolved_vars(ty) {
+                names.push(id.name.clone());
+            }
+            collect_unresolved_pattern_binding_names(inner, names);
+        }
+        TypedPattern::ListCons(_, head, tail) => {
+            collect_unresolved_pattern_binding_names(head, names);
+            collect_unresolved_pattern_binding_names(tail, names);
+        }
+        TypedPattern::Tuple(_, items) | TypedPattern::Extractor { items, .. } => {
+            for item in items {
+                collect_unresolved_pattern_binding_names(item, names);
+            }
+        }
+        TypedPattern::ResultOk(_, inner) => collect_unresolved_pattern_binding_names(inner, names),
+        TypedPattern::Wildcard(_)
+        | TypedPattern::ListNil(_)
+        | TypedPattern::IntLit(_, _)
+        | TypedPattern::StrLit(_, _)
+        | TypedPattern::BoolLit(_, _)
+        | TypedPattern::DurationLit(_, _) => {}
+    }
+}
+
+fn unresolved_repl_binding_issue(typed: &[TypedNode]) -> Option<(Span, Vec<String>)> {
+    fn binding_rhs_allows_unresolved_persistence(rhs: &TypedNode) -> bool {
+        matches!(
+            rhs.node,
+            TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_)
+        )
+    }
+
+    fn visit_stmt(stmt: &TypedNode) -> Option<(Span, Vec<String>)> {
+        match &stmt.node {
+            TypedInner::Bind(pat, rhs) | TypedInner::SafeBind(pat, rhs) => {
+                if binding_rhs_allows_unresolved_persistence(rhs) {
+                    return None;
+                }
+                let mut names = Vec::new();
+                collect_unresolved_pattern_binding_names(pat, &mut names);
+                (!names.is_empty()).then(|| (stmt.span.clone(), names))
+            }
+            TypedInner::Semi(inner) => visit_stmt(inner),
+            _ => None,
+        }
+    }
+
+    typed.iter().find_map(visit_stmt)
+}
+
 fn apply_preload_imports(
     sigil_session: &mut sigil::SigilSession,
     declaration_index: &sigil::DeclarationIndex,
@@ -5375,7 +6789,11 @@ fn apply_preload_imports(
             continue;
         };
         let module_name = path.segments.join("::");
-        if auto_import_modules.contains(&module_name) || auto_import_traits.contains(&module_name) {
+        let canonical_module_name =
+            preload_import_module_name(declaration_index, auto_import_modules, &module_name);
+        if auto_import_modules.contains(&canonical_module_name)
+            || auto_import_traits.contains(&module_name)
+        {
             return Err(ReplLoadError::Load(LoadError::BootstrapFailed {
                 phase: "resolve".into(),
                 file_name: "<repl-preload>".into(),
@@ -5389,7 +6807,8 @@ fn apply_preload_imports(
         match spec {
             ImportSpec::All => {
                 for entry in declaration_index.values().filter(|entry| {
-                    entry.module_path == module_name && entry.stage_index < current_stage_index
+                    entry.module_path == canonical_module_name
+                        && entry.stage_index < current_stage_index
                 }) {
                     let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| {
                         ReplLoadError::Load(LoadError::BootstrapFailed {
@@ -5406,12 +6825,12 @@ fn apply_preload_imports(
                 }
             }
             ImportSpec::Single(name) => {
-                let fq_name = format!("{}::{}", module_name, name);
+                let fq_name = format!("{}::{}", canonical_module_name, name);
                 let entry = declaration_index.get(&fq_name).ok_or_else(|| {
                     ReplLoadError::Load(LoadError::BootstrapFailed {
                         phase: "resolve".into(),
                         file_name: "<repl-preload>".into(),
-                        message: format!("Unknown import member: {}", fq_name),
+                        message: format!("Unknown import member: {}::{}", module_name, name),
                     })
                 })?;
                 let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| {
@@ -5429,12 +6848,12 @@ fn apply_preload_imports(
             }
             ImportSpec::List(names) => {
                 for name in names {
-                    let fq_name = format!("{}::{}", module_name, name);
+                    let fq_name = format!("{}::{}", canonical_module_name, name);
                     let entry = declaration_index.get(&fq_name).ok_or_else(|| {
                         ReplLoadError::Load(LoadError::BootstrapFailed {
                             phase: "resolve".into(),
                             file_name: "<repl-preload>".into(),
-                            message: format!("Unknown import member: {}", fq_name),
+                            message: format!("Unknown import member: {}::{}", module_name, name),
                         })
                     })?;
                     let uid = sigil_session.lookup_uid(&entry.fq_name).ok_or_else(|| {
@@ -5455,6 +6874,33 @@ fn apply_preload_imports(
     }
 
     Ok(imported_symbols)
+}
+
+fn preload_import_module_name(
+    declaration_index: &sigil::DeclarationIndex,
+    auto_import_modules: &BTreeSet<String>,
+    module_name: &str,
+) -> String {
+    if auto_import_modules.contains(module_name)
+        || declaration_index
+            .values()
+            .any(|entry| entry.module_path == module_name)
+    {
+        return module_name.to_string();
+    }
+    if module_name.contains("::") {
+        return module_name.to_string();
+    }
+    let canonical_name = format!("Global::{module_name}");
+    if auto_import_modules.contains(&canonical_name)
+        || declaration_index
+            .values()
+            .any(|entry| entry.module_path == canonical_name)
+    {
+        canonical_name
+    } else {
+        module_name.to_string()
+    }
 }
 
 fn apply_preload_visible_names(user_ast: &[Ast], mut visible: Vec<String>) -> Vec<String> {
@@ -5780,7 +7226,31 @@ fn signature_return_type(signature: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eldr::interactive::InteractiveChunkPolicy;
     use eldr::value::CallableTarget;
+    use sindr::ir::{
+        BootEntrySource, BytecodeChunk, Constant, Opcode, RuntimeBootPlan, SingletonBootEntry,
+    };
+    use sindr::runtime::{TypeEntry, TypeKind};
+
+    fn interactive_test_chunk() -> BytecodeChunk {
+        BytecodeChunk {
+            opcodes: vec![Opcode::LoadConst(0), Opcode::Halt],
+            source_map: None,
+            const_base: 0,
+            constants: vec![Constant::Int(sindr::primitives::int(1))],
+            new_locals: 0,
+            type_entries: Vec::new(),
+            error_template_base: 0,
+            error_templates: Vec::new(),
+            dbg_template_base: 0,
+            dbg_templates: Vec::new(),
+            functions: Vec::new(),
+            docs: Vec::new(),
+            runtime_process_specs: Vec::new(),
+            runtime_boot_plan: Default::default(),
+        }
+    }
 
     fn bootstrap_engine_with_module(source: &str, module_path: &str) -> ReplEngine {
         let repl_sources =
@@ -5791,7 +7261,7 @@ mod tests {
             }]])
             .expect("test module stage should load");
         let forge_session = forge::ForgeSession::new();
-        let vm = eldr::VM::new_interactive(forge_session.type_registry());
+        let vm = session::empty_interactive_vm(forge_session.type_registry());
 
         ReplEngine {
             sources: repl_sources.sources,
@@ -5808,6 +7278,7 @@ mod tests {
             vm,
             pending: String::new(),
             next_line: 1,
+            startup_results: Vec::new(),
             results: Vec::new(),
             result_metas: Vec::new(),
             symbols: ["Ok", "Err"]
@@ -5816,7 +7287,14 @@ mod tests {
                 .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
                 .collect(),
             docs: Vec::new(),
+            process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
+            reload_seed: ReplReloadSeed::Empty,
+            replay_inputs: Vec::new(),
+            history_entries: Vec::new(),
+            binding_records: Vec::new(),
+            import_records: Vec::new(),
+            def_records: Vec::new(),
             error_display_mode: ErrorDisplayMode::Full,
         }
     }
@@ -5877,25 +7355,28 @@ mod tests {
     fn bootstrap_std_modules_returns_runtime_failure() {
         let mut engine =
             bootstrap_engine_with_module("defmod Broken { def nope() -> Int { 1 } }", "Broken");
-        engine.vm = eldr::VM::new_interactive(engine.forge_session.type_registry());
+        engine.vm = session::empty_interactive_vm(engine.forge_session.type_registry());
         engine
             .vm
-            .push_atomic(sindr::ir::BytecodeChunk {
-                opcodes: vec![sindr::ir::Opcode::Halt],
-                source_map: None,
-                const_base: 0,
-                constants: vec![sindr::ir::Constant::Int(sindr::primitives::int(1))],
-                new_locals: 0,
-                type_entries: Vec::new(),
-                dbg_template_base: 0,
-                dbg_templates: Vec::new(),
-                error_template_base: 0,
-                error_templates: Vec::new(),
-                functions: Vec::new(),
-                docs: Vec::new(),
-                runtime_process_specs: Vec::new(),
-                runtime_boot_plan: Default::default(),
-            })
+            .push_chunk(
+                sindr::ir::BytecodeChunk {
+                    opcodes: vec![sindr::ir::Opcode::Halt],
+                    source_map: None,
+                    const_base: 0,
+                    constants: vec![sindr::ir::Constant::Int(sindr::primitives::int(1))],
+                    new_locals: 0,
+                    type_entries: Vec::new(),
+                    dbg_template_base: 0,
+                    dbg_templates: Vec::new(),
+                    error_template_base: 0,
+                    error_templates: Vec::new(),
+                    functions: Vec::new(),
+                    docs: Vec::new(),
+                    runtime_process_specs: Vec::new(),
+                    runtime_boot_plan: Default::default(),
+                },
+                InteractiveChunkPolicy::ReplAppendOnly,
+            )
             .expect("vm bootstrap corruption setup should succeed");
 
         let err = engine
@@ -5947,7 +7428,10 @@ mod tests {
         assert_eq!(callable.lexical_captures.len(), 1, "{callable:?}");
 
         let CallableTarget::Function(fun_idx) = callable.target else {
-            panic!("expected function callable target, got {:?}", callable.target);
+            panic!(
+                "expected function callable target, got {:?}",
+                callable.target
+            );
         };
         let entry = bytecode
             .functions
@@ -5956,10 +7440,16 @@ mod tests {
         assert_eq!(entry.fun_idx, fun_idx, "{entry:?}");
         assert_eq!(entry.arity, 3, "{entry:?}");
         let Some(Value::Callable(inner)) = callable.lexical_captures.first() else {
-            panic!("expected f2 to capture f3 callable, got {:?}", callable.lexical_captures);
+            panic!(
+                "expected f2 to capture f3 callable, got {:?}",
+                callable.lexical_captures
+            );
         };
         let CallableTarget::Function(fun_idx) = inner.target.clone() else {
-            panic!("expected captured f3 function target, got {:?}", inner.target);
+            panic!(
+                "expected captured f3 function target, got {:?}",
+                inner.target
+            );
         };
         let entry = bytecode
             .functions
@@ -5982,10 +7472,16 @@ mod tests {
         };
         assert_eq!(callable.lexical_captures.len(), 1, "{callable:?}");
         let Some(Value::Callable(inner)) = callable.lexical_captures.first() else {
-            panic!("expected f1 to capture f2 callable, got {:?}", callable.lexical_captures);
+            panic!(
+                "expected f1 to capture f2 callable, got {:?}",
+                callable.lexical_captures
+            );
         };
         let CallableTarget::Function(fun_idx) = inner.target.clone() else {
-            panic!("expected captured f2 function target, got {:?}", inner.target);
+            panic!(
+                "expected captured f2 function target, got {:?}",
+                inner.target
+            );
         };
         let entry = bytecode
             .functions
@@ -5994,10 +7490,16 @@ mod tests {
         assert_eq!(entry.fun_idx, fun_idx, "{entry:?}");
         assert_eq!(entry.arity, 3, "{entry:?}");
         let Some(Value::Callable(inner_f3)) = inner.lexical_captures.first() else {
-            panic!("expected captured f2 to retain f3 callable, got {:?}", inner.lexical_captures);
+            panic!(
+                "expected captured f2 to retain f3 callable, got {:?}",
+                inner.lexical_captures
+            );
         };
         let CallableTarget::Function(fun_idx) = inner_f3.target.clone() else {
-            panic!("expected retained f3 function target, got {:?}", inner_f3.target);
+            panic!(
+                "expected retained f3 function target, got {:?}",
+                inner_f3.target
+            );
         };
         let entry = bytecode
             .functions
@@ -6009,5 +7511,141 @@ mod tests {
         let applied = engine.handle_line("f1(10)");
         let applied_text = ReplEngine::repl_result_text(&applied);
         assert!(applied_text.contains("15"), "{applied_text}");
+    }
+
+    #[test]
+    fn repl_session_rejects_top_level_def_capturing_existing_value_binding() {
+        let mut engine = ReplEngine::new().expect("engine should initialize");
+
+        let bind = engine.handle_line("x = 1");
+        assert!(!bind.should_exit);
+        assert!(engine.sigil_session.lookup_uid("x").is_some());
+
+        let ast = spire::parse("def f() -> Int { x }").expect("parse failed");
+        let err = engine
+            .sigil_session
+            .resolve(ast)
+            .expect_err("top-level capture must fail");
+        assert!(
+            err.message
+                .contains("Top-level definition `f` cannot reference value binding `x`"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn repl_session_phase_maps_to_interactive_vm_policy() {
+        assert_eq!(
+            ReplSessionPhase::Bootstrap.execution_policy(),
+            InteractiveChunkPolicy::Preload
+        );
+        assert_eq!(
+            ReplSessionPhase::Preload.execution_policy(),
+            InteractiveChunkPolicy::Preload
+        );
+        assert_eq!(
+            ReplSessionPhase::Live.execution_policy(),
+            InteractiveChunkPolicy::ReplAppendOnly
+        );
+    }
+
+    #[test]
+    fn bootstrap_phase_allows_structural_vm_growth() {
+        let mut engine = ReplEngine::new().expect("engine should initialize");
+        let mut chunk = interactive_test_chunk();
+        chunk.const_base = engine.vm.bytecode().constants.len() as u32;
+        chunk.error_template_base = engine.vm.bytecode().error_templates.len() as u32;
+        let next_tag = engine
+            .vm
+            .bytecode()
+            .type_registry
+            .entries()
+            .iter()
+            .map(|entry| entry.tag)
+            .max()
+            .unwrap_or(1)
+            + 1;
+        chunk.type_entries.push(TypeEntry {
+            tag: next_tag,
+            name: "Extra".into(),
+            kind: TypeKind::Struct,
+            field_names: Vec::new(),
+            private_flags: Vec::new(),
+        });
+
+        let execution = engine
+            .execute_vm_chunk(chunk, ReplSessionPhase::Bootstrap)
+            .expect("bootstrap phase should allow preload-style chunk");
+
+        assert_eq!(execution.value, Value::Int(sindr::primitives::int(1)));
+    }
+
+    #[test]
+    fn live_phase_rejects_runtime_boot_plan_growth() {
+        let mut engine = ReplEngine::new().expect("engine should initialize");
+        let mut chunk = interactive_test_chunk();
+        chunk.runtime_boot_plan = RuntimeBootPlan {
+            singletons: vec![SingletonBootEntry {
+                process_name: "Counter".into(),
+                init_timeout_ms: 5000,
+                source: BootEntrySource::ExplicitConfig,
+            }],
+            ..RuntimeBootPlan::default()
+        };
+
+        let err = engine
+            .execute_vm_chunk(chunk, ReplSessionPhase::Live)
+            .expect_err("live phase should reject runtime boot plan growth");
+
+        assert!(err.message.contains("runtime_boot_plan"), "{}", err.message);
+    }
+
+    #[test]
+    fn repl_singleton_cast_accepts_explicit_pid_argument() {
+        let mut engine = ReplEngine::from_script_source(
+            "ticker_preload.srt",
+            r#"
+defgenserver Ticker {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @call
+  def value(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+
+  @cast
+  def tick(state: Int) -> Result<CastResult<Int>> {
+    Ok(CastResult::Next(state + 1))
+  }
+}
+
+supervisor_init {
+  Ticker {}
+}
+"#,
+        )
+        .expect("preloaded singleton process should initialize");
+
+        let bind = engine.handle_line("p = Ticker::pid()");
+        assert!(!bind.should_exit, "{}", ReplEngine::repl_result_text(&bind));
+
+        let tick = engine.handle_line("Ticker::tick(p)");
+        assert!(!tick.should_exit, "{}", ReplEngine::repl_result_text(&tick));
+        assert!(
+            !matches!(
+                tick.output,
+                ReplOutput::EvalError { .. } | ReplOutput::Diagnostic { .. }
+            ),
+            "{}",
+            ReplEngine::repl_result_text(&tick)
+        );
     }
 }

@@ -1,5 +1,7 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 use eldr::value::Value;
 use serde_json::{json, Value as JsonValue};
@@ -23,12 +25,59 @@ struct VmDumpOptions {
     mode: VmDumpMode,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RunObservationOptions {
+    vm_stats: bool,
+    vm_stats_json: bool,
+    trace_opcodes: bool,
+    trace_calls: bool,
+    trace_limit: Option<usize>,
+    trace_filter: BTreeSet<String>,
+}
+
+impl RunObservationOptions {
+    fn enabled(&self) -> bool {
+        self.vm_stats || self.vm_stats_json || self.trace_opcodes || self.trace_calls
+    }
+
+    fn to_vm_options(&self) -> eldr::vm::VmObservationOptions {
+        eldr::vm::VmObservationOptions {
+            trace_opcodes: self.trace_opcodes,
+            trace_calls: self.trace_calls,
+            trace_limit: self.trace_limit,
+            trace_filter: self.trace_filter.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum ErrorContextMode {
+    #[default]
+    Normal,
+    Verbose,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RunOptions {
     pub(crate) file_path: String,
     pub(crate) entry: Option<String>,
     pub(crate) cli_args: Vec<String>,
     vm_dump: Option<VmDumpOptions>,
+    observation: RunObservationOptions,
+    phase_times: bool,
+    error_context: ErrorContextMode,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PhaseTimes {
+    parse_ms: Option<u128>,
+    resolve_ms: Option<u128>,
+    typecheck_ms: Option<u128>,
+    codegen_ms: Option<u128>,
+    compile_ms: Option<u128>,
+    decode_ms: Option<u128>,
+    execute_ms: Option<u128>,
+    total_ms: u128,
 }
 
 pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
@@ -46,6 +95,9 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
     let mut cli_args = Vec::new();
     let mut vm_dump_path = None;
     let mut vm_dump_mode = VmDumpMode::Error;
+    let mut observation = RunObservationOptions::default();
+    let mut phase_times = false;
+    let mut error_context = ErrorContextMode::Normal;
     let mut i = 1usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -98,6 +150,61 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
                     }
                 };
             }
+            "--vm-stats" => {
+                observation.vm_stats = true;
+            }
+            "--vm-stats-json" => {
+                observation.vm_stats_json = true;
+            }
+            "--trace-opcode" => {
+                observation.trace_opcodes = true;
+            }
+            "--trace-call" => {
+                observation.trace_calls = true;
+            }
+            "--trace-limit" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err(RuneError::usage("run: missing value for --trace-limit"));
+                }
+                let limit = args[i].parse::<usize>().map_err(|_| {
+                    RuneError::message(1, format!("run: invalid --trace-limit value '{}'", args[i]))
+                })?;
+                observation.trace_limit = Some(limit);
+            }
+            "--trace-filter" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err(RuneError::usage("run: missing value for --trace-filter"));
+                }
+                observation.trace_filter = args[i]
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty())
+                    .map(|item| item.to_ascii_lowercase())
+                    .collect();
+            }
+            "--phase-times" => {
+                phase_times = true;
+            }
+            "--error-context" => {
+                i += 1;
+                if i >= args.len() {
+                    return Err(RuneError::usage("run: missing value for --error-context"));
+                }
+                error_context = match args[i].as_str() {
+                    "verbose" => ErrorContextMode::Verbose,
+                    other => {
+                        return Err(RuneError::message(
+                            1,
+                            format!(
+                                "run: unsupported --error-context value '{}'. supported: verbose",
+                                other
+                            ),
+                        ))
+                    }
+                };
+            }
             other => {
                 return Err(RuneError::usage(format!("run: unknown option '{}'", other)));
             }
@@ -120,6 +227,9 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
             path,
             mode: vm_dump_mode,
         }),
+        observation,
+        phase_times,
+        error_context,
     })
 }
 
@@ -136,6 +246,9 @@ fn run_command(options: RunOptions, env: ExecutionEnv) -> RuneResult<()> {
             env,
             &options.cli_args,
             options.vm_dump.as_ref(),
+            &options.observation,
+            options.phase_times,
+            options.error_context,
         )
     } else {
         run_source_file(
@@ -144,6 +257,9 @@ fn run_command(options: RunOptions, env: ExecutionEnv) -> RuneResult<()> {
             &options.cli_args,
             env,
             options.vm_dump.as_ref(),
+            &options.observation,
+            options.phase_times,
+            options.error_context,
         )
     }
 }
@@ -154,10 +270,15 @@ fn run_source_file(
     cli_args: &[String],
     env: ExecutionEnv,
     vm_dump: Option<&VmDumpOptions>,
+    observation: &RunObservationOptions,
+    report_phase_times: bool,
+    error_context: ErrorContextMode,
 ) -> RuneResult<()> {
+    let total_start = Instant::now();
     let source = fs::read_to_string(file_path)
         .map_err(|e| RuneError::message(1, format!("Error reading {}: {}", file_path, e)))?;
 
+    let compile_start = Instant::now();
     let compile_plan = prepare_script_compile_plan(file_path, &source, cli_entry)
         .map_err(|e| script_plan_error_as_rune_error(file_path, &source, e))?;
 
@@ -175,6 +296,10 @@ fn run_source_file(
             bytecode
         }
     };
+    let mut phase_times = PhaseTimes {
+        compile_ms: Some(compile_start.elapsed().as_millis()),
+        ..PhaseTimes::default()
+    };
     let runtime_sources = source_registry_from_bytecode(&bytecode);
     let source_context = runtime_sources
         .as_ref()
@@ -184,6 +309,8 @@ fn run_source_file(
                 .sources
                 .owned_context(compile_sources.user_source_id)
         });
+    let execute_start = Instant::now();
+    let phase_times = report_phase_times.then_some(&mut phase_times);
     execute_bytecode(
         env,
         bytecode,
@@ -196,6 +323,11 @@ fn run_source_file(
             ))
         }),
         vm_dump,
+        observation,
+        error_context,
+        phase_times,
+        &total_start,
+        &execute_start,
     )
 }
 
@@ -204,10 +336,15 @@ fn run_eldr_file(
     env: ExecutionEnv,
     cli_args: &[String],
     vm_dump: Option<&VmDumpOptions>,
+    observation: &RunObservationOptions,
+    report_phase_times: bool,
+    error_context: ErrorContextMode,
 ) -> RuneResult<()> {
+    let total_start = Instant::now();
     let bytes = fs::read(file_path)
         .map_err(|e| RuneError::message(1, format!("Error reading {}: {}", file_path, e)))?;
 
+    let decode_start = Instant::now();
     let bytecode = forge::bytecode::Bytecode::decode(&bytes).map_err(|e| {
         RuneError::message(
             1,
@@ -219,11 +356,17 @@ fn run_eldr_file(
             ),
         )
     })?;
+    let mut phase_times = PhaseTimes {
+        decode_ms: Some(decode_start.elapsed().as_millis()),
+        ..PhaseTimes::default()
+    };
 
     let runtime_sources = source_registry_from_bytecode(&bytecode);
     let source_context = runtime_sources
         .as_ref()
         .and_then(|(sources, source_id)| sources.owned_context(*source_id));
+    let execute_start = Instant::now();
+    let phase_times = report_phase_times.then_some(&mut phase_times);
     execute_bytecode(
         env,
         bytecode,
@@ -231,6 +374,11 @@ fn run_eldr_file(
         source_context,
         runtime_sources,
         vm_dump,
+        observation,
+        error_context,
+        phase_times,
+        &total_start,
+        &execute_start,
     )
 }
 
@@ -280,13 +428,20 @@ fn execute_bytecode(
     source_context: Option<(String, String)>,
     runtime_sources: Option<(diagnostics::SourceRegistry, diagnostics::SourceId)>,
     vm_dump: Option<&VmDumpOptions>,
+    observation_options: &RunObservationOptions,
+    error_context: ErrorContextMode,
+    mut phase_times: Option<&mut PhaseTimes>,
+    total_start: &Instant,
+    execute_start: &Instant,
 ) -> RuneResult<()> {
     let mut vm = match source_context {
         Some((source, file_path)) => eldr::VM::new(bytecode).with_source(source, file_path),
         None => eldr::VM::new(bytecode),
     }
     .with_cli_args(cli_args.to_vec());
-    if vm_dump.is_some() {
+    if observation_options.enabled() {
+        vm.enable_observation(observation_options.to_vm_options());
+    } else if vm_dump.is_some() {
         vm.enable_observation(eldr::vm::VmObservationOptions::default());
     }
     if let Err(e) = vm.run() {
@@ -311,25 +466,264 @@ fn execute_bytecode(
                 xldr::ErrorDisplayMode::Full,
             ),
         }
+        if matches!(error_context, ErrorContextMode::Verbose) {
+            emit_verbose_runtime_context(&vm, &e);
+        }
+        emit_phase_times_if_requested(&mut phase_times, total_start, execute_start);
+        emit_observation_if_requested(&vm, observation_options);
+        write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::RuntimeError { error: &e })?;
+        return Err(RuneError::silent(1));
+    }
+
+    if let Err(e) = vm.drain_background_tasks() {
+        let location = e
+            .context
+            .call_site
+            .clone()
+            .or_else(|| vm.runtime_error_location());
+        match runtime_sources.as_ref() {
+            Some((sources, source_id)) => xldr::error_display::emit_runtime_error_with_registry(
+                &e,
+                sources,
+                *source_id,
+                location.clone(),
+                xldr::ErrorDisplayMode::Full,
+            ),
+            None => xldr::error_display::emit_runtime_error(
+                &e,
+                vm.source(),
+                vm.source_file(),
+                location,
+                xldr::ErrorDisplayMode::Full,
+            ),
+        }
+        if matches!(error_context, ErrorContextMode::Verbose) {
+            emit_verbose_runtime_context(&vm, &e);
+        }
+        emit_phase_times_if_requested(&mut phase_times, total_start, execute_start);
+        emit_observation_if_requested(&vm, observation_options);
         write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::RuntimeError { error: &e })?;
         return Err(RuneError::silent(1));
     }
 
     if matches!(env, ExecutionEnv::Run) && report_final_result_error_if_any(&vm) {
+        if matches!(error_context, ErrorContextMode::Verbose) {
+            emit_verbose_vm_context(&vm);
+        }
+        emit_phase_times_if_requested(&mut phase_times, total_start, execute_start);
+        emit_observation_if_requested(&vm, observation_options);
         write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::ResultErr)?;
         return Err(RuneError::silent(1));
     }
 
     match vm.exit_code() {
         0 => {
+            emit_phase_times_if_requested(&mut phase_times, total_start, execute_start);
+            emit_observation_if_requested(&vm, observation_options);
             write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::Success)?;
             Ok(())
         }
         code => {
+            emit_phase_times_if_requested(&mut phase_times, total_start, execute_start);
+            emit_observation_if_requested(&vm, observation_options);
             write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::ExitCode)?;
             Err(RuneError::silent(code))
         }
     }
+}
+
+fn emit_observation_if_requested(vm: &eldr::VM, options: &RunObservationOptions) {
+    if !options.enabled() {
+        return;
+    }
+    let observation = vm.observation().unwrap_or_default();
+    if options.vm_stats {
+        eprintln!("VM stats:");
+        eprintln!("  executed_opcodes: {}", observation.stats.executed_opcodes);
+        eprintln!("  builtin_calls: {}", observation.stats.builtin_calls);
+        eprintln!("  function_calls: {}", observation.stats.function_calls);
+        eprintln!("  closure_calls: {}", observation.stats.closure_calls);
+        eprintln!("  return_count: {}", observation.stats.return_count);
+        eprintln!(
+            "  tail_calls_optimized: {}",
+            observation.stats.tail_calls_optimized
+        );
+        eprintln!("  max_stack_depth: {}", observation.stats.max_stack_depth);
+        eprintln!("  max_frame_depth: {}", observation.stats.max_frame_depth);
+        eprintln!("  branch:");
+        eprintln!(
+            "    jump_if_true_taken: {}",
+            observation.stats.branch.jump_if_true_taken
+        );
+        eprintln!(
+            "    jump_if_true_not_taken: {}",
+            observation.stats.branch.jump_if_true_not_taken
+        );
+        eprintln!(
+            "    jump_if_false_taken: {}",
+            observation.stats.branch.jump_if_false_taken
+        );
+        eprintln!(
+            "    jump_if_false_not_taken: {}",
+            observation.stats.branch.jump_if_false_not_taken
+        );
+        eprintln!("  per_opcode:");
+        for (kind, count) in &observation.stats.per_opcode {
+            eprintln!("    {kind}: {count}");
+        }
+    }
+    if options.trace_opcodes || options.trace_calls {
+        for line in &observation.trace_lines {
+            eprintln!("{line}");
+        }
+        if observation.dropped_trace_events > 0 {
+            eprintln!("dropped_trace_events: {}", observation.dropped_trace_events);
+        }
+    }
+    if options.vm_stats_json {
+        match serde_json::to_string(&build_observation_json(vm)) {
+            Ok(text) => eprintln!("{text}"),
+            Err(err) => eprintln!(
+                "{{\"schema_version\":1,\"error\":\"failed to serialize observation: {err}\"}}"
+            ),
+        }
+    }
+}
+
+fn build_observation_json(vm: &eldr::VM) -> JsonValue {
+    let observation = vm.observation().unwrap_or_default();
+    json!({
+        "schema_version": 1,
+        "stats": {
+            "executed_opcodes": observation.stats.executed_opcodes,
+            "builtin_calls": observation.stats.builtin_calls,
+            "function_calls": observation.stats.function_calls,
+            "closure_calls": observation.stats.closure_calls,
+            "return_count": observation.stats.return_count,
+            "tail_calls_optimized": observation.stats.tail_calls_optimized,
+            "max_stack_depth": observation.stats.max_stack_depth,
+            "max_frame_depth": observation.stats.max_frame_depth,
+            "per_opcode": observation.stats.per_opcode,
+            "branch": {
+                "jump_if_true_taken": observation.stats.branch.jump_if_true_taken,
+                "jump_if_true_not_taken": observation.stats.branch.jump_if_true_not_taken,
+                "jump_if_false_taken": observation.stats.branch.jump_if_false_taken,
+                "jump_if_false_not_taken": observation.stats.branch.jump_if_false_not_taken,
+            }
+        },
+        "trace": {
+            "dropped_events": observation.dropped_trace_events,
+            "lines": observation.trace_lines,
+        }
+    })
+}
+
+fn emit_verbose_runtime_context(vm: &eldr::VM, error: &eldr::RuntimeError) {
+    eprintln!("Runtime context:");
+    eprintln!("  pc: {}", error.context.pc.unwrap_or(vm.pc()));
+    eprintln!(
+        "  opcode: {}",
+        error
+            .context
+            .opcode
+            .clone()
+            .unwrap_or_else(|| "<unknown>".to_string())
+    );
+    eprintln!(
+        "  function: {}",
+        error
+            .context
+            .function
+            .clone()
+            .unwrap_or_else(|| "<unknown>".to_string())
+    );
+    eprintln!("  stack_depth: {}", vm.stack_depth());
+    eprintln!("  frame_depth: {}", vm.frame_depth());
+    if !error.context.details.is_empty() {
+        eprintln!("  details:");
+        for detail in &error.context.details {
+            eprintln!("    {detail}");
+        }
+    }
+}
+
+fn emit_verbose_vm_context(vm: &eldr::VM) {
+    let pc = vm.pc();
+    let last_opcode = pc
+        .checked_sub(1)
+        .and_then(|idx| vm.bytecode().opcodes.get(idx));
+    eprintln!("Runtime context:");
+    eprintln!("  pc: {}", pc);
+    eprintln!(
+        "  opcode: {}",
+        last_opcode
+            .map(|opcode| format!("{opcode:?}"))
+            .unwrap_or_else(|| "<unknown>".to_string())
+    );
+    eprintln!(
+        "  function: {}",
+        last_opcode
+            .and_then(|_| function_name_for_pc(vm.bytecode(), pc.saturating_sub(1)))
+            .unwrap_or_else(|| "<unknown>".to_string())
+    );
+    eprintln!("  stack_depth: {}", vm.stack_depth());
+    eprintln!("  frame_depth: {}", vm.frame_depth());
+}
+
+fn function_name_for_pc(bytecode: &forge::bytecode::Bytecode, pc: usize) -> Option<String> {
+    bytecode
+        .functions
+        .iter()
+        .find(|entry| {
+            let start = entry.entry_pc as usize;
+            let end = if entry.end_pc > entry.entry_pc {
+                entry.end_pc as usize
+            } else {
+                bytecode.opcodes.len()
+            };
+            pc >= start && pc < end
+        })
+        .map(|entry| {
+            entry
+                .qualified_name
+                .clone()
+                .unwrap_or_else(|| format!("fun#{}", entry.fun_idx))
+        })
+}
+
+fn emit_phase_times_if_requested(
+    phase_times: &mut Option<&mut PhaseTimes>,
+    total_start: &Instant,
+    execute_start: &Instant,
+) {
+    let Some(times) = phase_times.as_mut() else {
+        return;
+    };
+    times.execute_ms = Some(execute_start.elapsed().as_millis());
+    times.total_ms = total_start.elapsed().as_millis();
+    emit_phase_times(times);
+}
+
+fn emit_phase_times(times: &PhaseTimes) {
+    eprintln!("Phase times:");
+    eprintln!("  parse: {}", format_optional_ms(times.parse_ms));
+    eprintln!("  resolve: {}", format_optional_ms(times.resolve_ms));
+    eprintln!("  typecheck: {}", format_optional_ms(times.typecheck_ms));
+    eprintln!("  codegen: {}", format_optional_ms(times.codegen_ms));
+    if times.compile_ms.is_some() {
+        eprintln!("  compile: {}", format_optional_ms(times.compile_ms));
+    }
+    if times.decode_ms.is_some() {
+        eprintln!("  decode: {}", format_optional_ms(times.decode_ms));
+    }
+    eprintln!("  execute: {}", format_optional_ms(times.execute_ms));
+    eprintln!("  total: {}ms", times.total_ms);
+}
+
+fn format_optional_ms(value: Option<u128>) -> String {
+    value
+        .map(|ms| format!("{ms}ms"))
+        .unwrap_or_else(|| "n/a".to_string())
 }
 
 enum RuntimeOutcome<'a> {
@@ -424,7 +818,7 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
     let observation = vm.observation().unwrap_or_default();
     let process_runtime = vm.process_runtime_snapshot();
 
-    json!({
+    let mut dump = json!({
         "schema_version": 1,
         "result": {
             "status": outcome.status(),
@@ -448,6 +842,12 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
             "max_stack_depth": observation.stats.max_stack_depth,
             "max_frame_depth": observation.stats.max_frame_depth,
             "per_opcode": observation.stats.per_opcode,
+            "branch": {
+                "jump_if_true_taken": observation.stats.branch.jump_if_true_taken,
+                "jump_if_true_not_taken": observation.stats.branch.jump_if_true_not_taken,
+                "jump_if_false_taken": observation.stats.branch.jump_if_false_taken,
+                "jump_if_false_not_taken": observation.stats.branch.jump_if_false_not_taken,
+            },
             "process": {
                 "process_spec_count": process_runtime.counters.process_spec_count,
                 "singleton_slot_count": process_runtime.counters.singleton_slot_count,
@@ -512,6 +912,16 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
                     "target": context.target,
                 })),
             })).collect::<Vec<_>>(),
+            "worker_sets": process_runtime.worker_sets.iter().map(|worker_set| json!({
+                "id": worker_set.id,
+                "worker_process": worker_set.worker_process,
+                "supervisor": worker_set.supervisor,
+                "target": worker_set.target,
+                "min": worker_set.min,
+                "max": worker_set.max,
+                "member_pids": worker_set.member_pids,
+                "live_count": worker_set.live_count,
+            })).collect::<Vec<_>>(),
             "waiting": process_runtime.waiting,
             "replies": process_runtime.replies,
             "deadlines": process_runtime.deadlines.iter().map(|deadline| json!({
@@ -533,7 +943,42 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
             "dropped_events": observation.dropped_trace_events,
             "lines": observation.trace_lines,
         }
-    })
+    });
+    surface_strip_global_prefixes(&mut dump);
+    dump
+}
+
+fn surface_strip_global_prefixes(value: &mut JsonValue) {
+    match value {
+        JsonValue::String(text) => {
+            if let Some(stripped) = text.strip_prefix("Global::") {
+                *text = stripped.to_string();
+            }
+        }
+        JsonValue::Array(items) => {
+            for item in items {
+                surface_strip_global_prefixes(item);
+            }
+        }
+        JsonValue::Object(map) => {
+            let keys = map.keys().cloned().collect::<Vec<_>>();
+            for key in keys {
+                let mut item = map
+                    .remove(&key)
+                    .expect("json object key should still exist during surface rewrite");
+                surface_strip_global_prefixes(&mut item);
+                let surface_key = key
+                    .strip_prefix("Global::")
+                    .unwrap_or(key.as_str())
+                    .to_string();
+                map.insert(surface_key, item);
+            }
+            for item in map.values_mut() {
+                surface_strip_global_prefixes(item);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn report_final_result_error_if_any(vm: &eldr::VM) -> bool {

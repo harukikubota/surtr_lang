@@ -40,6 +40,19 @@ fn test_defp_marks_definition_private() {
 }
 
 #[test]
+fn test_doc_on_private_def_is_rejected() {
+    let err = parse(
+        r#"@doc """Hidden helper."""
+defp helper() -> String { "ok" }"#,
+    )
+    .expect_err("@doc on defp should fail");
+
+    assert!(err
+        .message()
+        .contains("@doc is only allowed on public declarations"));
+}
+
+#[test]
 fn test_const_definition_surface() {
     let ast = parse("public const APP_NAME: String = \"surtr\"").unwrap();
     match &ast[0] {
@@ -68,12 +81,71 @@ fn test_private_field_modifier_is_preserved() {
     .unwrap();
     match &ast[0] {
         Ast::StructDef(_, name, fields, attrs) => {
-            assert_eq!(name, "User");
+            assert_eq!(name, "Global::User");
             assert_eq!(fields[0].name, "password");
             assert_eq!(fields[0].visibility, Visibility::Private);
+            assert!(!fields[0].readonly);
             assert_eq!(fields[1].name, "name");
             assert_eq!(fields[1].visibility, Visibility::Public);
+            assert!(!fields[1].readonly);
             assert_eq!(attrs, &DeclAttrs::default());
+        }
+        _ => panic!("Expected StructDef"),
+    }
+}
+
+#[test]
+fn test_readonly_struct_field_modifier_is_preserved() {
+    let ast = parse_with_context(
+        "defstruct User { readonly profile: Profile, public readonly name: String }",
+        ParserContext::project(0),
+    )
+    .unwrap();
+    match &ast[0] {
+        Ast::StructDef(_, name, fields, attrs) => {
+            assert_eq!(name, "Global::User");
+            assert_eq!(fields[0].name, "profile");
+            assert!(fields[0].readonly);
+            assert_eq!(fields[0].visibility, Visibility::Public);
+            assert_eq!(fields[1].name, "name");
+            assert!(fields[1].readonly);
+            assert_eq!(fields[1].visibility, Visibility::Public);
+            assert_eq!(attrs, &DeclAttrs::default());
+        }
+        _ => panic!("Expected StructDef"),
+    }
+}
+
+#[test]
+fn test_readonly_record_field_modifier_is_rejected() {
+    let err = parse_with_context(
+        "defrecord User(readonly name: String)",
+        ParserContext::project(0),
+    )
+    .expect_err("readonly record field should fail");
+
+    assert!(err
+        .message()
+        .contains("readonly field modifier is only supported on `defstruct` fields"));
+}
+
+#[test]
+fn test_readonly_struct_metadata_and_field_modifier_are_preserved() {
+    let ast = parse_with_context(
+        "@readonly\ndefstruct User { private readonly password: String, readonly name: String }",
+        ParserContext::project(0),
+    )
+    .unwrap();
+    match &ast[0] {
+        Ast::StructDef(_, name, fields, attrs) => {
+            assert_eq!(name, "Global::User");
+            assert!(attrs.readonly);
+            assert_eq!(fields[0].name, "password");
+            assert_eq!(fields[0].visibility, Visibility::Private);
+            assert!(fields[0].readonly);
+            assert_eq!(fields[1].name, "name");
+            assert_eq!(fields[1].visibility, Visibility::Public);
+            assert!(fields[1].readonly);
         }
         _ => panic!("Expected StructDef"),
     }
@@ -95,7 +167,7 @@ defrecord Point(x: Float, y: Float)"#,
 
     match &ast[0] {
         Ast::StructDef(_, name, fields, attrs) => {
-            assert_eq!(name, "User");
+            assert_eq!(name, "Global::User");
             assert_eq!(fields.len(), 1);
             assert_eq!(attrs.doc.as_deref(), Some("User docs."));
         }
@@ -104,7 +176,7 @@ defrecord Point(x: Float, y: Float)"#,
 
     match &ast[1] {
         Ast::RecordDef(_, name, fields, attrs) => {
-            assert_eq!(name, "Point");
+            assert_eq!(name, "Global::Point");
             assert_eq!(fields.len(), 2);
             assert_eq!(attrs.doc.as_deref(), Some("Point docs."));
         }
@@ -113,36 +185,45 @@ defrecord Point(x: Float, y: Float)"#,
 }
 
 #[test]
-fn test_process_state_annotation_parses_for_struct_and_enum_decls() {
-    let ast = parse_with_context(
+fn test_process_state_annotation_is_rejected() {
+    let err = parse_with_context(
         r#"@process_state(Counter)
 defstruct CounterState {
   value: Int,
-}
-
-@process_state(Counter)
-defenum CounterEvent {
-  Changed(Int)
 }"#,
         ParserContext::module(1, None),
     )
-    .expect("@process_state should parse on process-owned state types");
+    .expect_err("@process_state should be rejected");
 
-    match &ast[0] {
-        Ast::StructDef(_, name, _, attrs) => {
-            assert_eq!(name, "CounterState");
-            assert_eq!(attrs.process_state_owner.as_deref(), Some("Counter"));
-        }
-        other => panic!("Expected StructDef, got {other:?}"),
-    }
+    assert!(err.message().contains("@process_state has been removed"));
+}
 
-    match &ast[1] {
-        Ast::EnumDef(_, name, _, _, attrs) => {
-            assert_eq!(name, "CounterEvent");
-            assert_eq!(attrs.process_state_owner.as_deref(), Some("Counter"));
-        }
-        other => panic!("Expected EnumDef, got {other:?}"),
-    }
+#[test]
+fn test_doc_on_private_process_helper_is_rejected() {
+    let err = parse_with_context(
+        r#"defagent Counter {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @get
+  def read(state: Int) -> Result<Int> { Ok(state) }
+
+  @doc """Internal helper."""
+  def hidden_value(_state: Int) -> Result<Int> { Ok(99) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("@doc on lowered private process helper should fail");
+
+    assert!(err
+        .message()
+        .contains("@doc is only allowed on public declarations"));
 }
 
 #[test]
@@ -187,7 +268,29 @@ impl User {
 
     assert!(err
         .message()
-        .contains("Only @doc / @hidden / @builtin are allowed before impl members"));
+        .contains("Only @doc / @hidden / @builtin / @intrinsic are allowed before impl members"));
+}
+
+#[test]
+fn test_doc_on_private_impl_member_is_rejected() {
+    let err = parse_with_context(
+        r#"defstruct User {
+  name: String,
+}
+
+impl User {
+  @doc """Normalize a private helper."""
+  defp normalize(self) -> Self {
+    self
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("@doc on private impl member should fail");
+
+    assert!(err
+        .message()
+        .contains("@doc is only allowed on public declarations"));
 }
 
 #[test]
@@ -226,7 +329,7 @@ fn test_intrinsic_dbg_decl_parses_in_std_module() {
 
     match &ast[0] {
         Ast::Defmod(_, name, body, _) => {
-            assert_eq!(name, "Bootstrap");
+            assert_eq!(name, "Global::Bootstrap");
             match &body[0] {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "dbg!");
@@ -286,7 +389,7 @@ fn test_intrinsic_bind_decl_parses_in_std_module() {
 
     match &ast[0] {
         Ast::Defmod(_, name, body, _) => {
-            assert_eq!(name, "Bootstrap");
+            assert_eq!(name, "Global::Bootstrap");
             match &body[0] {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "=");
@@ -323,7 +426,7 @@ fn test_intrinsic_safebind_decl_parses_in_std_module() {
 
     match &ast[0] {
         Ast::Defmod(_, name, body, _) => {
-            assert_eq!(name, "Bootstrap");
+            assert_eq!(name, "Global::Bootstrap");
             match &body[0] {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "=?");
@@ -360,7 +463,7 @@ fn test_intrinsic_match_decl_parses_in_std_module() {
 
     match &ast[0] {
         Ast::Defmod(_, name, body, _) => {
-            assert_eq!(name, "Bootstrap");
+            assert_eq!(name, "Global::Bootstrap");
             match &body[0] {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "match");
@@ -397,7 +500,7 @@ fn test_intrinsic_cond_decl_parses_in_std_module() {
 
     match &ast[0] {
         Ast::Defmod(_, name, body, _) => {
-            assert_eq!(name, "Bootstrap");
+            assert_eq!(name, "Global::Bootstrap");
             match &body[0] {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "cond");
@@ -415,6 +518,119 @@ fn test_intrinsic_cond_decl_parses_in_std_module() {
         }
         other => panic!("Expected Defmod, got {other:?}"),
     }
+}
+
+#[test]
+fn test_intrinsic_bulk_update_decl_parses_in_std_module() {
+    let mut context = ParserContext::project(0);
+    context.parse_rules = ParseRules::permissive_for_tests();
+    let ast = parse_with_context(
+        r#"@builtin type Facet<$S, $A>
+impl Facet {
+  @doc """
+  Bulk update special form.
+  """
+  @intrinsic def bulk_update(source: $S, updates: BulkUpdateEntries<$S>) -> Result<$S>
+}"#,
+        context,
+    )
+    .expect("intrinsic bulk_update decl should parse");
+
+    match &ast[0] {
+        Ast::BuiltinTypeDecl(_, _, _) => match &ast[1] {
+            Ast::ImplDef(_, name, body, _) => {
+                assert_eq!(name, "Global::Facet");
+                match &body[0] {
+                    Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
+                        assert_eq!(intrinsic_name, "bulk_update");
+                        assert!(signature.contains(
+                            "@intrinsic def bulk_update(source: $S, updates: BulkUpdateEntries<$S>) -> Result<$S>"
+                        ));
+                        assert!(attrs
+                            .doc
+                            .as_deref()
+                            .is_some_and(|doc| doc.contains("Bulk update special form.")));
+                    }
+                    other => panic!("Expected IntrinsicDecl, got {other:?}"),
+                }
+            }
+            other => panic!("Expected ImplDef, got {other:?}"),
+        },
+        other => panic!("Expected BuiltinTypeDecl, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_facet_bulk_update_special_form_parses() {
+    let ast = parse(
+        r#"updated =? Facet::bulk_update(user) {
+  name <- set("taro")
+  score <- over_result({|score: Result<Int>| Ok(score)})
+  address {
+    country <- set("Tokyo")
+  }
+}"#,
+    )
+    .expect("bulk update should parse");
+
+    match &ast[0] {
+        Ast::SafeBind(_, AstPattern::Var(_, name), rhs) => {
+            assert_eq!(name, "updated");
+            match rhs.as_ref() {
+                Ast::BulkUpdate(_, source, entries) => {
+                    assert!(matches!(source.as_ref(), Ast::Var(_, name) if name == "user"));
+                    assert_eq!(entries.len(), 3);
+                    assert_eq!(entries[0].path, vec!["name"]);
+                    assert!(matches!(entries[0].kind, BulkUpdateEntryKind::Set(_)));
+                    assert_eq!(entries[1].path, vec!["score"]);
+                    assert!(matches!(entries[1].kind, BulkUpdateEntryKind::OverResult(_)));
+                    assert_eq!(entries[2].path, vec!["address"]);
+                    assert!(matches!(entries[2].kind, BulkUpdateEntryKind::Nested(_)));
+                }
+                other => panic!("Expected BulkUpdate, got {other:?}"),
+            }
+        }
+        other => panic!("Expected SafeBind, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_facet_bulk_update_rejects_commas_between_entries() {
+    let err = parse(
+        r#"updated =? Facet::bulk_update(user) {
+  name <- set("taro"),
+  age <- over({|age| Ok(age + 1)})
+}"#,
+    )
+    .expect_err("commas should be rejected");
+
+    assert!(!err.message().is_empty());
+}
+
+#[test]
+fn test_facet_bulk_update_rejects_non_whitelisted_leaf_call() {
+    let err = parse(
+        r#"updated =? Facet::bulk_update(user) {
+  name <- replace("taro")
+}"#,
+    )
+    .expect_err("non-whitelisted leaf should be rejected");
+
+    assert!(err
+        .message()
+        .contains("set(value), over(update_fun), or over_result(update_fun)"));
+}
+
+#[test]
+fn test_facet_bulk_update_rejects_qualified_facet_leaf_call() {
+    let err = parse(
+        r#"updated =? Facet::bulk_update(user) {
+  name <- Facet::set("taro")
+}"#,
+    )
+    .expect_err("qualified Facet leaf call should be rejected");
+
+    assert!(!err.message().is_empty());
 }
 
 #[test]
@@ -655,7 +871,7 @@ impl User {
         .expect("expected impl node");
     match impl_node {
         Ast::ImplDef(_, target, methods, attrs) => {
-            assert_eq!(target, "User");
+            assert_eq!(target, "Global::User");
             assert_eq!(attrs, &DeclAttrs::default());
             assert_eq!(methods.len(), 2);
             assert!(matches!(
@@ -692,7 +908,7 @@ impl Int {
         .expect("expected impl node");
     match impl_node {
         Ast::ImplDef(_, target, methods, _) => {
-            assert_eq!(target, "Int");
+            assert_eq!(target, "Global::Int");
             assert!(matches!(
                 methods.as_slice(),
                 [Ast::BuiltinDecl(_, name, _, Some(AstTy::Generic(_, ret, _)), attrs)]
@@ -755,7 +971,7 @@ fn test_trait_impl_parses_and_keeps_methods() {
         [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods, attrs)] => {
             assert_eq!(trait_name, "Numeric");
             assert!(trait_args.is_empty());
-            assert_eq!(target, "Int");
+            assert_eq!(target, "Global::Int");
             assert_eq!(attrs, &DeclAttrs::default());
             assert_eq!(methods.len(), 2);
             assert!(matches!(
@@ -786,7 +1002,7 @@ fn test_trait_impl_accepts_builtin_def_method() {
     match ast.as_slice() {
         [Ast::TraitImplDef(_, trait_name, _, AstTy::Named(_, target), methods, _)] => {
             assert_eq!(trait_name, "Add");
-            assert_eq!(target, "Int");
+            assert_eq!(target, "Global::Int");
             assert!(matches!(
                 methods.as_slice(),
                 [Ast::BuiltinDecl(_, name, _, Some(AstTy::Named(_, ret)), _)]
@@ -840,7 +1056,7 @@ impl Show for User {
     match &ast[1] {
         Ast::TraitImplDef(_, trait_name, _, target, _, attrs) => {
             assert_eq!(trait_name, "Show");
-            assert!(matches!(target, AstTy::Named(_, name) if name == "User"));
+            assert!(matches!(target, AstTy::Named(_, name) if name == "Global::User"));
             assert_eq!(attrs.doc.as_deref(), Some("Impl docs."));
         }
         _ => panic!("Expected TraitImplDef"),
@@ -898,7 +1114,7 @@ impl User {
 
     match &ast[0] {
         Ast::ImplDef(_, target, _, attrs) => {
-            assert_eq!(target, "User");
+            assert_eq!(target, "Global::User");
             assert!(attrs.auto_import);
         }
         other => panic!("Expected ImplDef, got {other:?}"),
@@ -967,7 +1183,7 @@ impl User {
 
     match &ast[1] {
         Ast::ImplDef(_, target, methods, _) => {
-            assert_eq!(target, "User");
+            assert_eq!(target, "Global::User");
             assert_eq!(methods.len(), 2);
             match &methods[0] {
                 Ast::Def(_, name, _, _, _, _, attrs) => {
@@ -1092,7 +1308,7 @@ fn test_doc_attributes_parse_for_trait_impl_methods() {
     match ast.as_slice() {
         [Ast::TraitImplDef(_, trait_name, _, AstTy::Named(_, target), methods, _)] => {
             assert_eq!(trait_name, "Show");
-            assert_eq!(target, "Int");
+            assert_eq!(target, "Global::Int");
             match &methods[0] {
                 Ast::Def(_, name, _, _, _, _, attrs) => {
                     assert_eq!(name, "to_string");
@@ -1167,7 +1383,7 @@ fn test_trait_impl_parses_trait_type_args() {
         [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods, attrs)] => {
             assert_eq!(trait_name, "From");
             assert!(matches!(trait_args.as_slice(), [AstTy::Named(_, name)] if name == "String"));
-            assert_eq!(target, "Int");
+            assert_eq!(target, "Global::Int");
             assert_eq!(attrs, &DeclAttrs::default());
             assert_eq!(methods.len(), 1);
         }
@@ -1360,7 +1576,7 @@ fn test_hidden_builtin_impl_member_parses() {
 
     match &ast[0] {
         Ast::ImplDef(_, target, body, _) => {
-            assert_eq!(target, "Task");
+            assert_eq!(target, "Global::Task");
             assert!(matches!(
                 &body[0],
                 Ast::BuiltinDecl(_, name, _, _, DeclAttrs { hidden: true, .. })
@@ -1412,7 +1628,7 @@ fn test_doc_annotates_defmod() {
     assert!(matches!(
         ast.as_slice(),
         [Ast::Defmod(_, name, _, DeclAttrs { doc: Some(doc), .. })]
-            if name == "Kernel" && doc == "Kernel docs"
+            if name == "Global::Kernel" && doc == "Kernel docs"
     ));
 }
 
@@ -1427,7 +1643,7 @@ fn test_autoimport_annotates_defmod() {
     assert!(matches!(
         ast.as_slice(),
         [Ast::Defmod(_, name, _, DeclAttrs { auto_import: true, .. })]
-            if name == "Kernel"
+            if name == "Global::Kernel"
     ));
 }
 
@@ -1442,7 +1658,7 @@ fn test_doc_annotates_deferror() {
     assert!(matches!(
         ast.as_slice(),
         [Ast::DeferrorDef(_, name, _, _, DeclAttrs { doc: Some(doc), .. })]
-            if name == "NoneError" && doc == "Missing value error"
+            if name == "Global::NoneError" && doc == "Missing value error"
     ));
 }
 
@@ -1548,7 +1764,7 @@ fn test_builtin_if_decl_accepts_keyword_name_in_std_module_member() {
 
     match &ast[0] {
         Ast::Defmod(_, name, body, _) => {
-            assert_eq!(name, "Kernel");
+            assert_eq!(name, "Global::Kernel");
             assert!(matches!(
                 &body[0],
                 Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _)
@@ -1572,7 +1788,7 @@ fn test_builtin_import_decl_accepts_keyword_name_in_std_module_member() {
 
     match &ast[0] {
         Ast::Defmod(_, name, body, _) => {
-            assert_eq!(name, "Bootstrap");
+            assert_eq!(name, "Global::Bootstrap");
             assert!(matches!(
                 &body[0],
                 Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _)
@@ -1981,6 +2197,124 @@ fn test_func_literal_operator_lowers_to_binop() {
                         && matches!(right.as_ref(), Ast::Var(_, name) if name == "right")
             ));
         }
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_unqualified_on_is_lower_precedence_than_compose() {
+    let ast = parse("x = a `on` b >> c").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(
+                    func.as_ref(),
+                    Ast::Path(_, AstPath { segments, .. }) if segments == &vec!["Function".to_string(), "on".to_string()]
+                ));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(left, Ast::Var(_, name) if name == "a")
+                            && matches!(
+                                right,
+                                Ast::Compose(_, rl, rr)
+                                    if matches!(rl.as_ref(), Ast::Var(_, name) if name == "b")
+                                        && matches!(rr.as_ref(), Ast::Var(_, name) if name == "c")
+                            )
+                ));
+            }
+            other => panic!("Expected Function::on(...) call, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_function_on_path_is_lower_precedence_than_compose() {
+    let ast = parse("x = a `Function::on` b >> c").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(
+                    func.as_ref(),
+                    Ast::Path(_, AstPath { segments, .. }) if segments == &vec!["Function".to_string(), "on".to_string()]
+                ));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(left, Ast::Var(_, name) if name == "a")
+                            && matches!(
+                                right,
+                                Ast::Compose(_, rl, rr)
+                                    if matches!(rl.as_ref(), Ast::Var(_, name) if name == "b")
+                                        && matches!(rr.as_ref(), Ast::Var(_, name) if name == "c")
+                            )
+                ));
+            }
+            other => panic!("Expected Function::on(...) call, got {:?}", other),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_kernel_on_path_stays_expr_tier() {
+    let ast = parse("x = a `Kernel::on` b >> c").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::Compose(_, left, right) => {
+                assert!(matches!(right.as_ref(), Ast::Var(_, name) if name == "c"));
+                assert!(matches!(
+                    left.as_ref(),
+                    Ast::App(_, func, args)
+                        if matches!(
+                            func.as_ref(),
+                            Ast::Path(_, AstPath { segments, .. }) if segments == &vec!["Kernel".to_string(), "on".to_string()]
+                        )
+                        && matches!(
+                            args.as_slice(),
+                            [RecordLitArg::Positional(lhs), RecordLitArg::Positional(rhs)]
+                                if matches!(lhs, Ast::Var(_, name) if name == "a")
+                                    && matches!(rhs, Ast::Var(_, name) if name == "b")
+                        )
+                ));
+            }
+            other => panic!(
+                "Expected compose with expr-tier Kernel::on call, got {:?}",
+                other
+            ),
+        },
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_other_on_path_stays_expr_tier() {
+    let ast = parse("x = a `Other::on` b >> c").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::Compose(_, left, right) => {
+                assert!(matches!(right.as_ref(), Ast::Var(_, name) if name == "c"));
+                assert!(matches!(
+                    left.as_ref(),
+                    Ast::App(_, func, args)
+                        if matches!(
+                            func.as_ref(),
+                            Ast::Path(_, AstPath { segments, .. }) if segments == &vec!["Other".to_string(), "on".to_string()]
+                        )
+                        && matches!(
+                            args.as_slice(),
+                            [RecordLitArg::Positional(lhs), RecordLitArg::Positional(rhs)]
+                                if matches!(lhs, Ast::Var(_, name) if name == "a")
+                                    && matches!(rhs, Ast::Var(_, name) if name == "b")
+                        )
+                ));
+            }
+            other => panic!(
+                "Expected compose with expr-tier Other::on call, got {:?}",
+                other
+            ),
+        },
         other => panic!("Expected bind, got {:?}", other),
     }
 }
@@ -2552,15 +2886,15 @@ fn test_legacy_pipe_compose_operator_is_rejected() {
 }
 
 #[test]
-fn test_lens_slash_compose_expression_parses() {
-    parse(r#"value = Lens::view(User.profile / Profile.name, user)"#)
-        .expect("lens slash compose should parse");
+fn test_facet_slash_compose_expression_parses() {
+    parse(r#"value = Facet::view(User.profile / Profile.name, user)"#)
+        .expect("facet slash compose should parse");
 }
 
 #[test]
-fn test_lens_slash_compose_chain_parses() {
-    parse(r#"value = Lens::view(Config.root / Project.current / Tuple._0, cfg)"#)
-        .expect("chained lens slash compose should parse");
+fn test_facet_slash_compose_chain_parses() {
+    parse(r#"value = Facet::view(Config.root / Project.current / Tuple._0, cfg)"#)
+        .expect("chained facet slash compose should parse");
 }
 
 #[test]
@@ -3102,6 +3436,66 @@ fn test_tuple_dot_numeric_index_is_rejected() {
 }
 
 #[test]
+fn test_facet_capture_shorthand_parses_field_access_chain() {
+    let ast = parse("Facet::set(~user.profile.name, \"bob\")").unwrap();
+    match &ast[0] {
+        Ast::App(_, callee, args) => {
+            assert!(
+                matches!(callee.as_ref(), Ast::Path(_, path) if path.segments == vec!["Facet", "set"])
+            );
+            assert!(matches!(
+                &args[0],
+                RecordLitArg::Positional(Ast::FacetCapture(_, inner))
+                    if matches!(inner.as_ref(),
+                        Ast::FieldAccess(_, expr, field)
+                            if field == "name"
+                                && matches!(expr.as_ref(),
+                                    Ast::FieldAccess(_, expr2, field2)
+                                        if field2 == "profile"
+                                            && matches!(expr2.as_ref(), Ast::Var(_, name) if name == "user")
+                                )
+                    )
+            ));
+        }
+        other => panic!("Expected App, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_facet_capture_shorthand_parses_grouped_and_call_roots() {
+    let ast = parse("Facet::replace(~(make_pair())._1, 99)").unwrap();
+    match &ast[0] {
+        Ast::App(_, _, args) => {
+            assert!(matches!(
+                &args[0],
+                RecordLitArg::Positional(Ast::FacetCapture(_, inner))
+                    if matches!(inner.as_ref(),
+                        Ast::FieldAccess(_, expr, field)
+                            if field == "_1"
+                                && matches!(expr.as_ref(), Ast::Grouped(_, _))
+                    )
+            ));
+        }
+        other => panic!("Expected App, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_facet_capture_shorthand_allows_bare_inner_expr_for_later_diagnostics() {
+    let ast = parse("Facet::view(~user)").unwrap();
+    match &ast[0] {
+        Ast::App(_, _, args) => {
+            assert!(matches!(
+                &args[0],
+                RecordLitArg::Positional(Ast::FacetCapture(_, inner))
+                    if matches!(inner.as_ref(), Ast::Var(_, name) if name == "user")
+            ));
+        }
+        other => panic!("Expected App, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_one_tuple_literal_is_rejected() {
     let err = parse("pair = (1,)").expect_err("Expected parse error");
     assert!(err.message().contains("1-tuple literals are not supported"));
@@ -3478,7 +3872,7 @@ fn test_defmod_parses_module_body() {
 
     match ast.as_slice() {
         [Ast::Defmod(_, name, body, _)] => {
-            assert_eq!(name, "Kernel");
+            assert_eq!(name, "Global::Kernel");
             assert!(matches!(body.as_slice(), [Ast::Def(..)]));
         }
         _ => panic!("Expected single defmod declaration"),
@@ -3534,7 +3928,7 @@ fn test_defenum_parses_variants_with_payload_and_discriminant() {
 
     match ast.as_slice() {
         [Ast::EnumDef(_, name, type_params, variants, _)] => {
-            assert_eq!(name, "Direction");
+            assert_eq!(name, "Global::Direction");
             assert!(type_params.is_empty());
             assert_eq!(variants.len(), 3);
             assert_eq!(variants[0].name, "Up");
@@ -3561,7 +3955,7 @@ fn test_defenum_parses_generic_header() {
 
     match ast.as_slice() {
         [Ast::EnumDef(_, name, type_params, variants, _)] => {
-            assert_eq!(name, "ReduceStep");
+            assert_eq!(name, "Global::ReduceStep");
             assert_eq!(type_params.len(), 1);
             assert_eq!(type_params[0].name, "$A");
             assert_eq!(variants.len(), 2);
@@ -3692,6 +4086,74 @@ fn test_defmod_accepts_qualified_module_path() {
 }
 
 #[test]
+fn test_global_defmod_is_canonicalized_to_internal_root_path() {
+    let ast = parse_with_context(
+        "defmod Kernel { def name() -> String { \"repo\" } }",
+        ParserContext::module(1, None),
+    )
+    .expect("bare global defmod should parse");
+    assert!(matches!(ast.as_slice(), [Ast::Defmod(_, name, _, _)] if name == "Global::Kernel"));
+}
+
+#[test]
+fn test_namespace_block_lowers_bare_defmod_to_two_segment_canonical_path() {
+    let ast = parse_with_context(
+        r#"namespace Auth {
+  defmod Repo {
+    def name() -> String { "repo" }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("namespace declarations should lower into ordinary top-level declarations");
+    assert!(matches!(ast.as_slice(), [Ast::Defmod(_, name, _, _)] if name == "Auth::Repo"));
+}
+
+#[test]
+fn test_explicit_global_root_module_path_is_rejected() {
+    let err = parse_with_context(
+        "defmod Global::Kernel { def name() -> String { \"repo\" } }",
+        ParserContext::module(1, None),
+    )
+    .expect_err("explicit Global root should be rejected");
+    assert!(err.message().contains("Global"));
+}
+
+#[test]
+fn test_namespace_global_is_reserved() {
+    let err = parse_with_context(
+        "namespace Global { defmod Repo { def name() -> String { \"repo\" } } }",
+        ParserContext::module(1, None),
+    )
+    .expect_err("Global namespace should be reserved");
+    assert!(err.message().contains("Global"));
+}
+
+#[test]
+fn test_owner_name_cannot_reuse_namespace_name() {
+    let err = parse_with_context(
+        r#"namespace Auth {
+  defmod Auth {
+    def name() -> String { "repo" }
+  }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("owner name should not reuse active namespace name");
+    assert!(err.message().contains("Auth"));
+}
+
+#[test]
+fn test_global_type_names_are_canonicalized_to_internal_root_path() {
+    let ast = parse_with_context(
+        "defrecord User(name: String)",
+        ParserContext::module(1, None),
+    )
+    .expect("bare global type should parse");
+    assert!(matches!(ast.as_slice(), [Ast::RecordDef(_, name, _, _)] if name == "Global::User"));
+}
+
+#[test]
 fn test_impl_accepts_qualified_type_target() {
     let ast = parse_with_context(
         r#"impl Auth::User {
@@ -3721,7 +4183,7 @@ fn test_defmod_body_accepts_defextractor() {
     assert!(matches!(
         ast.as_slice(),
         [Ast::Defmod(_, name, body, _)]
-            if name == "Matchers"
+            if name == "Global::Matchers"
                 && matches!(body.as_slice(), [Ast::ExtractorDef(_, extractor_name, _, _, _, _, _)] if extractor_name == "never")
     ));
 }
@@ -3740,7 +4202,7 @@ fn test_defmod_body_accepts_import() {
     assert!(matches!(
         ast.as_slice(),
         [Ast::Defmod(_, name, body, _)]
-            if name == "Parser"
+            if name == "Global::Parser"
                 && matches!(body.as_slice(),
                     [
                         Ast::Import(_, AstPath { segments, .. }, ImportSpec::All),
@@ -3764,7 +4226,7 @@ fn test_impl_body_accepts_import() {
     assert!(matches!(
         ast.as_slice(),
         [Ast::ImplDef(_, target, body, _)]
-            if target == "User"
+            if target == "Global::User"
                 && matches!(body.as_slice(),
                     [
                         Ast::Import(_, AstPath { segments, .. }, ImportSpec::All),
@@ -3789,7 +4251,7 @@ fn test_trait_impl_body_accepts_import() {
         ast.as_slice(),
         [Ast::TraitImplDef(_, trait_name, _, AstTy::Named(_, target), body, _)]
             if trait_name == "Show"
-                && target == "User"
+                && target == "Global::User"
                 && matches!(body.as_slice(),
                     [
                         Ast::Import(_, AstPath { segments, .. }, ImportSpec::All),
@@ -3852,7 +4314,7 @@ fn test_std_module_compile_unit_accepts_builtin_decl() {
     )
     .expect("std module compile unit should accept builtin declarations");
     assert!(
-        matches!(ast.as_slice(), [Ast::Defmod(_, name, body, _)] if name == "Bootstrap"
+        matches!(ast.as_slice(), [Ast::Defmod(_, name, body, _)] if name == "Global::Bootstrap"
             && matches!(body.as_slice(), [Ast::BuiltinDecl(_, _, _, _, _)]))
     );
 }
@@ -3865,7 +4327,7 @@ fn test_std_module_compile_unit_accepts_builtin_type_decl() {
     )
     .expect("std module compile unit should accept builtin type declarations");
     assert!(
-        matches!(ast.as_slice(), [Ast::Defmod(_, name, body, _)] if name == "Bootstrap"
+        matches!(ast.as_slice(), [Ast::Defmod(_, name, body, _)] if name == "Global::Bootstrap"
             && matches!(body.as_slice(), [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name: builtin_name, .. }, _)] if builtin_name == "Int"))
     );
 }
@@ -3932,10 +4394,10 @@ impl Show for Auth::User {
         .any(|stmt| matches!(stmt, Ast::Defmod(_, name, _, _) if name == "Auth::Repo")));
     assert!(ast
         .iter()
-        .any(|stmt| matches!(stmt, Ast::DeferrorDef(_, name, _, _, _) if name == "Oops")));
+        .any(|stmt| matches!(stmt, Ast::DeferrorDef(_, name, _, _, _) if name == "Global::Oops")));
     assert!(ast
         .iter()
-        .any(|stmt| matches!(stmt, Ast::EnumDef(_, name, _, _, _) if name == "Role")));
+        .any(|stmt| matches!(stmt, Ast::EnumDef(_, name, _, _, _) if name == "Global::Role")));
     assert!(ast
         .iter()
         .any(|stmt| matches!(stmt, Ast::TraitDef(_, name, _, _, _) if name == "Named")));
@@ -4075,6 +4537,7 @@ defagent Counter {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4092,9 +4555,9 @@ defagent Counter {
 
     match &ast[0] {
         Ast::Defagent(_, name, body, process_spec, attrs) => {
-            assert_eq!(name, "Counter");
+            assert_eq!(name, "Global::Counter");
             assert_eq!(attrs.doc.as_deref(), Some("Counter agent docs."));
-            assert_eq!(process_spec.process_name, "Counter");
+            assert_eq!(process_spec.process_name, "Global::Counter");
             assert_eq!(process_spec.kind, crate::ast::ProcessKind::Agent);
             assert_eq!(
                 process_spec.instance,
@@ -4113,7 +4576,7 @@ defagent Counter {
                     assert!(params.is_empty());
                     assert_eq!(ty_name, "PID");
                     assert!(
-                        matches!(ty_args.as_slice(), [AstTy::Named(_, inner)] if inner == "Counter")
+                        matches!(ty_args.as_slice(), [AstTy::Named(_, inner)] if inner == "Global::Counter")
                     );
                 }
                 other => panic!("expected pid wrapper to return PID<Counter>, got {other:?}"),
@@ -4170,6 +4633,7 @@ fn test_defagent_parses_as_dedicated_process_ast_node() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4184,9 +4648,9 @@ fn test_defagent_parses_as_dedicated_process_ast_node() {
 
     match &ast[0] {
         Ast::Defagent(_, name, body, process_spec, attrs) => {
-            assert_eq!(name, "Counter");
+            assert_eq!(name, "Global::Counter");
             assert_eq!(attrs.doc, None);
-            assert_eq!(process_spec.process_name, "Counter");
+            assert_eq!(process_spec.process_name, "Global::Counter");
             assert_eq!(process_spec.kind, crate::ast::ProcessKind::Agent);
             assert!(body.iter().any(
                 |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "fetch")
@@ -4203,6 +4667,7 @@ fn test_defagent_meta_handlers_are_preserved_in_process_spec() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
     handlers {
       out: OutHandler = StdOut
     }
@@ -4220,6 +4685,10 @@ fn test_defagent_meta_handlers_are_preserved_in_process_spec() {
 
     match &ast[0] {
         Ast::Defagent(_, _, _, process_spec, _) => {
+            assert!(matches!(
+                &process_spec.state,
+                crate::ast::AstTy::Named(_, name) if name == "Int"
+            ));
             assert_eq!(process_spec.handlers.len(), 1);
             assert_eq!(process_spec.handlers[0].slot, "out");
             assert_eq!(process_spec.handlers[0].capability, "OutHandler");
@@ -4236,6 +4705,7 @@ fn test_defgenserver_preserves_runtime_handler_specs() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4278,12 +4748,35 @@ fn test_defgenserver_preserves_runtime_handler_specs() {
 }
 
 #[test]
+fn test_process_meta_requires_state() {
+    let err = parse_with_context(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int) -> Result<Int> { Ok(state) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("process meta without state should fail");
+
+    assert!(err.message().contains("meta requires state"));
+}
+
+#[test]
 fn test_defgenserver_preserves_multiple_call_and_cast_handler_specs() {
     let ast = parse_with_context(
         r#"defgenserver Logger {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4352,12 +4845,13 @@ fn test_defgenserver_preserves_multiple_call_and_cast_handler_specs() {
 }
 
 #[test]
-fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
+fn test_defagent_worker_init_route_is_public_surface() {
     let ast = parse_with_context(
         r#"defagent Worker {
   meta {
     instance: Worker
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4375,31 +4869,34 @@ fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
 
     match &ast[0] {
         Ast::Defagent(_, name, body, _, _) => {
-            assert_eq!(name, "Worker");
+            assert_eq!(name, "Global::Worker");
             assert!(body.iter().all(
                 |node| !matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "pid")
             ));
-            let spawn_wrapper = body
-                .iter()
-                .find(
-                    |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "spawn"),
-                )
-                .expect("worker agent should include spawn wrapper");
             let init_wrapper = body
                 .iter()
                 .find(
                     |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "init"),
                 )
                 .expect("worker agent should include init wrapper");
-            match spawn_wrapper {
-                Ast::Def(_, _, _, _, Some(AstTy::Generic(_, ty_name, ty_args)), body, _) => {
-                    assert_eq!(ty_name, "Result");
-                    assert!(matches!(
-                        ty_args.as_slice(),
-                        [AstTy::Generic(_, inner_name, inner_args)]
-                            if inner_name == "PID"
-                                && matches!(inner_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Worker")
-                    ));
+            let set_wrapper = body
+                .iter()
+                .find(
+                    |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "set"),
+                )
+                .expect("worker agent should include set wrapper");
+            match init_wrapper {
+                Ast::Def(_, _, _, params, Some(AstTy::Generic(_, ty_name, ty_args)), body, _) => {
+                    assert_eq!(params.len(), 1);
+                    assert!(
+                        ty_name == "Result"
+                            && matches!(
+                                ty_args.as_slice(),
+                                [AstTy::Generic(_, inner_name, inner_args)]
+                                    if inner_name == "PID"
+                                        && matches!(inner_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Global::Worker")
+                            )
+                    );
                     assert!(matches!(
                         body.as_ref(),
                         Ast::Block(_, stmts)
@@ -4415,39 +4912,8 @@ fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
                     ));
                 }
                 other => {
-                    panic!("expected spawn wrapper to return Result<PID<Worker>>, got {other:?}")
+                    panic!("expected init wrapper to return Result<PID<Worker>>, got {other:?}")
                 }
-            }
-            let set_wrapper = body
-                .iter()
-                .find(
-                    |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "set"),
-                )
-                .expect("worker agent should include set wrapper");
-            match init_wrapper {
-                Ast::Def(_, _, _, params, Some(AstTy::Func(_, ret_params, ret_ty)), body, _) => {
-                    assert_eq!(params.len(), 1);
-                    assert!(ret_params.is_empty());
-                    assert!(
-                        matches!(ret_ty.as_ref(), AstTy::Generic(_, name, _) if name == "Result")
-                    );
-                    assert!(matches!(
-                        body.as_ref(),
-                        Ast::Block(_, stmts)
-                            if matches!(
-                                stmts.as_slice(),
-                                [Ast::Closure(_, params, body)]
-                                    if params.is_empty()
-                                        && matches!(
-                                            body.as_ref(),
-                                            Ast::App(_, callee, args)
-                                                if args.len() == 1
-                                                    && matches!(callee.as_ref(), Ast::Var(_, name) if name == "__agent_init")
-                                        )
-                            )
-                    ));
-                }
-                other => panic!("expected init wrapper to return zero-arg callable, got {other:?}"),
             }
             match set_wrapper {
                 Ast::Def(_, _, _, _, _, body, _) => {
@@ -4486,6 +4952,92 @@ fn test_defagent_multi_lowering_uses_pid_spawn_surface() {
 }
 
 #[test]
+fn test_defgenserver_worker_init_route_uses_user_defined_name() {
+    let ast = parse_with_context(
+        r#"defgenserver QueueServer {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def boot(seed: Int) -> Result<Int> { Ok(seed) }
+
+  @call
+  def size(state: Int) -> Result<(Int, Int)> {
+    Ok((state, state))
+  }
+
+  @cast
+  def reset(_state: Int, next: Int) -> Result<Int> { Ok(next) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("worker defgenserver should parse");
+
+    match &ast[0] {
+        Ast::Defgenserver(_, name, body, _, _) => {
+            assert_eq!(name, "Global::QueueServer");
+            let init_wrapper = body
+                .iter()
+                .find(|node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "boot"))
+                .expect("worker genserver should expose @init name as public surface");
+            assert!(body.iter().all(
+                |node| !matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "spawn")
+            ));
+            let size_wrapper = body
+                .iter()
+                .find(|node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "size"))
+                .expect("worker genserver should include @call wrapper");
+            match init_wrapper {
+                Ast::Def(_, _, _, params, Some(AstTy::Generic(_, ty_name, ty_args)), body, _) => {
+                    assert_eq!(params.len(), 1);
+                    assert!(
+                        ty_name == "Result"
+                            && matches!(
+                                ty_args.as_slice(),
+                                [AstTy::Generic(_, inner_name, inner_args)]
+                                    if inner_name == "PID"
+                                        && matches!(inner_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Global::QueueServer")
+                            )
+                    );
+                    assert!(matches!(
+                        body.as_ref(),
+                        Ast::Block(_, stmts)
+                            if matches!(
+                                stmts.as_slice(),
+                                [Ast::App(_, callee, _)]
+                                    if matches!(
+                                        callee.as_ref(),
+                                        Ast::Path(_, path)
+                                            if path.segments.as_slice() == ["DynamicSupervisor", "spawn"]
+                                    )
+                            )
+                    ));
+                }
+                other => panic!("expected worker genserver init wrapper to return Result<PID<QueueServer>>, got {other:?}"),
+            }
+            match size_wrapper {
+                Ast::Def(_, _, _, params, _, _, _) => {
+                    assert!(matches!(
+                        params.as_slice(),
+                        [FunParam { name, ty: AstTy::Generic(_, ty_name, ty_args), .. }]
+                            if name == "pid"
+                                && ty_name == "PID"
+                                && matches!(ty_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Global::QueueServer")
+                    ));
+                }
+                other => panic!(
+                    "expected worker genserver call wrapper with pid receiver, got {other:?}"
+                ),
+            }
+        }
+        other => panic!("Expected Defgenserver, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_defsupervisor_generates_compiler_managed_surface_from_policy_meta() {
     let ast = parse_with_context(
         r#"defsupervisor AppSup {
@@ -4503,7 +5055,7 @@ fn test_defsupervisor_generates_compiler_managed_surface_from_policy_meta() {
 
     match &ast[0] {
         Ast::Defsupervisor(_, name, body, process_spec, _) => {
-            assert_eq!(name, "AppSup");
+            assert_eq!(name, "Global::AppSup");
             assert_eq!(process_spec.kind, crate::ast::ProcessKind::Supervisor);
             assert!(body.iter().any(
                 |node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _) if def_name == "__agent_init")
@@ -4578,6 +5130,7 @@ fn test_defsupervisor_rejects_instance_and_init_policy_meta_keys() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 }"#,
         ParserContext::module(1, None),
@@ -4597,6 +5150,7 @@ fn test_defagent_rejects_compiler_managed_surface_names() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4622,6 +5176,7 @@ fn test_defgenserver_rejects_compiler_managed_surface_names() {
   meta {
     instance: Singleton
     init_policy: Eager
+    state: Int
   }
 
   @init
@@ -4641,10 +5196,15 @@ fn test_defgenserver_rejects_compiler_managed_surface_names() {
 }
 
 #[test]
-fn test_supervisor_init_parses_singletons_and_supervisor_overrides() {
+fn test_supervisor_init_parses_entries_in_any_order() {
     let ast = parse_with_context(
         r#"supervisor_init {
-  singleton Logger {
+  ImageWorkerSupervisor {
+    max_restarts: 10
+    allow_adopt: True
+  }
+
+  Logger {
     timeout: 5s
     handlers {
       out: FileOutHandler(path: "./logs/app.log")
@@ -4652,10 +5212,7 @@ fn test_supervisor_init_parses_singletons_and_supervisor_overrides() {
     }
   }
 
-  ImageWorkerSupervisor {
-    max_restarts: 10
-    allow_adopt: True
-  }
+  DynamicSupervisor {}
 }"#,
         ParserContext::project(1),
     )
@@ -4663,42 +5220,65 @@ fn test_supervisor_init_parses_singletons_and_supervisor_overrides() {
 
     match &ast[0] {
         Ast::SupervisorInit(_, spec) => {
-            assert_eq!(spec.singletons.len(), 1);
-            assert_eq!(spec.supervisors.len(), 1);
-            let entry = &spec.singletons[0];
-            assert_eq!(entry.process_name, "Logger");
-            assert_eq!(entry.timeout_ms, Some(5_000));
-            assert_eq!(entry.handlers.len(), 2);
-            assert_eq!(entry.handlers[0].slot, "out");
-            assert_eq!(entry.handlers[0].target.name, "FileOutHandler");
-            assert_eq!(entry.handlers[0].target.named_args[0].name, "path");
-            assert_eq!(
-                entry.handlers[0].target.named_args[0].value,
-                "./logs/app.log"
-            );
-            assert_eq!(entry.handlers[1].slot, "err");
-            assert_eq!(entry.handlers[1].target.name, "NullOutHandler");
-            let supervisor = &spec.supervisors[0];
+            assert_eq!(spec.entries.len(), 3);
+            let supervisor = &spec.entries[0];
             assert_eq!(supervisor.process_name, "ImageWorkerSupervisor");
             assert_eq!(supervisor.overrides.max_restarts, Some(10));
             assert_eq!(supervisor.overrides.allow_adopt, Some(true));
+
+            let logger = &spec.entries[1];
+            assert_eq!(logger.process_name, "Logger");
+            assert_eq!(logger.timeout_ms, Some(5_000));
+            assert_eq!(logger.handlers.len(), 2);
+            assert_eq!(logger.handlers[0].slot, "out");
+            assert_eq!(logger.handlers[0].target.name, "FileOutHandler");
+            assert_eq!(logger.handlers[0].target.named_args[0].name, "path");
+            assert_eq!(
+                logger.handlers[0].target.named_args[0].value,
+                "./logs/app.log"
+            );
+            assert_eq!(logger.handlers[1].slot, "err");
+            assert_eq!(logger.handlers[1].target.name, "NullOutHandler");
+
+            let dynsup = &spec.entries[2];
+            assert_eq!(dynsup.process_name, "DynamicSupervisor");
+            assert_eq!(dynsup.timeout_ms, None);
+            assert!(dynsup.handlers.is_empty());
+            assert_eq!(dynsup.overrides, Default::default());
         }
         other => panic!("expected SupervisorInit, got {other:?}"),
     }
 }
 
 #[test]
-fn test_supervisor_init_rejects_duplicate_singleton() {
+fn test_supervisor_init_rejects_duplicate_entry() {
     let err = parse_with_context(
         r#"supervisor_init {
-  singleton Logger {}
+  Logger {}
+  Logger {}
+}"#,
+        ParserContext::project(1),
+    )
+    .expect_err("duplicate supervisor_init entries should fail");
+
+    assert!(err
+        .message()
+        .contains("supervisor_init entry is duplicated"));
+}
+
+#[test]
+fn test_supervisor_init_rejects_legacy_singleton_keyword() {
+    let err = parse_with_context(
+        r#"supervisor_init {
   singleton Logger {}
 }"#,
         ParserContext::project(1),
     )
-    .expect_err("duplicate singleton boot entries should fail");
+    .expect_err("legacy singleton keyword should fail");
 
-    assert!(err.message().contains("singleton boot entry is duplicated"));
+    assert!(err
+        .message()
+        .contains("`singleton` keyword is no longer used"));
 }
 
 #[test]
@@ -4719,9 +5299,29 @@ fn test_supervisor_init_rejects_parent_override() {
 #[test]
 fn test_task_timeout_literal_parses_in_project_context() {
     let ast = parse_with_context(
-        r#"value = Task::async({|| Ok(())}) @timeout(100ms)"#,
+        r#"value = Task::call({|| Ok(())}) @timeout(100ms)"#,
         ParserContext::project(1),
     )
     .expect("task timeout literal should parse");
+    assert!(!ast.is_empty());
+}
+
+#[test]
+fn test_workers_submit_timeout_literal_parses_in_project_context() {
+    let ast = parse_with_context(
+        r#"value = Workers::submit(workers, Worker::assign(job)) @timeout(100ms)"#,
+        ParserContext::project(1),
+    )
+    .expect("workers submit timeout literal should parse");
+    assert!(!ast.is_empty());
+}
+
+#[test]
+fn test_task_await_timeout_literal_parses_in_project_context() {
+    let ast = parse_with_context(
+        r#"value = Task::await(task) @timeout(100ms)"#,
+        ParserContext::project(1),
+    )
+    .expect("task await timeout literal should parse");
     assert!(!ast.is_empty());
 }

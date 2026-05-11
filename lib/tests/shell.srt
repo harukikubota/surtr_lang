@@ -1,0 +1,31 @@
+import File;
+import Shell;
+import Test;
+
+test("Shell") {
+  it("tracks VM-local current directory") {
+    root =? FS::path("./tmp/sandbox/shell_lib_test")
+    _ =? FS::mkdir_all(root)
+    before =? Shell::pwd()
+    _ =? Shell::cd(root)
+    after =? Shell::pwd()
+
+    assert_true(String::ends_with(after.raw, "shell_lib_test"))
+    _ =? File::write("inside.txt", "cwd")
+    assert_ok_eq("cwd", File::read("inside.txt"))
+    _ =? Shell::cd(before)
+    Ok(())
+  }
+
+  it("exec returns nonzero launched commands as Ok") {
+    result =? Shell::exec(
+      "sh",
+      ["-c", "printf out; printf err >&2; exit 7"],
+    )
+
+    assert_eq("sh", result.command)
+    assert_eq(7, result.exit_code)
+    assert_eq("out", result.stdout)
+    assert_eq("err", result.stderr)
+  }
+}

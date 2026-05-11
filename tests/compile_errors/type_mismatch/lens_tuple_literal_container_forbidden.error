@@ -1,2 +1,0 @@
-phase: typecheck
-contains: Tuple literal cannot contain Lens values

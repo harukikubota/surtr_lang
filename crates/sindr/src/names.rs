@@ -23,6 +23,7 @@ pub enum TypeName {
     Closure,
     MatchArms,
     CondClauses,
+    BulkUpdateEntries,
     Error,
     Regex,
     RegexCaptures,
@@ -37,10 +38,12 @@ pub enum TypeName {
     Lazy,
     TypeRef,
     Hole,
-    Lens,
+    Facet,
     Pid,
+    FileHandle,
     Workers,
     WorkerLease,
+    TaskHandle,
 }
 
 impl TypeName {
@@ -54,6 +57,7 @@ impl TypeName {
             Self::Closure => "Closure",
             Self::MatchArms => "MatchArms",
             Self::CondClauses => "CondClauses",
+            Self::BulkUpdateEntries => "BulkUpdateEntries",
             Self::Error => "Error",
             Self::Regex => "Regex",
             Self::RegexCaptures => "RegexCaptures",
@@ -68,10 +72,12 @@ impl TypeName {
             Self::Lazy => "Lazy",
             Self::TypeRef => "TypeRef",
             Self::Hole => "Hole",
-            Self::Lens => "Lens",
+            Self::Facet => "Facet",
             Self::Pid => "PID",
+            Self::FileHandle => "FileHandle",
             Self::Workers => "Workers",
             Self::WorkerLease => "WorkerLease",
+            Self::TaskHandle => "TaskHandle",
         }
     }
 
@@ -87,9 +93,11 @@ impl TypeName {
                 | Self::Closure
                 | Self::MatchArms
                 | Self::CondClauses
+                | Self::BulkUpdateEntries
                 | Self::ProcessInit
                 | Self::Lazy
                 | Self::Pid
+                | Self::FileHandle
         )
     }
 }
@@ -104,6 +112,7 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "Closure" => Some(TypeName::Closure),
         "MatchArms" => Some(TypeName::MatchArms),
         "CondClauses" => Some(TypeName::CondClauses),
+        "BulkUpdateEntries" => Some(TypeName::BulkUpdateEntries),
         "Error" => Some(TypeName::Error),
         "Regex" => Some(TypeName::Regex),
         "RegexCaptures" => Some(TypeName::RegexCaptures),
@@ -118,10 +127,12 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "Lazy" => Some(TypeName::Lazy),
         "TypeRef" => Some(TypeName::TypeRef),
         "Hole" => Some(TypeName::Hole),
-        "Lens" => Some(TypeName::Lens),
+        "Facet" => Some(TypeName::Facet),
         "PID" => Some(TypeName::Pid),
+        "FileHandle" => Some(TypeName::FileHandle),
         "Workers" => Some(TypeName::Workers),
         "WorkerLease" => Some(TypeName::WorkerLease),
+        "TaskHandle" => Some(TypeName::TaskHandle),
         _ => None,
     }
 }

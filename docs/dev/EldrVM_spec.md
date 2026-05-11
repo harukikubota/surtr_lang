@@ -22,6 +22,11 @@ Eldr は次を担わない。
 - 型検査（Scar）
 - コード生成（Forge）
 
+File v1 の host filesystem surface は `lib/file.srt` の `File` module を正本とし、
+VM はその lower 先 builtin を実行する。path は実行時の current working directory
+基準で解決し、存在しない path や open/read/write failure は `RuntimeError` ではなく
+user-facing `Result` の domain error として返す。
+
 ---
 
 ## 2. Bytecode 成果物
@@ -77,19 +82,29 @@ Eldr は次を担わない。
 - `FunctionEntry` の整列後は `entry.fun_idx == index` を満たす
 - VM はこの不変条件を前提に O(1) 参照し、破綻時は `RuntimeError` とする
 
-### 3.5 REPL 増分実行（`push_atomic`）契約
+### 3.5 REPL 増分実行（`push_chunk`）契約
 
+- 公開境界は batch 実行用の `VM` と、REPL/対話実行用の `InteractiveVm` に分ける
+- `VM` は完全な `Bytecode` の `run()` と opcode / process runtime 実行を担う
+- `InteractiveVm` は `VM` を内包し、`BytecodeChunk` の原子的 append 実行、interactive policy 検証、REPL host I/O buffering、`last_result`、`.eldr` 保存用 `snapshot_bytecode()` を担う
+- Xldr は source-level REPL policy を持つが、Eldr は `SourceKind::ReplChunk` や暗黙モジュールを解釈しない
+- `InteractiveVm` の公開 API は `push_chunk(chunk, policy)` の 1 入口とし、policy は少なくとも `ReplAppendOnly` と `Preload` を持つ
 - `BytecodeChunk` の `LoadConst` / `MakeError` は chunk-local index で生成される
-- `push_atomic()` は `const_base` / `error_template_base` により絶対 index へ再配置する
-- `push_atomic()` は jump 先も append 後の opcode 位置へ再配置する
+- `push_chunk()` は `const_base` / `error_template_base` により絶対 index へ再配置する
+- `push_chunk()` は jump 先も append 後の opcode 位置へ再配置する
 - `chunk.const_base` / `chunk.error_template_base` が VM の現在プール長と一致しない場合は `RuntimeError` とする
 - Forge の chunk codegen は top-level 末尾へ必ず `Halt` を 1 つ挿入する
 - top-level 実行は append された `code_base` から開始し、最初の `Halt` で停止する
 - 関数本体は top-level `Halt` 後ろに配置され、top-level からは到達不能であり、`Call` / `CallClosure` でのみ到達する
 - 実装は VM 全体 clone ではなく、append した bytecode 断片と実行時状態の checkpoint / rollback で原子性を保つ
-- `push_atomic()` の返り値は chunk 実行終了時点の stack top 1 値のみとする。stack が空なら `Unit` を返す
-- `push_atomic()` 完了後、VM の operand stack は空に戻す。REPL は前回 chunk の stack 内容を次回 chunk へ持ち越さない
-- `push_atomic()` は chunk 実行を原子的に扱い、失敗時は VM 状態を更新しない
+- `InteractiveVm::push_chunk()` の返り値は `ChunkExecution` とし、chunk 実行終了時点の stack top 1 値を `value` に保持する。stack が空なら `Unit` を返す
+- `last_result` はユーザー言語の通常 binding ではなく、直近の batch 実行または committed chunk の結果を保持する REPL-facing session property とする
+- `push_chunk()` 完了後、VM の operand stack は空に戻す。REPL は前回 chunk の stack 内容を次回 chunk へ持ち越さない
+- `push_chunk()` は chunk 実行を原子的に扱い、失敗時は VM 状態を更新しない
+- `policy = ReplAppendOnly` のとき、`InteractiveVm` は公開 REPL 境界として append-only function table を強制し、`fun_idx < current_function_len` の `FunctionEntry` を含む chunk を拒否する
+- `policy = ReplAppendOnly` のとき、`type_entries`、`runtime_process_specs`、`runtime_boot_plan` の追加を拒否する
+- `policy = Preload` のとき、Xldr が構築した preload/bootstrap chunk を live REPL 開始前に適用できる
+- rollback 対象は bytecode append 分、function overwrite、locals、operand stack、call frames、pc、process runtime、exit code、標準 I/O / REPL host I/O / test event cursor、`last_result` とする
 
 ### 3.6 トップレベル名衝突ポリシー（コンパイラ契約）
 
@@ -125,6 +140,24 @@ call timeout は Ready 待ち時間を含む。
 `StdIn` / `StdOut` / `StdErr` builtin handler への message call として扱う。
 Rust tests と Pure Surtr `Test` DSL は、この handler backend を差し替えて同じ
 buffer semantics を観測できなければならない。
+
+### 3.8 Step / ExecutionContext / quantum
+
+VM の互換 entrypoint は引き続き `VM::run()` / `InteractiveVm::push_chunk()` だが、
+内部実行は `ExecutionContext` を介した step 単位に分ける。
+
+- `ExecutionContext` は `pc`、operand stack、call frames、実行 target を持つ。
+- `VM` は bytecode、constant/function/type table、boot plan、process runtime、
+  I/O、observer、file resource を所有し続ける。
+- `step_context(ctx)` は `ctx.pc` の opcode 1 個、またはそれに相当する小さな VM 実行単位だけを進める。
+- `run_until_outcome` は `step_context` の loop として扱い、既存の batch / REPL 契約を保つ。
+- `run_quantum(ctx, budget)` は reduction budget が切れた時点で scheduler 境界へ戻る。
+- 初期 cost は opcode 1 個につき 1 reduction とする。tail-call frame reuse も `Call` opcode の step として 1 reduction を消費する。
+- `StepOutcome::Pending` は future id と resume 用 `ExecutionContext` を保持する。
+
+この段階では user-facing `yield`、新 opcode、bytecode format 変更、builtin continuation
+は導入しない。重い builtin はまだ分割不能な 1 step として扱い、後続フェーズで
+continuation / dirty worker へ移行する。
 
 ---
 
@@ -208,6 +241,13 @@ Opcode は以下のカテゴリを持つ。
 
 - `CallBuiltin` は `builtin_id` ベースでディスパッチする
 - `BitNotInt` / `BitAndInt` / `BitOrInt` / `BitXorInt` は `Int::bit_not` / `bit_and` / `bit_or` / `bit_xor` の direct call を対象にした monomorphic fast-path とする
+- `StoreConstLocal { const_idx, local_idx }` は `LoadConst(const_idx); StoreLocal(local_idx)` と同じ意味の圧縮 opcode とする。operand stack へ中間値を push せず、定数値を現在フレームの local slot に直接保存する。`const_idx` は `LoadConst` と同じ relocation / verifier 規則に従う
+- `CopyLocal { src_local_idx, dst_local_idx }` は `LoadLocal(src_local_idx); StoreLocal(dst_local_idx)` と同じ意味の圧縮 opcode とする。operand stack を経由せず、現在フレーム内で local 値を clone して保存する
+- `EqLocalTag { local_idx, tag_const_idx }` は `LoadLocal(local_idx); GetTag; LoadConst(tag_const_idx); EqTag` と同じ意味の圧縮 opcode とする。`tag_const_idx` は `Constant::Tag` を指し、`LoadConst` と同じ relocation / verifier 規則に従う
+- `MakeOk` は stack top の payload を `Tagged { tag: 0, fields: [payload] }` に包む Result 専用 constructor opcode とする
+- `MakeErr` は stack top の `Error` payload を `Tagged { tag: 1, fields: [payload] }` に包む Result 専用 constructor opcode とする。payload が `Error` でない bytecode は runtime error とする
+- `JumpIfLocalTagEq { local_idx, tag_const_idx, target_pc }` と `JumpIfLocalTagNe { local_idx, tag_const_idx, target_pc }` は `EqLocalTag` の直後に続く `JumpIfTrue` / `JumpIfFalse` を 1 opcode に畳み込む branch-fused fast-path とする。どちらも判定後の operand stack に Bool 中間値を残さない
+- `JumpIfLocalTagEq` / `JumpIfLocalTagNe` の `tag_const_idx` は `Constant::Tag` を指し、`LoadConst` と同じ relocation / verifier 規則に従う。`target_pc` は `Jump*` と同じ jump-target verifier / relocation 規則に従う
 
 実 opcode 一覧とオペランドは `crates/forge/src/opcode.rs` を正とする。
 
@@ -245,27 +285,42 @@ Opcode は以下のカテゴリを持つ。
 - 組込み関数メタデータは単一テーブルで管理する
 - `Bootstrap` module の `@builtin` 宣言はこの共有テーブルに対応する宣言層であり、builtin の追加起点ではない
 - VM は `builtin_id` により実装関数をディスパッチする
-- `Lens::view` / `Lens::set` / `Lens::over` / `Lens::over_result` / `Lens::compose` / Lens `/` compose は compile-time lowering 対象であり、runtime builtin として直接到達した場合は防御的に `RuntimeError` とする
-- Lens の variant mismatch は `Err(VariantMismatch(detail))` で返し、`detail` には失敗 segment（index と path 表示）を含める
+- `Facet::view` / `Facet::set` / `Facet::over` / `Facet::over_result` / `Facet::compose` / Facet `/` compose は compile-time lowering 対象であり、runtime builtin として直接到達した場合は防御的に `RuntimeError` とする
+- Facet の variant mismatch は `Err(VariantMismatch(detail))` で返し、`detail` には失敗 segment（index と path 表示）を含める
 - `eprint` は `Error` 値を診断表示し、それ以外の値への適用は VM 側ガード対象とする
 - `Error::kind` / `Error::message` / `Error::format` は `Error` 値を introspection / 表示文字列化する runtime builtin とし、それ以外の値への適用は VM 側ガード対象とする
 - `Result::recover` は compiler が lowering する special form であり、runtime builtin としては持たない
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
 - `HashMap` の runtime 表現は immutable map を基準にし、duplicate key 更新時は後勝ちで値を上書きする
 - process / task / duration 系の hidden builtin は owner module (`Process`, `Task`, `Duration`) 側の `@hidden @builtin ...` 宣言に対応し、`CallBuiltin` で実装する。VM は process table / PID capability / handler callable invocation を経由する。詳細な process runtime 契約は [ProcessRuntime spec](./ProcessRuntime_spec.md) を正とする。
+- `__supervisor_workers` は `(supervisor, worker_init, WorkerStrategy)` を受け取る。Eldr v1 は `WorkerScale::Fix(n)` のみ実行し、`init == n` かつ `0 <= min <= n <= max` を満たさない場合は `Err(InvalidWorkerStrategy)` を返す。
+- process runtime snapshot は `worker_sets` を含む。各要素は `id`, `worker_process`, `supervisor`, `target`, `min`, `max`, `member_pids`, `live_count` を持つ。
 - `Process::sleep(duration)` は runtime builtin とし、`Duration` 値を受け取って `Result<Unit>` を返す。
-- task timeout は `@timeout(100ms)` literal から hidden builtin 呼び出しへ lower し、dynamic timeout は初期フェーズでは許可しない。
+- process / workers / task await timeout は `@timeout(100ms)` literal から hidden builtin 呼び出しへ lower し、dynamic timeout は初期フェーズでは許可しない。
 - regex 系は Rust `regex` crate のラッパーとして builtin 実装し、regex 未サポート構文は `RegexCompileError` として返す
 - `RegexCaptures` の runtime 表現は `groups: Vec<Option<(start, end)>>`, `name_to_index: HashMap<String, usize>`, `input: String` を保持する
 - random 系は `CallBuiltin` で実装し、Opcode は追加しない。`RandomGenerator` は opaque な seedable state として保持し、半開区間が空の場合は `InvalidRandomRange` を `Result` の `Err` として返す
 - `Float` の厳密契約は `doc/float.md` を参照する
 
-組込み宣言の読み込み順序は compile 側で `Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Lens, Float, Config, Project, Random, IO, StyledDoc] -> [Test] -> ユーザ拡張` に固定される。同一 stage 内の import は file 読み込み順に依存せず compile 側で解決され、later stage 参照は compile error になる。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
+### 7.1 Json builtins
 
-### 7.1 TypeRegistry
+- `Json::parse` は `json_parse` builtin に解決され、`CallBuiltin` で実行される
+- `Json::stringify` は `json_stringify` builtin に解決され、`CallBuiltin` で実行される
+- Json 用 opcode は追加しない
+- Eldr は `serde_json` を使って text JSON と Rust `serde_json::Value` を相互変換する
+- Surtr runtime value への変換では `TypeRegistry` から `JsonValue` variant tag を名前で解決し、tag 番号をハードコードしない
+- `Object` は `HashMapHandle` に変換する。duplicate key は JSON parser 側の後勝ち値を採用する
+- `json_stringify` は `HashMapHandle` の deterministic key order を使って object を出力する
+- malformed JSON は `Err(JsonParseError(line, column, detail))` を返し、`RuntimeError` にしない
+- `JsonValue` 以外の値が `json_stringify` に渡った場合は `Err(JsonEncodeError(detail))` を返す。`TypeRegistry` 不整合や variant arity 不整合は VM 内部不整合として `RuntimeError` でよい
+
+組込み宣言の読み込み順序は compile 側で `Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Tuple, Ord, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Option, Generator, HashMap, Result, Duration, Process, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc] -> [Test] -> ユーザ拡張` に固定される。同一 stage 内の import は file 読み込み順に依存せず compile 側で解決され、later stage 参照は compile error になる。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
+
+### 7.2 TypeRegistry
 
 - `tag -> 型名/フィールド名` の逆引きを提供
 - 表示 (`to_string`) と診断表示で参照される
+- 実装は deterministic な entry 列を保持したまま、内部 index により O(1) 相当 lookup を行ってよい
 - `Ok=0`, `Err=1` は予約 tag
 - runtime tag は user-visible `Int` に乗せ替えない
 
@@ -341,7 +396,7 @@ call opcode / error template / function span を使って source 対応を補完
 
 ## 9. 将来拡張
 
-- `VM::step()` / `VMSnapshot`
+- public `VM::step()` / `VMSnapshot`
 - Bytecode verifier
 - 値表現最適化（clone 削減、共有構造）
 

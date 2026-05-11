@@ -287,6 +287,24 @@ impl List {
   }
 
   @doc """
+  Run a side-effecting callback for each element from left to right.
+  Empty lists return `()`.
+  ## REPL
+  xldr(1)> List::each([1, 2], {|n| print(to_string(n))})
+  1
+  2
+  """
+  def each(values: List<$A>, f: ($A -> Unit)) -> Unit {
+    match values {
+      [] => (),
+      [head, ..tail] => {
+        f(head)
+        each(tail, f)
+      },
+    }
+  }
+
+  @doc """
   Map a plain unary callable over each element and keep the list shape.
   This matches the semantics of `|*>` on `List`.
   ## REPL

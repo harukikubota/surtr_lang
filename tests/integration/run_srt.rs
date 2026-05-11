@@ -1,8 +1,10 @@
-use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+use sindr::policy::CompileUnitKind;
 
 use crate::common::{
     compile_error_fixtures, extract_phase_tag, normalize_text, parse_compile_error_expectation,
@@ -41,12 +43,6 @@ fn run_surtr(source: &str) -> Result<Vec<String>, String> {
     support::run_script("fixture.srt", source)
 }
 
-#[derive(Debug)]
-struct PhaseTiming {
-    phase: String,
-    duration: Duration,
-}
-
 fn timing_breakdown_enabled() -> bool {
     matches!(
         env::var("SURTR_TEST_TIMING").as_deref(),
@@ -54,28 +50,46 @@ fn timing_breakdown_enabled() -> bool {
     )
 }
 
-fn print_timing_breakdown(
+fn print_timing_report(
+    group: &str,
+    fixture_count: usize,
     total: Duration,
-    phase_totals: &[PhaseTiming],
-    slowest: &[(PathBuf, String, Duration)],
+    cache: support::CacheStatsSnapshot,
+    slowest: Vec<support::SlowFixtureTiming>,
 ) {
-    eprintln!("compile_error timing total: {:.3}s", total.as_secs_f64());
+    eprintln!(
+        "{}",
+        support::format_timing_report(&support::TimingReportInput {
+            group,
+            fixture_count,
+            total,
+            cache,
+            slowest: &slowest,
+        })
+    );
+}
 
-    for phase in phase_totals {
-        eprintln!(
-            "phase {} total: {:.3}s",
-            phase.phase,
-            phase.duration.as_secs_f64()
-        );
-    }
+fn timing_report_lock() -> &'static Mutex<()> {
+    static TIMING_REPORT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    TIMING_REPORT_LOCK.get_or_init(|| Mutex::new(()))
+}
 
-    for (path, phase, duration) in slowest.iter().take(10) {
-        eprintln!(
-            "slow fixture {:.3}s [{}] {}",
-            duration.as_secs_f64(),
-            phase,
-            path.display()
-        );
+fn semantic_prefix_cache_lock() -> &'static Mutex<()> {
+    static SEMANTIC_PREFIX_CACHE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    SEMANTIC_PREFIX_CACHE_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn remove_semantic_prefix_cache_entry(cache_path: &PathBuf) {
+    let _ = fs::remove_file(cache_path);
+    if let Some(parent) = cache_path.parent() {
+        let is_empty = fs::read_dir(parent)
+            .ok()
+            .and_then(|mut entries| entries.next().transpose().ok())
+            .flatten()
+            .is_none();
+        if is_empty {
+            let _ = fs::remove_dir(parent);
+        }
     }
 }
 
@@ -93,7 +107,19 @@ fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
         bucket_count
     );
 
+    let timing_enabled = timing_breakdown_enabled();
+    let _timing_guard = timing_enabled.then(|| {
+        timing_report_lock()
+            .lock()
+            .expect("timing report lock poisoned")
+    });
+    let cache_stats_start = support::cache_stats_snapshot();
+    let timing_start = Instant::now();
+    let mut slowest = Vec::<support::SlowFixtureTiming>::new();
+    let fixture_count = sources.len();
+
     for fixture in sources {
+        let fixture_start = Instant::now();
         let output = run_surtr(fixture.source).unwrap_or_else(|e| {
             panic!(
                 "pipeline failed for {}: {}",
@@ -101,6 +127,14 @@ fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
                 e
             )
         });
+        let fixture_elapsed = fixture_start.elapsed();
+        if timing_enabled {
+            slowest.push(support::SlowFixtureTiming {
+                path: fixture.source_path.clone(),
+                phase: "run".to_string(),
+                duration: fixture_elapsed,
+            });
+        }
 
         let actual_stdout = output.join("\n");
         assert_eq!(
@@ -108,6 +142,21 @@ fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
             normalize_text(fixture.expected),
             "stdout mismatch for {}",
             fixture.source_path.display()
+        );
+    }
+
+    if timing_enabled {
+        slowest.sort_by(|a, b| {
+            b.duration
+                .cmp(&a.duration)
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        print_timing_report(
+            &format!("script pass bucket {bucket}"),
+            fixture_count,
+            timing_start.elapsed(),
+            support::cache_stats_snapshot().saturating_delta_since(&cache_stats_start),
+            slowest,
         );
     }
 }
@@ -147,9 +196,15 @@ fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
     );
 
     let timing_enabled = timing_breakdown_enabled();
+    let _timing_guard = timing_enabled.then(|| {
+        timing_report_lock()
+            .lock()
+            .expect("timing report lock poisoned")
+    });
+    let cache_stats_start = support::cache_stats_snapshot();
     let timing_start = Instant::now();
-    let mut phase_totals = HashMap::<String, Duration>::new();
-    let mut slowest = Vec::<(PathBuf, String, Duration)>::new();
+    let mut slowest = Vec::<support::SlowFixtureTiming>::new();
+    let fixture_count = sources.len();
 
     for fixture in sources {
         let expected = parse_compile_error_expectation(&fixture.error_path);
@@ -160,8 +215,11 @@ fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
         let fixture_elapsed = fixture_start.elapsed();
 
         if timing_enabled {
-            *phase_totals.entry(phase_name.clone()).or_default() += fixture_elapsed;
-            slowest.push((fixture.source_path.clone(), phase_name, fixture_elapsed));
+            slowest.push(support::SlowFixtureTiming {
+                path: fixture.source_path.clone(),
+                phase: phase_name,
+                duration: fixture_elapsed,
+            });
         }
 
         match result {
@@ -193,18 +251,18 @@ fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
     }
 
     if timing_enabled {
-        let mut phase_totals = phase_totals
-            .into_iter()
-            .map(|(phase, duration)| PhaseTiming { phase, duration })
-            .collect::<Vec<_>>();
-        phase_totals.sort_by(|a, b| {
+        slowest.sort_by(|a, b| {
             b.duration
                 .cmp(&a.duration)
-                .then_with(|| a.phase.cmp(&b.phase))
+                .then_with(|| a.path.cmp(&b.path))
         });
-
-        slowest.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
-        print_timing_breakdown(timing_start.elapsed(), &phase_totals, &slowest);
+        print_timing_report(
+            &format!("script fail bucket {bucket}"),
+            fixture_count,
+            timing_start.elapsed(),
+            support::cache_stats_snapshot().saturating_delta_since(&cache_stats_start),
+            slowest,
+        );
     }
 }
 
@@ -247,9 +305,11 @@ def helper() -> Unit { () }"#,
 
 #[test]
 fn compile_error_phase_primes_semantic_prefix_cache_without_final_bytecode_cache() {
+    let _cache_guard = semantic_prefix_cache_lock()
+        .lock()
+        .expect("semantic prefix cache lock poisoned");
     let prefix_dir =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-fixture-cache/prefix");
-    let _ = fs::remove_dir_all(&prefix_dir);
 
     let module_sources = support::collect_module_sources(&[vec![xldr::ModuleInput {
         file_name: "Helper.srt".into(),
@@ -262,6 +322,14 @@ fn compile_error_phase_primes_semantic_prefix_cache_without_final_bytecode_cache
         "import Helper;\nbad: Int = \"bad type\"\n",
         module_sources,
     );
+    let cache_key = xldr::test_semantic_prefix_cache_key(CompileUnitKind::Script, &compile_sources)
+        .expect("semantic prefix key should build");
+    let cache_path = prefix_dir.join(format!("{cache_key}.semantic"));
+    let _ = fs::remove_file(&cache_path);
+    fs::create_dir_all(&prefix_dir).expect("prefix cache dir should be creatable");
+    let unrelated_path = prefix_dir.join("preserve-me.semantic");
+    fs::write(&unrelated_path, b"existing-prefix-entry")
+        .expect("unrelated prefix cache entry should be writable");
     let err = support::check_script_sources_phase(&compile_sources, "typecheck")
         .expect_err("type mismatch should fail in the typecheck phase");
 
@@ -270,17 +338,45 @@ fn compile_error_phase_primes_semantic_prefix_cache_without_final_bytecode_cache
         "unexpected compile failure: {err}"
     );
     assert!(
-        prefix_dir.is_dir(),
-        "semantic prefix cache dir should exist: {}",
-        prefix_dir.display()
+        cache_path.is_file(),
+        "semantic prefix cache file should exist: {}",
+        cache_path.display()
     );
-    let prefix_files = fs::read_dir(&prefix_dir)
-        .expect("prefix cache dir should be readable")
-        .map(|entry| entry.expect("prefix cache entry should load").path())
-        .collect::<Vec<_>>();
     assert!(
-        !prefix_files.is_empty(),
-        "expected at least one cached semantic prefix after compile-error path"
+        unrelated_path.is_file(),
+        "compile-error path should not clear unrelated prefix cache entries: {}",
+        unrelated_path.display()
+    );
+
+    remove_semantic_prefix_cache_entry(&cache_path);
+}
+
+#[test]
+fn semantic_prefix_cache_cleanup_keeps_unrelated_entries() {
+    let _cache_guard = semantic_prefix_cache_lock()
+        .lock()
+        .expect("semantic prefix cache lock poisoned");
+    let prefix_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-fixture-cache/prefix");
+    let _ = fs::remove_dir_all(&prefix_dir);
+    fs::create_dir_all(&prefix_dir).expect("prefix cache dir should be creatable");
+
+    let target_path = prefix_dir.join("target.semantic");
+    let unrelated_path = prefix_dir.join("unrelated.semantic");
+    fs::write(&target_path, b"target").expect("target cache entry should be writable");
+    fs::write(&unrelated_path, b"unrelated").expect("unrelated cache entry should be writable");
+
+    remove_semantic_prefix_cache_entry(&target_path);
+
+    assert!(
+        !target_path.exists(),
+        "cleanup should remove the targeted semantic prefix entry: {}",
+        target_path.display()
+    );
+    assert!(
+        unrelated_path.exists(),
+        "cleanup should preserve unrelated semantic prefix entries: {}",
+        unrelated_path.display()
     );
 
     let _ = fs::remove_dir_all(&prefix_dir);

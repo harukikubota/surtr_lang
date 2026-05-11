@@ -228,12 +228,7 @@ impl String {
   xldr(1)> String::len("hello")
   5
   """
-  def len(value: String) -> Int {
-    match value {
-      "" => 0,
-      [_, ..tail] => 1 + len(tail),
-    }
-  }
+  @builtin def len(value: String) -> Int
 
   @doc """
   Wrap `value` with `prefix` and `suffix`.
@@ -292,9 +287,7 @@ impl String {
   xldr(1)> String::starts_with("hello", "he")
   True
   """
-  def starts_with(value: String, prefix: String) -> Boolean {
-    Result::is_ok(String::strip_prefix(value, prefix))
-  }
+  @builtin def starts_with(value: String, prefix: String) -> Boolean
 
   @doc """
   Return `True` when `value` ends with `suffix`.
@@ -303,9 +296,7 @@ impl String {
   xldr(1)> String::ends_with("hello", "lo")
   True
   """
-  def ends_with(value: String, suffix: String) -> Boolean {
-    Result::is_ok(String::strip_suffix(value, suffix))
-  }
+  @builtin def ends_with(value: String, suffix: String) -> Boolean
 
   @doc """
   Remove `prefix` from the start of `value`.
@@ -362,9 +353,7 @@ impl String {
   xldr(1)> String::contains("hello", "ell")
   True
   """
-  def contains(value: String, needle: String) -> Boolean {
-    Result::is_ok(String::split_once(value, needle))
-  }
+  @builtin def contains(value: String, needle: String) -> Boolean
 
   @doc """
   Replace every non-overlapping occurrence of `from` with `to`.
@@ -373,9 +362,7 @@ impl String {
   xldr(1)> String::replace("abc", "b", "B")
   "aBc"
   """
-  def replace(value: String, from: String, to: String) -> String {
-    if(from == "", value, _replace_go(value, from, to))
-  }
+  @builtin def replace(value: String, from: String, to: String) -> String
 
   @doc """
   Split `value` at every occurrence of `separator`.
@@ -384,16 +371,7 @@ impl String {
   xldr(1)> String::split("a,b,c", ",")
   Ok(["a", "b", "c"] )
   """
-  def split(value: String, separator: String) -> List<String> {
-    if(
-      separator == "",
-      chars(value),
-      match split_once(value, separator) {
-        Ok(StringSplit::Split(before, after)) => [before, ..split(after, separator)],
-        Err(_) => [value],
-      },
-    )
-  }
+  @builtin def split(value: String, separator: String) -> List<String>
 
   @doc """
   Split `value` into lines.

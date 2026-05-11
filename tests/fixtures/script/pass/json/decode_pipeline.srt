@@ -1,0 +1,3 @@
+json =? "{\"name\":\"surtr\",\"entrypoint\":\"main\"}" |> decode(JsonFormat, JsonValue)
+name =? Json::get(json, "name") |>= decode(JsonFormat, String)
+print(name)

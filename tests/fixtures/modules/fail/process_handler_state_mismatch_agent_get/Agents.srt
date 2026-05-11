@@ -1,0 +1,32 @@
+defstruct CounterState {
+  value: Int,
+}
+
+impl CounterState {
+  def new(value: Int) -> Self {
+    CounterState { value: value }
+  }
+}
+
+defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: CounterState
+  }
+
+  @init
+  def init() -> Result<CounterState> {
+    Ok(CounterState::new(0))
+  }
+
+  @get
+  def get(wrong_state: Int) -> Result<Int> {
+    Ok(wrong_state)
+  }
+
+  @set
+  def set(_state: CounterState, next: Int) -> Result<CounterState> {
+    Ok(CounterState::new(next))
+  }
+}

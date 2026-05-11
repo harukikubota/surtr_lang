@@ -3,6 +3,8 @@
 Surtr では例外機構を持ちません。  
 失敗は `raise` するものではなく、`Result` に乗った値として返し、必要ならその場で `match` して回復します。
 
+process surface の `init` / `get` / `set` / `call` でも同じ流儀を使います。`PID<T>` や singleton / worker の全体像は `./process.md` を見てください。
+
 ## 基本方針
 
 - 失敗しうる処理は `Result<T>` を返す

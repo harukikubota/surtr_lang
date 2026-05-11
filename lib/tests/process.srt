@@ -10,11 +10,12 @@ test("Process") {
     }
 
     it("supports async work that sleeps before returning") {
-      result = Task::async({||
+      task = Task::async({||
         Process::sleep(1ms)
         Ok("async:ready")
       })
-      assert_eq("Ok(\"async:ready\")", inspect(result))
+      result =? Task::await(task)
+      assert_eq("async:ready", result)
     }
   }
 

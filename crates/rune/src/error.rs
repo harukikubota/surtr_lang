@@ -9,11 +9,11 @@ pub(crate) const USAGE_TEXT: &str = "\
 Usage:\n\
   surtr --version\n\
   surtr check <file.srt> [--format json]\n\
-  surtr run <file.srt|file.eldr> [--entry <name>] [--vm-dump <path>] [--vm-dump-on error|always] [-- <arg>...]\n\
+  surtr run <file.srt|file.eldr> [--entry <name>] [--vm-dump <path>] [--vm-dump-on error|always] [--vm-stats] [--vm-stats-json] [--trace-opcode] [--trace-call] [--trace-limit <n>] [--trace-filter <csv>] [--phase-times] [--error-context verbose] [-- <arg>...]\n\
   surtr test [--quiet|-q] <lib-relative-name|--all>\n\
   surtr repl [--quiet] [--banner] [--version] [--module <file.srt>] [--script <file.srt>]\n\
   surtr build <file.srt> [output.eldr]\n\
-  surtr dump <file.eldr|entry.srt> [--format json] [--entry <name>]\n\
+  surtr dump <file.eldr|entry.srt> [--format json] [--entry <name>] [--opcode-histogram] [--peephole-candidates]\n\
   surtr tui [file.eldr]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +97,23 @@ impl RuneError {
         Self::Message {
             exit_code,
             message: String::new(),
+        }
+    }
+
+    pub(crate) fn from_xldr_command_error(error: xldr::CommandError) -> Self {
+        match error {
+            xldr::CommandError::Usage { message } => Self::usage(message),
+            xldr::CommandError::Message { exit_code, message } => Self::message(exit_code, message),
+            xldr::CommandError::Diagnostic {
+                exit_code,
+                diagnostic,
+            } => Self::diagnostic(
+                exit_code,
+                &diagnostic.sources,
+                diagnostic.source_id,
+                diagnostic.phase,
+                diagnostic.spec,
+            ),
         }
     }
 
@@ -225,5 +242,44 @@ impl RuneError {
                 )
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod adapter_tests {
+    use super::RuneError;
+
+    #[test]
+    fn xldr_message_error_maps_to_rune_message() {
+        let err = RuneError::from_xldr_command_error(xldr::CommandError::message(
+            7,
+            "tui: terminal init failed",
+        ));
+
+        assert_eq!(err.exit_code(), 7);
+        assert_eq!(err.summary(), "tui: terminal init failed");
+    }
+
+    #[test]
+    fn xldr_diagnostic_error_maps_to_rune_diagnostic() {
+        let mut sources = diagnostics::SourceRegistry::new();
+        let source_id = sources.register("bad.srt", "defmod Broken { }\n");
+        let err = RuneError::from_xldr_command_error(xldr::CommandError::diagnostic(
+            1,
+            &sources,
+            source_id,
+            "parse",
+            diagnostics::simple_error(
+                "ParseError",
+                "This top-level declaration is not allowed in script source",
+                spire::ast::Span { start: 0, end: 6 },
+                None,
+            ),
+        ));
+
+        assert_eq!(err.exit_code(), 1);
+        assert!(err.summary().contains(
+            "ParseError at bad.srt:1:1: This top-level declaration is not allowed in script source"
+        ));
     }
 }
