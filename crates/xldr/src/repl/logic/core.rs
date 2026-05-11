@@ -10,6 +10,7 @@ use eldr::value::{TypeKind, Value};
 use forge::bytecode::populate_error_template_lines;
 use scar::typed::{
     TraitCallOrigin, TypedFacetOverMode, TypedFacetPath, TypedFacetSegment, TypedInner, TypedNode,
+    TypedPattern,
 };
 use scar::types::Ty;
 use sigil::error::ResolveError;
@@ -68,6 +69,10 @@ const METHOD_DOC_TRAIT_ALIASES: &[(&str, &str)] = &[
     ("gte", "Gte"),
     ("concat", "Concat"),
 ];
+const REPL_UNRESOLVED_TYPE_MESSAGE: &str =
+    "Cannot persist binding with unresolved type variable.";
+const REPL_UNRESOLVED_TYPE_HINT: &str =
+    "Add a type annotation or use the value in a context that determines the success type.";
 
 const STAGE_PARSE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
 
@@ -1121,6 +1126,7 @@ impl ReplEngine {
             ":info <query>        Show derived information for visible symbols, queries, or process handles"
                 .to_string(),
             ":type <binding>      Show the type for a visible binding or singleton process owner".to_string(),
+            "                      Unresolved generic bindings must be annotated before persistence.".to_string(),
             ":facet <binding|expr> Inspect a FacetPath and its API boundaries".to_string(),
             ":error [full|summary]  Show or change error display mode".to_string(),
             ":save <path.eldr>    Save the current session as .eldr".to_string(),
@@ -4340,20 +4346,34 @@ impl ReplEngine {
     }
 
     fn query_arg_ast_ty(&self, arg: &QueryArg) -> Result<AstTy, String> {
-        match &arg.kind {
+        let ty = match &arg.kind {
             QueryArgKind::Binding(name) => {
                 let Some(ty) = self.binding_type(name) else {
                     return Err(format!("Unknown query binding `{name}`."));
                 };
-                parse_binding_query_type(&ty)
-                    .ok_or_else(|| format!("Binding `{name}` has unsupported query type `{ty}`."))
+                let parsed = parse_binding_query_type(&ty)
+                    .ok_or_else(|| format!("Binding `{name}` has unsupported query type `{ty}`."))?;
+                if ast_ty_contains_query_placeholder(&parsed) {
+                    return Err(format!(
+                        "Cannot use unresolved generic binding in REPL operator query. {}",
+                        REPL_UNRESOLVED_TYPE_HINT
+                    ));
+                }
+                Ok(parsed)
             }
             QueryArgKind::ForcedBinding(name) => {
                 let Some(ty) = self.binding_type(name) else {
                     return Err(format!("Unknown query binding `{name}`."));
                 };
-                parse_binding_query_type(&ty)
-                    .ok_or_else(|| format!("Binding `{name}` has unsupported query type `{ty}`."))
+                let parsed = parse_binding_query_type(&ty)
+                    .ok_or_else(|| format!("Binding `{name}` has unsupported query type `{ty}`."))?;
+                if ast_ty_contains_query_placeholder(&parsed) {
+                    return Err(format!(
+                        "Cannot use unresolved generic binding in REPL operator query. {}",
+                        REPL_UNRESOLVED_TYPE_HINT
+                    ));
+                }
+                Ok(parsed)
             }
             QueryArgKind::Capture(capture) => self.capture_query_type(capture),
             QueryArgKind::PipePlaceholder => Err(
@@ -4366,7 +4386,14 @@ impl ReplEngine {
                     arg.source
                 )
             }),
+        }?;
+        if ast_ty_contains_query_placeholder(&ty) {
+            return Err(format!(
+                "Cannot use unresolved generic binding in REPL operator query. {}",
+                REPL_UNRESOLVED_TYPE_HINT
+            ));
         }
+        Ok(ty)
     }
 
     fn typed_operator_signature(
@@ -5582,6 +5609,51 @@ impl ReplEngine {
             }
         };
 
+        if let Some((span, names)) = unresolved_repl_binding_issue(&typed) {
+            self.sigil_session.rollback(sigil_cp);
+            self.scar_session.rollback(scar_cp);
+            self.forge_session.rollback(forge_cp);
+            let hint = if names.is_empty() {
+                REPL_UNRESOLVED_TYPE_HINT.to_string()
+            } else {
+                format!(
+                    "{} Affected binding(s): {}.",
+                    REPL_UNRESOLVED_TYPE_HINT,
+                    names.join(", ")
+                )
+            };
+            let error = diagnostics::TypeErrorDiagnostic::new(
+                REPL_UNRESOLVED_TYPE_MESSAGE,
+                span,
+                Some(hint),
+            );
+            let spec =
+                diagnostics::type_error_spec_by_id(&self.sources, self.repl_source_id, &error);
+            let rendered = error_display::diagnostic_lines_by_id(
+                &self.sources,
+                self.repl_source_id,
+                &spec,
+                self.error_display_mode,
+            );
+            error_display::emit_diagnostic_by_id(
+                &self.sources,
+                self.repl_source_id,
+                &spec,
+                self.error_display_mode,
+            );
+            self.history_entries.push(ReplHistoryEntry {
+                line: committed_line,
+                source: self.pending.clone(),
+            });
+            self.pending.clear();
+            self.bump_line(None, None);
+            return ReplResult::ok(ReplOutput::EvalError {
+                idx,
+                source,
+                rendered,
+            });
+        }
+
         let (mut chunk, mut meta) = match self.forge_session.codegen_chunk_repl_result(typed) {
             Ok(c) => c,
             Err(e) => {
@@ -6627,6 +6699,78 @@ fn history_value_for_result(
         }
     }
     value.clone()
+}
+
+fn ast_ty_contains_query_placeholder(ty: &AstTy) -> bool {
+    match ty {
+        AstTy::Named(_, name) => matches!(name.as_str(), "_" | "Hole"),
+        AstTy::Generic(_, _, args) | AstTy::Tuple(_, args) => {
+            args.iter().any(ast_ty_contains_query_placeholder)
+        }
+        AstTy::Func(_, params, ret) => {
+            params.iter().any(ast_ty_contains_query_placeholder)
+                || ast_ty_contains_query_placeholder(ret)
+        }
+        _ => false,
+    }
+}
+
+fn collect_unresolved_pattern_binding_names(pat: &TypedPattern, names: &mut Vec<String>) {
+    match pat {
+        TypedPattern::Var(ty, id) => {
+            if scar::type_contains_unresolved_vars(ty) {
+                names.push(id.name.clone());
+            }
+        }
+        TypedPattern::As(ty, inner, id) => {
+            if scar::type_contains_unresolved_vars(ty) {
+                names.push(id.name.clone());
+            }
+            collect_unresolved_pattern_binding_names(inner, names);
+        }
+        TypedPattern::ListCons(_, head, tail) => {
+            collect_unresolved_pattern_binding_names(head, names);
+            collect_unresolved_pattern_binding_names(tail, names);
+        }
+        TypedPattern::Tuple(_, items) | TypedPattern::Extractor { items, .. } => {
+            for item in items {
+                collect_unresolved_pattern_binding_names(item, names);
+            }
+        }
+        TypedPattern::ResultOk(_, inner) => collect_unresolved_pattern_binding_names(inner, names),
+        TypedPattern::Wildcard(_)
+        | TypedPattern::ListNil(_)
+        | TypedPattern::IntLit(_, _)
+        | TypedPattern::StrLit(_, _)
+        | TypedPattern::BoolLit(_, _)
+        | TypedPattern::DurationLit(_, _) => {}
+    }
+}
+
+fn unresolved_repl_binding_issue(typed: &[TypedNode]) -> Option<(Span, Vec<String>)> {
+    fn binding_rhs_allows_unresolved_persistence(rhs: &TypedNode) -> bool {
+        matches!(
+            rhs.node,
+            TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_)
+        )
+    }
+
+    fn visit_stmt(stmt: &TypedNode) -> Option<(Span, Vec<String>)> {
+        match &stmt.node {
+            TypedInner::Bind(pat, rhs) | TypedInner::SafeBind(pat, rhs) => {
+                if binding_rhs_allows_unresolved_persistence(rhs) {
+                    return None;
+                }
+                let mut names = Vec::new();
+                collect_unresolved_pattern_binding_names(pat, &mut names);
+                (!names.is_empty()).then(|| (stmt.span.clone(), names))
+            }
+            TypedInner::Semi(inner) => visit_stmt(inner),
+            _ => None,
+        }
+    }
+
+    typed.iter().find_map(visit_stmt)
 }
 
 fn apply_preload_imports(

@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use sindr::policy::CompileUnitKind;
+
 use crate::common::{
     compile_error_fixtures, extract_phase_tag, normalize_text, parse_compile_error_expectation,
     spec_fixtures,
@@ -70,6 +72,20 @@ fn print_timing_report(
 fn timing_report_lock() -> &'static Mutex<()> {
     static TIMING_REPORT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     TIMING_REPORT_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn remove_semantic_prefix_cache_entry(cache_path: &PathBuf) {
+    let _ = fs::remove_file(cache_path);
+    if let Some(parent) = cache_path.parent() {
+        let is_empty = fs::read_dir(parent)
+            .ok()
+            .and_then(|mut entries| entries.next().transpose().ok())
+            .flatten()
+            .is_none();
+        if is_empty {
+            let _ = fs::remove_dir(parent);
+        }
+    }
 }
 
 fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
@@ -286,7 +302,6 @@ def helper() -> Unit { () }"#,
 fn compile_error_phase_primes_semantic_prefix_cache_without_final_bytecode_cache() {
     let prefix_dir =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-fixture-cache/prefix");
-    let _ = fs::remove_dir_all(&prefix_dir);
 
     let module_sources = support::collect_module_sources(&[vec![xldr::ModuleInput {
         file_name: "Helper.srt".into(),
@@ -299,6 +314,14 @@ fn compile_error_phase_primes_semantic_prefix_cache_without_final_bytecode_cache
         "import Helper;\nbad: Int = \"bad type\"\n",
         module_sources,
     );
+    let cache_key = xldr::test_semantic_prefix_cache_key(CompileUnitKind::Script, &compile_sources)
+        .expect("semantic prefix key should build");
+    let cache_path = prefix_dir.join(format!("{cache_key}.semantic"));
+    let _ = fs::remove_file(&cache_path);
+    fs::create_dir_all(&prefix_dir).expect("prefix cache dir should be creatable");
+    let unrelated_path = prefix_dir.join("preserve-me.semantic");
+    fs::write(&unrelated_path, b"existing-prefix-entry")
+        .expect("unrelated prefix cache entry should be writable");
     let err = support::check_script_sources_phase(&compile_sources, "typecheck")
         .expect_err("type mismatch should fail in the typecheck phase");
 
@@ -307,17 +330,42 @@ fn compile_error_phase_primes_semantic_prefix_cache_without_final_bytecode_cache
         "unexpected compile failure: {err}"
     );
     assert!(
-        prefix_dir.is_dir(),
-        "semantic prefix cache dir should exist: {}",
-        prefix_dir.display()
+        cache_path.is_file(),
+        "semantic prefix cache file should exist: {}",
+        cache_path.display()
     );
-    let prefix_files = fs::read_dir(&prefix_dir)
-        .expect("prefix cache dir should be readable")
-        .map(|entry| entry.expect("prefix cache entry should load").path())
-        .collect::<Vec<_>>();
     assert!(
-        !prefix_files.is_empty(),
-        "expected at least one cached semantic prefix after compile-error path"
+        unrelated_path.is_file(),
+        "compile-error path should not clear unrelated prefix cache entries: {}",
+        unrelated_path.display()
+    );
+
+    remove_semantic_prefix_cache_entry(&cache_path);
+}
+
+#[test]
+fn semantic_prefix_cache_cleanup_keeps_unrelated_entries() {
+    let prefix_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-fixture-cache/prefix");
+    let _ = fs::remove_dir_all(&prefix_dir);
+    fs::create_dir_all(&prefix_dir).expect("prefix cache dir should be creatable");
+
+    let target_path = prefix_dir.join("target.semantic");
+    let unrelated_path = prefix_dir.join("unrelated.semantic");
+    fs::write(&target_path, b"target").expect("target cache entry should be writable");
+    fs::write(&unrelated_path, b"unrelated").expect("unrelated cache entry should be writable");
+
+    remove_semantic_prefix_cache_entry(&target_path);
+
+    assert!(
+        !target_path.exists(),
+        "cleanup should remove the targeted semantic prefix entry: {}",
+        target_path.display()
+    );
+    assert!(
+        unrelated_path.exists(),
+        "cleanup should preserve unrelated semantic prefix entries: {}",
+        unrelated_path.display()
     );
 
     let _ = fs::remove_dir_all(&prefix_dir);

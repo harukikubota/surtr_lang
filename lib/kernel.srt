@@ -259,6 +259,19 @@ defmod Kernel {
   @builtin def inspect(a: $A) -> String
 
   @doc """
+  Return a placeholder failure for a `Result`-returning code path.
+  This is useful for generated stubs and partial implementations where the
+  surrounding API already returns `Result<...>`.
+
+  ## REPL
+  xldr(1)> inspect(todo())
+  "Err(NotImplemented(\"not implemented\"))"
+  """
+  def todo() -> Result<$T> {
+    Err(NotImplemented)
+  }
+
+  @doc """
   Print an `Error` value to stderr-oriented output.
   This stays under `Kernel` because it is part of the cross-cutting runtime
   surface, not an `Error`-specific helper family.

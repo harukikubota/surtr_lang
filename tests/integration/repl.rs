@@ -314,6 +314,75 @@ fn repl_sig_expression_query_flows_through_cli_presentation() {
 }
 
 #[test]
+fn repl_rejects_persisting_unresolved_result_callable_binding() {
+    let output = run_repl_session("todo = {|| Err(NoneError)}\n:quit\n");
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    let combined = format!("{stdout}\n{stderr}");
+
+    assert!(
+        combined.contains("Cannot persist binding with unresolved type variable."),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("Add a type annotation or use the value in a context that determines the success type."),
+        "{combined}"
+    );
+    assert!(!combined.contains("todo: (-> Result<_, Error>)"), "{combined}");
+}
+
+#[test]
+fn repl_rejects_persisting_unresolved_result_value_binding() {
+    let output = run_repl_session("todo = {|| Err(NoneError)}\nret = todo()\n:quit\n");
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    let combined = format!("{stdout}\n{stderr}");
+
+    assert!(
+        combined.contains("Cannot persist binding with unresolved type variable."),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("ret = todo()"),
+        "{combined}"
+    );
+    assert!(!combined.contains("ret: Result<_, Error>"), "{combined}");
+}
+
+#[test]
+fn repl_accepts_explicitly_constrained_result_binding() {
+    let output = run_repl_session("todo: (-> Result<Int>) = {|| Err(NoneError)}\nret: Result<Int> = todo()\n:type ret\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("ret: Result<Int, Error> = Err(NoneError"), "{stdout}");
+    assert!(stdout.contains("type: Result<Int, Error>"), "{stdout}");
+}
+
+#[test]
+fn repl_accepts_result_mapping_when_chunk_constrains_type() {
+    let output = run_repl_session(
+        "todo: (-> Result<Int>) = {|| Err(NoneError)}\nmapped = todo() |*> inspect()\n:type mapped\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("mapped: Result<String, Error> = Err(NoneError"), "{stdout}");
+    assert!(stdout.contains("type: Result<String, Error>"), "{stdout}");
+}
+
+
+#[test]
 fn repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli() {
     let output = run_repl_session(":sig |>\n:sig id(Int)\n:quit\n");
     assert!(

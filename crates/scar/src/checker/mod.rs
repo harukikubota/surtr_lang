@@ -480,6 +480,31 @@ pub fn typecheck_with_context(
     checker.check_program(resolved)
 }
 
+pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
+    match ty {
+        Ty::Var(_) => true,
+        Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
+            type_contains_unresolved_vars(inner)
+        }
+        Ty::Tuple(items) | Ty::Enum(_, items) => items.iter().any(type_contains_unresolved_vars),
+        Ty::Func(params, ret) => {
+            params.iter().any(type_contains_unresolved_vars) || type_contains_unresolved_vars(ret)
+        }
+        Ty::Facet(source, focus) | Ty::Result(source, focus) => {
+            type_contains_unresolved_vars(source) || type_contains_unresolved_vars(focus)
+        }
+        Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
+            params.iter().any(type_contains_unresolved_vars) || type_contains_unresolved_vars(ret)
+        }
+        Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
+            .iter()
+            .any(|(_, field_ty)| type_contains_unresolved_vars(field_ty)),
+        Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Pid(_) | Ty::Hole | Ty::Error => {
+            false
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypecheckContext {
     pub runtime_policy: RuntimeSourcePolicy,

@@ -60,7 +60,10 @@ static GLOBAL_COMMANDS: &[(&str, &str)] = &[
     ("error", ":error [full|summary]  — set error display mode"),
     ("sig", ":sig <symbol|expr>  — show signature"),
     ("info", ":info <query>  — show derived info"),
-    ("type", ":type <binding>  — lookup binding type"),
+    (
+        "type",
+        ":type <binding>  — lookup binding type (annotate unresolved generics before persistence)",
+    ),
     ("facet", ":facet <binding|expr>  — inspect facet path"),
     ("save", ":save <path>  — save session to .eldr"),
 ];

@@ -102,6 +102,29 @@ fn special_form_shape_and_or(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>
 }
 
 impl Checker {
+    fn bare_return_typevar_result_mismatch(
+        &self,
+        expected_ret: &Ty,
+        actual_ret: &Ty,
+        span: &Span,
+    ) -> Option<TypeError> {
+        match (self.resolve_ty(expected_ret), self.resolve_ty(actual_ret)) {
+            (Ty::Var(_), Ty::Result(_, _)) => Some(TypeError {
+                message: format!(
+                    "expected {}, got {}",
+                    self.ty_name(expected_ret),
+                    self.ty_name(actual_ret)
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "A plain return type variable cannot be satisfied by Err(...). Declare Result<$T> when the function propagates failures."
+                        .into(),
+                ),
+            }),
+            _ => None,
+        }
+    }
+
     pub(super) fn check_builtin_decl(
         &mut self,
         span: &Span,
@@ -758,8 +781,15 @@ impl Checker {
             body,
         )?;
 
+        let actual_ret = self.resolve_ty(&typed_body.ty);
+        if let Some(err) = self.bare_return_typevar_result_mismatch(
+            &expected_ret,
+            &actual_ret,
+            &self.return_mismatch_span(&typed_body),
+        ) {
+            return Err(err);
+        }
         if !self.types_compatible(&expected_ret, &typed_body.ty) {
-            let actual_ret = self.resolve_ty(&typed_body.ty);
             let hint = if matches!(actual_ret, Ty::Unit) {
                 self.describe_unit_return_hint(&typed_body)
             } else {
@@ -1050,8 +1080,15 @@ impl Checker {
                 &method.body,
             )?;
 
+            let actual_ret = self.resolve_ty(&typed_body.ty);
+            if let Some(err) = self.bare_return_typevar_result_mismatch(
+                &expected_ret,
+                &actual_ret,
+                &self.return_mismatch_span(&typed_body),
+            ) {
+                return Err(err);
+            }
             if !self.types_compatible(&expected_ret, &typed_body.ty) {
-                let actual_ret = self.resolve_ty(&typed_body.ty);
                 let hint = if matches!(actual_ret, Ty::Unit) {
                     self.describe_unit_return_hint(&typed_body)
                 } else {
