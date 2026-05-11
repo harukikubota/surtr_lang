@@ -241,6 +241,9 @@ fn build_dump_json(
     if options.include_peephole_candidates {
         dump["peephole_candidates"] = peephole_candidates(&inspected.bytecode);
     }
+    if options.include_opcode_histogram || options.include_peephole_candidates {
+        dump["function_summary"] = function_summary(&inspected.bytecode);
+    }
 
     Ok(dump)
 }
@@ -319,6 +322,92 @@ fn optimization_summary(bytecode: &Bytecode) -> Value {
     })
 }
 
+fn function_summary(bytecode: &Bytecode) -> Value {
+    let mut functions = bytecode.functions.clone();
+    functions.sort_by_key(|entry| entry.fun_idx);
+
+    let items = functions
+        .iter()
+        .map(|entry| function_summary_entry(bytecode, entry))
+        .collect::<Vec<_>>();
+    let generated_function_count = bytecode
+        .functions
+        .iter()
+        .filter(|entry| entry.flags.generated)
+        .count();
+    let partial_apply_wrapper_count = bytecode
+        .functions
+        .iter()
+        .filter(|entry| entry.flags.partial_apply_wrapper)
+        .count();
+    let functions_with_call_closure = items
+        .iter()
+        .filter(|item| item["call_counts"]["call_closure"].as_u64().unwrap_or(0) > 0)
+        .count();
+
+    json!({
+        "summary": {
+            "generated_function_count": generated_function_count,
+            "partial_apply_wrapper_count": partial_apply_wrapper_count,
+            "functions_with_call_closure": functions_with_call_closure
+        },
+        "functions": items
+    })
+}
+
+fn function_summary_entry(bytecode: &Bytecode, entry: &FunctionEntry) -> Value {
+    let start = entry.entry_pc as usize;
+    let end = function_end_pc(bytecode, entry);
+    let opcodes = bytecode.opcodes.get(start..end).unwrap_or(&[]);
+    let mut histogram = BTreeMap::<&'static str, usize>::new();
+    let mut call = 0usize;
+    let mut call_builtin = 0usize;
+    let mut call_closure = 0usize;
+    let mut capture_closure = 0usize;
+    let mut capture_closure_zero = 0usize;
+
+    for opcode in opcodes {
+        *histogram.entry(opcode.kind_name()).or_default() += 1;
+        match opcode {
+            Opcode::Call { .. } => call += 1,
+            Opcode::CallBuiltin { .. } => call_builtin += 1,
+            Opcode::CallClosure { .. } => call_closure += 1,
+            Opcode::CaptureClosure(count) => {
+                capture_closure += 1;
+                if *count == 0 {
+                    capture_closure_zero += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    json!({
+        "fun_idx": entry.fun_idx,
+        "name": entry
+            .qualified_name
+            .clone()
+            .unwrap_or_else(|| format!("fun#{}", entry.fun_idx)),
+        "arity": entry.arity,
+        "entry_pc": entry.entry_pc,
+        "end_pc": end,
+        "flags": {
+            "generated": entry.flags.generated,
+            "partial_apply_wrapper": entry.flags.partial_apply_wrapper,
+            "closure": entry.flags.closure
+        },
+        "opcode_count": opcodes.len(),
+        "opcode_histogram": histogram,
+        "call_counts": {
+            "call": call,
+            "call_builtin": call_builtin,
+            "call_closure": call_closure,
+            "capture_closure": capture_closure,
+            "capture_closure_zero": capture_closure_zero
+        }
+    })
+}
+
 fn peephole_candidates(bytecode: &Bytecode) -> Value {
     let mut items = Vec::new();
     let mut summary: BTreeMap<&'static str, usize> = BTreeMap::new();
@@ -367,9 +456,14 @@ fn peephole_candidates(bytecode: &Bytecode) -> Value {
 }
 
 fn peephole_candidate_json(bytecode: &Bytecode, pc: usize, kind: &str, len: usize) -> Value {
-    let opcode_window = bytecode.opcodes[pc..pc + len]
+    let opcode_slice = &bytecode.opcodes[pc..pc + len];
+    let opcode_window = opcode_slice
         .iter()
         .map(|opcode| opcode.kind_name())
+        .collect::<Vec<_>>();
+    let operands = opcode_slice
+        .iter()
+        .map(|opcode| operand_summary(bytecode, opcode))
         .collect::<Vec<_>>();
     let function = function_for_pc(bytecode, pc).map(|entry| {
         entry
@@ -389,20 +483,103 @@ fn peephole_candidate_json(bytecode: &Bytecode, pc: usize, kind: &str, len: usiz
             "span": [entry.span_start, entry.span_end],
             "source_name": entry.source_name
         })),
-        "opcode_window": opcode_window
+        "opcode_window": opcode_window,
+        "operands": operands
     })
+}
+
+fn operand_summary(bytecode: &Bytecode, opcode: &Opcode) -> Value {
+    match opcode {
+        Opcode::LoadConst(idx) => json!({
+            "opcode": "LoadConst",
+            "const_idx": idx,
+            "constant": bytecode
+                .constants
+                .get(*idx as usize)
+                .map(|constant| format!("{constant:?}"))
+        }),
+        Opcode::StoreLocal(local_idx) => json!({
+            "opcode": "StoreLocal",
+            "local_idx": local_idx
+        }),
+        Opcode::LoadLocal(local_idx) => json!({
+            "opcode": "LoadLocal",
+            "local_idx": local_idx
+        }),
+        Opcode::StoreConstLocal {
+            const_idx,
+            local_idx,
+        } => json!({
+            "opcode": "StoreConstLocal",
+            "const_idx": const_idx,
+            "local_idx": local_idx,
+            "constant": bytecode
+                .constants
+                .get(*const_idx as usize)
+                .map(|constant| format!("{constant:?}"))
+        }),
+        Opcode::CopyLocal {
+            src_local_idx,
+            dst_local_idx,
+        } => json!({
+            "opcode": "CopyLocal",
+            "src_local_idx": src_local_idx,
+            "dst_local_idx": dst_local_idx
+        }),
+        Opcode::EqLocalTag {
+            local_idx,
+            tag_const_idx,
+        } => json!({
+            "opcode": "EqLocalTag",
+            "local_idx": local_idx,
+            "tag_const_idx": tag_const_idx,
+            "tag": bytecode
+                .constants
+                .get(*tag_const_idx as usize)
+                .and_then(runtime_tag_constant)
+        }),
+        Opcode::JumpIfFalse(target) => json!({
+            "opcode": "JumpIfFalse",
+            "target": target
+        }),
+        Opcode::JumpIfTrue(target) => json!({
+            "opcode": "JumpIfTrue",
+            "target": target
+        }),
+        other => json!({
+            "opcode": other.kind_name()
+        }),
+    }
+}
+
+fn runtime_tag_constant(constant: &sindr::ir::Constant) -> Option<u32> {
+    match constant {
+        sindr::ir::Constant::Tag(tag) => Some(*tag),
+        _ => None,
+    }
 }
 
 fn function_for_pc(bytecode: &Bytecode, pc: usize) -> Option<&FunctionEntry> {
     bytecode.functions.iter().find(|entry| {
         let start = entry.entry_pc as usize;
-        let end = if entry.end_pc > entry.entry_pc {
-            entry.end_pc as usize
-        } else {
-            bytecode.opcodes.len()
-        };
+        let end = function_end_pc(bytecode, entry);
         pc >= start && pc < end
     })
+}
+
+fn function_end_pc(bytecode: &Bytecode, entry: &FunctionEntry) -> usize {
+    if entry.end_pc > entry.entry_pc {
+        return entry.end_pc as usize;
+    }
+    bytecode
+        .functions
+        .iter()
+        .filter_map(|candidate| {
+            let pc = candidate.entry_pc as usize;
+            (pc > entry.entry_pc as usize).then_some(pc)
+        })
+        .min()
+        .unwrap_or(bytecode.opcodes.len())
 }
 
 fn opcode_source_for_pc(bytecode: &Bytecode, pc: usize) -> Option<OpcodeSource> {
