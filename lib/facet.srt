@@ -18,12 +18,20 @@ conversion.
 Common path forms:
 
 - struct / record field: `User.name`
+- explicit type-root capture in unary function context: `&User.name`
 - tuple field: `Tuple._0`, `Tuple._1`, ...
 - nested path: `User.profile / Profile.name`, `User.profile.name`
 - function-form nested path: `Facet::compose(User.profile, Profile.name)`
 - enum variant selector: `Expr.Add`
 - value sugar: `value.segment`
 - shorthand source/path capture: `~value.segment`
+
+`User.name` is the Facet path itself.
+`&User.name` captures that type-root path as a unary function when a callable
+such as `(User -> String)` is expected.
+For example:
+
+`users |*> &User.name`
 
 `~value.segment` is compiler-managed shorthand that expands to a source value and
 structural path when consumed by `Facet::view/preview/replace/set/over/over_result`.

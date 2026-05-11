@@ -117,6 +117,20 @@ users |*> &User.name
 `_.path` は standalone の Facet 値ではありません。文脈から source 型を推論できない
 場所では compile error になります。
 
+## `&Type.path` explicit capture
+
+`&User.name` は type-root の FacetPath を unary capture として使う明示形です。
+`User.name` 自体は `Facet<User, String>` の path ですが、`&User.name` は
+`(User -> String)` が期待される場所で使う callable になります。
+
+```surtr
+users |*> &User.name
+List::sort_by(users, &compare `Function::on` &User.age)
+```
+
+- `Facet` 値そのものがほしいときは `User.name`
+- unary function として渡したいときは `&User.name`
+
 ## struct path
 
 ```surtr
