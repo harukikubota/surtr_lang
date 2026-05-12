@@ -8,7 +8,7 @@ use sindr::policy::CompileUnitKind;
 
 use crate::common::{
     compile_error_fixtures, extract_phase_tag, normalize_text, parse_compile_error_expectation,
-    spec_fixtures,
+    spec_fixtures, unique_temp_dir,
 };
 use crate::support;
 
@@ -44,10 +44,7 @@ fn run_surtr(source: &str) -> Result<Vec<String>, String> {
 }
 
 fn timing_breakdown_enabled() -> bool {
-    matches!(
-        env::var("SURTR_TEST_TIMING").as_deref(),
-        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
-    )
+    support::env_flag_enabled(env::var("SURTR_TEST_TIMING").ok().as_deref())
 }
 
 fn print_timing_report(
@@ -356,9 +353,7 @@ fn semantic_prefix_cache_cleanup_keeps_unrelated_entries() {
     let _cache_guard = semantic_prefix_cache_lock()
         .lock()
         .expect("semantic prefix cache lock poisoned");
-    let prefix_dir =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-fixture-cache/prefix");
-    let _ = fs::remove_dir_all(&prefix_dir);
+    let prefix_dir = unique_temp_dir("surtr_semantic_prefix_cleanup");
     fs::create_dir_all(&prefix_dir).expect("prefix cache dir should be creatable");
 
     let target_path = prefix_dir.join("target.semantic");
