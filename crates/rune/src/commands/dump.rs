@@ -269,6 +269,7 @@ fn optimization_summary(bytecode: &Bytecode) -> Value {
     let mut capture_closure_total = 0usize;
     let mut capture_closure_zero = 0usize;
     let mut call_closure = 0usize;
+    let mut tail_call_closure = 0usize;
     let mut direct_builtin_calls = 0usize;
     let mut direct_user_calls = 0usize;
     for opcode in &bytecode.opcodes {
@@ -280,6 +281,7 @@ fn optimization_summary(bytecode: &Bytecode) -> Value {
                 }
             }
             Opcode::CallClosure { .. } => call_closure += 1,
+            Opcode::TailCallClosure { .. } => tail_call_closure += 1,
             Opcode::CallBuiltin { .. } => direct_builtin_calls += 1,
             Opcode::Call { .. } => direct_user_calls += 1,
             _ => {}
@@ -327,6 +329,10 @@ fn optimization_summary(bytecode: &Bytecode) -> Value {
                 "count": jump_if_local_tag_ne,
                 "estimated_saved_opcodes": jump_if_local_tag_ne
             },
+            "TailCallClosure": {
+                "count": tail_call_closure,
+                "estimated_saved_opcodes": tail_call_closure
+            },
             "estimated_saved_opcodes_total": store_const
                 + copy_local
                 + (eq_local_tag * 3)
@@ -334,9 +340,11 @@ fn optimization_summary(bytecode: &Bytecode) -> Value {
                 + make_err
                 + jump_if_local_tag_eq
                 + jump_if_local_tag_ne
+                + tail_call_closure
         },
         "apply_compose": {
             "call_closure": call_closure,
+            "tail_call_closure": tail_call_closure,
             "capture_closure_total": capture_closure_total,
             "capture_closure_zero": capture_closure_zero,
             "generated_functions": generated_functions,
@@ -389,6 +397,7 @@ fn function_summary_entry(bytecode: &Bytecode, entry: &FunctionEntry) -> Value {
     let mut call = 0usize;
     let mut call_builtin = 0usize;
     let mut call_closure = 0usize;
+    let mut tail_call_closure = 0usize;
     let mut capture_closure = 0usize;
     let mut capture_closure_zero = 0usize;
 
@@ -398,6 +407,7 @@ fn function_summary_entry(bytecode: &Bytecode, entry: &FunctionEntry) -> Value {
             Opcode::Call { .. } => call += 1,
             Opcode::CallBuiltin { .. } => call_builtin += 1,
             Opcode::CallClosure { .. } => call_closure += 1,
+            Opcode::TailCallClosure { .. } => tail_call_closure += 1,
             Opcode::CaptureClosure(count) => {
                 capture_closure += 1;
                 if *count == 0 {
@@ -428,6 +438,7 @@ fn function_summary_entry(bytecode: &Bytecode, entry: &FunctionEntry) -> Value {
             "call": call,
             "call_builtin": call_builtin,
             "call_closure": call_closure,
+            "tail_call_closure": tail_call_closure,
             "capture_closure": capture_closure,
             "capture_closure_zero": capture_closure_zero
         }
@@ -464,6 +475,8 @@ fn peephole_candidates(bytecode: &Bytecode) -> Value {
             ]
         ) {
             Some(("branch_fusion", 2usize))
+        } else if matches!(remaining, [Opcode::CallClosure { .. }, Opcode::Return, ..]) {
+            Some(("tail_call_closure", 2usize))
         } else {
             None
         };
@@ -571,6 +584,24 @@ fn operand_summary(bytecode: &Bytecode, opcode: &Opcode) -> Value {
         Opcode::JumpIfTrue(target) => json!({
             "opcode": "JumpIfTrue",
             "target": target
+        }),
+        Opcode::CallClosure {
+            arity,
+            span_start,
+            span_end,
+        } => json!({
+            "opcode": "CallClosure",
+            "arity": arity,
+            "span": [span_start, span_end]
+        }),
+        Opcode::TailCallClosure {
+            arity,
+            span_start,
+            span_end,
+        } => json!({
+            "opcode": "TailCallClosure",
+            "arity": arity,
+            "span": [span_start, span_end]
         }),
         other => json!({
             "opcode": other.kind_name()

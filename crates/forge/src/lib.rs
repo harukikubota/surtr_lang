@@ -701,6 +701,36 @@ print(to_string(add_base(2)))"#,
     }
 
     #[test]
+    fn tail_closure_call_lowers_to_fused_tail_opcode() {
+        let bytecode = codegen_source(
+            r#"def apply_tail(f: (Int -> Int), value: Int) -> Int {
+  f(value)
+}
+
+add1: (Int -> Int) = {|x| x + 1}
+print(to_string(apply_tail(add1, 41)))"#,
+        );
+        let apply_tail = bytecode
+            .functions
+            .iter()
+            .find(|entry| {
+                entry
+                    .qualified_name
+                    .as_deref()
+                    .is_some_and(|name| name.ends_with("apply_tail"))
+            })
+            .expect("apply_tail function should be present");
+        let body = function_body_opcodes(&bytecode, apply_tail.fun_idx);
+
+        assert!(body
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::TailCallClosure { arity: 1, .. })));
+        assert!(!body
+            .windows(2)
+            .any(|ops| { matches!(ops, [Opcode::CallClosure { .. }, Opcode::Return]) }));
+    }
+
+    #[test]
     fn pipe_direct_user_capture_lowers_to_call_without_callclosure() {
         let bytecode = codegen_typed(vec![
             identity_def("id_int", 0, 10, 11, Ty::Int),

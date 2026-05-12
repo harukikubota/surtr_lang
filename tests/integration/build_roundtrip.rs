@@ -204,11 +204,21 @@ fn dump_peephole_candidates_reports_remaining_branch_fusion_opportunities() {
             == 0,
         "expected no remaining branch-fusion candidates in result_helpers dump: {json}"
     );
+    let items = json["peephole_candidates"]["items"]
+        .as_array()
+        .expect("peephole items should be an array");
     assert!(
-        json["peephole_candidates"]["items"]
-            .as_array()
-            .is_some_and(|items| items.is_empty()),
-        "expected no remaining peephole candidates in result_helpers dump: {json}"
+        items
+            .iter()
+            .all(|item| item["kind"].as_str() == Some("tail_call_closure")),
+        "expected only tail-call closure candidates in result_helpers dump: {json}"
+    );
+    assert!(
+        json["peephole_candidates"]["summary"]["tail_call_closure"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "expected tail-call closure candidates to be visible in result_helpers dump: {json}"
     );
 }
 
@@ -252,7 +262,10 @@ fn dump_peephole_candidates_include_operand_details() {
         .expect("expected a load_const_store_local candidate");
     assert!(item["pc"].as_u64().is_some());
     assert!(item["function"].is_null());
-    assert_eq!(item["opcode_window"], serde_json::json!(["LoadConst", "StoreLocal"]));
+    assert_eq!(
+        item["opcode_window"],
+        serde_json::json!(["LoadConst", "StoreLocal"])
+    );
     let operands = item["operands"]
         .as_array()
         .expect("operands must be an array");
@@ -351,6 +364,57 @@ fn dump_opcode_histogram_tracks_result_branch_opcode_batch() {
             .is_some(),
         "expected JumpIfLocalTagNe optimization summary entry: {json}"
     );
+}
+
+#[test]
+fn dump_opcode_histogram_tracks_tail_call_closure_fusion() {
+    let temp = unique_temp_dir("surtr_dump_tail_call_closure");
+    let source_path = temp.join("tail_call_closure.srt");
+    write_source(
+        &source_path,
+        r#"def apply_tail(f: (Int -> Int), value: Int) -> Int {
+  f(value)
+}
+
+add1: (Int -> Int) = {|x| x + 1}
+print(to_string(apply_tail(add1, 41)))
+"#,
+    );
+
+    let dump = surtr_command()
+        .args([
+            "dump",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--format",
+            "json",
+            "--opcode-histogram",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    assert!(
+        json["opcode_histogram"]["TailCallClosure"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "expected TailCallClosure histogram entries: {json}"
+    );
+    assert!(
+        json["optimization_summary"]["apply_compose"]["tail_call_closure"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "expected TailCallClosure apply/compose summary entry: {json}"
+    );
+
+    let _ = fs::remove_dir_all(temp);
 }
 
 #[test]

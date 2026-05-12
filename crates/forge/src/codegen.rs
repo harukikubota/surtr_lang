@@ -1454,12 +1454,13 @@ fn relocate_chunk_ops_for_artifact(
                 ..
             } => {
                 *target_pc = map_chunk_pc(*target_pc, chunk_halt, base_top_len, chunk_func_base)?;
-                *tag_const_idx = tag_const_idx.checked_add(const_base).ok_or_else(|| {
-                    CodegenError {
-                        message: "chunk const relocation overflow".into(),
-                        span: Span { start: 0, end: 0 },
-                    }
-                })?;
+                *tag_const_idx =
+                    tag_const_idx
+                        .checked_add(const_base)
+                        .ok_or_else(|| CodegenError {
+                            message: "chunk const relocation overflow".into(),
+                            span: Span { start: 0, end: 0 },
+                        })?;
             }
             Opcode::Jump(addr) | Opcode::JumpIfFalse(addr) | Opcode::JumpIfTrue(addr) => {
                 *addr = map_chunk_pc(*addr, chunk_halt, base_top_len, chunk_func_base)?;
@@ -1873,14 +1874,8 @@ fn localize_chunk_indices(
 ) -> Result<(), CodegenError> {
     for op in opcodes.iter_mut() {
         match op {
-            Opcode::JumpIfLocalTagEq {
-                tag_const_idx,
-                ..
-            }
-            | Opcode::JumpIfLocalTagNe {
-                tag_const_idx,
-                ..
-            } => {
+            Opcode::JumpIfLocalTagEq { tag_const_idx, .. }
+            | Opcode::JumpIfLocalTagNe { tag_const_idx, .. } => {
                 let idx_usize = *tag_const_idx as usize;
                 if idx_usize < const_base {
                     return Err(CodegenError {
@@ -1971,17 +1966,13 @@ fn localize_chunk_indices(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        compose_bytecode_with_chunk, localize_chunk_indices, Codegen, ForgeSession,
-    };
+    use super::{compose_bytecode_with_chunk, localize_chunk_indices, Codegen, ForgeSession};
     use crate::bytecode::{Bytecode, BytecodeChunk, CompileInfo, Constant, ErrTemplate};
     use crate::opcode::Opcode;
+    use scar::typed::TypedProcessHandlerUid;
     use scar::typed::{
         TypedDbgArg, TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode,
         TypedPattern, TypedProcessSpec, TypedProgram,
-    };
-    use scar::typed::{
-        TypedProcessHandlerUid,
     };
     use scar::types::Ty;
     use sigil::resolved::ResolvedId;
@@ -2133,7 +2124,9 @@ mod tests {
     fn singleton_boot(name: &str) -> SingletonBootEntry {
         SingletonBootEntry {
             process_name: name.into(),
-            init_timeout_ms: RuntimeBootPlan::default().runtime_limits.default_init_timeout_ms,
+            init_timeout_ms: RuntimeBootPlan::default()
+                .runtime_limits
+                .default_init_timeout_ms,
             source: BootEntrySource::ExplicitConfig,
         }
     }
@@ -2225,7 +2218,10 @@ mod tests {
             dbg_template_base: 1,
             dbg_templates: vec![dbg_template(1)],
             functions: vec![function_entry(1, 5, 10), function_entry(2, 10, 12)],
-            docs: vec![doc_entry("Global::base_doc"), doc_entry("Global::chunk_doc")],
+            docs: vec![
+                doc_entry("Global::base_doc"),
+                doc_entry("Global::chunk_doc"),
+            ],
             runtime_process_specs: vec![runtime_process_spec("Global::ChunkAgent", 1)],
             runtime_boot_plan: RuntimeBootPlan {
                 singletons: vec![singleton_boot("Global::ChunkAgent")],
@@ -2639,7 +2635,8 @@ mod tests {
             ),
         };
 
-        gene.emit_node(&node).expect("map_err emission should succeed");
+        gene.emit_node(&node)
+            .expect("map_err emission should succeed");
         let (opcodes, _) = gene.finalize().expect("labels should resolve");
         let map_err_id = Codegen::builtin_id("map_err").expect("map_err builtin must exist");
 
@@ -2654,12 +2651,10 @@ mod tests {
                 ..
             } if *builtin_id == map_err_id
         )));
-        assert!(opcodes
-            .iter()
-            .any(|opcode| matches!(
-                opcode,
-                Opcode::JumpIfTrue(_) | Opcode::JumpIfLocalTagEq { .. }
-            )));
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::JumpIfTrue(_) | Opcode::JumpIfLocalTagEq { .. }
+        )));
     }
 
     #[test]
@@ -2682,7 +2677,8 @@ mod tests {
             ),
         };
 
-        gene.emit_node(&node).expect("cause emission should succeed");
+        gene.emit_node(&node)
+            .expect("cause emission should succeed");
         let (opcodes, _) = gene.finalize().expect("labels should resolve");
         let cause_id = Codegen::builtin_id("cause").expect("cause builtin must exist");
 
@@ -2694,11 +2690,13 @@ mod tests {
                 ..
             } if *builtin_id == cause_id
         )));
-        assert!(opcodes
-            .iter()
-            .filter(|opcode| matches!(opcode, Opcode::LoadLocal(_)))
-            .count()
-            >= 2);
+        assert!(
+            opcodes
+                .iter()
+                .filter(|opcode| matches!(opcode, Opcode::LoadLocal(_)))
+                .count()
+                >= 2
+        );
     }
 
     #[test]
@@ -2708,7 +2706,10 @@ mod tests {
         gene.state.next_slot = 1;
 
         let handler = TypedNode {
-            ty: Ty::Func(vec![Ty::Error], Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)))),
+            ty: Ty::Func(
+                vec![Ty::Error],
+                Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))),
+            ),
             span: span(10, 20),
             node: TypedInner::Capture(
                 Box::new(TypedNode {
@@ -2753,10 +2754,9 @@ mod tests {
             } if *builtin_id == kind_id
         )));
         assert!(opcodes.iter().any(|opcode| matches!(opcode, Opcode::EqStr)));
-        assert!(opcodes.iter().any(|opcode| matches!(
-            opcode,
-            Opcode::CallClosure { arity: 1, .. }
-        )));
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::CallClosure { arity: 1, .. })));
         assert!(opcodes
             .iter()
             .any(|opcode| matches!(opcode, Opcode::LoadFunctionRef(7))));
@@ -2789,12 +2789,10 @@ mod tests {
         assert!(opcodes
             .iter()
             .any(|opcode| matches!(opcode, Opcode::StoreLocal(_) | Opcode::CopyLocal { .. })));
-        assert!(opcodes
-            .iter()
-            .any(|opcode| matches!(
-                opcode,
-                Opcode::JumpIfFalse(_) | Opcode::JumpIfLocalTagNe { .. }
-            )));
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::JumpIfFalse(_) | Opcode::JumpIfLocalTagNe { .. }
+        )));
         assert!(opcodes
             .iter()
             .any(|opcode| matches!(opcode, Opcode::GetField { field_index: 0 })));
@@ -2837,7 +2835,10 @@ mod tests {
             }
         );
         assert!(matches!(bytecode.opcodes[8], Opcode::LoadConst(3)));
-        assert!(matches!(bytecode.opcodes[14], Opcode::MakeError { template_id: 1 }));
+        assert!(matches!(
+            bytecode.opcodes[14],
+            Opcode::MakeError { template_id: 1 }
+        ));
         assert!(matches!(
             bytecode.opcodes[15],
             Opcode::Dbg {
@@ -2853,7 +2854,14 @@ mod tests {
                 message_const_idx: 6
             }
         ));
-        assert_eq!(bytecode.opcodes.iter().filter(|op| matches!(op, Opcode::Halt)).count(), 1);
+        assert_eq!(
+            bytecode
+                .opcodes
+                .iter()
+                .filter(|op| matches!(op, Opcode::Halt))
+                .count(),
+            1
+        );
         assert!(matches!(bytecode.opcodes[9], Opcode::Halt));
 
         assert_eq!(bytecode.functions.len(), 3);
@@ -2887,7 +2895,9 @@ mod tests {
         let err = compose_bytecode_with_chunk(base, relocatable_chunk())
             .expect_err("base bytecode without top-level halt must fail");
 
-        assert!(err.message.contains("precompiled bytecode has no top-level Halt"));
+        assert!(err
+            .message
+            .contains("precompiled bytecode has no top-level Halt"));
     }
 
     #[test]
@@ -3063,7 +3073,10 @@ mod tests {
             .expect("typed program chunk should succeed");
 
         assert_eq!(chunk.runtime_process_specs.len(), 1);
-        assert_eq!(chunk.runtime_process_specs[0].type_name, "Global::ChunkedLogger");
+        assert_eq!(
+            chunk.runtime_process_specs[0].type_name,
+            "Global::ChunkedLogger"
+        );
         assert_eq!(chunk.runtime_process_specs[0].init.callable.fun_idx, 0);
         assert_eq!(chunk.runtime_boot_plan.singletons.len(), 1);
         assert_eq!(
@@ -3100,10 +3113,10 @@ mod tests {
             .opcodes
             .iter()
             .any(|opcode| matches!(opcode, Opcode::StructNew { field_count: 1 })));
-        assert!(!chunk.opcodes.iter().any(|opcode| matches!(
-            opcode,
-            Opcode::CallBuiltin { .. }
-        )));
+        assert!(!chunk
+            .opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::CallBuiltin { .. })));
         assert!(matches!(chunk.opcodes.last(), Some(Opcode::Halt)));
     }
 }
@@ -4317,6 +4330,32 @@ impl Codegen {
     }
 
     fn emit(&mut self, op: Opcode) {
+        if let Opcode::Return = op {
+            if self
+                .label_positions
+                .values()
+                .all(|position| *position != self.ir.len())
+            {
+                if let Some(IrOp::Op(Opcode::CallClosure {
+                    arity,
+                    span_start,
+                    span_end,
+                })) = self.ir.last()
+                {
+                    let arity = *arity;
+                    let span_start = *span_start;
+                    let span_end = *span_end;
+                    self.ir.pop();
+                    self.ir.push(IrOp::Op(Opcode::TailCallClosure {
+                        arity,
+                        span_start,
+                        span_end,
+                    }));
+                    return;
+                }
+            }
+        }
+
         if matches!(op, Opcode::EqTag) && self.ir.len() >= 3 {
             let start = self.ir.len() - 3;
             let current = self.ir.len();
@@ -7998,44 +8037,100 @@ impl Codegen {
 
     // ── Finish: resolve labels → absolute addresses ──
 
-    fn finalize(self) -> Result<(Vec<Opcode>, CodegenState), CodegenError> {
-        // Resolve labels to absolute IR indices → opcode positions.
-        // IR ops map 1:1 to opcodes, so IR index == opcode index.
+    fn finalize(mut self) -> Result<(Vec<Opcode>, CodegenState), CodegenError> {
+        let mut fuse_tail_call = vec![false; self.ir.len()];
+        let mut skip_ir = vec![false; self.ir.len()];
+        for idx in 0..self.ir.len().saturating_sub(1) {
+            if self
+                .label_positions
+                .values()
+                .any(|position| *position == idx + 1)
+            {
+                continue;
+            }
+            if matches!(
+                (&self.ir[idx], &self.ir[idx + 1]),
+                (
+                    IrOp::Op(Opcode::CallClosure { .. }),
+                    IrOp::Op(Opcode::Return)
+                )
+            ) {
+                fuse_tail_call[idx] = true;
+                skip_ir[idx + 1] = true;
+            }
+        }
+
+        let mut ir_to_pc = vec![0usize; self.ir.len() + 1];
+        let mut pc = 0usize;
+        for idx in 0..self.ir.len() {
+            ir_to_pc[idx] = pc;
+            if !skip_ir[idx] {
+                pc += 1;
+            }
+        }
+        ir_to_pc[self.ir.len()] = pc;
+
+        for entry in &mut self.state.functions {
+            if let Some(pc) = ir_to_pc.get(entry.entry_pc as usize) {
+                entry.entry_pc = *pc as u32;
+            }
+        }
+
+        let resolve_label_pc = |label| -> Result<u32, CodegenError> {
+            let ir_pos = self
+                .label_positions
+                .get(&label)
+                .copied()
+                .ok_or_else(|| CodegenError {
+                    message: format!("unresolved label {:?}", label),
+                    span: Span { start: 0, end: 0 },
+                })?;
+            ir_to_pc
+                .get(ir_pos)
+                .copied()
+                .map(|pc| pc as u32)
+                .ok_or_else(|| CodegenError {
+                    message: format!("label position out of bounds: {}", ir_pos),
+                    span: Span { start: 0, end: 0 },
+                })
+        };
+
+        // Resolve labels to opcode positions after final IR peepholes.
         let mut opcodes = Vec::new();
-        for ir_op in &self.ir {
+        for (idx, ir_op) in self.ir.iter().enumerate() {
+            if skip_ir[idx] {
+                continue;
+            }
             match ir_op {
+                IrOp::Op(Opcode::CallClosure {
+                    arity,
+                    span_start,
+                    span_end,
+                }) if fuse_tail_call[idx] => opcodes.push(Opcode::TailCallClosure {
+                    arity: *arity,
+                    span_start: *span_start,
+                    span_end: *span_end,
+                }),
                 IrOp::Op(op) => opcodes.push(op.clone()),
                 IrOp::JumpLabel(label) => {
-                    let pos =
-                        self.label_positions
-                            .get(label)
-                            .copied()
-                            .ok_or_else(|| CodegenError {
-                                message: format!("unresolved jump label {:?}", label),
-                                span: Span { start: 0, end: 0 },
-                            })? as u32;
+                    let pos = resolve_label_pc(*label).map_err(|mut err| {
+                        err.message = format!("unresolved jump label {:?}", label);
+                        err
+                    })?;
                     opcodes.push(Opcode::Jump(pos));
                 }
                 IrOp::JumpIfFalseLabel(label) => {
-                    let pos =
-                        self.label_positions
-                            .get(label)
-                            .copied()
-                            .ok_or_else(|| CodegenError {
-                                message: format!("unresolved jump-if-false label {:?}", label),
-                                span: Span { start: 0, end: 0 },
-                            })? as u32;
+                    let pos = resolve_label_pc(*label).map_err(|mut err| {
+                        err.message = format!("unresolved jump-if-false label {:?}", label);
+                        err
+                    })?;
                     opcodes.push(Opcode::JumpIfFalse(pos));
                 }
                 IrOp::JumpIfTrueLabel(label) => {
-                    let pos =
-                        self.label_positions
-                            .get(label)
-                            .copied()
-                            .ok_or_else(|| CodegenError {
-                                message: format!("unresolved jump-if-true label {:?}", label),
-                                span: Span { start: 0, end: 0 },
-                            })? as u32;
+                    let pos = resolve_label_pc(*label).map_err(|mut err| {
+                        err.message = format!("unresolved jump-if-true label {:?}", label);
+                        err
+                    })?;
                     opcodes.push(Opcode::JumpIfTrue(pos));
                 }
                 IrOp::JumpIfLocalTagEqLabel {
@@ -8043,17 +8138,10 @@ impl Codegen {
                     tag_const_idx,
                     label,
                 } => {
-                    let pos =
-                        self.label_positions
-                            .get(label)
-                            .copied()
-                            .ok_or_else(|| CodegenError {
-                                message: format!(
-                                    "unresolved jump-if-local-tag-eq label {:?}",
-                                    label
-                                ),
-                                span: Span { start: 0, end: 0 },
-                            })? as u32;
+                    let pos = resolve_label_pc(*label).map_err(|mut err| {
+                        err.message = format!("unresolved jump-if-local-tag-eq label {:?}", label);
+                        err
+                    })?;
                     opcodes.push(Opcode::JumpIfLocalTagEq {
                         local_idx: *local_idx,
                         tag_const_idx: *tag_const_idx,
@@ -8065,17 +8153,10 @@ impl Codegen {
                     tag_const_idx,
                     label,
                 } => {
-                    let pos =
-                        self.label_positions
-                            .get(label)
-                            .copied()
-                            .ok_or_else(|| CodegenError {
-                                message: format!(
-                                    "unresolved jump-if-local-tag-ne label {:?}",
-                                    label
-                                ),
-                                span: Span { start: 0, end: 0 },
-                            })? as u32;
+                    let pos = resolve_label_pc(*label).map_err(|mut err| {
+                        err.message = format!("unresolved jump-if-local-tag-ne label {:?}", label);
+                        err
+                    })?;
                     opcodes.push(Opcode::JumpIfLocalTagNe {
                         local_idx: *local_idx,
                         tag_const_idx: *tag_const_idx,

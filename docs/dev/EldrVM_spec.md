@@ -248,6 +248,7 @@ Opcode は以下のカテゴリを持つ。
 - `MakeErr` は stack top の `Error` payload を `Tagged { tag: 1, fields: [payload] }` に包む Result 専用 constructor opcode とする。payload が `Error` でない bytecode は runtime error とする
 - `JumpIfLocalTagEq { local_idx, tag_const_idx, target_pc }` と `JumpIfLocalTagNe { local_idx, tag_const_idx, target_pc }` は `EqLocalTag` の直後に続く `JumpIfTrue` / `JumpIfFalse` を 1 opcode に畳み込む branch-fused fast-path とする。どちらも判定後の operand stack に Bool 中間値を残さない
 - `JumpIfLocalTagEq` / `JumpIfLocalTagNe` の `tag_const_idx` は `Constant::Tag` を指し、`LoadConst` と同じ relocation / verifier 規則に従う。`target_pc` は `Jump*` と同じ jump-target verifier / relocation 規則に従う
+- `TailCallClosure { arity, span_start, span_end }` は tail position の `CallClosure { arity, span_start, span_end }; Return` と同じ意味の圧縮 opcode とする。callable / argument / lexical capture の評価規約は `CallClosure` と同じで、結果は現在フレームの呼び出し元へ直接返る。初期実装では既存 TCO 観測値 `tail_calls_optimized` の増加を要求しない
 
 実 opcode 一覧とオペランドは `crates/forge/src/opcode.rs` を正とする。
 

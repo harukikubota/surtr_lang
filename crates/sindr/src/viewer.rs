@@ -225,6 +225,11 @@ pub enum OpcodeView {
         span_start: u32,
         span_end: u32,
     },
+    TailCallClosure {
+        arity: u8,
+        span_start: u32,
+        span_end: u32,
+    },
     Jump {
         target_pc: u32,
     },
@@ -638,6 +643,15 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
             span_start,
             span_end,
         } => OpcodeView::CallClosure {
+            arity: *arity,
+            span_start: *span_start,
+            span_end: *span_end,
+        },
+        Opcode::TailCallClosure {
+            arity,
+            span_start,
+            span_end,
+        } => OpcodeView::TailCallClosure {
             arity: *arity,
             span_start: *span_start,
             span_end: *span_end,

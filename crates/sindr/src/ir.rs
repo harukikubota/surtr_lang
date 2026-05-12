@@ -173,6 +173,11 @@ pub enum Opcode {
         tag_const_idx: u32,
         target_pc: u32,
     },
+    TailCallClosure {
+        arity: u8,
+        span_start: u32,
+        span_end: u32,
+    },
 }
 
 impl Opcode {
@@ -196,6 +201,7 @@ impl Opcode {
             Self::MakeErr => "MakeErr",
             Self::JumpIfLocalTagEq { .. } => "JumpIfLocalTagEq",
             Self::JumpIfLocalTagNe { .. } => "JumpIfLocalTagNe",
+            Self::TailCallClosure { .. } => "TailCallClosure",
             Self::AddInt => "AddInt",
             Self::SubInt => "SubInt",
             Self::MulInt => "MulInt",
@@ -1601,6 +1607,11 @@ fn opcode_span(
             span_start,
             span_end,
             ..
+        }
+        | Opcode::TailCallClosure {
+            span_start,
+            span_end,
+            ..
         } => Some((*span_start, (*span_end).max(*span_start + 1))),
         Opcode::MakeError { template_id } => error_templates
             .iter()
@@ -1855,6 +1866,25 @@ mod tests {
         let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
 
         assert_eq!(decoded.opcodes, bytecode.opcodes);
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_tail_call_closure_opcode() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.opcodes = vec![
+            Opcode::Halt,
+            Opcode::TailCallClosure {
+                arity: 1,
+                span_start: 2,
+                span_end: 8,
+            },
+        ];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.opcodes, bytecode.opcodes);
+        assert_eq!(decoded.opcodes[1].kind_name(), "TailCallClosure");
     }
 
     #[test]

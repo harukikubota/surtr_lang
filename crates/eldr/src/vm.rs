@@ -3629,6 +3629,7 @@ impl VM {
                 "CallBuiltin" => observer.stats.builtin_calls += 1,
                 "Call" => observer.stats.function_calls += 1,
                 "CallClosure" => observer.stats.closure_calls += 1,
+                "TailCallClosure" => observer.stats.closure_calls += 1,
                 "Return" => observer.stats.return_count += 1,
                 _ => {}
             }
@@ -4521,6 +4522,34 @@ impl VM {
         Ok(())
     }
 
+    fn return_from_current_frame(
+        &mut self,
+        ret: Value,
+        pc: &mut usize,
+    ) -> Result<(), RuntimeError> {
+        if self.frames.len() == 1 {
+            return Err(RuntimeError::new("Return at top-level"));
+        }
+
+        let frame = self
+            .frames
+            .pop()
+            .ok_or_else(|| RuntimeError::new("Return with empty frame stack"))?;
+        self.stack.truncate(frame.stack_base);
+        self.stack.push(ret);
+        *pc = frame.return_pc;
+        self.observe_call_event(
+            "Return",
+            format!(
+                "return pc={} stack_depth={} frame_depth={}",
+                *pc,
+                self.stack.len(),
+                self.frames.len()
+            ),
+        );
+        Ok(())
+    }
+
     fn verify_program(bytecode: &Bytecode) -> Result<(), RuntimeError> {
         Self::verify_type_registry_entries(bytecode.type_registry.entries(), None)?;
         Self::verify_source_map_entries(bytecode.source_map.as_ref(), bytecode.opcodes.len(), "")?;
@@ -4588,7 +4617,7 @@ impl VM {
                         )));
                     }
                 }
-                Opcode::Return if idx <= halt_pos => {
+                Opcode::Return | Opcode::TailCallClosure { .. } if idx <= halt_pos => {
                     return Err(RuntimeError::new("Return at top-level"));
                 }
                 _ => {}
@@ -4701,7 +4730,7 @@ impl VM {
                         )));
                     }
                 }
-                Opcode::Return if idx <= halt_pos => {
+                Opcode::Return | Opcode::TailCallClosure { .. } if idx <= halt_pos => {
                     return Err(RuntimeError::new("Return at top-level"));
                 }
                 _ => {}
@@ -5783,6 +5812,93 @@ impl VM {
                 }
             }
 
+            Opcode::TailCallClosure {
+                arity,
+                span_start,
+                span_end,
+            } => {
+                let mut args = Vec::with_capacity(arity as usize);
+                for _ in 0..arity {
+                    args.push(self.pop_stack()?);
+                }
+                args.reverse();
+
+                let callable = match self.pop_stack()? {
+                    Value::Callable(callable) => callable,
+                    _ => {
+                        return Err(RuntimeError::new("CallClosure expects a callable value"));
+                    }
+                };
+
+                let mut full_args = callable.lexical_captures;
+                full_args.extend(args);
+
+                match callable.target {
+                    CallableTarget::Builtin(builtin_id) => {
+                        let builtin_name = builtin_meta_by_id(builtin_id)
+                            .map(|meta| meta.name)
+                            .unwrap_or("<unknown>");
+                        self.observe_call_event(
+                            "TailCallClosure",
+                            format!(
+                                "call pc={} kind=TailCallClosure target=builtin:{} arity={} stack_depth={} frame_depth={}",
+                                (*pc).saturating_sub(1),
+                                builtin_name,
+                                full_args.len(),
+                                self.stack.len(),
+                                self.frames.len()
+                            ),
+                        );
+                        let result = self.with_call_site(Some((span_start, span_end)), |vm| {
+                            call_builtin(vm, builtin_id, full_args)
+                        })?;
+                        let pending_future = match result {
+                            Value::PendingFuture(future_id) => Some(future_id),
+                            _ => None,
+                        };
+                        self.return_from_current_frame(result, pc)?;
+                        if let Some(future_id) = pending_future {
+                            return Ok(OpcodeControl::Pending {
+                                future_id,
+                                resume_pc: *pc,
+                            });
+                        }
+                    }
+                    CallableTarget::Function(fun_idx) => {
+                        let entry = self.function_entry(fun_idx)?.clone();
+                        if entry.arity as usize != full_args.len() {
+                            return Err(RuntimeError::new(format!(
+                                "Call arity mismatch for function {}: expected {}, got {}",
+                                fun_idx,
+                                entry.arity,
+                                full_args.len()
+                            )));
+                        }
+                        if entry.entry_pc as usize >= self.bytecode.opcodes.len() {
+                            return Err(RuntimeError::new(format!(
+                                "Function {} entry_pc out of bounds: {}",
+                                fun_idx, entry.entry_pc
+                            )));
+                        }
+
+                        let locals = Self::build_locals_for_call(&entry, full_args)?;
+                        self.observe_call_event(
+                            "TailCallClosure",
+                            format!(
+                                "call pc={} kind=TailCallClosure target=function:fun#{} arity={} stack_depth={} frame_depth={}",
+                                (*pc).saturating_sub(1),
+                                fun_idx,
+                                entry.arity,
+                                self.stack.len(),
+                                self.frames.len()
+                            ),
+                        );
+                        self.reuse_current_frame_for_call(locals, Some((span_start, span_end)))?;
+                        *pc = entry.entry_pc as usize;
+                    }
+                }
+            }
+
             // Control flow
             Opcode::Jump(addr) => {
                 *pc = self.validate_jump_target(addr)?;
@@ -5822,27 +5938,8 @@ impl VM {
 
             // Return
             Opcode::Return => {
-                if self.frames.len() == 1 {
-                    return Err(RuntimeError::new("Return at top-level"));
-                }
-
                 let ret = self.pop_stack()?;
-                let frame = self
-                    .frames
-                    .pop()
-                    .ok_or_else(|| RuntimeError::new("Return with empty frame stack"))?;
-                self.stack.truncate(frame.stack_base);
-                self.stack.push(ret);
-                *pc = frame.return_pc;
-                self.observe_call_event(
-                    "Return",
-                    format!(
-                        "return pc={} stack_depth={} frame_depth={}",
-                        *pc,
-                        self.stack.len(),
-                        self.frames.len()
-                    ),
-                );
+                self.return_from_current_frame(ret, pc)?;
             }
         }
 
@@ -10124,6 +10221,137 @@ mod tests {
         assert_eq!(observation.trace_lines.len(), 1);
         assert!(observation.trace_lines[0].contains("kind=CallBuiltin"));
         assert!(observation.trace_lines[0].contains("target=to_string"));
+    }
+
+    #[test]
+    fn tail_call_closure_returns_user_function_result_to_caller() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadFunctionRef(1),
+            Opcode::LoadConst(0),
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 2,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::Halt,
+            Opcode::LoadLocal(0),
+            Opcode::LoadLocal(1),
+            Opcode::TailCallClosure {
+                arity: 1,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::LoadLocal(0),
+            Opcode::LoadConst(1),
+            Opcode::AddInt,
+            Opcode::Return,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(41)), Constant::Int(int(1))];
+        bytecode.functions = vec![
+            function_entry(0, 4, 2, 2, Some("Main::apply_tail")),
+            function_entry(1, 7, 1, 1, Some("Main::add1")),
+        ];
+
+        let mut vm = VM::new(bytecode);
+        vm.run().expect("run should succeed");
+
+        assert_eq!(vm.last_result, Some(Value::Int(int(42))));
+    }
+
+    #[test]
+    fn tail_call_closure_preserves_lexical_capture_order() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadFunctionRef(1),
+            Opcode::LoadConst(0),
+            Opcode::CaptureClosure(1),
+            Opcode::LoadConst(1),
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 2,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::Halt,
+            Opcode::LoadLocal(0),
+            Opcode::LoadLocal(1),
+            Opcode::TailCallClosure {
+                arity: 1,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::LoadLocal(0),
+            Opcode::LoadLocal(1),
+            Opcode::AddInt,
+            Opcode::Return,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(10)), Constant::Int(int(32))];
+        bytecode.functions = vec![
+            function_entry(0, 6, 2, 2, Some("Main::apply_tail")),
+            function_entry(1, 9, 2, 2, Some("Main::add_base")),
+        ];
+
+        let mut vm = VM::new(bytecode);
+        vm.run().expect("run should succeed");
+
+        assert_eq!(vm.last_result, Some(Value::Int(int(42))));
+    }
+
+    #[test]
+    fn tail_call_closure_returns_builtin_result_to_caller() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadBuiltinRef(builtin_id("to_string")),
+            Opcode::LoadConst(0),
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 2,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::Halt,
+            Opcode::LoadLocal(0),
+            Opcode::LoadLocal(1),
+            Opcode::TailCallClosure {
+                arity: 1,
+                span_start: 0,
+                span_end: 0,
+            },
+        ]);
+        bytecode.constants = vec![Constant::Int(int(42))];
+        bytecode.functions = vec![function_entry(0, 4, 2, 2, Some("Main::apply_tail"))];
+
+        let mut vm = VM::new(bytecode);
+        vm.run().expect("run should succeed");
+
+        assert_eq!(vm.last_result, Some(Value::Str("42".into())));
+    }
+
+    #[test]
+    fn tail_call_closure_rejects_non_callable_target() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 2,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::Halt,
+            Opcode::LoadLocal(0),
+            Opcode::LoadLocal(1),
+            Opcode::TailCallClosure {
+                arity: 1,
+                span_start: 0,
+                span_end: 0,
+            },
+        ]);
+        bytecode.constants = vec![Constant::Int(int(0)), Constant::Int(int(42))];
+        bytecode.functions = vec![function_entry(0, 4, 2, 2, Some("Main::bad_apply"))];
+
+        let err = VM::new(bytecode).run().expect_err("must fail");
+
+        assert!(err.message.contains("CallClosure expects a callable value"));
     }
 
     #[test]
