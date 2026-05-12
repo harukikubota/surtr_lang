@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::builtin::builtin_meta_by_id;
 use crate::primitives::{BuiltinId, FunctionId, RuntimeTag, SurtrInt};
-use crate::runtime::{TypeEntry, TypeRegistry};
+use crate::runtime::{CallableOrigin, TypeEntry, TypeRegistry};
 
 /// Surtr bytecode instructions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -178,6 +178,7 @@ pub enum Opcode {
         span_start: u32,
         span_end: u32,
     },
+    LoadCallableTemplateRef(u32),
 }
 
 impl Opcode {
@@ -202,6 +203,7 @@ impl Opcode {
             Self::JumpIfLocalTagEq { .. } => "JumpIfLocalTagEq",
             Self::JumpIfLocalTagNe { .. } => "JumpIfLocalTagNe",
             Self::TailCallClosure { .. } => "TailCallClosure",
+            Self::LoadCallableTemplateRef(..) => "LoadCallableTemplateRef",
             Self::AddInt => "AddInt",
             Self::SubInt => "SubInt",
             Self::MulInt => "MulInt",
@@ -320,7 +322,7 @@ pub struct CompileInfo {
 impl Default for CompileInfo {
     fn default() -> Self {
         Self {
-            bytecode_version: 1,
+            bytecode_version: 2,
             debug_level: 2,
             num_locals: 0,
             compiler_version: None,
@@ -691,6 +693,8 @@ pub struct Bytecode {
     pub error_templates: Vec<ErrTemplate>,
     #[serde(default)]
     pub dbg_templates: Vec<DbgTemplate>,
+    #[serde(default)]
+    pub callable_templates: Vec<CallableTemplate>,
     pub functions: Vec<FunctionEntry>,
     pub source_map: Option<SourceMap>,
     /// Symbol-level documentation carried from `@doc` through `.eldr`.
@@ -729,6 +733,7 @@ impl Default for Bytecode {
             type_registry: TypeRegistry::new(),
             error_templates: Vec::new(),
             dbg_templates: Vec::new(),
+            callable_templates: Vec::new(),
             functions: Vec::new(),
             source_map: None,
             docs: Vec::new(),
@@ -763,6 +768,7 @@ pub struct BytecodeChunk {
     /// Base offset of dbg templates in the VM-wide pool when this chunk is produced.
     pub dbg_template_base: u32,
     pub dbg_templates: Vec<DbgTemplate>,
+    pub callable_templates: Vec<CallableTemplate>,
     pub functions: Vec<FunctionEntry>,
     pub docs: Vec<DocEntry>,
     pub runtime_process_specs: Vec<RuntimeProcessSpec>,
@@ -787,6 +793,69 @@ pub struct FunctionEntry {
     pub span_end: u32,
     #[serde(default)]
     pub flags: FunctionFlags,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CallableTemplateDirectTarget {
+    Builtin(BuiltinId),
+    Function(FunctionId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CallableTemplateArg {
+    Bound(u8),
+    Runtime(u8),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CallableTemplateComposeFlavor {
+    Plain,
+    ResultMap,
+    ResultBind,
+    ListMap,
+    ListBind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CallableTemplateKind {
+    PartialDirectCall {
+        target: CallableTemplateDirectTarget,
+        arg_sources: Vec<CallableTemplateArg>,
+    },
+    InjectDirectCall {
+        target: CallableTemplateDirectTarget,
+        bound_arg_count: u8,
+    },
+    ComposeDirect {
+        flavor: CallableTemplateComposeFlavor,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallableTemplate {
+    pub template_id: u32,
+    pub kind: CallableTemplateKind,
+    #[serde(default)]
+    pub metadata: CallableTemplateMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallableTemplateMetadata {
+    pub origin: CallableOrigin,
+    pub module: Option<String>,
+    pub name: Option<String>,
+    pub full_signature: Option<String>,
+}
+
+impl Default for CallableTemplateMetadata {
+    fn default() -> Self {
+        Self {
+            origin: CallableOrigin::Unknown,
+            module: None,
+            name: None,
+            full_signature: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -999,7 +1068,7 @@ struct ParsedContainer<'a> {
 
 impl Bytecode {
     const MAGIC: [u8; 4] = *b"ELDR";
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
     const HEADER_LEN: usize = 16;
     const CHUNK_HEADER_LEN: usize = 8;
     const CHUNK_CODE: [u8; 4] = *b"Code";
@@ -1008,6 +1077,7 @@ impl Bytecode {
     const CHUNK_TYPES: [u8; 4] = *b"Type";
     const CHUNK_ERRORS: [u8; 4] = *b"ErrT";
     const CHUNK_DBGS: [u8; 4] = *b"DbgT";
+    const CHUNK_CALLABLE_TEMPLATES: [u8; 4] = *b"CalT";
     const CHUNK_COMPILE_INFO: [u8; 4] = *b"CInf";
     const CHUNK_LABELS: [u8; 4] = *b"LblT";
     const CHUNK_IMPORTS: [u8; 4] = *b"ImpT";
@@ -1023,9 +1093,7 @@ impl Bytecode {
 
     pub fn refresh_viewer_metadata(&mut self) {
         self.compile_info.num_locals = self.num_locals;
-        if self.compile_info.bytecode_version == 0 {
-            self.compile_info.bytecode_version = 1;
-        }
+        self.compile_info.bytecode_version = Self::VERSION;
         if self.sources.is_empty() {
             self.sources = derive_sources(self.source_map.as_ref());
         }
@@ -1056,6 +1124,10 @@ impl Bytecode {
                 serialize_chunk(&bytecode.error_templates)?,
             ),
             (Self::CHUNK_DBGS, serialize_chunk(&bytecode.dbg_templates)?),
+            (
+                Self::CHUNK_CALLABLE_TEMPLATES,
+                serialize_chunk(&bytecode.callable_templates)?,
+            ),
             (
                 Self::CHUNK_COMPILE_INFO,
                 serialize_chunk(&bytecode.compile_info)?,
@@ -1134,6 +1206,8 @@ fn decode_payloads(
     let error_templates = deserialize_required::<Vec<ErrTemplate>>(payloads, "ErrT")?;
     let dbg_templates =
         deserialize_optional::<Vec<DbgTemplate>>(payloads, "DbgT")?.unwrap_or_default();
+    let callable_templates =
+        deserialize_optional::<Vec<CallableTemplate>>(payloads, "CalT")?.unwrap_or_default();
     let compile_info = deserialize_required::<CompileInfo>(payloads, "CInf")?;
     let labels = deserialize_required::<Vec<LabelEntry>>(payloads, "LblT")?;
     let imports = deserialize_required::<Vec<ImportEntry>>(payloads, "ImpT")?;
@@ -1156,6 +1230,7 @@ fn decode_payloads(
         type_registry,
         error_templates,
         dbg_templates,
+        callable_templates,
         functions,
         source_map: rebuild_source_map(&spans, &pc_spans),
         docs,
@@ -1184,7 +1259,7 @@ fn parse_container(bytes: &[u8]) -> Result<ParsedContainer<'_>, BytecodeFormatEr
     }
 
     let version = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-    if version != Bytecode::VERSION {
+    if version > Bytecode::VERSION {
         return Err(BytecodeFormatError::UnsupportedVersion(version));
     }
 
@@ -1310,6 +1385,7 @@ fn is_known_chunk_tag(tag: &str) -> bool {
             | "Type"
             | "ErrT"
             | "DbgT"
+            | "CalT"
             | "CInf"
             | "LblT"
             | "ImpT"
@@ -1657,12 +1733,14 @@ fn checked_payload_len(len: usize) -> Result<u32, BytecodeFormatError> {
 mod tests {
     use super::{
         checked_payload_len, line_column_for_offset, populate_error_template_lines,
-        stable_hash_hex, Bytecode, BytecodeFormatError, CompileInfo, Constant, DocEntry, DocKind,
-        ErrTemplate, FunctionEntry, FunctionFlags, Opcode, OpcodeSource, RuntimeBootPlan,
-        RuntimeCallableRef, RuntimeInitPolicy, RuntimeInitResultShape, RuntimeInitSpec,
-        RuntimeLifecycleSpec, RuntimeProcessDependencies, RuntimeProcessInstance,
-        RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable, RuntimeStateSpec,
-        RuntimeSupervisionSpec, RuntimeTypeRef, SourceFileEntry, SourceMap,
+        stable_hash_hex, Bytecode, BytecodeFormatError, CallableTemplate,
+        CallableTemplateArg, CallableTemplateComposeFlavor, CallableTemplateDirectTarget,
+        CallableTemplateKind, CallableTemplateMetadata, CompileInfo, Constant, DocEntry,
+        DocKind, ErrTemplate, FunctionEntry, FunctionFlags, Opcode, OpcodeSource,
+        RuntimeBootPlan, RuntimeCallableRef, RuntimeInitPolicy, RuntimeInitResultShape,
+        RuntimeInitSpec, RuntimeLifecycleSpec, RuntimeProcessDependencies,
+        RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable,
+        RuntimeStateSpec, RuntimeSupervisionSpec, RuntimeTypeRef, SourceFileEntry, SourceMap,
     };
     use crate::primitives::int;
     use crate::runtime::{TypeEntry, TypeKind, TypeRegistry};
@@ -1727,6 +1805,7 @@ mod tests {
                 num_params: 0,
             }],
             dbg_templates: Vec::new(),
+            callable_templates: Vec::new(),
             functions: vec![FunctionEntry {
                 fun_idx: 0,
                 entry_pc: 1,
@@ -1885,6 +1964,44 @@ mod tests {
 
         assert_eq!(decoded.opcodes, bytecode.opcodes);
         assert_eq!(decoded.opcodes[1].kind_name(), "TailCallClosure");
+    }
+
+    #[test]
+    fn roundtrip_encode_decode_callable_templates() {
+        let mut bytecode = sample_bytecode(None);
+        bytecode.callable_templates = vec![
+            CallableTemplate {
+                template_id: 0,
+                kind: CallableTemplateKind::PartialDirectCall {
+                    target: CallableTemplateDirectTarget::Function(7),
+                    arg_sources: vec![
+                        CallableTemplateArg::Runtime(0),
+                        CallableTemplateArg::Bound(0),
+                    ],
+                },
+                metadata: CallableTemplateMetadata::default(),
+            },
+            CallableTemplate {
+                template_id: 1,
+                kind: CallableTemplateKind::InjectDirectCall {
+                    target: CallableTemplateDirectTarget::Builtin(2),
+                    bound_arg_count: 1,
+                },
+                metadata: CallableTemplateMetadata::default(),
+            },
+            CallableTemplate {
+                template_id: 2,
+                kind: CallableTemplateKind::ComposeDirect {
+                    flavor: CallableTemplateComposeFlavor::ResultBind,
+                },
+                metadata: CallableTemplateMetadata::default(),
+            },
+        ];
+
+        let bytes = bytecode.encode().expect("encode should succeed");
+        let decoded = Bytecode::decode(&bytes).expect("decode should succeed");
+
+        assert_eq!(decoded.callable_templates, bytecode.callable_templates);
     }
 
     #[test]
@@ -2073,9 +2190,20 @@ mod tests {
 
     #[test]
     fn decode_rejects_unsupported_version() {
-        let bytes = b"ELDR\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        let bytes = b"ELDR\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
         let err = Bytecode::decode(bytes).expect_err("decode must fail");
-        assert!(matches!(err, BytecodeFormatError::UnsupportedVersion(2)));
+        assert!(matches!(err, BytecodeFormatError::UnsupportedVersion(3)));
+    }
+
+    #[test]
+    fn decode_accepts_previous_version_header() {
+        let bytecode = sample_bytecode(None);
+        let mut bytes = bytecode.encode().expect("encode should succeed");
+        bytes[4..8].copy_from_slice(&1u32.to_le_bytes());
+
+        let decoded = Bytecode::decode(&bytes).expect("decode should accept version 1");
+        assert_eq!(decoded.callable_templates, bytecode.callable_templates);
+        assert_eq!(decoded.compile_info.bytecode_version, 2);
     }
 
     #[test]
@@ -2098,11 +2226,12 @@ mod tests {
         let bytes = bytecode.encode().expect("encode should succeed");
         let inspected = Bytecode::inspect(&bytes).expect("inspect should succeed");
         assert_eq!(inspected.header.magic, "ELDR");
-        assert_eq!(inspected.header.version, 1);
-        assert!(inspected.chunks.len() >= 14);
+        assert_eq!(inspected.header.version, 2);
+        assert!(inspected.chunks.len() >= 15);
         assert_eq!(inspected.chunks[0].tag, "Code");
         assert!(inspected.chunks.iter().any(|chunk| chunk.tag == "Proc"));
         assert!(inspected.chunks.iter().any(|chunk| chunk.tag == "Boot"));
+        assert!(inspected.chunks.iter().any(|chunk| chunk.tag == "CalT"));
         assert!(inspected.chunks[0].payload_offset >= 16);
         assert!(inspected.chunks[0].padded_size >= inspected.chunks[0].size as usize);
     }

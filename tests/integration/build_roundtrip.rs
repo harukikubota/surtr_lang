@@ -422,6 +422,95 @@ print(to_string(apply_tail(add1, 41)))
 }
 
 #[test]
+fn dump_opcode_histogram_tracks_callable_templates_and_wrapper_reduction() {
+    let temp = unique_temp_dir("surtr_dump_callable_templates");
+    let source_path = temp.join("callable_templates.srt");
+    write_source(
+        &source_path,
+        r#"def add(x: Int, y: Int) -> Int {
+  x + y
+}
+
+def inc(x: Int) -> Int {
+  x + 1
+}
+
+def parse(text: String) -> Result<Int> {
+  Ok(41)
+}
+
+def render(x: Int) -> Result<String> {
+  Ok(to_string(x))
+}
+
+partial = &add(&1, 1)
+plain = partial >> &inc
+mapped: Result<Int> = Ok(1) |*> add(2)
+pipeline = &parse >=> &render
+
+print(to_string(plain(40)))
+match mapped {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("mapped err"),
+}
+match pipeline("x") {
+  Ok(v) => print(v),
+  Err(e) => print("pipeline err"),
+}
+"#,
+    );
+
+    let dump = surtr_command()
+        .args([
+            "dump",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--format",
+            "json",
+            "--opcode-histogram",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    assert_eq!(json["header"]["version"], 2);
+    assert!(
+        json["summary"]["callable_template_count"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "expected callable templates in dump summary: {json}"
+    );
+    assert!(
+        json["optimization_summary"]["apply_compose"]["template_partial_calls"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "expected template partial call entries: {json}"
+    );
+    assert!(
+        json["optimization_summary"]["apply_compose"]["template_compose_calls"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "expected template compose call entries: {json}"
+    );
+    assert!(
+        json["function_summary"]["summary"]["generated_wrapper_functions"]
+            .as_u64()
+            .is_some(),
+        "expected generated wrapper count in function summary: {json}"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn dump_outputs_runtime_process_specs_for_agent_modules() {
     let fixture = module_spec_fixtures()
         .into_iter()

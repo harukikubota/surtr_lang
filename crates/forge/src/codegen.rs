@@ -5,14 +5,17 @@ use scar::types::Ty;
 use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_id_by_name;
 use sindr::ir::{
-    BootEntrySource, CompileInfo, DbgArgTemplate, DbgTemplate, DocEntry, FunctionFlags,
-    RuntimeBootPlan, RuntimeCallableRef, RuntimeHandlerArg, RuntimeHandlerDependency,
-    RuntimeHandlerKind, RuntimeHandlerOverride, RuntimeHandlerSpec, RuntimeHandlerTarget,
-    RuntimeInitPolicy, RuntimeInitResultShape, RuntimeInitSpec, RuntimeLifecycleSpec,
-    RuntimeProcessDependencies, RuntimeStateSpec, RuntimeSupervisionSpec,
-    RuntimeSupervisorOverrideEntry, RuntimeSupervisorPolicy, RuntimeTypeRef, SingletonBootEntry,
+    BootEntrySource, CallableTemplate, CallableTemplateArg, CallableTemplateComposeFlavor,
+    CallableTemplateDirectTarget, CallableTemplateKind, CallableTemplateMetadata, CompileInfo,
+    DbgArgTemplate, DbgTemplate, DocEntry, FunctionFlags, RuntimeBootPlan, RuntimeCallableRef,
+    RuntimeHandlerArg, RuntimeHandlerDependency, RuntimeHandlerKind, RuntimeHandlerOverride,
+    RuntimeHandlerSpec, RuntimeHandlerTarget, RuntimeInitPolicy, RuntimeInitResultShape,
+    RuntimeInitSpec, RuntimeLifecycleSpec, RuntimeProcessDependencies, RuntimeStateSpec,
+    RuntimeSupervisionSpec, RuntimeSupervisorOverrideEntry, RuntimeSupervisorPolicy,
+    RuntimeTypeRef, SingletonBootEntry,
 };
 use sindr::primitives::int;
+use sindr::runtime::CallableOrigin;
 use spire::ast::{
     AstTy, BinOp, Lit, ProcessInstance, ProcessRuntimeHandlerKind, Span, SupervisorInitSpec,
     Visibility,
@@ -53,6 +56,7 @@ pub fn codegen_typed_program(typed: TypedProgram) -> Result<Bytecode, CodegenErr
         type_registry: state.type_registry,
         error_templates: state.error_templates,
         dbg_templates: state.dbg_templates,
+        callable_templates: state.callable_templates,
         functions: state.functions,
         source_map: None,
         docs: Vec::new(),
@@ -513,7 +517,7 @@ fn singleton_required_by_call(
 /// the single top-level halt.
 pub fn compose_bytecode_with_chunk(
     mut base: Bytecode,
-    chunk: BytecodeChunk,
+    mut chunk: BytecodeChunk,
 ) -> Result<Bytecode, CodegenError> {
     let base_halt = base
         .opcodes
@@ -570,6 +574,19 @@ pub fn compose_bytecode_with_chunk(
     let base_func_base = final_halt + 1;
     let chunk_func_base = base_func_base + base_func_len;
 
+    rebase_chunk_callable_template_ids(
+        &mut chunk.opcodes,
+        &mut chunk.callable_templates,
+        base.callable_templates.len(),
+    )?;
+    rebase_chunk_function_ids(
+        &mut chunk.opcodes,
+        &mut chunk.callable_templates,
+        &mut chunk.functions,
+        &mut chunk.runtime_process_specs,
+        base.functions.len(),
+    )?;
+
     let mut base_ops = base.opcodes;
     relocate_base_ops_for_insert(&mut base_ops, base_halt, chunk_top_len)?;
 
@@ -624,6 +641,7 @@ pub fn compose_bytecode_with_chunk(
     base.type_registry.extend(chunk.type_entries);
     base.error_templates.extend(chunk.error_templates);
     base.dbg_templates.extend(chunk.dbg_templates);
+    base.callable_templates.extend(chunk.callable_templates);
     base.num_locals = base.num_locals.saturating_add(chunk.new_locals);
     base.functions = functions;
     base.source_map = None;
@@ -633,6 +651,104 @@ pub fn compose_bytecode_with_chunk(
         .extend(chunk.runtime_process_specs);
     extend_runtime_boot_plan(&mut base.runtime_boot_plan, chunk.runtime_boot_plan);
     Ok(base)
+}
+
+fn rebase_chunk_callable_template_ids(
+    opcodes: &mut [Opcode],
+    templates: &mut [CallableTemplate],
+    base_template_len: usize,
+) -> Result<(), CodegenError> {
+    let Some(template_floor) = templates.iter().map(|template| template.template_id as usize).min()
+    else {
+        return Ok(());
+    };
+    if template_floor <= base_template_len {
+        return Ok(());
+    }
+    let delta = template_floor - base_template_len;
+    for opcode in opcodes.iter_mut() {
+        if let Opcode::LoadCallableTemplateRef(template_id) = opcode {
+            let template_idx = *template_id as usize;
+            if template_idx >= template_floor {
+                *template_id = u32::try_from(template_idx - delta).map_err(|_| CodegenError {
+                    message: "callable template index exceeds u32 after rebasing".into(),
+                    span: Span { start: 0, end: 0 },
+                })?;
+            }
+        }
+    }
+    for template in templates.iter_mut() {
+        let template_idx = template.template_id as usize;
+        if template_idx >= template_floor {
+            template.template_id =
+                u32::try_from(template_idx - delta).map_err(|_| CodegenError {
+                    message: "callable template id exceeds u32 after rebasing".into(),
+                    span: Span { start: 0, end: 0 },
+                })?;
+        }
+    }
+    Ok(())
+}
+
+fn rebase_chunk_function_ids(
+    opcodes: &mut [Opcode],
+    templates: &mut [CallableTemplate],
+    functions: &mut [FunctionEntry],
+    runtime_process_specs: &mut [RuntimeProcessSpec],
+    base_function_len: usize,
+) -> Result<(), CodegenError> {
+    let Some(function_floor) = functions.iter().map(|entry| entry.fun_idx as usize).min() else {
+        return Ok(());
+    };
+    if function_floor <= base_function_len {
+        return Ok(());
+    }
+    let delta = function_floor - base_function_len;
+
+    let rebase_fun_idx = |fun_idx: &mut u32| -> Result<(), CodegenError> {
+        let current = *fun_idx as usize;
+        if current >= function_floor {
+            *fun_idx = u32::try_from(current - delta).map_err(|_| CodegenError {
+                message: "function index exceeds u32 after rebasing".into(),
+                span: Span { start: 0, end: 0 },
+            })?;
+        }
+        Ok(())
+    };
+
+    for opcode in opcodes.iter_mut() {
+        match opcode {
+            Opcode::LoadFunctionRef(fun_idx) | Opcode::Call { fun_idx, .. } => {
+                rebase_fun_idx(fun_idx)?;
+            }
+            _ => {}
+        }
+    }
+
+    for template in templates.iter_mut() {
+        match &mut template.kind {
+            CallableTemplateKind::PartialDirectCall { target, .. }
+            | CallableTemplateKind::InjectDirectCall { target, .. } => {
+                if let CallableTemplateDirectTarget::Function(fun_idx) = target {
+                    rebase_fun_idx(fun_idx)?;
+                }
+            }
+            CallableTemplateKind::ComposeDirect { .. } => {}
+        }
+    }
+
+    for entry in functions.iter_mut() {
+        rebase_fun_idx(&mut entry.fun_idx)?;
+    }
+
+    for spec in runtime_process_specs.iter_mut() {
+        rebase_fun_idx(&mut spec.init.callable.fun_idx)?;
+        for handler in &mut spec.handlers {
+            rebase_fun_idx(&mut handler.fun_idx)?;
+        }
+    }
+
+    Ok(())
 }
 
 fn extend_runtime_boot_plan(base: &mut RuntimeBootPlan, chunk: RuntimeBootPlan) {
@@ -1641,6 +1757,7 @@ struct CodegenState {
     type_registry: TypeRegistry,
     error_templates: Vec<ErrTemplate>,
     dbg_templates: Vec<DbgTemplate>,
+    callable_templates: Vec<CallableTemplate>,
     functions: Vec<FunctionEntry>,
     error_ctor_funs: HashMap<String, (u32, u8)>, // error kind -> (fun_idx, arity)
 }
@@ -1655,6 +1772,7 @@ impl CodegenState {
             type_registry: TypeRegistry::new(),
             error_templates: Vec::new(),
             dbg_templates: Vec::new(),
+            callable_templates: Vec::new(),
             functions: Vec::new(),
             error_ctor_funs: HashMap::new(),
         }
@@ -1732,6 +1850,7 @@ impl ForgeSession {
                 type_registry: bytecode.type_registry.clone(),
                 error_templates: bytecode.error_templates.clone(),
                 dbg_templates: bytecode.dbg_templates.clone(),
+                callable_templates: bytecode.callable_templates.clone(),
                 functions: bytecode.functions.clone(),
                 error_ctor_funs,
             },
@@ -1806,7 +1925,6 @@ impl ForgeSession {
         let const_base = before.constants.len();
         let error_template_base = before.error_templates.len();
         let dbg_template_base = before.dbg_templates.len();
-
         let mut gene = Codegen::from_state(before.clone());
         gene.set_chunk_constant_dedup_start(const_base);
         gene.set_top_level_returns_result(top_level_returns_result);
@@ -1825,6 +1943,8 @@ impl ForgeSession {
             after.type_registry.entries()[before.type_registry.entries().len()..].to_vec();
         let error_templates = after.error_templates[before.error_templates.len()..].to_vec();
         let dbg_templates = after.dbg_templates[before.dbg_templates.len()..].to_vec();
+        let callable_templates =
+            after.callable_templates[before.callable_templates.len()..].to_vec();
         let meta = collect_chunk_meta(&typed_for_meta, &after.slot_map);
         let functions = after.functions[before.functions.len()..].to_vec();
 
@@ -1855,6 +1975,7 @@ impl ForgeSession {
                 error_templates,
                 dbg_template_base,
                 dbg_templates,
+                callable_templates,
                 functions: functions.clone(),
                 docs: Vec::new(),
                 runtime_process_specs: Vec::new(),
@@ -1971,17 +2092,18 @@ mod tests {
     use crate::opcode::Opcode;
     use scar::typed::TypedProcessHandlerUid;
     use scar::typed::{
-        TypedDbgArg, TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode,
-        TypedPattern, TypedProcessSpec, TypedProgram,
+        ComposeFlavor, TypedDbgArg, TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern,
+        TypedNode, TypedPattern, TypedProcessSpec, TypedProgram,
     };
     use scar::types::Ty;
     use sigil::resolved::ResolvedId;
     use sindr::ir::{
-        BootEntrySource, DbgTemplate, DocEntry, DocKind, FunctionEntry, FunctionFlags,
-        RuntimeBootPlan, RuntimeCallableRef, RuntimeInitPolicy, RuntimeInitResultShape,
-        RuntimeInitSpec, RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec,
-        RuntimeProcessSpecTable, RuntimeStateSpec, RuntimeSupervisionSpec, RuntimeTypeRef,
-        SingletonBootEntry,
+        BootEntrySource, CallableTemplate, CallableTemplateComposeFlavor,
+        CallableTemplateDirectTarget, CallableTemplateKind, DbgTemplate, DocEntry, DocKind,
+        FunctionEntry, FunctionFlags, RuntimeBootPlan, RuntimeCallableRef, RuntimeInitPolicy,
+        RuntimeInitResultShape, RuntimeInitSpec, RuntimeProcessInstance, RuntimeProcessKind,
+        RuntimeProcessSpec, RuntimeProcessSpecTable, RuntimeStateSpec, RuntimeSupervisionSpec,
+        RuntimeTypeRef, SingletonBootEntry,
     };
     use sindr::runtime::{TypeEntry, TypeKind, TypeRegistry};
     use spire::ast::{
@@ -2154,6 +2276,7 @@ mod tests {
             type_registry: TypeRegistry::from_entries(vec![type_entry(2, "Global::BaseType")]),
             error_templates: vec![err_template(0, "Global::BaseError")],
             dbg_templates: vec![dbg_template(0)],
+            callable_templates: Vec::new(),
             functions: vec![function_entry(0, 6, 8), function_entry(1, 8, 10)],
             source_map: None,
             docs: vec![doc_entry("Global::base_doc")],
@@ -2217,6 +2340,7 @@ mod tests {
             error_templates: vec![err_template(1, "Global::ChunkError")],
             dbg_template_base: 1,
             dbg_templates: vec![dbg_template(1)],
+            callable_templates: Vec::new(),
             functions: vec![function_entry(1, 5, 10), function_entry(2, 10, 12)],
             docs: vec![
                 doc_entry("Global::base_doc"),
@@ -2760,6 +2884,114 @@ mod tests {
         assert!(opcodes
             .iter()
             .any(|opcode| matches!(opcode, Opcode::LoadFunctionRef(7))));
+    }
+
+    #[test]
+    fn emit_inject_call_records_direct_call_template() {
+        let mut gene = Codegen::new();
+        let node = TypedNode {
+            ty: Ty::Func(vec![Ty::Int], Box::new(Ty::Int)),
+            span: span(1, 12),
+            node: TypedInner::InjectCall(
+                Box::new(TypedNode {
+                    ty: Ty::UserFunc {
+                        fun_idx: 7,
+                        type_params: vec![],
+                        params: vec![Ty::Int, Ty::Int],
+                        ret: Box::new(Ty::Int),
+                    },
+                    span: span(1, 4),
+                    node: TypedInner::Var(resolved_id("add", None, 41)),
+                }),
+                vec![lit_node(Ty::Int, Lit::Int(1.into()), span(9, 10))],
+            ),
+        };
+
+        gene.emit_node(&node)
+            .expect("inject call emission should succeed");
+        let (_, state) = gene.finalize().expect("labels should resolve");
+
+        assert!(matches!(
+            state.callable_templates.as_slice(),
+            [CallableTemplate {
+                kind: CallableTemplateKind::InjectDirectCall {
+                    target: CallableTemplateDirectTarget::Function(7),
+                    bound_arg_count: 1,
+                },
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn emit_compose_records_template_for_template_compatible_operands() {
+        let mut gene = Codegen::new();
+        let node = TypedNode {
+            ty: Ty::Func(
+                vec![Ty::Str],
+                Box::new(Ty::Result(Box::new(Ty::Str), Box::new(Ty::Error))),
+            ),
+            span: span(1, 20),
+            node: TypedInner::Compose(
+                ComposeFlavor::ResultBind,
+                Box::new(TypedNode {
+                    ty: Ty::Func(
+                        vec![Ty::Str],
+                        Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))),
+                    ),
+                    span: span(1, 7),
+                    node: TypedInner::Capture(
+                        Box::new(TypedNode {
+                            ty: Ty::UserFunc {
+                                fun_idx: 11,
+                                type_params: vec![],
+                                params: vec![Ty::Str],
+                                ret: Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))),
+                            },
+                            span: span(1, 7),
+                            node: TypedInner::Var(resolved_id("parse", None, 51)),
+                        }),
+                        vec![],
+                    ),
+                }),
+                Box::new(TypedNode {
+                    ty: Ty::Func(
+                        vec![Ty::Int],
+                        Box::new(Ty::Result(Box::new(Ty::Str), Box::new(Ty::Error))),
+                    ),
+                    span: span(11, 20),
+                    node: TypedInner::Capture(
+                        Box::new(TypedNode {
+                            ty: Ty::UserFunc {
+                                fun_idx: 12,
+                                type_params: vec![],
+                                params: vec![Ty::Int],
+                                ret: Box::new(Ty::Result(
+                                    Box::new(Ty::Str),
+                                    Box::new(Ty::Error),
+                                )),
+                            },
+                            span: span(11, 20),
+                            node: TypedInner::Var(resolved_id("render", None, 52)),
+                        }),
+                        vec![],
+                    ),
+                }),
+            ),
+        };
+
+        gene.emit_node(&node)
+            .expect("compose emission should succeed");
+        let (_, state) = gene.finalize().expect("labels should resolve");
+
+        assert!(state.callable_templates.iter().any(|template| {
+            matches!(
+                template.kind,
+                CallableTemplateKind::ComposeDirect {
+                    flavor: CallableTemplateComposeFlavor::ResultBind,
+                }
+            )
+        }));
     }
 
     #[test]
@@ -3917,6 +4149,220 @@ impl Codegen {
         }
     }
 
+    fn callable_template_target(target: DirectCallableTarget) -> CallableTemplateDirectTarget {
+        match target {
+            DirectCallableTarget::Builtin(builtin_id) => {
+                CallableTemplateDirectTarget::Builtin(builtin_id)
+            }
+            DirectCallableTarget::User(fun_idx) => CallableTemplateDirectTarget::Function(fun_idx),
+        }
+    }
+
+    fn callable_template_compose_flavor(
+        flavor: &ComposeFlavor,
+    ) -> Option<CallableTemplateComposeFlavor> {
+        match flavor {
+            ComposeFlavor::Plain => Some(CallableTemplateComposeFlavor::Plain),
+            ComposeFlavor::ResultMap => Some(CallableTemplateComposeFlavor::ResultMap),
+            ComposeFlavor::ResultBind => Some(CallableTemplateComposeFlavor::ResultBind),
+            ComposeFlavor::ListMap { .. } => Some(CallableTemplateComposeFlavor::ListMap),
+            ComposeFlavor::ListBind { .. } => Some(CallableTemplateComposeFlavor::ListBind),
+        }
+    }
+
+    fn operator_compose_template_flavor(
+        op: &OperatorTraitOp,
+        lhs_ty: &Ty,
+    ) -> Option<CallableTemplateComposeFlavor> {
+        match op {
+            OperatorTraitOp::Compose => Some(CallableTemplateComposeFlavor::Plain),
+            OperatorTraitOp::LiftCompose | OperatorTraitOp::KleisliCompose => {
+                let Ty::Func(_, ret) = lhs_ty else {
+                    return None;
+                };
+                match (op, ret.as_ref()) {
+                    (OperatorTraitOp::LiftCompose, Ty::Result(_, _)) => {
+                        Some(CallableTemplateComposeFlavor::ResultMap)
+                    }
+                    (OperatorTraitOp::LiftCompose, Ty::List(_)) => {
+                        Some(CallableTemplateComposeFlavor::ListMap)
+                    }
+                    (OperatorTraitOp::KleisliCompose, Ty::Result(_, _)) => {
+                        Some(CallableTemplateComposeFlavor::ResultBind)
+                    }
+                    (OperatorTraitOp::KleisliCompose, Ty::List(_)) => {
+                        Some(CallableTemplateComposeFlavor::ListBind)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn callable_template_metadata(
+        display: Option<&ReplCallableDisplay>,
+        fallback_signature: Option<&str>,
+    ) -> CallableTemplateMetadata {
+        match display {
+            Some(ReplCallableDisplay::FnCapture { module, name, sig }) => CallableTemplateMetadata {
+                origin: CallableOrigin::Capture,
+                module: Some(module.clone()),
+                name: Some(name.clone()),
+                full_signature: Some(sig.clone()),
+            },
+            Some(ReplCallableDisplay::Closure { sig }) => CallableTemplateMetadata {
+                origin: CallableOrigin::Closure,
+                module: None,
+                name: None,
+                full_signature: Some(sig.clone()),
+            },
+            None => CallableTemplateMetadata {
+                origin: if fallback_signature.is_some() {
+                    CallableOrigin::Closure
+                } else {
+                    CallableOrigin::Unknown
+                },
+                module: None,
+                name: None,
+                full_signature: fallback_signature.map(str::to_string),
+            },
+        }
+    }
+
+    fn add_callable_template(
+        &mut self,
+        kind: CallableTemplateKind,
+        metadata: CallableTemplateMetadata,
+    ) -> u32 {
+        let template_id = self.state.callable_templates.len() as u32;
+        self.state
+            .callable_templates
+            .push(CallableTemplate {
+                template_id,
+                kind,
+                metadata,
+            });
+        template_id
+    }
+
+    fn emit_callable_template_ref(&mut self, template_id: u32) {
+        self.emit(Opcode::LoadCallableTemplateRef(template_id));
+    }
+
+    fn record_inject_direct_call_template(
+        &mut self,
+        func: &TypedNode,
+        bound_arg_count: usize,
+        display: Option<&ReplCallableDisplay>,
+        signature: &str,
+    ) -> Result<Option<u32>, CodegenError> {
+        let Some(target) = self.direct_callable_target_for_ref(func)? else {
+            return Ok(None);
+        };
+        let bound_arg_count = u8::try_from(bound_arg_count).map_err(|_| CodegenError {
+            message: "inject direct-call template bound_arg_count exceeds u8".into(),
+            span: func.span.clone(),
+        })?;
+        Ok(Some(self.add_callable_template(
+            CallableTemplateKind::InjectDirectCall {
+                target: Self::callable_template_target(target),
+                bound_arg_count,
+            },
+            Self::callable_template_metadata(display, Some(signature)),
+        )))
+    }
+
+    fn callable_template_arg_for_node(
+        arg: &TypedNode,
+        params: &[TypedClosureParam],
+        captures: &[ResolvedId],
+    ) -> Option<CallableTemplateArg> {
+        let TypedInner::Var(id) = &arg.node else {
+            return None;
+        };
+        if let Some(index) = params
+            .iter()
+            .position(|param| param.id.unique_id == id.unique_id)
+        {
+            let index = u8::try_from(index).ok()?;
+            return Some(CallableTemplateArg::Runtime(index));
+        }
+        captures
+            .iter()
+            .position(|capture| capture.unique_id == id.unique_id)
+            .and_then(|index| u8::try_from(index).ok())
+            .map(CallableTemplateArg::Bound)
+    }
+
+    fn partial_direct_call_template_for_closure(
+        &self,
+        params: &[TypedClosureParam],
+        captures: &[ResolvedId],
+        body: &TypedNode,
+    ) -> Result<Option<CallableTemplateKind>, CodegenError> {
+        let (target, args): (DirectCallableTarget, &[TypedNode]) = match &body.node {
+            TypedInner::App(func, args) => {
+                let Some(target) = self.direct_callable_target_for_ref(func)? else {
+                    return Ok(None);
+                };
+                (target, args)
+            }
+            TypedInner::TraitCall { dispatch, args, .. } => match dispatch {
+                TraitDispatch::Static(TraitDispatchTarget::Builtin(name)) => (
+                    DirectCallableTarget::Builtin(Self::builtin_id(name).ok_or_else(|| {
+                        CodegenError {
+                            message: format!("Unknown builtin: {}", name),
+                            span: body.span.clone(),
+                        }
+                    })?),
+                    args,
+                ),
+                TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }) => {
+                    (DirectCallableTarget::User(*fun_idx), args)
+                }
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+
+        let mut arg_sources = Vec::with_capacity(args.len());
+        for arg in args {
+            let Some(source) = Self::callable_template_arg_for_node(arg, params, captures) else {
+                return Ok(None);
+            };
+            arg_sources.push(source);
+        }
+
+        Ok(Some(CallableTemplateKind::PartialDirectCall {
+            target: Self::callable_template_target(target),
+            arg_sources,
+        }))
+    }
+
+    fn template_compatible_callable(&self, node: &TypedNode) -> Result<bool, CodegenError> {
+        if self.direct_callable_target_for_capture(node)?.is_some() {
+            return Ok(true);
+        }
+        match &node.node {
+            TypedInner::InjectCall(func, _) => {
+                Ok(self.direct_callable_target_for_ref(func)?.is_some())
+            }
+            TypedInner::Closure(params, captures, body) => {
+                let filtered_captures: Vec<ResolvedId> = captures
+                    .iter()
+                    .filter(|id| self.state.slot_map.contains_key(&id.unique_id))
+                    .cloned()
+                    .collect();
+                Ok(self
+                    .partial_direct_call_template_for_closure(params, &filtered_captures, body)?
+                    .is_some())
+            }
+            TypedInner::Semi(inner) => self.template_compatible_callable(inner),
+            _ => Ok(false),
+        }
+    }
+
     fn emit_direct_call(&mut self, target: DirectCallableTarget, arity: u8, span: &Span) {
         match target {
             DirectCallableTarget::Builtin(builtin_id) => self.emit(Opcode::CallBuiltin {
@@ -4917,9 +5363,36 @@ impl Codegen {
             TypedInner::TraitCall {
                 dispatch,
                 receiver_ty,
+                origin,
                 args,
                 ..
-            } => match dispatch {
+            } => {
+                if let TraitCallOrigin::Operator { op, lhs_ty, .. } = origin {
+                    if args.len() == 2
+                        && self.template_compatible_callable(&args[0])?
+                        && self.template_compatible_callable(&args[1])?
+                    {
+                        if let Some(flavor) =
+                            Self::operator_compose_template_flavor(op, lhs_ty)
+                        {
+                            let template_id = self.add_callable_template(
+                                CallableTemplateKind::ComposeDirect { flavor },
+                                CallableTemplateMetadata {
+                                    origin: CallableOrigin::Closure,
+                                    module: None,
+                                    name: None,
+                                    full_signature: Some(ty_to_string(&node.ty)),
+                                },
+                            );
+                            self.emit_callable_template_ref(template_id);
+                            self.emit_callable_ref(&args[0])?;
+                            self.emit_callable_ref(&args[1])?;
+                            self.emit(Opcode::CaptureClosure(2));
+                            return Ok(());
+                        }
+                    }
+                }
+                match dispatch {
                 TraitDispatch::Pending => {
                     return Err(CodegenError {
                         message: "bounded trait call must be specialized before codegen".into(),
@@ -4976,23 +5449,37 @@ impl Codegen {
                         span_end: node.span.end as u32,
                     });
                 }
-            },
+            }
+            }
 
             TypedInner::InjectCall(func, args) => {
-                let fun_idx = self.reserve_fun_idx();
-                self.pending_inject_calls.push(PendingInjectCall {
-                    fun_idx,
-                    extra_arg_count: args.len(),
-                    span: node.span.clone(),
-                    display: callable_display_for_node(node),
-                    signature: ty_to_string(&node.ty),
-                });
-                self.emit(Opcode::LoadFunctionRef(fun_idx));
-                self.emit_callable_ref(func)?;
+                let display = callable_display_for_node(node);
+                let signature = ty_to_string(&node.ty);
+                let capture_count = if let Some(template_id) = self.record_inject_direct_call_template(
+                    func,
+                    args.len(),
+                    display.as_ref(),
+                    &signature,
+                )? {
+                    self.emit_callable_template_ref(template_id);
+                    args.len()
+                } else {
+                    let fun_idx = self.reserve_fun_idx();
+                    self.pending_inject_calls.push(PendingInjectCall {
+                        fun_idx,
+                        extra_arg_count: args.len(),
+                        span: node.span.clone(),
+                        display: display.clone(),
+                        signature: signature.clone(),
+                    });
+                    self.emit(Opcode::LoadFunctionRef(fun_idx));
+                    self.emit_callable_ref(func)?;
+                    args.len() + 1
+                };
                 for arg in args {
                     self.emit_node(arg)?;
                 }
-                self.emit(Opcode::CaptureClosure((args.len() + 1) as u8));
+                self.emit(Opcode::CaptureClosure(capture_count as u8));
             }
 
             TypedInner::BinOp(op, left, right) => {
@@ -5032,6 +5519,25 @@ impl Codegen {
             }
 
             TypedInner::Compose(flavor, left, right) => {
+                if self.template_compatible_callable(left)? && self.template_compatible_callable(right)?
+                {
+                    if let Some(flavor) = Self::callable_template_compose_flavor(flavor) {
+                        let template_id = self.add_callable_template(
+                            CallableTemplateKind::ComposeDirect { flavor },
+                            CallableTemplateMetadata {
+                                origin: CallableOrigin::Closure,
+                                module: None,
+                                name: None,
+                                full_signature: Some(ty_to_string(&node.ty)),
+                            },
+                        );
+                        self.emit_callable_template_ref(template_id);
+                        self.emit_callable_ref(left)?;
+                        self.emit_callable_ref(right)?;
+                        self.emit(Opcode::CaptureClosure(2));
+                        return Ok(());
+                    }
+                }
                 let fun_idx = self.reserve_fun_idx();
                 let direct_targets = match (
                     self.direct_callable_target_for_capture(left)?,
@@ -5235,14 +5741,33 @@ impl Codegen {
                     .filter(|id| self.state.slot_map.contains_key(&id.unique_id))
                     .cloned()
                     .collect();
+                let display = callable_display_for_node(node);
+                let signature = ty_to_string(&node.ty);
+                if let Some(kind) =
+                    self.partial_direct_call_template_for_closure(params, &filtered_captures, body)?
+                {
+                    let template_id = self.add_callable_template(
+                        kind,
+                        Self::callable_template_metadata(display.as_ref(), Some(&signature)),
+                    );
+                    self.emit_callable_template_ref(template_id);
+                    for capture in &filtered_captures {
+                        let slot = self.alloc_slot(capture.unique_id);
+                        self.emit(Opcode::LoadLocal(slot));
+                    }
+                    if !filtered_captures.is_empty() {
+                        self.emit(Opcode::CaptureClosure(filtered_captures.len() as u8));
+                    }
+                    return Ok(());
+                }
                 let fun_idx = self.reserve_fun_idx();
                 self.pending_closures.push(PendingClosure {
                     fun_idx,
                     captures: filtered_captures.clone(),
                     params: params.clone(),
                     body: body.clone(),
-                    display: callable_display_for_node(node),
-                    signature: ty_to_string(&node.ty),
+                    display,
+                    signature,
                 });
                 self.emit(Opcode::LoadFunctionRef(fun_idx));
                 for capture in &filtered_captures {
@@ -7113,6 +7638,20 @@ impl Codegen {
                 if let Some(new_idx) = remap.get(fun_idx) {
                     *fun_idx = *new_idx;
                 }
+            }
+        }
+
+        for template in &mut self.state.callable_templates {
+            match &mut template.kind {
+                CallableTemplateKind::PartialDirectCall { target, .. }
+                | CallableTemplateKind::InjectDirectCall { target, .. } => {
+                    if let CallableTemplateDirectTarget::Function(fun_idx) = target {
+                        if let Some(new_idx) = remap.get(fun_idx) {
+                            *fun_idx = *new_idx;
+                        }
+                    }
+                }
+                CallableTemplateKind::ComposeDirect { .. } => {}
             }
         }
 

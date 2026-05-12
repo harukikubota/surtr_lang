@@ -1,8 +1,10 @@
 use sindr::builtin::builtin_meta_by_id;
 use sindr::ir::{
-    line_column_for_offset, Bytecode, BytecodeChunk, Constant, DocEntry, FunctionEntry, Opcode,
-    RuntimeHandlerTarget, RuntimeInitPolicy, RuntimeProcessInstance, RuntimeProcessSpec,
-    RuntimeProcessSpecTable, RuntimeSupervisorPolicy, SourceMap,
+    line_column_for_offset, Bytecode, BytecodeChunk, CallableTemplate,
+    CallableTemplateArg, CallableTemplateComposeFlavor, CallableTemplateDirectTarget,
+    CallableTemplateKind, Constant, DocEntry, FunctionEntry, Opcode, RuntimeHandlerTarget,
+    RuntimeInitPolicy, RuntimeProcessInstance, RuntimeProcessSpec, RuntimeProcessSpecTable,
+    RuntimeSupervisorPolicy, SourceMap,
 };
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
@@ -134,6 +136,7 @@ struct VmCheckpoint {
     constant_len: usize,
     type_entry_len: usize,
     error_template_len: usize,
+    callable_template_len: usize,
     function_len: usize,
     doc_len: usize,
     process_spec_len: usize,
@@ -1043,6 +1046,188 @@ impl VM {
             target: CallableTarget::Function(fun_idx),
             lexical_captures: Vec::new(),
             metadata: self.callable_metadata_for_function(fun_idx),
+        }
+    }
+
+    fn callable_metadata_for_template(&self, template_id: u32) -> CallableMetadata {
+        self.callable_template(template_id)
+            .map(|template| CallableMetadata {
+                origin: template.metadata.origin,
+                module: template.metadata.module.clone(),
+                name: template.metadata.name.clone(),
+                full_signature: template.metadata.full_signature.clone(),
+                applied_args: 0,
+            })
+            .unwrap_or_default()
+    }
+
+    fn callable_template(&self, template_id: u32) -> Result<&CallableTemplate, RuntimeError> {
+        self.bytecode
+            .callable_templates
+            .iter()
+            .find(|template| template.template_id == template_id)
+            .ok_or_else(|| RuntimeError::new(format!("Unknown callable template: {}", template_id)))
+    }
+
+    fn invoke_direct_template_target_sync(
+        &mut self,
+        target: &CallableTemplateDirectTarget,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        match target {
+            CallableTemplateDirectTarget::Builtin(builtin_id) => call_builtin(self, *builtin_id, args),
+            sindr::ir::CallableTemplateDirectTarget::Function(fun_idx) => {
+                self.invoke_callable_sync(self.callable_for_function(*fun_idx), args)
+            }
+        }
+    }
+
+    fn invoke_callable_template_sync(
+        &mut self,
+        template_id: u32,
+        lexical_captures: Vec<Value>,
+        runtime_args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        let template = self.callable_template(template_id)?.clone();
+        match template.kind {
+            CallableTemplateKind::PartialDirectCall { target, arg_sources } => {
+                let mut final_args = Vec::with_capacity(arg_sources.len());
+                for source in arg_sources {
+                    match source {
+                        CallableTemplateArg::Bound(idx) => {
+                            let value = lexical_captures
+                                .get(idx as usize)
+                                .cloned()
+                                .ok_or_else(|| {
+                                    RuntimeError::new(format!(
+                                        "Callable template {} bound arg out of bounds: {}",
+                                        template_id, idx
+                                    ))
+                                })?;
+                            final_args.push(value);
+                        }
+                        CallableTemplateArg::Runtime(idx) => {
+                            let value = runtime_args
+                                .get(idx as usize)
+                                .cloned()
+                                .ok_or_else(|| {
+                                    RuntimeError::new(format!(
+                                        "Callable template {} runtime arg out of bounds: {}",
+                                        template_id, idx
+                                    ))
+                                })?;
+                            final_args.push(value);
+                        }
+                    }
+                }
+                self.invoke_direct_template_target_sync(&target, final_args)
+            }
+            CallableTemplateKind::InjectDirectCall {
+                target,
+                bound_arg_count,
+            } => {
+                let Some((first_arg, rest_args)) = runtime_args.split_first() else {
+                    return Err(RuntimeError::new(format!(
+                        "Callable template {} requires at least one runtime argument",
+                        template_id
+                    )));
+                };
+                let mut final_args =
+                    Vec::with_capacity(1 + lexical_captures.len() + rest_args.len());
+                final_args.push(first_arg.clone());
+                final_args.extend(
+                    lexical_captures
+                        .iter()
+                        .take(bound_arg_count as usize)
+                        .cloned(),
+                );
+                final_args.extend(rest_args.iter().cloned());
+                self.invoke_direct_template_target_sync(&target, final_args)
+            }
+            CallableTemplateKind::ComposeDirect { flavor } => {
+                let Some(input) = runtime_args.first().cloned() else {
+                    return Err(RuntimeError::new(format!(
+                        "Callable template {} requires one runtime argument",
+                        template_id
+                    )));
+                };
+                let lhs = match lexical_captures.first() {
+                    Some(Value::Callable(callable)) => callable.clone(),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Callable template {} expects lhs callable capture",
+                            template_id
+                        )))
+                    }
+                };
+                let rhs = match lexical_captures.get(1) {
+                    Some(Value::Callable(callable)) => callable.clone(),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Callable template {} expects rhs callable capture",
+                            template_id
+                        )))
+                    }
+                };
+                match flavor {
+                    CallableTemplateComposeFlavor::Plain => {
+                        let lhs_value = self.invoke_callable_sync(lhs, vec![input])?;
+                        self.invoke_callable_sync(rhs, vec![lhs_value])
+                    }
+                    CallableTemplateComposeFlavor::ResultMap => {
+                        let lhs_value = self.invoke_callable_sync(lhs, vec![input])?;
+                        match decode_vm_result(lhs_value, "ComposeDirect", "lhs")? {
+                            Ok(ok) => {
+                                let mapped = self.invoke_callable_sync(rhs, vec![ok])?;
+                                Ok(ok_vm_result(mapped))
+                            }
+                            Err(rich) => Ok(err_vm_result(rich)),
+                        }
+                    }
+                    CallableTemplateComposeFlavor::ResultBind => {
+                        let lhs_value = self.invoke_callable_sync(lhs, vec![input])?;
+                        match decode_vm_result(lhs_value, "ComposeDirect", "lhs")? {
+                            Ok(ok) => self.invoke_callable_sync(rhs, vec![ok]),
+                            Err(rich) => Ok(err_vm_result(rich)),
+                        }
+                    }
+                    CallableTemplateComposeFlavor::ListMap => {
+                        let lhs_value = self.invoke_callable_sync(lhs, vec![input])?;
+                        let Value::List(items) = lhs_value else {
+                            return Err(RuntimeError::new(format!(
+                                "Callable template {} expected List result for list map",
+                                template_id
+                            )));
+                        };
+                        let mapped = items
+                            .iter()
+                            .map(|item| self.invoke_callable_sync(rhs.clone(), vec![item]))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Ok(Value::List(ListHandle::from_items(mapped)))
+                    }
+                    CallableTemplateComposeFlavor::ListBind => {
+                        let lhs_value = self.invoke_callable_sync(lhs, vec![input])?;
+                        let Value::List(items) = lhs_value else {
+                            return Err(RuntimeError::new(format!(
+                                "Callable template {} expected List result for list bind",
+                                template_id
+                            )));
+                        };
+                        let mut flattened = Vec::new();
+                        for item in items.iter() {
+                            let value = self.invoke_callable_sync(rhs.clone(), vec![item])?;
+                            let Value::List(list) = value else {
+                                return Err(RuntimeError::new(format!(
+                                    "Callable template {} list bind expects List results",
+                                    template_id
+                                )));
+                            };
+                            flattened.extend(list.iter());
+                        }
+                        Ok(Value::List(ListHandle::from_items(flattened)))
+                    }
+                }
+            }
         }
     }
 
@@ -3322,6 +3507,7 @@ impl VM {
             error_templates,
             dbg_template_base: chunk_dbg_template_base,
             dbg_templates,
+            callable_templates,
             functions,
             docs,
             runtime_process_specs,
@@ -3362,6 +3548,7 @@ impl VM {
         self.bytecode.type_registry.extend(type_entries);
         self.bytecode.error_templates.extend(error_templates);
         self.bytecode.dbg_templates.extend(dbg_templates);
+        self.bytecode.callable_templates.extend(callable_templates);
         self.extend_docs_unique(docs);
         self.bytecode
             .runtime_process_specs
@@ -3490,6 +3677,7 @@ impl VM {
             constant_len: self.bytecode.constants.len(),
             type_entry_len: self.bytecode.type_registry.entries().len(),
             error_template_len: self.bytecode.error_templates.len(),
+            callable_template_len: self.bytecode.callable_templates.len(),
             function_len: self.bytecode.functions.len(),
             doc_len: self.bytecode.docs.len(),
             process_spec_len: self.bytecode.runtime_process_specs.entries.len(),
@@ -3536,6 +3724,9 @@ impl VM {
         self.bytecode
             .error_templates
             .truncate(checkpoint.error_template_len);
+        self.bytecode
+            .callable_templates
+            .truncate(checkpoint.callable_template_len);
         self.bytecode.functions.truncate(checkpoint.function_len);
         self.bytecode.docs.truncate(checkpoint.doc_len);
         self.bytecode
@@ -4170,10 +4361,15 @@ impl VM {
     }
 
     fn invoke_callable_step(&mut self, callable: Callable, args: Vec<Value>) -> StepOutcome {
-        let mut full_args = callable.lexical_captures;
+        let Callable {
+            target,
+            lexical_captures,
+            ..
+        } = callable;
+        let mut full_args = lexical_captures.clone();
         full_args.extend(args);
 
-        match callable.target {
+        match target {
             CallableTarget::Builtin(builtin_id) => {
                 match call_builtin(self, builtin_id, full_args) {
                     Ok(value) => StepOutcome::Halt(value),
@@ -4217,6 +4413,16 @@ impl VM {
                     entry.entry_pc as usize,
                     ExecutionTarget::FrameDepth(frame_depth),
                 )
+            }
+            CallableTarget::Template(template_id) => {
+                let runtime_arity = full_args.len().saturating_sub(lexical_captures.len());
+                let runtime_args = full_args.split_off(lexical_captures.len());
+                debug_assert_eq!(runtime_args.len(), runtime_arity);
+                match self.invoke_callable_template_sync(template_id, lexical_captures, runtime_args)
+                {
+                    Ok(value) => StepOutcome::Halt(value),
+                    Err(err) => StepOutcome::RuntimeError(err),
+                }
             }
         }
     }
@@ -5037,6 +5243,14 @@ impl VM {
                 }));
             }
 
+            Opcode::LoadCallableTemplateRef(template_id) => {
+                self.stack.push(Value::Callable(Callable {
+                    target: CallableTarget::Template(template_id),
+                    lexical_captures: Vec::new(),
+                    metadata: self.callable_metadata_for_template(template_id),
+                }));
+            }
+
             Opcode::LoadLocal(slot) => {
                 return self.load_local_or_pending(slot, (*pc).saturating_sub(1));
             }
@@ -5722,8 +5936,9 @@ impl VM {
                     }
                 };
 
-                let mut full_args = callable.lexical_captures;
-                full_args.extend(args);
+                let lexical_captures = callable.lexical_captures.clone();
+                let mut full_args = lexical_captures.clone();
+                full_args.extend(args.iter().cloned());
 
                 match callable.target {
                     CallableTarget::Builtin(builtin_id) => {
@@ -5809,6 +6024,37 @@ impl VM {
                         }
                         *pc = entry.entry_pc as usize;
                     }
+                    CallableTarget::Template(template_id) => {
+                        self.observe_call_event(
+                            "CallClosure",
+                            format!(
+                                "call pc={} kind=CallClosure target=template:{} arity={} stack_depth={} frame_depth={}",
+                                (*pc).saturating_sub(1),
+                                template_id,
+                                full_args.len(),
+                                self.stack.len(),
+                                self.frames.len()
+                            ),
+                        );
+                        let result = self.with_call_site(Some((span_start, span_end)), |vm| {
+                            vm.invoke_callable_template_sync(
+                                template_id,
+                                lexical_captures.clone(),
+                                args.clone(),
+                            )
+                        })?;
+                        let pending_future = match result {
+                            Value::PendingFuture(future_id) => Some(future_id),
+                            _ => None,
+                        };
+                        self.stack.push(result);
+                        if let Some(future_id) = pending_future {
+                            return Ok(OpcodeControl::Pending {
+                                future_id,
+                                resume_pc: *pc,
+                            });
+                        }
+                    }
                 }
             }
 
@@ -5830,8 +6076,9 @@ impl VM {
                     }
                 };
 
-                let mut full_args = callable.lexical_captures;
-                full_args.extend(args);
+                let lexical_captures = callable.lexical_captures.clone();
+                let mut full_args = lexical_captures.clone();
+                full_args.extend(args.iter().cloned());
 
                 match callable.target {
                     CallableTarget::Builtin(builtin_id) => {
@@ -5895,6 +6142,37 @@ impl VM {
                         );
                         self.reuse_current_frame_for_call(locals, Some((span_start, span_end)))?;
                         *pc = entry.entry_pc as usize;
+                    }
+                    CallableTarget::Template(template_id) => {
+                        self.observe_call_event(
+                            "TailCallClosure",
+                            format!(
+                                "call pc={} kind=TailCallClosure target=template:{} arity={} stack_depth={} frame_depth={}",
+                                (*pc).saturating_sub(1),
+                                template_id,
+                                full_args.len(),
+                                self.stack.len(),
+                                self.frames.len()
+                            ),
+                        );
+                        let result = self.with_call_site(Some((span_start, span_end)), |vm| {
+                            vm.invoke_callable_template_sync(
+                                template_id,
+                                lexical_captures.clone(),
+                                args.clone(),
+                            )
+                        })?;
+                        let pending_future = match result {
+                            Value::PendingFuture(future_id) => Some(future_id),
+                            _ => None,
+                        };
+                        self.return_from_current_frame(result, pc)?;
+                        if let Some(future_id) = pending_future {
+                            return Ok(OpcodeControl::Pending {
+                                future_id,
+                                resume_pc: *pc,
+                            });
+                        }
                     }
                 }
             }
@@ -6607,11 +6885,13 @@ mod tests {
         TaskMode, VmFileError, VmFileMode, VmObservationOptions, VmRuntimeOutputEventSnapshot, VM,
     };
     use sindr::ir::{
-        BootEntrySource, Bytecode, BytecodeChunk, Constant, ErrTemplate, FunctionEntry, Opcode,
-        OpcodeSource, RuntimeBootPlan, RuntimeCallableRef, RuntimeHandlerKind, RuntimeHandlerSpec,
-        RuntimeInitPolicy, RuntimeInitResultShape, RuntimeInitSpec, RuntimeLifecycleSpec,
-        RuntimeProcessDependencies, RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec,
-        RuntimeProcessSpecTable, RuntimeStateSpec, RuntimeSupervisionSpec,
+        BootEntrySource, Bytecode, BytecodeChunk, CallableTemplate, CallableTemplateArg,
+        CallableTemplateComposeFlavor, CallableTemplateDirectTarget, CallableTemplateKind,
+        Constant, ErrTemplate, FunctionEntry, Opcode, OpcodeSource, RuntimeBootPlan,
+        RuntimeCallableRef, RuntimeHandlerKind, RuntimeHandlerSpec, RuntimeInitPolicy,
+        RuntimeInitResultShape, RuntimeInitSpec, RuntimeLifecycleSpec,
+        RuntimeProcessDependencies, RuntimeProcessInstance, RuntimeProcessKind,
+        RuntimeProcessSpec, RuntimeProcessSpecTable, RuntimeStateSpec, RuntimeSupervisionSpec,
         RuntimeSupervisorOverrideEntry, RuntimeSupervisorPolicy, RuntimeTypeRef,
         SingletonBootEntry, SourceMap,
     };
@@ -7539,7 +7819,8 @@ mod tests {
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
-            error_template_base: 0,
+            callable_templates: Vec::new(),
+                        error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
@@ -8401,7 +8682,8 @@ mod tests {
             error_templates: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
-            functions: Vec::new(),
+            callable_templates: Vec::new(),
+                        functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: RuntimeBootPlan::default(),
@@ -8795,7 +9077,8 @@ mod tests {
             error_templates: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
-            functions: Vec::new(),
+            callable_templates: Vec::new(),
+                        functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
@@ -9457,7 +9740,8 @@ mod tests {
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
-            error_template_base: 0,
+            callable_templates: Vec::new(),
+                        error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
@@ -9484,7 +9768,8 @@ mod tests {
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
-            error_template_base: 0,
+            callable_templates: Vec::new(),
+                        error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
@@ -9524,7 +9809,8 @@ mod tests {
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
-            error_template_base: 1,
+            callable_templates: Vec::new(),
+                        error_template_base: 1,
             error_templates: vec![ErrTemplate {
                 id: 0,
                 kind: "NewKind".into(),
@@ -9573,6 +9859,7 @@ mod tests {
                 type_entries: Vec::new(),
                 dbg_template_base: 0,
                 dbg_templates: Vec::new(),
+            callable_templates: Vec::new(),
                 error_template_base: 0,
                 error_templates: vec![ErrTemplate {
                     id: 0,
@@ -9648,6 +9935,7 @@ mod tests {
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
+            callable_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -9675,6 +9963,7 @@ mod tests {
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
+            callable_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -9706,6 +9995,7 @@ mod tests {
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
+            callable_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: vec![function_entry(0, 2, 1, 0, Some("new"))],
@@ -9747,6 +10037,7 @@ mod tests {
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
+            callable_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -9775,6 +10066,7 @@ mod tests {
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
+            callable_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -9811,6 +10103,7 @@ mod tests {
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
+            callable_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -9854,6 +10147,7 @@ mod tests {
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
+            callable_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -9982,6 +10276,7 @@ mod tests {
             }],
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
+            callable_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -10021,6 +10316,7 @@ mod tests {
             }],
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
+            callable_templates: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
@@ -10352,6 +10648,133 @@ mod tests {
         let err = VM::new(bytecode).run().expect_err("must fail");
 
         assert!(err.message.contains("CallClosure expects a callable value"));
+    }
+
+    #[test]
+    fn call_closure_executes_partial_direct_call_template() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::CallClosure {
+                arity: 1,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::Halt,
+            Opcode::LoadLocal(0),
+            Opcode::LoadLocal(1),
+            Opcode::AddInt,
+            Opcode::Return,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(41)), Constant::Int(int(1))];
+        bytecode.functions = vec![function_entry(0, 3, 2, 2, Some("Main::add1"))];
+        bytecode.callable_templates = vec![CallableTemplate {
+            template_id: 0,
+            kind: CallableTemplateKind::PartialDirectCall {
+                target: CallableTemplateDirectTarget::Function(0),
+                arg_sources: vec![CallableTemplateArg::Runtime(0), CallableTemplateArg::Bound(0)],
+            },
+            metadata: Default::default(),
+        }];
+
+        let mut vm = VM::new(bytecode);
+        vm.stack.push(Value::Callable(Callable {
+            target: CallableTarget::Template(0),
+            lexical_captures: vec![Value::Int(int(1))],
+            metadata: CallableMetadata::default(),
+        }));
+        vm.run().expect("run should succeed");
+
+        assert_eq!(vm.last_result, Some(Value::Int(int(42))));
+    }
+
+    #[test]
+    fn call_closure_executes_inject_direct_call_template() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::CallClosure {
+                arity: 1,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(41))];
+        bytecode.callable_templates = vec![CallableTemplate {
+            template_id: 0,
+            kind: CallableTemplateKind::InjectDirectCall {
+                target: CallableTemplateDirectTarget::Builtin(builtin_id("to_string")),
+                bound_arg_count: 0,
+            },
+            metadata: Default::default(),
+        }];
+
+        let mut vm = VM::new(bytecode);
+        vm.stack.push(Value::Callable(Callable {
+            target: CallableTarget::Template(0),
+            lexical_captures: Vec::new(),
+            metadata: CallableMetadata::default(),
+        }));
+        vm.run().expect("run should succeed");
+
+        assert_eq!(vm.last_result, Some(Value::Str("41".into())));
+    }
+
+    #[test]
+    fn call_closure_executes_compose_direct_template() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::CallClosure {
+                arity: 1,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::Halt,
+            Opcode::LoadLocal(0),
+            Opcode::LoadConst(1),
+            Opcode::AddInt,
+            Opcode::Return,
+            Opcode::LoadLocal(0),
+            Opcode::LoadConst(2),
+            Opcode::MulInt,
+            Opcode::Return,
+        ]);
+        bytecode.constants = vec![
+            Constant::Int(int(20)),
+            Constant::Int(int(1)),
+            Constant::Int(int(2)),
+        ];
+        bytecode.functions = vec![
+            function_entry(0, 3, 1, 1, Some("Main::inc")),
+            function_entry(1, 7, 1, 1, Some("Main::double")),
+        ];
+        bytecode.callable_templates = vec![CallableTemplate {
+            template_id: 0,
+            kind: CallableTemplateKind::ComposeDirect {
+                flavor: CallableTemplateComposeFlavor::Plain,
+            },
+            metadata: Default::default(),
+        }];
+
+        let mut vm = VM::new(bytecode);
+        vm.stack.push(Value::Callable(Callable {
+            target: CallableTarget::Template(0),
+            lexical_captures: vec![
+                Value::Callable(Callable {
+                    target: CallableTarget::Function(0),
+                    lexical_captures: Vec::new(),
+                    metadata: CallableMetadata::default(),
+                }),
+                Value::Callable(Callable {
+                    target: CallableTarget::Function(1),
+                    lexical_captures: Vec::new(),
+                    metadata: CallableMetadata::default(),
+                }),
+            ],
+            metadata: CallableMetadata::default(),
+        }));
+        vm.run().expect("run should succeed");
+
+        assert_eq!(vm.last_result, Some(Value::Int(int(42))));
     }
 
     #[test]

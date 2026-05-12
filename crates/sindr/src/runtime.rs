@@ -229,6 +229,7 @@ pub struct Callable {
 pub enum CallableTarget {
     Builtin(BuiltinId),
     Function(FunctionId),
+    Template(u32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -252,7 +253,7 @@ impl Default for CallableMetadata {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CallableOrigin {
     Unknown,
     Closure,
@@ -412,6 +413,13 @@ impl Value {
                     format!(
                         "<function:{}; lexical_captures={}>",
                         fun_idx,
+                        callable.lexical_captures.len()
+                    )
+                }
+                CallableTarget::Template(template_id) => {
+                    format!(
+                        "<template:{}; lexical_captures={}>",
+                        template_id,
                         callable.lexical_captures.len()
                     )
                 }
@@ -1054,10 +1062,19 @@ mod tests {
             lexical_captures: vec![Value::Unit],
             metadata: CallableMetadata::default(),
         });
+        let template = Value::Callable(Callable {
+            target: CallableTarget::Template(11),
+            lexical_captures: vec![Value::Unit, Value::Bool(true)],
+            metadata: CallableMetadata::default(),
+        });
         assert_eq!(builtin.to_display_string(&registry), "<builtin:3>");
         assert_eq!(
             function.to_display_string(&registry),
             "<function:7; lexical_captures=1>"
+        );
+        assert_eq!(
+            template.to_display_string(&registry),
+            "<template:11; lexical_captures=2>"
         );
     }
 

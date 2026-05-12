@@ -25,6 +25,7 @@ mod tests {
     use scar::types::Ty;
     use sigil::resolved::ResolvedId;
     use sindr::builtin::builtin_id_by_name;
+    use sindr::ir::{CallableTemplateComposeFlavor, CallableTemplateKind};
     use sindr::primitives::int;
     use spire::ast::{Ast, BinOp, Lit, Span, Visibility};
 
@@ -957,7 +958,7 @@ print(to_string(add(1, 2)))"#,
     }
 
     #[test]
-    fn direct_compose_wrapper_embeds_user_calls_without_captured_callables() {
+    fn direct_compose_uses_callable_template_without_generated_wrapper() {
         let bytecode = codegen_typed(vec![
             identity_def("left_int", 0, 30, 31, Ty::Int),
             identity_def("right_int", 1, 32, 33, Ty::Int),
@@ -971,39 +972,22 @@ print(to_string(add(1, 2)))"#,
                 ),
             },
         ]);
-        let compose_entry = bytecode
-            .functions
-            .iter()
-            .find(|entry| {
-                entry.flags.generated
-                    && !entry.flags.closure
-                    && entry.qualified_name.is_none()
-                    && entry.arity == 1
-            })
-            .expect("direct compose wrapper should take only the input");
-        let compose_body = function_body_opcodes(&bytecode, compose_entry.fun_idx);
         let top_level = top_level_opcodes(&bytecode);
 
-        assert!(compose_body.iter().any(|op| matches!(
-            op,
-            Opcode::Call {
-                fun_idx: 0,
-                arity: 1,
-                ..
+        assert!(bytecode.callable_templates.iter().any(|template| matches!(
+            template.kind,
+            CallableTemplateKind::ComposeDirect {
+                flavor: CallableTemplateComposeFlavor::Plain,
             }
         )));
-        assert!(compose_body.iter().any(|op| matches!(
-            op,
-            Opcode::Call {
-                fun_idx: 1,
-                arity: 1,
-                ..
-            }
-        )));
-        assert!(!compose_body
+        assert!(!bytecode
+            .functions
             .iter()
-            .any(|op| matches!(op, Opcode::CallClosure { .. })));
-        assert!(!top_level
+            .any(|entry| entry.flags.generated && !entry.flags.closure && entry.arity == 1));
+        assert!(top_level
+            .iter()
+            .any(|op| matches!(op, Opcode::LoadCallableTemplateRef(_))));
+        assert!(top_level
             .iter()
             .any(|op| matches!(op, Opcode::CaptureClosure(2))));
     }
