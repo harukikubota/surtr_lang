@@ -1,5 +1,8 @@
 use serde_json::Value;
+use std::env;
 use std::fs;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use crate::common::{
     extract_phase_tag, module_compile_error_fixtures, module_spec_fixtures, normalize_text,
@@ -36,6 +39,34 @@ fn run_multi_source_case(case: &ModuleFixtureCase) -> Result<Vec<String>, String
     Ok(vm.output.unwrap_or_default())
 }
 
+fn timing_breakdown_enabled() -> bool {
+    support::env_flag_enabled(env::var("SURTR_TEST_TIMING").ok().as_deref())
+}
+
+fn timing_report_lock() -> &'static Mutex<()> {
+    static TIMING_REPORT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    TIMING_REPORT_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn print_timing_report(
+    group: &str,
+    fixture_count: usize,
+    total: Duration,
+    cache: support::CacheStatsSnapshot,
+    slowest: Vec<support::SlowFixtureTiming>,
+) {
+    eprintln!(
+        "{}",
+        support::format_timing_report(&support::TimingReportInput {
+            group,
+            fixture_count,
+            total,
+            cache,
+            slowest: &slowest,
+        })
+    );
+}
+
 fn run_module_spec_bucket(bucket: usize, bucket_count: usize) {
     let cases = module_spec_fixtures()
         .into_iter()
@@ -50,7 +81,19 @@ fn run_module_spec_bucket(bucket: usize, bucket_count: usize) {
         bucket_count
     );
 
+    let timing_enabled = timing_breakdown_enabled();
+    let _timing_guard = timing_enabled.then(|| {
+        timing_report_lock()
+            .lock()
+            .expect("timing report lock poisoned")
+    });
+    let cache_stats_start = support::cache_stats_snapshot();
+    let timing_start = Instant::now();
+    let mut slowest = Vec::<support::SlowFixtureTiming>::new();
+    let fixture_count = cases.len();
+
     for fixture in cases {
+        let fixture_start = Instant::now();
         let output = run_multi_source_case(&fixture.case).unwrap_or_else(|e| {
             panic!(
                 "pipeline failed for {}: {}",
@@ -58,12 +101,36 @@ fn run_module_spec_bucket(bucket: usize, bucket_count: usize) {
                 e
             )
         });
+        let fixture_elapsed = fixture_start.elapsed();
+        if timing_enabled {
+            slowest.push(support::SlowFixtureTiming {
+                path: fixture.case.case_dir.clone(),
+                phase: "run".to_string(),
+                duration: fixture_elapsed,
+            });
+        }
+
         let actual_stdout = output.join("\n");
         assert_eq!(
             normalize_text(&actual_stdout),
             normalize_text(fixture.expected),
             "stdout mismatch for {}",
             fixture.case.case_dir.display()
+        );
+    }
+
+    if timing_enabled {
+        slowest.sort_by(|a, b| {
+            b.duration
+                .cmp(&a.duration)
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        print_timing_report(
+            &format!("module pass bucket {bucket}"),
+            fixture_count,
+            timing_start.elapsed(),
+            support::cache_stats_snapshot().saturating_delta_since(&cache_stats_start),
+            slowest,
         );
     }
 }
@@ -82,15 +149,34 @@ fn run_module_compile_error_bucket(bucket: usize, bucket_count: usize) {
         bucket_count
     );
 
+    let timing_enabled = timing_breakdown_enabled();
+    let _timing_guard = timing_enabled.then(|| {
+        timing_report_lock()
+            .lock()
+            .expect("timing report lock poisoned")
+    });
+    let cache_stats_start = support::cache_stats_snapshot();
+    let timing_start = Instant::now();
+    let mut slowest = Vec::<support::SlowFixtureTiming>::new();
+    let fixture_count = cases.len();
+
     for fixture in cases {
         let expected = parse_compile_error_expectation(&fixture.error_path);
+        let phase_name = expected.phase.as_deref().unwrap_or("compile");
+        let fixture_start = Instant::now();
         let result = match expected.phase.as_deref() {
             Some(phase @ ("parse" | "resolve" | "typecheck")) => {
                 check_multi_source_case_phase(&fixture.case, phase)
             }
-            None => compile_multi_source_case(&fixture.case).map(|_| ()),
-            Some(_) => compile_multi_source_case(&fixture.case).map(|_| ()),
+            None | Some(_) => compile_multi_source_case(&fixture.case).map(|_| ()),
         };
+        if timing_enabled {
+            slowest.push(support::SlowFixtureTiming {
+                path: fixture.case.case_dir.clone(),
+                phase: phase_name.to_string(),
+                duration: fixture_start.elapsed(),
+            });
+        }
         match result {
             Ok(_) => panic!(
                 "expected compile failure but succeeded: {}",
@@ -117,6 +203,21 @@ fn run_module_compile_error_bucket(bucket: usize, bucket_count: usize) {
                 }
             }
         }
+    }
+
+    if timing_enabled {
+        slowest.sort_by(|a, b| {
+            b.duration
+                .cmp(&a.duration)
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        print_timing_report(
+            &format!("module fail bucket {bucket}"),
+            fixture_count,
+            timing_start.elapsed(),
+            support::cache_stats_snapshot().saturating_delta_since(&cache_stats_start),
+            slowest,
+        );
     }
 }
 

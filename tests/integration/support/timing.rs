@@ -1,6 +1,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+pub fn env_flag_enabled(value: Option<&str>) -> bool {
+    matches!(value, Some("1" | "true" | "TRUE" | "yes" | "YES"))
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CacheStatsSnapshot {
     pub semantic_prefix_hits: u64,
@@ -165,5 +169,19 @@ mod tests {
                 final_bytecode_corrupt: 0,
             }
         );
+    }
+
+    #[test]
+    fn env_flag_accepts_common_truthy_values_only() {
+        assert!(super::env_flag_enabled(Some("1")));
+        assert!(super::env_flag_enabled(Some("true")));
+        assert!(super::env_flag_enabled(Some("TRUE")));
+        assert!(super::env_flag_enabled(Some("yes")));
+        assert!(super::env_flag_enabled(Some("YES")));
+
+        assert!(!super::env_flag_enabled(None));
+        assert!(!super::env_flag_enabled(Some("0")));
+        assert!(!super::env_flag_enabled(Some("false")));
+        assert!(!super::env_flag_enabled(Some("")));
     }
 }
