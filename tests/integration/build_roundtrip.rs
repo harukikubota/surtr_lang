@@ -177,7 +177,7 @@ fn dump_opcode_histogram_adds_static_opcode_counts() {
 }
 
 #[test]
-fn dump_peephole_candidates_reports_remaining_branch_fusion_opportunities() {
+fn dump_peephole_candidates_omits_fully_lowered_result_helpers_patterns() {
     let fixture = repo_root().join("tests/fixtures/script/pass/stdmod/result_helpers.srt");
     let dump = surtr_command()
         .args([
@@ -217,8 +217,12 @@ fn dump_peephole_candidates_reports_remaining_branch_fusion_opportunities() {
         json["peephole_candidates"]["summary"]["tail_call_closure"]
             .as_u64()
             .unwrap_or(0)
-            > 0,
-        "expected tail-call closure candidates to be visible in result_helpers dump: {json}"
+            == 0,
+        "expected no remaining tail-call closure candidates in result_helpers dump: {json}"
+    );
+    assert!(
+        items.is_empty(),
+        "expected no peephole candidates once result_helpers lowering is complete: {json}"
     );
 }
 

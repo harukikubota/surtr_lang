@@ -246,8 +246,9 @@ opcode window を追加する。各候補は `pc` / `function` / `source` /
 
 `operands` は window 内 opcode の機械可読な operand summary である。
 すでに専用 opcode へ畳み込み済みの箇所は候補としては現れない。たとえば
-`EqLocalTag + JumpIfFalse/JumpIfTrue` が `JumpIfLocalTagEq/JumpIfLocalTagNe` へ
-lowering 済みの場合、`branch_fusion` は報告されず、専用 opcode の出現数は
+`EqLocalTag + JumpIfFalse/JumpIfTrue` が `JumpIfLocalTagEq/JumpIfLocalTagNe` へ、
+`CallClosure + Return` が `TailCallClosure` へ lowering 済みの場合、それぞれ
+`branch_fusion` / `tail_call_closure` は報告されず、専用 opcode の出現数は
 `--opcode-histogram` / `optimization_summary` 側で観測する。
 
 ```json

@@ -47,7 +47,7 @@
 
 - custom tail-apply source の dump で `opcode_histogram.TailCallClosure > 0` と `optimization_summary.apply_compose.tail_call_closure > 0` を確認した。
 - standard-heavy sample の `result_helpers.srt` では `capture_closure_zero = 0` を維持している。
-- standard / prelude 由来の残存 `CallClosure; Return` は、`peephole_candidates` の `tail_call_closure` として観測できる。
+- `result_helpers.srt` では `branch_fusion` / `tail_call_closure` ともに残存候補 0 を確認し、lowering 済み箇所は histogram / optimization summary 側で観測できることを確認した。
 
 ## 検証結果
 
