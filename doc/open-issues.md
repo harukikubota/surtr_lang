@@ -37,22 +37,6 @@
 - テスト方針:
   - `unit/sindr` の `display_for_rich_error_*` 系テストで採用形式を固定する。
 
-### OI-011 apply / compose lowering 最適化方針
-
-- 背景:
-  - `|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>` の外部契約は固まっている。
-  - 一方で `forge` は compose 系で pending / synthetic callable を使う経路をまだ残しており、最適化方針は未固定である。
-- 未確定点:
-  - 即時適用 compose をどこまで直接 lower するか
-  - synthetic callable と直接 lowering の選択基準
-  - 追加最適化が debug 性能や span 診断に与える影響
-- 受け入れ条件:
-  - 最適化前後で外部挙動と診断位置が変わらない。
-  - codegen / VM の責務境界を壊さない。
-- テスト方針:
-  - 既存 spec / compile_errors / integration を回帰基準にする。
-  - IR / opcode 選択が変わる場合は unit test で固定する。
-
 ### OI-012 `.eldr` viewer follow-up
 
 - 背景:
