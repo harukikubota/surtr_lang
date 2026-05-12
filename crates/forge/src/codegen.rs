@@ -2027,6 +2027,22 @@ mod tests {
         }
     }
 
+    fn local_var(name: &str, unique_id: u32, ty: Ty) -> TypedNode {
+        TypedNode {
+            ty,
+            span: span(0, 0),
+            node: TypedInner::Var(resolved_id(name, None, unique_id)),
+        }
+    }
+
+    fn qualified_var(name: &str, qualified_name: &str, unique_id: u32, ty: Ty) -> TypedNode {
+        TypedNode {
+            ty,
+            span: span(0, 0),
+            node: TypedInner::Var(resolved_id(name, Some(qualified_name), unique_id)),
+        }
+    }
+
     fn function_entry(fun_idx: u32, entry_pc: u32, end_pc: u32) -> FunctionEntry {
         FunctionEntry {
             fun_idx,
@@ -2601,6 +2617,198 @@ mod tests {
             Some(Opcode::Dbg { arg_count: 2, .. })
         ));
         assert_eq!(state.dbg_templates.len(), 1);
+    }
+
+    #[test]
+    fn emit_map_err_routes_error_branch_through_builtin() {
+        let mut gene = Codegen::new();
+        gene.state.slot_map.insert(10, 0);
+        gene.state.slot_map.insert(11, 1);
+        gene.state.next_slot = 2;
+
+        let node = TypedNode {
+            ty: Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
+            span: span(1, 20),
+            node: TypedInner::MapErr(
+                Box::new(local_var(
+                    "value",
+                    10,
+                    Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
+                )),
+                Box::new(local_var("err", 11, Ty::Error)),
+            ),
+        };
+
+        gene.emit_node(&node).expect("map_err emission should succeed");
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+        let map_err_id = Codegen::builtin_id("map_err").expect("map_err builtin must exist");
+
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::StoreLocal(_) | Opcode::CopyLocal { .. })));
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::CallBuiltin {
+                builtin_id,
+                arity: 2,
+                ..
+            } if *builtin_id == map_err_id
+        )));
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(
+                opcode,
+                Opcode::JumpIfTrue(_) | Opcode::JumpIfLocalTagEq { .. }
+            )));
+    }
+
+    #[test]
+    fn emit_cause_routes_error_branch_through_builtin() {
+        let mut gene = Codegen::new();
+        gene.state.slot_map.insert(20, 0);
+        gene.state.slot_map.insert(21, 1);
+        gene.state.next_slot = 2;
+
+        let node = TypedNode {
+            ty: Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
+            span: span(1, 18),
+            node: TypedInner::Cause(
+                Box::new(local_var(
+                    "value",
+                    20,
+                    Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
+                )),
+                Box::new(local_var("err", 21, Ty::Error)),
+            ),
+        };
+
+        gene.emit_node(&node).expect("cause emission should succeed");
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+        let cause_id = Codegen::builtin_id("cause").expect("cause builtin must exist");
+
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::CallBuiltin {
+                builtin_id,
+                arity: 2,
+                ..
+            } if *builtin_id == cause_id
+        )));
+        assert!(opcodes
+            .iter()
+            .filter(|opcode| matches!(opcode, Opcode::LoadLocal(_)))
+            .count()
+            >= 2);
+    }
+
+    #[test]
+    fn emit_recover_kind_checks_error_kind_and_calls_handler() {
+        let mut gene = Codegen::new();
+        gene.state.slot_map.insert(30, 0);
+        gene.state.next_slot = 1;
+
+        let handler = TypedNode {
+            ty: Ty::Func(vec![Ty::Error], Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)))),
+            span: span(10, 20),
+            node: TypedInner::Capture(
+                Box::new(TypedNode {
+                    ty: Ty::UserFunc {
+                        fun_idx: 7,
+                        type_params: vec![],
+                        params: vec![Ty::Error],
+                        ret: Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))),
+                    },
+                    span: span(10, 20),
+                    node: TypedInner::Var(resolved_id("handler", None, 31)),
+                }),
+                vec![],
+            ),
+        };
+
+        let node = TypedNode {
+            ty: Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
+            span: span(1, 30),
+            node: TypedInner::RecoverKind(
+                Box::new(local_var(
+                    "value",
+                    30,
+                    Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
+                )),
+                Box::new(qualified_var("MyError", "Global::MyError", 32, Ty::Error)),
+                Box::new(handler),
+            ),
+        };
+
+        gene.emit_node(&node)
+            .expect("recover_kind emission should succeed");
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+        let kind_id = Codegen::builtin_id("kind").expect("kind builtin must exist");
+
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::CallBuiltin {
+                builtin_id,
+                arity: 1,
+                ..
+            } if *builtin_id == kind_id
+        )));
+        assert!(opcodes.iter().any(|opcode| matches!(opcode, Opcode::EqStr)));
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::CallClosure { arity: 1, .. }
+        )));
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::LoadFunctionRef(7))));
+    }
+
+    #[test]
+    fn emit_safebind_result_wildcard_propagates_err_and_returns_unit_on_success() {
+        let mut gene = Codegen::new();
+        gene.state.slot_map.insert(40, 0);
+        gene.state.next_slot = 1;
+
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: span(1, 12),
+            node: TypedInner::SafeBind(
+                TypedPattern::Wildcard(Ty::Int),
+                Box::new(local_var(
+                    "value",
+                    40,
+                    Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
+                )),
+            ),
+        };
+
+        gene.emit_node(&node)
+            .expect("safebind result emission should succeed");
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+        let eprint_id = Codegen::builtin_id("eprint").expect("eprint builtin must exist");
+
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::StoreLocal(_) | Opcode::CopyLocal { .. })));
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(
+                opcode,
+                Opcode::JumpIfFalse(_) | Opcode::JumpIfLocalTagNe { .. }
+            )));
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::GetField { field_index: 0 })));
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::CallBuiltin {
+                builtin_id,
+                arity: 1,
+                ..
+            } if *builtin_id == eprint_id
+        )));
+        assert!(opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::LoadConst(_))));
     }
 
     #[test]
