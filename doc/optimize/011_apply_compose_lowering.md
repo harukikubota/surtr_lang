@@ -14,7 +14,7 @@
 
 - 新規 opcode は `TailCallClosure { arity, span_start, span_end }` のみ追加する。
 - `TailCallClosure` は `CallClosure; Return` の compressed opcode として扱う。
-- 初期版では TCO の観測値 `tail_calls_optimized` を完了条件にしない。
+- 初期版では TCO の観測値 `tail_calls_optimized` を完了条件にしなかった。後続の TCO 条件整理で user function target は観測値へ含める契約に更新した。
 - `.eldr` bytecode version は変更せず、opcode enum 末尾追加で既存 bincode tag 互換を守る。
 
 ## 実施内容
@@ -26,7 +26,7 @@
 - Eldr では `TailCallClosure` を `CallClosure` と同じ callable / arity / capture ordering で評価するようにした。
 - lexical captures は `lexical_captures -> args` の順で callee locals に入れる契約を維持した。
 - builtin callable の tail call は call-site span と副作用を既存 `CallClosure` と同等に扱い、返り値を現在 frame の caller へ返すようにした。
-- user function callable の tail call は現在 frame を callee locals / call-site へ差し替えるが、`tail_calls_optimized` は増やさない暫定実装にした。
+- user function callable の tail call は現在 frame を callee locals / call-site へ差し替える。初期実装では `tail_calls_optimized` を増やさない暫定実装だったが、後続の TCO 条件整理で user-function TCO 観測値へ含めるよう更新した。
 - verifier では top-level `Return` と同じく top-level `TailCallClosure` を拒否するようにした。
 - `rune dump` の histogram / optimization summary / function summary / operand summary を `TailCallClosure` に対応させた。
 - `rune dump --peephole-candidates` で残存 `CallClosure; Return` を `tail_call_closure` candidate として表示するようにした。
@@ -41,7 +41,7 @@
 - `if` / `match` branch 内では、各 branch 内の `CallClosure; Return` だけを個別に融合し、branch target PC を壊さない。
 - label boundary 直後の `Return` とは融合しない。
 - top-level には `Return` がないため融合対象にせず、top-level safety contract も維持する。
-- TCO は後続タスクで `TailCallClosure` に frame reuse / `tail_calls_optimized` 観測を戻す余地を残す。
+- TCO 条件整理後は、user function target の `TailCallClosure` も frame reuse / `tail_calls_optimized` 観測対象とする。builtin / template target は圧縮実行として caller へ返るが、user-function TCO 観測値には含めない。
 
 ## 観測
 
@@ -66,6 +66,6 @@
 
 ## 今後の課題
 
-- `TailCallClosure` で本格的な frame reuse と `tail_calls_optimized` 観測を戻す。
+- `TailCallClosure` の観測契約は user function target に限って `tail_calls_optimized` へ含める形で整理済み。今後は必要に応じて dump / viewer 側で target 種別をより見やすくする。
 - 残存 `tail_call_closure` candidate のうち、prelude / generated wrapper 由来で安全に融合できるものを追加で調査する。
 - Apply / compose 専用の広い VM opcode は、call semantics と capture semantics がさらに安定するまで導入しない。

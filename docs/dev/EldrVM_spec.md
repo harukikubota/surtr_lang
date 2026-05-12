@@ -66,7 +66,10 @@ user-facing `Result` の domain error として返す。
 - `Callable` は `lexical_captures` を保持する
 - 関数呼び出し時、`locals` には `lexical_captures` → 実引数 の順で先頭から配置する
 - `Call` 実行後は、呼び出し先がフレーム完成状態で開始する
+- tail-position は、現在の関数 / closure / extractor / process handler の返り値そのものになる式位置を指す
 - user function への tail-position call は、次 opcode が `Return` の場合に限り current `CallFrame` を再利用してよい
+- 対象は direct `Call` と、target が user function の `CallClosure` / `TailCallClosure` に限る
+- builtin / template target の tail-position call は user-function TCO ではなく、必要なら圧縮 opcode の実行規約として扱う
 - frame 再利用時も外部意味は変わらず、返り値 1 個・呼び出し元への復帰位置・operand stack 契約は維持する
 
 ### 3.3 返り値
@@ -250,7 +253,7 @@ Opcode は以下のカテゴリを持つ。
 - `MakeErr` は stack top の `Error` payload を `Tagged { tag: 1, fields: [payload] }` に包む Result 専用 constructor opcode とする。payload が `Error` でない bytecode は runtime error とする
 - `JumpIfLocalTagEq { local_idx, tag_const_idx, target_pc }` と `JumpIfLocalTagNe { local_idx, tag_const_idx, target_pc }` は `EqLocalTag` の直後に続く `JumpIfTrue` / `JumpIfFalse` を 1 opcode に畳み込む branch-fused fast-path とする。どちらも判定後の operand stack に Bool 中間値を残さない
 - `JumpIfLocalTagEq` / `JumpIfLocalTagNe` の `tag_const_idx` は `Constant::Tag` を指し、`LoadConst` と同じ relocation / verifier 規則に従う。`target_pc` は `Jump*` と同じ jump-target verifier / relocation 規則に従う
-- `TailCallClosure { arity, span_start, span_end }` は tail position の `CallClosure { arity, span_start, span_end }; Return` と同じ意味の圧縮 opcode とする。callable / argument / lexical capture の評価規約は `CallClosure` と同じで、結果は現在フレームの呼び出し元へ直接返る。初期実装では既存 TCO 観測値 `tail_calls_optimized` の増加を要求しない
+- `TailCallClosure { arity, span_start, span_end }` は tail position の `CallClosure { arity, span_start, span_end }; Return` と同じ意味の圧縮 opcode とする。callable / argument / lexical capture の評価規約は `CallClosure` と同じで、結果は現在フレームの呼び出し元へ直接返る。target が user function の場合だけ user-function TCO として `tail_calls_optimized` を増やす。builtin / template target は圧縮実行として現在 frame の caller へ返るが、user-function TCO 観測値には含めない
 
 実 opcode 一覧とオペランドは `crates/forge/src/opcode.rs` を正とする。
 

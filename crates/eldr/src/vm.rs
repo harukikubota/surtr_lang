@@ -6246,6 +6246,7 @@ impl VM {
                             ),
                         );
                         self.reuse_current_frame_for_call(locals, Some((span_start, span_end)))?;
+                        self.observe_tail_call_optimized();
                         *pc = entry.entry_pc as usize;
                     }
                     CallableTarget::Template(template_id) => {
@@ -10839,6 +10840,53 @@ mod tests {
         vm.run().expect("run should succeed");
 
         assert_eq!(vm.last_result, Some(Value::Str("42".into())));
+    }
+
+    #[test]
+    fn tail_call_closure_template_target_is_not_user_function_tco() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadCallableTemplateRef(0),
+            Opcode::LoadConst(0),
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 2,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::Halt,
+            Opcode::LoadLocal(0),
+            Opcode::LoadLocal(1),
+            Opcode::TailCallClosure {
+                arity: 1,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::LoadLocal(0),
+            Opcode::LoadConst(1),
+            Opcode::AddInt,
+            Opcode::Return,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(41)), Constant::Int(int(1))];
+        bytecode.functions = vec![
+            function_entry(0, 4, 2, 2, Some("Main::apply_tail")),
+            function_entry(1, 7, 1, 1, Some("Main::add1")),
+        ];
+        bytecode.callable_templates = vec![CallableTemplate {
+            template_id: 0,
+            kind: CallableTemplateKind::PartialDirectCall {
+                target: CallableTemplateDirectTarget::Function(1),
+                arg_sources: vec![CallableTemplateArg::Runtime(0)],
+            },
+            metadata: Default::default(),
+        }];
+
+        let mut vm = VM::new(bytecode);
+        vm.enable_observation(VmObservationOptions::default());
+        vm.run().expect("run should succeed");
+
+        let observation = vm.observation().expect("observation should exist");
+        assert_eq!(vm.last_result, Some(Value::Int(int(42))));
+        assert_eq!(observation.stats.tail_calls_optimized, 0);
     }
 
     #[test]

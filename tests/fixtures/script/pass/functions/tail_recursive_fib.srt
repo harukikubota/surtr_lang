@@ -1,0 +1,5 @@
+def fib_tail(n: Int, a: Int, b: Int) -> Int {
+  if(n == 0, a, fib_tail(n - 1, b, a + b))
+}
+
+print(to_string(fib_tail(10, 0, 1)))

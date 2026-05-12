@@ -67,6 +67,8 @@
 - opcode 別実行回数
 
 `tail_calls_optimized` は current frame を再利用した user-function tail call 回数を表す。
+direct `Call` と、target が user function の `CallClosure` / `TailCallClosure` が対象である。
+builtin / template target の `TailCallClosure` は frame を caller へ返す圧縮実行として扱うが、この値には含めない。
 TCO が効いた実行では `return_count` や `max_frame_depth` が非最適化時より小さくなりうる。
 
 ### 3.1.1 `--vm-stats-json`
