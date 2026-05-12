@@ -198,7 +198,7 @@ compile / surface 契約との対応は次のとおり。
 - user code は `Error` を一般の first-class data として保持しない
 - `Error` が surface 上で生存するのは `Err(Error)`、`match` の `Err(err)` で束縛された局所スコープ、標準定義ソース内の `Error` 観測 helper の引数位置に限る
 - `Result::map_err` / `Result::cause` / `assert` / `ensure` は、この既存 `Error` 値を forward してよい
-- `Result::recover_kind` だけは existing `Error` value ではなく concrete `deferror` kind marker surface を受ける
+- `Result::recover_kind` だけは existing `Error` value ではなく concrete `deferror` kind marker surface を受ける。compiler は marker payload を runtime 値として評価せず、kind 名だけを hidden builtin `__recover_kind` へ渡して runtime 側で判定と handler 呼び出しを行う
 
 - parallel error は持たない
 - `Result::cause(result, err)` は `err` chain の末尾に既存 error chain を付ける
@@ -240,7 +240,9 @@ Opcode は以下のカテゴリを持つ。
 補足:
 
 - `CallBuiltin` は `builtin_id` ベースでディスパッチする
-- `BitNotInt` / `BitAndInt` / `BitOrInt` / `BitXorInt` は `Int::bit_not` / `bit_and` / `bit_or` / `bit_xor` の direct call を対象にした monomorphic fast-path とする
+- `BitNotInt` / `BitAndInt` / `BitOrInt` / `BitXorInt` / `ShlInt` / `ShrInt` / `TestBitInt` / `SetBitInt` / `ClearBitInt` / `ToggleBitInt` は `Int::bit_not` / `bit_and` / `bit_or` / `bit_xor` / `shl` / `shr` / `test_bit` / `set_bit` / `clear_bit` / `toggle_bit` の direct call を対象にした monomorphic fast-path とする
+- `ShlInt` / `ShrInt` は負 shift count を `RuntimeError` ではなく `Err(NegativeShiftCount(...))` の `Result` 値として返す
+- `TestBitInt` / `SetBitInt` / `ClearBitInt` / `ToggleBitInt` は負 bit index を `RuntimeError` ではなく `Err(NegativeBitIndex(...))` の `Result` 値として返す
 - `StoreConstLocal { const_idx, local_idx }` は `LoadConst(const_idx); StoreLocal(local_idx)` と同じ意味の圧縮 opcode とする。operand stack へ中間値を push せず、定数値を現在フレームの local slot に直接保存する。`const_idx` は `LoadConst` と同じ relocation / verifier 規則に従う
 - `CopyLocal { src_local_idx, dst_local_idx }` は `LoadLocal(src_local_idx); StoreLocal(dst_local_idx)` と同じ意味の圧縮 opcode とする。operand stack を経由せず、現在フレーム内で local 値を clone して保存する
 - `EqLocalTag { local_idx, tag_const_idx }` は `LoadLocal(local_idx); GetTag; LoadConst(tag_const_idx); EqTag` と同じ意味の圧縮 opcode とする。`tag_const_idx` は `Constant::Tag` を指し、`LoadConst` と同じ relocation / verifier 規則に従う

@@ -134,6 +134,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_result_chain,
     },
     BuiltinImpl {
+        name: "__recover_kind",
+        func: builtin_result_recover_kind,
+    },
+    BuiltinImpl {
         name: "__test_push",
         func: builtin_test_push,
     },
@@ -1818,6 +1822,47 @@ fn builtin_result_chain(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
             err_result_from_rich_error(right)
         }
     })
+}
+
+fn builtin_result_recover_kind(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let result = decode_result_arg(&args[0], "__recover_kind", "value")?;
+    let marker = decode_callable_arg(&args[1], "__recover_kind", "marker")?;
+    let expected_kind = recover_kind_marker_name(vm, &marker)?;
+    let handler = decode_callable_arg(&args[2], "__recover_kind", "handler")?;
+
+    match result {
+        Ok(value) => Ok(ok_result(value)),
+        Err(err) if err.kind == expected_kind => {
+            let handler_result = vm.invoke_callable_sync(handler, vec![err_value(err.clone())])?;
+            match decode_result_arg(&handler_result, "__recover_kind", "handler result")? {
+                Ok(value) => Ok(ok_result(value)),
+                Err(rich) => Ok(err_result_from_rich_error(rich)),
+            }
+        }
+        Err(err) => Ok(err_result_from_rich_error(err)),
+    }
+}
+
+fn recover_kind_marker_name(vm: &VM, marker: &Callable) -> Result<String, RuntimeError> {
+    let qualified_name = match &marker.target {
+        sindr::runtime::CallableTarget::Function(fun_idx) => vm
+            .function_entries()
+            .get(*fun_idx as usize)
+            .and_then(|entry| entry.qualified_name.as_deref())
+            .ok_or_else(|| {
+                RuntimeError::new(format!(
+                    "__recover_kind marker references unknown function {}",
+                    fun_idx
+                ))
+            })?,
+        other => {
+            return Err(RuntimeError::new(format!(
+                "__recover_kind marker must be a deferror constructor function, got {:?}",
+                other
+            )))
+        }
+    };
+    Ok(qualified_name.to_string())
 }
 
 fn builtin_test_push(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

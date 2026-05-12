@@ -638,7 +638,7 @@ mod tests {
             .filter(|op| matches!(op, Opcode::ListHead))
             .count();
 
-        assert_eq!(list_head_count, 1024);
+        assert_eq!(list_head_count, 512);
     }
 
     #[test]
@@ -662,7 +662,7 @@ mod tests {
             .filter(|op| matches!(op, Opcode::ListHead))
             .count();
 
-        assert_eq!(list_head_count, 1024);
+        assert_eq!(list_head_count, 512);
     }
 
     #[test]
@@ -1200,27 +1200,44 @@ print("ok")"#,
     }
 
     #[test]
-    fn int_bit_index_helpers_stay_as_builtin_calls() {
+    fn direct_shift_and_bit_index_builtins_lower_to_specialized_opcodes() {
         let bytecode = codegen_typed(vec![
+            builtin_app(
+                "shl",
+                vec![int_lit(1), int_lit(3)],
+                Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
+            ),
+            builtin_app(
+                "shr",
+                vec![int_lit(8), int_lit(1)],
+                Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
+            ),
             builtin_app("test_bit", vec![int_lit(5), int_lit(0)], Ty::Bool),
             builtin_app("set_bit", vec![int_lit(0), int_lit(1)], Ty::Int),
             builtin_app("clear_bit", vec![int_lit(7), int_lit(1)], Ty::Int),
             builtin_app("toggle_bit", vec![int_lit(5), int_lit(0)], Ty::Int),
         ]);
 
-        for name in ["test_bit", "set_bit", "clear_bit", "toggle_bit"] {
-            let builtin_id = builtin_id_by_name(name)
-                .unwrap_or_else(|| panic!("{name} builtin metadata must exist"));
-            assert!(bytecode.opcodes.iter().any(|op| {
-                matches!(
-                    op,
-                    Opcode::CallBuiltin {
-                        builtin_id: id,
-                        arity: 2,
-                        ..
-                    } if *id == builtin_id
-                )
-            }));
+        for opcode in [
+            Opcode::ShlInt,
+            Opcode::ShrInt,
+            Opcode::TestBitInt,
+            Opcode::SetBitInt,
+            Opcode::ClearBitInt,
+            Opcode::ToggleBitInt,
+        ] {
+            assert!(bytecode.opcodes.iter().any(|op| *op == opcode));
+        }
+
+        for name in [
+            "shl",
+            "shr",
+            "test_bit",
+            "set_bit",
+            "clear_bit",
+            "toggle_bit",
+        ] {
+            assert_no_call_builtin(&bytecode, name);
         }
     }
 

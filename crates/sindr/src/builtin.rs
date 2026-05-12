@@ -155,6 +155,11 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Result<$T>, Result<()>) -> Result<$T>",
     },
     BuiltinMeta {
+        name: "__recover_kind",
+        arity: 3,
+        sig_str: "(Result<$T>, String, (Error -> Result<$T>)) -> Result<$T>",
+    },
+    BuiltinMeta {
         name: "__test_push",
         arity: 2,
         sig_str: "(String, String) -> Unit",

@@ -1,10 +1,10 @@
 use sindr::builtin::builtin_meta_by_id;
 use sindr::ir::{
-    line_column_for_offset, Bytecode, BytecodeChunk, CallableTemplate,
-    CallableTemplateArg, CallableTemplateComposeFlavor, CallableTemplateDirectTarget,
-    CallableTemplateKind, Constant, DocEntry, FunctionEntry, Opcode, RuntimeHandlerTarget,
-    RuntimeInitPolicy, RuntimeProcessInstance, RuntimeProcessSpec, RuntimeProcessSpecTable,
-    RuntimeSupervisorPolicy, SourceMap,
+    line_column_for_offset, Bytecode, BytecodeChunk, CallableTemplate, CallableTemplateArg,
+    CallableTemplateComposeFlavor, CallableTemplateDirectTarget, CallableTemplateKind, Constant,
+    DocEntry, FunctionEntry, Opcode, RuntimeHandlerTarget, RuntimeInitPolicy,
+    RuntimeProcessInstance, RuntimeProcessSpec, RuntimeProcessSpecTable, RuntimeSupervisorPolicy,
+    SourceMap,
 };
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
@@ -1075,7 +1075,9 @@ impl VM {
         args: Vec<Value>,
     ) -> Result<Value, RuntimeError> {
         match target {
-            CallableTemplateDirectTarget::Builtin(builtin_id) => call_builtin(self, *builtin_id, args),
+            CallableTemplateDirectTarget::Builtin(builtin_id) => {
+                call_builtin(self, *builtin_id, args)
+            }
             sindr::ir::CallableTemplateDirectTarget::Function(fun_idx) => {
                 self.invoke_callable_sync(self.callable_for_function(*fun_idx), args)
             }
@@ -1090,15 +1092,16 @@ impl VM {
     ) -> Result<Value, RuntimeError> {
         let template = self.callable_template(template_id)?.clone();
         match template.kind {
-            CallableTemplateKind::PartialDirectCall { target, arg_sources } => {
+            CallableTemplateKind::PartialDirectCall {
+                target,
+                arg_sources,
+            } => {
                 let mut final_args = Vec::with_capacity(arg_sources.len());
                 for source in arg_sources {
                     match source {
                         CallableTemplateArg::Bound(idx) => {
-                            let value = lexical_captures
-                                .get(idx as usize)
-                                .cloned()
-                                .ok_or_else(|| {
+                            let value =
+                                lexical_captures.get(idx as usize).cloned().ok_or_else(|| {
                                     RuntimeError::new(format!(
                                         "Callable template {} bound arg out of bounds: {}",
                                         template_id, idx
@@ -1107,10 +1110,8 @@ impl VM {
                             final_args.push(value);
                         }
                         CallableTemplateArg::Runtime(idx) => {
-                            let value = runtime_args
-                                .get(idx as usize)
-                                .cloned()
-                                .ok_or_else(|| {
+                            let value =
+                                runtime_args.get(idx as usize).cloned().ok_or_else(|| {
                                     RuntimeError::new(format!(
                                         "Callable template {} runtime arg out of bounds: {}",
                                         template_id, idx
@@ -4418,8 +4419,11 @@ impl VM {
                 let runtime_arity = full_args.len().saturating_sub(lexical_captures.len());
                 let runtime_args = full_args.split_off(lexical_captures.len());
                 debug_assert_eq!(runtime_args.len(), runtime_arity);
-                match self.invoke_callable_template_sync(template_id, lexical_captures, runtime_args)
-                {
+                match self.invoke_callable_template_sync(
+                    template_id,
+                    lexical_captures,
+                    runtime_args,
+                ) {
                     Ok(value) => StepOutcome::Halt(value),
                     Err(err) => StepOutcome::RuntimeError(err),
                 }
@@ -5335,6 +5339,107 @@ impl VM {
                 } else {
                     self.stack.push(ok_vm_result(Value::Int(a % b)));
                 }
+            }
+            Opcode::ShlInt => {
+                let bits = self.pop_int()?;
+                let value = self.pop_int()?;
+                let Some(amount) = bits.to_usize() else {
+                    self.stack.push(err_vm_result(self.process_error(
+                        "NegativeShiftCount",
+                        &format!("shift amount must be non-negative: {}", bits),
+                    )));
+                    return Ok(OpcodeControl::Continue);
+                };
+                self.stack.push(ok_vm_result(Value::Int(value << amount)));
+            }
+            Opcode::ShrInt => {
+                let bits = self.pop_int()?;
+                let value = self.pop_int()?;
+                let Some(amount) = bits.to_usize() else {
+                    self.stack.push(err_vm_result(self.process_error(
+                        "NegativeShiftCount",
+                        &format!("shift amount must be non-negative: {}", bits),
+                    )));
+                    return Ok(OpcodeControl::Continue);
+                };
+                self.stack.push(ok_vm_result(Value::Int(value >> amount)));
+            }
+            Opcode::TestBitInt => {
+                let index = self.pop_int()?;
+                let value = self.pop_int()?;
+                if index < int(0) {
+                    self.stack.push(err_vm_result(self.process_error(
+                        "NegativeBitIndex",
+                        &format!("bit index must be non-negative: {}", index),
+                    )));
+                    return Ok(OpcodeControl::Continue);
+                }
+                let Some(bit_index) = index.to_usize() else {
+                    return Err(RuntimeError::new(format!(
+                        "bit index out of range for usize: {}",
+                        index
+                    )));
+                };
+                let mask = int(1) << bit_index;
+                self.stack
+                    .push(ok_vm_result(Value::Bool(!(value & mask).is_zero())));
+            }
+            Opcode::SetBitInt => {
+                let index = self.pop_int()?;
+                let value = self.pop_int()?;
+                if index < int(0) {
+                    self.stack.push(err_vm_result(self.process_error(
+                        "NegativeBitIndex",
+                        &format!("bit index must be non-negative: {}", index),
+                    )));
+                    return Ok(OpcodeControl::Continue);
+                }
+                let Some(bit_index) = index.to_usize() else {
+                    return Err(RuntimeError::new(format!(
+                        "bit index out of range for usize: {}",
+                        index
+                    )));
+                };
+                let mask = int(1) << bit_index;
+                self.stack.push(ok_vm_result(Value::Int(value | mask)));
+            }
+            Opcode::ClearBitInt => {
+                let index = self.pop_int()?;
+                let value = self.pop_int()?;
+                if index < int(0) {
+                    self.stack.push(err_vm_result(self.process_error(
+                        "NegativeBitIndex",
+                        &format!("bit index must be non-negative: {}", index),
+                    )));
+                    return Ok(OpcodeControl::Continue);
+                }
+                let Some(bit_index) = index.to_usize() else {
+                    return Err(RuntimeError::new(format!(
+                        "bit index out of range for usize: {}",
+                        index
+                    )));
+                };
+                let mask = int(1) << bit_index;
+                self.stack.push(ok_vm_result(Value::Int(value & !mask)));
+            }
+            Opcode::ToggleBitInt => {
+                let index = self.pop_int()?;
+                let value = self.pop_int()?;
+                if index < int(0) {
+                    self.stack.push(err_vm_result(self.process_error(
+                        "NegativeBitIndex",
+                        &format!("bit index must be non-negative: {}", index),
+                    )));
+                    return Ok(OpcodeControl::Continue);
+                }
+                let Some(bit_index) = index.to_usize() else {
+                    return Err(RuntimeError::new(format!(
+                        "bit index out of range for usize: {}",
+                        index
+                    )));
+                };
+                let mask = int(1) << bit_index;
+                self.stack.push(ok_vm_result(Value::Int(value ^ mask)));
             }
 
             // Arithmetic (Float)
@@ -6889,11 +6994,10 @@ mod tests {
         CallableTemplateComposeFlavor, CallableTemplateDirectTarget, CallableTemplateKind,
         Constant, ErrTemplate, FunctionEntry, Opcode, OpcodeSource, RuntimeBootPlan,
         RuntimeCallableRef, RuntimeHandlerKind, RuntimeHandlerSpec, RuntimeInitPolicy,
-        RuntimeInitResultShape, RuntimeInitSpec, RuntimeLifecycleSpec,
-        RuntimeProcessDependencies, RuntimeProcessInstance, RuntimeProcessKind,
-        RuntimeProcessSpec, RuntimeProcessSpecTable, RuntimeStateSpec, RuntimeSupervisionSpec,
-        RuntimeSupervisorOverrideEntry, RuntimeSupervisorPolicy, RuntimeTypeRef,
-        SingletonBootEntry, SourceMap,
+        RuntimeInitResultShape, RuntimeInitSpec, RuntimeLifecycleSpec, RuntimeProcessDependencies,
+        RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec, RuntimeProcessSpecTable,
+        RuntimeStateSpec, RuntimeSupervisionSpec, RuntimeSupervisorOverrideEntry,
+        RuntimeSupervisorPolicy, RuntimeTypeRef, SingletonBootEntry, SourceMap,
     };
     use sindr::primitives::int;
     use sindr::runtime::{
@@ -7820,7 +7924,7 @@ mod tests {
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
             callable_templates: Vec::new(),
-                        error_template_base: 0,
+            error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
@@ -8683,7 +8787,7 @@ mod tests {
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
             callable_templates: Vec::new(),
-                        functions: Vec::new(),
+            functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: RuntimeBootPlan::default(),
@@ -9078,7 +9182,7 @@ mod tests {
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
             callable_templates: Vec::new(),
-                        functions: Vec::new(),
+            functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
@@ -9741,7 +9845,7 @@ mod tests {
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
             callable_templates: Vec::new(),
-                        error_template_base: 0,
+            error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
@@ -9769,7 +9873,7 @@ mod tests {
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
             callable_templates: Vec::new(),
-                        error_template_base: 0,
+            error_template_base: 0,
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
@@ -9810,7 +9914,7 @@ mod tests {
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
             callable_templates: Vec::new(),
-                        error_template_base: 1,
+            error_template_base: 1,
             error_templates: vec![ErrTemplate {
                 id: 0,
                 kind: "NewKind".into(),
@@ -9859,7 +9963,7 @@ mod tests {
                 type_entries: Vec::new(),
                 dbg_template_base: 0,
                 dbg_templates: Vec::new(),
-            callable_templates: Vec::new(),
+                callable_templates: Vec::new(),
                 error_template_base: 0,
                 error_templates: vec![ErrTemplate {
                     id: 0,
@@ -10413,6 +10517,121 @@ mod tests {
     }
 
     #[test]
+    fn shift_and_bit_index_opcodes_execute_successfully() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::ShlInt,
+            Opcode::LoadConst(2),
+            Opcode::LoadConst(3),
+            Opcode::ShrInt,
+            Opcode::LoadConst(4),
+            Opcode::LoadConst(5),
+            Opcode::TestBitInt,
+            Opcode::LoadConst(6),
+            Opcode::LoadConst(3),
+            Opcode::SetBitInt,
+            Opcode::LoadConst(7),
+            Opcode::LoadConst(3),
+            Opcode::ClearBitInt,
+            Opcode::LoadConst(4),
+            Opcode::LoadConst(5),
+            Opcode::ToggleBitInt,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![
+            Constant::Int(int(1)),
+            Constant::Int(int(3)),
+            Constant::Int(int(8)),
+            Constant::Int(int(1)),
+            Constant::Int(int(5)),
+            Constant::Int(int(0)),
+            Constant::Int(int(0)),
+            Constant::Int(int(7)),
+        ];
+
+        let mut vm = VM::new(bytecode);
+        vm.run().expect("run should succeed");
+
+        assert_eq!(
+            vm.stack,
+            vec![
+                Value::Tagged {
+                    tag: 0,
+                    fields: vec![Value::Int(int(8))],
+                },
+                Value::Tagged {
+                    tag: 0,
+                    fields: vec![Value::Int(int(4))],
+                },
+                Value::Tagged {
+                    tag: 0,
+                    fields: vec![Value::Bool(true)],
+                },
+                Value::Tagged {
+                    tag: 0,
+                    fields: vec![Value::Int(int(2))],
+                },
+                Value::Tagged {
+                    tag: 0,
+                    fields: vec![Value::Int(int(5))],
+                },
+                Value::Tagged {
+                    tag: 0,
+                    fields: vec![Value::Int(int(4))],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn shift_and_bit_index_opcodes_preserve_negative_index_errors() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::ShlInt,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::ShrInt,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::TestBitInt,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::SetBitInt,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::ClearBitInt,
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::ToggleBitInt,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(1)), Constant::Int(int(-1))];
+
+        let mut vm = VM::new(bytecode);
+        vm.run().expect("run should succeed");
+
+        let expected_kinds = [
+            "NegativeShiftCount",
+            "NegativeShiftCount",
+            "NegativeBitIndex",
+            "NegativeBitIndex",
+            "NegativeBitIndex",
+            "NegativeBitIndex",
+        ];
+        for (value, expected_kind) in vm.stack.iter().zip(expected_kinds) {
+            match value {
+                Value::Tagged { tag: 1, fields } => match fields.first() {
+                    Some(Value::Error(rich)) => assert_eq!(rich.kind, expected_kind),
+                    other => panic!("expected Err(Error), got {other:?}"),
+                },
+                other => panic!("expected Err result, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn get_field_on_non_tagged_value_is_runtime_error() {
         let mut bytecode = base_bytecode(vec![
             Opcode::LoadConst(0),
@@ -10671,7 +10890,10 @@ mod tests {
             template_id: 0,
             kind: CallableTemplateKind::PartialDirectCall {
                 target: CallableTemplateDirectTarget::Function(0),
-                arg_sources: vec![CallableTemplateArg::Runtime(0), CallableTemplateArg::Bound(0)],
+                arg_sources: vec![
+                    CallableTemplateArg::Runtime(0),
+                    CallableTemplateArg::Bound(0),
+                ],
             },
             metadata: Default::default(),
         }];
