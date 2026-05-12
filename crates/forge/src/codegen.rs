@@ -1971,14 +1971,32 @@ fn localize_chunk_indices(
 
 #[cfg(test)]
 mod tests {
-    use super::Codegen;
-    use crate::bytecode::Constant;
+    use super::{
+        compose_bytecode_with_chunk, localize_chunk_indices, Codegen, ForgeSession,
+    };
+    use crate::bytecode::{Bytecode, BytecodeChunk, CompileInfo, Constant, ErrTemplate};
     use crate::opcode::Opcode;
     use scar::typed::{
-        TypedDbgArg, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode, TypedPattern,
+        TypedDbgArg, TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode,
+        TypedPattern, TypedProcessSpec, TypedProgram,
+    };
+    use scar::typed::{
+        TypedProcessHandlerUid,
     };
     use scar::types::Ty;
-    use spire::ast::{BinOp, Lit, Span};
+    use sigil::resolved::ResolvedId;
+    use sindr::ir::{
+        BootEntrySource, DbgTemplate, DocEntry, DocKind, FunctionEntry, FunctionFlags,
+        RuntimeBootPlan, RuntimeCallableRef, RuntimeInitPolicy, RuntimeInitResultShape,
+        RuntimeInitSpec, RuntimeProcessInstance, RuntimeProcessKind, RuntimeProcessSpec,
+        RuntimeProcessSpecTable, RuntimeStateSpec, RuntimeSupervisionSpec, RuntimeTypeRef,
+        SingletonBootEntry,
+    };
+    use sindr::runtime::{TypeEntry, TypeKind, TypeRegistry};
+    use spire::ast::{
+        AstTy, BinOp, Lit, ProcessInstance, ProcessKind, ProcessRuntimeHandlerSpec, ProcessSpec,
+        Span, SupervisorInitEntry, SupervisorInitSpec, Visibility,
+    };
 
     fn span(start: usize, end: usize) -> Span {
         Span { start, end }
@@ -1989,6 +2007,285 @@ mod tests {
             ty,
             span: span.clone(),
             node: TypedInner::Lit(node),
+        }
+    }
+
+    fn resolved_id(name: &str, qualified_name: Option<&str>, unique_id: u32) -> ResolvedId {
+        ResolvedId {
+            name: name.into(),
+            qualified_name: qualified_name.map(str::to_string),
+            unique_id,
+            compiler_generated: false,
+            span: span(0, 0),
+        }
+    }
+
+    fn typed_fun_param(name: &str, unique_id: u32, ty: Ty) -> TypedFunParam {
+        TypedFunParam {
+            id: resolved_id(name, None, unique_id),
+            ty,
+        }
+    }
+
+    fn function_entry(fun_idx: u32, entry_pc: u32, end_pc: u32) -> FunctionEntry {
+        FunctionEntry {
+            fun_idx,
+            entry_pc,
+            num_locals: 0,
+            arity: 0,
+            qualified_name: Some(format!("Global::f{fun_idx}")),
+            signature: None,
+            end_pc,
+            span_start: 0,
+            span_end: 0,
+            flags: FunctionFlags::default(),
+        }
+    }
+
+    fn err_template(id: u32, kind: &str) -> ErrTemplate {
+        ErrTemplate {
+            id,
+            kind: kind.into(),
+            span_start: 0,
+            span_end: 0,
+            line: 0,
+            column: 0,
+            format: "{message}".into(),
+            num_params: 0,
+        }
+    }
+
+    fn dbg_template(id: u32) -> DbgTemplate {
+        DbgTemplate {
+            id,
+            span_start: 0,
+            span_end: 0,
+            source_name: None,
+            args: Vec::new(),
+        }
+    }
+
+    fn doc_entry(qualified_name: &str) -> DocEntry {
+        DocEntry {
+            qualified_name: qualified_name.into(),
+            kind: DocKind::Function,
+            module_path: "Global".into(),
+            signature: Some("() -> Unit".into()),
+            doc: format!("doc for {qualified_name}"),
+        }
+    }
+
+    fn type_entry(tag: u32, name: &str) -> TypeEntry {
+        TypeEntry {
+            tag,
+            name: name.into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["value".into()],
+            private_flags: vec![false],
+        }
+    }
+
+    fn runtime_process_spec(process_name: &str, fun_idx: u32) -> RuntimeProcessSpec {
+        RuntimeProcessSpec {
+            process_id: 0,
+            type_name: process_name.into(),
+            kind: RuntimeProcessKind::Agent,
+            instance: RuntimeProcessInstance::Singleton,
+            state: RuntimeStateSpec {
+                state_type: RuntimeTypeRef { name: "Int".into() },
+            },
+            init: RuntimeInitSpec {
+                callable: RuntimeCallableRef { fun_idx },
+                policy: RuntimeInitPolicy::Eager,
+                result_shape: RuntimeInitResultShape::EagerState {
+                    result_type: RuntimeTypeRef { name: "Int".into() },
+                },
+                state_type: RuntimeTypeRef { name: "Int".into() },
+                init_route: None,
+            },
+            handlers: Vec::new(),
+            dependencies: Default::default(),
+            lifecycle: Default::default(),
+            supervision: RuntimeSupervisionSpec {
+                parent: Some("RuntimeSupervisor".into()),
+                children: Vec::new(),
+                policy: None,
+            },
+        }
+    }
+
+    fn singleton_boot(name: &str) -> SingletonBootEntry {
+        SingletonBootEntry {
+            process_name: name.into(),
+            init_timeout_ms: RuntimeBootPlan::default().runtime_limits.default_init_timeout_ms,
+            source: BootEntrySource::ExplicitConfig,
+        }
+    }
+
+    fn base_bytecode() -> Bytecode {
+        Bytecode {
+            opcodes: vec![
+                Opcode::LoadConst(0),
+                Opcode::Jump(5),
+                Opcode::JumpIfFalse(5),
+                Opcode::JumpIfLocalTagEq {
+                    local_idx: 0,
+                    tag_const_idx: 1,
+                    target_pc: 5,
+                },
+                Opcode::LoadConst(1),
+                Opcode::Halt,
+                Opcode::LoadConst(0),
+                Opcode::Return,
+                Opcode::LoadConst(1),
+                Opcode::Return,
+            ],
+            constants: vec![Constant::Bool(true), Constant::Tag(7)],
+            num_locals: 2,
+            type_registry: TypeRegistry::from_entries(vec![type_entry(2, "Global::BaseType")]),
+            error_templates: vec![err_template(0, "Global::BaseError")],
+            dbg_templates: vec![dbg_template(0)],
+            functions: vec![function_entry(0, 6, 8), function_entry(1, 8, 10)],
+            source_map: None,
+            docs: vec![doc_entry("Global::base_doc")],
+            compile_info: CompileInfo::default(),
+            labels: Vec::new(),
+            imports: Vec::new(),
+            exports: Vec::new(),
+            literals: Vec::new(),
+            lines: Vec::new(),
+            spans: Vec::new(),
+            sources: Vec::new(),
+            pc_spans: Vec::new(),
+            runtime_process_specs: RuntimeProcessSpecTable {
+                entries: vec![runtime_process_spec("Global::BaseAgent", 0)],
+            },
+            runtime_boot_plan: RuntimeBootPlan {
+                singletons: vec![singleton_boot("Global::BaseAgent")],
+                ..RuntimeBootPlan::default()
+            },
+        }
+    }
+
+    fn relocatable_chunk() -> BytecodeChunk {
+        BytecodeChunk {
+            opcodes: vec![
+                Opcode::LoadConst(0),
+                Opcode::JumpIfTrue(4),
+                Opcode::JumpIfLocalTagNe {
+                    local_idx: 0,
+                    tag_const_idx: 1,
+                    target_pc: 4,
+                },
+                Opcode::LoadConst(1),
+                Opcode::Halt,
+                Opcode::MakeError { template_id: 0 },
+                Opcode::Dbg {
+                    template_id: 0,
+                    arg_count: 0,
+                },
+                Opcode::LoadConst(2),
+                Opcode::MakeErrorLiteral {
+                    kind_const_idx: 3,
+                    message_const_idx: 4,
+                },
+                Opcode::Return,
+                Opcode::LoadConst(1),
+                Opcode::Return,
+            ],
+            source_map: None,
+            const_base: 2,
+            constants: vec![
+                Constant::Int(5.into()),
+                Constant::Tag(9),
+                Constant::Str("payload".into()),
+                Constant::Str("ChunkError".into()),
+                Constant::Str("boom".into()),
+            ],
+            new_locals: 3,
+            type_entries: vec![type_entry(3, "Global::ChunkType")],
+            error_template_base: 1,
+            error_templates: vec![err_template(1, "Global::ChunkError")],
+            dbg_template_base: 1,
+            dbg_templates: vec![dbg_template(1)],
+            functions: vec![function_entry(1, 5, 10), function_entry(2, 10, 12)],
+            docs: vec![doc_entry("Global::base_doc"), doc_entry("Global::chunk_doc")],
+            runtime_process_specs: vec![runtime_process_spec("Global::ChunkAgent", 1)],
+            runtime_boot_plan: RuntimeBootPlan {
+                singletons: vec![singleton_boot("Global::ChunkAgent")],
+                ..RuntimeBootPlan::default()
+            },
+        }
+    }
+
+    fn singleton_process_spec(name: &str) -> TypedProcessSpec {
+        TypedProcessSpec {
+            module_path: "Global".into(),
+            process_name: format!("Global::{name}"),
+            spec: ProcessSpec {
+                process_name: format!("Global::{name}"),
+                kind: ProcessKind::Agent,
+                instance: ProcessInstance::Singleton,
+                state: AstTy::Named(span(0, 0), "Int".into()),
+                boot: false,
+                registry: false,
+                lazy: false,
+                handlers: Vec::new(),
+                handler_specs: Vec::<ProcessRuntimeHandlerSpec>::new(),
+                supervisor_policy: None,
+            },
+            init_uid: 101,
+            get_uid: 102,
+            set_uid: None,
+            handler_uids: Vec::<TypedProcessHandlerUid>::new(),
+        }
+    }
+
+    fn singleton_process_program(name: &str) -> TypedProgram {
+        let result_ty = Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error));
+        let init_id = resolved_id("init", Some(&format!("Global::{name}::init")), 101);
+        let get_id = resolved_id("get", Some(&format!("Global::{name}::get")), 102);
+
+        TypedProgram {
+            nodes: vec![
+                TypedNode {
+                    ty: Ty::Unit,
+                    span: span(0, 0),
+                    node: TypedInner::Def(
+                        0,
+                        init_id,
+                        Vec::new(),
+                        Vec::new(),
+                        result_ty.clone(),
+                        Box::new(lit_node(Ty::Int, Lit::Int(0.into()), span(0, 0))),
+                        Visibility::Public,
+                    ),
+                },
+                TypedNode {
+                    ty: Ty::Unit,
+                    span: span(0, 0),
+                    node: TypedInner::Def(
+                        1,
+                        get_id,
+                        Vec::new(),
+                        vec![typed_fun_param("state", 201, Ty::Int)],
+                        result_ty,
+                        Box::new(lit_node(Ty::Int, Lit::Int(1.into()), span(0, 0))),
+                        Visibility::Public,
+                    ),
+                },
+            ],
+            process_specs: vec![singleton_process_spec(name)],
+            boot_plan: SupervisorInitSpec {
+                entries: vec![SupervisorInitEntry {
+                    process_name: format!("Global::{name}"),
+                    timeout_ms: None,
+                    handlers: Vec::new(),
+                    overrides: Default::default(),
+                    span: span(0, 0),
+                }],
+                ..SupervisorInitSpec::default()
+            },
         }
     }
 
@@ -2304,6 +2601,302 @@ mod tests {
             Some(Opcode::Dbg { arg_count: 2, .. })
         ));
         assert_eq!(state.dbg_templates.len(), 1);
+    }
+
+    #[test]
+    fn compose_bytecode_with_chunk_relocates_and_merges_artifact_state() {
+        let bytecode =
+            compose_bytecode_with_chunk(base_bytecode(), relocatable_chunk()).expect("compose");
+
+        assert_eq!(bytecode.opcodes[1], Opcode::Jump(9));
+        assert_eq!(bytecode.opcodes[2], Opcode::JumpIfFalse(9));
+        assert_eq!(
+            bytecode.opcodes[3],
+            Opcode::JumpIfLocalTagEq {
+                local_idx: 0,
+                tag_const_idx: 1,
+                target_pc: 9,
+            }
+        );
+        assert!(matches!(bytecode.opcodes[5], Opcode::LoadConst(2)));
+        assert_eq!(bytecode.opcodes[6], Opcode::JumpIfTrue(9));
+        assert_eq!(
+            bytecode.opcodes[7],
+            Opcode::JumpIfLocalTagNe {
+                local_idx: 0,
+                tag_const_idx: 3,
+                target_pc: 9,
+            }
+        );
+        assert!(matches!(bytecode.opcodes[8], Opcode::LoadConst(3)));
+        assert!(matches!(bytecode.opcodes[14], Opcode::MakeError { template_id: 1 }));
+        assert!(matches!(
+            bytecode.opcodes[15],
+            Opcode::Dbg {
+                template_id: 1,
+                arg_count: 0
+            }
+        ));
+        assert!(matches!(bytecode.opcodes[16], Opcode::LoadConst(4)));
+        assert!(matches!(
+            bytecode.opcodes[17],
+            Opcode::MakeErrorLiteral {
+                kind_const_idx: 5,
+                message_const_idx: 6
+            }
+        ));
+        assert_eq!(bytecode.opcodes.iter().filter(|op| matches!(op, Opcode::Halt)).count(), 1);
+        assert!(matches!(bytecode.opcodes[9], Opcode::Halt));
+
+        assert_eq!(bytecode.functions.len(), 3);
+        assert_eq!(bytecode.functions[0].fun_idx, 0);
+        assert_eq!(bytecode.functions[0].entry_pc, 10);
+        assert_eq!(bytecode.functions[0].end_pc, 12);
+        assert_eq!(bytecode.functions[1].fun_idx, 1);
+        assert_eq!(bytecode.functions[1].entry_pc, 14);
+        assert_eq!(bytecode.functions[1].end_pc, 19);
+        assert_eq!(bytecode.functions[2].fun_idx, 2);
+        assert_eq!(bytecode.functions[2].entry_pc, 19);
+        assert_eq!(bytecode.functions[2].end_pc, 21);
+
+        assert_eq!(bytecode.constants.len(), 7);
+        assert_eq!(bytecode.error_templates.len(), 2);
+        assert_eq!(bytecode.dbg_templates.len(), 2);
+        assert_eq!(bytecode.type_registry.entries().len(), 2);
+        assert_eq!(bytecode.num_locals, 5);
+        assert_eq!(bytecode.docs.len(), 2);
+        assert_eq!(bytecode.runtime_process_specs.entries.len(), 2);
+        assert_eq!(bytecode.runtime_boot_plan.singletons.len(), 2);
+        assert_eq!(bytecode.docs[0].qualified_name, "Global::base_doc");
+        assert_eq!(bytecode.docs[1].qualified_name, "Global::chunk_doc");
+    }
+
+    #[test]
+    fn compose_bytecode_with_chunk_rejects_base_without_top_level_halt() {
+        let mut base = base_bytecode();
+        base.opcodes.retain(|op| !matches!(op, Opcode::Halt));
+
+        let err = compose_bytecode_with_chunk(base, relocatable_chunk())
+            .expect_err("base bytecode without top-level halt must fail");
+
+        assert!(err.message.contains("precompiled bytecode has no top-level Halt"));
+    }
+
+    #[test]
+    fn compose_bytecode_with_chunk_rejects_chunk_without_top_level_halt() {
+        let mut chunk = relocatable_chunk();
+        chunk.opcodes.retain(|op| !matches!(op, Opcode::Halt));
+
+        let err = compose_bytecode_with_chunk(base_bytecode(), chunk)
+            .expect_err("chunk without top-level halt must fail");
+
+        assert!(err.message.contains("compiled chunk has no top-level Halt"));
+    }
+
+    #[test]
+    fn compose_bytecode_with_chunk_rejects_mismatched_chunk_bases() {
+        let base = base_bytecode();
+
+        let mut const_chunk = relocatable_chunk();
+        const_chunk.const_base += 1;
+        let err = compose_bytecode_with_chunk(base.clone(), const_chunk)
+            .expect_err("const base mismatch must fail");
+        assert!(err.message.contains("chunk constant base mismatch"));
+
+        let mut err_chunk = relocatable_chunk();
+        err_chunk.error_template_base += 1;
+        let err = compose_bytecode_with_chunk(base.clone(), err_chunk)
+            .expect_err("error template base mismatch must fail");
+        assert!(err.message.contains("chunk error template base mismatch"));
+
+        let mut dbg_chunk = relocatable_chunk();
+        dbg_chunk.dbg_template_base += 1;
+        let err = compose_bytecode_with_chunk(base, dbg_chunk)
+            .expect_err("dbg template base mismatch must fail");
+        assert!(err.message.contains("chunk dbg template base mismatch"));
+    }
+
+    #[test]
+    fn compose_bytecode_with_chunk_rejects_invalid_chunk_function_index() {
+        let mut chunk = relocatable_chunk();
+        chunk.functions[1].fun_idx = 9;
+
+        let err = compose_bytecode_with_chunk(base_bytecode(), chunk)
+            .expect_err("invalid function index must fail");
+
+        assert!(err
+            .message
+            .contains("function table invariant violated in chunk"));
+    }
+
+    #[test]
+    fn localize_chunk_indices_rebases_all_chunk_local_indices() {
+        let mut opcodes = vec![
+            Opcode::LoadConst(3),
+            Opcode::StoreConstLocal {
+                const_idx: 4,
+                local_idx: 1,
+            },
+            Opcode::EqLocalTag {
+                local_idx: 2,
+                tag_const_idx: 5,
+            },
+            Opcode::JumpIfLocalTagEq {
+                local_idx: 3,
+                tag_const_idx: 6,
+                target_pc: 7,
+            },
+            Opcode::JumpIfLocalTagNe {
+                local_idx: 4,
+                tag_const_idx: 7,
+                target_pc: 8,
+            },
+            Opcode::MakeError { template_id: 4 },
+            Opcode::Dbg {
+                template_id: 5,
+                arg_count: 0,
+            },
+            Opcode::MakeErrorLiteral {
+                kind_const_idx: 8,
+                message_const_idx: 9,
+            },
+        ];
+
+        localize_chunk_indices(&mut opcodes, 3, 4, 5).expect("localize chunk indices");
+
+        assert_eq!(opcodes[0], Opcode::LoadConst(0));
+        assert_eq!(
+            opcodes[1],
+            Opcode::StoreConstLocal {
+                const_idx: 1,
+                local_idx: 1,
+            }
+        );
+        assert_eq!(
+            opcodes[2],
+            Opcode::EqLocalTag {
+                local_idx: 2,
+                tag_const_idx: 2,
+            }
+        );
+        assert_eq!(
+            opcodes[3],
+            Opcode::JumpIfLocalTagEq {
+                local_idx: 3,
+                tag_const_idx: 3,
+                target_pc: 7,
+            }
+        );
+        assert_eq!(
+            opcodes[4],
+            Opcode::JumpIfLocalTagNe {
+                local_idx: 4,
+                tag_const_idx: 4,
+                target_pc: 8,
+            }
+        );
+        assert_eq!(opcodes[5], Opcode::MakeError { template_id: 0 });
+        assert_eq!(
+            opcodes[6],
+            Opcode::Dbg {
+                template_id: 0,
+                arg_count: 0,
+            }
+        );
+        assert_eq!(
+            opcodes[7],
+            Opcode::MakeErrorLiteral {
+                kind_const_idx: 5,
+                message_const_idx: 6,
+            }
+        );
+    }
+
+    #[test]
+    fn forge_session_codegen_chunk_uses_chunk_local_indices_from_existing_bases() {
+        let mut base = Bytecode::default();
+        base.constants = vec![Constant::Int(10.into())];
+        base.error_templates = vec![err_template(0, "Global::OldError")];
+        base.dbg_templates = vec![dbg_template(0)];
+
+        let mut session = ForgeSession::from_bytecode(&base);
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: span(1, 18),
+            node: TypedInner::Dbg(vec![TypedDbgArg {
+                span: span(6, 7),
+                ty_name: "Int".into(),
+                expr: lit_node(Ty::Int, Lit::Int(1.into()), span(6, 7)),
+            }]),
+        };
+
+        let (chunk, _) = session
+            .codegen_chunk(vec![node])
+            .expect("codegen chunk should succeed");
+
+        assert_eq!(chunk.const_base, 1);
+        assert_eq!(chunk.error_template_base, 1);
+        assert_eq!(chunk.dbg_template_base, 1);
+        assert_eq!(chunk.constants, vec![Constant::Int(1.into())]);
+        assert!(chunk.opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::Dbg {
+                template_id: 0,
+                arg_count: 1
+            }
+        )));
+    }
+
+    #[test]
+    fn forge_session_codegen_chunk_typed_program_embeds_runtime_metadata() {
+        let mut session = ForgeSession::new();
+        let (chunk, _) = session
+            .codegen_chunk_typed_program(singleton_process_program("ChunkedLogger"))
+            .expect("typed program chunk should succeed");
+
+        assert_eq!(chunk.runtime_process_specs.len(), 1);
+        assert_eq!(chunk.runtime_process_specs[0].type_name, "Global::ChunkedLogger");
+        assert_eq!(chunk.runtime_process_specs[0].init.callable.fun_idx, 0);
+        assert_eq!(chunk.runtime_boot_plan.singletons.len(), 1);
+        assert_eq!(
+            chunk.runtime_boot_plan.singletons[0].process_name,
+            "Global::ChunkedLogger"
+        );
+    }
+
+    #[test]
+    fn forge_session_codegen_chunk_repl_result_uses_result_halt_path_for_failures() {
+        let mut session = ForgeSession::new();
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: span(1, 8),
+            node: TypedInner::Bind(
+                TypedPattern::ListCons(
+                    Ty::List(Box::new(Ty::Int)),
+                    Box::new(TypedPattern::Wildcard(Ty::Int)),
+                    Box::new(TypedPattern::Wildcard(Ty::List(Box::new(Ty::Int)))),
+                ),
+                Box::new(TypedNode {
+                    ty: Ty::List(Box::new(Ty::Int)),
+                    span: span(5, 7),
+                    node: TypedInner::ListNil,
+                }),
+            ),
+        };
+
+        let (chunk, _) = session
+            .codegen_chunk_repl_result(vec![node])
+            .expect("repl result chunk should succeed");
+
+        assert!(chunk
+            .opcodes
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::StructNew { field_count: 1 })));
+        assert!(!chunk.opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::CallBuiltin { .. }
+        )));
+        assert!(matches!(chunk.opcodes.last(), Some(Opcode::Halt)));
     }
 }
 
