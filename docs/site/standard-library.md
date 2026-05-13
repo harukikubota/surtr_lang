@@ -17,7 +17,7 @@ Surtr 全体では、関数は常に何らかの namespace に属します。標
 標準定義ソースの初期ロード順は次で固定されています。
 
 ```text
-Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Facet, Float] -> user source
+Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, Shell, IO, DynamicSupervisor] -> user source
 ```
 
 このうち auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@autoimport` が付いた標準 trait です。  
@@ -71,8 +71,10 @@ primitive module をまたぐ読みやすさを優先して `Kernel` に置き�
 - `Boolean`
 - `Error`
 - `List`
+- `Generator`
 - `HashMap`
 - `Result`
+- `Range`
 - `Facet`
 - `Float`
 

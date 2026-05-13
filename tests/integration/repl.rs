@@ -477,6 +477,38 @@ fn repl_sig_attached_extractor_owner_query_matches_zero_arg_form() {
 }
 
 #[test]
+fn repl_range_constructor_and_extractor_queries_render_through_cli() {
+    let output =
+        run_repl_session(":doc Range(Int, Int)\n:sig Range\n:sig Range()\n:doc Range!()\n:sig Range!\n:sig Range!()\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("Range::new"), "{stdout}");
+    assert!(stdout.contains("min: $A"), "{stdout}");
+    assert!(stdout.contains("max: $A"), "{stdout}");
+    assert!(stdout.contains("-> Range<$A>"), "{stdout}");
+    assert!(
+        stdout.contains("Construct a range while preserving the input order."),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Range::deconstruct"), "{stdout}");
+    assert!(stdout.contains("MatchResult<($A, $A), Error>"), "{stdout}");
+    assert!(
+        stdout.contains("Deconstruct a `Range` into `(min, max)` in pattern position."),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("specialized:\n  Range!() -> MatchResult<($A, $A), Error>"),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn repl_sig_enum_rejects_extra_input_with_shared_message() {
     let output = run_repl_session(
         ":sig Option(Int)\n:sig Option::Some\n:sig Option::Some()\n:sig Option::Some(1)\n:sig Option::Some(Int)\n:quit\n",

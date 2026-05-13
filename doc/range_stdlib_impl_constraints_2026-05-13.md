@@ -5,14 +5,14 @@
 `Range` を標準ライブラリへ追加し、`[start..stop]` の list range literal とは別に、
 「境界だけを保持する値」を導入するための実装メモを残す。
 
-今回の想定 API は次のとおり。
+今回の実装 API は次のとおり。
 
 - `Range::new(min, max)`
 - `Range::normalized(a, b)`
-- `impl Compare`
-- `impl Eq`
-- `impl Neq`
-- `Range::add(range, delta)` / `Range::sub(range, delta)` 相当の Int 専用移動
+- `impl Compare for Range<Int>`
+- `impl Eq for Range<Int>`
+- `impl Neq for Range<Int>`
+- `Range::advance(range, steps)` / `Range::retreat(range, steps)` の Int 専用移動
 - `Range(min, max)` pattern を支える `deconstruct`
 
 ## 先に確定してよい仕様
@@ -25,7 +25,8 @@
 - `Compare` は包含順序ではなく辞書順
   - まず `min`、同値なら `max`
 - `Eq` / `Neq` は構造的等値
-- 加算・減算は `Range + Range` ではなく、`Range<Int>` の平行移動だけを扱う
+- ただし現行実装では比較 trait は `Range<Int>` に限定する
+- 平行移動は `Range + Range` ではなく、`Range<Int>` の境界を同じだけ動かす helper として扱う
 
 ## 今回確認できた実装上の制約
 
@@ -63,7 +64,7 @@ Surtr の設計に合う。
 
 - `defstruct Range<$A> { min: $A, max: $A }`
 - `min/max` は public
-- `new` / `normalized` / `deconstruct` / `add` / `sub` を API として提供する
+- `new` / `normalized` / `deconstruct` / `advance` / `retreat` を API として提供する
 - field を直接更新して `min > max` になっても、それは compile error や runtime error ではなく、
   利用者が選んだ `Range` の状態として扱う
 
@@ -80,18 +81,32 @@ generic `defstruct` が言語機能として使える必要がある。
 既存 `Add` / `Sub` は `rhs: Self` 制約なので、
 `Range<Int> + Int` を trait で素直に表現できない。
 
-そのため、初版は通常関数にするのが自然。
+さらに `add` / `sub` という名前は operator helper (`Add::add`, `Sub::sub`) の語彙と衝突しやすい。
+そのため、初版は「平行移動」を表す通常関数にするのが自然。
 
 候補:
 
-- `Range::add(self: Range<Int>, rhs: Int) -> Range<Int>`
-- `Range::sub(self: Range<Int>, rhs: Int) -> Range<Int>`
+- `Range::advance(self: Range<Int>, rhs: Int) -> Range<Int>`
+- `Range::retreat(self: Range<Int>, rhs: Int) -> Range<Int>`
 
 もし method surface で `self: Range<Int>` が受け付けられない場合は、
 さらに次へ落とす。
 
-- `Range::add(range: Range<Int>, rhs: Int) -> Range<Int>`
-- `Range::sub(range: Range<Int>, rhs: Int) -> Range<Int>`
+- `Range::advance(range: Range<Int>, rhs: Int) -> Range<Int>`
+- `Range::retreat(range: Range<Int>, rhs: Int) -> Range<Int>`
+
+### 4.5. generic な比較 trait 実装は現行コンパイラ制約に当たる
+
+`impl Compare for Range<impl Compare>` のような surface は構文上は書けるが、
+現時点では runtime で `Call arity mismatch` に当たり安定しない。
+
+そのため今回の着地では:
+
+- `Range` 自体は `Range<$A>` の generic struct として提供する
+- `Range::normalized` / `Range::deconstruct` は generic のまま提供する
+- `Compare` / `Eq` / `Neq` は `Range<Int>` に限定して実装する
+
+完全な generic 比較は別タスクで compiler/runtime 側を詰めてから再拡張する。
 
 ### 5. 標準型追加は preload 配線が複数箇所にまたがる
 
@@ -100,10 +115,12 @@ generic `defstruct` が言語機能として使える必要がある。
 - `crates/xldr/src/loader.rs`
 - `crates/forge/src/lib.rs`
 - `crates/scar/tests/support/mod.rs`
-- `crates/eldr/src/builtin.rs`
 
 `Range` 本体だけ追加しても、preload 経路を揃えないと
-REPL / compiler test support / builtin surface alignment がずれる。
+REPL / compiler test support / semantic snapshot がずれる。
+
+`Range` は `@builtin def` / `@builtin type` を持たない pure stdlib module なので、
+`crates/eldr/src/builtin.rs` の builtin surface alignment 対応は不要。
 
 ### 6. テストは `lib/tests` に置くのが素直
 
@@ -122,9 +139,9 @@ cargo nextest run --workspace
 1. `Range` の実体表現を確定する
    - `defstruct Range<$A>` を前提に進める
 2. `new` / `normalized` / `deconstruct` の surface を確定する
-3. `Compare` / `Eq` / `Neq` を固定する
-4. `Int` 専用 `add/sub` を通常関数で載せる
-5. preload 配線を 4 箇所に追加する
+3. `Compare` / `Eq` / `Neq` を `Range<Int>` で固定する
+4. `Int` 専用 `advance/retreat` を通常関数で載せる
+5. preload 配線を 3 箇所に追加する
 6. `lib/tests/range.srt` と必要最小限の aggregate 連携を足す
 
 ## 今回の結論
@@ -137,3 +154,8 @@ field は `readonly` にせず public のままにし、
 
 つまり、`Range` は `Duration` のような「常に内部不変条件を守らせる値」ではなく、
 「比較・変換 API を持つ plain data」として扱う。
+
+ただし比較 trait だけは現状の実装制約に合わせて `Range<Int>` 限定で提供する。
+
+追加後も `[start..stop]` literal は従来どおり `List` / `Result<List<String>, Error>` 側へ lower され、
+`Range` には下がらない。

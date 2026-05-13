@@ -13,6 +13,7 @@ REPL は起動時に標準定義ソースと preload を読み切る OnceRead un
 - [型注釈](./type-annotations.md)
 - [トレイト実装](./trait-impls.md)
 - [構造体](./structs.md)
+- [Range](./range.md)
 - [Facet](./facet.md)
 - [Kernel](./kernel.md)
 - [JSON](./json.md)

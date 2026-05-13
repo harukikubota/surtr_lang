@@ -62,6 +62,7 @@ impl Generator {}"#;
 const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../../lib/types/hash_map.srt");
 const RESULT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/result.srt");
 const DURATION_MODULE_SOURCE: &str = include_str!("../../../../lib/types/duration.srt");
+const RANGE_MODULE_SOURCE: &str = include_str!("../../../../lib/types/range.srt");
 const PROCESS_MODULE_SOURCE: &str = include_str!("../../../../lib/process.srt");
 const FACET_MODULE_SOURCE: &str = include_str!("../../../../lib/facet.srt");
 const FLOAT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/float.srt");
@@ -520,6 +521,10 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
             (
                 "Duration",
                 pick_override("Duration", DURATION_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Range",
+                pick_override("Range", RANGE_MODULE_SOURCE, overrides),
             ),
             (
                 "Process",

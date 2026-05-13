@@ -1226,6 +1226,56 @@ fn core_sig_type_owner_falls_back_to_constructor_signatures() {
 }
 
 #[test]
+fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fallbacks() {
+    let mut engine = engine();
+
+    let constructor_doc = doc_text(&engine.handle_line(":doc Range(Int, Int)"));
+    assert!(constructor_doc.contains("Range::new"), "{constructor_doc}");
+    assert!(constructor_doc.contains("min: $A"), "{constructor_doc}");
+    assert!(constructor_doc.contains("max: $A"), "{constructor_doc}");
+    assert!(constructor_doc.contains("-> Range<$A>"), "{constructor_doc}");
+    assert!(
+        constructor_doc.contains("Construct a range while preserving the input order."),
+        "{constructor_doc}"
+    );
+
+    let range_sig = signature_text(&engine.handle_line(":sig Range"));
+    assert!(range_sig.contains("Range::new"), "{range_sig}");
+    assert!(range_sig.contains("min: $A"), "{range_sig}");
+    assert!(range_sig.contains("max: $A"), "{range_sig}");
+    assert!(range_sig.contains("-> Range<$A>"), "{range_sig}");
+
+    let range_empty_call_sig = signature_text(&engine.handle_line(":sig Range()"));
+    assert_eq!(range_empty_call_sig.trim(), range_sig.trim());
+
+    let extractor_doc = doc_text(&engine.handle_line(":doc Range!()"));
+    assert!(extractor_doc.contains("Range::deconstruct"), "{extractor_doc}");
+    assert!(
+        extractor_doc.contains("MatchResult<($A, $A), Error>"),
+        "{extractor_doc}"
+    );
+    assert!(
+        extractor_doc.contains("Deconstruct a `Range` into `(min, max)` in pattern position."),
+        "{extractor_doc}"
+    );
+
+    let extractor_sig = signature_text(&engine.handle_line(":sig Range!()"));
+    assert!(
+        extractor_sig.contains(
+            "defined:\n  Range::deconstruct<$A>(self: Range<$A>) -> MatchResult<($A, $A), Error>"
+        ),
+        "{extractor_sig}"
+    );
+    assert!(
+        extractor_sig.contains("specialized:\n  Range!() -> MatchResult<($A, $A), Error>"),
+        "{extractor_sig}"
+    );
+
+    let extractor_sig_no_args = signature_text(&engine.handle_line(":sig Range!"));
+    assert_eq!(extractor_sig_no_args.trim(), extractor_sig.trim());
+}
+
+#[test]
 fn core_sig_enum_rejects_extra_input_with_shared_message() {
     let mut engine = engine();
 

@@ -1,0 +1,20 @@
+raw = Range(3, 1)
+normalized = Range::normalized(3, 1)
+advanced = Range::advance(raw, 2)
+retreated = Range::retreat(raw, 2)
+left = Range(1, 4)
+right = Range(2, 0)
+same = Range(1, 4)
+different = Range(1, 5)
+value = Range(4, 6)
+
+print(to_string((raw.min, raw.max)))
+print(to_string((normalized.min, normalized.max)))
+print(to_string(compare(left, right)))
+print(to_string((left == same, left != different)))
+print(to_string((advanced.min, advanced.max)))
+print(to_string((retreated.min, retreated.max)))
+print(to_string(match value {
+  Range(min, max) => (min, max),
+  _ => (0, 0),
+}))

@@ -17,7 +17,7 @@ Surtr の標準定義ソースは language surface の一部です。
   - capability: `Numeric`, `Show`, `Compare`, `From`, `TryFrom`
   - operator dispatch / compatibility: `Eq`, `Ord`, `Concat` など
 - type modules
-  - `Int`, `String`, `Regex`, `Boolean`, `Error`, `List`, `Result`, `Option`, `HashMap`, `Facet`, `Float`
+  - `Int`, `String`, `Regex`, `Boolean`, `Error`, `List`, `Generator`, `HashMap`, `Result`, `Range`, `Option`, `Facet`, `Float`
 - effect / runtime-facing modules
   - `Process`, `IO`, `File`, `FS`, `Shell`, `Task`, `Random`, `Json`
 
@@ -27,6 +27,7 @@ Surtr の標準定義ソースは language surface の一部です。
 - 数値演算の契約: `../../lib/traits/numeric.srt`
 - 変換: `../../lib/traits/from.srt`, `../../lib/traits/try_from.srt`
 - 型ごとの helper: `../../lib/types/int.srt`, `../../lib/types/string.srt`, `../../lib/types/list.srt` など
+- range helpers と generator range: `../../lib/types/range.srt`, `../../lib/types/generator.srt`
 - 正規表現: `../../lib/types/regex.srt`
 - JSON: `../../lib/types/json.srt`, `../../lib/traits/encode.srt`, `../../lib/traits/decode.srt`
 - Facet path: `../../lib/facet.srt`
@@ -57,6 +58,7 @@ xldr(2)>
 - `FS` / `Shell` を触りたいなら `./shell.md`
 - trait 系を見たいなら `./trait-impls.md`
 - path 操作を見たいなら `./facet.md`
+- range の違いを整理したいなら `./range.md`
 
 ## 確認したソース
 
