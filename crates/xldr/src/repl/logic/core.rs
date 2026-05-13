@@ -9,8 +9,8 @@ use eldr::interactive::InteractiveChunkPolicy;
 use eldr::value::{TypeKind, Value};
 use forge::bytecode::populate_error_template_lines;
 use scar::typed::{
-    TraitCallOrigin, TypedFacetOverMode, TypedFacetPath, TypedFacetSegment, TypedInner, TypedNode,
-    TypedPattern,
+    PendingFacetSegment, TraitCallOrigin, TypedFacetOverMode, TypedFacetPath, TypedFacetSegment,
+    TypedInner, TypedNode, TypedPattern,
 };
 use scar::types::Ty;
 use sigil::error::ResolveError;
@@ -69,8 +69,7 @@ const METHOD_DOC_TRAIT_ALIASES: &[(&str, &str)] = &[
     ("gte", "Gte"),
     ("concat", "Concat"),
 ];
-const REPL_UNRESOLVED_TYPE_MESSAGE: &str =
-    "Cannot persist binding with unresolved type variable.";
+const REPL_UNRESOLVED_TYPE_MESSAGE: &str = "Cannot persist binding with unresolved type variable.";
 const REPL_UNRESOLVED_TYPE_HINT: &str =
     "Add a type annotation or use the value in a context that determines the success type.";
 
@@ -3543,21 +3542,7 @@ impl ReplEngine {
                 idx
             )),
             TypedInner::FacetPath(path) => Some(Self::render_typed_facet_path(path)),
-            TypedInner::PendingFacetPath(path) => Some(path.segments.iter().enumerate().fold(
-                String::new(),
-                |mut acc, (index, segment)| {
-                    if index == 0 && segment.starts_with('_') {
-                        acc.push_str("Tuple");
-                    } else if !acc.is_empty() && !segment.starts_with('_') {
-                        acc.push('.');
-                    }
-                    if segment.starts_with('_') {
-                        acc.push('.');
-                    }
-                    acc.push_str(segment);
-                    acc
-                },
-            )),
+            TypedInner::PendingFacetPath(path) => Some(Self::render_pending_facet_path(path)),
             TypedInner::Closure(..) => Some("{|...| ...}".to_string()),
             TypedInner::Lit(lit) => Some(Self::literal_source(lit)),
             _ => None,
@@ -3604,6 +3589,18 @@ impl ReplEngine {
                     rendered.push('.');
                     rendered.push_str(variant_name);
                 }
+                TypedFacetSegment::ListIndex { index, .. } => {
+                    if rendered.is_empty() {
+                        rendered.push_str("List");
+                    }
+                    rendered.push_str(&format!(".[{index}]"));
+                }
+                TypedFacetSegment::MapKey { key, .. } => {
+                    if rendered.is_empty() {
+                        rendered.push_str("HashMap");
+                    }
+                    rendered.push_str(&format!(".[\"{}\"]", key.escape_default()));
+                }
             }
         }
         if rendered.is_empty() {
@@ -3618,7 +3615,57 @@ impl ReplEngine {
             TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
             TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
             TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
+            TypedFacetSegment::ListIndex { index, .. } => format!("[{index}]"),
+            TypedFacetSegment::MapKey { key, .. } => {
+                format!("[\"{}\"]", key.escape_default())
+            }
         }
+    }
+
+    fn pending_facet_segment_label(segment: &PendingFacetSegment) -> String {
+        match segment {
+            PendingFacetSegment::Field { name, optional } => {
+                if *optional {
+                    format!("{name}?")
+                } else {
+                    name.clone()
+                }
+            }
+            PendingFacetSegment::ListIndex { index } => format!("[{index}]"),
+            PendingFacetSegment::MapKey { key } => format!("[\"{}\"]", key.escape_default()),
+        }
+    }
+
+    fn pending_facet_segment_kind(segment: &PendingFacetSegment) -> &'static str {
+        match segment {
+            PendingFacetSegment::Field { name, .. } if name.starts_with('_') => "tuple",
+            PendingFacetSegment::Field { .. } => "field",
+            PendingFacetSegment::ListIndex { .. } => "list index",
+            PendingFacetSegment::MapKey { .. } => "map key",
+        }
+    }
+
+    fn render_pending_facet_path(path: &scar::typed::PendingFacetPath) -> String {
+        if path.segments.is_empty() {
+            return "<facet>".to_string();
+        }
+        let mut rendered = path.root_path_name.clone().unwrap_or_default();
+        for segment in &path.segments {
+            let label = Self::pending_facet_segment_label(segment);
+            if rendered.is_empty() {
+                if matches!(
+                    segment,
+                    PendingFacetSegment::Field { name, .. } if name.starts_with('_')
+                ) {
+                    rendered.push_str("Tuple");
+                    rendered.push('.');
+                }
+            } else {
+                rendered.push('.');
+            }
+            rendered.push_str(&label);
+        }
+        rendered
     }
 
     fn facet_info_from_path(
@@ -3706,13 +3753,64 @@ impl ReplEngine {
                     current_source = focus_ty;
                     ("variant", true, "variant mismatch returns Result")
                 }
+                TypedFacetSegment::ListIndex { index, .. } => {
+                    let focus_ty = match &current_source {
+                        Ty::List(inner) => inner.as_ref().clone(),
+                        _ => path.focus_ty.clone(),
+                    };
+                    if prefix.is_empty() {
+                        prefix.push_str("List.");
+                    } else {
+                        prefix.push('.');
+                    }
+                    prefix.push_str(&format!("[{index}]"));
+                    path_is_fallible = true;
+                    segments.push(forge::ReplFacetSegmentInfo {
+                        label: prefix.clone(),
+                        kind: "list index".to_string(),
+                        source_ty: Self::ty_to_string(&current_source),
+                        focus_ty: Self::ty_to_string(&focus_ty),
+                        fallible: true,
+                        reason: "index miss returns Result".to_string(),
+                    });
+                    current_source = focus_ty;
+                    ("list index", true, "index miss returns Result")
+                }
+                TypedFacetSegment::MapKey { key, .. } => {
+                    let focus_ty = match &current_source {
+                        Ty::Enum(name, args)
+                            if name.rsplit("::").next().unwrap_or(name) == "HashMap"
+                                && args.len() == 1 =>
+                        {
+                            args[0].clone()
+                        }
+                        _ => path.focus_ty.clone(),
+                    };
+                    if prefix.is_empty() {
+                        prefix.push_str("HashMap.");
+                    } else {
+                        prefix.push('.');
+                    }
+                    prefix.push_str(&format!("[\"{}\"]", key.escape_default()));
+                    path_is_fallible = true;
+                    segments.push(forge::ReplFacetSegmentInfo {
+                        label: prefix.clone(),
+                        kind: "map key".to_string(),
+                        source_ty: Self::ty_to_string(&current_source),
+                        focus_ty: Self::ty_to_string(&focus_ty),
+                        fallible: true,
+                        reason: "key miss returns Result".to_string(),
+                    });
+                    current_source = focus_ty;
+                    ("map key", true, "key miss returns Result")
+                }
             };
             let _ = (kind, fallible, reason, label);
         }
         forge::ReplFacetInfo {
             ty: Self::ty_to_string(ty),
             path_kind: path.path_kind.as_str().to_string(),
-            view_result_ty: if source_is_result || path_is_fallible {
+            view_result_ty: if source_is_result || path_is_fallible || path.may_fail {
                 format!("Result<{}, Error>", Self::ty_to_string(&path.focus_ty))
             } else {
                 Self::ty_to_string(&path.focus_ty)
@@ -3727,23 +3825,7 @@ impl ReplEngine {
         match &node.node {
             TypedInner::FacetPath(path) => Some(Self::facet_info_from_path(path, &node.ty, false)),
             TypedInner::PendingFacetPath(path) => {
-                let full_path = if path.segments.is_empty() {
-                    "<facet>".to_string()
-                } else {
-                    let mut rendered = String::new();
-                    for (index, segment) in path.segments.iter().enumerate() {
-                        if index == 0 && segment.starts_with('_') {
-                            rendered.push_str("Tuple");
-                        } else if !rendered.is_empty() && !segment.starts_with('_') {
-                            rendered.push('.');
-                        }
-                        if segment.starts_with('_') {
-                            rendered.push('.');
-                        }
-                        rendered.push_str(segment);
-                    }
-                    rendered
-                };
+                let full_path = Self::render_pending_facet_path(path);
                 Some(forge::ReplFacetInfo {
                     ty: Self::ty_to_string(&node.ty),
                     path_kind: "structural".to_string(),
@@ -3753,19 +3835,22 @@ impl ReplEngine {
                         .segments
                         .iter()
                         .map(|segment| forge::ReplFacetSegmentInfo {
-                            label: if segment.starts_with('_') {
-                                format!("Tuple.{segment}")
+                            label: if matches!(
+                                segment,
+                                PendingFacetSegment::Field { name, .. } if name.starts_with('_')
+                            ) {
+                                format!("Tuple.{}", Self::pending_facet_segment_label(segment))
                             } else {
-                                segment.clone()
+                                Self::pending_facet_segment_label(segment)
                             },
-                            kind: if segment.starts_with('_') {
-                                "tuple".to_string()
-                            } else {
-                                "field".to_string()
-                            },
+                            kind: Self::pending_facet_segment_kind(segment).to_string(),
                             source_ty: "_".to_string(),
                             focus_ty: "_".to_string(),
-                            fallible: false,
+                            fallible: matches!(
+                                segment,
+                                PendingFacetSegment::ListIndex { .. }
+                                    | PendingFacetSegment::MapKey { .. }
+                            ),
                             reason: "requires Facet context to specialize".to_string(),
                         })
                         .collect(),
@@ -6435,6 +6520,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::Match(span, _, _)
         | Ast::BulkUpdate(span, _, _)
         | Ast::FieldAccess(span, _, _)
+        | Ast::FacetSegmentAccess(span, _, _)
         | Ast::FacetCapture(span, _)
         | Ast::StructDef(span, _, _, _)
         | Ast::RecordDef(span, _, _, _)

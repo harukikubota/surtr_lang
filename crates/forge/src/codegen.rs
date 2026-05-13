@@ -14,7 +14,7 @@ use sindr::ir::{
     RuntimeSupervisionSpec, RuntimeSupervisorOverrideEntry, RuntimeSupervisorPolicy,
     RuntimeTypeRef, SingletonBootEntry,
 };
-use sindr::primitives::int;
+use sindr::primitives::{int, SurtrInt};
 use sindr::runtime::CallableOrigin;
 use spire::ast::{
     AstTy, BinOp, Lit, ProcessInstance, ProcessRuntimeHandlerKind, Span, SupervisorInitSpec,
@@ -3767,6 +3767,31 @@ fn facet_segment_label(segment: &TypedFacetSegment) -> String {
         TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
         TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
         TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
+        TypedFacetSegment::ListIndex { index, .. } => format!("[{index}]"),
+        TypedFacetSegment::MapKey { key, .. } => format!("[\"{}\"]", key.escape_default()),
+    }
+}
+
+fn pending_facet_segment_label(segment: &PendingFacetSegment) -> String {
+    match segment {
+        PendingFacetSegment::Field { name, optional } => {
+            if *optional {
+                format!("{name}?")
+            } else {
+                name.clone()
+            }
+        }
+        PendingFacetSegment::ListIndex { index } => format!("[{index}]"),
+        PendingFacetSegment::MapKey { key } => format!("[\"{}\"]", key.escape_default()),
+    }
+}
+
+fn pending_facet_segment_kind(segment: &PendingFacetSegment) -> &'static str {
+    match segment {
+        PendingFacetSegment::Field { name, .. } if name.starts_with('_') => "tuple",
+        PendingFacetSegment::Field { .. } => "field",
+        PendingFacetSegment::ListIndex { .. } => "list index",
+        PendingFacetSegment::MapKey { .. } => "map key",
     }
 }
 
@@ -3779,6 +3804,18 @@ fn facet_path_full_path(path: &TypedFacetPath) -> String {
                     rendered.push_str("Tuple");
                 }
                 rendered.push_str(&format!("._{field_index}"));
+            }
+            TypedFacetSegment::ListIndex { index, .. } => {
+                if rendered.is_empty() {
+                    rendered.push_str("List");
+                }
+                rendered.push_str(&format!(".[{index}]"));
+            }
+            TypedFacetSegment::MapKey { key, .. } => {
+                if rendered.is_empty() {
+                    rendered.push_str("HashMap");
+                }
+                rendered.push_str(&format!(".[\"{}\"]", key.escape_default()));
             }
             other => {
                 if rendered.is_empty() {
@@ -3844,6 +3881,19 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                             path.focus_ty.clone()
                         }
                     }
+                    TypedFacetSegment::ListIndex { .. } => match &current_source {
+                        Ty::List(inner) => inner.as_ref().clone(),
+                        _ => path.focus_ty.clone(),
+                    },
+                    TypedFacetSegment::MapKey { .. } => match &current_source {
+                        Ty::Enum(name, args)
+                            if name.rsplit("::").next().unwrap_or(name) == "HashMap"
+                                && args.len() == 1 =>
+                        {
+                            args[0].clone()
+                        }
+                        _ => path.focus_ty.clone(),
+                    },
                 };
                 if !prefix.is_empty() && !matches!(segment, TypedFacetSegment::Tuple { .. }) {
                     prefix.push('.');
@@ -3855,6 +3905,18 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                         }
                         prefix.push_str(&format!("._{field_index}"));
                     }
+                    TypedFacetSegment::ListIndex { index, .. } => {
+                        if prefix.is_empty() {
+                            prefix.push_str("List.");
+                        }
+                        prefix.push_str(&format!("[{index}]"));
+                    }
+                    TypedFacetSegment::MapKey { key, .. } => {
+                        if prefix.is_empty() {
+                            prefix.push_str("HashMap.");
+                        }
+                        prefix.push_str(&format!("[\"{}\"]", key.escape_default()));
+                    }
                     _ => prefix.push_str(&label),
                 }
                 let (kind, fallible, reason) = match segment {
@@ -3863,6 +3925,14 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                     TypedFacetSegment::Variant { .. } => {
                         path_is_fallible = true;
                         ("variant", true, "variant mismatch returns Result")
+                    }
+                    TypedFacetSegment::ListIndex { .. } => {
+                        path_is_fallible = true;
+                        ("list index", true, "index miss returns Result")
+                    }
+                    TypedFacetSegment::MapKey { .. } => {
+                        path_is_fallible = true;
+                        ("map key", true, "key miss returns Result")
                     }
                 };
                 segments.push(ReplFacetSegmentInfo {
@@ -3878,7 +3948,7 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
             Some(ReplFacetInfo {
                 ty: ty_to_string(&node.ty),
                 path_kind: path.path_kind.as_str().to_string(),
-                view_result_ty: if path_is_fallible {
+                view_result_ty: if path_is_fallible || path.may_fail {
                     format!("Result<{}, Error>", ty_to_string(&path.focus_ty))
                 } else {
                     ty_to_string(&path.focus_ty)
@@ -3895,17 +3965,21 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
             full_path: if path.segments.is_empty() {
                 "<facet>".to_string()
             } else {
-                let mut rendered = String::new();
-                for (index, segment) in path.segments.iter().enumerate() {
-                    if index == 0 && segment.starts_with('_') {
-                        rendered.push_str("Tuple");
-                    } else if !rendered.is_empty() && !segment.starts_with('_') {
+                let mut rendered = path.root_path_name.clone().unwrap_or_default();
+                for segment in &path.segments {
+                    let label = pending_facet_segment_label(segment);
+                    if rendered.is_empty() {
+                        if matches!(
+                            segment,
+                            PendingFacetSegment::Field { name, .. } if name.starts_with('_')
+                        ) {
+                            rendered.push_str("Tuple");
+                            rendered.push('.');
+                        }
+                    } else {
                         rendered.push('.');
                     }
-                    if segment.starts_with('_') {
-                        rendered.push('.');
-                    }
-                    rendered.push_str(segment);
+                    rendered.push_str(&label);
                 }
                 rendered
             },
@@ -3913,19 +3987,21 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                 .segments
                 .iter()
                 .map(|segment| ReplFacetSegmentInfo {
-                    label: if segment.starts_with('_') {
-                        format!("Tuple.{segment}")
+                    label: if matches!(
+                        segment,
+                        PendingFacetSegment::Field { name, .. } if name.starts_with('_')
+                    ) {
+                        format!("Tuple.{}", pending_facet_segment_label(segment))
                     } else {
-                        segment.clone()
+                        pending_facet_segment_label(segment)
                     },
-                    kind: if segment.starts_with('_') {
-                        "tuple".to_string()
-                    } else {
-                        "field".to_string()
-                    },
+                    kind: pending_facet_segment_kind(segment).to_string(),
                     source_ty: "_".to_string(),
                     focus_ty: "_".to_string(),
-                    fallible: false,
+                    fallible: matches!(
+                        segment,
+                        PendingFacetSegment::ListIndex { .. } | PendingFacetSegment::MapKey { .. }
+                    ),
                     reason: "requires Facet context to specialize".to_string(),
                 })
                 .collect(),
@@ -4347,6 +4423,9 @@ enum FacetUpdateLeaf {
         value_slot: u32,
         wrap_plain_result: bool,
     },
+    CaseSet {
+        value_slot: u32,
+    },
     Over {
         update_fun_slot: u32,
         mode: TypedFacetOverMode,
@@ -4468,6 +4547,48 @@ impl Codegen {
     fn builtin_id(name: &str) -> Option<u16> {
         let short_name = name.rsplit("::").next().unwrap_or(name);
         builtin_id_by_name(short_name)
+    }
+
+    fn emit_internal_builtin_call(
+        &mut self,
+        name: &str,
+        arity: u8,
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
+            message: format!("Missing internal builtin {name}"),
+            span: span.clone(),
+        })?;
+        self.emit(Opcode::CallBuiltin {
+            builtin_id,
+            arity,
+            span_start: span.start as u32,
+            span_end: span.end as u32,
+        });
+        Ok(())
+    }
+
+    fn emit_unwrap_result_to_local_or_jump(
+        &mut self,
+        result_slot: u32,
+        target_slot: u32,
+        failure_end: Label,
+    ) {
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetTag);
+        let err_tag = self.add_constant(Constant::Tag(1));
+        self.emit(Opcode::LoadConst(err_tag));
+        self.emit(Opcode::EqTag);
+
+        let ok_label = self.fresh_label();
+        self.emit_jump_if_false(ok_label);
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit_jump(failure_end);
+
+        self.patch_label(ok_label);
+        self.emit(Opcode::LoadLocal(result_slot));
+        self.emit(Opcode::GetField { field_index: 0 });
+        self.emit(Opcode::StoreLocal(target_slot));
     }
 
     fn literal_bool_value(node: &TypedNode) -> Option<bool> {
@@ -6485,16 +6606,16 @@ impl Codegen {
         self.state.next_slot += 1;
         self.emit(Opcode::StoreLocal(value_slot));
 
-        self.emit_facet_update_from_source_slot(
-            node,
-            source_slot,
-            path,
-            source_is_result,
+        let leaf = if matches!(mode, TypedFacetSetMode::CaseSet) {
+            FacetUpdateLeaf::CaseSet { value_slot }
+        } else {
             FacetUpdateLeaf::Set {
                 value_slot,
                 wrap_plain_result: matches!(mode, TypedFacetSetMode::WrapPlainResult),
-            },
-        )
+            }
+        };
+
+        self.emit_facet_update_from_source_slot(node, source_slot, path, source_is_result, leaf)
     }
 
     fn emit_facet_over(
@@ -6516,6 +6637,12 @@ impl Codegen {
         self.state.next_slot += 1;
         self.emit(Opcode::StoreLocal(update_fun_slot));
 
+        let normalized_mode = match mode {
+            TypedFacetOverMode::CaseFocusValue => TypedFacetOverMode::FocusValue,
+            TypedFacetOverMode::CaseFocusResult => TypedFacetOverMode::FocusResult,
+            other => other,
+        };
+
         self.emit_facet_update_from_source_slot(
             node,
             source_slot,
@@ -6523,7 +6650,7 @@ impl Codegen {
             source_is_result,
             FacetUpdateLeaf::Over {
                 update_fun_slot,
-                mode,
+                mode: normalized_mode,
                 focus_is_result: matches!(path.focus_ty, Ty::Result(_, _)),
             },
         )
@@ -6584,6 +6711,35 @@ impl Codegen {
 
         self.patch_label(end_label);
         Ok(())
+    }
+
+    fn emit_variant_from_value_slot(
+        &mut self,
+        variant_tag: u32,
+        discriminant: &SurtrInt,
+        payload_arity: u32,
+        value_slot: u32,
+    ) {
+        let tag_const = self.add_constant(Constant::Tag(variant_tag));
+        self.emit(Opcode::LoadConst(tag_const));
+        let discriminant_const = self.add_constant(Constant::Int(discriminant.clone()));
+        self.emit(Opcode::LoadConst(discriminant_const));
+        match payload_arity {
+            0 => {
+                self.emit(Opcode::StructNew { field_count: 1 });
+            }
+            1 => {
+                self.emit(Opcode::LoadLocal(value_slot));
+                self.emit(Opcode::StructNew { field_count: 2 });
+            }
+            n => {
+                for index in 0..n {
+                    self.emit(Opcode::LoadLocal(value_slot));
+                    self.emit(Opcode::GetTupleField { field_index: index });
+                }
+                self.emit(Opcode::StructNew { field_count: n + 1 });
+            }
+        }
     }
 
     fn emit_facet_update_at_path(
@@ -6670,11 +6826,81 @@ impl Codegen {
                 self.emit(Opcode::TupleNew { len: *tuple_len });
                 self.emit(Opcode::StoreLocal(current_slot));
             }
+            TypedFacetSegment::ListIndex { index, .. } => {
+                let focus_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(current_slot));
+                let index_const = self.add_constant(Constant::Int(index.clone()));
+                self.emit(Opcode::LoadConst(index_const));
+                self.emit_internal_builtin_call("__facet_list_get", 2, span)?;
+                let get_result_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(get_result_slot));
+                self.emit_unwrap_result_to_local_or_jump(get_result_slot, focus_slot, failure_end);
+
+                self.emit_facet_update_at_path(
+                    focus_slot,
+                    path,
+                    segment_idx + 1,
+                    leaf,
+                    span,
+                    failure_end,
+                )?;
+
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::LoadConst(index_const));
+                self.emit(Opcode::LoadLocal(focus_slot));
+                self.emit_internal_builtin_call("__facet_list_set", 3, span)?;
+                let set_result_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(set_result_slot));
+                self.emit_unwrap_result_to_local_or_jump(
+                    set_result_slot,
+                    current_slot,
+                    failure_end,
+                );
+            }
+            TypedFacetSegment::MapKey { key, .. } => {
+                let focus_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::LoadLocal(current_slot));
+                let key_const = self.add_constant(Constant::Str(key.clone()));
+                self.emit(Opcode::LoadConst(key_const));
+                self.emit_internal_builtin_call("__facet_map_get", 2, span)?;
+                let get_result_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(get_result_slot));
+                self.emit_unwrap_result_to_local_or_jump(get_result_slot, focus_slot, failure_end);
+
+                self.emit_facet_update_at_path(
+                    focus_slot,
+                    path,
+                    segment_idx + 1,
+                    leaf,
+                    span,
+                    failure_end,
+                )?;
+
+                self.emit(Opcode::LoadLocal(current_slot));
+                self.emit(Opcode::LoadConst(key_const));
+                self.emit(Opcode::LoadLocal(focus_slot));
+                self.emit_internal_builtin_call("__facet_map_set_existing", 3, span)?;
+                let set_result_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(set_result_slot));
+                self.emit_unwrap_result_to_local_or_jump(
+                    set_result_slot,
+                    current_slot,
+                    failure_end,
+                );
+            }
             TypedFacetSegment::Variant {
                 enum_name,
                 variant_name,
                 variant_tag,
+                discriminant,
                 payload_arity,
+                optional,
                 ..
             } => {
                 self.emit(Opcode::LoadLocal(current_slot));
@@ -6686,6 +6912,34 @@ impl Codegen {
                 let mismatch_label = self.fresh_label();
                 let continue_label = self.fresh_label();
                 self.emit_jump_if_false(mismatch_label);
+
+                if let FacetUpdateLeaf::CaseSet { value_slot } = leaf {
+                    if segment_idx + 1 == path.segments.len() {
+                        self.emit_variant_from_value_slot(
+                            *variant_tag,
+                            discriminant,
+                            *payload_arity,
+                            value_slot,
+                        );
+                        self.emit(Opcode::StoreLocal(current_slot));
+                        self.emit_jump(continue_label);
+
+                        self.patch_label(mismatch_label);
+                        if *optional {
+                            self.emit_jump(continue_label);
+                        } else {
+                            self.emit_variant_from_value_slot(
+                                *variant_tag,
+                                discriminant,
+                                *payload_arity,
+                                value_slot,
+                            );
+                            self.emit(Opcode::StoreLocal(current_slot));
+                        }
+                        self.patch_label(continue_label);
+                        return Ok(());
+                    }
+                }
 
                 let focus_slot = self.state.next_slot;
                 self.state.next_slot += 1;
@@ -6745,15 +6999,19 @@ impl Codegen {
                 self.emit_jump(continue_label);
 
                 self.patch_label(mismatch_label);
-                let detail = format!(
-                    "Variant mismatch at segment {} ({}) in facet path: expected variant {}::{}, but got a different variant",
-                    segment_idx + 1,
-                    Self::facet_segment_display(&path.segments[segment_idx]),
-                    enum_name,
-                    variant_name
-                );
-                self.emit_variant_mismatch_result(&detail, span);
-                self.emit_jump(failure_end);
+                if *optional {
+                    self.emit_jump(continue_label);
+                } else {
+                    let detail = format!(
+                        "Variant mismatch at segment {} ({}) in facet path: expected variant {}::{}, but got a different variant",
+                        segment_idx + 1,
+                        Self::facet_segment_display(&path.segments[segment_idx]),
+                        enum_name,
+                        variant_name
+                    );
+                    self.emit_variant_mismatch_result(&detail, span);
+                    self.emit_jump(failure_end);
+                }
 
                 self.patch_label(continue_label);
             }
@@ -6782,6 +7040,12 @@ impl Codegen {
                     self.emit(Opcode::LoadLocal(value_slot));
                 }
                 self.emit(Opcode::StoreLocal(current_slot));
+            }
+            FacetUpdateLeaf::CaseSet { .. } => {
+                return Err(CodegenError {
+                    message: "Internal invariant broken: Facet::case_set leaf must be handled at final enum segment".into(),
+                    span: span.clone(),
+                });
             }
             FacetUpdateLeaf::Over {
                 update_fun_slot,
@@ -6888,6 +7152,42 @@ impl Codegen {
                     });
                     self.emit(Opcode::StoreLocal(current_slot));
                 }
+                TypedFacetSegment::ListIndex { index, .. } => {
+                    let Some(end_label) = mismatch_end else {
+                        return Err(CodegenError {
+                            message:
+                                "Internal invariant broken: fallible list facet segment in plain context"
+                                    .into(),
+                            span: span.clone(),
+                        });
+                    };
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    let index_const = self.add_constant(Constant::Int(index.clone()));
+                    self.emit(Opcode::LoadConst(index_const));
+                    self.emit_internal_builtin_call("__facet_list_get", 2, span)?;
+                    let result_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::StoreLocal(result_slot));
+                    self.emit_unwrap_result_to_local_or_jump(result_slot, current_slot, end_label);
+                }
+                TypedFacetSegment::MapKey { key, .. } => {
+                    let Some(end_label) = mismatch_end else {
+                        return Err(CodegenError {
+                            message:
+                                "Internal invariant broken: fallible map facet segment in plain context"
+                                    .into(),
+                            span: span.clone(),
+                        });
+                    };
+                    self.emit(Opcode::LoadLocal(current_slot));
+                    let key_const = self.add_constant(Constant::Str(key.clone()));
+                    self.emit(Opcode::LoadConst(key_const));
+                    self.emit_internal_builtin_call("__facet_map_get", 2, span)?;
+                    let result_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::StoreLocal(result_slot));
+                    self.emit_unwrap_result_to_local_or_jump(result_slot, current_slot, end_label);
+                }
                 TypedFacetSegment::Variant {
                     enum_name,
                     variant_name,
@@ -6965,6 +7265,8 @@ impl Codegen {
             TypedFacetSegment::Field { field_name, .. } => format!(".{}", field_name),
             TypedFacetSegment::Tuple { field_index, .. } => format!("._{}", field_index),
             TypedFacetSegment::Variant { variant_name, .. } => format!(".{}", variant_name),
+            TypedFacetSegment::ListIndex { index, .. } => format!(".[{index}]"),
+            TypedFacetSegment::MapKey { key, .. } => format!(".[\"{}\"]", key.escape_default()),
         }
     }
 

@@ -1,6 +1,6 @@
 use scar::typed::{
     OperatorTraitOp, TraitCallOrigin, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode,
-    TypedProgram,
+    TypedPattern, TypedProgram,
 };
 use scar::types::Ty;
 use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
@@ -132,6 +132,22 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     (
         "facet_preview_accepts_option_variant",
         facet_preview_accepts_option_variant as fn(),
+    ),
+    (
+        "facet_list_and_map_segments_are_fallible_structural_paths",
+        facet_list_and_map_segments_are_fallible_structural_paths as fn(),
+    ),
+    (
+        "facet_explicit_container_root_captures_use_expected_function_context",
+        facet_explicit_container_root_captures_use_expected_function_context as fn(),
+    ),
+    (
+        "facet_optional_marker_rejected_on_non_enum_segment",
+        facet_optional_marker_rejected_on_non_enum_segment as fn(),
+    ),
+    (
+        "facet_case_api_requires_enum_path_and_records_modes",
+        facet_case_api_requires_enum_path_and_records_modes as fn(),
     ),
     (
         "facet_surface_resolves_after_facet_rename",
@@ -1036,6 +1052,21 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
+fn typed_bind_rhs<'a>(typed: &'a [TypedNode], name: &str) -> &'a TypedNode {
+    typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(TypedPattern::Var(_, id), rhs)
+            | TypedInner::SafeBind(TypedPattern::Var(_, id), rhs)
+                if id.name == name =>
+            {
+                Some(rhs.as_ref())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected binding `{name}`"))
+}
+
 fn process_stdlib_no_longer_declares_task_hidden_lower_helpers() {
     for hidden_name in [
         "__task_call",
@@ -1515,6 +1546,109 @@ Facet::preview(Option.Some, value)"#,
     ));
 }
 
+fn facet_list_and_map_segments_are_fallible_structural_paths() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"scores = [10, 20, 30]
+score_map = HashMap::from_entries([("talk", 80)])
+list_root = Facet::view(List.[1], scores)
+map_root = Facet::view(HashMap.["talk"], score_map)
+list_value = scores.[1]
+map_value = score_map.["talk"]"#,
+    );
+
+    for name in ["list_root", "map_root", "list_value", "map_value"] {
+        let rhs = typed_bind_rhs(&typed, name);
+        assert!(
+            matches!(
+                &rhs.ty,
+                Ty::Result(ok, err)
+                    if matches!(ok.as_ref(), Ty::Int) && matches!(err.as_ref(), Ty::Error)
+            ),
+            "{name} should be Result<Int>, got {:?}",
+            rhs.ty
+        );
+        let TypedInner::FacetView { path, .. } = &rhs.node else {
+            panic!("{name} should lower to FacetView, got {:?}", rhs.node);
+        };
+        assert_eq!(path.path_kind, TypedFacetPathKind::Structural);
+        assert!(path.may_fail, "{name} should be fallible");
+    }
+
+    assert!(matches!(
+        &typed_bind_rhs(&typed, "list_root").node,
+        TypedInner::FacetView { path, .. }
+            if matches!(path.segments.as_slice(), [TypedFacetSegment::ListIndex { .. }])
+    ));
+    assert!(matches!(
+        &typed_bind_rhs(&typed, "map_root").node,
+        TypedInner::FacetView { path, .. }
+            if matches!(path.segments.as_slice(), [TypedFacetSegment::MapKey { key, .. }] if key == "talk")
+    ));
+}
+
+fn facet_explicit_container_root_captures_use_expected_function_context() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"scores = [10, 20]
+score_map = HashMap::from_entries([("talk", 80)])
+get_first: (List<Int> -> Result<Int>) = &List.[0]
+get_talk: (HashMap<Int> -> Result<Int>) = &HashMap.["talk"]
+first = get_first(scores)
+talk = get_talk(score_map)"#,
+    );
+
+    for name in ["first", "talk"] {
+        let rhs = typed_bind_rhs(&typed, name);
+        assert!(
+            matches!(
+                &rhs.ty,
+                Ty::Result(ok, err)
+                    if matches!(ok.as_ref(), Ty::Int) && matches!(err.as_ref(), Ty::Error)
+            ),
+            "{name} should be Result<Int>, got {:?}",
+            rhs.ty
+        );
+    }
+}
+
+fn facet_optional_marker_rejected_on_non_enum_segment() {
+    let err = typecheck_with_rules(
+        r#"defrecord User(name: String)
+user = User("alice")
+Facet::set(User.name?, user, "bob")"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("optional marker on a field should fail");
+    assert!(err
+        .message
+        .contains("optional Facet segment requires an enum variant"));
+}
+
+fn facet_case_api_requires_enum_path_and_records_modes() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defenum Slot {
+  Some(Result<String>),
+  None,
+}
+slot = Slot::Some(Ok("alice"))
+updated =? Facet::case_set(Slot.Some, slot, Ok("bob"))
+overed =? Facet::case_over(Slot.Some?, updated, {|name| Ok(name ++ "!")})
+Facet::case_over_result(Slot.Some, overed, {|value| Ok(value)})"#,
+    );
+    let rendered = format!("{typed:?}");
+    assert!(rendered.contains("CaseSet"), "{rendered}");
+    assert!(rendered.contains("CaseFocusValue"), "{rendered}");
+    assert!(rendered.contains("CaseFocusResult"), "{rendered}");
+
+    let err = typecheck_with_rules(
+        r#"defrecord User(name: String)
+user = User("alice")
+Facet::case_over(User.name, user, {|name| Ok(name ++ "!")})"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("case_over should reject structural-only paths");
+    assert!(err.message.contains("requires an enum Facet path"));
+}
+
 fn facet_surface_resolves_after_facet_rename() {
     let resolved = resolve_with_builtin_prelude_result(
         r#"defrecord User(name: String)
@@ -1623,7 +1757,7 @@ Facet::replace(Expr.Add / Tuple._0, expr, 7)"#,
     .expect_err("variant path should fail for Facet::replace");
     assert!(variant_path_err
         .message
-        .contains("Facet::replace requires a structural Facet path"));
+        .contains("Facet::replace requires an infallible structural Facet path"));
 }
 
 fn facet_replace_supports_same_type_tuple_update_inside_annotated_closure() {

@@ -325,10 +325,15 @@ fn repl_rejects_persisting_unresolved_result_callable_binding() {
         "{combined}"
     );
     assert!(
-        combined.contains("Add a type annotation or use the value in a context that determines the success type."),
+        combined.contains(
+            "Add a type annotation or use the value in a context that determines the success type."
+        ),
         "{combined}"
     );
-    assert!(!combined.contains("todo: (-> Result<_, Error>)"), "{combined}");
+    assert!(
+        !combined.contains("todo: (-> Result<_, Error>)"),
+        "{combined}"
+    );
 }
 
 #[test]
@@ -342,10 +347,7 @@ fn repl_rejects_persisting_unresolved_result_value_binding() {
         combined.contains("Cannot persist binding with unresolved type variable."),
         "{combined}"
     );
-    assert!(
-        combined.contains("ret = todo()"),
-        "{combined}"
-    );
+    assert!(combined.contains("ret = todo()"), "{combined}");
     assert!(!combined.contains("ret: Result<_, Error>"), "{combined}");
 }
 
@@ -360,7 +362,10 @@ fn repl_accepts_explicitly_constrained_result_binding() {
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("ret: Result<Int, Error> = Err(NoneError"), "{stdout}");
+    assert!(
+        stdout.contains("ret: Result<Int, Error> = Err(NoneError"),
+        "{stdout}"
+    );
     assert!(stdout.contains("type: Result<Int, Error>"), "{stdout}");
 }
 
@@ -377,10 +382,12 @@ fn repl_accepts_result_mapping_when_chunk_constrains_type() {
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("mapped: Result<String, Error> = Err(NoneError"), "{stdout}");
+    assert!(
+        stdout.contains("mapped: Result<String, Error> = Err(NoneError"),
+        "{stdout}"
+    );
     assert!(stdout.contains("type: Result<String, Error>"), "{stdout}");
 }
-
 
 #[test]
 fn repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli() {

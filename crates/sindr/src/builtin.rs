@@ -280,6 +280,41 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Facet<$S, Result<$A>>, $S, (Result<$A> -> Result<Result<$A>>)) -> Result<$S>",
     },
     BuiltinMeta {
+        name: "case_set",
+        arity: 3,
+        sig_str: "(Facet<$S, $A>, $S, $A) -> Result<$S>",
+    },
+    BuiltinMeta {
+        name: "case_over",
+        arity: 3,
+        sig_str: "(Facet<$S, $A>, $S, ($A -> Result<$A>)) -> Result<$S>",
+    },
+    BuiltinMeta {
+        name: "case_over_result",
+        arity: 3,
+        sig_str: "(Facet<$S, Result<$A>>, $S, (Result<$A> -> Result<Result<$A>>)) -> Result<$S>",
+    },
+    BuiltinMeta {
+        name: "__facet_list_get",
+        arity: 2,
+        sig_str: "(List<$A>, Int) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "__facet_list_set",
+        arity: 3,
+        sig_str: "(List<$A>, Int, $A) -> Result<List<$A>>",
+    },
+    BuiltinMeta {
+        name: "__facet_map_get",
+        arity: 2,
+        sig_str: "(HashMap<$A>, String) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "__facet_map_set_existing",
+        arity: 3,
+        sig_str: "(HashMap<$A>, String, $A) -> Result<HashMap<$A>>",
+    },
+    BuiltinMeta {
         name: "__test_capture_stdout",
         arity: 0,
         sig_str: "() -> List<String>",

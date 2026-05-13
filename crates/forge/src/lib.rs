@@ -1300,6 +1300,50 @@ user3 = Facet::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
     }
 
     #[test]
+    fn facet_container_segments_lower_without_public_facet_builtin_calls() {
+        let bytecode = codegen_source(
+            r#"defrecord User(scores: List<Int>, score: HashMap<Int>)
+user = User([10, 20], HashMap::from_entries([("talk", 80)]))
+value1 =? Facet::view(List.[1], user.scores)
+value2 =? Facet::view(HashMap.["talk"], user.score)
+value3 =? Facet::view(User.scores.[1], user)
+value4 =? Facet::set(User.score.["talk"], user, 90)"#,
+        );
+
+        for name in ["view", "set"] {
+            let facet_id = builtin_id_by_name(name).expect("facet builtin metadata must exist");
+            assert!(!bytecode.opcodes.iter().any(|op| {
+                matches!(
+                    op,
+                    Opcode::CallBuiltin {
+                        builtin_id,
+                        ..
+                    } if *builtin_id == facet_id
+                )
+            }));
+        }
+        for name in [
+            "__facet_list_get",
+            "__facet_map_get",
+            "__facet_map_set_existing",
+        ] {
+            let helper_id = builtin_id_by_name(name).expect("facet helper metadata must exist");
+            assert!(
+                bytecode.opcodes.iter().any(|op| {
+                    matches!(
+                        op,
+                        Opcode::CallBuiltin {
+                            builtin_id,
+                            ..
+                        } if *builtin_id == helper_id
+                    )
+                }),
+                "expected helper call {name}"
+            );
+        }
+    }
+
+    #[test]
     fn facet_bindings_are_erased_and_only_viewed_values_are_captured() {
         let bytecode = codegen_source(
             r#"defrecord User(name: String)

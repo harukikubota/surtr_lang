@@ -475,6 +475,10 @@ impl Parser<'_> {
                 let rbrack = self.expect(&Token::RBrack)?;
                 Ok((segment, rbrack))
             }
+            Token::Int(_) => Err(ParseError::syntax(
+                "Expected field name after '.'. Tuple access uses ._0, ._1, ...",
+                self.peek_span(),
+            )),
             other => Err(ParseError::syntax(
                 format!(
                     "Facet path segment after `.` expects identifier or bracket segment, got {other:?}"
@@ -1656,27 +1660,19 @@ impl Parser<'_> {
 
         while matches!(self.peek(), Token::Dot) {
             self.advance();
-            let (field, field_span) = match self.peek().clone() {
-                Token::Ident(field) => {
-                    let span = self.advance().span.clone();
-                    (field, span)
-                }
-                _ => {
-                    return Err(ParseError::syntax(
-                        "Expected field name after '.'. Tuple access uses ._0, ._1, ...",
-                        self.peek_span(),
-                    ));
-                }
+            let (segment, segment_span) = self.parse_facet_path_segment_after_dot()?;
+            end = segment_span.end;
+            let span = Span {
+                start: target.span().start,
+                end,
             };
-            end = field_span.end;
-            target = Ast::FieldAccess(
-                Span {
-                    start: target.span().start,
-                    end,
-                },
-                Box::new(target),
-                field,
-            );
+            target = match segment {
+                FacetPathSegment::Field {
+                    name,
+                    optional: false,
+                } => Ast::FieldAccess(span, Box::new(target), name),
+                other => Ast::FacetSegmentAccess(span, Box::new(target), other),
+            };
         }
 
         let mut parsed_args = Vec::new();

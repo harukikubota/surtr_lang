@@ -1,0 +1,2 @@
+phase: typecheck
+contains: final Facet segment to be an enum case

@@ -1815,21 +1815,18 @@ impl Resolver {
                     None
                 }
             })
-            .or_else(|| {
-                special_facet_root_uid(&name)
-            })
+            .or_else(|| special_facet_root_uid(&name))
             .ok_or_else(|| ResolveError {
                 message: format!("Undefined variable: {}", name),
                 span: span.clone(),
                 related_labels: Vec::new(),
             })?;
-        let qualified_name =
-            (!matches!(
-                uid,
-                TUPLE_TYPE_ROOT_UID | LIST_TYPE_ROOT_UID | HASH_MAP_TYPE_ROOT_UID
-            ))
-            .then(|| self.declaration_fq_name_for_uid(uid))
-            .flatten();
+        let qualified_name = (!matches!(
+            uid,
+            TUPLE_TYPE_ROOT_UID | LIST_TYPE_ROOT_UID | HASH_MAP_TYPE_ROOT_UID
+        ))
+        .then(|| self.declaration_fq_name_for_uid(uid))
+        .flatten();
         if self
             .declaration_uid_kinds
             .get(&uid)

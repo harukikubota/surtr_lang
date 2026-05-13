@@ -2,7 +2,8 @@
 Standard `Facet` type declaration.
 `Facet<S, A>` is a compiler-managed path capability from source `S` to focus `A`.
 Facet values are same-scope capabilities: bind them locally when useful, then
-consume them in that same scope via `Facet::view/replace/set/over/over_result/preview`.
+consume them in that same scope via
+`Facet::view/preview/replace/set/over/over_result/case_set/case_over/case_over_result`.
 
 Use `Facet` when you want to describe "where" inside a value the compiler should
 look or update.
@@ -20,10 +21,16 @@ Common path forms:
 - struct / record field: `User.name`
 - inferred unary capture from context: `_.name`
 - explicit type-root capture in unary function context: `&User.name`
-- tuple field: `Tuple._0`, `Tuple._1`, ...
+- tuple root path: `Tuple._0`, `Tuple._1`, ...
+- list root path: `List.[1]`
+- map root path: `HashMap.["talk"]`
+- value-side list/map sugar: `values.[1]`, `map.["talk"]`
+- property list segment: `User.scores.[1]`
+- property map segment: `User.score.["talk"]`
 - nested path: `User.profile / Profile.name`, `User.profile.name`
 - function-form nested path: `Facet::compose(User.profile, Profile.name)`
 - enum variant selector: `Expr.Add`
+- optional enum variant selector: `Expr.Add?`
 - value sugar: `value.segment`
 - shorthand source/path capture: `~value.segment`
 
@@ -41,7 +48,8 @@ Use `_.path` when the surrounding context already determines the source type.
 Use `&Type.path` when you want to make that source type explicit in the code.
 
 `~value.segment` is compiler-managed shorthand that expands to a source value and
-structural path when consumed by `Facet::view/preview/replace/set/over/over_result`.
+structural path when consumed by
+`Facet::view/preview/replace/set/over/over_result/case_set/case_over/case_over_result`.
 The source expression is evaluated exactly once.
 It is never a first-class `Facet` value, and API-specific validity is still
 decided by the consuming `Facet` operation.
@@ -79,8 +87,8 @@ impl Facet {
 
   - plain field / tuple paths on plain values return plain `A`
   - if `source` is already `Result<S>`, the result stays `Result<A>`
-  - if the path contains an enum variant selector such as `Expr.Add`, the result
-    is promoted to `Result<A>`
+  - if the path contains an enum variant selector such as `Expr.Add`, list
+    index, or HashMap key, the result is promoted to `Result<A>`
 
   `value.segment` is shorthand for the same read:
   `cfg.entrypoint`
@@ -90,6 +98,8 @@ impl Facet {
   variant:
 
   When the selector does not match, the result is `Err(VariantMismatch(...))`.
+  List and HashMap path segments are also fallible: they return
+  `IndexOutOfBounds` or `KeyNotFound` through `Result`.
 
   `Facet::view` may cross readonly fields and readonly struct boundaries because
   readonly is enforced only for mutating Facet operations.
@@ -138,12 +148,15 @@ impl Facet {
   It is available only when both of these hold:
 
   - `source` is a plain value, not `Result<$S>`
-  - `facet` is structural-only (field / tuple path, no variant selector)
+  - `facet` is infallible structural-only (field / tuple path, no variant
+    selector, list index, or map key)
 
   The same readonly restrictions as `set` apply here.
 
   Use `set` instead when the update should compose through `Result` context or
   variant matching.
+  List and HashMap path segments return `IndexOutOfBounds` or `KeyNotFound`
+  through `Result`, and are therefore not accepted by `replace`.
 
   ## REPL
   xldr(1)> pair = ("alice", 42)
@@ -193,6 +206,17 @@ impl Facet {
   > bw2: BitWidth = BitWidth::Any(7)
   """
   @builtin def set(facet: Facet<$S, $A>, source: $S, value: $A) -> Result<$S>
+
+  @doc """
+  Replace the payload of the final enum case at `facet`.
+  `case_set` is valid only when the Facet path contains an enum selector and
+  the final segment is that enum case.
+
+  Required enum segments return `Err(VariantMismatch(...))` when the source is
+  on another variant. Optional enum segments such as `Option.Some?` skip a
+  variant mismatch and return the original source unchanged.
+  """
+  @builtin def case_set(facet: Facet<$S, $A>, source: $S, value: $A) -> Result<$S>
 
   @doc """
   Update the focus at `facet` in `source` with `update_fun`.
@@ -246,6 +270,21 @@ impl Facet {
   @builtin def over_result(facet: Facet<$S, Result<$A>>, source: $S, update_fun: (Result<$A> -> Result<Result<$A>>)) -> Result<$S>
 
   @doc """
+  Update a focus reached through an enum case path.
+  `case_over` requires at least one enum selector in the Facet path. Optional
+  selectors such as `Option.Some?` skip mismatches and leave the source
+  unchanged.
+  """
+  @builtin def case_over(facet: Facet<$S, $A>, source: $S, update_fun: ($A -> Result<$A>)) -> Result<$S>
+
+  @doc """
+  Update a `Result<$A>` focus reached through an enum case path.
+  This is the case-aware variant of `over_result`; it requires both a Result
+  focus and at least one enum selector in the Facet path.
+  """
+  @builtin def case_over_result(facet: Facet<$S, Result<$A>>, source: $S, update_fun: (Result<$A> -> Result<Result<$A>>)) -> Result<$S>
+
+  @doc """
   Bulk update special form.
 
   `Facet::bulk_update(source) { ... }` is a language-provided update form for
@@ -257,6 +296,9 @@ impl Facet {
   - `path <- set(value)`
   - `path <- over(update_fun)`
   - `path <- over_result(update_fun)`
+  - `path <- case_set(payload)`
+  - `path <- case_over(update_fun)`
+  - `path <- case_over_result(update_fun)`
   - `path { nested_entries... }`
 
   Nested blocks extend the current path prefix. This makes the following forms
@@ -270,7 +312,8 @@ impl Facet {
   Entries are separated by newlines, not commas.
 
   `bulk_update` lowers to ordinary `Facet::set` / `Facet::over` /
-  `Facet::over_result` calls and
+  `Facet::over_result` / `Facet::case_set` / `Facet::case_over` /
+  `Facet::case_over_result` calls and
   returns `Result<$S>`.
   Each later entry sees the latest updated state produced so far.
 

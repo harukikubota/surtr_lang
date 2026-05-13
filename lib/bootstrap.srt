@@ -310,6 +310,13 @@ attach the relevant bounds information.
 deferror IndexOutOfBounds(detail: String) { detail }
 
 @doc """
+Concrete bootstrap error for Facet HashMap key access when the key is missing.
+`HashMap::get` keeps returning `NoneError`; Facet paths use this error so a
+missing path segment is visible in diagnostics.
+"""
+deferror KeyNotFound(key: String) { "key not found: #{key}" }
+
+@doc """
 Concrete bootstrap error for enum-variant selector mismatch in Facet access.
 `Facet::view` returns this when a variant segment does not match the runtime
 value's tag.

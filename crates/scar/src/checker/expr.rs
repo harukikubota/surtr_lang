@@ -4225,6 +4225,9 @@ impl Checker {
                 "Facet::set" => Some("set"),
                 "Facet::over" => Some("over"),
                 "Facet::over_result" => Some("over_result"),
+                "Facet::case_set" => Some("case_set"),
+                "Facet::case_over" => Some("case_over"),
+                "Facet::case_over_result" => Some("case_over_result"),
                 _ => None,
             };
         }
@@ -4236,9 +4239,11 @@ impl Checker {
             TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
             TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
             TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
-            TypedFacetSegment::ListIndex { index, .. } => return PendingFacetSegment::ListIndex {
-                index: index.clone(),
-            },
+            TypedFacetSegment::ListIndex { index, .. } => {
+                return PendingFacetSegment::ListIndex {
+                    index: index.clone(),
+                }
+            }
             TypedFacetSegment::MapKey { key, .. } => {
                 return PendingFacetSegment::MapKey { key: key.clone() };
             }
@@ -4820,7 +4825,7 @@ impl Checker {
             path,
             ..
         } = self.prepare_facet_input(span, "Facet::preview", &source_expr, path_input)?;
-        if path.path_kind != TypedFacetPathKind::Variant {
+        if !path.has_variant_segment() {
             return Err(TypeError {
                 message: "Facet::preview requires a variant Facet".into(),
                 span: span.clone(),
@@ -4926,11 +4931,11 @@ impl Checker {
                 hint: Some("Use Facet::set when the source is already Result<T>.".into()),
             });
         }
-        if path.path_kind != TypedFacetPathKind::Structural {
+        if !path.is_infallible_structural() {
             return Err(TypeError {
-                message: "Facet::replace requires a structural Facet path".into(),
+                message: "Facet::replace requires an infallible structural Facet path".into(),
                 span: span.clone(),
-                hint: Some("Use Facet::set for variant-sensitive updates.".into()),
+                hint: Some("Use Facet::set for fallible or variant-sensitive updates.".into()),
             });
         }
         self.check_mutating_facet_path_permissions("Facet::replace", &path, span)?;
@@ -4984,6 +4989,182 @@ impl Checker {
             &typed_update,
             false,
         )?;
+
+        Ok(TypedNode {
+            ty: Ty::Result(
+                Box::new(self.resolve_ty(&source_value_ty)),
+                Box::new(Ty::Error),
+            ),
+            span: span.clone(),
+            node: TypedInner::FacetOver {
+                source: Box::new(typed_source),
+                path,
+                update_fun: Box::new(typed_update),
+                source_is_result,
+                mode,
+            },
+        })
+    }
+
+    fn require_enum_facet_path(
+        &self,
+        op_name: &str,
+        path: &TypedFacetPath,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        if !path.has_variant_segment() {
+            return Err(TypeError {
+                message: format!("{op_name} requires an enum Facet path"),
+                span: span.clone(),
+                hint: Some("Use Facet::set/over for structural, list, or map paths.".into()),
+            });
+        }
+        Ok(())
+    }
+
+    fn check_facet_case_set_intrinsic(
+        &mut self,
+        span: &Span,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        let (source_expr, path_input, value_expr) =
+            self.parse_facet_mutating_intrinsic_args(span, "Facet::case_set", args)?;
+        let PreparedFacetInput {
+            typed_source,
+            source_is_result,
+            source_value_ty,
+            path,
+        } = self.prepare_facet_input(span, "Facet::case_set", &source_expr, path_input)?;
+        self.require_enum_facet_path("Facet::case_set", &path, span)?;
+        if !path.final_segment_is_variant() {
+            return Err(TypeError {
+                message: "Facet::case_set requires the final Facet segment to be an enum case"
+                    .into(),
+                span: span.clone(),
+                hint: Some(
+                    "Use Facet::case_over when updating inside a selected case payload.".into(),
+                ),
+            });
+        }
+        self.check_mutating_facet_path_permissions("Facet::case_set", &path, span)?;
+
+        let typed_value = self.check_node_with_expected(value_expr, Some(&path.focus_ty))?;
+        if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "Facet::case_set value type mismatch: expected {}, got {}",
+                    self.ty_name(&path.focus_ty),
+                    self.ty_name(&typed_value.ty)
+                ),
+                span: typed_value.span.clone(),
+                hint: None,
+            });
+        }
+
+        Ok(TypedNode {
+            ty: Ty::Result(
+                Box::new(self.resolve_ty(&source_value_ty)),
+                Box::new(Ty::Error),
+            ),
+            span: span.clone(),
+            node: TypedInner::FacetSet {
+                source: Box::new(typed_source),
+                path,
+                value: Box::new(typed_value),
+                source_is_result,
+                mode: TypedFacetSetMode::CaseSet,
+            },
+        })
+    }
+
+    fn check_facet_case_over_intrinsic(
+        &mut self,
+        span: &Span,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        let (source_expr, path_input, update_expr) =
+            self.parse_facet_mutating_intrinsic_args(span, "Facet::case_over", args)?;
+        let PreparedFacetInput {
+            typed_source,
+            source_is_result,
+            source_value_ty,
+            path,
+        } = self.prepare_facet_input(span, "Facet::case_over", &source_expr, path_input)?;
+        self.require_enum_facet_path("Facet::case_over", &path, span)?;
+        self.check_mutating_facet_path_permissions("Facet::case_over", &path, span)?;
+
+        let typed_update = self.check_node(update_expr)?;
+        let mode = match self.check_facet_over_callable(
+            "Facet::case_over",
+            span,
+            &path.focus_ty,
+            &typed_update,
+            false,
+        )? {
+            TypedFacetOverMode::FocusValue => TypedFacetOverMode::CaseFocusValue,
+            TypedFacetOverMode::FocusResult => TypedFacetOverMode::CaseFocusResult,
+            mode @ (TypedFacetOverMode::CaseFocusValue | TypedFacetOverMode::CaseFocusResult) => {
+                mode
+            }
+        };
+
+        Ok(TypedNode {
+            ty: Ty::Result(
+                Box::new(self.resolve_ty(&source_value_ty)),
+                Box::new(Ty::Error),
+            ),
+            span: span.clone(),
+            node: TypedInner::FacetOver {
+                source: Box::new(typed_source),
+                path,
+                update_fun: Box::new(typed_update),
+                source_is_result,
+                mode,
+            },
+        })
+    }
+
+    fn check_facet_case_over_result_intrinsic(
+        &mut self,
+        span: &Span,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        let (source_expr, path_input, update_expr) =
+            self.parse_facet_mutating_intrinsic_args(span, "Facet::case_over_result", args)?;
+        let PreparedFacetInput {
+            typed_source,
+            source_is_result,
+            source_value_ty,
+            path,
+        } = self.prepare_facet_input(span, "Facet::case_over_result", &source_expr, path_input)?;
+        self.require_enum_facet_path("Facet::case_over_result", &path, span)?;
+        self.check_mutating_facet_path_permissions("Facet::case_over_result", &path, span)?;
+
+        if !matches!(self.resolve_ty(&path.focus_ty), Ty::Result(_, _)) {
+            return Err(TypeError {
+                message: format!(
+                    "Facet::case_over_result requires Result focus, got {}",
+                    self.ty_name(&path.focus_ty)
+                ),
+                span: span.clone(),
+                hint: Some("Use Facet::case_over for plain focus updates.".into()),
+            });
+        }
+
+        let typed_update = self.check_node(update_expr)?;
+        let mode = match self.check_facet_over_callable(
+            "Facet::case_over_result",
+            span,
+            &path.focus_ty,
+            &typed_update,
+            true,
+        )? {
+            TypedFacetOverMode::FocusValue => TypedFacetOverMode::CaseFocusValue,
+            TypedFacetOverMode::FocusResult => TypedFacetOverMode::CaseFocusResult,
+            mode @ (TypedFacetOverMode::CaseFocusValue | TypedFacetOverMode::CaseFocusResult) => {
+                mode
+            }
+        };
 
         Ok(TypedNode {
             ty: Ty::Result(
@@ -5277,6 +5458,11 @@ impl Checker {
             Some("set") => Ok(Some(self.check_facet_set_intrinsic(span, args)?)),
             Some("over") => Ok(Some(self.check_facet_over_intrinsic(span, args)?)),
             Some("over_result") => Ok(Some(self.check_facet_over_result_intrinsic(span, args)?)),
+            Some("case_set") => Ok(Some(self.check_facet_case_set_intrinsic(span, args)?)),
+            Some("case_over") => Ok(Some(self.check_facet_case_over_intrinsic(span, args)?)),
+            Some("case_over_result") => Ok(Some(
+                self.check_facet_case_over_result_intrinsic(span, args)?,
+            )),
             _ => Ok(None),
         }
     }
@@ -6531,6 +6717,45 @@ impl Checker {
             return self.check_node_with_expected(&synthetic, Some(expected_ty));
         }
 
+        if Self::capture_target_is_facet_path(target) {
+            if let Some(expected_ty) = expected {
+                let expected_ty_resolved = self.resolve_ty(expected_ty);
+                if let Ty::Func(params, _) = &expected_ty_resolved {
+                    if params.len() == 1 {
+                        let view_id = self.runtime_helper_id("Facet::view", span)?;
+                        let param_uid = Self::next_synthetic_range_uid();
+                        let param_id = ResolvedId {
+                            name: "__facet_capture_arg".to_string(),
+                            qualified_name: None,
+                            unique_id: param_uid,
+                            compiler_generated: true,
+                            span: span.clone(),
+                        };
+                        let synthetic = Resolved::Closure(
+                            span.clone(),
+                            vec![ResolvedClosureParam {
+                                id: param_id.clone(),
+                                ty: None,
+                            }],
+                            Vec::new(),
+                            Box::new(Resolved::App(
+                                span.clone(),
+                                Box::new(Resolved::Var(span.clone(), view_id)),
+                                vec![
+                                    ResolvedRecordLitArg::Positional(target.clone()),
+                                    ResolvedRecordLitArg::Positional(Resolved::Var(
+                                        span.clone(),
+                                        param_id,
+                                    )),
+                                ],
+                            )),
+                        );
+                        return self.check_node_with_expected(&synthetic, Some(expected_ty));
+                    }
+                }
+            }
+        }
+
         let typed_target = self.check_node(target)?;
         let target_ty = self.resolve_ty(&typed_target.ty);
         if let Ty::Facet(source_ty, focus_ty) = &target_ty {
@@ -6621,6 +6846,13 @@ impl Checker {
             }
             _ => node,
         }
+    }
+
+    fn capture_target_is_facet_path(target: &Resolved) -> bool {
+        matches!(
+            target,
+            Resolved::FieldAccess(_, _, _) | Resolved::FacetSegmentAccess(_, _, _)
+        )
     }
 
     pub(super) fn check_binop(
@@ -7673,10 +7905,8 @@ impl Checker {
                         TypedFacetSegment::MapKey {
                             key: key.clone(),
                             focus_readonly_root: self.ty_is_readonly_root(&value_ty),
-                            focus_type_name: Self::readonly_type_name(
-                                &self.resolve_ty(&value_ty),
-                            )
-                            .map(str::to_string),
+                            focus_type_name: Self::readonly_type_name(&self.resolve_ty(&value_ty))
+                                .map(str::to_string),
                         },
                         value_ty,
                         true,
@@ -7849,6 +8079,7 @@ impl Checker {
                         enum_name,
                         variant_name: variant.short_name,
                         variant_tag: variant.tag,
+                        discriminant: variant.discriminant,
                         payload_arity,
                         optional: *optional,
                         focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
@@ -8098,12 +8329,9 @@ impl Checker {
             _ => None,
         };
 
-        if let Some(container_root_path) = self.try_check_container_type_root_facet_path(
-            span,
-            expr,
-            &pending_segment,
-            expected,
-        )? {
+        if let Some(container_root_path) =
+            self.try_check_container_type_root_facet_path(span, expr, &pending_segment, expected)?
+        {
             return Ok(container_root_path);
         }
         if let Some(field) = field {

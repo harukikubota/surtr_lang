@@ -234,6 +234,34 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_facet_over_result,
     },
     BuiltinImpl {
+        name: "case_set",
+        func: builtin_facet_case_set,
+    },
+    BuiltinImpl {
+        name: "case_over",
+        func: builtin_facet_case_over,
+    },
+    BuiltinImpl {
+        name: "case_over_result",
+        func: builtin_facet_case_over_result,
+    },
+    BuiltinImpl {
+        name: "__facet_list_get",
+        func: builtin_facet_list_get,
+    },
+    BuiltinImpl {
+        name: "__facet_list_set",
+        func: builtin_facet_list_set,
+    },
+    BuiltinImpl {
+        name: "__facet_map_get",
+        func: builtin_facet_map_get,
+    },
+    BuiltinImpl {
+        name: "__facet_map_set_existing",
+        func: builtin_facet_map_set_existing,
+    },
+    BuiltinImpl {
         name: "__test_capture_stdout",
         func: builtin_test_capture_stdout,
     },
@@ -2075,6 +2103,93 @@ fn builtin_map_values_list(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runt
     Ok(Value::List(ListHandle::from_items(map.values())))
 }
 
+fn facet_index_to_usize(
+    vm: &VM,
+    index: &SurtrInt,
+    len: usize,
+) -> Result<Result<usize, Value>, RuntimeError> {
+    if index.sign() == Sign::Minus {
+        return Ok(Err(err_result(
+            vm,
+            "IndexOutOfBounds",
+            &format!("index {index} out of bounds for len {len}"),
+        )));
+    }
+    let Some(value) = index.to_usize() else {
+        return Ok(Err(err_result(
+            vm,
+            "IndexOutOfBounds",
+            &format!("index {index} out of bounds for len {len}"),
+        )));
+    };
+    if value >= len {
+        return Ok(Err(err_result(
+            vm,
+            "IndexOutOfBounds",
+            &format!("index {index} out of bounds for len {len}"),
+        )));
+    }
+    Ok(Ok(value))
+}
+
+fn key_not_found_result(vm: &VM, key: &str) -> Value {
+    err_result(vm, "KeyNotFound", &format!("key not found: {key}"))
+}
+
+fn builtin_facet_list_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::List(list) = &args[0] else {
+        return Err(RuntimeError::new("__facet_list_get expects List"));
+    };
+    let Value::Int(index) = &args[1] else {
+        return Err(RuntimeError::new("__facet_list_get expects Int index"));
+    };
+    let index = match facet_index_to_usize(vm, index, list.len)? {
+        Ok(index) => index,
+        Err(err) => return Ok(err),
+    };
+    let value = list
+        .iter()
+        .nth(index)
+        .ok_or_else(|| RuntimeError::new("__facet_list_get invariant broken after bounds check"))?;
+    Ok(ok_result(value))
+}
+
+fn builtin_facet_list_set(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::List(list) = &args[0] else {
+        return Err(RuntimeError::new("__facet_list_set expects List"));
+    };
+    let Value::Int(index) = &args[1] else {
+        return Err(RuntimeError::new("__facet_list_set expects Int index"));
+    };
+    let index = match facet_index_to_usize(vm, index, list.len)? {
+        Ok(index) => index,
+        Err(err) => return Ok(err),
+    };
+    let mut items = list.iter().collect::<Vec<_>>();
+    items[index] = args[2].clone();
+    Ok(ok_result(Value::List(ListHandle::from_items(items))))
+}
+
+fn builtin_facet_map_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let map = decode_hash_map_arg(&args[0], "__facet_map_get", "map")?;
+    let key = decode_string_arg(&args[1], "__facet_map_get", "key")?;
+    match map.get(key) {
+        Some(value) => Ok(ok_result(value)),
+        None => Ok(key_not_found_result(vm, key)),
+    }
+}
+
+fn builtin_facet_map_set_existing(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let map = decode_hash_map_arg(&args[0], "__facet_map_set_existing", "map")?;
+    let key = decode_string_arg(&args[1], "__facet_map_set_existing", "key")?;
+    if !map.contains_key(key) {
+        return Ok(key_not_found_result(vm, key));
+    }
+    Ok(ok_result(Value::HashMap(
+        map.insert(key.to_string(), args[2].clone()),
+    )))
+}
+
 fn builtin_facet_view(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Facet::view should be lowered in Forge (runtime builtin call indicates lowering bug)",
@@ -2114,6 +2229,24 @@ fn builtin_facet_over(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeE
 fn builtin_facet_over_result(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Facet::over_result should be lowered in Forge (runtime builtin call indicates lowering bug)",
+    ))
+}
+
+fn builtin_facet_case_set(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Facet::case_set should be lowered in Forge (runtime builtin call indicates lowering bug)",
+    ))
+}
+
+fn builtin_facet_case_over(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Facet::case_over should be lowered in Forge (runtime builtin call indicates lowering bug)",
+    ))
+}
+
+fn builtin_facet_case_over_result(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Facet::case_over_result should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
@@ -5510,6 +5643,84 @@ mod tests {
             }
             other => panic!("expected List<String>, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn facet_list_get_and_set_report_index_bounds() {
+        let mut vm = test_vm();
+        let list = Value::List(ListHandle::from_items(vec![
+            Value::Int(int(10)),
+            Value::Int(int(20)),
+        ]));
+
+        let got = call_builtin(
+            &mut vm,
+            builtin_id("__facet_list_get"),
+            vec![list.clone(), Value::Int(int(1))],
+        )
+        .expect("facet list get should return Result");
+        assert!(matches!(got, Value::Tagged { tag: 0, .. }));
+
+        let missing = call_builtin(
+            &mut vm,
+            builtin_id("__facet_list_get"),
+            vec![list.clone(), Value::Int(int(9))],
+        )
+        .expect("facet list miss should return Err result");
+        assert!(
+            matches!(
+                missing,
+                Value::Tagged {
+                    tag: 1,
+                    ref fields
+                }
+                    if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "IndexOutOfBounds")
+            ),
+            "{missing:?}"
+        );
+
+        let updated = call_builtin(
+            &mut vm,
+            builtin_id("__facet_list_set"),
+            vec![list, Value::Int(int(0)), Value::Int(int(99))],
+        )
+        .expect("facet list set should return Result");
+        assert!(matches!(updated, Value::Tagged { tag: 0, .. }));
+    }
+
+    #[test]
+    fn facet_map_get_and_set_report_key_not_found() {
+        let mut vm = test_vm();
+        let map = Value::HashMap(HashMapHandle::from_entries(vec![(
+            "talk".into(),
+            Value::Int(int(80)),
+        )]));
+
+        let got = call_builtin(
+            &mut vm,
+            builtin_id("__facet_map_get"),
+            vec![map.clone(), Value::Str("talk".into())],
+        )
+        .expect("facet map get should return Result");
+        assert!(matches!(got, Value::Tagged { tag: 0, .. }));
+
+        let missing = call_builtin(
+            &mut vm,
+            builtin_id("__facet_map_set_existing"),
+            vec![map, Value::Str("missing".into()), Value::Int(int(1))],
+        )
+        .expect("facet map miss should return Err result");
+        assert!(
+            matches!(
+                missing,
+                Value::Tagged {
+                    tag: 1,
+                    ref fields
+                }
+                    if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "KeyNotFound")
+            ),
+            "{missing:?}"
+        );
     }
 
     #[test]

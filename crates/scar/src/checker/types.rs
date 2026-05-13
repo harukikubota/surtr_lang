@@ -880,7 +880,10 @@ impl Checker {
                 self.resolve_hole_surface_ty(span, context)
             }
             AstTy::Named(span, name)
-                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses" | "BulkUpdateEntries") =>
+                if matches!(
+                    Self::surface_type_name(name),
+                    "MatchArms" | "CondClauses" | "BulkUpdateEntries"
+                ) =>
             {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
             }
@@ -912,7 +915,10 @@ impl Checker {
                 Err(self.type_ref_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _)
-                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses" | "BulkUpdateEntries") =>
+                if matches!(
+                    Self::surface_type_name(name),
+                    "MatchArms" | "CondClauses" | "BulkUpdateEntries"
+                ) =>
             {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
             }

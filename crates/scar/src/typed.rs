@@ -144,6 +144,7 @@ pub enum TypedFacetSegment {
         enum_name: String,
         variant_name: String,
         variant_tag: u32,
+        discriminant: SurtrInt,
         payload_arity: u32,
         optional: bool,
         focus_readonly_root: bool,
@@ -236,12 +237,15 @@ pub enum PendingFacetSegment {
 pub enum TypedFacetSetMode {
     Exact,
     WrapPlainResult,
+    CaseSet,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypedFacetOverMode {
     FocusValue,
     FocusResult,
+    CaseFocusValue,
+    CaseFocusResult,
 }
 
 /// Inner structure of a typed node.

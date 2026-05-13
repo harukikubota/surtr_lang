@@ -621,7 +621,8 @@ fn test_facet_bulk_update_rejects_non_whitelisted_leaf_call() {
 
     assert!(err
         .message()
-        .contains("set(value), over(update_fun), or over_result(update_fun)"));
+        .contains("set(value), over(update_fun), over_result(update_fun)"));
+    assert!(err.message().contains("case_set(payload)"));
 }
 
 #[test]
@@ -2735,6 +2736,66 @@ fn test_qualified_capture_and_flow_parse() {
             other => panic!("Expected left-associative flow parse, got {:?}", other),
         },
         _ => panic!("Expected bind"),
+    }
+}
+
+#[test]
+fn test_capture_allows_facet_bracket_segments() {
+    let ast = parse(
+        r#"first = &List.[0]
+talk = &HashMap.["talk"]
+user_score = &User.scores.[1]"#,
+    )
+    .unwrap();
+
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::Capture(_, target, args)
+                    if args.is_empty()
+                        && matches!(target.as_ref(),
+                            Ast::FacetSegmentAccess(_, expr, FacetPathSegment::ListIndex { .. })
+                                if matches!(expr.as_ref(), Ast::Var(_, name) if name == "List")
+                        )
+            ));
+        }
+        other => panic!("Expected List bracket capture bind, got {:?}", other),
+    }
+
+    match &ast[1] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::Capture(_, target, args)
+                    if args.is_empty()
+                        && matches!(target.as_ref(),
+                            Ast::FacetSegmentAccess(_, expr, FacetPathSegment::MapKey { key, .. })
+                                if key == "talk"
+                                    && matches!(expr.as_ref(), Ast::Var(_, name) if name == "HashMap")
+                        )
+            ));
+        }
+        other => panic!("Expected HashMap bracket capture bind, got {:?}", other),
+    }
+
+    match &ast[2] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::Capture(_, target, args)
+                    if args.is_empty()
+                        && matches!(target.as_ref(),
+                            Ast::FacetSegmentAccess(_, expr, FacetPathSegment::ListIndex { .. })
+                                if matches!(expr.as_ref(),
+                                    Ast::FieldAccess(_, owner, field)
+                                        if field == "scores"
+                                            && matches!(owner.as_ref(), Ast::Var(_, name) if name == "User")
+                                )
+                        )
+            ));
+        }
+        other => panic!("Expected property bracket capture bind, got {:?}", other),
     }
 }
 
