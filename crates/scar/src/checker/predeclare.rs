@@ -50,7 +50,9 @@ impl Checker {
                 .consts
                 .get(&id.unique_id)
                 .is_none_or(|meta| matches!(meta.kind, ConstKind::FacetPath)),
-            Resolved::FieldAccess(_, inner, _) => self.const_surface_is_allowed(inner),
+            Resolved::FieldAccess(_, inner, _) | Resolved::FacetSegmentAccess(_, inner, _) => {
+                self.const_surface_is_allowed(inner)
+            }
             Resolved::InferredFacetCapture(_, _) => false,
             Resolved::BinOp(_, BinOp::Slash, left, right) => {
                 self.const_surface_is_allowed(left) && self.const_surface_is_allowed(right)
@@ -972,8 +974,8 @@ impl Checker {
         let display = Self::surface_ast_ty_key(&info.target_ast_ty);
         let base = display.split('<').next().unwrap_or(display.as_str());
         match base {
-            "TypeRef" | "Hole" | "Closure" | "MatchArms" | "CondClauses"
-            | "BulkUpdateEntries" | "Self" => None,
+            "TypeRef" | "Hole" | "Closure" | "MatchArms" | "CondClauses" | "BulkUpdateEntries"
+            | "Self" => None,
             _ => Some(display),
         }
     }

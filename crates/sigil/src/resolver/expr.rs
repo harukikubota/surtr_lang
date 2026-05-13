@@ -7,7 +7,8 @@ use super::scope_init::{
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
 use spire::ast::{
-    AstPath, BinOp, BulkUpdateEntry, BulkUpdateEntryKind, DbgArg, InterpolatedPart, Symbol,
+    AstPath, BinOp, BulkUpdateEntry, BulkUpdateEntryKind, DbgArg, FacetPathSegment,
+    InterpolatedPart,
 };
 
 const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
@@ -404,7 +405,10 @@ impl Resolver {
                 match &entry.kind {
                     BulkUpdateEntryKind::Set(expr)
                     | BulkUpdateEntryKind::Over(expr)
-                    | BulkUpdateEntryKind::OverResult(expr) => {
+                    | BulkUpdateEntryKind::OverResult(expr)
+                    | BulkUpdateEntryKind::CaseSet(expr)
+                    | BulkUpdateEntryKind::CaseOver(expr)
+                    | BulkUpdateEntryKind::CaseOverResult(expr) => {
                         resolver.collect_capture_placeholders(
                             expr,
                             allow_placeholders,
@@ -488,6 +492,7 @@ impl Resolver {
             | Ast::Grouped(_, rhs)
             | Ast::Semi(_, rhs)
             | Ast::FieldAccess(_, rhs, _)
+            | Ast::FacetSegmentAccess(_, rhs, _)
             | Ast::FacetCapture(_, rhs) => self.collect_capture_placeholders(
                 rhs,
                 allow_placeholders,
@@ -1188,13 +1193,17 @@ impl Resolver {
         Ok(self.make_closure_from_call(&span, params, target, rewritten_args))
     }
 
-    fn inferred_facet_capture_segments(expr: &Ast) -> Option<Vec<String>> {
+    fn inferred_facet_capture_segments(expr: &Ast) -> Option<Vec<FacetPathSegment>> {
         let mut segments = Vec::new();
         let mut current = expr;
         loop {
             match current {
                 Ast::FieldAccess(_, inner, field) => {
-                    segments.push(field.clone());
+                    segments.push(FacetPathSegment::field(field.clone()));
+                    current = inner.as_ref();
+                }
+                Ast::FacetSegmentAccess(_, inner, segment) => {
+                    segments.push(segment.clone());
                     current = inner.as_ref();
                 }
                 Ast::Grouped(_, inner) => {
@@ -1229,7 +1238,8 @@ impl Resolver {
             | Ast::SafeBind(_, _, rhs)
             | Ast::Grouped(_, rhs)
             | Ast::Semi(_, rhs)
-            | Ast::FieldAccess(_, rhs, _) => Self::pipe_slot_span(rhs),
+            | Ast::FieldAccess(_, rhs, _)
+            | Ast::FacetSegmentAccess(_, rhs, _) => Self::pipe_slot_span(rhs),
             Ast::BinOp(_, _, left, right)
             | Ast::Pipe(_, left, right)
             | Ast::ContextMap(_, left, right)
@@ -1911,9 +1921,9 @@ impl Resolver {
 
 impl Resolver {
     fn flatten_bulk_update_entries(
-        prefix: &[Symbol],
+        prefix: &[FacetPathSegment],
         entries: Vec<BulkUpdateEntry>,
-        out: &mut Vec<(Span, Vec<Symbol>, BulkUpdateEntryKind)>,
+        out: &mut Vec<(Span, Vec<FacetPathSegment>, BulkUpdateEntryKind)>,
     ) {
         for entry in entries {
             let mut path = prefix.to_vec();
@@ -1930,11 +1940,17 @@ impl Resolver {
     fn make_bulk_update_capture_path(
         span: &Span,
         root_name: &str,
-        path: &[Symbol],
+        path: &[FacetPathSegment],
     ) -> Result<Ast, ResolveError> {
         let mut expr = Ast::Var(span.clone(), root_name.to_string());
         for segment in path {
-            expr = Ast::FieldAccess(span.clone(), Box::new(expr), segment.clone());
+            expr = match segment {
+                FacetPathSegment::Field {
+                    name,
+                    optional: false,
+                } => Ast::FieldAccess(span.clone(), Box::new(expr), name.clone()),
+                other => Ast::FacetSegmentAccess(span.clone(), Box::new(expr), other.clone()),
+            };
         }
         Ok(Ast::FacetCapture(span.clone(), Box::new(expr)))
     }
@@ -1990,9 +2006,18 @@ impl Resolver {
                 BulkUpdateEntryKind::Over(update_fun) => {
                     Self::make_facet_intrinsic_call(&entry_span, "over", capture, update_fun)
                 }
-                BulkUpdateEntryKind::OverResult(update_fun) => Self::make_facet_intrinsic_call(
+                BulkUpdateEntryKind::OverResult(update_fun) => {
+                    Self::make_facet_intrinsic_call(&entry_span, "over_result", capture, update_fun)
+                }
+                BulkUpdateEntryKind::CaseSet(value) => {
+                    Self::make_facet_intrinsic_call(&entry_span, "case_set", capture, value)
+                }
+                BulkUpdateEntryKind::CaseOver(update_fun) => {
+                    Self::make_facet_intrinsic_call(&entry_span, "case_over", capture, update_fun)
+                }
+                BulkUpdateEntryKind::CaseOverResult(update_fun) => Self::make_facet_intrinsic_call(
                     &entry_span,
-                    "over_result",
+                    "case_over_result",
                     capture,
                     update_fun,
                 ),
@@ -2272,6 +2297,18 @@ impl Resolver {
                 }
                 let resolved_expr = self.resolve_node(*expr)?;
                 Ok(Resolved::FieldAccess(span, Box::new(resolved_expr), field))
+            }
+            Ast::FacetSegmentAccess(span, expr, segment) => {
+                let original = Ast::FacetSegmentAccess(span.clone(), expr.clone(), segment.clone());
+                if let Some(segments) = Self::inferred_facet_capture_segments(&original) {
+                    return Ok(Resolved::InferredFacetCapture(span, segments));
+                }
+                let resolved_expr = self.resolve_node(*expr)?;
+                Ok(Resolved::FacetSegmentAccess(
+                    span,
+                    Box::new(resolved_expr),
+                    segment,
+                ))
             }
             Ast::FacetCapture(span, expr) => {
                 let resolved_expr = self.resolve_node(*expr)?;

@@ -422,24 +422,19 @@ impl Parser<'_> {
         let mut expr = self.parse_primary()?;
 
         while matches!(self.peek(), Token::Dot) {
-            self.advance(); // consume .
-            let (field, fspan) = match self.peek().clone() {
-                Token::Ident(field) => {
-                    let span = self.advance().span.clone();
-                    (field, span)
-                }
-                _ => {
-                    return Err(ParseError::syntax(
-                        "Expected field name after '.'. Tuple access uses ._0, ._1, ...",
-                        self.peek_span(),
-                    ));
-                }
-            };
+            self.advance();
+            let (segment, segment_span) = self.parse_facet_path_segment_after_dot()?;
             let span = Span {
                 start: expr.span().start,
-                end: fspan.end,
+                end: segment_span.end,
             };
-            expr = Ast::FieldAccess(span, Box::new(expr), field);
+            expr = match segment {
+                FacetPathSegment::Field {
+                    name,
+                    optional: false,
+                } => Ast::FieldAccess(span, Box::new(expr), name),
+                other => Ast::FacetSegmentAccess(span, Box::new(expr), other),
+            };
         }
 
         if self.is_timeout_modifier_start() {
@@ -447,6 +442,46 @@ impl Parser<'_> {
         }
 
         Ok(expr)
+    }
+
+    fn parse_facet_path_segment_after_dot(
+        &mut self,
+    ) -> Result<(FacetPathSegment, Span), ParseError> {
+        match self.peek() {
+            Token::Ident(_) => {
+                let (name, name_span) = self.expect_ident()?;
+                if matches!(self.peek(), Token::Question) {
+                    let question_span = self.advance().span;
+                    Ok((FacetPathSegment::optional_field(name), question_span))
+                } else {
+                    Ok((FacetPathSegment::field(name), name_span))
+                }
+            }
+            Token::LBrack => {
+                self.advance();
+                let value = self.advance();
+                let segment = match value.token {
+                    Token::Int(index) => FacetPathSegment::ListIndex { index },
+                    Token::Str(key) => FacetPathSegment::MapKey { key },
+                    other => {
+                        return Err(ParseError::syntax(
+                            format!(
+                                "Facet path bracket segment expects an Int or String literal, got {other:?}"
+                            ),
+                            value.span,
+                        ));
+                    }
+                };
+                let rbrack = self.expect(&Token::RBrack)?;
+                Ok((segment, rbrack))
+            }
+            other => Err(ParseError::syntax(
+                format!(
+                    "Facet path segment after `.` expects identifier or bracket segment, got {other:?}"
+                ),
+                self.peek_span(),
+            )),
+        }
     }
 
     // ── Primary ──
@@ -1841,7 +1876,10 @@ impl Parser<'_> {
         let end = match &kind {
             BulkUpdateEntryKind::Set(expr)
             | BulkUpdateEntryKind::Over(expr)
-            | BulkUpdateEntryKind::OverResult(expr) => expr.span().end,
+            | BulkUpdateEntryKind::OverResult(expr)
+            | BulkUpdateEntryKind::CaseSet(expr)
+            | BulkUpdateEntryKind::CaseOver(expr)
+            | BulkUpdateEntryKind::CaseOverResult(expr) => expr.span().end,
             BulkUpdateEntryKind::Nested(_) => unreachable!("leaf classifier cannot produce nested"),
         };
         Ok(BulkUpdateEntry {
@@ -1851,12 +1889,12 @@ impl Parser<'_> {
         })
     }
 
-    fn parse_bulk_update_path(&mut self) -> Result<Vec<Symbol>, ParseError> {
+    fn parse_bulk_update_path(&mut self) -> Result<Vec<FacetPathSegment>, ParseError> {
         let (first, _) = self.expect_ident()?;
-        let mut segments = vec![first];
+        let mut segments = vec![FacetPathSegment::field(first)];
         while matches!(self.peek(), Token::Dot) {
             self.advance();
-            let (segment, _) = self.expect_ident()?;
+            let (segment, _) = self.parse_facet_path_segment_after_dot()?;
             segments.push(segment);
         }
         Ok(segments)
@@ -1865,9 +1903,13 @@ impl Parser<'_> {
     fn parse_bulk_update_leaf(&mut self) -> Result<BulkUpdateEntryKind, ParseError> {
         self.skip_newlines();
         let (name, name_span) = self.expect_ident()?;
-        if !matches!(name.as_str(), "set" | "over" | "over_result") {
+        let allowed = matches!(
+            name.as_str(),
+            "set" | "over" | "over_result" | "case_set" | "case_over" | "case_over_result"
+        );
+        if !allowed {
             return Err(ParseError::syntax(
-                "Bulk update entries must use set(value), over(update_fun), or over_result(update_fun)",
+                "Bulk update entries must use set(value), over(update_fun), over_result(update_fun), case_set(payload), case_over(update_fun), or case_over_result(update_fun)",
                 name_span,
             ));
         }
@@ -1876,9 +1918,13 @@ impl Parser<'_> {
         let args = self.with_trailing_call_block_disabled(|parser| parser.parse_call_args())?;
         let call_end = self.expect(&Token::RParen)?;
 
-        if args.len() != 1 || args.iter().any(|arg| matches!(arg, RecordLitArg::Named(_, _))) {
+        if args.len() != 1
+            || args
+                .iter()
+                .any(|arg| matches!(arg, RecordLitArg::Named(_, _)))
+        {
             return Err(ParseError::syntax(
-                "Bulk update entries must use set(value), over(update_fun), or over_result(update_fun)",
+                "Bulk update entries must use set(value), over(update_fun), over_result(update_fun), case_set(payload), case_over(update_fun), or case_over_result(update_fun)",
                 Span {
                     start: name_span.start,
                     end: call_end.end,
@@ -1895,6 +1941,9 @@ impl Parser<'_> {
             "set" => Ok(BulkUpdateEntryKind::Set(inner)),
             "over" => Ok(BulkUpdateEntryKind::Over(inner)),
             "over_result" => Ok(BulkUpdateEntryKind::OverResult(inner)),
+            "case_set" => Ok(BulkUpdateEntryKind::CaseSet(inner)),
+            "case_over" => Ok(BulkUpdateEntryKind::CaseOver(inner)),
+            "case_over_result" => Ok(BulkUpdateEntryKind::CaseOverResult(inner)),
             _ => unreachable!("validated bulk update whitelist"),
         }
     }

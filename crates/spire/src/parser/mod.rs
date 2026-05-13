@@ -286,6 +286,7 @@ impl<'a> Parser<'a> {
             | Ast::FacetCapture(_, _)
             | Ast::Closure(_, _, _)
             | Ast::Grouped(_, _)
+            | Ast::FacetSegmentAccess(_, _, _)
             | Ast::App(_, _, _) => Some(stmt),
             _ => None,
         }
@@ -740,6 +741,15 @@ fn rewrite_process_owner_bulk_entries(
                 BulkUpdateEntryKind::OverResult(expr) => BulkUpdateEntryKind::OverResult(
                     rewrite_process_owner_refs(expr, old_name, new_name),
                 ),
+                BulkUpdateEntryKind::CaseSet(expr) => BulkUpdateEntryKind::CaseSet(
+                    rewrite_process_owner_refs(expr, old_name, new_name),
+                ),
+                BulkUpdateEntryKind::CaseOver(expr) => BulkUpdateEntryKind::CaseOver(
+                    rewrite_process_owner_refs(expr, old_name, new_name),
+                ),
+                BulkUpdateEntryKind::CaseOverResult(expr) => BulkUpdateEntryKind::CaseOverResult(
+                    rewrite_process_owner_refs(expr, old_name, new_name),
+                ),
                 BulkUpdateEntryKind::Nested(entries) => BulkUpdateEntryKind::Nested(
                     rewrite_process_owner_bulk_entries(entries, old_name, new_name),
                 ),
@@ -883,6 +893,11 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
             span,
             Box::new(rewrite_process_owner_refs(*expr, old_name, new_name)),
             field,
+        ),
+        Ast::FacetSegmentAccess(span, expr, segment) => Ast::FacetSegmentAccess(
+            span,
+            Box::new(rewrite_process_owner_refs(*expr, old_name, new_name)),
+            segment,
         ),
         Ast::StructLit(span, name, fields) => Ast::StructLit(
             span,
@@ -1465,6 +1480,15 @@ fn shift_bulk_update_entries(entries: Vec<BulkUpdateEntry>, delta: usize) -> Vec
                 BulkUpdateEntryKind::OverResult(expr) => {
                     BulkUpdateEntryKind::OverResult(shift_ast_span(expr, delta))
                 }
+                BulkUpdateEntryKind::CaseSet(expr) => {
+                    BulkUpdateEntryKind::CaseSet(shift_ast_span(expr, delta))
+                }
+                BulkUpdateEntryKind::CaseOver(expr) => {
+                    BulkUpdateEntryKind::CaseOver(shift_ast_span(expr, delta))
+                }
+                BulkUpdateEntryKind::CaseOverResult(expr) => {
+                    BulkUpdateEntryKind::CaseOverResult(shift_ast_span(expr, delta))
+                }
                 BulkUpdateEntryKind::Nested(entries) => {
                     BulkUpdateEntryKind::Nested(shift_bulk_update_entries(entries, delta))
                 }
@@ -1609,6 +1633,11 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             shift_span(span, delta),
             Box::new(shift_ast_span(*expr, delta)),
             field,
+        ),
+        Ast::FacetSegmentAccess(span, expr, segment) => Ast::FacetSegmentAccess(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*expr, delta)),
+            segment,
         ),
         Ast::FacetCapture(span, expr) => Ast::FacetCapture(
             shift_span(span, delta),
@@ -2048,6 +2077,7 @@ impl Ast {
             | Ast::Match(s, _, _)
             | Ast::BulkUpdate(s, _, _)
             | Ast::FieldAccess(s, _, _)
+            | Ast::FacetSegmentAccess(s, _, _)
             | Ast::FacetCapture(s, _)
             | Ast::StructDef(s, _, _, _)
             | Ast::RecordDef(s, _, _, _)

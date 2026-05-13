@@ -770,6 +770,9 @@ impl Checker {
             Resolved::Match(span, scrutinee, arms) => self.check_match(span, scrutinee, arms),
 
             Resolved::FieldAccess(span, expr, field) => self.check_field_access(span, expr, field),
+            Resolved::FacetSegmentAccess(span, expr, segment) => {
+                self.check_facet_segment_access_with_expected(span, expr, segment, None)
+            }
             Resolved::InferredFacetCapture(span, segments) => Err(TypeError {
                 message: format!(
                     "{} requires expected unary function context",
@@ -915,6 +918,9 @@ impl Checker {
             }
             (Resolved::FieldAccess(span, expr, field), expected_ty) => {
                 self.check_field_access_with_expected(span, expr, field, expected_ty)
+            }
+            (Resolved::FacetSegmentAccess(span, expr, segment), expected_ty) => {
+                self.check_facet_segment_access_with_expected(span, expr, segment, expected_ty)
             }
             (Resolved::Grouped(span, inner), Some(expected_ty)) => {
                 let mut typed = self.check_node_with_expected(inner, Some(expected_ty))?;
@@ -1347,25 +1353,76 @@ impl Checker {
         }
     }
 
-    fn inferred_facet_capture_display(segments: &[String]) -> String {
-        if segments.is_empty() {
-            "_".to_string()
-        } else {
-            format!("_.{}", segments.join("."))
+    fn pending_segment_from_syntax(segment: &FacetPathSegment) -> PendingFacetSegment {
+        match segment {
+            FacetPathSegment::Field { name, optional } => PendingFacetSegment::Field {
+                name: name.clone(),
+                optional: *optional,
+            },
+            FacetPathSegment::ListIndex { index } => PendingFacetSegment::ListIndex {
+                index: index.clone(),
+            },
+            FacetPathSegment::MapKey { key } => PendingFacetSegment::MapKey { key: key.clone() },
         }
     }
 
-    fn inferred_capture_body(span: &Span, param_id: &ResolvedId, segments: &[String]) -> Resolved {
+    fn pending_field_segment(name: impl Into<String>) -> PendingFacetSegment {
+        PendingFacetSegment::Field {
+            name: name.into(),
+            optional: false,
+        }
+    }
+
+    fn pending_segment_display(segment: &PendingFacetSegment) -> String {
+        match segment {
+            PendingFacetSegment::Field { name, optional } => {
+                if *optional {
+                    format!("{name}?")
+                } else {
+                    name.clone()
+                }
+            }
+            PendingFacetSegment::ListIndex { index } => format!("[{index}]"),
+            PendingFacetSegment::MapKey { key } => format!("[\"{}\"]", key.escape_default()),
+        }
+    }
+
+    fn inferred_facet_capture_display(segments: &[FacetPathSegment]) -> String {
+        if segments.is_empty() {
+            "_".to_string()
+        } else {
+            format!(
+                "_.{}",
+                segments
+                    .iter()
+                    .map(FacetPathSegment::display_label)
+                    .collect::<Vec<_>>()
+                    .join(".")
+            )
+        }
+    }
+
+    fn inferred_capture_body(
+        span: &Span,
+        param_id: &ResolvedId,
+        segments: &[FacetPathSegment],
+    ) -> Resolved {
         segments.iter().fold(
             Resolved::Var(span.clone(), param_id.clone()),
-            |expr, segment| Resolved::FieldAccess(span.clone(), Box::new(expr), segment.clone()),
+            |expr, segment| match segment {
+                FacetPathSegment::Field {
+                    name,
+                    optional: false,
+                } => Resolved::FieldAccess(span.clone(), Box::new(expr), name.clone()),
+                other => Resolved::FacetSegmentAccess(span.clone(), Box::new(expr), other.clone()),
+            },
         )
     }
 
     fn check_inferred_facet_capture(
         &mut self,
         span: &Span,
-        segments: &[String],
+        segments: &[FacetPathSegment],
         expected_ty: &Ty,
     ) -> Result<TypedNode, TypeError> {
         let expected_ty = self.resolve_ty(expected_ty);
@@ -1723,6 +1780,7 @@ impl Checker {
             | Resolved::RecoverKind(span, _, _, _)
             | Resolved::Match(span, _, _)
             | Resolved::FieldAccess(span, _, _)
+            | Resolved::FacetSegmentAccess(span, _, _)
             | Resolved::InferredFacetCapture(span, _)
             | Resolved::FacetCapture(span, _)
             | Resolved::ProcessContextHandler(span, _)
@@ -4173,12 +4231,12 @@ impl Checker {
         None
     }
 
-    fn facet_segment_name(segment: &TypedFacetSegment) -> String {
-        match segment {
+    fn pending_segment_from_typed(segment: &TypedFacetSegment) -> PendingFacetSegment {
+        Self::pending_field_segment(match segment {
             TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
             TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
             TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
-        }
+        })
     }
 
     fn pending_facet_node(&mut self, span: &Span, path: PendingFacetPath) -> TypedNode {
@@ -4230,10 +4288,10 @@ impl Checker {
         let source_ty = current_source.clone();
         let mut may_fail = false;
         let mut segments = Vec::with_capacity(path.segments.len());
-        for segment_name in path.segments {
+        for pending_segment in path.segments {
             let (segment, focus_ty, segment_may_fail) = self.resolve_facet_segment_for_source_ty(
                 &current_source,
-                &segment_name,
+                &pending_segment,
                 span,
                 true,
             )?;
@@ -4352,7 +4410,7 @@ impl Checker {
             TypedInner::FacetPath(path) => {
                 left_path
                     .segments
-                    .extend(path.segments.iter().map(Self::facet_segment_name));
+                    .extend(path.segments.iter().map(Self::pending_segment_from_typed));
                 Ok(self.pending_facet_node(span, left_path))
             }
             TypedInner::PendingFacetPath(path) => {
@@ -4448,7 +4506,11 @@ impl Checker {
         loop {
             match current {
                 Resolved::FieldAccess(_, inner, field) => {
-                    segments.push(field);
+                    segments.push(Self::pending_field_segment(field));
+                    current = *inner;
+                }
+                Resolved::FacetSegmentAccess(_, inner, segment) => {
+                    segments.push(Self::pending_segment_from_syntax(&segment));
                     current = *inner;
                 }
                 Resolved::Grouped(_, inner) => {
@@ -7496,12 +7558,36 @@ impl Checker {
     fn resolve_facet_segment_for_source_ty(
         &mut self,
         source_ty: &Ty,
-        field: &str,
+        segment: &PendingFacetSegment,
         span: &Span,
         _for_capability: bool,
     ) -> Result<(TypedFacetSegment, Ty, bool), TypeError> {
+        let PendingFacetSegment::Field {
+            name: field,
+            optional,
+        } = segment
+        else {
+            return Err(TypeError {
+                message: format!(
+                    "Facet segment {} is not supported for {} yet",
+                    Self::pending_segment_display(segment),
+                    self.ty_name(source_ty)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        };
         match self.resolve_ty(source_ty) {
             Ty::Tuple(items) => {
+                if *optional {
+                    return Err(TypeError {
+                        message: "optional Facet segment requires an enum variant".into(),
+                        span: span.clone(),
+                        hint: Some(
+                            "Use `?` only on enum case segments such as Option.Some?.".into(),
+                        ),
+                    });
+                }
                 let index = field
                     .strip_prefix('_')
                     .ok_or_else(|| TypeError {
@@ -7537,6 +7623,15 @@ impl Checker {
                 ))
             }
             Ty::Struct(name, fields) | Ty::Record(name, fields) => {
+                if *optional {
+                    return Err(TypeError {
+                        message: "optional Facet segment requires an enum variant".into(),
+                        span: span.clone(),
+                        hint: Some(
+                            "Use `?` only on enum case segments such as Option.Some?.".into(),
+                        ),
+                    });
+                }
                 if self.env.is_private_field(&name, field) {
                     let display_name = Self::surface_name(&name);
                     let outside_impl =
@@ -7678,7 +7773,7 @@ impl Checker {
                 span,
                 PendingFacetPath {
                     source_ty_hint: None,
-                    segments: vec![field.to_string()],
+                    segments: vec![Self::pending_field_segment(field)],
                 },
             )));
         };
@@ -7775,17 +7870,43 @@ impl Checker {
         field: &str,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        if let Some(tuple_root_path) =
-            self.try_check_tuple_type_root_facet_path(span, expr, field, expected)?
-        {
-            return Ok(tuple_root_path);
+        let segment = FacetPathSegment::field(field.to_string());
+        self.check_facet_segment_access_with_expected(span, expr, &segment, expected)
+    }
+
+    fn check_facet_segment_access_with_expected(
+        &mut self,
+        span: &Span,
+        expr: &Resolved,
+        syntax_segment: &FacetPathSegment,
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let pending_segment = Self::pending_segment_from_syntax(syntax_segment);
+        let field = match syntax_segment {
+            FacetPathSegment::Field {
+                name,
+                optional: false,
+            } => Some(name.as_str()),
+            _ => None,
+        };
+
+        if let Some(field) = field {
+            if let Some(tuple_root_path) =
+                self.try_check_tuple_type_root_facet_path(span, expr, field, expected)?
+            {
+                return Ok(tuple_root_path);
+            }
         }
         let typed_expr = self.check_node(expr)?;
 
         if matches!(typed_expr.ty, Ty::Facet(_, _)) {
             let path = self.resolve_facet_path_from_node(typed_expr, span, None)?;
-            let (segment, focus_ty, may_fail) =
-                self.resolve_facet_segment_for_source_ty(&path.focus_ty, field, span, true)?;
+            let (segment, focus_ty, may_fail) = self.resolve_facet_segment_for_source_ty(
+                &path.focus_ty,
+                &pending_segment,
+                span,
+                true,
+            )?;
             let source_ty = self.resolve_ty(&path.source_ty);
             let focus_ty = self.resolve_ty(&focus_ty);
             let mut segments = path.segments;
@@ -7812,8 +7933,12 @@ impl Checker {
         if let TypedInner::Var(id) = &typed_expr.node {
             if self.env.is_type_constructor_id(id.unique_id) {
                 let source_ty = self.resolve_ty(&typed_expr.ty);
-                let (segment, focus_ty, may_fail) =
-                    self.resolve_facet_segment_for_source_ty(&source_ty, field, span, true)?;
+                let (segment, focus_ty, may_fail) = self.resolve_facet_segment_for_source_ty(
+                    &source_ty,
+                    &pending_segment,
+                    span,
+                    true,
+                )?;
                 let focus_ty = self.resolve_ty(&focus_ty);
                 let path = TypedFacetPath {
                     source_ty: source_ty.clone(),
@@ -7835,8 +7960,12 @@ impl Checker {
             Ty::Result(ok, _) => (true, ok.as_ref().clone()),
             other => (false, other),
         };
-        let (segment, focus_ty, may_fail) =
-            self.resolve_facet_segment_for_source_ty(&source_focus_ty, field, span, false)?;
+        let (segment, focus_ty, may_fail) = self.resolve_facet_segment_for_source_ty(
+            &source_focus_ty,
+            &pending_segment,
+            span,
+            false,
+        )?;
         let focus_ty = self.resolve_ty(&focus_ty);
         let path = TypedFacetPath {
             source_ty: source_focus_ty,

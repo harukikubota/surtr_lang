@@ -580,11 +580,14 @@ fn test_facet_bulk_update_special_form_parses() {
                 Ast::BulkUpdate(_, source, entries) => {
                     assert!(matches!(source.as_ref(), Ast::Var(_, name) if name == "user"));
                     assert_eq!(entries.len(), 3);
-                    assert_eq!(entries[0].path, vec!["name"]);
+                    assert_eq!(entries[0].path, vec![FacetPathSegment::field("name")]);
                     assert!(matches!(entries[0].kind, BulkUpdateEntryKind::Set(_)));
-                    assert_eq!(entries[1].path, vec!["score"]);
-                    assert!(matches!(entries[1].kind, BulkUpdateEntryKind::OverResult(_)));
-                    assert_eq!(entries[2].path, vec!["address"]);
+                    assert_eq!(entries[1].path, vec![FacetPathSegment::field("score")]);
+                    assert!(matches!(
+                        entries[1].kind,
+                        BulkUpdateEntryKind::OverResult(_)
+                    ));
+                    assert_eq!(entries[2].path, vec![FacetPathSegment::field("address")]);
                     assert!(matches!(entries[2].kind, BulkUpdateEntryKind::Nested(_)));
                 }
                 other => panic!("Expected BulkUpdate, got {other:?}"),
@@ -3493,6 +3496,65 @@ fn test_facet_capture_shorthand_allows_bare_inner_expr_for_later_diagnostics() {
         }
         other => panic!("Expected App, got {:?}", other),
     }
+}
+
+#[test]
+fn parses_facet_index_and_key_segments() {
+    let ast = parse("updated =? Facet::set(~user.score.[\"talk\"], 90)").unwrap();
+    let Ast::SafeBind(_, _, rhs) = &ast[0] else {
+        panic!("expected safe bind");
+    };
+    let Ast::App(_, callee, args) = rhs.as_ref() else {
+        panic!("expected Facet::set call");
+    };
+    assert!(matches!(callee.as_ref(), Ast::Path(_, path) if path.segments == vec!["Facet", "set"]));
+    assert!(matches!(
+        &args[0],
+        RecordLitArg::Positional(Ast::FacetCapture(_, inner))
+            if matches!(
+                inner.as_ref(),
+                Ast::FacetSegmentAccess(_, _, FacetPathSegment::MapKey { key, .. }) if key == "talk"
+            )
+    ));
+}
+
+#[test]
+fn parses_optional_enum_facet_segment() {
+    let ast = parse("print(inspect(Facet::view(Option.Some?, option)))").unwrap();
+    let Ast::App(_, _, print_args) = &ast[0] else {
+        panic!("expected print call");
+    };
+    assert_eq!(print_args.len(), 1);
+}
+
+#[test]
+fn parses_bulk_update_index_key_optional_and_case_actions() {
+    let ast = parse(
+        r#"user2 =? Facet::bulk_update(user) {
+  score.["talk"] <- over({|score| Ok(score + 1)})
+  scores.[1] <- set(500)
+  nickname.Some? <- case_over({|name| Ok(name ++ "!")})
+  phone.Some <- case_set("090")
+}"#,
+    )
+    .unwrap();
+    let Ast::SafeBind(_, _, rhs) = &ast[0] else {
+        panic!("expected safe bind");
+    };
+    let Ast::BulkUpdate(_, _, entries) = rhs.as_ref() else {
+        panic!("expected bulk update");
+    };
+    assert_eq!(entries.len(), 4);
+    assert!(matches!(
+        entries[0].path[1],
+        FacetPathSegment::MapKey { .. }
+    ));
+    assert!(matches!(
+        entries[1].path[1],
+        FacetPathSegment::ListIndex { .. }
+    ));
+    assert!(matches!(entries[2].kind, BulkUpdateEntryKind::CaseOver(_)));
+    assert!(matches!(entries[3].kind, BulkUpdateEntryKind::CaseSet(_)));
 }
 
 #[test]

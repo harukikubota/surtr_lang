@@ -192,7 +192,14 @@ pub struct TypedFacetPath {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingFacetPath {
     pub source_ty_hint: Option<Ty>,
-    pub segments: Vec<String>,
+    pub segments: Vec<PendingFacetSegment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PendingFacetSegment {
+    Field { name: String, optional: bool },
+    ListIndex { index: SurtrInt },
+    MapKey { key: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

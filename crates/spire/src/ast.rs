@@ -296,10 +296,47 @@ pub struct AstMatchArm {
     pub body: Ast,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FacetPathSegment {
+    Field { name: Symbol, optional: bool },
+    ListIndex { index: SurtrInt },
+    MapKey { key: String },
+}
+
+impl FacetPathSegment {
+    pub fn field(name: impl Into<Symbol>) -> Self {
+        Self::Field {
+            name: name.into(),
+            optional: false,
+        }
+    }
+
+    pub fn optional_field(name: impl Into<Symbol>) -> Self {
+        Self::Field {
+            name: name.into(),
+            optional: true,
+        }
+    }
+
+    pub fn display_label(&self) -> String {
+        match self {
+            Self::Field { name, optional } => {
+                if *optional {
+                    format!("{name}?")
+                } else {
+                    name.clone()
+                }
+            }
+            Self::ListIndex { index } => format!("[{index}]"),
+            Self::MapKey { key } => format!("[\"{}\"]", key.escape_default()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct BulkUpdateEntry {
     pub span: Span,
-    pub path: Vec<Symbol>,
+    pub path: Vec<FacetPathSegment>,
     pub kind: BulkUpdateEntryKind,
 }
 
@@ -308,6 +345,9 @@ pub enum BulkUpdateEntryKind {
     Set(Ast),
     Over(Ast),
     OverResult(Ast),
+    CaseSet(Ast),
+    CaseOver(Ast),
+    CaseOverResult(Ast),
     Nested(Vec<BulkUpdateEntry>),
 }
 
@@ -513,6 +553,9 @@ pub enum Ast {
 
     /// Field access: `user.name`, `pair._0`
     FieldAccess(Span, Box<Ast>, Symbol),
+
+    /// Non-identifier Facet path segment, or an identifier segment with an optional marker.
+    FacetSegmentAccess(Span, Box<Ast>, FacetPathSegment),
 
     /// Compiler-managed Facet shorthand capture: `~source.path`
     FacetCapture(Span, Box<Ast>),

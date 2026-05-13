@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sindr::primitives::SurtrInt;
-use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, Symbol, Visibility};
+use spire::ast::{AstTy, BinOp, FacetPathSegment, Lit, ProcessSpec, Span, Symbol, Visibility};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedDeclAttrs {
@@ -148,8 +148,11 @@ pub enum Resolved {
     /// Field access: `expr.field`
     FieldAccess(Span, Box<Resolved>, Symbol),
 
+    /// Non-identifier Facet path segment, or an identifier segment with an optional marker.
+    FacetSegmentAccess(Span, Box<Resolved>, FacetPathSegment),
+
     /// Inferred field/facet capture: `_.field` / `_.field.subfield`
-    InferredFacetCapture(Span, Vec<Symbol>),
+    InferredFacetCapture(Span, Vec<FacetPathSegment>),
 
     /// Compiler-managed Facet shorthand capture: `~source.path`
     FacetCapture(Span, Box<Resolved>),

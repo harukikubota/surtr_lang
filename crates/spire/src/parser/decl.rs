@@ -310,6 +310,9 @@ fn rewrite_process_self_refs(node: Ast) -> Ast {
         Ast::FieldAccess(span, expr, field) => {
             Ast::FieldAccess(span, Box::new(rewrite_process_self_refs(*expr)), field)
         }
+        Ast::FacetSegmentAccess(span, expr, segment) => {
+            Ast::FacetSegmentAccess(span, Box::new(rewrite_process_self_refs(*expr)), segment)
+        }
         Ast::FacetCapture(span, expr) => {
             Ast::FacetCapture(span, Box::new(rewrite_process_self_refs(*expr)))
         }

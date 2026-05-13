@@ -405,6 +405,9 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
         Ast::FieldAccess(span, expr, field) => {
             Ast::FieldAccess(span, Box::new(rewrite_self_ast(*expr, target)), field)
         }
+        Ast::FacetSegmentAccess(span, expr, segment) => {
+            Ast::FacetSegmentAccess(span, Box::new(rewrite_self_ast(*expr, target)), segment)
+        }
         Ast::StructLit(span, name, fields) => Ast::StructLit(
             span,
             name,
@@ -1369,8 +1372,11 @@ impl Resolver {
                                 ));
                             }
                             Ast::IntrinsicDecl(method_span, method_name, signature, attrs) => {
-                                let lowered_name =
-                                    lower_impl_member_name(lowered_module_path, &target, &method_name);
+                                let lowered_name = lower_impl_member_name(
+                                    lowered_module_path,
+                                    &target,
+                                    &method_name,
+                                );
                                 lowered.push(Ast::IntrinsicDecl(
                                     method_span,
                                     lowered_name,
