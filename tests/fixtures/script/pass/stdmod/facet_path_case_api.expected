@@ -16,3 +16,5 @@ Option::None
 [99, 25]
 Ok(82)
 Option::Some("alice!!")
+Option::Some(Ok("alice!"))
+Option::Some(Err(NoneError("None Value.")))

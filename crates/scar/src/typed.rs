@@ -238,8 +238,14 @@ pub enum PendingFacetExpr {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PendingFacetSegment {
-    Field { name: String, optional: bool },
-    Bracket { expr: PendingFacetExpr, display: String },
+    Field {
+        name: String,
+        optional: bool,
+    },
+    Bracket {
+        expr: PendingFacetExpr,
+        display: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

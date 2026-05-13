@@ -3996,10 +3996,7 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                     kind: pending_facet_segment_kind(segment).to_string(),
                     source_ty: "_".to_string(),
                     focus_ty: "_".to_string(),
-                    fallible: matches!(
-                        segment,
-                        PendingFacetSegment::Bracket { .. }
-                    ),
+                    fallible: matches!(segment, PendingFacetSegment::Bracket { .. }),
                     reason: "requires Facet context to specialize".to_string(),
                 })
                 .collect(),
@@ -6627,9 +6624,7 @@ impl Codegen {
                     }
                 }
                 TypedFacetSegment::MapKey {
-                    key,
-                    literal_key,
-                    ..
+                    key, literal_key, ..
                 } => {
                     if literal_key.is_some() {
                         slots.push(None);

@@ -96,11 +96,8 @@ fn test_private_field_modifier_is_preserved() {
 
 #[test]
 fn test_generic_struct_type_params_are_preserved() {
-    let ast = parse_with_context(
-        "defstruct Box<$A> { value: $A }",
-        ParserContext::project(0),
-    )
-    .unwrap();
+    let ast =
+        parse_with_context("defstruct Box<$A> { value: $A }", ParserContext::project(0)).unwrap();
     match &ast[0] {
         Ast::StructDef(_, name, type_params, fields, attrs) => {
             assert_eq!(name, "Global::Box");
@@ -3705,14 +3702,8 @@ fn parses_bulk_update_index_key_optional_and_case_actions() {
         panic!("expected bulk update");
     };
     assert_eq!(entries.len(), 4);
-    assert!(matches!(
-        entries[0].path[1],
-        FacetPathSegment::Bracket(_)
-    ));
-    assert!(matches!(
-        entries[1].path[1],
-        FacetPathSegment::Bracket(_)
-    ));
+    assert!(matches!(entries[0].path[1], FacetPathSegment::Bracket(_)));
+    assert!(matches!(entries[1].path[1], FacetPathSegment::Bracket(_)));
     assert!(matches!(entries[2].kind, BulkUpdateEntryKind::CaseOver(_)));
     assert!(matches!(entries[3].kind, BulkUpdateEntryKind::CaseSet(_)));
 }

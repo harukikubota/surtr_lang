@@ -1233,7 +1233,10 @@ fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fall
     assert!(constructor_doc.contains("Range::new"), "{constructor_doc}");
     assert!(constructor_doc.contains("min: $A"), "{constructor_doc}");
     assert!(constructor_doc.contains("max: $A"), "{constructor_doc}");
-    assert!(constructor_doc.contains("-> Range<$A>"), "{constructor_doc}");
+    assert!(
+        constructor_doc.contains("-> Range<$A>"),
+        "{constructor_doc}"
+    );
     assert!(
         constructor_doc.contains("Construct a range while preserving the input order."),
         "{constructor_doc}"
@@ -1249,7 +1252,10 @@ fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fall
     assert_eq!(range_empty_call_sig.trim(), range_sig.trim());
 
     let extractor_doc = doc_text(&engine.handle_line(":doc Range!()"));
-    assert!(extractor_doc.contains("Range::deconstruct"), "{extractor_doc}");
+    assert!(
+        extractor_doc.contains("Range::deconstruct"),
+        "{extractor_doc}"
+    );
     assert!(
         extractor_doc.contains("MatchResult<($A, $A), Error>"),
         "{extractor_doc}"

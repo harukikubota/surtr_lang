@@ -47,7 +47,10 @@ impl Checker {
         match segment {
             ResolvedFacetPathSegment::Field { .. } => true,
             ResolvedFacetPathSegment::Bracket(expr) => {
-                matches!(expr.expr.as_ref(), Resolved::Lit(_, Lit::Int(_) | Lit::Str(_)))
+                matches!(
+                    expr.expr.as_ref(),
+                    Resolved::Lit(_, Lit::Int(_) | Lit::Str(_))
+                )
             }
         }
     }

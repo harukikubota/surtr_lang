@@ -1,7 +1,9 @@
 defrecord ScoreBook(scores: List<Int>, by_kind: HashMap<Int>, nick: Option<String>)
+defrecord ResultBook(nick: Option<Result<String>>)
 
 def inc(n: Int) -> Result<Int> { Ok(n + 1) }
 def bang(name: String) -> Result<String> { Ok(name ++ "!") }
+def keep(value: Result<String>) -> Result<Result<String>> { Ok(value) }
 
 values = [10, 20]
 map = HashMap::from_entries([("talk", 80)])
@@ -39,7 +41,13 @@ book7 =? Facet::bulk_update(book5) {
   by_kind.["talk"] <- over(&inc)
   nick.Some? <- case_over(&bang)
 }
+result_book = ResultBook(Option::Some(Ok("alice")))
+result_book2 =? Facet::case_over(ResultBook.nick.Some, result_book, &bang)
+result_book3 =? Facet::case_over(ResultBook.nick.Some, result_book2, &keep)
+result_book4 =? Facet::case_over(ResultBook.nick.Some, ResultBook(Option::Some(Err(NoneError))), &bang)
 
 print(inspect(book7.scores))
 print(inspect(HashMap::get(book7.by_kind, "talk")))
 print(inspect(book7.nick))
+print(inspect(result_book3.nick))
+print(inspect(result_book4.nick))

@@ -291,7 +291,7 @@ Opcode は以下のカテゴリを持つ。
 - 組込み関数メタデータは単一テーブルで管理する
 - `Bootstrap` module の `@builtin` 宣言はこの共有テーブルに対応する宣言層であり、builtin の追加起点ではない
 - VM は `builtin_id` により実装関数をディスパッチする
-- `Facet::view` / `Facet::preview` / `Facet::replace` / `Facet::set` / `Facet::over` / `Facet::over_result` / `Facet::case_set` / `Facet::case_over` / `Facet::case_over_result` / `Facet::compose` / Facet `/` compose は compile-time lowering 対象であり、runtime builtin として直接到達した場合は防御的に `RuntimeError` とする
+- `Facet::view` / `Facet::preview` / `Facet::replace` / `Facet::set` / `Facet::over` / `Facet::over_result` / `Facet::case_set` / `Facet::case_over` / `Facet::compose` / Facet `/` compose は compile-time lowering 対象であり、runtime builtin として直接到達した場合は防御的に `RuntimeError` とする
 - Facet の variant mismatch は `Err(VariantMismatch(detail))` で返し、`detail` には失敗 segment（index と path 表示）を含める
 - Facet の fallible container path segment は internal polymorphic helper `__facet_list_get` / `__facet_list_set` / `__facet_map_get` / `__facet_map_set_existing` に lower し、list miss は `IndexOutOfBounds`、map miss は `KeyNotFound` を `Result` で返す
 - `eprint` は `Error` 値を診断表示し、それ以外の値への適用は VM 側ガード対象とする

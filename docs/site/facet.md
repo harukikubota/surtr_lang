@@ -12,7 +12,6 @@
 - `Facet::over_result(facet, source, update_fun)`
 - `Facet::case_set(facet, source, value)`
 - `Facet::case_over(facet, source, update_fun)`
-- `Facet::case_over_result(facet, source, update_fun)`
 - `Facet::bulk_update(source) { ... }`
 - `outer / inner`
 - `Facet::compose(outer, inner)`
@@ -223,7 +222,7 @@ add_facet = Expr.Add
 - 現在値が別 variant なら `Err(...)` になる
 - `set` / `over` でも同じく variant mismatch が失敗になる
 - `over_result` は `Result` focus 全体を書き換えたいときに使う
-- `case_set` / `case_over` / `case_over_result` は「最後の enum case payload を更新する」専用 API
+- `case_set` / `case_over` は「最後の enum case payload を更新する」専用 API
 
 ```surtr
 next =? Facet::case_set(Expr.Add, expr, (left2, right2))
@@ -244,7 +243,6 @@ source order でまとめて書くための special form です。
 - `path <- over_result(update_fun)`
 - `path <- case_set(payload)`
 - `path <- case_over(update_fun)`
-- `path <- case_over_result(update_fun)`
 - `path { nested_entries... }`
 
 ```surtr

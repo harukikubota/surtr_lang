@@ -351,7 +351,6 @@ pub enum BulkUpdateEntryKind {
     OverResult(Ast),
     CaseSet(Ast),
     CaseOver(Ast),
-    CaseOverResult(Ast),
     Nested(Vec<BulkUpdateEntry>),
 }
 

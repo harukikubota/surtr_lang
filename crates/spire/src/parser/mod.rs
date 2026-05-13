@@ -767,9 +767,6 @@ fn rewrite_process_owner_bulk_entries(
                 BulkUpdateEntryKind::CaseOver(expr) => BulkUpdateEntryKind::CaseOver(
                     rewrite_process_owner_refs(expr, old_name, new_name),
                 ),
-                BulkUpdateEntryKind::CaseOverResult(expr) => BulkUpdateEntryKind::CaseOverResult(
-                    rewrite_process_owner_refs(expr, old_name, new_name),
-                ),
                 BulkUpdateEntryKind::Nested(entries) => BulkUpdateEntryKind::Nested(
                     rewrite_process_owner_bulk_entries(entries, old_name, new_name),
                 ),
@@ -1519,9 +1516,6 @@ fn shift_bulk_update_entries(entries: Vec<BulkUpdateEntry>, delta: usize) -> Vec
                 }
                 BulkUpdateEntryKind::CaseOver(expr) => {
                     BulkUpdateEntryKind::CaseOver(shift_ast_span(expr, delta))
-                }
-                BulkUpdateEntryKind::CaseOverResult(expr) => {
-                    BulkUpdateEntryKind::CaseOverResult(shift_ast_span(expr, delta))
                 }
                 BulkUpdateEntryKind::Nested(entries) => {
                     BulkUpdateEntryKind::Nested(shift_bulk_update_entries(entries, delta))

@@ -3,7 +3,7 @@ Standard `Facet` type declaration.
 `Facet<S, A>` is a compiler-managed path capability from source `S` to focus `A`.
 Facet values are same-scope capabilities: bind them locally when useful, then
 consume them in that same scope via
-`Facet::view/preview/replace/set/over/over_result/case_set/case_over/case_over_result`.
+`Facet::view/preview/replace/set/over/over_result/case_set/case_over`.
 
 Use `Facet` when you want to describe "where" inside a value the compiler should
 look or update.
@@ -53,7 +53,7 @@ Use `&Type.path` when you want to make that source type explicit in the code.
 
 `~value.segment` is compiler-managed shorthand that expands to a source value and
 structural path when consumed by
-`Facet::view/preview/replace/set/over/over_result/case_set/case_over/case_over_result`.
+`Facet::view/preview/replace/set/over/over_result/case_set/case_over`.
 The source expression is evaluated exactly once.
 It is never a first-class `Facet` value, and API-specific validity is still
 decided by the consuming `Facet` operation.
@@ -297,15 +297,15 @@ impl Facet {
   `case_over` requires at least one enum selector in the Facet path. Optional
   selectors such as `Option.Some?` skip mismatches and leave the source
   unchanged.
+
+  `case_over` accepts both plain and `Result` focus.
+  When the focus is plain `$A`, `update_fun` receives `$A` and returns
+  `Result<$A>`.
+  When the focus is `Result<$A>`, `update_fun` may either receive the `Ok`
+  payload as `$A` or the whole `Result<$A>`.
+  Payload-style updaters skip `Err(err)` and leave that branch unchanged.
   """
   @builtin def case_over(facet: Facet<$S, $A>, source: $S, update_fun: ($A -> Result<$A>)) -> Result<$S>
-
-  @doc """
-  Update a `Result<$A>` focus reached through an enum case path.
-  This is the case-aware variant of `over_result`; it requires both a Result
-  focus and at least one enum selector in the Facet path.
-  """
-  @builtin def case_over_result(facet: Facet<$S, Result<$A>>, source: $S, update_fun: (Result<$A> -> Result<Result<$A>>)) -> Result<$S>
 
   @doc """
   Bulk update special form.
@@ -321,7 +321,6 @@ impl Facet {
   - `path <- over_result(update_fun)`
   - `path <- case_set(payload)`
   - `path <- case_over(update_fun)`
-  - `path <- case_over_result(update_fun)`
   - `path { nested_entries... }`
 
   Nested blocks extend the current path prefix. This makes the following forms
@@ -335,8 +334,7 @@ impl Facet {
   Entries are separated by newlines, not commas.
 
   `bulk_update` lowers to ordinary `Facet::set` / `Facet::over` /
-  `Facet::over_result` / `Facet::case_set` / `Facet::case_over` /
-  `Facet::case_over_result` calls and
+  `Facet::over_result` / `Facet::case_set` / `Facet::case_over` calls and
   returns `Result<$S>`.
   Each later entry sees the latest updated state produced so far.
   List / HashMap bracket segments use the same dynamic-expression rules as

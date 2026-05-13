@@ -4237,7 +4237,6 @@ impl Checker {
                 "Facet::over_result" => Some("over_result"),
                 "Facet::case_set" => Some("case_set"),
                 "Facet::case_over" => Some("case_over"),
-                "Facet::case_over_result" => Some("case_over_result"),
                 _ => None,
             };
         }
@@ -5138,64 +5137,6 @@ impl Checker {
         })
     }
 
-    fn check_facet_case_over_result_intrinsic(
-        &mut self,
-        span: &Span,
-        args: &[ResolvedRecordLitArg],
-    ) -> Result<TypedNode, TypeError> {
-        let (source_expr, path_input, update_expr) =
-            self.parse_facet_mutating_intrinsic_args(span, "Facet::case_over_result", args)?;
-        let PreparedFacetInput {
-            typed_source,
-            source_is_result,
-            source_value_ty,
-            path,
-        } = self.prepare_facet_input(span, "Facet::case_over_result", &source_expr, path_input)?;
-        self.require_enum_facet_path("Facet::case_over_result", &path, span)?;
-        self.check_mutating_facet_path_permissions("Facet::case_over_result", &path, span)?;
-
-        if !matches!(self.resolve_ty(&path.focus_ty), Ty::Result(_, _)) {
-            return Err(TypeError {
-                message: format!(
-                    "Facet::case_over_result requires Result focus, got {}",
-                    self.ty_name(&path.focus_ty)
-                ),
-                span: span.clone(),
-                hint: Some("Use Facet::case_over for plain focus updates.".into()),
-            });
-        }
-
-        let typed_update = self.check_node(update_expr)?;
-        let mode = match self.check_facet_over_callable(
-            "Facet::case_over_result",
-            span,
-            &path.focus_ty,
-            &typed_update,
-            true,
-        )? {
-            TypedFacetOverMode::FocusValue => TypedFacetOverMode::CaseFocusValue,
-            TypedFacetOverMode::FocusResult => TypedFacetOverMode::CaseFocusResult,
-            mode @ (TypedFacetOverMode::CaseFocusValue | TypedFacetOverMode::CaseFocusResult) => {
-                mode
-            }
-        };
-
-        Ok(TypedNode {
-            ty: Ty::Result(
-                Box::new(self.resolve_ty(&source_value_ty)),
-                Box::new(Ty::Error),
-            ),
-            span: span.clone(),
-            node: TypedInner::FacetOver {
-                source: Box::new(typed_source),
-                path,
-                update_fun: Box::new(typed_update),
-                source_is_result,
-                mode,
-            },
-        })
-    }
-
     fn check_facet_over_result_intrinsic(
         &mut self,
         span: &Span,
@@ -5474,9 +5415,6 @@ impl Checker {
             Some("over_result") => Ok(Some(self.check_facet_over_result_intrinsic(span, args)?)),
             Some("case_set") => Ok(Some(self.check_facet_case_set_intrinsic(span, args)?)),
             Some("case_over") => Ok(Some(self.check_facet_case_over_intrinsic(span, args)?)),
-            Some("case_over_result") => Ok(Some(
-                self.check_facet_case_over_result_intrinsic(span, args)?,
-            )),
             _ => Ok(None),
         }
     }
@@ -8430,7 +8368,12 @@ impl Checker {
 
         if let TypedInner::Var(id) = &typed_expr.node {
             if self.env.is_type_constructor_id(id.unique_id) {
-                let source_ty = self.resolve_ty(&typed_expr.ty);
+                let (source_ty, expected_focus_ty) = match expected.map(|ty| self.resolve_ty(ty)) {
+                    Some(Ty::Facet(source, focus)) => {
+                        (source.as_ref().clone(), Some(focus.as_ref().clone()))
+                    }
+                    _ => (self.resolve_ty(&typed_expr.ty), None),
+                };
                 let (segment, focus_ty, may_fail) = self.resolve_facet_segment_for_source_ty(
                     &source_ty,
                     &pending_segment,
@@ -8438,6 +8381,19 @@ impl Checker {
                     true,
                 )?;
                 let focus_ty = self.resolve_ty(&focus_ty);
+                if let Some(expected_focus_ty) = expected_focus_ty {
+                    if !self.types_compatible(&focus_ty, &expected_focus_ty) {
+                        return Err(TypeError {
+                            message: format!(
+                                "Facet path focus type mismatch: expected {}, got {}",
+                                self.ty_name(&expected_focus_ty),
+                                self.ty_name(&focus_ty)
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                }
                 let path = TypedFacetPath {
                     source_ty: source_ty.clone(),
                     focus_ty: focus_ty.clone(),

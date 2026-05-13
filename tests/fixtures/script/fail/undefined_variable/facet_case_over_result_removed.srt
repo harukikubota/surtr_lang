@@ -1,0 +1,7 @@
+defenum Slot {
+  Some(Result<String>),
+  None,
+}
+
+slot = Slot::Some(Ok("alice"))
+bad = Facet::case_over_result(Slot.Some, slot, {|value| Ok(value)})

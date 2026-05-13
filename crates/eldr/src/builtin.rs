@@ -242,10 +242,6 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_facet_case_over,
     },
     BuiltinImpl {
-        name: "case_over_result",
-        func: builtin_facet_case_over_result,
-    },
-    BuiltinImpl {
         name: "__facet_list_get",
         func: builtin_facet_list_get,
     },
@@ -2241,12 +2237,6 @@ fn builtin_facet_case_set(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, Runt
 fn builtin_facet_case_over(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Facet::case_over should be lowered in Forge (runtime builtin call indicates lowering bug)",
-    ))
-}
-
-fn builtin_facet_case_over_result(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
-    Err(RuntimeError::new(
-        "Facet::case_over_result should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 

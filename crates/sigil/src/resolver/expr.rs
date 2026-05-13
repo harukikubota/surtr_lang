@@ -418,8 +418,7 @@ impl Resolver {
                     | BulkUpdateEntryKind::Over(expr)
                     | BulkUpdateEntryKind::OverResult(expr)
                     | BulkUpdateEntryKind::CaseSet(expr)
-                    | BulkUpdateEntryKind::CaseOver(expr)
-                    | BulkUpdateEntryKind::CaseOverResult(expr) => {
+                    | BulkUpdateEntryKind::CaseOver(expr) => {
                         resolver.collect_capture_placeholders(
                             expr,
                             allow_placeholders,
@@ -2050,12 +2049,6 @@ impl Resolver {
                 BulkUpdateEntryKind::CaseOver(update_fun) => {
                     Self::make_facet_intrinsic_call(&entry_span, "case_over", capture, update_fun)
                 }
-                BulkUpdateEntryKind::CaseOverResult(update_fun) => Self::make_facet_intrinsic_call(
-                    &entry_span,
-                    "case_over_result",
-                    capture,
-                    update_fun,
-                ),
                 BulkUpdateEntryKind::Nested(_) => unreachable!("nested entries must be flattened"),
             };
             let closure = Ast::Closure(

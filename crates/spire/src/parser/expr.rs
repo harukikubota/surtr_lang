@@ -1869,8 +1869,7 @@ impl Parser<'_> {
             | BulkUpdateEntryKind::Over(expr)
             | BulkUpdateEntryKind::OverResult(expr)
             | BulkUpdateEntryKind::CaseSet(expr)
-            | BulkUpdateEntryKind::CaseOver(expr)
-            | BulkUpdateEntryKind::CaseOverResult(expr) => expr.span().end,
+            | BulkUpdateEntryKind::CaseOver(expr) => expr.span().end,
             BulkUpdateEntryKind::Nested(_) => unreachable!("leaf classifier cannot produce nested"),
         };
         Ok(BulkUpdateEntry {
@@ -1896,11 +1895,11 @@ impl Parser<'_> {
         let (name, name_span) = self.expect_ident()?;
         let allowed = matches!(
             name.as_str(),
-            "set" | "over" | "over_result" | "case_set" | "case_over" | "case_over_result"
+            "set" | "over" | "over_result" | "case_set" | "case_over"
         );
         if !allowed {
             return Err(ParseError::syntax(
-                "Bulk update entries must use set(value), over(update_fun), over_result(update_fun), case_set(payload), case_over(update_fun), or case_over_result(update_fun)",
+                "Bulk update entries must use set(value), over(update_fun), over_result(update_fun), case_set(payload), or case_over(update_fun)",
                 name_span,
             ));
         }
@@ -1915,7 +1914,7 @@ impl Parser<'_> {
                 .any(|arg| matches!(arg, RecordLitArg::Named(_, _)))
         {
             return Err(ParseError::syntax(
-                "Bulk update entries must use set(value), over(update_fun), over_result(update_fun), case_set(payload), case_over(update_fun), or case_over_result(update_fun)",
+                "Bulk update entries must use set(value), over(update_fun), over_result(update_fun), case_set(payload), or case_over(update_fun)",
                 Span {
                     start: name_span.start,
                     end: call_end.end,
@@ -1934,7 +1933,6 @@ impl Parser<'_> {
             "over_result" => Ok(BulkUpdateEntryKind::OverResult(inner)),
             "case_set" => Ok(BulkUpdateEntryKind::CaseSet(inner)),
             "case_over" => Ok(BulkUpdateEntryKind::CaseOver(inner)),
-            "case_over_result" => Ok(BulkUpdateEntryKind::CaseOverResult(inner)),
             _ => unreachable!("validated bulk update whitelist"),
         }
     }

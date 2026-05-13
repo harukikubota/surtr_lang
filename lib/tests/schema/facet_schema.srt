@@ -1,6 +1,6 @@
-defmod FacetSchema {
-  defrecord ScoreFixture(scores: List<Int>, score: HashMap<Int>)
+defrecord ScoreFixture(scores: List<Int>, score: HashMap<Int>)
 
+defmod FacetSchema {
   def demo_fixture() -> ((Config, Result<String>), (String, Int), BitWidth) {
     (
       (Config::new("App"), Ok("ally")),
