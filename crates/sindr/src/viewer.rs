@@ -176,9 +176,6 @@ pub enum OpcodeView {
     NegInt,
     NegFloat,
     NotBool,
-    ListNew {
-        len: u32,
-    },
     ListEmpty,
     ListNil,
     ListCons,
@@ -591,7 +588,6 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
         Opcode::NegInt => OpcodeView::NegInt,
         Opcode::NegFloat => OpcodeView::NegFloat,
         Opcode::NotBool => OpcodeView::NotBool,
-        Opcode::ListNew { len } => OpcodeView::ListNew { len: *len },
         Opcode::ListEmpty => OpcodeView::ListEmpty,
         Opcode::ListNil => OpcodeView::ListNil,
         Opcode::ListCons => OpcodeView::ListCons,
@@ -973,5 +969,13 @@ mod tests {
                 .is_some(),
             true
         );
+    }
+
+    #[test]
+    #[cfg(feature = "viewer-schema")]
+    fn viewer_schema_does_not_include_list_new_opcode() {
+        let schema_json =
+            serde_json::to_string(&viewer_schema()).expect("viewer schema must serialize");
+        assert!(!schema_json.contains("\"ListNew\""));
     }
 }

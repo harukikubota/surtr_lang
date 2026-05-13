@@ -5548,14 +5548,6 @@ impl VM {
             }
 
             // List
-            Opcode::ListNew { len } => {
-                let mut elems = Vec::with_capacity(len as usize);
-                for _ in 0..len {
-                    elems.push(self.pop_stack()?);
-                }
-                elems.reverse();
-                self.stack.push(Value::List(ListHandle::from_items(elems)));
-            }
             Opcode::ListEmpty => {
                 self.stack.push(Value::List(ListHandle::empty()));
             }

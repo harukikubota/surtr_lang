@@ -64,9 +64,6 @@ pub enum Opcode {
     NotBool,
 
     // List
-    ListNew {
-        len: u32,
-    },
     ListEmpty,
     ListNil,
     ListCons,
@@ -249,7 +246,6 @@ impl Opcode {
             Self::NegInt => "NegInt",
             Self::NegFloat => "NegFloat",
             Self::NotBool => "NotBool",
-            Self::ListNew { .. } => "ListNew",
             Self::ListEmpty => "ListEmpty",
             Self::ListNil => "ListNil",
             Self::ListCons => "ListCons",

@@ -197,11 +197,6 @@ export type OpcodeView =
       [k: string]: unknown;
     }
   | {
-      kind: "ListNew";
-      len: number;
-      [k: string]: unknown;
-    }
-  | {
       kind: "ListEmpty";
       [k: string]: unknown;
     }

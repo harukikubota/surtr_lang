@@ -12,7 +12,16 @@ const typesPath = join(extensionRoot, "src", "generated", "viewer.ts");
 
 const schemaText = execFileSync(
   "cargo",
-  ["run", "-p", "sindr", "--example", "export_viewer_schema", "--quiet"],
+  [
+    "run",
+    "-p",
+    "sindr",
+    "--features",
+    "viewer-schema",
+    "--example",
+    "export_viewer_schema",
+    "--quiet"
+  ],
   {
     cwd: repoRoot,
     encoding: "utf8"

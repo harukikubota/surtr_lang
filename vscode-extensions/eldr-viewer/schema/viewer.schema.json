@@ -962,26 +962,6 @@
         {
           "type": "object",
           "required": [
-            "kind",
-            "len"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "ListNew"
-              ]
-            },
-            "len": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0.0
-            }
-          }
-        },
-        {
-          "type": "object",
-          "required": [
             "kind"
           ],
           "properties": {
