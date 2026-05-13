@@ -190,6 +190,26 @@ impl List {
     }
   }
 
+  defp _min_max_go(values: List<$A>, current: ($A, $A), cmp: ($A, $A -> Ordering)) -> ($A, $A) {
+    match values {
+      [] => current,
+      [head, ..tail] => _min_max_go(
+        tail,
+        (
+          match cmp(head, current._0) {
+            Ordering::Less => head,
+            _ => current._0,
+          },
+          match cmp(head, current._1) {
+            Ordering::Greater => head,
+            _ => current._1,
+          },
+        ),
+        cmp,
+      ),
+    }
+  }
+
   defp _insert_sorted(value: $A, sorted: List<$A>, cmp: ($A, $A -> Ordering)) -> List<$A> {
     match sorted {
       [] => [value],
@@ -448,6 +468,21 @@ impl List {
   """
   def min<$A: Compare>(values: List<$A>) -> Result<$A, NoneError> {
     min_by(values, {|left, right| Compare::compare(left, right)})
+  }
+
+  @doc """
+  Return both the smallest and largest elements in a list.
+  Requires `Compare` for the element type.
+  Empty lists return `Err(NoneError)`.
+  ## REPL
+  xldr(1)> List::min_max([3, 1, 4, 2])
+  Ok((1, 4))
+  """
+  def min_max<$A: Compare>(values: List<$A>) -> Result<($A, $A), NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => Ok(_min_max_go(tail, (head, head), &compare)),
+    }
   }
 
   @doc """
