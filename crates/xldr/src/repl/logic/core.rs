@@ -6514,7 +6514,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::FieldAccess(span, _, _)
         | Ast::FacetSegmentAccess(span, _, _)
         | Ast::FacetCapture(span, _)
-        | Ast::StructDef(span, _, _, _)
+        | Ast::StructDef(span, ..)
         | Ast::RecordDef(span, _, _, _)
         | Ast::StructLit(span, _, _)
         | Ast::InternalStructLit(span, _, _)

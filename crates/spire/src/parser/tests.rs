@@ -80,7 +80,7 @@ fn test_private_field_modifier_is_preserved() {
     )
     .unwrap();
     match &ast[0] {
-        Ast::StructDef(_, name, fields, attrs) => {
+        Ast::StructDef(_, name, _, fields, attrs) => {
             assert_eq!(name, "Global::User");
             assert_eq!(fields[0].name, "password");
             assert_eq!(fields[0].visibility, Visibility::Private);
@@ -95,6 +95,48 @@ fn test_private_field_modifier_is_preserved() {
 }
 
 #[test]
+fn test_generic_struct_type_params_are_preserved() {
+    let ast = parse_with_context(
+        "defstruct Box<$A> { value: $A }",
+        ParserContext::project(0),
+    )
+    .unwrap();
+    match &ast[0] {
+        Ast::StructDef(_, name, type_params, fields, attrs) => {
+            assert_eq!(name, "Global::Box");
+            assert_eq!(type_params.len(), 1);
+            assert_eq!(type_params[0].name, "$A");
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0].name, "value");
+            assert!(matches!(fields[0].ty, AstTy::Named(_, ref ty) if ty == "$A"));
+            assert_eq!(attrs, &DeclAttrs::default());
+        }
+        _ => panic!("Expected StructDef"),
+    }
+}
+
+#[test]
+fn test_generic_struct_two_type_params_are_preserved() {
+    let ast = parse_with_context(
+        "defstruct Pair<$A, $B> { left: $A, right: $B }",
+        ParserContext::project(0),
+    )
+    .unwrap();
+    match &ast[0] {
+        Ast::StructDef(_, name, type_params, fields, _) => {
+            assert_eq!(name, "Global::Pair");
+            assert_eq!(type_params.len(), 2);
+            assert_eq!(type_params[0].name, "$A");
+            assert_eq!(type_params[1].name, "$B");
+            assert_eq!(fields.len(), 2);
+            assert!(matches!(fields[0].ty, AstTy::Named(_, ref ty) if ty == "$A"));
+            assert!(matches!(fields[1].ty, AstTy::Named(_, ref ty) if ty == "$B"));
+        }
+        _ => panic!("Expected StructDef"),
+    }
+}
+
+#[test]
 fn test_readonly_struct_field_modifier_is_preserved() {
     let ast = parse_with_context(
         "defstruct User { readonly profile: Profile, public readonly name: String }",
@@ -102,7 +144,7 @@ fn test_readonly_struct_field_modifier_is_preserved() {
     )
     .unwrap();
     match &ast[0] {
-        Ast::StructDef(_, name, fields, attrs) => {
+        Ast::StructDef(_, name, _, fields, attrs) => {
             assert_eq!(name, "Global::User");
             assert_eq!(fields[0].name, "profile");
             assert!(fields[0].readonly);
@@ -137,7 +179,7 @@ fn test_readonly_struct_metadata_and_field_modifier_are_preserved() {
     )
     .unwrap();
     match &ast[0] {
-        Ast::StructDef(_, name, fields, attrs) => {
+        Ast::StructDef(_, name, _, fields, attrs) => {
             assert_eq!(name, "Global::User");
             assert!(attrs.readonly);
             assert_eq!(fields[0].name, "password");
@@ -166,7 +208,7 @@ defrecord Point(x: Float, y: Float)"#,
     .expect("annotated struct and record should parse");
 
     match &ast[0] {
-        Ast::StructDef(_, name, fields, attrs) => {
+        Ast::StructDef(_, name, _, fields, attrs) => {
             assert_eq!(name, "Global::User");
             assert_eq!(fields.len(), 1);
             assert_eq!(attrs.doc.as_deref(), Some("User docs."));

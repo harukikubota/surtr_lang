@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Type Pair requires 2 type argument(s), got 1

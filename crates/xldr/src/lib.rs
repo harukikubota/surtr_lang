@@ -193,8 +193,8 @@ fn format_type_params(type_params: &[spire::ast::TypeParam]) -> String {
         let params = type_params
             .iter()
             .map(|param| match &param.bound {
-                Some(bound) => format!("${}: {}", param.name, bound),
-                None => format!("${}", param.name),
+                Some(bound) => format!("{}: {}", param.name, bound),
+                None => param.name.clone(),
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -297,6 +297,11 @@ fn format_defenum_signature(name: &str, variants: &[spire::ast::EnumVariant]) ->
 
 fn format_struct_signature(name: &str) -> String {
     format!("defstruct {}", surface_path_name(name))
+}
+
+fn format_generic_struct_signature(name: &str, type_params: &[spire::ast::TypeParam]) -> String {
+    let type_params = format_type_params(type_params);
+    format!("defstruct {}{type_params}", surface_path_name(name))
 }
 
 fn format_record_signature(name: &str) -> String {
@@ -473,13 +478,13 @@ fn collect_doc_entries_for_ast(
                     });
                 }
             }
-            spire::ast::Ast::StructDef(_, name, _, attrs) => {
+            spire::ast::Ast::StructDef(_, name, type_params, _fields, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Type,
                         module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format_struct_signature(name)),
+                        signature: Some(format_generic_struct_signature(name, type_params)),
                         doc: doc.clone(),
                     });
                 }
@@ -2324,6 +2329,73 @@ defrecord Point(x: Float, y: Float)"#,
                 && entry.kind == DocKind::Type
                 && entry.signature.as_deref() == Some("defrecord Point")
                 && entry.doc == "Point docs."
+        }));
+    }
+
+    #[test]
+    fn collect_doc_entries_include_generic_struct_signatures() {
+        let ast = spire::parse_with_context(
+            r#"@doc """Box docs."""
+defstruct Box<$A> {
+  value: $A,
+}"#,
+            spire::ParserContext::module(1, None),
+        )
+        .expect("annotated generic struct docs should parse");
+
+        let lowered = lower_module_source_ast(ast, Some("Sample"));
+        let stages = vec![lowered
+            .into_iter()
+            .map(|module| sigil::StagedModuleAst {
+                module_path: module.module_path,
+                doc_module_path: module.doc_module_path,
+                ast: module.ast,
+                module_doc: module.module_doc,
+                auto_import: module.auto_import,
+                process_spec: module.process_spec,
+            })
+            .collect::<Vec<_>>()];
+
+        let docs = collect_doc_entries(&stages, &[], None);
+        assert!(docs.iter().any(|entry| {
+            entry.qualified_name == "Sample::Box"
+                && entry.kind == DocKind::Type
+                && entry.signature.as_deref() == Some("defstruct Box<$A>")
+                && entry.doc == "Box docs."
+        }));
+    }
+
+    #[test]
+    fn collect_doc_entries_include_multiple_generic_struct_signatures() {
+        let ast = spire::parse_with_context(
+            r#"@doc """Pair docs."""
+defstruct Pair<$A, $B> {
+  left: $A,
+  right: $B,
+}"#,
+            spire::ParserContext::module(1, None),
+        )
+        .expect("annotated generic struct docs should parse");
+
+        let lowered = lower_module_source_ast(ast, Some("Sample"));
+        let stages = vec![lowered
+            .into_iter()
+            .map(|module| sigil::StagedModuleAst {
+                module_path: module.module_path,
+                doc_module_path: module.doc_module_path,
+                ast: module.ast,
+                module_doc: module.module_doc,
+                auto_import: module.auto_import,
+                process_spec: module.process_spec,
+            })
+            .collect::<Vec<_>>()];
+
+        let docs = collect_doc_entries(&stages, &[], None);
+        assert!(docs.iter().any(|entry| {
+            entry.qualified_name == "Sample::Pair"
+                && entry.kind == DocKind::Type
+                && entry.signature.as_deref() == Some("defstruct Pair<$A, $B>")
+                && entry.doc == "Pair docs."
         }));
     }
 

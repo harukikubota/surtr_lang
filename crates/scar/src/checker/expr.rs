@@ -820,7 +820,9 @@ impl Checker {
                 })
             }
 
-            Resolved::StructDef(span, id, fields, _) => self.check_struct_def(span, id, fields),
+            Resolved::StructDef(span, id, type_params, fields, _) => {
+                self.check_struct_def(span, id, type_params, fields)
+            }
             Resolved::RecordDef(span, id, fields) => self.check_record_def(span, id, fields),
             Resolved::EnumDef(span, id, type_params, variants, _) => {
                 self.check_enum_def(span, id, type_params, variants)
@@ -1795,7 +1797,7 @@ impl Checker {
             | Resolved::StructLit(span, _, _)
             | Resolved::ConstructorCall(span, _, _)
             | Resolved::TypeRefWitness(span, _)
-            | Resolved::StructDef(span, _, _, _)
+            | Resolved::StructDef(span, ..)
             | Resolved::RecordDef(span, _, _)
             | Resolved::DeferrorDef(span, _, _, _)
             | Resolved::EnumDef(span, _, _, _, _)
@@ -8604,6 +8606,7 @@ mod tests {
                 .into_iter()
                 .map(|(field, ty)| (field.into(), ty))
                 .collect(),
+            Vec::new(),
             HashSet::new(),
             readonly_fields
                 .iter()

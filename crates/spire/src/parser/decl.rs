@@ -120,7 +120,7 @@ fn ast_decl_attrs(ast: &Ast) -> Option<&DeclAttrs> {
         | Ast::BuiltinExtractorDecl(_, _, _, _, attrs)
         | Ast::BuiltinTypeDecl(_, _, attrs)
         | Ast::ResultCtorDecl(_, _, _, _, attrs)
-        | Ast::StructDef(_, _, _, attrs)
+        | Ast::StructDef(_, _, _, _, attrs)
         | Ast::RecordDef(_, _, _, attrs)
         | Ast::DeferrorDef(_, _, _, _, attrs)
         | Ast::EnumDef(_, _, _, _, attrs)
@@ -2442,6 +2442,7 @@ impl Parser<'_> {
         let sp = self.peek_span();
         self.expect(&Token::Defstruct)?;
         let (name, _) = self.expect_qualified_ident(2, "type")?;
+        let type_params = self.parse_decl_type_params()?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -2476,6 +2477,7 @@ impl Parser<'_> {
                 end: end.end,
             },
             name,
+            type_params,
             fields,
             attrs,
         ))

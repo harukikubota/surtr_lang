@@ -363,6 +363,14 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         forward_struct_type_annotation_and_literal_are_allowed as fn(),
     ),
     (
+        "generic_struct_single_type_param_typechecks",
+        generic_struct_single_type_param_typechecks as fn(),
+    ),
+    (
+        "generic_struct_two_type_params_typecheck",
+        generic_struct_two_type_params_typecheck as fn(),
+    ),
+    (
         "forward_deferror_value_can_flow_into_err",
         forward_deferror_value_can_flow_into_err as fn(),
     ),
@@ -755,6 +763,14 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         struct_literal_field_shorthand_rejects_duplicate_fields as fn(),
     ),
     ("struct_requires_impl_new", struct_requires_impl_new as fn()),
+    (
+        "generic_struct_bare_annotation_requires_type_args",
+        generic_struct_bare_annotation_requires_type_args as fn(),
+    ),
+    (
+        "generic_struct_arity_mismatch_is_rejected",
+        generic_struct_arity_mismatch_is_rejected as fn(),
+    ),
     (
         "struct_new_accepts_result_self_return_type",
         struct_new_accepts_result_self_return_type as fn(),
@@ -2682,6 +2698,65 @@ User { name: name, age: age }
         .any(|node| matches!(node.node, TypedInner::StructDef(_, _, _, _, _))));
 }
 
+fn generic_struct_single_type_param_typechecks() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defstruct Box<$A> {
+  value: $A,
+}
+impl Box {
+  def new<$A>(value: $A) -> Box<$A> {
+    Box { value: value }
+  }
+}
+boxed: Box<Int> = Box(41)
+printable: Int = boxed.value"#,
+    );
+    let boxed_bind = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(TypedPattern::Var(ty, id), rhs) if id.name == "boxed" => {
+                Some((ty, rhs.as_ref()))
+            }
+            _ => None,
+        })
+        .expect("expected boxed binding");
+    assert!(matches!(boxed_bind.0, Ty::Struct(name, fields) if name == "Global::Box"
+        && matches!(fields.as_slice(), [(field, Ty::Int)] if field == "value")));
+    assert!(matches!(boxed_bind.1.ty, Ty::Struct(ref name, ref fields) if name == "Global::Box"
+        && matches!(fields.as_slice(), [(field, Ty::Int)] if field == "value")));
+}
+
+fn generic_struct_two_type_params_typecheck() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defstruct Pair<$A, $B> {
+  left: $A,
+  right: $B,
+}
+impl Pair {
+  def new<$A, $B>(left: $A, right: $B) -> Pair<$A, $B> {
+    Pair { left: left, right: right }
+  }
+}
+pair: Pair<Int, String> = Pair(1, "two")
+text: String = pair.right"#,
+    );
+    let pair_bind = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(TypedPattern::Var(ty, id), rhs) if id.name == "pair" => {
+                Some((ty, rhs.as_ref()))
+            }
+            _ => None,
+        })
+        .expect("expected pair binding");
+    assert!(matches!(pair_bind.0, Ty::Struct(name, fields) if name == "Global::Pair"
+        && matches!(fields.as_slice(),
+            [(left, Ty::Int), (right, Ty::Str)] if left == "left" && right == "right")));
+    assert!(matches!(pair_bind.1.ty, Ty::Struct(ref name, ref fields) if name == "Global::Pair"
+        && matches!(fields.as_slice(),
+            [(left, Ty::Int), (right, Ty::Str)] if left == "left" && right == "right")));
+}
+
 fn forward_deferror_value_can_flow_into_err() {
     let resolved = resolve_with_builtin_prelude(
         r#"ret: Result<Int> = Err(NotFound)
@@ -3146,7 +3221,7 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
             {
                 Some(format!("extractor {}", id.name))
             }
-            sigil::resolved::Resolved::StructDef(_, id, _, _) if id.unique_id == use_uid => {
+            sigil::resolved::Resolved::StructDef(_, id, ..) if id.unique_id == use_uid => {
                 Some(format!("struct {}", id.name))
             }
             sigil::resolved::Resolved::RecordDef(_, id, _) if id.unique_id == use_uid => {
@@ -4385,6 +4460,41 @@ user = User("alice")"#,
     );
     let err = typecheck(resolved).expect_err("struct without new should fail");
     assert!(err.message.contains("must define `new` in its impl block"));
+}
+
+fn generic_struct_bare_annotation_requires_type_args() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defstruct Box<$A> {
+  value: $A,
+}
+boxed: Box = Box(1)
+impl Box {
+  def new<$A>(value: $A) -> Box<$A> {
+    Box { value: value }
+  }
+}"#,
+    );
+    let err = typecheck(resolved).expect_err("bare generic struct annotation should fail");
+    assert!(err.message.contains("Type Box requires 1 type argument(s)"));
+}
+
+fn generic_struct_arity_mismatch_is_rejected() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defstruct Pair<$A, $B> {
+  left: $A,
+  right: $B,
+}
+pair: Pair<Int> = Pair(1, 2)
+impl Pair {
+  def new<$A, $B>(left: $A, right: $B) -> Pair<$A, $B> {
+    Pair { left: left, right: right }
+  }
+}"#,
+    );
+    let err = typecheck(resolved).expect_err("generic struct arity mismatch should fail");
+    assert!(err
+        .message
+        .contains("Type Pair requires 2 type argument(s), got 1"));
 }
 
 fn struct_new_accepts_result_self_return_type() {

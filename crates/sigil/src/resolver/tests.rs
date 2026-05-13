@@ -1223,8 +1223,9 @@ fn test_struct_readonly_metadata_and_fields_resolve() {
         .expect("readonly struct should resolve");
 
     match &resolved[0] {
-        Resolved::StructDef(_, id, fields, attrs) => {
+        Resolved::StructDef(_, id, type_params, fields, attrs) => {
             assert_eq!(id.name, "Global::User");
+            assert!(type_params.is_empty());
             assert!(attrs.readonly);
             assert_eq!(fields[0].name, "password");
             assert_eq!(fields[0].visibility, spire::ast::Visibility::Private);
@@ -1232,6 +1233,34 @@ fn test_struct_readonly_metadata_and_fields_resolve() {
             assert_eq!(fields[1].name, "name");
             assert_eq!(fields[1].visibility, spire::ast::Visibility::Public);
             assert!(fields[1].readonly);
+        }
+        other => panic!("Expected StructDef, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_generic_struct_type_params_and_fields_resolve() {
+    let ast = spire::parse_with_context(
+        "defstruct Pair<$A, $B> { left: $A, right: $B }",
+        spire::ParserContext::project(0),
+    )
+    .expect("generic struct should parse");
+    let mut resolver = Resolver::new();
+    let resolved = resolver
+        .resolve_program(ast)
+        .expect("generic struct should resolve");
+
+    match &resolved[0] {
+        Resolved::StructDef(_, id, type_params, fields, attrs) => {
+            assert_eq!(id.name, "Global::Pair");
+            assert_eq!(type_params.len(), 2);
+            assert_eq!(type_params[0].name, "$A");
+            assert_eq!(type_params[1].name, "$B");
+            assert_eq!(fields[0].name, "left");
+            assert!(matches!(fields[0].ty, spire::ast::AstTy::Named(_, ref ty) if ty == "$A"));
+            assert_eq!(fields[1].name, "right");
+            assert!(matches!(fields[1].ty, spire::ast::AstTy::Named(_, ref ty) if ty == "$B"));
+            assert_eq!(*attrs, ResolvedDeclAttrs::default());
         }
         other => panic!("Expected StructDef, got {other:?}"),
     }
@@ -2204,7 +2233,7 @@ defstruct User {
     };
 
     let def_id = match &resolved[1] {
-        Resolved::StructDef(_, id, _, _) => id.unique_id,
+        Resolved::StructDef(_, id, ..) => id.unique_id,
         _ => panic!("Expected StructDef"),
     };
 
@@ -2292,7 +2321,7 @@ deferror NotFound(code: String) {
                 },
                 Resolved::Def(_, id, _, _, _, _, _)
                 | Resolved::RecordDef(_, id, _)
-                | Resolved::StructDef(_, id, _, _)
+                | Resolved::StructDef(_, id, ..)
                 | Resolved::DeferrorDef(_, id, _, _) => vec![id.unique_id],
                 _ => Vec::new(),
             })

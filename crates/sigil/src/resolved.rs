@@ -183,7 +183,13 @@ pub enum Resolved {
     TypeRefWitness(Span, AstTy),
 
     /// Struct definition (passed through for Scar)
-    StructDef(Span, ResolvedId, Vec<ResolvedField>, ResolvedDeclAttrs),
+    StructDef(
+        Span,
+        ResolvedId,
+        Vec<ResolvedTypeParam>,
+        Vec<ResolvedField>,
+        ResolvedDeclAttrs,
+    ),
 
     /// Record definition (passed through for Scar)
     RecordDef(Span, ResolvedId, Vec<ResolvedField>),

@@ -1211,14 +1211,21 @@ impl Checker {
         &mut self,
         span: &Span,
         id: &ResolvedId,
+        type_params: &[ResolvedTypeParam],
         fields: &[ResolvedField],
     ) -> Result<TypedNode, TypeError> {
+        let mut tyvars = HashMap::new();
+        self.seed_signature_type_params(type_params, &mut tyvars);
         let ty_fields: Vec<(String, Ty)> = fields
             .iter()
             .map(|f| {
                 Ok((
                     f.name.clone(),
-                    self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?,
+                    self.resolve_signature_ast_ty_in_context(
+                        &f.ty,
+                        TypeSyntaxContext::General,
+                        &mut tyvars,
+                    )?,
                 ))
             })
             .collect::<Result<Vec<_>, TypeError>>()?;
@@ -1237,12 +1244,20 @@ impl Checker {
             .env
             .lookup_type_def(&id.name)
             .is_some_and(|def| def.readonly_root);
+        let type_param_vars = type_params
+            .iter()
+            .filter_map(|param| match tyvars.get(&param.name) {
+                Some(Ty::Var(var)) => Some(*var),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
 
         let tag = self
             .env
             .resolve_type_def_signature(
                 &id.name,
                 ty_fields.clone(),
+                type_param_vars,
                 private_fields,
                 readonly_fields,
                 readonly_root,
@@ -1355,6 +1370,7 @@ impl Checker {
             .resolve_type_def_signature(
                 &id.name,
                 ty_fields.clone(),
+                Vec::new(),
                 private_fields,
                 readonly_fields,
                 readonly_root,
@@ -2072,6 +2088,7 @@ impl Checker {
                     .iter()
                     .map(|(ty, rid)| (rid.name.clone(), ty.clone()))
                     .collect(),
+                Vec::new(),
                 fields
                     .iter()
                     .filter(|field| field.visibility == spire::ast::Visibility::Private)

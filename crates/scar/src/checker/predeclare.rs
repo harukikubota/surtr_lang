@@ -164,9 +164,15 @@ impl Checker {
         // Pass 1: reserve deterministic tags for all user-defined types.
         for stmt in stmts {
             let maybe_decl = match stmt {
-                Resolved::StructDef(_, id, _, _) => {
-                    Some((&id.name, &id.span, TypeKind::Struct, Vec::new()))
-                }
+                Resolved::StructDef(_, id, type_params, _, _) => Some((
+                    &id.name,
+                    &id.span,
+                    TypeKind::Struct,
+                    type_params
+                        .iter()
+                        .map(|param| param.name.clone())
+                        .collect::<Vec<_>>(),
+                )),
                 Resolved::RecordDef(_, id, _) => {
                     Some((&id.name, &id.span, TypeKind::Record, Vec::new()))
                 }
@@ -224,12 +230,17 @@ impl Checker {
         // Pass 2: finalize field signatures and constructor-like bindings.
         for stmt in stmts {
             match stmt {
-                Resolved::StructDef(_, id, fields, attrs) => {
+                Resolved::StructDef(_, id, type_params, fields, attrs) => {
+                    let mut tyvars = HashMap::new();
+                    self.seed_signature_type_params(type_params, &mut tyvars);
                     let ty_fields = fields
                         .iter()
                         .map(|f| {
-                            let field_ty =
-                                self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?;
+                            let field_ty = self.resolve_signature_ast_ty_in_context(
+                                &f.ty,
+                                TypeSyntaxContext::General,
+                                &mut tyvars,
+                            )?;
                             if self.ty_contains_process_init(&field_ty) {
                                 return Err(TypeError {
                                     message:
@@ -252,10 +263,18 @@ impl Checker {
                         .filter(|field| field.readonly)
                         .map(|field| field.name.clone())
                         .collect::<HashSet<_>>();
+                    let type_param_vars = type_params
+                        .iter()
+                        .filter_map(|param| match tyvars.get(&param.name) {
+                            Some(Ty::Var(var)) => Some(*var),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
                     self.env
                         .resolve_type_def_signature(
                             &id.name,
                             ty_fields.clone(),
+                            type_param_vars,
                             private_fields,
                             readonly_fields,
                             attrs.readonly,
@@ -296,6 +315,7 @@ impl Checker {
                         .resolve_type_def_signature(
                             &id.name,
                             ty_fields.clone(),
+                            Vec::new(),
                             private_fields,
                             HashSet::new(),
                             false,
@@ -328,6 +348,7 @@ impl Checker {
                         .resolve_type_def_signature(
                             &id.name,
                             ty_fields,
+                            Vec::new(),
                             private_fields,
                             HashSet::new(),
                             false,
@@ -343,6 +364,7 @@ impl Checker {
                         .env
                         .resolve_type_def_signature(
                             &id.name,
+                            Vec::new(),
                             Vec::new(),
                             HashSet::new(),
                             HashSet::new(),
@@ -457,7 +479,7 @@ impl Checker {
 
         for stmt in stmts {
             match stmt {
-                Resolved::StructDef(_, id, fields, _)
+                Resolved::StructDef(_, id, _, fields, _)
                 | Resolved::RecordDef(_, id, fields)
                 | Resolved::DeferrorDef(_, id, fields, _) => {
                     decl_spans.insert(id.name.clone(), id.span.clone());
@@ -708,7 +730,9 @@ impl Checker {
         let mut structs_with_new: HashSet<String> = HashSet::new();
 
         for stmt in stmts {
-            if let Resolved::StructDef(_, id, fields, _attrs) = stmt {
+            if let Resolved::StructDef(_, id, type_params, fields, _attrs) = stmt {
+                let mut tyvars = HashMap::new();
+                self.seed_signature_type_params(type_params, &mut tyvars);
                 let expected_self_ty = Ty::Struct(
                     id.name.clone(),
                     fields
@@ -716,9 +740,10 @@ impl Checker {
                         .map(|field| {
                             Ok((
                                 field.name.clone(),
-                                self.resolve_ast_ty_in_context(
+                                self.resolve_signature_ast_ty_in_context(
                                     &field.ty,
                                     TypeSyntaxContext::General,
+                                    &mut tyvars,
                                 )?,
                             ))
                         })

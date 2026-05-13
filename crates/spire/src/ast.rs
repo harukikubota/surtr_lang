@@ -564,8 +564,8 @@ pub enum Ast {
     /// Compiler-managed Facet shorthand capture: `~source.path`
     FacetCapture(Span, Box<Ast>),
 
-    /// Struct definition: `defstruct User { name: String, age: Int }`
-    StructDef(Span, Symbol, Vec<StructField>, DeclAttrs),
+    /// Struct definition: `defstruct Box<$A> { value: $A }`
+    StructDef(Span, Symbol, Vec<TypeParam>, Vec<StructField>, DeclAttrs),
 
     /// Record definition: `defrecord Point(x: Float, y: Float)`
     RecordDef(Span, Symbol, Vec<RecordField>, DeclAttrs),

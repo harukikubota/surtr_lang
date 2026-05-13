@@ -2372,7 +2372,7 @@ impl Resolver {
             }
 
             // Struct/Record/Deferror definitions — reuse predeclared IDs
-            Ast::StructDef(span, name, fields, attrs) => {
+            Ast::StructDef(span, name, type_params, fields, attrs) => {
                 let uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -2389,6 +2389,7 @@ impl Resolver {
                     compiler_generated: false,
                     span: span.clone(),
                 };
+                let resolved_type_params = self.resolve_type_params(type_params)?;
                 let rfields = fields
                     .into_iter()
                     .map(|f| {
@@ -2405,6 +2406,7 @@ impl Resolver {
                 Ok(Resolved::StructDef(
                     span,
                     rid,
+                    resolved_type_params,
                     rfields,
                     resolve_decl_attrs(&attrs),
                 ))

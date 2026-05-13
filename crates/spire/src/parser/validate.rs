@@ -95,7 +95,7 @@ fn top_level_decl_kind(ast: &Ast) -> Option<TopLevelDeclKind> {
         Ast::TraitImplDef(_, _, _, _, _, _) => Some(TopLevelDeclKind::TraitImplDef),
         Ast::Import(_, _, _) => Some(TopLevelDeclKind::Import),
         Ast::Include(_, _) => Some(TopLevelDeclKind::Include),
-        Ast::StructDef(_, _, _, _) => Some(TopLevelDeclKind::StructDef),
+        Ast::StructDef(..) => Some(TopLevelDeclKind::StructDef),
         Ast::RecordDef(_, _, _, _) => Some(TopLevelDeclKind::RecordDef),
         Ast::DeferrorDef(_, _, _, _, _) => Some(TopLevelDeclKind::DeferrorDef),
         Ast::EnumDef(_, _, _, _, _) => Some(TopLevelDeclKind::EnumDef),

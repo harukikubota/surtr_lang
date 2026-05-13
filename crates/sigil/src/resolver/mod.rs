@@ -458,7 +458,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 rebase_record_arg(arg, base, offset);
             }
         }
-        Resolved::StructDef(_, id, fields, _) | Resolved::RecordDef(_, id, fields) => {
+        Resolved::StructDef(_, id, _, fields, _) | Resolved::RecordDef(_, id, fields) => {
             rebase_resolved_id(id, base, offset);
             rebase_fields(fields, base, offset);
         }

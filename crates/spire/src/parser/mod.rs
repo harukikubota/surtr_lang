@@ -494,9 +494,10 @@ fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, Pa
                 attrs,
             ))
         }
-        Ast::StructDef(span, name, fields, attrs) => Ok(Ast::StructDef(
+        Ast::StructDef(span, name, type_params, fields, attrs) => Ok(Ast::StructDef(
             span.clone(),
             qualify_namespace_head(namespace, &name, 2, &span, "type", true)?,
+            type_params,
             fields,
             attrs,
         )),
@@ -607,7 +608,7 @@ fn owner_head_name(node: &Ast) -> Option<&str> {
         | Ast::Defgenserver(_, name, _, _, _)
         | Ast::Defsupervisor(_, name, _, _, _)
         | Ast::DefdynamicSupervisor(_, name, _, _, _)
-        | Ast::StructDef(_, name, _, _)
+        | Ast::StructDef(_, name, ..)
         | Ast::RecordDef(_, name, _, _)
         | Ast::DeferrorDef(_, name, _, _, _)
         | Ast::EnumDef(_, name, _, _, _) => Some(name.as_str()),
@@ -684,9 +685,10 @@ fn canonicalize_root_owner_heads(ast: Vec<Ast>) -> Result<Vec<Ast>, ParseError> 
                     attrs,
                 ))
             }
-            Ast::StructDef(span, name, fields, attrs) => Ok(Ast::StructDef(
+            Ast::StructDef(span, name, type_params, fields, attrs) => Ok(Ast::StructDef(
                 span,
                 canonicalize_root_owner_name(&name),
+                type_params,
                 fields,
                 attrs,
             )),
@@ -1675,9 +1677,17 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             shift_span(span, delta),
             Box::new(shift_ast_span(*expr, delta)),
         ),
-        Ast::StructDef(span, name, fields, attrs) => Ast::StructDef(
+        Ast::StructDef(span, name, type_params, fields, attrs) => Ast::StructDef(
             shift_span(span, delta),
             name,
+            type_params
+                .into_iter()
+                .map(|param| TypeParam {
+                    name: param.name,
+                    bound: param.bound,
+                    span: shift_span(param.span, delta),
+                })
+                .collect(),
             fields
                 .into_iter()
                 .map(|f| StructField {
@@ -2111,7 +2121,7 @@ impl Ast {
             | Ast::FieldAccess(s, _, _)
             | Ast::FacetSegmentAccess(s, _, _)
             | Ast::FacetCapture(s, _)
-            | Ast::StructDef(s, _, _, _)
+            | Ast::StructDef(s, ..)
             | Ast::RecordDef(s, _, _, _)
             | Ast::StructLit(s, _, _)
             | Ast::InternalStructLit(s, _, _)
