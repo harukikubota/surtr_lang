@@ -3404,6 +3404,76 @@ fn test_tuple_type_root_resolves_in_field_access() {
 }
 
 #[test]
+fn resolves_inferred_facet_capture_with_map_key() {
+    let resolved = parse_and_resolve(
+        r#"users = []
+names = users |*> _.score.["talk"]"#,
+    )
+    .unwrap();
+    let rendered = format!("{resolved:?}");
+    assert!(rendered.contains("InferredFacetCapture"), "{rendered}");
+    assert!(rendered.contains("MapKey"), "{rendered}");
+}
+
+#[test]
+fn resolves_container_root_facet_paths() {
+    let module_stages = vec![vec![staged_module(
+        "Facet",
+        parse_module_ast(
+            r#"@builtin def view(facet: Facet<$S, $A>, source: $S) -> Result<$A>"#,
+            "Facet",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules(
+        r#"map = ()
+value = Facet::view(HashMap.["taro"], map)"#,
+        &module_stages,
+    )
+    .unwrap();
+    let rendered = format!("{resolved:?}");
+    assert!(rendered.contains("HashMap"), "{rendered}");
+    assert!(rendered.contains("MapKey"), "{rendered}");
+
+    let resolved = resolve_user_with_modules(
+        r#"values = []
+value = Facet::view(List.[0], values)"#,
+        &module_stages,
+    )
+    .unwrap();
+    let rendered = format!("{resolved:?}");
+    assert!(rendered.contains("List"), "{rendered}");
+    assert!(rendered.contains("ListIndex"), "{rendered}");
+}
+
+#[test]
+fn resolves_bulk_update_case_actions_as_facet_calls() {
+    let module_stages = vec![vec![staged_module(
+        "Facet",
+        parse_module_ast(
+            r#"@builtin def case_set(facet: Facet<$S, $A>, source: $S, value: $A) -> Result<$S>
+@builtin def set(facet: Facet<$S, $A>, source: $S, value: $A) -> Result<$S>"#,
+            "Facet",
+        ),
+    )]];
+    let resolved = resolve_user_with_modules(
+        r#"user = ()
+user2 =? Facet::bulk_update(user) {
+  nickname.Some <- case_set("alice")
+  scores.[1] <- set(500)
+}"#,
+        &module_stages,
+    )
+    .unwrap();
+    let rendered = format!("{resolved:?}");
+    assert!(
+        rendered.contains("Facet::case_set") || rendered.contains("case_set"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("FacetCapture"), "{rendered}");
+}
+
+#[test]
 fn test_list_literal_resolves_all_elements() {
     let resolved = parse_and_resolve("items = [1, 2, 3]").unwrap();
     match &resolved[0] {

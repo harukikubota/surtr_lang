@@ -1892,6 +1892,7 @@ impl Checker {
                 TypedInner::FacetPath(self.resolve_typed_facet_path(path))
             }
             TypedInner::PendingFacetPath(path) => TypedInner::PendingFacetPath(PendingFacetPath {
+                root_path_name: path.root_path_name,
                 source_ty_hint: path.source_ty_hint.map(|ty| self.resolve_ty(&ty)),
                 segments: path.segments,
             }),

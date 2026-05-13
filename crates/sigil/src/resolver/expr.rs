@@ -12,6 +12,17 @@ use spire::ast::{
 };
 
 const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
+const LIST_TYPE_ROOT_UID: u32 = u32::MAX - 8;
+const HASH_MAP_TYPE_ROOT_UID: u32 = u32::MAX - 9;
+
+fn special_facet_root_uid(name: &str) -> Option<u32> {
+    match name {
+        "Tuple" => Some(TUPLE_TYPE_ROOT_UID),
+        "List" => Some(LIST_TYPE_ROOT_UID),
+        "HashMap" => Some(HASH_MAP_TYPE_ROOT_UID),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 struct TypeRefHelperSpec {
@@ -1805,18 +1816,18 @@ impl Resolver {
                 }
             })
             .or_else(|| {
-                if name == "Tuple" {
-                    Some(TUPLE_TYPE_ROOT_UID)
-                } else {
-                    None
-                }
+                special_facet_root_uid(&name)
             })
             .ok_or_else(|| ResolveError {
                 message: format!("Undefined variable: {}", name),
                 span: span.clone(),
                 related_labels: Vec::new(),
             })?;
-        let qualified_name = (uid != TUPLE_TYPE_ROOT_UID)
+        let qualified_name =
+            (!matches!(
+                uid,
+                TUPLE_TYPE_ROOT_UID | LIST_TYPE_ROOT_UID | HASH_MAP_TYPE_ROOT_UID
+            ))
             .then(|| self.declaration_fq_name_for_uid(uid))
             .flatten();
         if self

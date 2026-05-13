@@ -3519,6 +3519,19 @@ fn parses_facet_index_and_key_segments() {
 }
 
 #[test]
+fn parses_container_root_facet_paths() {
+    let ast = parse(r#"print(inspect(Facet::view(HashMap.["taro"], map)))"#).unwrap();
+    let rendered = format!("{ast:?}");
+    assert!(rendered.contains("FacetSegmentAccess"), "{rendered}");
+    assert!(rendered.contains("MapKey"), "{rendered}");
+
+    let ast = parse("print(inspect(Facet::view(List.[0], values)))").unwrap();
+    let rendered = format!("{ast:?}");
+    assert!(rendered.contains("FacetSegmentAccess"), "{rendered}");
+    assert!(rendered.contains("ListIndex"), "{rendered}");
+}
+
+#[test]
 fn parses_optional_enum_facet_segment() {
     let ast = parse("print(inspect(Facet::view(Option.Some?, option)))").unwrap();
     let Ast::App(_, _, print_args) = &ast[0] else {

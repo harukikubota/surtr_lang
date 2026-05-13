@@ -145,6 +145,17 @@ pub enum TypedFacetSegment {
         variant_name: String,
         variant_tag: u32,
         payload_arity: u32,
+        optional: bool,
+        focus_readonly_root: bool,
+        focus_type_name: Option<String>,
+    },
+    ListIndex {
+        index: SurtrInt,
+        focus_readonly_root: bool,
+        focus_type_name: Option<String>,
+    },
+    MapKey {
+        key: String,
         focus_readonly_root: bool,
         focus_type_name: Option<String>,
     },
@@ -189,8 +200,27 @@ pub struct TypedFacetPath {
     pub segments: Vec<TypedFacetSegment>,
 }
 
+impl TypedFacetPath {
+    pub fn has_variant_segment(&self) -> bool {
+        self.segments
+            .iter()
+            .any(|segment| matches!(segment, TypedFacetSegment::Variant { .. }))
+    }
+
+    pub fn final_segment_is_variant(&self) -> bool {
+        self.segments
+            .last()
+            .is_some_and(|segment| matches!(segment, TypedFacetSegment::Variant { .. }))
+    }
+
+    pub fn is_infallible_structural(&self) -> bool {
+        !self.may_fail && !self.has_variant_segment()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingFacetPath {
+    pub root_path_name: Option<String>,
     pub source_ty_hint: Option<Ty>,
     pub segments: Vec<PendingFacetSegment>,
 }

@@ -4236,7 +4236,24 @@ impl Checker {
             TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
             TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
             TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
+            TypedFacetSegment::ListIndex { index, .. } => return PendingFacetSegment::ListIndex {
+                index: index.clone(),
+            },
+            TypedFacetSegment::MapKey { key, .. } => {
+                return PendingFacetSegment::MapKey { key: key.clone() };
+            }
         })
+    }
+
+    fn facet_path_kind_for_segments(segments: &[TypedFacetSegment]) -> TypedFacetPathKind {
+        if segments
+            .iter()
+            .any(|segment| matches!(segment, TypedFacetSegment::Variant { .. }))
+        {
+            TypedFacetPathKind::Variant
+        } else {
+            TypedFacetPathKind::Structural
+        }
     }
 
     fn pending_facet_node(&mut self, span: &Span, path: PendingFacetPath) -> TypedNode {
@@ -4246,6 +4263,48 @@ impl Checker {
             ty: Ty::Facet(Box::new(source_tv), Box::new(focus_tv)),
             span: span.clone(),
             node: TypedInner::PendingFacetPath(path),
+        }
+    }
+
+    fn validate_pending_root_source(
+        &mut self,
+        root_path_name: &str,
+        source_ty: &Ty,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        match (root_path_name, self.resolve_ty(source_ty)) {
+            ("Tuple", Ty::Tuple(_)) => Ok(()),
+            ("List", Ty::List(_)) => Ok(()),
+            ("HashMap", Ty::Enum(name, args))
+                if Self::surface_name(&name) == "HashMap" && args.len() == 1 =>
+            {
+                Ok(())
+            }
+            ("Tuple", actual) => Err(TypeError {
+                message: format!(
+                    "Tuple root Facet path requires tuple source context, got {}",
+                    self.ty_name(&actual)
+                ),
+                span: span.clone(),
+                hint: Some("Expected source type like (A, B, ...) for Tuple._N.".into()),
+            }),
+            ("List", actual) => Err(TypeError {
+                message: format!(
+                    "List root Facet path requires List<T>, got {}",
+                    self.ty_name(&actual)
+                ),
+                span: span.clone(),
+                hint: Some("Use List.[N] with a List source value.".into()),
+            }),
+            ("HashMap", actual) => Err(TypeError {
+                message: format!(
+                    "HashMap root Facet path requires HashMap<T>, got {}",
+                    self.ty_name(&actual)
+                ),
+                span: span.clone(),
+                hint: Some("Use HashMap.[\"key\"] with a HashMap source value.".into()),
+            }),
+            _ => Ok(()),
         }
     }
 
@@ -4286,6 +4345,9 @@ impl Checker {
         };
 
         let source_ty = current_source.clone();
+        if let Some(root_path_name) = &path.root_path_name {
+            self.validate_pending_root_source(root_path_name, &source_ty, span)?;
+        }
         let mut may_fail = false;
         let mut segments = Vec::with_capacity(path.segments.len());
         for pending_segment in path.segments {
@@ -4303,7 +4365,7 @@ impl Checker {
         Ok(TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: current_source,
-            path_kind: TypedFacetPathKind::from_may_fail(may_fail),
+            path_kind: Self::facet_path_kind_for_segments(&segments),
             may_fail,
             source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments,
@@ -4415,6 +4477,9 @@ impl Checker {
             }
             TypedInner::PendingFacetPath(path) => {
                 left_path.segments.extend(path.segments);
+                if left_path.root_path_name.is_none() {
+                    left_path.root_path_name = path.root_path_name;
+                }
                 Ok(self.pending_facet_node(span, left_path))
             }
             _ => Err(TypeError {
@@ -4533,6 +4598,7 @@ impl Checker {
         Ok((
             current,
             PendingFacetPath {
+                root_path_name: None,
                 source_ty_hint: None,
                 segments,
             },
@@ -5163,6 +5229,16 @@ impl Checker {
                     ..
                 }
                 | TypedFacetSegment::Variant {
+                    focus_readonly_root,
+                    focus_type_name,
+                    ..
+                }
+                | TypedFacetSegment::ListIndex {
+                    focus_readonly_root,
+                    focus_type_name,
+                    ..
+                }
+                | TypedFacetSegment::MapKey {
                     focus_readonly_root,
                     focus_type_name,
                     ..
@@ -7562,6 +7638,60 @@ impl Checker {
         span: &Span,
         _for_capability: bool,
     ) -> Result<(TypedFacetSegment, Ty, bool), TypeError> {
+        if let PendingFacetSegment::ListIndex { index } = segment {
+            return match self.resolve_ty(source_ty) {
+                Ty::List(inner) => {
+                    let focus_ty = inner.as_ref().clone();
+                    Ok((
+                        TypedFacetSegment::ListIndex {
+                            index: index.clone(),
+                            focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
+                            focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
+                                .map(str::to_string),
+                        },
+                        focus_ty,
+                        true,
+                    ))
+                }
+                other => Err(TypeError {
+                    message: format!(
+                        "List index Facet segment requires List<T>, got {}",
+                        self.ty_name(&other)
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                }),
+            };
+        }
+        if let PendingFacetSegment::MapKey { key } = segment {
+            return match self.resolve_ty(source_ty) {
+                Ty::Enum(name, args)
+                    if Self::surface_name(&name) == "HashMap" && args.len() == 1 =>
+                {
+                    let value_ty = args[0].clone();
+                    Ok((
+                        TypedFacetSegment::MapKey {
+                            key: key.clone(),
+                            focus_readonly_root: self.ty_is_readonly_root(&value_ty),
+                            focus_type_name: Self::readonly_type_name(
+                                &self.resolve_ty(&value_ty),
+                            )
+                            .map(str::to_string),
+                        },
+                        value_ty,
+                        true,
+                    ))
+                }
+                other => Err(TypeError {
+                    message: format!(
+                        "HashMap key Facet segment requires HashMap<T>, got {}",
+                        self.ty_name(&other)
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                }),
+            };
+        }
         let PendingFacetSegment::Field {
             name: field,
             optional,
@@ -7720,6 +7850,7 @@ impl Checker {
                         variant_name: variant.short_name,
                         variant_tag: variant.tag,
                         payload_arity,
+                        optional: *optional,
                         focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
                         focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
                             .map(str::to_string),
@@ -7772,6 +7903,7 @@ impl Checker {
             return Ok(Some(self.pending_facet_node(
                 span,
                 PendingFacetPath {
+                    root_path_name: Some("Tuple".into()),
                     source_ty_hint: None,
                     segments: vec![Self::pending_field_segment(field)],
                 },
@@ -7863,6 +7995,82 @@ impl Checker {
         }))
     }
 
+    fn try_check_container_type_root_facet_path(
+        &mut self,
+        span: &Span,
+        expr: &Resolved,
+        segment: &PendingFacetSegment,
+        expected: Option<&Ty>,
+    ) -> Result<Option<TypedNode>, TypeError> {
+        let Resolved::Var(_, id) = expr else {
+            return Ok(None);
+        };
+        let root_path_name = match (id.name.as_str(), segment) {
+            ("List", PendingFacetSegment::ListIndex { .. }) => "List",
+            ("HashMap", PendingFacetSegment::MapKey { .. }) => "HashMap",
+            _ => return Ok(None),
+        };
+
+        let Some(expected_ty) = expected else {
+            return Ok(Some(self.pending_facet_node(
+                span,
+                PendingFacetPath {
+                    root_path_name: Some(root_path_name.into()),
+                    source_ty_hint: None,
+                    segments: vec![segment.clone()],
+                },
+            )));
+        };
+        let expected_ty = self.resolve_ty(expected_ty);
+        let (expected_source, expected_focus) = match expected_ty {
+            Ty::Facet(source, focus) => (source.as_ref().clone(), focus.as_ref().clone()),
+            other => {
+                return Err(TypeError {
+                    message: format!(
+                        "{root_path_name} root Facet path requires expected Facet<..., ...> context, got {}",
+                        self.ty_name(&other)
+                    ),
+                    span: span.clone(),
+                    hint: Some(format!(
+                        "Use {root_path_name} root paths as Facet path arguments in Facet::view/set/over."
+                    )),
+                });
+            }
+        };
+
+        self.validate_pending_root_source(root_path_name, &expected_source, span)?;
+        let (typed_segment, focus_ty, may_fail) =
+            self.resolve_facet_segment_for_source_ty(&expected_source, segment, span, true)?;
+        let focus_ty = self.resolve_ty(&focus_ty);
+        if !self.types_compatible(&focus_ty, &expected_focus) {
+            return Err(TypeError {
+                message: format!(
+                    "{root_path_name} root Facet path focus type mismatch: expected {}, got {}",
+                    self.ty_name(&expected_focus),
+                    self.ty_name(&focus_ty)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let source_ty = self.resolve_ty(&expected_source);
+        let path = TypedFacetPath {
+            source_ty: source_ty.clone(),
+            focus_ty: focus_ty.clone(),
+            path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&typed_segment)),
+            may_fail,
+            source_readonly_root: self.ty_is_readonly_root(&source_ty),
+            segments: vec![typed_segment],
+        };
+
+        Ok(Some(TypedNode {
+            ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
+            span: span.clone(),
+            node: TypedInner::FacetPath(path),
+        }))
+    }
+
     fn check_field_access_with_expected(
         &mut self,
         span: &Span,
@@ -7890,6 +8098,14 @@ impl Checker {
             _ => None,
         };
 
+        if let Some(container_root_path) = self.try_check_container_type_root_facet_path(
+            span,
+            expr,
+            &pending_segment,
+            expected,
+        )? {
+            return Ok(container_root_path);
+        }
         if let Some(field) = field {
             if let Some(tuple_root_path) =
                 self.try_check_tuple_type_root_facet_path(span, expr, field, expected)?
@@ -7914,11 +8130,7 @@ impl Checker {
             let combined = TypedFacetPath {
                 source_ty: source_ty.clone(),
                 focus_ty: focus_ty.clone(),
-                path_kind: if path.path_kind == TypedFacetPathKind::Variant || may_fail {
-                    TypedFacetPathKind::Variant
-                } else {
-                    TypedFacetPathKind::Structural
-                },
+                path_kind: Self::facet_path_kind_for_segments(&segments),
                 may_fail: path.may_fail || may_fail,
                 source_readonly_root: path.source_readonly_root,
                 segments,
@@ -7943,7 +8155,7 @@ impl Checker {
                 let path = TypedFacetPath {
                     source_ty: source_ty.clone(),
                     focus_ty: focus_ty.clone(),
-                    path_kind: TypedFacetPathKind::from_may_fail(may_fail),
+                    path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&segment)),
                     may_fail,
                     source_readonly_root: self.ty_is_readonly_root(&source_ty),
                     segments: vec![segment],
@@ -7970,7 +8182,7 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_focus_ty,
             focus_ty: focus_ty.clone(),
-            path_kind: TypedFacetPathKind::from_may_fail(may_fail),
+            path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&segment)),
             may_fail,
             source_readonly_root: false,
             segments: vec![segment],
