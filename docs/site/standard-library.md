@@ -407,8 +407,8 @@ REPL は起動時に標準定義ソースと preload script を読み切った O
 - REPL 中の `defstruct` / `defenum` / `deftrait` / `impl` / `defmod` は増分 universe 更新を前提にしない
 - trait impl 候補一覧や diagnostics は、その起動時 universe を前提に固定される
 
-データ型の field で欠損を表したい場合は、`Option<T>` より `T?` を先に検討してください。
-`T?` は `Result<T, NoneError>` に下がるので、Facet 更新や `Result` を返す helper と直接つながります。
+データ型の field で欠損を表したい場合は、`T?` または `Option<T>` を使います。
+`T?` は `Option<T>` に下がる sugar です。
 
 ```surtr
 user.nickname
@@ -418,7 +418,7 @@ user.nickname
 ```
 
 `Option<T>` field を `Result` パイプへ流すと、上のような往復変換が必要です。
-`nickname: String?` なら field 自体が `Result` 系なので、この変換を省けます。
+`nickname: String?` も同じく `Option<String>` なので、この変換規則は変わりません。
 
 ## 12. `Facet` module の位置づけ
 

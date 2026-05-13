@@ -1,5 +1,5 @@
-defrecord ScoreBook(scores: List<Int>, by_kind: HashMap<Int>, nick: Option<String>)
-defrecord ResultBook(nick: Option<Result<String>>)
+defrecord ScoreBook(scores: List<Int>, by_kind: HashMap<Int>, nick: String?)
+defrecord ResultBook(nick: Result<String>?)
 
 def inc(n: Int) -> Result<Int> { Ok(n + 1) }
 def bang(name: String) -> Result<String> { Ok(name ++ "!") }

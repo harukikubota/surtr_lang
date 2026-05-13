@@ -16,10 +16,11 @@
 - `outer / inner`
 - `Facet::compose(outer, inner)`
 
-`T?` は `Result<T, NoneError>` に下がるため、optional-looking な field でも
-Facet では `Result` focus として扱われます。
-そのため `Result` を返す helper とつないで更新したい field には
-`Option<T>` より `T?` の方が自然です。
+`T?` は `Option<T>` に下がります。
+optional field は `Option.Some` / `Option.Some?` を通じて
+`Facet::case_set` / `Facet::case_over` で短く扱えます。
+`Result` を返す helper と直接つなぎたい field では、
+`Result<T, NoneError>` を明示的に使います。
 
 また、source を伴う API では `~source.path` shorthand が使えます。
 これは source 実体と structural path の組を compiler-managed に expand する sugar で、
@@ -158,7 +159,8 @@ name_facet = User.name
 - `Facet::over(User.nickname, user, normalize)`
 - `Facet::over_result(User.nickname, user, rewrite_result)`
 
-`nickname: String?` なら、`Facet::set(...)` の plain `"bob"` は `Ok("bob")` として格納されます。
+`nickname: Result<String, NoneError>` のような field なら、
+`Facet::set(...)` の plain `"bob"` は `Ok("bob")` として格納されます。
 
 ## container path
 
@@ -393,7 +395,7 @@ full path: User.scores.[index + 1]
 
 ```surtr
 defstruct User {
-  nickname: String?,
+  nickname: Result<String, NoneError>,
 }
 
 normalized =? Facet::over(User.nickname, user, {|name|
@@ -401,9 +403,9 @@ normalized =? Facet::over(User.nickname, user, {|name|
 })
 ```
 
-`Option<T>` field でも同じ更新はできますが、`Result` helper とつなぐたびに
-`Option -> Result -> Option` の往復変換が必要になります。
-`./structs.md` と `./standard-library.md` の `Option` 節も参照してください。
+`String?` / `Option<String>` field で同じことをしたい場合は、
+`Facet::case_over(User.nickname.Some?, user, {|name| Ok(String::trim(name))})`
+のように enum case payload を更新します。
 
 ## 制約
 

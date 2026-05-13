@@ -210,8 +210,12 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_over_requires_unary_result_callable as fn(),
     ),
     (
-        "optional_type_annotation_matches_result_none_error",
-        optional_type_annotation_matches_result_none_error as fn(),
+        "optional_type_annotation_matches_option",
+        optional_type_annotation_matches_option as fn(),
+    ),
+    (
+        "optional_type_annotation_rejects_result_value",
+        optional_type_annotation_rejects_result_value as fn(),
     ),
     (
         "facet_set_accepts_plain_value_for_result_focus",
@@ -1944,15 +1948,35 @@ Facet::over(User.name, user, {|name| name})"#,
         .contains("Facet::over update function must return Result"));
 }
 
-fn optional_type_annotation_matches_result_none_error() {
+fn optional_type_annotation_matches_option() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Boxed(
   value: Int?,
 )
-boxed = Boxed(Ok(1))
-same: Result<Int, NoneError> = boxed.value"#,
+boxed = Boxed(Option::Some(1))
+same: Option<Int> = boxed.value"#,
     );
     assert!(!typed.is_empty());
+}
+
+#[test]
+fn optional_type_annotation_rejects_result_value() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defrecord Boxed(
+  value: Int?,
+)
+boxed = Boxed(Ok(1))"#,
+    );
+    let err = typecheck(resolved).expect_err("Result value should not typecheck for Int?");
+    assert!(
+        err.message
+            .contains("expected Option<Int>, got Result<Int>")
+            || err
+                .message
+                .contains("Record field value expected Option<Int>, got Result<Int>"),
+        "{}",
+        err.message
+    );
 }
 
 fn facet_set_accepts_plain_value_for_result_focus() {

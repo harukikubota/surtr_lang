@@ -4,12 +4,9 @@ Standard `Option` enum.
 It is not part of Surtr's failure-propagation machinery: `=?` still rejects
 `Option`, and missing values only participate in Result control flow after an
 explicit conversion.
-The type sugar `T?` does not build `Option<T>`; it lowers to
-`Result<T, NoneError>` instead.
-For data-model fields, prefer `T?` when the value should compose with Facet
-updates or `Result`-returning helper functions.
-Using `Option<T>` in a struct field is still valid, but Result-oriented updates
-usually need explicit conversion in and out of `Option`.
+The type sugar `T?` builds `Option<T>`.
+Using `Option<T>` in a struct field is therefore equivalent to using `T?`.
+Result-oriented updates still need explicit conversion in and out of `Option`.
 `Option` does support the contextual operators `|*>` and `|>=` in its own
 container family.
 
@@ -17,8 +14,8 @@ Example:
 
 `user.nickname |> from(Result) |>= normalize_name |> from(Option)`
 
-The equivalent `nickname: String?` field can stay in `Result` form through the
-whole update pipeline.
+The equivalent `nickname: String?` field has the same `Option<String>` surface
+and uses the same explicit bridge when you want to enter `Result` control flow.
 
 ## REPL
 xldr(1)> Option::is_some(Option::Some(1))

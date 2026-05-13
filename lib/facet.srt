@@ -7,11 +7,10 @@ consume them in that same scope via
 
 Use `Facet` when you want to describe "where" inside a value the compiler should
 look or update.
-When a struct or record field should participate in Result-style update flows,
-prefer `T?` or `Result<T, NoneError>` over `Option<T>`.
-That keeps the field aligned with `set`, `over`, `over_result`, `=?`, and
-ordinary `Result`-returning helper functions without repeated container
-conversion.
+`Option<T>` fields work naturally with enum-case Facet paths such as
+`Option.Some`, `Option.Some?`, `case_set`, and `case_over`.
+When a field should participate in Result-style update flows, use
+`Result<T, NoneError>` explicitly.
 
 - `Type.segment` builds a path itself
 - `value.segment` is sugar for applying the corresponding path to `value`
@@ -192,7 +191,7 @@ impl Facet {
   Use `set` when you already have the replacement value.
   When the focus is `Result<$A>`, `set` also accepts a plain `$A` and stores it
   as `Ok($A)`.
-  This is especially useful for `T?` fields because `T?` lowers to
+  This is especially useful for fields declared explicitly as
   `Result<T, NoneError>`.
 
   Readonly rules:

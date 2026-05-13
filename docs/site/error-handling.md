@@ -54,7 +54,7 @@ def parse_port(text: String) -> Result<Int> {
 }
 ```
 
-## `Result` が標準、`Option` は `Result<T, NoneError>` 的に読む
+## `Result` が標準、`Option` は別コンテナ
 
 Surtr では optional value も、まず `Result` で扱うのが基本です。  
 特に「値がない」を recoverable failure として扱うときは `Err(NoneError)` を使います。
@@ -65,8 +65,8 @@ def first_or_error(xs: List<Int>) -> Result<Int> {
 }
 ```
 
-この種の API は、利用者視点では `Option<T>` より
-`Result<T, NoneError>` として読むのが自然です。
+この種の API は、利用者視点では `Option<T>` ではなく
+`Result<T, NoneError>` を返す失敗 API として読むのが自然です。
 
 ```surtr
 match List::first([10, 20, 30]) {

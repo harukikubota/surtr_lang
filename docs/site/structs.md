@@ -21,9 +21,10 @@ impl User {
 `defstruct` は名前付きフィールドを持つデータ型です。  
 `impl User` は `User` 専用の namespace で、構築 helper や分解 helper を置きます。
 
-欠損可能 field を持たせるときは、まず `T?` を検討してください。
-`T?` は `Option<T>` ではなく `Result<T, NoneError>` に下がるため、Facet 更新や
-`Result` を返す helper 関数と直接つながります。
+欠損可能 field を持たせるときは、`T?` または `Option<T>` を使います。
+`T?` は `Option<T>` に下がる sugar です。
+`Result` を返す helper 関数とつなぐときは、必要に応じて
+`from(value, Result)` / `from(value, Option)` を明示します。
 
 ## 構築ルール
 
@@ -206,11 +207,12 @@ defstruct User {
   nickname: String?,
 }
 
-next =? Facet::over(User.nickname, user, normalize_name)
+next =? Facet::case_over(User.nickname.Some?, user, normalize_name)
 ```
 
-`nickname: String?` なら field 自体が `Result<String, NoneError>` と同じなので、
-`Facet::set` / `Facet::over` / `Facet::over_result` とそのまま噛み合います。
+`nickname: String?` は `Option<String>` と同じなので、
+optional payload を更新するときは `Some` / `Some?` を経由した
+`Facet::case_over` / `Facet::case_set` が自然です。
 
 たとえば `impl User` 内で `with_age` を定義して再構築できます。
 

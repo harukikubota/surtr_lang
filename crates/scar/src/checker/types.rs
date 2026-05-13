@@ -679,7 +679,7 @@ impl Checker {
                                         .into(),
                                 span: span.clone(),
                                 hint: Some(
-                                    "Use Result<T> in local code, or Result<T, NoneError> / T? for optional-style values."
+                                    "Use Result<T> in local code, or Option<T> / T? for optional-style values."
                                         .into(),
                                 ),
                             });
