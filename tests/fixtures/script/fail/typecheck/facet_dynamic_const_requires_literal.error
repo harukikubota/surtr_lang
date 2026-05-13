@@ -1,0 +1,2 @@
+phase: typecheck
+contains: const Facet path bracket segments must use literal Int or String values

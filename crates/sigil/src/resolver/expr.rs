@@ -1229,6 +1229,33 @@ impl Resolver {
         }
     }
 
+    fn resolve_facet_path_segment(
+        &mut self,
+        segment: FacetPathSegment,
+    ) -> Result<ResolvedFacetPathSegment, ResolveError> {
+        Ok(match segment {
+            FacetPathSegment::Field { name, optional } => {
+                ResolvedFacetPathSegment::Field { name, optional }
+            }
+            FacetPathSegment::Bracket(expr) => {
+                ResolvedFacetPathSegment::Bracket(ResolvedFacetBracketExpr {
+                    expr: Box::new(self.resolve_node(*expr.expr)?),
+                    display: expr.display,
+                })
+            }
+        })
+    }
+
+    fn resolve_facet_path_segments(
+        &mut self,
+        segments: Vec<FacetPathSegment>,
+    ) -> Result<Vec<ResolvedFacetPathSegment>, ResolveError> {
+        segments
+            .into_iter()
+            .map(|segment| self.resolve_facet_path_segment(segment))
+            .collect()
+    }
+
     fn pipe_slot_span(expr: &Ast) -> Option<Span> {
         match expr {
             Ast::Var(span, name) if name == "_1" => Some(span.clone()),
@@ -2298,7 +2325,10 @@ impl Resolver {
             Ast::FieldAccess(span, expr, field) => {
                 let original = Ast::FieldAccess(span.clone(), expr.clone(), field.clone());
                 if let Some(segments) = Self::inferred_facet_capture_segments(&original) {
-                    return Ok(Resolved::InferredFacetCapture(span, segments));
+                    return Ok(Resolved::InferredFacetCapture(
+                        span,
+                        self.resolve_facet_path_segments(segments)?,
+                    ));
                 }
                 if matches!(expr.as_ref(), Ast::Var(_, name) if name == "ctx") {
                     return Ok(Resolved::ProcessContextHandler(span, field));
@@ -2309,13 +2339,16 @@ impl Resolver {
             Ast::FacetSegmentAccess(span, expr, segment) => {
                 let original = Ast::FacetSegmentAccess(span.clone(), expr.clone(), segment.clone());
                 if let Some(segments) = Self::inferred_facet_capture_segments(&original) {
-                    return Ok(Resolved::InferredFacetCapture(span, segments));
+                    return Ok(Resolved::InferredFacetCapture(
+                        span,
+                        self.resolve_facet_path_segments(segments)?,
+                    ));
                 }
                 let resolved_expr = self.resolve_node(*expr)?;
                 Ok(Resolved::FacetSegmentAccess(
                     span,
                     Box::new(resolved_expr),
-                    segment,
+                    self.resolve_facet_path_segment(segment)?,
                 ))
             }
             Ast::FacetCapture(span, expr) => {

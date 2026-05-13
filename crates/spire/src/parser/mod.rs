@@ -721,6 +721,20 @@ fn rewrite_process_owner_refs_in_body(body: Vec<Ast>, old_name: &str, new_name: 
         .collect()
 }
 
+fn rewrite_facet_path_segment_refs(
+    segment: FacetPathSegment,
+    old_name: &str,
+    new_name: &str,
+) -> FacetPathSegment {
+    match segment {
+        FacetPathSegment::Field { .. } => segment,
+        FacetPathSegment::Bracket(expr) => FacetPathSegment::Bracket(FacetBracketExpr {
+            expr: Box::new(rewrite_process_owner_refs(*expr.expr, old_name, new_name)),
+            display: expr.display,
+        }),
+    }
+}
+
 fn rewrite_process_owner_bulk_entries(
     entries: Vec<BulkUpdateEntry>,
     old_name: &str,
@@ -730,7 +744,11 @@ fn rewrite_process_owner_bulk_entries(
         .into_iter()
         .map(|entry| BulkUpdateEntry {
             span: entry.span,
-            path: entry.path,
+            path: entry
+                .path
+                .into_iter()
+                .map(|segment| rewrite_facet_path_segment_refs(segment, old_name, new_name))
+                .collect(),
             kind: match entry.kind {
                 BulkUpdateEntryKind::Set(expr) => {
                     BulkUpdateEntryKind::Set(rewrite_process_owner_refs(expr, old_name, new_name))
@@ -897,7 +915,7 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
         Ast::FacetSegmentAccess(span, expr, segment) => Ast::FacetSegmentAccess(
             span,
             Box::new(rewrite_process_owner_refs(*expr, old_name, new_name)),
-            segment,
+            rewrite_facet_path_segment_refs(segment, old_name, new_name),
         ),
         Ast::StructLit(span, name, fields) => Ast::StructLit(
             span,
@@ -1464,12 +1482,26 @@ fn shift_ast_path(path: AstPath, delta: usize) -> AstPath {
     }
 }
 
+fn shift_facet_path_segment(segment: FacetPathSegment, delta: usize) -> FacetPathSegment {
+    match segment {
+        FacetPathSegment::Field { .. } => segment,
+        FacetPathSegment::Bracket(expr) => FacetPathSegment::Bracket(FacetBracketExpr {
+            expr: Box::new(shift_ast_span(*expr.expr, delta)),
+            display: expr.display,
+        }),
+    }
+}
+
 fn shift_bulk_update_entries(entries: Vec<BulkUpdateEntry>, delta: usize) -> Vec<BulkUpdateEntry> {
     entries
         .into_iter()
         .map(|entry| BulkUpdateEntry {
             span: shift_span(entry.span, delta),
-            path: entry.path,
+            path: entry
+                .path
+                .into_iter()
+                .map(|segment| shift_facet_path_segment(segment, delta))
+                .collect(),
             kind: match entry.kind {
                 BulkUpdateEntryKind::Set(expr) => {
                     BulkUpdateEntryKind::Set(shift_ast_span(expr, delta))
@@ -1637,7 +1669,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
         Ast::FacetSegmentAccess(span, expr, segment) => Ast::FacetSegmentAccess(
             shift_span(span, delta),
             Box::new(shift_ast_span(*expr, delta)),
-            segment,
+            shift_facet_path_segment(segment, delta),
         ),
         Ast::FacetCapture(span, expr) => Ast::FacetCapture(
             shift_span(span, delta),

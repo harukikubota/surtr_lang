@@ -1353,16 +1353,16 @@ impl Checker {
         }
     }
 
-    fn pending_segment_from_syntax(segment: &FacetPathSegment) -> PendingFacetSegment {
+    fn pending_segment_from_syntax(segment: &ResolvedFacetPathSegment) -> PendingFacetSegment {
         match segment {
-            FacetPathSegment::Field { name, optional } => PendingFacetSegment::Field {
+            ResolvedFacetPathSegment::Field { name, optional } => PendingFacetSegment::Field {
                 name: name.clone(),
                 optional: *optional,
             },
-            FacetPathSegment::ListIndex { index } => PendingFacetSegment::ListIndex {
-                index: index.clone(),
+            ResolvedFacetPathSegment::Bracket(expr) => PendingFacetSegment::Bracket {
+                expr: PendingFacetExpr::Resolved(expr.expr.clone()),
+                display: expr.display.clone(),
             },
-            FacetPathSegment::MapKey { key } => PendingFacetSegment::MapKey { key: key.clone() },
         }
     }
 
@@ -1382,12 +1382,11 @@ impl Checker {
                     name.clone()
                 }
             }
-            PendingFacetSegment::ListIndex { index } => format!("[{index}]"),
-            PendingFacetSegment::MapKey { key } => format!("[\"{}\"]", key.escape_default()),
+            PendingFacetSegment::Bracket { display, .. } => format!("[{display}]"),
         }
     }
 
-    fn inferred_facet_capture_display(segments: &[FacetPathSegment]) -> String {
+    fn inferred_facet_capture_display(segments: &[ResolvedFacetPathSegment]) -> String {
         if segments.is_empty() {
             "_".to_string()
         } else {
@@ -1395,7 +1394,16 @@ impl Checker {
                 "_.{}",
                 segments
                     .iter()
-                    .map(FacetPathSegment::display_label)
+                    .map(|segment| match segment {
+                        ResolvedFacetPathSegment::Field { name, optional } => {
+                            if *optional {
+                                format!("{name}?")
+                            } else {
+                                name.clone()
+                            }
+                        }
+                        ResolvedFacetPathSegment::Bracket(expr) => format!("[{}]", expr.display),
+                    })
                     .collect::<Vec<_>>()
                     .join(".")
             )
@@ -1405,12 +1413,12 @@ impl Checker {
     fn inferred_capture_body(
         span: &Span,
         param_id: &ResolvedId,
-        segments: &[FacetPathSegment],
+        segments: &[ResolvedFacetPathSegment],
     ) -> Resolved {
         segments.iter().fold(
             Resolved::Var(span.clone(), param_id.clone()),
             |expr, segment| match segment {
-                FacetPathSegment::Field {
+                ResolvedFacetPathSegment::Field {
                     name,
                     optional: false,
                 } => Resolved::FieldAccess(span.clone(), Box::new(expr), name.clone()),
@@ -1422,7 +1430,7 @@ impl Checker {
     fn check_inferred_facet_capture(
         &mut self,
         span: &Span,
-        segments: &[FacetPathSegment],
+        segments: &[ResolvedFacetPathSegment],
         expected_ty: &Ty,
     ) -> Result<TypedNode, TypeError> {
         let expected_ty = self.resolve_ty(expected_ty);
@@ -4239,13 +4247,17 @@ impl Checker {
             TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
             TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
             TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
-            TypedFacetSegment::ListIndex { index, .. } => {
-                return PendingFacetSegment::ListIndex {
-                    index: index.clone(),
-                }
+            TypedFacetSegment::ListIndex { index, display, .. } => {
+                return PendingFacetSegment::Bracket {
+                    expr: PendingFacetExpr::Typed(index.clone()),
+                    display: display.clone(),
+                };
             }
-            TypedFacetSegment::MapKey { key, .. } => {
-                return PendingFacetSegment::MapKey { key: key.clone() };
+            TypedFacetSegment::MapKey { key, display, .. } => {
+                return PendingFacetSegment::Bracket {
+                    expr: PendingFacetExpr::Typed(key.clone()),
+                    display: display.clone(),
+                };
             }
         })
     }
@@ -7870,13 +7882,41 @@ impl Checker {
         span: &Span,
         _for_capability: bool,
     ) -> Result<(TypedFacetSegment, Ty, bool), TypeError> {
-        if let PendingFacetSegment::ListIndex { index } = segment {
+        if let PendingFacetSegment::Bracket { expr, display } = segment {
+            let typed_expr = match expr {
+                PendingFacetExpr::Resolved(expr) => self.check_node(expr)?,
+                PendingFacetExpr::Typed(expr) => self.resolve_typed_node((**expr).clone()),
+            };
             return match self.resolve_ty(source_ty) {
                 Ty::List(inner) => {
+                    let expr_ty = self.resolve_ty(&typed_expr.ty);
+                    if let Ty::Result(ok, _) = &expr_ty {
+                        if self.types_compatible(ok.as_ref(), &Ty::Int) {
+                            return Err(TypeError {
+                                message: "Facet bracket expression must be plain Int; unwrap Result<Int> before using it".into(),
+                                span: typed_expr.span.clone(),
+                                hint: None,
+                            });
+                        }
+                    }
+                    if !self.types_compatible(&Ty::Int, &expr_ty) {
+                        return Err(TypeError {
+                            message: "List Facet index expression must be Int".into(),
+                            span: typed_expr.span.clone(),
+                            hint: None,
+                        });
+                    }
+
+                    let literal_index = match &typed_expr.node {
+                        TypedInner::Lit(Lit::Int(index)) => Some(index.clone()),
+                        _ => None,
+                    };
                     let focus_ty = inner.as_ref().clone();
                     Ok((
                         TypedFacetSegment::ListIndex {
-                            index: index.clone(),
+                            index: Box::new(typed_expr),
+                            display: display.clone(),
+                            literal_index,
                             focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
                             focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
                                 .map(str::to_string),
@@ -7885,25 +7925,37 @@ impl Checker {
                         true,
                     ))
                 }
-                other => Err(TypeError {
-                    message: format!(
-                        "List index Facet segment requires List<T>, got {}",
-                        self.ty_name(&other)
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                }),
-            };
-        }
-        if let PendingFacetSegment::MapKey { key } = segment {
-            return match self.resolve_ty(source_ty) {
                 Ty::Enum(name, args)
                     if Self::surface_name(&name) == "HashMap" && args.len() == 1 =>
                 {
+                    let expr_ty = self.resolve_ty(&typed_expr.ty);
+                    if let Ty::Result(ok, _) = &expr_ty {
+                        if self.types_compatible(ok.as_ref(), &Ty::Str) {
+                            return Err(TypeError {
+                                message: "Facet bracket expression must be plain String; unwrap Result<String> before using it".into(),
+                                span: typed_expr.span.clone(),
+                                hint: None,
+                            });
+                        }
+                    }
+                    if !self.types_compatible(&Ty::Str, &expr_ty) {
+                        return Err(TypeError {
+                            message: "HashMap Facet key expression must be String".into(),
+                            span: typed_expr.span.clone(),
+                            hint: None,
+                        });
+                    }
+
+                    let literal_key = match &typed_expr.node {
+                        TypedInner::Lit(Lit::Str(key)) => Some(key.clone()),
+                        _ => None,
+                    };
                     let value_ty = args[0].clone();
                     Ok((
                         TypedFacetSegment::MapKey {
-                            key: key.clone(),
+                            key: Box::new(typed_expr),
+                            display: display.clone(),
+                            literal_key,
                             focus_readonly_root: self.ty_is_readonly_root(&value_ty),
                             focus_type_name: Self::readonly_type_name(&self.resolve_ty(&value_ty))
                                 .map(str::to_string),
@@ -7914,7 +7966,8 @@ impl Checker {
                 }
                 other => Err(TypeError {
                     message: format!(
-                        "HashMap key Facet segment requires HashMap<T>, got {}",
+                        "Facet segment {} is not supported for {} yet",
+                        Self::pending_segment_display(segment),
                         self.ty_name(&other)
                     ),
                     span: span.clone(),
@@ -8237,8 +8290,8 @@ impl Checker {
             return Ok(None);
         };
         let root_path_name = match (id.name.as_str(), segment) {
-            ("List", PendingFacetSegment::ListIndex { .. }) => "List",
-            ("HashMap", PendingFacetSegment::MapKey { .. }) => "HashMap",
+            ("List", PendingFacetSegment::Bracket { .. }) => "List",
+            ("HashMap", PendingFacetSegment::Bracket { .. }) => "HashMap",
             _ => return Ok(None),
         };
 
@@ -8309,7 +8362,10 @@ impl Checker {
         field: &str,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        let segment = FacetPathSegment::field(field.to_string());
+        let segment = ResolvedFacetPathSegment::Field {
+            name: field.to_string(),
+            optional: false,
+        };
         self.check_facet_segment_access_with_expected(span, expr, &segment, expected)
     }
 
@@ -8317,12 +8373,12 @@ impl Checker {
         &mut self,
         span: &Span,
         expr: &Resolved,
-        syntax_segment: &FacetPathSegment,
+        syntax_segment: &ResolvedFacetPathSegment,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
         let pending_segment = Self::pending_segment_from_syntax(syntax_segment);
         let field = match syntax_segment {
-            FacetPathSegment::Field {
+            ResolvedFacetPathSegment::Field {
                 name,
                 optional: false,
             } => Some(name.as_str()),

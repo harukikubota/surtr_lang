@@ -3589,17 +3589,17 @@ impl ReplEngine {
                     rendered.push('.');
                     rendered.push_str(variant_name);
                 }
-                TypedFacetSegment::ListIndex { index, .. } => {
+                TypedFacetSegment::ListIndex { display, .. } => {
                     if rendered.is_empty() {
                         rendered.push_str("List");
                     }
-                    rendered.push_str(&format!(".[{index}]"));
+                    rendered.push_str(&format!(".[{display}]"));
                 }
-                TypedFacetSegment::MapKey { key, .. } => {
+                TypedFacetSegment::MapKey { display, .. } => {
                     if rendered.is_empty() {
                         rendered.push_str("HashMap");
                     }
-                    rendered.push_str(&format!(".[\"{}\"]", key.escape_default()));
+                    rendered.push_str(&format!(".[{display}]"));
                 }
             }
         }
@@ -3615,10 +3615,8 @@ impl ReplEngine {
             TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
             TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
             TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
-            TypedFacetSegment::ListIndex { index, .. } => format!("[{index}]"),
-            TypedFacetSegment::MapKey { key, .. } => {
-                format!("[\"{}\"]", key.escape_default())
-            }
+            TypedFacetSegment::ListIndex { display, .. }
+            | TypedFacetSegment::MapKey { display, .. } => format!("[{display}]"),
         }
     }
 
@@ -3631,8 +3629,7 @@ impl ReplEngine {
                     name.clone()
                 }
             }
-            PendingFacetSegment::ListIndex { index } => format!("[{index}]"),
-            PendingFacetSegment::MapKey { key } => format!("[\"{}\"]", key.escape_default()),
+            PendingFacetSegment::Bracket { display, .. } => format!("[{display}]"),
         }
     }
 
@@ -3640,8 +3637,7 @@ impl ReplEngine {
         match segment {
             PendingFacetSegment::Field { name, .. } if name.starts_with('_') => "tuple",
             PendingFacetSegment::Field { .. } => "field",
-            PendingFacetSegment::ListIndex { .. } => "list index",
-            PendingFacetSegment::MapKey { .. } => "map key",
+            PendingFacetSegment::Bracket { .. } => "container segment",
         }
     }
 
@@ -3753,7 +3749,7 @@ impl ReplEngine {
                     current_source = focus_ty;
                     ("variant", true, "variant mismatch returns Result")
                 }
-                TypedFacetSegment::ListIndex { index, .. } => {
+                TypedFacetSegment::ListIndex { display, .. } => {
                     let focus_ty = match &current_source {
                         Ty::List(inner) => inner.as_ref().clone(),
                         _ => path.focus_ty.clone(),
@@ -3763,7 +3759,7 @@ impl ReplEngine {
                     } else {
                         prefix.push('.');
                     }
-                    prefix.push_str(&format!("[{index}]"));
+                    prefix.push_str(&format!("[{display}]"));
                     path_is_fallible = true;
                     segments.push(forge::ReplFacetSegmentInfo {
                         label: prefix.clone(),
@@ -3776,7 +3772,7 @@ impl ReplEngine {
                     current_source = focus_ty;
                     ("list index", true, "index miss returns Result")
                 }
-                TypedFacetSegment::MapKey { key, .. } => {
+                TypedFacetSegment::MapKey { display, .. } => {
                     let focus_ty = match &current_source {
                         Ty::Enum(name, args)
                             if name.rsplit("::").next().unwrap_or(name) == "HashMap"
@@ -3791,7 +3787,7 @@ impl ReplEngine {
                     } else {
                         prefix.push('.');
                     }
-                    prefix.push_str(&format!("[\"{}\"]", key.escape_default()));
+                    prefix.push_str(&format!("[{display}]"));
                     path_is_fallible = true;
                     segments.push(forge::ReplFacetSegmentInfo {
                         label: prefix.clone(),
@@ -3846,11 +3842,7 @@ impl ReplEngine {
                             kind: Self::pending_facet_segment_kind(segment).to_string(),
                             source_ty: "_".to_string(),
                             focus_ty: "_".to_string(),
-                            fallible: matches!(
-                                segment,
-                                PendingFacetSegment::ListIndex { .. }
-                                    | PendingFacetSegment::MapKey { .. }
-                            ),
+                            fallible: matches!(segment, PendingFacetSegment::Bracket { .. }),
                             reason: "requires Facet context to specialize".to_string(),
                         })
                         .collect(),

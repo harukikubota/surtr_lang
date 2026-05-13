@@ -43,6 +43,30 @@ impl Checker {
         }
     }
 
+    fn const_facet_segment_is_allowed(&self, segment: &ResolvedFacetPathSegment) -> bool {
+        match segment {
+            ResolvedFacetPathSegment::Field { .. } => true,
+            ResolvedFacetPathSegment::Bracket(expr) => {
+                matches!(expr.expr.as_ref(), Resolved::Lit(_, Lit::Int(_) | Lit::Str(_)))
+            }
+        }
+    }
+
+    fn const_has_dynamic_bracket_segment(&self, value: &Resolved) -> bool {
+        match value {
+            Resolved::FieldAccess(_, inner, _) => self.const_has_dynamic_bracket_segment(inner),
+            Resolved::FacetSegmentAccess(_, inner, segment) => {
+                self.const_has_dynamic_bracket_segment(inner)
+                    || !self.const_facet_segment_is_allowed(segment)
+            }
+            Resolved::BinOp(_, BinOp::Slash, left, right) => {
+                self.const_has_dynamic_bracket_segment(left)
+                    || self.const_has_dynamic_bracket_segment(right)
+            }
+            _ => false,
+        }
+    }
+
     fn const_surface_is_allowed(&self, value: &Resolved) -> bool {
         match value {
             Resolved::Lit(_, _) => true,
@@ -50,8 +74,9 @@ impl Checker {
                 .consts
                 .get(&id.unique_id)
                 .is_none_or(|meta| matches!(meta.kind, ConstKind::FacetPath)),
-            Resolved::FieldAccess(_, inner, _) | Resolved::FacetSegmentAccess(_, inner, _) => {
-                self.const_surface_is_allowed(inner)
+            Resolved::FieldAccess(_, inner, _) => self.const_surface_is_allowed(inner),
+            Resolved::FacetSegmentAccess(_, inner, segment) => {
+                self.const_surface_is_allowed(inner) && self.const_facet_segment_is_allowed(segment)
             }
             Resolved::InferredFacetCapture(_, _) => false,
             Resolved::BinOp(_, BinOp::Slash, left, right) => {
@@ -68,6 +93,17 @@ impl Checker {
             };
 
             if !self.const_surface_is_allowed(value) {
+                if self.const_has_dynamic_bracket_segment(value) {
+                    return Err(TypeError {
+                        message:
+                            "const Facet path bracket segments must use literal Int or String values"
+                                .into(),
+                        span: span.clone(),
+                        hint: Some(
+                            "Use literal container keys in const Facet paths and keep dynamic bracket expressions in local bindings or Facet API calls.".into(),
+                        ),
+                    });
+                }
                 return Err(TypeError {
                     message: "const value must be a primitive literal or a facet path".into(),
                     span: span.clone(),

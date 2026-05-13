@@ -1,0 +1,2 @@
+map: HashMap<Int> = HashMap::from_entries([("taro", 18)])
+bad = Facet::view(HashMap.[1], map)

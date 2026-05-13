@@ -10,6 +10,9 @@
 - `Facet::set(facet, source, value)`
 - `Facet::over(facet, source, update_fun)`
 - `Facet::over_result(facet, source, update_fun)`
+- `Facet::case_set(facet, source, value)`
+- `Facet::case_over(facet, source, update_fun)`
+- `Facet::case_over_result(facet, source, update_fun)`
 - `Facet::bulk_update(source) { ... }`
 - `outer / inner`
 - `Facet::compose(outer, inner)`
@@ -158,6 +161,36 @@ name_facet = User.name
 
 `nickname: String?` なら、`Facet::set(...)` の plain `"bob"` は `Ok("bob")` として格納されます。
 
+## container path
+
+List と HashMap の bracket segment は、通常の Facet path では runtime 式を受けられます。
+
+- `List.[expr]` の `expr` は plain `Int`
+- `HashMap.[expr]` の `expr` は plain `String`
+- `Result<Int>` / `Result<String>` はそのまま使えないので、先に `=?` や `match` で unwrap する
+- `const Facet<...>` だけは compile-time 固定のままで、bracket segment は literal のみ
+
+```surtr
+score =? Facet::view(List.[index + 1], scores)
+talk =? Facet::view(HashMap.[String::trim(kind)], score_by_kind)
+
+score2 =? Facet::set(User.scores.[slot], user, 99)
+user2 =? Facet::over(User.score_by_kind.[kind], user, {|n| Ok(n + 1)})
+```
+
+value-side sugar でも同じです。
+
+```surtr
+score =? scores.[index + 1]
+talk =? score_by_kind.[kind]
+```
+
+1 回の Facet operation 中では、bracket expression は先に 1 回だけ評価され、
+read と rebuild の両方で同じ index / key が再利用されます。
+
+`replace` は引き続き infallible structural path 専用です。
+そのため `List.[expr]` / `HashMap.[expr]` は literal かどうかに関係なく `replace` では使えません。
+
 ## record path
 
 ```surtr
@@ -190,6 +223,12 @@ add_facet = Expr.Add
 - 現在値が別 variant なら `Err(...)` になる
 - `set` / `over` でも同じく variant mismatch が失敗になる
 - `over_result` は `Result` focus 全体を書き換えたいときに使う
+- `case_set` / `case_over` / `case_over_result` は「最後の enum case payload を更新する」専用 API
+
+```surtr
+next =? Facet::case_set(Expr.Add, expr, (left2, right2))
+next2 =? Facet::case_over(Expr.Add, expr, {|pair| Ok(rewrite_pair(pair))})
+```
 
 ## bulk_update
 
@@ -203,6 +242,9 @@ source order でまとめて書くための special form です。
 - `path <- set(value)`
 - `path <- over(update_fun)`
 - `path <- over_result(update_fun)`
+- `path <- case_set(payload)`
+- `path <- case_over(update_fun)`
+- `path <- case_over_result(update_fun)`
 - `path { nested_entries... }`
 
 ```surtr
@@ -220,8 +262,18 @@ updated =? Facet::bulk_update(user) {
 `address { country <- set("Tokyo") }` は同じ更新へ lower されます。
 
 `bulk_update` は `Facet::set` / `Facet::over` / `Facet::over_result` の並びへ
-lower される範囲に限定されています。`S -> Result<S>` の whole-state updater を
+lower される範囲に限定されています。`case_*` も同じ要領で通常の Facet API へ展開されます。
+`S -> Result<S>` の whole-state updater を
 混ぜたい場合は、普通の関数として bulk の外で `|>=` 合成します。
+
+container path も通常の Facet API と揃っています。
+
+```surtr
+updated =? Facet::bulk_update(user) {
+  scores.[index + 1] <- over({|score| Ok(score + 10)})
+  score_by_kind.[kind] <- set(9)
+}
+```
 
 ## compose
 
@@ -325,6 +377,14 @@ may stop at:
 1. source - input already starts in Result context
 ```
 
+dynamic container path では bracket expression の表示もそのまま残ります。
+
+```text
+xldr(1)> :facet User.scores.[index + 1]
+type: Facet<User, Int>
+full path: User.scores.[index + 1]
+```
+
 ## `Result` focus の更新
 
 `Facet::set` と `Facet::over` は `Result<A>` focus に対して少し ergonomic です。
@@ -390,3 +450,5 @@ facet = User.password
 - variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:facet <binding|expr>` で確認するのが一番わかりやすいです。
 - スコープをまたぐときは `Facet` ではなく、`Facet::view(...)` 済みの値を渡します。
 - `Result` を返す updater とつなぐ field には、`Option<T>` より `T?` の方が更新パイプが短くなります。
+- `List.[expr]` / `HashMap.[expr]` は普通の path では runtime 式を許可しますが、`const Facet<...>` では literal だけに絞られます。
+- `bulk_update` は DSL ですが path 能力は通常の Facet API と揃っているので、dynamic bracket や `case_*` も同じ感覚で使えます。

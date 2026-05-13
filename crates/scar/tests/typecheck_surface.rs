@@ -142,6 +142,18 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_explicit_container_root_captures_use_expected_function_context as fn(),
     ),
     (
+        "facet_dynamic_container_segments_accept_runtime_expressions",
+        facet_dynamic_container_segments_accept_runtime_expressions as fn(),
+    ),
+    (
+        "facet_dynamic_container_segments_reject_result_and_wrong_key_types",
+        facet_dynamic_container_segments_reject_result_and_wrong_key_types as fn(),
+    ),
+    (
+        "facet_const_dynamic_container_segments_require_literals",
+        facet_const_dynamic_container_segments_require_literals as fn(),
+    ),
+    (
         "facet_optional_marker_rejected_on_non_enum_segment",
         facet_optional_marker_rejected_on_non_enum_segment as fn(),
     ),
@@ -1582,7 +1594,7 @@ map_value = score_map.["talk"]"#,
     assert!(matches!(
         &typed_bind_rhs(&typed, "map_root").node,
         TypedInner::FacetView { path, .. }
-            if matches!(path.segments.as_slice(), [TypedFacetSegment::MapKey { key, .. }] if key == "talk")
+            if matches!(path.segments.as_slice(), [TypedFacetSegment::MapKey { literal_key, .. }] if literal_key.as_deref() == Some("talk"))
     ));
 }
 
@@ -1608,6 +1620,75 @@ talk = get_talk(score_map)"#,
             rhs.ty
         );
     }
+}
+
+fn facet_dynamic_container_segments_accept_runtime_expressions() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord ScoreBook(scores: List<Int>, by_kind: HashMap<Int>)
+def find_index(values: List<Int>) -> Int { 1 }
+def normalize_key(raw: String) -> String { String::trim(raw) }
+scores = [10, 20, 30]
+score_map = HashMap::from_entries([("talk", 80)])
+book = ScoreBook(scores, score_map)
+index = 0
+raw_name = " talk "
+list_root = Facet::view(List.[index + 1], scores)
+map_root = Facet::view(HashMap.[normalize_key(raw_name)], score_map)
+list_value = scores.[find_index(scores)]
+map_value = score_map.[String::trim(raw_name)]
+path = ScoreBook.scores.[index + 1]
+bulk = Facet::bulk_update(book) {
+  scores.[index + 1] <- set(99)
+  by_kind.[String::trim(raw_name)] <- over({|value| Ok(value + 1)})
+}"#,
+    );
+
+    for name in ["list_root", "map_root", "list_value", "map_value", "bulk"] {
+        let rhs = typed_bind_rhs(&typed, name);
+        assert!(
+            matches!(&rhs.ty, Ty::Result(_, err) if matches!(err.as_ref(), Ty::Error)),
+            "{name} should be Result<...>, got {:?}",
+            rhs.ty
+        );
+    }
+
+    let path_rhs = typed_bind_rhs(&typed, "path");
+    assert!(matches!(path_rhs.node, TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_)));
+}
+
+fn facet_dynamic_container_segments_reject_result_and_wrong_key_types() {
+    let list_err = typecheck_with_rules(
+        r#"def find_index(values: List<Int>) -> Result<Int> { Ok(0) }
+values = [1, 2, 3]
+bad = Facet::view(List.[find_index(values)], values)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("Result<Int> bracket expression should fail");
+    assert!(list_err
+        .message
+        .contains("Facet bracket expression must be plain Int; unwrap Result<Int> before using it"));
+
+    let map_err = typecheck_with_rules(
+        r#"map: HashMap<Int> = HashMap::from_entries([("taro", 18)])
+bad = Facet::view(HashMap.[1], map)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("non-String HashMap key should fail");
+    assert!(map_err
+        .message
+        .contains("HashMap Facet key expression must be String"));
+}
+
+fn facet_const_dynamic_container_segments_require_literals() {
+    let err = typecheck_with_rules(
+        r#"index = 0
+const PATH: Facet<List<Int>, Int> = List.[index]"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("dynamic container bracket in const facet should fail");
+    assert!(err
+        .message
+        .contains("const Facet path bracket segments must use literal Int or String values"));
 }
 
 fn facet_optional_marker_rejected_on_non_enum_segment() {

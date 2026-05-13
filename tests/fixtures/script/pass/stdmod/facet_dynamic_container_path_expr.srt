@@ -1,0 +1,28 @@
+defrecord ScoreBook(scores: List<Int>, by_kind: HashMap<Int>)
+
+def find_index(values: List<Int>) -> Int { 1 }
+def normalize_key(raw: String) -> String { String::trim(raw) }
+def inc(n: Int) -> Result<Int> { Ok(n + 1) }
+
+scores = [10, 20, 30]
+score_map = HashMap::from_entries([("talk", 80)])
+book = ScoreBook(scores, score_map)
+index = 0
+raw_name = " talk "
+
+print(inspect(Facet::view(List.[index + 1], scores)))
+print(inspect(Facet::view(HashMap.[normalize_key(raw_name)], score_map)))
+print(inspect(scores.[find_index(scores)]))
+print(inspect(score_map.[String::trim(raw_name)]))
+
+book2 =? Facet::set(ScoreBook.scores.[index + 1], book, 99)
+book3 =? Facet::over(ScoreBook.by_kind.[String::trim(raw_name)], book2, &inc)
+book4 =? Facet::bulk_update(book3) {
+  scores.[index + 1] <- set(100)
+  by_kind.[normalize_key(raw_name)] <- over(&inc)
+}
+
+print(inspect(book2.scores))
+print(inspect(HashMap::get(book3.by_kind, "talk")))
+print(inspect(book4.scores))
+print(inspect(HashMap::get(book4.by_kind, "talk")))

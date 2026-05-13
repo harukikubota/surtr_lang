@@ -562,15 +562,28 @@ focus が `Result<A>` のとき、`over` は `Ok(value)` の payload だけを�
 - successful payload だけ触りたいなら `over` の方が軽い
 - `~source.path` shorthand は source を伴う `Facet` API の第1引数だけで使える
 
+### `Facet::case_*`
+
+enum case path の最後の payload を直接更新したいときは `case_*` を使います。
+
+- `Facet::case_set(facet, source, value)`
+- `Facet::case_over(facet, source, update_fun)`
+- `Facet::case_over_result(facet, source, update_fun)`
+
+通常の `set` / `over` / `over_result` と同じく `Result<S>` を返しますが、
+用途は「path の最後が enum case payload である」場合に絞られます。
+
 ### `Facet::bulk_update`
 
 `Facet::bulk_update(source) { ... }` は、relative path ごとの Facet 更新を
 改行区切りで並べる special form です。
 
 - 返り値: `Result<S>`
-- 許可される update 形: `set`, `over`, `over_result`
+- 許可される update 形: `set`, `over`, `over_result`, `case_set`, `case_over`, `case_over_result`
 - nested path 形: `path { ... }`
 - 通常 block ではないため、任意の式や `S -> Result<S>` updater は置けない
+- `List.[expr]` は plain `Int`、`HashMap.[expr]` は plain `String` を要求する
+- `const Facet<...>` に含める bracket segment は literal のみ
 
 ```surtr
 updated =? Facet::bulk_update(user) {
@@ -578,6 +591,7 @@ updated =? Facet::bulk_update(user) {
   profile {
     nickname <- over_result({|name: Result<String>| Ok(name)})
   }
+  score_by_kind.[kind] <- set(9)
 }
 ```
 

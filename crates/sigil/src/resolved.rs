@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sindr::primitives::SurtrInt;
-use spire::ast::{AstTy, BinOp, FacetPathSegment, Lit, ProcessSpec, Span, Symbol, Visibility};
+use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, Symbol, Visibility};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedDeclAttrs {
@@ -50,6 +50,18 @@ pub struct ResolvedProcessSpec {
 pub struct ResolvedProcessHandlerUid {
     pub internal_name: Symbol,
     pub uid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedFacetBracketExpr {
+    pub expr: Box<Resolved>,
+    pub display: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ResolvedFacetPathSegment {
+    Field { name: Symbol, optional: bool },
+    Bracket(ResolvedFacetBracketExpr),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -149,10 +161,10 @@ pub enum Resolved {
     FieldAccess(Span, Box<Resolved>, Symbol),
 
     /// Non-identifier Facet path segment, or an identifier segment with an optional marker.
-    FacetSegmentAccess(Span, Box<Resolved>, FacetPathSegment),
+    FacetSegmentAccess(Span, Box<Resolved>, ResolvedFacetPathSegment),
 
     /// Inferred field/facet capture: `_.field` / `_.field.subfield`
-    InferredFacetCapture(Span, Vec<FacetPathSegment>),
+    InferredFacetCapture(Span, Vec<ResolvedFacetPathSegment>),
 
     /// Compiler-managed Facet shorthand capture: `~source.path`
     FacetCapture(Span, Box<Resolved>),

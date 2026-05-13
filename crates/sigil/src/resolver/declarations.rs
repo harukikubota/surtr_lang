@@ -2,6 +2,7 @@ use super::scope_init::initialize_scope;
 use super::scope_init::is_doc_only_builtin_decl;
 use super::*;
 use sindr::builtin::{builtin_type_meta_by_name, builtin_type_supports_inherent_impl};
+use spire::ast::FacetPathSegment;
 
 use serde::{Deserialize, Serialize};
 
@@ -406,6 +407,15 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             Ast::FieldAccess(span, Box::new(rewrite_self_ast(*expr, target)), field)
         }
         Ast::FacetSegmentAccess(span, expr, segment) => {
+            let segment = match segment {
+                FacetPathSegment::Field { .. } => segment,
+                FacetPathSegment::Bracket(expr) => {
+                    FacetPathSegment::Bracket(spire::ast::FacetBracketExpr {
+                        expr: Box::new(rewrite_self_ast(*expr.expr, target)),
+                        display: expr.display,
+                    })
+                }
+            };
             Ast::FacetSegmentAccess(span, Box::new(rewrite_self_ast(*expr, target)), segment)
         }
         Ast::StructLit(span, name, fields) => Ast::StructLit(

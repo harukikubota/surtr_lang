@@ -459,21 +459,16 @@ impl Parser<'_> {
             }
             Token::LBrack => {
                 self.advance();
-                let value = self.advance();
-                let segment = match value.token {
-                    Token::Int(index) => FacetPathSegment::ListIndex { index },
-                    Token::Str(key) => FacetPathSegment::MapKey { key },
-                    other => {
-                        return Err(ParseError::syntax(
-                            format!(
-                                "Facet path bracket segment expects an Int or String literal, got {other:?}"
-                            ),
-                            value.span,
-                        ));
-                    }
-                };
+                let expr = self.parse_expr()?;
                 let rbrack = self.expect(&Token::RBrack)?;
-                Ok((segment, rbrack))
+                let display = self.source[expr.span().start..expr.span().end].to_string();
+                Ok((
+                    FacetPathSegment::Bracket(FacetBracketExpr {
+                        expr: Box::new(expr),
+                        display,
+                    }),
+                    rbrack,
+                ))
             }
             Token::Int(_) => Err(ParseError::syntax(
                 "Expected field name after '.'. Tuple access uses ._0, ._1, ...",

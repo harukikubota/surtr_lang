@@ -2755,7 +2755,7 @@ user_score = &User.scores.[1]"#,
                 Ast::Capture(_, target, args)
                     if args.is_empty()
                         && matches!(target.as_ref(),
-                            Ast::FacetSegmentAccess(_, expr, FacetPathSegment::ListIndex { .. })
+                            Ast::FacetSegmentAccess(_, expr, FacetPathSegment::Bracket(_))
                                 if matches!(expr.as_ref(), Ast::Var(_, name) if name == "List")
                         )
             ));
@@ -2770,9 +2770,8 @@ user_score = &User.scores.[1]"#,
                 Ast::Capture(_, target, args)
                     if args.is_empty()
                         && matches!(target.as_ref(),
-                            Ast::FacetSegmentAccess(_, expr, FacetPathSegment::MapKey { key, .. })
-                                if key == "talk"
-                                    && matches!(expr.as_ref(), Ast::Var(_, name) if name == "HashMap")
+                            Ast::FacetSegmentAccess(_, expr, FacetPathSegment::Bracket(_))
+                                if matches!(expr.as_ref(), Ast::Var(_, name) if name == "HashMap")
                         )
             ));
         }
@@ -2786,7 +2785,7 @@ user_score = &User.scores.[1]"#,
                 Ast::Capture(_, target, args)
                     if args.is_empty()
                         && matches!(target.as_ref(),
-                            Ast::FacetSegmentAccess(_, expr, FacetPathSegment::ListIndex { .. })
+                            Ast::FacetSegmentAccess(_, expr, FacetPathSegment::Bracket(_))
                                 if matches!(expr.as_ref(),
                                     Ast::FieldAccess(_, owner, field)
                                         if field == "scores"
@@ -2796,6 +2795,51 @@ user_score = &User.scores.[1]"#,
             ));
         }
         other => panic!("Expected property bracket capture bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_facet_bracket_segments_parse_dynamic_expressions() {
+    let ast = parse(
+        r#"list_value = List.[index + 1]
+map_value = HashMap.[String::trim(raw_name)]
+Facet::bulk_update(book) {
+  scores.[n] <- set(1)
+}"#,
+    )
+    .unwrap();
+
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::FacetSegmentAccess(_, expr, FacetPathSegment::Bracket(_))
+                    if matches!(expr.as_ref(), Ast::Var(_, name) if name == "List")
+            ));
+        }
+        other => panic!("Expected dynamic List bracket bind, got {:?}", other),
+    }
+
+    match &ast[1] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::FacetSegmentAccess(_, expr, FacetPathSegment::Bracket(_))
+                    if matches!(expr.as_ref(), Ast::Var(_, name) if name == "HashMap")
+            ));
+        }
+        other => panic!("Expected dynamic HashMap bracket bind, got {:?}", other),
+    }
+
+    match &ast[2] {
+        Ast::BulkUpdate(_, _, entries) => {
+            assert!(matches!(
+                entries.as_slice(),
+                [BulkUpdateEntry { path, .. }]
+                    if matches!(path.as_slice(), [FacetPathSegment::Field { name, .. }, FacetPathSegment::Bracket(_)] if name == "scores")
+            ));
+        }
+        other => panic!("Expected bulk update, got {:?}", other),
     }
 }
 
@@ -3574,7 +3618,7 @@ fn parses_facet_index_and_key_segments() {
         RecordLitArg::Positional(Ast::FacetCapture(_, inner))
             if matches!(
                 inner.as_ref(),
-                Ast::FacetSegmentAccess(_, _, FacetPathSegment::MapKey { key, .. }) if key == "talk"
+                Ast::FacetSegmentAccess(_, _, FacetPathSegment::Bracket(_))
             )
     ));
 }
@@ -3584,12 +3628,12 @@ fn parses_container_root_facet_paths() {
     let ast = parse(r#"print(inspect(Facet::view(HashMap.["taro"], map)))"#).unwrap();
     let rendered = format!("{ast:?}");
     assert!(rendered.contains("FacetSegmentAccess"), "{rendered}");
-    assert!(rendered.contains("MapKey"), "{rendered}");
+    assert!(rendered.contains("Bracket"), "{rendered}");
 
     let ast = parse("print(inspect(Facet::view(List.[0], values)))").unwrap();
     let rendered = format!("{ast:?}");
     assert!(rendered.contains("FacetSegmentAccess"), "{rendered}");
-    assert!(rendered.contains("ListIndex"), "{rendered}");
+    assert!(rendered.contains("Bracket"), "{rendered}");
 }
 
 #[test]
@@ -3621,11 +3665,11 @@ fn parses_bulk_update_index_key_optional_and_case_actions() {
     assert_eq!(entries.len(), 4);
     assert!(matches!(
         entries[0].path[1],
-        FacetPathSegment::MapKey { .. }
+        FacetPathSegment::Bracket(_)
     ));
     assert!(matches!(
         entries[1].path[1],
-        FacetPathSegment::ListIndex { .. }
+        FacetPathSegment::Bracket(_)
     ));
     assert!(matches!(entries[2].kind, BulkUpdateEntryKind::CaseOver(_)));
     assert!(matches!(entries[3].kind, BulkUpdateEntryKind::CaseSet(_)));

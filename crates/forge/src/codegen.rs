@@ -3767,8 +3767,8 @@ fn facet_segment_label(segment: &TypedFacetSegment) -> String {
         TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
         TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
         TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
-        TypedFacetSegment::ListIndex { index, .. } => format!("[{index}]"),
-        TypedFacetSegment::MapKey { key, .. } => format!("[\"{}\"]", key.escape_default()),
+        TypedFacetSegment::ListIndex { display, .. }
+        | TypedFacetSegment::MapKey { display, .. } => format!("[{display}]"),
     }
 }
 
@@ -3781,8 +3781,7 @@ fn pending_facet_segment_label(segment: &PendingFacetSegment) -> String {
                 name.clone()
             }
         }
-        PendingFacetSegment::ListIndex { index } => format!("[{index}]"),
-        PendingFacetSegment::MapKey { key } => format!("[\"{}\"]", key.escape_default()),
+        PendingFacetSegment::Bracket { display, .. } => format!("[{display}]"),
     }
 }
 
@@ -3790,8 +3789,7 @@ fn pending_facet_segment_kind(segment: &PendingFacetSegment) -> &'static str {
     match segment {
         PendingFacetSegment::Field { name, .. } if name.starts_with('_') => "tuple",
         PendingFacetSegment::Field { .. } => "field",
-        PendingFacetSegment::ListIndex { .. } => "list index",
-        PendingFacetSegment::MapKey { .. } => "map key",
+        PendingFacetSegment::Bracket { .. } => "container segment",
     }
 }
 
@@ -3805,17 +3803,17 @@ fn facet_path_full_path(path: &TypedFacetPath) -> String {
                 }
                 rendered.push_str(&format!("._{field_index}"));
             }
-            TypedFacetSegment::ListIndex { index, .. } => {
+            TypedFacetSegment::ListIndex { display, .. } => {
                 if rendered.is_empty() {
                     rendered.push_str("List");
                 }
-                rendered.push_str(&format!(".[{index}]"));
+                rendered.push_str(&format!(".[{display}]"));
             }
-            TypedFacetSegment::MapKey { key, .. } => {
+            TypedFacetSegment::MapKey { display, .. } => {
                 if rendered.is_empty() {
                     rendered.push_str("HashMap");
                 }
-                rendered.push_str(&format!(".[\"{}\"]", key.escape_default()));
+                rendered.push_str(&format!(".[{display}]"));
             }
             other => {
                 if rendered.is_empty() {
@@ -3905,17 +3903,17 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                         }
                         prefix.push_str(&format!("._{field_index}"));
                     }
-                    TypedFacetSegment::ListIndex { index, .. } => {
+                    TypedFacetSegment::ListIndex { display, .. } => {
                         if prefix.is_empty() {
                             prefix.push_str("List.");
                         }
-                        prefix.push_str(&format!("[{index}]"));
+                        prefix.push_str(&format!("[{display}]"));
                     }
-                    TypedFacetSegment::MapKey { key, .. } => {
+                    TypedFacetSegment::MapKey { display, .. } => {
                         if prefix.is_empty() {
                             prefix.push_str("HashMap.");
                         }
-                        prefix.push_str(&format!("[\"{}\"]", key.escape_default()));
+                        prefix.push_str(&format!("[{display}]"));
                     }
                     _ => prefix.push_str(&label),
                 }
@@ -4000,7 +3998,7 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                     focus_ty: "_".to_string(),
                     fallible: matches!(
                         segment,
-                        PendingFacetSegment::ListIndex { .. } | PendingFacetSegment::MapKey { .. }
+                        PendingFacetSegment::Bracket { .. }
                     ),
                     reason: "requires Facet context to specialize".to_string(),
                 })
@@ -6526,6 +6524,7 @@ impl Codegen {
         source_is_result: bool,
     ) -> Result<(), CodegenError> {
         let returns_result = matches!(node.ty, Ty::Result(_, _));
+        let segment_slots = self.precompute_facet_segment_slots(path)?;
 
         if source_is_result {
             self.emit_node(source)?;
@@ -6553,7 +6552,13 @@ impl Codegen {
             self.state.next_slot += 1;
             self.emit(Opcode::StoreLocal(current_slot));
 
-            self.emit_facet_segments_from_local(current_slot, path, &node.span, Some(end_label))?;
+            self.emit_facet_segments_from_local(
+                current_slot,
+                path,
+                &segment_slots,
+                &node.span,
+                Some(end_label),
+            )?;
 
             let ok_tag = self.add_constant(Constant::Tag(0));
             self.emit(Opcode::LoadConst(ok_tag));
@@ -6571,7 +6576,13 @@ impl Codegen {
 
         if returns_result {
             let end_label = self.fresh_label();
-            self.emit_facet_segments_from_local(current_slot, path, &node.span, Some(end_label))?;
+            self.emit_facet_segments_from_local(
+                current_slot,
+                path,
+                &segment_slots,
+                &node.span,
+                Some(end_label),
+            )?;
 
             let ok_tag = self.add_constant(Constant::Tag(0));
             self.emit(Opcode::LoadConst(ok_tag));
@@ -6580,11 +6591,89 @@ impl Codegen {
 
             self.patch_label(end_label);
         } else {
-            self.emit_facet_segments_from_local(current_slot, path, &node.span, None)?;
+            self.emit_facet_segments_from_local(
+                current_slot,
+                path,
+                &segment_slots,
+                &node.span,
+                None,
+            )?;
             self.emit(Opcode::LoadLocal(current_slot));
         }
 
         Ok(())
+    }
+
+    fn precompute_facet_segment_slots(
+        &mut self,
+        path: &TypedFacetPath,
+    ) -> Result<Vec<Option<u32>>, CodegenError> {
+        let mut slots = Vec::with_capacity(path.segments.len());
+        for segment in &path.segments {
+            match segment {
+                TypedFacetSegment::ListIndex {
+                    index,
+                    literal_index,
+                    ..
+                } => {
+                    if literal_index.is_some() {
+                        slots.push(None);
+                    } else {
+                        self.emit_node(index)?;
+                        let slot = self.state.next_slot;
+                        self.state.next_slot += 1;
+                        self.emit(Opcode::StoreLocal(slot));
+                        slots.push(Some(slot));
+                    }
+                }
+                TypedFacetSegment::MapKey {
+                    key,
+                    literal_key,
+                    ..
+                } => {
+                    if literal_key.is_some() {
+                        slots.push(None);
+                    } else {
+                        self.emit_node(key)?;
+                        let slot = self.state.next_slot;
+                        self.state.next_slot += 1;
+                        self.emit(Opcode::StoreLocal(slot));
+                        slots.push(Some(slot));
+                    }
+                }
+                _ => slots.push(None),
+            }
+        }
+        Ok(slots)
+    }
+
+    fn emit_facet_segment_argument(
+        &mut self,
+        segment: &TypedFacetSegment,
+        slot: Option<u32>,
+        literal_index: Option<&SurtrInt>,
+        literal_key: Option<&String>,
+    ) -> Result<(), CodegenError> {
+        if let Some(slot) = slot {
+            self.emit(Opcode::LoadLocal(slot));
+            return Ok(());
+        }
+        if let Some(index) = literal_index {
+            let index_const = self.add_constant(Constant::Int(index.clone()));
+            self.emit(Opcode::LoadConst(index_const));
+            return Ok(());
+        }
+        if let Some(key) = literal_key {
+            let key_const = self.add_constant(Constant::Str(key.clone()));
+            self.emit(Opcode::LoadConst(key_const));
+            return Ok(());
+        }
+
+        match segment {
+            TypedFacetSegment::ListIndex { index, .. } => self.emit_node(index),
+            TypedFacetSegment::MapKey { key, .. } => self.emit_node(key),
+            _ => Ok(()),
+        }
     }
 
     fn emit_facet_set(
@@ -6596,6 +6685,7 @@ impl Codegen {
         source_is_result: bool,
         mode: TypedFacetSetMode,
     ) -> Result<(), CodegenError> {
+        let segment_slots = self.precompute_facet_segment_slots(path)?;
         self.emit_node(source)?;
         let source_slot = self.state.next_slot;
         self.state.next_slot += 1;
@@ -6615,7 +6705,14 @@ impl Codegen {
             }
         };
 
-        self.emit_facet_update_from_source_slot(node, source_slot, path, source_is_result, leaf)
+        self.emit_facet_update_from_source_slot(
+            node,
+            source_slot,
+            path,
+            &segment_slots,
+            source_is_result,
+            leaf,
+        )
     }
 
     fn emit_facet_over(
@@ -6627,6 +6724,7 @@ impl Codegen {
         source_is_result: bool,
         mode: TypedFacetOverMode,
     ) -> Result<(), CodegenError> {
+        let segment_slots = self.precompute_facet_segment_slots(path)?;
         self.emit_node(source)?;
         let source_slot = self.state.next_slot;
         self.state.next_slot += 1;
@@ -6647,6 +6745,7 @@ impl Codegen {
             node,
             source_slot,
             path,
+            &segment_slots,
             source_is_result,
             FacetUpdateLeaf::Over {
                 update_fun_slot,
@@ -6661,6 +6760,7 @@ impl Codegen {
         node: &TypedNode,
         source_slot: u32,
         path: &TypedFacetPath,
+        segment_slots: &[Option<u32>],
         source_is_result: bool,
         leaf: FacetUpdateLeaf,
     ) -> Result<(), CodegenError> {
@@ -6698,7 +6798,15 @@ impl Codegen {
             source_slot
         };
 
-        self.emit_facet_update_at_path(root_slot, path, 0, leaf, &node.span, end_label)?;
+        self.emit_facet_update_at_path(
+            root_slot,
+            path,
+            segment_slots,
+            0,
+            leaf,
+            &node.span,
+            end_label,
+        )?;
 
         if returns_result {
             let ok_tag = self.add_constant(Constant::Tag(0));
@@ -6746,6 +6854,7 @@ impl Codegen {
         &mut self,
         current_slot: u32,
         path: &TypedFacetPath,
+        segment_slots: &[Option<u32>],
         segment_idx: usize,
         leaf: FacetUpdateLeaf,
         span: &Span,
@@ -6772,6 +6881,7 @@ impl Codegen {
                 self.emit_facet_update_at_path(
                     focus_slot,
                     path,
+                    segment_slots,
                     segment_idx + 1,
                     leaf,
                     span,
@@ -6809,6 +6919,7 @@ impl Codegen {
                 self.emit_facet_update_at_path(
                     focus_slot,
                     path,
+                    segment_slots,
                     segment_idx + 1,
                     leaf,
                     span,
@@ -6826,12 +6937,16 @@ impl Codegen {
                 self.emit(Opcode::TupleNew { len: *tuple_len });
                 self.emit(Opcode::StoreLocal(current_slot));
             }
-            TypedFacetSegment::ListIndex { index, .. } => {
+            TypedFacetSegment::ListIndex { literal_index, .. } => {
                 let focus_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(current_slot));
-                let index_const = self.add_constant(Constant::Int(index.clone()));
-                self.emit(Opcode::LoadConst(index_const));
+                self.emit_facet_segment_argument(
+                    &path.segments[segment_idx],
+                    segment_slots[segment_idx],
+                    literal_index.as_ref(),
+                    None,
+                )?;
                 self.emit_internal_builtin_call("__facet_list_get", 2, span)?;
                 let get_result_slot = self.state.next_slot;
                 self.state.next_slot += 1;
@@ -6841,6 +6956,7 @@ impl Codegen {
                 self.emit_facet_update_at_path(
                     focus_slot,
                     path,
+                    segment_slots,
                     segment_idx + 1,
                     leaf,
                     span,
@@ -6848,7 +6964,12 @@ impl Codegen {
                 )?;
 
                 self.emit(Opcode::LoadLocal(current_slot));
-                self.emit(Opcode::LoadConst(index_const));
+                self.emit_facet_segment_argument(
+                    &path.segments[segment_idx],
+                    segment_slots[segment_idx],
+                    literal_index.as_ref(),
+                    None,
+                )?;
                 self.emit(Opcode::LoadLocal(focus_slot));
                 self.emit_internal_builtin_call("__facet_list_set", 3, span)?;
                 let set_result_slot = self.state.next_slot;
@@ -6860,12 +6981,16 @@ impl Codegen {
                     failure_end,
                 );
             }
-            TypedFacetSegment::MapKey { key, .. } => {
+            TypedFacetSegment::MapKey { literal_key, .. } => {
                 let focus_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(current_slot));
-                let key_const = self.add_constant(Constant::Str(key.clone()));
-                self.emit(Opcode::LoadConst(key_const));
+                self.emit_facet_segment_argument(
+                    &path.segments[segment_idx],
+                    segment_slots[segment_idx],
+                    None,
+                    literal_key.as_ref(),
+                )?;
                 self.emit_internal_builtin_call("__facet_map_get", 2, span)?;
                 let get_result_slot = self.state.next_slot;
                 self.state.next_slot += 1;
@@ -6875,6 +7000,7 @@ impl Codegen {
                 self.emit_facet_update_at_path(
                     focus_slot,
                     path,
+                    segment_slots,
                     segment_idx + 1,
                     leaf,
                     span,
@@ -6882,7 +7008,12 @@ impl Codegen {
                 )?;
 
                 self.emit(Opcode::LoadLocal(current_slot));
-                self.emit(Opcode::LoadConst(key_const));
+                self.emit_facet_segment_argument(
+                    &path.segments[segment_idx],
+                    segment_slots[segment_idx],
+                    None,
+                    literal_key.as_ref(),
+                )?;
                 self.emit(Opcode::LoadLocal(focus_slot));
                 self.emit_internal_builtin_call("__facet_map_set_existing", 3, span)?;
                 let set_result_slot = self.state.next_slot;
@@ -6969,6 +7100,7 @@ impl Codegen {
                 self.emit_facet_update_at_path(
                     focus_slot,
                     path,
+                    segment_slots,
                     segment_idx + 1,
                     leaf,
                     span,
@@ -7133,6 +7265,7 @@ impl Codegen {
         &mut self,
         current_slot: u32,
         path: &TypedFacetPath,
+        segment_slots: &[Option<u32>],
         span: &Span,
         mismatch_end: Option<Label>,
     ) -> Result<(), CodegenError> {
@@ -7152,7 +7285,7 @@ impl Codegen {
                     });
                     self.emit(Opcode::StoreLocal(current_slot));
                 }
-                TypedFacetSegment::ListIndex { index, .. } => {
+                TypedFacetSegment::ListIndex { literal_index, .. } => {
                     let Some(end_label) = mismatch_end else {
                         return Err(CodegenError {
                             message:
@@ -7162,15 +7295,19 @@ impl Codegen {
                         });
                     };
                     self.emit(Opcode::LoadLocal(current_slot));
-                    let index_const = self.add_constant(Constant::Int(index.clone()));
-                    self.emit(Opcode::LoadConst(index_const));
+                    self.emit_facet_segment_argument(
+                        segment,
+                        segment_slots[segment_idx],
+                        literal_index.as_ref(),
+                        None,
+                    )?;
                     self.emit_internal_builtin_call("__facet_list_get", 2, span)?;
                     let result_slot = self.state.next_slot;
                     self.state.next_slot += 1;
                     self.emit(Opcode::StoreLocal(result_slot));
                     self.emit_unwrap_result_to_local_or_jump(result_slot, current_slot, end_label);
                 }
-                TypedFacetSegment::MapKey { key, .. } => {
+                TypedFacetSegment::MapKey { literal_key, .. } => {
                     let Some(end_label) = mismatch_end else {
                         return Err(CodegenError {
                             message:
@@ -7180,8 +7317,12 @@ impl Codegen {
                         });
                     };
                     self.emit(Opcode::LoadLocal(current_slot));
-                    let key_const = self.add_constant(Constant::Str(key.clone()));
-                    self.emit(Opcode::LoadConst(key_const));
+                    self.emit_facet_segment_argument(
+                        segment,
+                        segment_slots[segment_idx],
+                        None,
+                        literal_key.as_ref(),
+                    )?;
                     self.emit_internal_builtin_call("__facet_map_get", 2, span)?;
                     let result_slot = self.state.next_slot;
                     self.state.next_slot += 1;
@@ -7265,8 +7406,8 @@ impl Codegen {
             TypedFacetSegment::Field { field_name, .. } => format!(".{}", field_name),
             TypedFacetSegment::Tuple { field_index, .. } => format!("._{}", field_index),
             TypedFacetSegment::Variant { variant_name, .. } => format!(".{}", variant_name),
-            TypedFacetSegment::ListIndex { index, .. } => format!(".[{index}]"),
-            TypedFacetSegment::MapKey { key, .. } => format!(".[\"{}\"]", key.escape_default()),
+            TypedFacetSegment::ListIndex { display, .. }
+            | TypedFacetSegment::MapKey { display, .. } => format!(".[{display}]"),
         }
     }
 

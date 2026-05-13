@@ -9,7 +9,7 @@ use sindr::builtin::{
     builtin_type_meta_by_name, builtin_uid, BuiltinMeta, BUILTIN_METAS, BUILTIN_TYPE_METAS,
 };
 use sindr::policy::{ExitCodePolicy, RuntimeSourcePolicy};
-use spire::ast::{AstTy, BinOp, FacetPathSegment, Lit, Span};
+use spire::ast::{AstTy, BinOp, Lit, Span};
 
 use crate::env::{TypeEnv, TypeKind};
 use crate::error::TypeError;

@@ -296,11 +296,16 @@ pub struct AstMatchArm {
     pub body: Ast,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct FacetBracketExpr {
+    pub expr: Box<Ast>,
+    pub display: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum FacetPathSegment {
     Field { name: Symbol, optional: bool },
-    ListIndex { index: SurtrInt },
-    MapKey { key: String },
+    Bracket(FacetBracketExpr),
 }
 
 impl FacetPathSegment {
@@ -327,8 +332,7 @@ impl FacetPathSegment {
                     name.clone()
                 }
             }
-            Self::ListIndex { index } => format!("[{index}]"),
-            Self::MapKey { key } => format!("[\"{}\"]", key.escape_default()),
+            Self::Bracket(expr) => format!("[{}]", expr.display),
         }
     }
 }

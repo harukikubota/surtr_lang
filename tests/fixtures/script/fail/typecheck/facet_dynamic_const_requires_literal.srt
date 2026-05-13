@@ -1,0 +1,1 @@
+const PATH: Facet<List<Int>, Int> = List.[if(True, 0, 1)]

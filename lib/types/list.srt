@@ -4,6 +4,19 @@ Standard `List` type declaration.
 patterns.
 The canonical builtin head is `List<$A>`, and the compiler validates that exact
 shape at this file's top level.
+
+Facet path note:
+
+- `List.[expr]` selects a list element through a Facet path
+- `expr` must have plain `Int` type
+- the same syntax is available in value-side sugar such as `values.[index + 1]`
+- `const Facet<...>` still requires a literal bracket segment such as `List.[0]`
+
+Examples:
+
+- `Facet::view(List.[1], [10, 20, 30])`
+- `Facet::view(List.[index + 1], scores)`
+- `Facet::set(User.scores.[slot], user, 99)`
 """
 @builtin type List<$A>
 

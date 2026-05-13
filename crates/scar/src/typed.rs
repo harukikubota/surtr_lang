@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sigil::resolved::{ResolvedId, ResolvedProcessHandlerUid, ResolvedProcessSpec};
+use sigil::resolved::{Resolved, ResolvedId, ResolvedProcessHandlerUid, ResolvedProcessSpec};
 use sindr::primitives::SurtrInt;
 use spire::ast::{BinOp, Lit, ProcessSpec, Span, SupervisorInitSpec, Visibility};
 
@@ -151,12 +151,16 @@ pub enum TypedFacetSegment {
         focus_type_name: Option<String>,
     },
     ListIndex {
-        index: SurtrInt,
+        index: Box<TypedNode>,
+        display: String,
+        literal_index: Option<SurtrInt>,
         focus_readonly_root: bool,
         focus_type_name: Option<String>,
     },
     MapKey {
-        key: String,
+        key: Box<TypedNode>,
+        display: String,
+        literal_key: Option<String>,
         focus_readonly_root: bool,
         focus_type_name: Option<String>,
     },
@@ -226,11 +230,16 @@ pub struct PendingFacetPath {
     pub segments: Vec<PendingFacetSegment>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PendingFacetExpr {
+    Resolved(Box<Resolved>),
+    Typed(Box<TypedNode>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PendingFacetSegment {
     Field { name: String, optional: bool },
-    ListIndex { index: SurtrInt },
-    MapKey { key: String },
+    Bracket { expr: PendingFacetExpr, display: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

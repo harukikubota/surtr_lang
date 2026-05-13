@@ -3412,7 +3412,7 @@ names = users |*> _.score.["talk"]"#,
     .unwrap();
     let rendered = format!("{resolved:?}");
     assert!(rendered.contains("InferredFacetCapture"), "{rendered}");
-    assert!(rendered.contains("MapKey"), "{rendered}");
+    assert!(rendered.contains("Bracket"), "{rendered}");
 }
 
 #[test]
@@ -3433,7 +3433,7 @@ value = Facet::view(HashMap.["taro"], map)"#,
     .unwrap();
     let rendered = format!("{resolved:?}");
     assert!(rendered.contains("HashMap"), "{rendered}");
-    assert!(rendered.contains("MapKey"), "{rendered}");
+    assert!(rendered.contains("Bracket"), "{rendered}");
 
     let resolved = resolve_user_with_modules(
         r#"values = []
@@ -3443,7 +3443,7 @@ value = Facet::view(List.[0], values)"#,
     .unwrap();
     let rendered = format!("{resolved:?}");
     assert!(rendered.contains("List"), "{rendered}");
-    assert!(rendered.contains("ListIndex"), "{rendered}");
+    assert!(rendered.contains("Bracket"), "{rendered}");
 }
 
 #[test]
