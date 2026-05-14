@@ -495,6 +495,14 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         eq_helper_typechecks_as_trait_call as fn(),
     ),
     (
+        "eq_helper_mismatch_uses_operator_helper_message",
+        eq_helper_mismatch_uses_operator_helper_message as fn(),
+    ),
+    (
+        "shadowed_eq_keeps_generic_call_mismatch_message",
+        shadowed_eq_keeps_generic_call_mismatch_message as fn(),
+    ),
+    (
         "concat_helper_typechecks_as_trait_call",
         concat_helper_typechecks_as_trait_call as fn(),
     ),
@@ -3325,6 +3333,29 @@ fn eq_helper_typechecks_as_trait_call() {
     }
 }
 
+fn eq_helper_mismatch_uses_operator_helper_message() {
+    let resolved = resolve_with_builtin_prelude("print(to_string(eq(1, True)))");
+    let err = typecheck(resolved).expect_err("eq helper mismatch must fail");
+    assert!(err
+        .message
+        .contains("Eq::eq helper cannot compare Int and Boolean"));
+}
+
+fn shadowed_eq_keeps_generic_call_mismatch_message() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"def eq(left: String, right: String) -> Boolean {
+  True
+}
+
+print(to_string(eq(1, True)))"#,
+    );
+    let err = typecheck(resolved).expect_err("shadowed eq should use generic call checking");
+    assert!(err
+        .message
+        .contains("Argument type mismatch: expected String, got Int"));
+    assert!(!err.message.contains("Eq::eq helper"));
+}
+
 fn concat_helper_typechecks_as_trait_call() {
     let typed = typecheck_with_builtin_prelude(r#"value = concat("a", "b")"#);
     let bind = typed.last().expect("binding should exist");
@@ -4797,17 +4828,19 @@ less = 10ms < 20ms"#,
     }
 
     assert!(
-        trait_calls.iter().any(|(trait_name, method_name, _, origin)| {
-            *trait_name == "Compare"
-                && *method_name == "lt"
-                && matches!(
-                    origin,
-                    scar::typed::TraitCallOrigin::Comparison {
-                        op: scar::typed::ComparisonOperator::Lt,
-                        ..
-                    }
-                )
-        }),
+        trait_calls
+            .iter()
+            .any(|(trait_name, method_name, _, origin)| {
+                *trait_name == "Compare"
+                    && *method_name == "lt"
+                    && matches!(
+                        origin,
+                        scar::typed::TraitCallOrigin::Comparison {
+                            op: scar::typed::ComparisonOperator::Lt,
+                            ..
+                        }
+                    )
+            }),
         "< should lower through Compare::lt with a comparison origin"
     );
 }
@@ -5043,9 +5076,7 @@ fn add_trait_missing_receiver_lists_available_implementations() {
 fn add_operator_missing_impl_lists_available_implementations_in_hint() {
     let resolved = resolve_with_builtin_prelude("value = False + True");
     let err = typecheck(resolved).expect_err("invalid add operator must fail");
-    assert!(err
-        .message
-        .contains("`+` requires both operands to implement Add"));
+    assert!(err.message.contains("`+` is not defined for Boolean"));
     let hint = err.hint.as_deref().expect("operator hint");
     assert!(hint.contains("Add is implemented for: Duration, Float, Int"));
 }

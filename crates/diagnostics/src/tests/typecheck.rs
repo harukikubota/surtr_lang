@@ -2,7 +2,7 @@
 fn type_error_spec_labels_backtick_operator_operands() {
     let source = "bad = 1 `+` \"oops\"";
     let err = TypeError {
-            message: "Cannot apply Add to Int and String".into(),
+            message: "`+` requires the same type on both sides, but got Int and String".into(),
             span: Span { start: 6, end: 18 },
             hint: Some(
                 "Operator `Add` requires compatible operand types. Left operand is Int, right operand is String."
@@ -25,19 +25,18 @@ fn type_error_spec_labels_backtick_operator_operands() {
     assert!(spec
         .labels
         .iter()
-        .any(|label| strip_ansi(&label.message) == "   OP rule: A + A -> A (where A: Add)"));
+        .any(|label| strip_ansi(&label.message) == "   OP rule: A + A -> A"));
     assert!(spec
         .labels
         .iter()
         .any(|label| strip_ansi(&label.message) == "RHS actual: String"));
     assert!(notes_text.contains("Step: Int + String -> <type error>"));
-    assert!(notes_text.contains(
-        "Reason: `+` requires the same operator trait type on both sides, but got Int and String."
-    ));
+    assert!(notes_text
+        .contains("Reason: `+` requires the same type on both sides, but got Int and String."));
     assert!(spec
         .help
         .as_deref()
-        .is_some_and(|help| help.contains("same Add type")));
+        .is_some_and(|help| help.contains("same type on both sides")));
 }
 
 #[test]
@@ -45,7 +44,7 @@ fn type_error_spec_picks_symbol_operator_outside_literals() {
     let source = r#""+" + "value""#;
     let rhs_start = source.rfind("\"value\"").expect("rhs literal");
     let err = TypeError {
-            message: "Cannot apply Add to String and String".into(),
+            message: "`+` is not defined for String".into(),
             span: Span {
                 start: rhs_start,
                 end: source.chars().count(),
@@ -60,7 +59,7 @@ fn type_error_spec_picks_symbol_operator_outside_literals() {
     let op = spec
         .labels
         .iter()
-        .find(|label| strip_ansi(&label.message) == "   OP rule: A + A -> A (where A: Add)")
+        .find(|label| strip_ansi(&label.message) == "   OP rule: A + A -> A")
         .expect("operator label");
     let lhs = spec
         .labels
@@ -76,7 +75,7 @@ fn type_error_spec_picks_symbol_operator_outside_literals() {
 fn type_error_spec_formats_eq_operator_with_three_captions() {
     let source = "print(to_string(1 == True))";
     let err = TypeError {
-        message: "Cannot compare Int and Boolean".into(),
+        message: "`==` requires the same type on both sides, but got Int and Boolean".into(),
         span: Span { start: 16, end: 25 },
         hint: None,
     };
@@ -110,7 +109,7 @@ fn type_error_spec_formats_eq_operator_with_three_captions() {
 fn type_error_spec_distinguishes_neq_operator_from_source() {
     let source = "print(to_string(1 != True))";
     let err = TypeError {
-        message: "Cannot compare Int and Boolean".into(),
+        message: "`!=` requires the same type on both sides, but got Int and Boolean".into(),
         span: Span { start: 16, end: 25 },
         hint: None,
     };
@@ -136,7 +135,7 @@ fn type_error_spec_distinguishes_neq_operator_from_source() {
 fn type_error_spec_distinguishes_lt_operator_from_source() {
     let source = "print(to_string(1 < True))";
     let err = TypeError {
-        message: "Cannot compare Int and Boolean".into(),
+        message: "`<` requires the same type on both sides, but got Int and Boolean".into(),
         span: Span { start: 16, end: 24 },
         hint: None,
     };
@@ -152,12 +151,39 @@ fn type_error_spec_distinguishes_lt_operator_from_source() {
     assert!(spec
         .labels
         .iter()
-        .any(|label| strip_ansi(&label.message)
-            == "   OP rule: A < A -> Boolean (where A: Compare)"));
+        .any(|label| strip_ansi(&label.message) == "   OP rule: A < A -> Boolean"));
     assert!(notes_text.contains("Step: Int < Boolean -> Boolean"));
     assert!(notes_text.contains(
         "Reason: `<` compares two ordered values of the same type, but got Int and Boolean."
     ));
+}
+
+#[test]
+fn type_error_spec_distinguishes_same_type_but_undefined_open_operator() {
+    let source = "bad = False + True";
+    let err = TypeError {
+        message: "`+` is not defined for Boolean".into(),
+        span: Span { start: 6, end: 18 },
+        hint: Some("Add is implemented for: Duration, Float, Int.".into()),
+    };
+
+    let spec = type_error_spec(source, &err);
+    let notes_text = spec
+        .notes
+        .iter()
+        .map(|note| strip_ansi(note))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(spec
+        .labels
+        .iter()
+        .any(|label| strip_ansi(&label.message) == "   OP rule: A + A -> A"));
+    assert!(notes_text.contains("Reason: `+` is not defined for Boolean."));
+    assert!(spec
+        .help
+        .as_deref()
+        .is_some_and(|help| help.contains("Add is implemented for: Duration, Float, Int.")));
 }
 
 #[test]
@@ -194,10 +220,54 @@ fn type_error_spec_formats_concat_operator_with_three_captions() {
 }
 
 #[test]
+fn type_error_spec_canonicalizes_eq_helper_as_operator_surface() {
+    let source = "print(to_string(eq(1, True)))";
+    let true_start = source.find("True").expect("rhs arg");
+    let err = TypeError {
+        message: "Eq::eq helper cannot compare Int and Boolean".into(),
+        span: Span {
+            start: true_start,
+            end: true_start + "True".chars().count(),
+        },
+        hint: None,
+    };
+
+    let spec = type_error_spec(source, &err);
+    let notes_text = spec
+        .notes
+        .iter()
+        .map(|note| strip_ansi(note))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(spec
+        .labels
+        .iter()
+        .any(|label| strip_ansi(&label.message) == "LHS actual: Int"));
+    assert!(spec
+        .labels
+        .iter()
+        .any(|label| strip_ansi(&label.message) == "   OP rule: A == A -> Boolean"));
+    assert!(spec
+        .labels
+        .iter()
+        .any(|label| strip_ansi(&label.message) == "RHS actual: Boolean"));
+    assert!(notes_text.contains("Step: Int == Boolean -> Boolean"));
+    assert!(notes_text
+        .contains("Reason: `==` compares two values of the same type, but got Int and Boolean."));
+    let op = spec
+        .labels
+        .iter()
+        .find(|label| strip_ansi(&label.message) == "   OP rule: A == A -> Boolean")
+        .expect("operator label");
+    assert_eq!(slice_chars(source, op.span.start, op.span.end), "eq");
+}
+
+#[test]
 fn type_error_spec_colors_generic_binary_operator_note_only() {
     let source = "bad = 1 `*` \"oops\"";
     let err = TypeError {
-        message: "Cannot apply Mul to Int and String".into(),
+        message: "`*` requires the same type on both sides, but got Int and String".into(),
         span: Span { start: 6, end: 18 },
         hint: None,
     };
@@ -348,7 +418,7 @@ fn render_flow_operator_error_keeps_actual_types_out_of_help() {
 fn binary_operator_error_preserves_trait_implementation_hint_in_help() {
     let source = "bad = False + True";
     let err = TypeError {
-        message: "`+` requires both operands to implement Add".into(),
+        message: "`+` is not defined for Boolean".into(),
         span: Span { start: 6, end: 18 },
         hint: Some("Add is implemented for: Duration, Float, Int.".into()),
     };

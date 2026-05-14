@@ -108,7 +108,7 @@ fn type_error_spec_splits_total_bind_pattern_error_into_lhs_op_rhs() {
             && slice_chars(source, label.span.start, label.span.end) == "[h, ..t]"
     }));
     assert!(spec.labels.iter().any(|label| {
-        label.message == "Use `=?` for partial destructuring and extractor-driven matches."
+        label.message == "Bind rule: `=` accepts only total MatchBlock patterns."
             && label.color == Some(Color::Yellow)
             && slice_chars(source, label.span.start, label.span.end) == "="
     }));
@@ -117,7 +117,10 @@ fn type_error_spec_splits_total_bind_pattern_error_into_lhs_op_rhs() {
             && label.color.is_none()
             && slice_chars(source, label.span.start, label.span.end) == "[1]"
     }));
-    assert!(spec.help.is_none());
+    assert_eq!(
+        spec.help.as_deref(),
+        Some("Use `=?` for partial destructuring and extractor-driven matches.")
+    );
 }
 
 #[test]

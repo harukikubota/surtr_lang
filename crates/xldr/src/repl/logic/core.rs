@@ -4507,6 +4507,25 @@ impl ReplEngine {
         args.iter().map(|arg| self.query_arg_type(arg)).collect()
     }
 
+    fn repl_operator_query_unresolved_generic_error() -> String {
+        format!(
+            "Cannot use unresolved generic binding in REPL operator query. {}",
+            REPL_UNRESOLVED_TYPE_HINT
+        )
+    }
+
+    fn repl_typed_operator_operand_error(source: &str) -> String {
+        format!(
+            "Unsupported typed operator query operand `{source}`. Use an existing binding or a concrete type such as `(Int -> String)`."
+        )
+    }
+
+    fn repl_operator_query_rhs_error(operator: &str) -> String {
+        format!(
+            "Unsupported operator query `{operator}`. Use a direct callable or binding on the right-hand side."
+        )
+    }
+
     fn query_arg_ast_types(&self, args: &[QueryArg]) -> Result<Vec<AstTy>, String> {
         args.iter().map(|arg| self.query_arg_ast_ty(arg)).collect()
     }
@@ -4517,13 +4536,11 @@ impl ReplEngine {
                 let Some(ty) = self.binding_type(name) else {
                     return Err(format!("Unknown query binding `{name}`."));
                 };
-                let parsed = parse_binding_query_type(&ty)
-                    .ok_or_else(|| format!("Binding `{name}` has unsupported query type `{ty}`."))?;
+                let parsed = parse_binding_query_type(&ty).ok_or_else(|| {
+                    format!("Binding `{name}` has unsupported query type `{ty}`.")
+                })?;
                 if ast_ty_contains_query_placeholder(&parsed) {
-                    return Err(format!(
-                        "Cannot use unresolved generic binding in REPL operator query. {}",
-                        REPL_UNRESOLVED_TYPE_HINT
-                    ));
+                    return Err(Self::repl_operator_query_unresolved_generic_error());
                 }
                 Ok(parsed)
             }
@@ -4531,33 +4548,23 @@ impl ReplEngine {
                 let Some(ty) = self.binding_type(name) else {
                     return Err(format!("Unknown query binding `{name}`."));
                 };
-                let parsed = parse_binding_query_type(&ty)
-                    .ok_or_else(|| format!("Binding `{name}` has unsupported query type `{ty}`."))?;
+                let parsed = parse_binding_query_type(&ty).ok_or_else(|| {
+                    format!("Binding `{name}` has unsupported query type `{ty}`.")
+                })?;
                 if ast_ty_contains_query_placeholder(&parsed) {
-                    return Err(format!(
-                        "Cannot use unresolved generic binding in REPL operator query. {}",
-                        REPL_UNRESOLVED_TYPE_HINT
-                    ));
+                    return Err(Self::repl_operator_query_unresolved_generic_error());
                 }
                 Ok(parsed)
             }
             QueryArgKind::Capture(capture) => self.capture_query_type(capture),
-            QueryArgKind::PipePlaceholder => Err(
-                "Pipe placeholder `_1` is only valid inside a top-level `|>` call."
-                    .to_string(),
-            ),
-            QueryArgKind::TypeExpr(_) => ast_ty_from_query_arg(arg).ok_or_else(|| {
-                format!(
-                    "Unsupported typed operator query operand `{}`. Use an existing binding or a concrete type such as `(Int -> String)`.",
-                    arg.source
-                )
-            }),
+            QueryArgKind::PipePlaceholder => {
+                Err("Pipe placeholder `_1` is only valid inside a top-level `|>` call.".to_string())
+            }
+            QueryArgKind::TypeExpr(_) => ast_ty_from_query_arg(arg)
+                .ok_or_else(|| Self::repl_typed_operator_operand_error(&arg.source)),
         }?;
         if ast_ty_contains_query_placeholder(&ty) {
-            return Err(format!(
-                "Cannot use unresolved generic binding in REPL operator query. {}",
-                REPL_UNRESOLVED_TYPE_HINT
-            ));
+            return Err(Self::repl_operator_query_unresolved_generic_error());
         }
         Ok(ty)
     }
@@ -4567,23 +4574,10 @@ impl ReplEngine {
         query: &TypedOperatorQuery,
     ) -> Result<(String, AstTy), String> {
         let OperatorRhs::QueryArg(rhs) = &query.rhs else {
-            return Err(format!(
-                "Unsupported operator query `{}`. Use a direct callable or binding on the right-hand side.",
-                query.operator
-            ));
+            return Err(Self::repl_operator_query_rhs_error(query.operator));
         };
-        let lhs_ty = self.query_arg_ast_ty(&query.lhs).map_err(|_| {
-            format!(
-                "Unsupported typed operator query operand `{}`. Use an existing binding or a concrete type such as `(Int -> String)`.",
-                query.lhs.source
-            )
-        })?;
-        let rhs_ty = self.query_arg_ast_ty(rhs).map_err(|_| {
-            format!(
-                "Unsupported typed operator query operand `{}`. Use an existing binding or a concrete type such as `(Int -> String)`.",
-                rhs.source
-            )
-        })?;
+        let lhs_ty = self.query_arg_ast_ty(&query.lhs)?;
+        let rhs_ty = self.query_arg_ast_ty(rhs)?;
         match query.operator {
             "|>" => {
                 let (params, ret) = Self::query_unary_func_parts(&rhs_ty, "|>")?;

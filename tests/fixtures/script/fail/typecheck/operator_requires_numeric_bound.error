@@ -1,2 +1,2 @@
 phase: typecheck
-contains: requires both operands to implement Add
+contains: `+` is not defined for $

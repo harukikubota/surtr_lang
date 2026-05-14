@@ -2087,20 +2087,23 @@ impl Checker {
                         let Ty::UserFunc { fun_idx, .. } = function_ty else {
                             return None;
                         };
-                        let display_name = method
-                            .display_name_override
-                            .clone()
-                            .or_else(|| {
-                                method.function_id.qualified_name.as_deref().map(|qualified_name| {
-                                    callable_definition_display_name(
-                                        qualified_name,
-                                        &method.function_id.name,
+                        let display_name =
+                            method
+                                .display_name_override
+                                .clone()
+                                .or_else(|| {
+                                    method.function_id.qualified_name.as_deref().map(
+                                        |qualified_name| {
+                                            callable_definition_display_name(
+                                                qualified_name,
+                                                &method.function_id.name,
+                                            )
+                                        },
                                     )
                                 })
-                            })
-                            .unwrap_or_else(|| {
-                                Checker::surface_name(&method.function_id.name).into()
-                            });
+                                .unwrap_or_else(|| {
+                                    Checker::surface_name(&method.function_id.name).into()
+                                });
                         return Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
                             name: display_name,
                             fun_idx: *fun_idx,
@@ -2179,12 +2182,16 @@ impl Checker {
                     .display_name_override
                     .clone()
                     .or_else(|| {
-                        method.function_id.qualified_name.as_deref().map(|qualified_name| {
-                            callable_definition_display_name(
-                                qualified_name,
-                                &method.function_id.name,
-                            )
-                        })
+                        method
+                            .function_id
+                            .qualified_name
+                            .as_deref()
+                            .map(|qualified_name| {
+                                callable_definition_display_name(
+                                    qualified_name,
+                                    &method.function_id.name,
+                                )
+                            })
                     })
                     .unwrap_or_else(|| Checker::surface_name(&method.function_id.name).into());
                 return Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
@@ -2435,12 +2442,34 @@ impl Checker {
                 if typed_args.len() == 2 {
                     let left_ty = self.ty_name(&typed_args[0].ty);
                     let right_ty = self.ty_name(&typed_args[1].ty);
-                    if self.trait_matches_short_name(trait_name, "Eq")
-                        || self.trait_matches_short_name(trait_name, "Neq")
-                        || self.trait_matches_short_name(trait_name, "Compare")
+                    if self.trait_matches_short_name(trait_name, "Eq") && method_name == "eq" {
+                        return Err(TypeError {
+                            message: format!(
+                                "Eq::eq helper cannot compare {} and {}",
+                                left_ty, right_ty
+                            ),
+                            span: arg.span.clone(),
+                            hint: trait_hint(self),
+                        });
+                    }
+                    if self.trait_matches_short_name(trait_name, "Neq") && method_name == "neq" {
+                        return Err(TypeError {
+                            message: format!(
+                                "Neq::neq helper cannot compare {} and {}",
+                                left_ty, right_ty
+                            ),
+                            span: arg.span.clone(),
+                            hint: trait_hint(self),
+                        });
+                    }
+                    if self.trait_matches_short_name(trait_name, "Compare")
+                        && method_name == "compare"
                     {
                         return Err(TypeError {
-                            message: format!("Cannot compare {} and {}", left_ty, right_ty),
+                            message: format!(
+                                "Compare::compare helper cannot compare {} and {}",
+                                left_ty, right_ty
+                            ),
                             span: arg.span.clone(),
                             hint: trait_hint(self),
                         });
@@ -2448,8 +2477,8 @@ impl Checker {
                     if self.trait_matches_short_name(trait_name, "Concat") {
                         return Err(TypeError {
                             message: format!(
-                                "++ requires (String, String), got ({}, {})",
-                                left_ty, right_ty
+                                "Concat::concat helper requires String on both sides, but got {} and {}",
+                                left_ty, right_ty,
                             ),
                             span: arg.span.clone(),
                             hint: trait_hint(self),
@@ -6862,10 +6891,10 @@ impl Checker {
                     let summary = self.trait_implementation_summary(trait_short_name);
                     return Err(TypeError {
                         message: format!(
-                            "Cannot apply {:?} to {} and {}",
-                            op,
+                            "`{}` requires the same type on both sides, but got {} and {}",
+                            symbol,
                             self.ty_name(&lt),
-                            self.ty_name(&rt)
+                            self.ty_name(&rt),
                         ),
                         span: typed_right.span.clone(),
                         hint: Some(format!(
@@ -6889,8 +6918,9 @@ impl Checker {
                     .trait_dispatch_target(&operator_trait, method_name, &receiver_ty)
                     .ok_or_else(|| TypeError {
                         message: format!(
-                            "`{}` requires both operands to implement {}",
-                            symbol, trait_short_name
+                            "`{}` is not defined for {}",
+                            symbol,
+                            self.ty_name(&receiver_ty)
                         ),
                         span: typed_right.span.clone(),
                         hint: Some(self.trait_implementation_summary(trait_short_name)),
@@ -6917,9 +6947,14 @@ impl Checker {
                     });
                     return Err(TypeError {
                         message: format!(
-                            "Cannot compare {} and {}",
+                            "`{}` requires the same type on both sides, but got {} and {}",
+                            match op {
+                                BinOp::Eq => "==",
+                                BinOp::Neq => "!=",
+                                _ => unreachable!("validated above"),
+                            },
                             self.ty_name(&lt),
-                            self.ty_name(&rt)
+                            self.ty_name(&rt),
                         ),
                         span: typed_right.span.clone(),
                         hint: Some(summary),
@@ -6942,8 +6977,9 @@ impl Checker {
                     .trait_dispatch_target(&eq_trait, method_name, &receiver_ty)
                     .ok_or_else(|| TypeError {
                         message: format!(
-                            "`{}` requires both operands to implement {}",
-                            symbol, trait_short_name
+                            "`{}` is not defined for {}",
+                            symbol,
+                            self.ty_name(&receiver_ty)
                         ),
                         span: typed_right.span.clone(),
                         hint: Some(self.trait_implementation_summary(trait_short_name)),
@@ -6965,9 +7001,16 @@ impl Checker {
                     let summary = self.trait_implementation_summary("Compare");
                     return Err(TypeError {
                         message: format!(
-                            "Cannot compare {} and {}",
+                            "`{}` requires the same type on both sides, but got {} and {}",
+                            match op {
+                                BinOp::Lt => "<",
+                                BinOp::Gt => ">",
+                                BinOp::Lte => "<=",
+                                BinOp::Gte => ">=",
+                                _ => unreachable!("validated above"),
+                            },
                             self.ty_name(&lt),
-                            self.ty_name(&rt)
+                            self.ty_name(&rt),
                         ),
                         span: typed_right.span.clone(),
                         hint: Some(summary),
@@ -6997,7 +7040,11 @@ impl Checker {
                 let dispatch = self
                     .trait_dispatch_target(&compare_trait, method_name, &receiver_ty)
                     .ok_or_else(|| TypeError {
-                        message: format!("`{}` requires both operands to implement Compare", symbol),
+                        message: format!(
+                            "`{}` is not defined for {}",
+                            symbol,
+                            self.ty_name(&receiver_ty)
+                        ),
                         span: typed_right.span.clone(),
                         hint: Some(self.trait_implementation_summary("Compare")),
                     })?;
@@ -7040,11 +7087,7 @@ impl Checker {
                 let dispatch = self
                     .trait_dispatch_target(&concat_trait, "concat", &receiver_ty)
                     .ok_or_else(|| TypeError {
-                        message: format!(
-                            "++ requires values implementing Concat, got ({}, {})",
-                            self.ty_name(&lt),
-                            self.ty_name(&rt)
-                        ),
+                        message: format!("`++` is not defined for {}", self.ty_name(&receiver_ty)),
                         span: typed_right.span.clone(),
                         hint: Some(self.trait_implementation_summary("Concat")),
                     })?;

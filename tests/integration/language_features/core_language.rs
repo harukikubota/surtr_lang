@@ -368,7 +368,9 @@ print("a" ++ "b")
 print(to_string(add(1, 2)))
 print(to_string(eq(3, 3)))
 print(to_string(concat("a", "b")))"#,
-        &["3", "True", "True", "True", "True", "ab", "999", "False", "wrong"],
+        &[
+            "3", "True", "True", "True", "True", "ab", "999", "False", "wrong",
+        ],
     );
 }
 
@@ -381,7 +383,10 @@ fn arithmetic_precedence() {
 }
 
 fn equality_reject_mixed_types() {
-    assert_compile_error("x = 1 == \"one\"", "Cannot compare");
+    assert_compile_error(
+        "x = 1 == \"one\"",
+        "`==` requires the same type on both sides",
+    );
 }
 
 fn list_literal_int() {
