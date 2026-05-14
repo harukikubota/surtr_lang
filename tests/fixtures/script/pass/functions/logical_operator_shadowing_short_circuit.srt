@@ -1,0 +1,19 @@
+def and(left: Boolean, right: Boolean) -> Boolean {
+  print("local-and")
+  right
+}
+
+def or(left: Boolean, right: Boolean) -> Boolean {
+  print("local-or")
+  right
+}
+
+def note(tag: String, value: Boolean) -> Boolean {
+  print(tag)
+  value
+}
+
+print(to_string(and(True, note("call-and-rhs", False))))
+print(to_string(or(False, note("call-or-rhs", True))))
+print(to_string(False && note("symbolic-and-rhs", True)))
+print(to_string(True || note("symbolic-or-rhs", False)))

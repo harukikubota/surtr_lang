@@ -2018,7 +2018,7 @@ fn test_prefix_bang_binds_tighter_than_and() {
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::App(_, func, args) => {
-                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "and"));
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "&&"));
                 assert!(matches!(
                     args.as_slice(),
                     [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
@@ -2060,7 +2060,7 @@ fn test_prefix_bang_preserves_grouping() {
                         if matches!(
                             inner.as_ref(),
                             Ast::App(_, inner_func, inner_args)
-                                if matches!(inner_func.as_ref(), Ast::Var(_, name) if name == "and")
+                                if matches!(inner_func.as_ref(), Ast::Var(_, name) if name == "&&")
                                     && matches!(
                                         inner_args.as_slice(),
                                         [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
@@ -2183,7 +2183,7 @@ fn test_symbolic_and_is_lower_precedence_than_comparison_ops() {
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::App(_, func, args) => {
-                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "and"));
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "&&"));
                 assert!(matches!(
                     args.as_slice(),
                     [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
@@ -2212,7 +2212,7 @@ fn test_symbolic_or_lowers_to_call() {
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::App(_, func, args) => {
-                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "or"));
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "||"));
                 assert!(matches!(
                     args.as_slice(),
                     [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
@@ -2270,6 +2270,26 @@ fn test_func_literal_operator_lowers_to_binop() {
                         && matches!(right.as_ref(), Ast::Var(_, name) if name == "right")
             ));
         }
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_bare_and_call_stays_plain_name() {
+    let ast = parse("x = and(left, right)").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "and"));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(left, Ast::Var(_, name) if name == "left")
+                            && matches!(right, Ast::Var(_, name) if name == "right")
+                ));
+            }
+            other => panic!("Expected bare and(...) call, got {:?}", other),
+        },
         other => panic!("Expected bind, got {:?}", other),
     }
 }

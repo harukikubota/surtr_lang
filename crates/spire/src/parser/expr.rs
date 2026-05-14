@@ -220,8 +220,10 @@ impl Parser<'_> {
 
     pub(super) fn and_or_name(tok: &Token) -> Option<&'static str> {
         match tok {
-            Token::AndAnd => Some("and"),
-            Token::OrOr => Some("or"),
+            // Keep symbolic logical operators distinguishable until resolution
+            // so local `and` / `or` bindings cannot retarget `&&` / `||`.
+            Token::AndAnd => Some("&&"),
+            Token::OrOr => Some("||"),
             _ => None,
         }
     }

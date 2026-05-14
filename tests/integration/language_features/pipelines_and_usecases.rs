@@ -165,6 +165,61 @@ match bound_grouped {
     );
 }
 
+fn flow_and_compose_operators_ignore_local_helper_names() {
+    assert_output(
+        r#"def pipe_apply(value: Int, f: (Int -> Int)) -> Int { 999 }
+def compose(left: (Int -> Int), right: (Int -> Int)) -> String { "wrong compose" }
+def map(value: Result<Int>, f: (Int -> Int)) -> Result<Int> { Err(NoneError) }
+def chain(value: Result<Int>, f: (Int -> Result<Int>)) -> Result<Int> { Err(NoneError) }
+def lift_compose(left: (Int -> Result<Int>), right: (Int -> String)) -> String { "wrong lift" }
+def kleisli_compose(left: (Int -> Result<Int>), right: (Int -> Result<String>)) -> String { "wrong kleisli" }
+
+def inc(x: Int) -> Int { x + 1 }
+def double(x: Int) -> Int { x * 2 }
+def check(x: Int) -> Result<Int> { Ok(x + 10) }
+def render_plain(x: Int) -> String { to_string(x) }
+def render_result(x: Int) -> Result<String> { Ok(to_string(x)) }
+
+f: (Int -> Int) = &inc
+g: (Int -> Int) = &double
+check_fn: (Int -> Result<Int>) = &check
+render_plain_fn: (Int -> String) = &render_plain
+render_result_fn: (Int -> Result<String>) = &render_result
+
+print(to_string(1 |> f))
+plain = f >> g
+print(to_string(plain(3)))
+mapped: Result<Int> = Ok(1) |*> f
+bound: Result<Int> = Ok(1) |>= check_fn
+lifted = check_fn >* render_plain_fn
+kleisli = check_fn >=> render_result_fn
+print(inspect(mapped))
+print(inspect(bound))
+print(inspect(lifted(1)))
+print(inspect(kleisli(1)))
+print(to_string(pipe_apply(1, f)))
+print(compose(f, g))
+print(inspect(map(Ok(1), f)))
+print(inspect(chain(Ok(1), check_fn)))
+print(lift_compose(check_fn, render_plain_fn))
+print(kleisli_compose(check_fn, render_result_fn))"#,
+        &[
+            "2",
+            "8",
+            "Ok(2)",
+            "Ok(11)",
+            "Ok(\"11\")",
+            "Ok(\"11\")",
+            "999",
+            "wrong compose",
+            "Err(NoneError(\"None Value.\"))",
+            "Err(NoneError(\"None Value.\"))",
+            "wrong lift",
+            "wrong kleisli",
+        ],
+    );
+}
+
 fn flow_bind_closure_safebind_receives_result_context() {
     assert_output(
         r#"deferror Oops {
@@ -882,6 +937,10 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "flow_operators_accept_function_value_variables_and_grouped_calls",
             flow_operators_accept_function_value_variables_and_grouped_calls as fn(),
+        ),
+        (
+            "flow_and_compose_operators_ignore_local_helper_names",
+            flow_and_compose_operators_ignore_local_helper_names as fn(),
         ),
         (
             "flow_bind_closure_safebind_receives_result_context",

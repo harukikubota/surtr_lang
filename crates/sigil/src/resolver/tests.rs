@@ -1730,6 +1730,77 @@ x = True || rhs()"#,
 }
 
 #[test]
+fn test_symbolic_and_ignores_local_and_binding() {
+    let resolved = parse_and_resolve(
+        r#"def rhs() -> Boolean { True }
+def and(left: Boolean, right: Boolean) -> Boolean { right }
+x = False && rhs()"#,
+    )
+    .expect("symbolic && should still resolve as builtin logic");
+    match &resolved[2] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::If(_, cond, then_branch, Some(else_branch)) => {
+                assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(false))));
+                assert!(matches!(then_branch.as_ref(), Resolved::App(_, _, _)));
+                assert!(matches!(
+                    else_branch.as_ref(),
+                    Resolved::Lit(_, Lit::Bool(false))
+                ));
+            }
+            other => panic!("Expected If for && despite local and, got {:?}", other),
+        },
+        other => panic!("Expected Bind for && regression, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_symbolic_or_ignores_local_or_binding() {
+    let resolved = parse_and_resolve(
+        r#"def rhs() -> Boolean { False }
+def or(left: Boolean, right: Boolean) -> Boolean { right }
+x = True || rhs()"#,
+    )
+    .expect("symbolic || should still resolve as builtin logic");
+    match &resolved[2] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::If(_, cond, then_branch, Some(else_branch)) => {
+                assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(true))));
+                assert!(matches!(
+                    then_branch.as_ref(),
+                    Resolved::Lit(_, Lit::Bool(true))
+                ));
+                assert!(matches!(else_branch.as_ref(), Resolved::App(_, _, _)));
+            }
+            other => panic!("Expected If for || despite local or, got {:?}", other),
+        },
+        other => panic!("Expected Bind for || regression, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_bare_and_call_still_uses_local_binding() {
+    let resolved = parse_and_resolve(
+        r#"def and(left: Boolean, right: Boolean) -> Boolean { right }
+x = and(False, True)"#,
+    )
+    .expect("bare and(...) should still follow normal name resolution");
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, args) => {
+                assert!(matches!(
+                    func.as_ref(),
+                    Resolved::Var(_, id)
+                        if id.name == "and" && id.qualified_name.as_deref() == Some("and")
+                ));
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("Expected plain App for bare and(...), got {:?}", other),
+        },
+        other => panic!("Expected Bind for bare and(...), got {:?}", other),
+    }
+}
+
+#[test]
 fn test_eq_helper_resolves_via_autoimport_trait() {
     let module_stages = vec![vec![staged_module(
         "Eq",
