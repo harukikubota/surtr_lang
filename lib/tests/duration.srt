@@ -6,7 +6,7 @@ test("Duration") {
   describe("construction") {
     it("supports duration literals and millis access") {
       d: Duration =? try_from(7, Duration)
-      assert_eq((250ms, 250, 7), (250ms, Duration::millis(250ms), Duration::millis(d)))
+      assert_eq((250ms, 250, 7), (250ms, 250ms.millis, d.millis))
     }
 
     it("rejects negative durations") {

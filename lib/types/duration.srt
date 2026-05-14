@@ -11,7 +11,7 @@ xldr(2)> Duration(250)
 Ok(250ms)
 """
 defstruct Duration {
-  private millis: Int,
+  readonly millis: Int,
 }
 
 deferror InvalidDuration(message: String) {
@@ -35,17 +35,6 @@ impl Duration {
       Err(InvalidDuration("duration must be non-negative: #{value}")),
       Ok(Duration { millis: value })
     )
-  }
-
-  @doc """
-  Return the millisecond count stored in the duration.
-
-  ## REPL
-  xldr(1)> millis(250ms)
-  250
-  """
-  def millis(self: Self) -> Int {
-    self.millis
   }
 
   @doc """
