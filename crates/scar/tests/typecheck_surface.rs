@@ -166,8 +166,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_surface_resolves_after_facet_rename as fn(),
     ),
     (
-        "facet_compose_typecheck_success_and_mismatch",
-        facet_compose_typecheck_success_and_mismatch as fn(),
+        "facet_chain_typecheck_success_and_mismatch",
+        facet_chain_typecheck_success_and_mismatch as fn(),
     ),
     (
         "facet_slash_compose_typecheck_success_and_mismatch",
@@ -178,32 +178,32 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_set_returns_result_source as fn(),
     ),
     (
-        "facet_replace_returns_plain_source",
-        facet_replace_returns_plain_source as fn(),
+        "facet_put_returns_plain_source",
+        facet_put_returns_plain_source as fn(),
     ),
     (
-        "facet_replace_rejects_result_source_and_variant_path",
-        facet_replace_rejects_result_source_and_variant_path as fn(),
+        "facet_put_rejects_result_source_and_variant_path",
+        facet_put_rejects_result_source_and_variant_path as fn(),
     ),
     (
-        "facet_replace_supports_same_type_tuple_update_inside_annotated_closure",
-        facet_replace_supports_same_type_tuple_update_inside_annotated_closure as fn(),
+        "facet_put_supports_same_type_tuple_update_inside_annotated_closure",
+        facet_put_supports_same_type_tuple_update_inside_annotated_closure as fn(),
     ),
     (
-        "facet_replace_unannotated_closure_still_lacks_tuple_context_from_expected_return",
-        facet_replace_unannotated_closure_still_lacks_tuple_context_from_expected_return as fn(),
+        "facet_put_unannotated_closure_still_lacks_tuple_context_from_expected_return",
+        facet_put_unannotated_closure_still_lacks_tuple_context_from_expected_return as fn(),
     ),
     (
-        "facet_replace_rejects_type_changing_tuple_update",
-        facet_replace_rejects_type_changing_tuple_update as fn(),
+        "facet_put_rejects_type_changing_tuple_update",
+        facet_put_rejects_type_changing_tuple_update as fn(),
     ),
     (
-        "facet_replace_rejects_result_annotation_context",
-        facet_replace_rejects_result_annotation_context as fn(),
+        "facet_put_rejects_result_annotation_context",
+        facet_put_rejects_result_annotation_context as fn(),
     ),
     (
-        "facet_replace_rejects_result_return_context",
-        facet_replace_rejects_result_return_context as fn(),
+        "facet_put_rejects_result_return_context",
+        facet_put_rejects_result_return_context as fn(),
     ),
     (
         "facet_over_requires_unary_result_callable",
@@ -1767,12 +1767,12 @@ Facet::view(User.name, user)"#,
     assert!(!resolved.is_empty());
 }
 
-fn facet_compose_typecheck_success_and_mismatch() {
+fn facet_chain_typecheck_success_and_mismatch() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
 user = User(Profile("alice"))
-Facet::view(Facet::compose(User.profile, Profile.name), user)"#,
+Facet::view(chain(User.profile, Profile.name), user)"#,
     );
     assert!(matches!(
         typed.last().map(|node| &node.ty),
@@ -1782,10 +1782,10 @@ Facet::view(Facet::compose(User.profile, Profile.name), user)"#,
     let err = typecheck_with_rules(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
-Facet::compose(Profile.name, User.profile)"#,
+chain(Profile.name, User.profile)"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("mismatched compose should fail");
+    .expect_err("mismatched chain should fail");
     assert!(!err.message.is_empty());
 }
 
@@ -1827,11 +1827,11 @@ Facet::set(User.name, user, "bob")"#,
     assert!(matches!(last.node, TypedInner::FacetSet { .. }));
 }
 
-fn facet_replace_returns_plain_source() {
+fn facet_put_returns_plain_source() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
 user = User("alice")
-Facet::replace(User.name, user, "bob")"#,
+put(User.name, user, "bob")"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(
@@ -1841,17 +1841,17 @@ Facet::replace(User.name, user, "bob")"#,
     assert!(matches!(last.node, TypedInner::FacetSet { .. }));
 }
 
-fn facet_replace_rejects_result_source_and_variant_path() {
+fn facet_put_rejects_result_source_and_variant_path() {
     let result_source_err = typecheck_with_rules(
         r#"defrecord User(name: String)
 user = Ok(User("alice"))
-Facet::replace(User.name, user, "bob")"#,
+put(User.name, user, "bob")"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("Result source should fail for Facet::replace");
+    .expect_err("Result source should fail for Facet::put");
     assert!(result_source_err
         .message
-        .contains("Facet::replace requires a plain source value"));
+        .contains("Facet::put requires a plain source value"));
 
     let variant_path_err = typecheck_with_rules(
         r#"defenum Expr {
@@ -1859,28 +1859,28 @@ Facet::replace(User.name, user, "bob")"#,
   Halt,
 }
 expr = Expr::Add(1, 2)
-Facet::replace(Expr.Add / Tuple._0, expr, 7)"#,
+put(Expr.Add / Tuple._0, expr, 7)"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("variant path should fail for Facet::replace");
+    .expect_err("variant path should fail for Facet::put");
     assert!(variant_path_err
         .message
-        .contains("Facet::replace requires an infallible structural Facet path"));
+        .contains("Facet::put requires an infallible structural Facet path"));
 }
 
-fn facet_replace_supports_same_type_tuple_update_inside_annotated_closure() {
+fn facet_put_supports_same_type_tuple_update_inside_annotated_closure() {
     let typed = typecheck_with_builtin_prelude(
         r#"def first(f: (Int -> Int)) -> ((Int, Boolean) -> (Int, Boolean)) {
-  {|pair: (Int, Boolean)| Facet::replace(Tuple._0, pair, f(pair._0))}
+  {|pair: (Int, Boolean)| Facet::put(Tuple._0, pair, f(pair._0))}
 }"#,
     );
     assert!(!typed.is_empty());
 }
 
-fn facet_replace_unannotated_closure_still_lacks_tuple_context_from_expected_return() {
+fn facet_put_unannotated_closure_still_lacks_tuple_context_from_expected_return() {
     let err = typecheck_with_rules(
         r#"def first(f: (Int -> Int)) -> ((Int, Boolean) -> (Int, Boolean)) {
-  {|pair| Facet::replace(Tuple._0, pair, f(pair._0))}
+  {|pair| Facet::put(Tuple._0, pair, f(pair._0))}
 }"#,
         RuntimeSourcePolicy::script(),
     )
@@ -1890,38 +1890,38 @@ fn facet_replace_unannotated_closure_still_lacks_tuple_context_from_expected_ret
         .contains("Tuple._0 requires tuple source context"));
 }
 
-fn facet_replace_rejects_type_changing_tuple_update() {
+fn facet_put_rejects_type_changing_tuple_update() {
     let err = typecheck_with_rules(
         r#"def first(f: (Int -> String)) -> ((Int, Boolean) -> (String, Boolean)) {
-  {|pair: (Int, Boolean)| Facet::replace(Tuple._0, pair, f(pair._0))}
+  {|pair: (Int, Boolean)| Facet::put(Tuple._0, pair, f(pair._0))}
 }"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("type-changing tuple update should fail for Facet::replace");
+    .expect_err("type-changing tuple update should fail for Facet::put");
     assert!(err
         .message
-        .contains("Facet::replace value type mismatch: expected Int, got String"));
+        .contains("Facet::put value type mismatch: expected Int, got String"));
 }
 
-fn facet_replace_rejects_result_annotation_context() {
+fn facet_put_rejects_result_annotation_context() {
     let err = typecheck_with_rules(
         r#"defrecord User(name: String)
-updated: Result<User> = Facet::replace(User.name, User("alice"), "bob")"#,
+updated: Result<User> = Facet::put(User.name, User("alice"), "bob")"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("Facet::replace should explain Result annotation mismatch");
+    .expect_err("Facet::put should explain Result annotation mismatch");
     assert!(err.message.contains("expected Result<User>, got User"));
 }
 
-fn facet_replace_rejects_result_return_context() {
+fn facet_put_rejects_result_return_context() {
     let err = typecheck_with_rules(
         r#"defrecord User(name: String)
 def rename() -> Result<User> {
-  Facet::replace(User.name, User("alice"), "bob")
+  Facet::put(User.name, User("alice"), "bob")
 }"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("Facet::replace should explain Result return mismatch");
+    .expect_err("Facet::put should explain Result return mismatch");
     assert!(err.message.contains("expected Result<User>, got User"));
 }
 
@@ -2004,7 +2004,7 @@ fn facet_shorthand_view_and_mutation_forms_typecheck() {
 user = User("alice", Ok(1))
 name = Facet::view(~user.name)
 updated =? Facet::set(~user.name, "bob")
-replaced = Facet::replace(~updated.name, "carol")
+replaced = put(~updated.name, "carol")
 bumped =? Facet::over(~replaced.score, {|score| Ok(score + 1)})
 Facet::over_result(~bumped.score, {|score| Ok(score)})"#,
     );
@@ -2024,16 +2024,16 @@ Facet::preview(~user.name)"#,
         .message
         .contains("Facet::preview requires a variant Facet"));
 
-    let replace_err = typecheck_with_rules(
+    let put_err = typecheck_with_rules(
         r#"defrecord User(name: String)
 result_user = Ok(User("alice"))
-Facet::replace(~result_user.name, "bob")"#,
+put(~result_user.name, "bob")"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("result source shorthand should fail for replace");
-    assert!(replace_err
+    .expect_err("result source shorthand should fail for put");
+    assert!(put_err
         .message
-        .contains("Facet::replace requires a plain source value"));
+        .contains("Facet::put requires a plain source value"));
 }
 
 fn facet_shorthand_misuse_is_rejected_outside_facet_api() {
@@ -2046,7 +2046,7 @@ path = ~user.name"#,
     .expect_err("shorthand binding should fail");
     assert!(bind_err
         .message
-        .contains("must be consumed as the first argument of Facet::view/preview/replace/set/over/over_result"));
+        .contains("must be consumed as the first argument of Facet::view/preview/put/set/over/over_result"));
 
     let missing_path_err = typecheck_with_rules(
         r#"defrecord User(name: String)
@@ -2307,7 +2307,7 @@ fn facet_tuple_type_root_compose_works_as_inner_path() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(pair: (String, Int))
 user = User(("alice", 42))
-Facet::view(Facet::compose(User.pair, Tuple._0), user)"#,
+Facet::view(Facet::chain(User.pair, Tuple._0), user)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
@@ -3974,23 +3974,15 @@ bound = parse(1) |>= &stringify"#,
         }
     ));
     assert!(trait_calls.iter().any(
-        |(trait_name, method_name, dispatch, origin, args, result_ty)| {
-            trait_name.starts_with("Chainable<")
-                && *method_name == "chain"
-                && matches!(
-                    dispatch,
-                    scar::typed::TraitDispatch::Static(
-                        scar::typed::TraitDispatchTarget::UserFunction { name, .. }
-                    ) if name.ends_with("::chain") || name == "chain"
-                )
-                && matches!(
-                    origin,
-                    TraitCallOrigin::Operator {
-                        op: OperatorTraitOp::PipeBind,
-                        lhs_ty: Ty::Result(_, _),
-                        rhs_ty: Ty::Func(_, _) | Ty::UserFunc { .. } | Ty::BuiltinFunc { .. },
-                    }
-                )
+        |(_trait_name, _method_name, _dispatch, origin, args, result_ty)| {
+            matches!(
+                origin,
+                TraitCallOrigin::Operator {
+                    op: OperatorTraitOp::PipeBind,
+                    lhs_ty: Ty::Result(_, _),
+                    rhs_ty: Ty::Func(_, _) | Ty::UserFunc { .. } | Ty::BuiltinFunc { .. },
+                }
+            )
                 && args.len() == 2
                 && matches!(result_ty, Ty::Result(ok, _) if matches!(ok.as_ref(), Ty::Str))
         }

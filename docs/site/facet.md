@@ -14,7 +14,7 @@
 - `Facet::case_over(facet, source, update_fun)`
 - `Facet::bulk_update(source) { ... }`
 - `outer / inner`
-- `Facet::compose(outer, inner)`
+- `Facet::chain(outer, inner)`
 
 `T?` は `Option<T>` に下がります。
 optional field は `Option.Some` / `Option.Some?` を通じて
@@ -92,12 +92,12 @@ first = Facet::view(Tuple._0, pair)
 ```surtr
 name = Facet::view(~user.name)
 user2 =? Facet::set(~user.name, "bob")
-pair2 = Facet::replace(~pair._1, 99)
+pair2 = Facet::put(~pair._1, 99)
 ```
 
 `~source.path` は first-class `Facet` 値にはなりません。
 binding、関数引数、戻り値、container 格納には使えず、
-`Facet::view/preview/replace/set/over/over_result` の第1引数位置でだけ消費できます。
+`Facet::view/preview/put/set/over/over_result` の第1引数位置でだけ消費できます。
 
 ## `_.path` inferred capture
 
@@ -189,8 +189,8 @@ talk =? score_by_kind.[kind]
 1 回の Facet operation 中では、bracket expression は先に 1 回だけ評価され、
 read と rebuild の両方で同じ index / key が再利用されます。
 
-`replace` は引き続き infallible structural path 専用です。
-そのため `List.[expr]` / `HashMap.[expr]` は literal かどうかに関係なく `replace` では使えません。
+`put` は引き続き infallible structural path 専用です。
+そのため `List.[expr]` / `HashMap.[expr]` は literal かどうかに関係なく `put` では使えません。
 
 ## record path
 
@@ -275,9 +275,9 @@ updated =? Facet::bulk_update(user) {
 }
 ```
 
-## compose
+## chain
 
-ネストした path は `outer / inner` でつなぎます。`Facet::compose(...)` も同じ意味で使えます。
+ネストした path は `outer / inner` でつなぎます。`Facet::chain(...)` も同じ意味で使えます。
 
 ```surtr
 defstruct Profile {
@@ -302,17 +302,17 @@ impl User {
 
 profile_name = User.profile / Profile.name
 # or
-profile_name = Facet::compose(User.profile, Profile.name)
+profile_name = Facet::chain(User.profile, Profile.name)
 # or
 profile_name = User.profile.name
 ```
 
-compose した path は REPL や inspect 表示で canonical path に圧縮されます。
+chain した path は REPL や inspect 表示で canonical path に圧縮されます。
 つまり `User.profile / Profile.name` と `User.profile.name` は同じ path として
-扱われ、compose の履歴は表示に残りません。
+扱われ、chain の履歴は表示に残りません。
 
 この canonical 化では、つなぎ目で root path が重複していたら落とします。
-たとえば `outer = User.profile` と `inner = Profile.name` を compose した結果は
+たとえば `outer = User.profile` と `inner = Profile.name` を chain した結果は
 `User.profile.Profile.name` ではなく `User.profile.name` です。
 
 ```text
@@ -446,7 +446,7 @@ facet = User.password
 
 - `var_name.lenspath` は read sugar であって、field access 一般の許可とは同義ではありません。private field は見える範囲でしか path にできず、`value.private_field` も同じ境界で拒否されます。
 - `Tuple._0` のような tuple root は、同一スコープの local binding として保持できます。`Facet::view(...)` や `/` で同じスコープ内に消費してください。
-- compose した path は canonical 表示へ圧縮されるので、`User.profile / Profile.name` を inspect すると `User.profile.name` に見えます。`/` の組み立て履歴そのものは残りません。
+- chain した path は canonical 表示へ圧縮されるので、`User.profile / Profile.name` を inspect すると `User.profile.name` に見えます。`/` の組み立て履歴そのものは残りません。
 - variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:facet <binding|expr>` で確認するのが一番わかりやすいです。
 - スコープをまたぐときは `Facet` ではなく、`Facet::view(...)` 済みの値を渡します。
 - `Result` を返す updater とつなぐ field には、`Option<T>` より `T?` の方が更新パイプが短くなります。

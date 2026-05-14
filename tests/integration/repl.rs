@@ -1083,9 +1083,9 @@ fn repl_supports_deferred_lens_bindings_and_lens_command() {
 }
 
 #[test]
-fn repl_renders_top_level_lens_compose_expressions() {
+fn repl_renders_top_level_lens_chain_expressions() {
     let output =
-        run_repl_session("ep = IntBase.Oct\na = Tuple._1\na / ep\nFacet::compose(a, ep)\n:quit\n");
+        run_repl_session("ep = IntBase.Oct\na = Tuple._1\na / ep\nFacet::chain(a, ep)\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",

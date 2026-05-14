@@ -785,7 +785,7 @@ impl Checker {
                 ),
             }),
             Resolved::FacetCapture(span, _) => Err(TypeError {
-                message: "`~source.path` is Facet API shorthand and must be consumed as the first argument of Facet::view/preview/replace/set/over/over_result".into(),
+                message: "`~source.path` is Facet API shorthand and must be consumed as the first argument of Facet::view/preview/put/set/over/over_result".into(),
                 span: span.clone(),
                 hint: Some(
                     "Use the shorthand only inside a Facet API call such as `Facet::set(~user.name, value)`."
@@ -969,7 +969,7 @@ impl Checker {
 
         Some(TypeError {
             message: format!(
-                "Facet::replace returns plain {}, not {}",
+                "Facet::put returns plain {}, not {}",
                 self.ty_name(&actual),
                 self.ty_name(&expected)
             ),
@@ -3400,7 +3400,7 @@ impl Checker {
             span: span.clone(),
             node: TypedInner::TraitCall {
                 trait_name,
-                method_name: "chain".into(),
+                method_name: "compose".into(),
                 receiver_ty: receiver_ty.clone(),
                 dispatch,
                 origin: TraitCallOrigin::Operator {
@@ -4261,8 +4261,8 @@ impl Checker {
             return match Self::surface_name(qualified_name) {
                 "Facet::view" => Some("view"),
                 "Facet::preview" => Some("preview"),
-                "Facet::compose" => Some("compose"),
-                "Facet::replace" => Some("replace"),
+                "Facet::chain" => Some("chain"),
+                "Facet::put" => Some("put"),
                 "Facet::set" => Some("set"),
                 "Facet::over" => Some("over"),
                 "Facet::over_result" => Some("over_result"),
@@ -4272,6 +4272,34 @@ impl Checker {
             };
         }
         None
+    }
+
+    fn is_result_chain_auto_import(func: &Resolved) -> bool {
+        let Resolved::Var(_, id) = func else {
+            return false;
+        };
+        id.qualified_name
+            .as_deref()
+            .is_some_and(|qualified| Self::surface_name(qualified) == "Result::chain")
+    }
+
+    fn looks_like_facet_path_expr(expr: &Resolved) -> bool {
+        match expr {
+            Resolved::FieldAccess(_, _, _) | Resolved::FacetSegmentAccess(_, _, _) => true,
+            Resolved::Grouped(_, inner) => Self::looks_like_facet_path_expr(inner),
+            Resolved::FacetCapture(_, _)
+            | Resolved::InferredFacetCapture(_, _)
+            | Resolved::BinOp(_, BinOp::Slash, _, _) => true,
+            _ => false,
+        }
+    }
+
+    fn facet_chain_candidate_args(args: &[ResolvedRecordLitArg]) -> bool {
+        args.iter().all(|arg| matches!(arg, ResolvedRecordLitArg::Positional(_)))
+            && args.iter().any(|arg| match arg {
+                ResolvedRecordLitArg::Positional(expr) => Self::looks_like_facet_path_expr(expr),
+                ResolvedRecordLitArg::Named(_, _) => false,
+            })
     }
 
     fn pending_segment_from_typed(segment: &TypedFacetSegment) -> PendingFacetSegment {
@@ -4548,7 +4576,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if args.len() != 2 {
             return Err(TypeError {
-                message: format!("Facet::compose expects 2 argument(s), got {}", args.len()),
+                message: format!("Facet::chain expects 2 argument(s), got {}", args.len()),
                 span: span.clone(),
                 hint: None,
             });
@@ -4558,7 +4586,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                message: "Facet::compose does not accept named arguments".into(),
+                message: "Facet::chain does not accept named arguments".into(),
                 span: span.clone(),
                 hint: None,
             });
@@ -4574,7 +4602,7 @@ impl Checker {
         let left = self.check_node(left_expr)?;
         match left.node {
             TypedInner::FacetPath(path) => {
-                self.compose_facet_paths(span, path, right_expr, "Facet::compose")
+                self.compose_facet_paths(span, path, right_expr, "Facet::chain")
             }
             TypedInner::PendingFacetPath(path) => {
                 self.compose_pending_facet_paths(span, path, right_expr)
@@ -4638,7 +4666,7 @@ impl Checker {
                 message: format!("{op_name} shorthand requires a field or tuple path").into(),
                 span: span.clone(),
                 hint: Some(
-                    "Write `~source.field` or `~source._0`. Use canonical `Facet::compose(...)` or a type-root path when you need a standalone Facet path."
+                    "Write `~source.field` or `~source._0`. Use canonical `Facet::chain(...)` or a type-root path when you need a standalone Facet path."
                         .into(),
                 ),
             });
@@ -4955,40 +4983,40 @@ impl Checker {
         })
     }
 
-    fn check_facet_replace_intrinsic(
+    fn check_facet_put_intrinsic(
         &mut self,
         span: &Span,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
         let (source_expr, path_input, value_expr) =
-            self.parse_facet_mutating_intrinsic_args(span, "Facet::replace", args)?;
+            self.parse_facet_mutating_intrinsic_args(span, "Facet::put", args)?;
         let PreparedFacetInput {
             typed_source,
             source_is_result,
             source_value_ty,
             path,
-        } = self.prepare_facet_input(span, "Facet::replace", &source_expr, path_input)?;
+        } = self.prepare_facet_input(span, "Facet::put", &source_expr, path_input)?;
         if source_is_result {
             return Err(TypeError {
-                message: "Facet::replace requires a plain source value".into(),
+                message: "Facet::put requires a plain source value".into(),
                 span: typed_source.span.clone(),
                 hint: Some("Use Facet::set when the source is already Result<T>.".into()),
             });
         }
         if !path.is_infallible_structural() {
             return Err(TypeError {
-                message: "Facet::replace requires an infallible structural Facet path".into(),
+                message: "Facet::put requires an infallible structural Facet path".into(),
                 span: span.clone(),
                 hint: Some("Use Facet::set for fallible or variant-sensitive updates.".into()),
             });
         }
-        self.check_mutating_facet_path_permissions("Facet::replace", &path, span)?;
+        self.check_mutating_facet_path_permissions("Facet::put", &path, span)?;
 
         let typed_value = self.check_node_with_expected(value_expr, Some(&path.focus_ty))?;
         if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
             return Err(TypeError {
                 message: format!(
-                    "Facet::replace value type mismatch: expected {}, got {}",
+                    "Facet::put value type mismatch: expected {}, got {}",
                     self.ty_name(&path.focus_ty),
                     self.ty_name(&typed_value.ty)
                 ),
@@ -5436,11 +5464,18 @@ impl Checker {
         func: &Resolved,
         args: &[ResolvedRecordLitArg],
     ) -> Result<Option<TypedNode>, TypeError> {
+        if Self::is_result_chain_auto_import(func) && args.len() == 2 {
+            match self.check_facet_compose_intrinsic(span, args) {
+                Ok(node) => return Ok(Some(node)),
+                Err(err) if Self::facet_chain_candidate_args(args) => return Err(err),
+                Err(_) => {}
+            }
+        }
         match self.facet_intrinsic_kind(func) {
             Some("view") => Ok(Some(self.check_facet_view_intrinsic(span, args)?)),
             Some("preview") => Ok(Some(self.check_facet_preview_intrinsic(span, args)?)),
-            Some("compose") => Ok(Some(self.check_facet_compose_intrinsic(span, args)?)),
-            Some("replace") => Ok(Some(self.check_facet_replace_intrinsic(span, args)?)),
+            Some("chain") => Ok(Some(self.check_facet_compose_intrinsic(span, args)?)),
+            Some("put") => Ok(Some(self.check_facet_put_intrinsic(span, args)?)),
             Some("set") => Ok(Some(self.check_facet_set_intrinsic(span, args)?)),
             Some("over") => Ok(Some(self.check_facet_over_intrinsic(span, args)?)),
             Some("over_result") => Ok(Some(self.check_facet_over_result_intrinsic(span, args)?)),
@@ -7176,7 +7211,7 @@ impl Checker {
             span: span.clone(),
             node: TypedInner::TraitCall {
                 trait_name,
-                method_name: "compose".into(),
+                method_name: "chain".into(),
                 receiver_ty: receiver_ty.clone(),
                 dispatch,
                 origin: TraitCallOrigin::Operator {

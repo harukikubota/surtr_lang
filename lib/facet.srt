@@ -3,7 +3,7 @@ Standard `Facet` type declaration.
 `Facet<S, A>` is a compiler-managed path capability from source `S` to focus `A`.
 Facet values are same-scope capabilities: bind them locally when useful, then
 consume them in that same scope via
-`Facet::view/preview/replace/set/over/over_result/case_set/case_over`.
+`Facet::view/preview/put/set/over/over_result/case_set/case_over`.
 
 Use `Facet` when you want to describe "where" inside a value the compiler should
 look or update.
@@ -31,7 +31,7 @@ Common path forms:
 - property map segment: `User.score.["talk"]`
 - dynamic property segment: `User.scores.[index]`, `User.score.[name]`
 - nested path: `User.profile / Profile.name`, `User.profile.name`
-- function-form nested path: `Facet::compose(User.profile, Profile.name)`
+- function-form nested path: `Facet::chain(User.profile, Profile.name)`
 - enum variant selector: `Expr.Add`
 - optional enum variant selector: `Expr.Add?`
 - value sugar: `value.segment`
@@ -52,7 +52,7 @@ Use `&Type.path` when you want to make that source type explicit in the code.
 
 `~value.segment` is compiler-managed shorthand that expands to a source value and
 structural path when consumed by
-`Facet::view/preview/replace/set/over/over_result/case_set/case_over`.
+`Facet::view/preview/put/set/over/over_result/case_set/case_over`.
 The source expression is evaluated exactly once.
 It is never a first-class `Facet` value, and API-specific validity is still
 decided by the consuming `Facet` operation.
@@ -82,7 +82,7 @@ Container bracket expressions follow these additional rules:
 - `List.[expr]` requires plain `Int`
 - `HashMap.[expr]` requires plain `String`
 - `Result<Int>` and `Result<String>` are rejected; unwrap before building the path
-- `replace` still accepts only infallible structural paths, so list/map bracket
+- `put` still accepts only infallible structural paths, so list/map bracket
   segments are excluded even when `expr` itself is pure
 - `const Facet<...>` accepts only literal bracket segments such as `List.[0]`
   and `HashMap.["talk"]`
@@ -157,10 +157,10 @@ impl Facet {
   @builtin def preview(facet: Facet<$S, $A>, source: $S) -> Result<$A>
 
   @doc """
-  Replace the focus at `facet` in plain `source` with `value`.
+  Put `value` at `facet` in plain `source`.
   Returns the updated source directly, without wrapping it in `Result`.
 
-  `replace` is the non-fallible companion to `set`.
+  `put` is the non-fallible companion to `set`.
   It is available only when both of these hold:
 
   - `source` is a plain value, not `Result<$S>`
@@ -172,17 +172,17 @@ impl Facet {
   Use `set` instead when the update should compose through `Result` context or
   variant matching.
   List and HashMap path segments return `IndexOutOfBounds` or `KeyNotFound`
-  through `Result`, and are therefore not accepted by `replace`.
+  through `Result`, and are therefore not accepted by `put`.
 
   ## REPL
   xldr(1)> pair = ("alice", 42)
   > pair: (String, Int) = ("alice", 42)
-  xldr(2)> Facet::replace(Tuple._1, pair, 99)
+  xldr(2)> Facet::put(Tuple._1, pair, 99)
   ("alice", 99)
-  xldr(3)> Facet::replace(~pair._1, 99)
+  xldr(3)> Facet::put(~pair._1, 99)
   ("alice", 99)
   """
-  @builtin def replace(facet: Facet<$S, $A>, source: $S, value: $A) -> $S
+  @builtin def put(facet: Facet<$S, $A>, source: $S, value: $A) -> $S
 
   @doc """
   Replace the focus at `facet` in `source` with `value`.
@@ -366,8 +366,8 @@ impl Facet {
   @intrinsic def bulk_update(source: $S, updates: BulkUpdateEntries<$S>) -> Result<$S>
 
   @doc """
-  Compose two facet paths in sequence.
-  `compose(outer, inner)` focuses from `S` to `B` via `A`.
+  Chain two facet paths in sequence.
+  `chain(outer, inner)` focuses from `S` to `B` via `A`.
   `outer / inner` is equivalent operator sugar.
 
   Use this for nested access and updates.
@@ -390,9 +390,9 @@ impl Facet {
   outer = User.profile
   inner = Profile.name
   path2 = outer / inner
-  path = Facet::compose(outer, inner)
+  path = Facet::chain(outer, inner)
   """
-  @builtin def compose(outer: Facet<$S, $A>, inner: Facet<$A, $B>) -> Facet<$S, $B>
+  @builtin def chain(outer: Facet<$S, $A>, inner: Facet<$A, $B>) -> Facet<$S, $B>
 }
 
 @doc """
@@ -405,7 +405,7 @@ impl Compose<Facet<$A, $B>, Facet<$S, $B>> for Facet<$S, $A> {
   @doc """
   Compose the receiver path before `rhs`.
   `left / right` and `Compose::compose(left, right)` follow this contract.
-  `Facet::compose(left, right)` remains the canonical helper form.
+  `Facet::chain(left, right)` remains the canonical helper form.
   """
   @builtin def compose(self: Self, rhs: Facet<$A, $B>) -> Facet<$S, $B>
 }

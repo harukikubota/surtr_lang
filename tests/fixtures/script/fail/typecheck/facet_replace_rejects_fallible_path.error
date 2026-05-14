@@ -1,2 +1,2 @@
 phase: typecheck
-contains: Facet::replace requires an infallible structural Facet path
+contains: Facet::put requires an infallible structural Facet path

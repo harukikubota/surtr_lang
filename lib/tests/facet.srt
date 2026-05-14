@@ -7,7 +7,7 @@ test("Facet") {
   describe("view and sugar") {
     it("views nested fields through compose and slash helpers") {
       fixture = demo_fixture()
-      outer = Facet::compose(Tuple._0, Tuple._0)
+      outer = Facet::chain(Tuple._0, Tuple._0)
       path = outer / Config.entrypoint
       slash = Tuple._0 / Tuple._0 / Config.entrypoint
       assert_eq("Main::main", Facet::view(path, fixture))
@@ -77,7 +77,7 @@ test("Facet") {
 
     it("replace works through shorthand on plain structural paths") {
       fixture = demo_fixture()
-      updated = Facet::replace(~fixture._1._1, 99)
+      updated = Facet::put(~fixture._1._1, 99)
       assert_eq(99, updated._1._1)
     }
 

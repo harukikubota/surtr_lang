@@ -3659,7 +3659,7 @@ fn test_facet_capture_shorthand_parses_field_access_chain() {
 
 #[test]
 fn test_facet_capture_shorthand_parses_grouped_and_call_roots() {
-    let ast = parse("Facet::replace(~(make_pair())._1, 99)").unwrap();
+    let ast = parse("put(~(make_pair())._1, 99)").unwrap();
     match &ast[0] {
         Ast::App(_, _, args) => {
             assert!(matches!(

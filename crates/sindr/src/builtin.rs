@@ -255,12 +255,12 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Facet<$S, $A>, $S) -> Result<$A>",
     },
     BuiltinMeta {
-        name: "compose",
+        name: "__facet_chain",
         arity: 2,
         sig_str: "(Facet<$S, $A>, Facet<$A, $B>) -> Facet<$S, $B>",
     },
     BuiltinMeta {
-        name: "__facet_replace",
+        name: "__facet_put",
         arity: 3,
         sig_str: "(Facet<$S, $A>, $S, $A) -> $S",
     },
@@ -1150,7 +1150,8 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
         Some("String::replace") => "string_replace",
         Some("Json::parse") => "json_parse",
         Some("Json::stringify") => "json_stringify",
-        Some("Facet::replace") => "__facet_replace",
+        Some("Facet::chain") => "__facet_chain",
+        Some("Facet::put") => "__facet_put",
         Some("Process::self") => "__process_self",
         Some("Process::sleep") => "__process_sleep",
         Some("Agent::pid") => "__process_pid",
@@ -1240,22 +1241,26 @@ mod tests {
     }
 
     #[test]
-    fn qualified_replace_builtins_resolve_to_distinct_runtime_names() {
+    fn qualified_put_builtins_resolve_to_distinct_runtime_names() {
+        assert_eq!(
+            builtin_runtime_name("chain", Some("Facet::chain")),
+            "__facet_chain"
+        );
         assert_eq!(
             builtin_runtime_name("replace", Some("String::replace")),
             "string_replace"
         );
         assert_eq!(
-            builtin_runtime_name("replace", Some("Facet::replace")),
-            "__facet_replace"
+            builtin_runtime_name("put", Some("Facet::put")),
+            "__facet_put"
         );
         assert_eq!(
             builtin_runtime_name("replace", Some("Regex::replace")),
             "__regex_replace"
         );
         assert_eq!(
-            builtin_meta_for_decl("replace", Some("Facet::replace"))
-                .expect("facet replace builtin metadata")
+            builtin_meta_for_decl("put", Some("Facet::put"))
+                .expect("facet put builtin metadata")
                 .sig_str,
             "(Facet<$S, $A>, $S, $A) -> $S"
         );

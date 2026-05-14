@@ -1,0 +1,9 @@
+defmod MyModule {
+  def put() -> String {
+    "local"
+  }
+
+  def start() -> String {
+    put()
+  }
+}

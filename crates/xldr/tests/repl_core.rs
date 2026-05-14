@@ -548,7 +548,7 @@ fn core_static_impl_methods_keep_runtime_arity_in_sync() {
 }
 
 #[test]
-fn core_renders_top_level_facet_compose_expressions_without_codegen_leak() {
+fn core_renders_top_level_facet_chain_expressions_without_codegen_leak() {
     let mut engine = engine();
 
     let tuple_facet = engine.handle_line("a = Tuple._1");
@@ -561,7 +561,7 @@ fn core_renders_top_level_facet_compose_expressions_without_codegen_leak() {
     let slash = rendered_text(&slash);
     assert!(slash.contains("Facet<_, _> = Tuple._1.Oct"), "{slash}");
 
-    let helper = engine.handle_line("Facet::compose(a, ep)");
+    let helper = engine.handle_line("Facet::chain(a, ep)");
     let helper = rendered_text(&helper);
     assert!(helper.contains("Facet<_, _> = Tuple._1.Oct"), "{helper}");
 }
@@ -2114,12 +2114,12 @@ fn core_sig_supports_tuple_field_sugar_and_facet_expression_queries() {
         "{result_pair_text}"
     );
 
-    let compose_sig =
-        engine.handle_line(":sig Facet::compose(StyledDocSegment.style, StyledDocStyle.bold)");
-    let compose_sig = rendered_text(&compose_sig);
+    let chain_sig =
+        engine.handle_line(":sig Facet::chain(StyledDocSegment.style, StyledDocStyle.bold)");
+    let chain_sig = rendered_text(&chain_sig);
     assert!(
-        compose_sig.contains("Unsupported command query argument `StyledDocSegment.style`"),
-        "{compose_sig}"
+        chain_sig.contains("Unsupported command query argument `StyledDocSegment.style`"),
+        "{chain_sig}"
     );
 
     let over_result_sig = engine.handle_line(

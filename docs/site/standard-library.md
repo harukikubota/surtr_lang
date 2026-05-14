@@ -20,7 +20,7 @@ Surtr 全体では、関数は常に何らかの namespace に属します。標
 Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, Shell, IO, DynamicSupervisor] -> user source
 ```
 
-このうち auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@autoimport` が付いた標準 trait です。  
+このうち auto import されるのは `Bootstrap`, `Kernel` と、`@autoimport` が付いた標準 `impl Type` owner helper surface および標準 trait です。  
 他の標準定義ソースは標準定義ソースとして同梱されますが、名前空間としては明示 import 前提です。
 
 ## 2. 各モジュールの役割
@@ -469,14 +469,14 @@ Token.Ident
 - selector は PascalCase 固定
 - 実行時の値がその variant でなければ `Err(VariantMismatch(...))` になる
 
-ネストした path は `/` または `Facet::compose` でつなぎます。
+ネストした path は `/` または `Facet::chain` でつなぎます。
 
 ```surtr
 User.profile / Profile.name
-Facet::compose(User.profile, Profile.name)
+Facet::chain(User.profile, Profile.name)
 ```
 
-compose 後の表示は canonical path に正規化されます。
+chain 後の表示は canonical path に正規化されます。
 `User.profile / Profile.name` は `User.profile.name` として扱われ、root path の
 重複は表示に残りません。
 
@@ -597,12 +597,12 @@ updated =? Facet::bulk_update(user) {
 }
 ```
 
-### `Facet::compose`
+### `Facet::chain`
 
-`Facet::compose(outer, inner)` は 2 つの path を順につなぎます。`outer / inner` は同じ意味の operator sugar です。
+`Facet::chain(outer, inner)` は 2 つの path を順につなぎます。`outer / inner` は同じ意味の operator sugar です。
 
 ```surtr
-profile_name = Facet::compose(User.profile, Profile.name)
+profile_name = Facet::chain(User.profile, Profile.name)
 name = Facet::view(profile_name, user)
 ```
 

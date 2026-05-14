@@ -36,7 +36,7 @@ Surtr の標準定義ソースは language surface の一部です。
 
 ## auto import されるもの
 
-auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@autoimport` が付いた標準 trait です。  
+auto import されるのは `Bootstrap`, `Kernel` と、`@autoimport` が付いた標準 `impl Type` owner helper surface / 標準 trait です。  
 それ以外の標準定義ソースは同梱されますが、名前空間としては明示 import 前提です。
 
 ## REPL で見える最小例
@@ -47,7 +47,7 @@ hello
 xldr(2)>
 ```
 
-`print` が import なしで使えるのは `Kernel` が auto import されるためです。`Ok` / `Err` が bare 名で使えるのは `Result` が auto import されるためです。
+`print` が import なしで使えるのは `Kernel` が auto import されるためです。`map_err(...)` や `chain(...)` のような標準 owner helper が bare 名で使えるのは、対応する `@autoimport impl Type` surface が auto import されるためです。
 
 ## 次に読むページ
 
@@ -72,7 +72,7 @@ xldr(2)>
 
 ## 躓きやすいポイント
 
-- auto import されるのは `Bootstrap`, `Kernel`, `Result` と `@autoimport` 付き標準 trait だけで、他の標準定義ソースは明示 `import` 前提です。
+- auto import されるのは `Bootstrap`, `Kernel` と `@autoimport` 付き標準 `impl Type` owner helper surface / 標準 trait だけで、他の標準定義ソースは明示 `import` 前提です。
 - `Facet` は標準定義ソースに見えても同一スコープ内でのみ使用可能な capability です。
 - ordered comparison の公開入口は `Compare` と `< <= > >=` です。
 - REPL は OnceRead universe なので、読み込み後に trait universe を増分更新する前提ではありません。

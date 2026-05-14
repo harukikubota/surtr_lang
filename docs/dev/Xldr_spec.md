@@ -104,7 +104,7 @@ phase ごとの VM 実行ポリシーは Xldr が決め、Eldr へは `Interacti
 - `.eldr` に含まれる user-defined function は VM には常駐するが、新しい REPL 入力の名前解決対象としては復元されない
 - したがって `.eldr` 復元は現時点では部分復元であり、完全な semantic restore は後続課題とする
 
-`Bootstrap` / `Kernel` は REPL でも auto import 対象とし、明示 `import` は compile error とする。
+`Bootstrap` / `Kernel` と、`@autoimport` が付いた標準 trait / 標準 `impl Type` owner helper surface は REPL でも auto import 対象とし、`Bootstrap` / `Kernel` への明示 `import` は compile error とする。
 
 ### 3.3 失敗時の扱い
 
@@ -171,7 +171,7 @@ REPL 実装は次の 3 層に分ける。
 | `:error [full|summary]` | エラー表示モードを切り替える（省略時は現在値表示） |
 | `:save <path>` | 現在の REPL session を `.eldr` に保存する |
 | `:vars` | visible な top-level value binding の索引を表示する。値自体は出さず、`line` / `name` / `type` に相当する簡易一覧を返す。preload script 由来の binding も同じ行番号体系に含める。 |
-| `:imported` | 現在の REPL compile unit に効いている import 面を表示する。`src` / `item` / `via` に相当する簡易一覧を返し、`@autoimport` と `import Ty` は module 名だけ、`import Ty::fun` と `import Ty::{a, b}` は member 名まで表示する。 |
+| `:imported` | 現在の REPL compile unit に効いている import 面を表示する。`src` / `item` / `via` に相当する簡易一覧を返し、`@autoimport defmod` / `import Ty` は module 名だけ、`@autoimport impl Type` / `@autoimport deftrait` / `import Ty::fun` / `import Ty::{a, b}` は導入された member 名まで表示する。 |
 | `:defs` | visible な top-level `def` の索引を表示する。REPL 対話入力、`--script` preload、script preload の `include` 由来で REPL compile unit から見える定義を、`line` / `name` / `arity` に相当する簡易一覧で返す。 |
 | `:history [selector]` | REPL 履歴を一覧表示する。`selector` は省略、単一行 `N`、列挙 `N1, N2, .., Nn`、範囲 `N..M` を受ける。`N > M` の reverse range と範囲外 index は command 全体を error にする。 |
 | `:reload [all|defs]` | preload 条件と top-level `def` から session を再構築する。`all` は起動時 preload に加えて REPL 中の top-level `def` も再投入し、`defs` は起動時 preload だけで再構築する。どちらも value binding は破棄する。 |

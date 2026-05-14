@@ -1346,8 +1346,8 @@ result = getter()"#,
         );
 
         let facet_view_id = builtin_id_by_name("view").expect("view builtin metadata must exist");
-        let facet_compose_id =
-            builtin_id_by_name("compose").expect("compose builtin metadata must exist");
+        let facet_chain_id =
+            builtin_id_by_name("__facet_chain").expect("facet chain builtin metadata must exist");
 
         assert!(!bytecode.opcodes.iter().any(|op| {
             matches!(
@@ -1355,7 +1355,7 @@ result = getter()"#,
                 Opcode::CallBuiltin {
                     builtin_id,
                     ..
-                } if *builtin_id == facet_view_id || *builtin_id == facet_compose_id
+                } if *builtin_id == facet_view_id || *builtin_id == facet_chain_id
             )
         }));
         assert!(bytecode

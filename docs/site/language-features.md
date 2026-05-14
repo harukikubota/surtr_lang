@@ -50,12 +50,15 @@ process examples でも、entry script から `include "./Agents.srt"` や `incl
 標準ライブラリでは次が代表です。
 
 - `../../lib/kernel.srt` の `defmod Kernel`
+- `../../lib/types/result.srt` などの `@autoimport impl Type`
 - `../../lib/trait/eq.srt`, `concat.srt`, `from.srt`, `try_from.srt` などの trait 宣言
 
-module と trait では意味合いが少し違います。
+module / type owner / trait では意味合いが少し違います。
 
 - `@autoimport defmod`
   - module member を最初から見える standard surface に入れる
+- `@autoimport impl Type`
+  - owner 名配下の public helper surface を最初から見える standard surface に入れる
 - `@autoimport deftrait`
   - trait method helper alias を unqualified で使えるようにする
 
@@ -82,6 +85,7 @@ print(to_string(add(3, 4)))
 利用者目線では、次の覚え方で十分です。
 
 - `print`, `if`, `inspect` のような cross-cutting API は `Kernel` 由来
+- `Result::map_err`, `Result::chain` のような標準 owner helper は `@autoimport impl Type` 由来
 - `eq`, `concat`, `from`, `try_from`, `to_string` のような頻出 helper は autoimport trait alias
 - `Add::add`, `Sub::sub`, `Mul::mul` のような helper は qualified/import 前提
 

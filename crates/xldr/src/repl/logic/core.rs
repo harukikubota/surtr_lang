@@ -3462,7 +3462,7 @@ impl ReplEngine {
             TypedInner::FacetPath(_path) => {
                 let rendered = match expr {
                     Ast::BinOp(_, BinOp::Slash, left, right) => format!(
-                        "Facet::compose({}, {})",
+                        "Facet::chain({}, {})",
                         Self::source_expr_string(left),
                         Self::source_expr_string(right)
                     ),
@@ -3474,7 +3474,7 @@ impl ReplEngine {
                 let _ = path;
                 let rendered = match expr {
                     Ast::BinOp(_, BinOp::Slash, left, right) => format!(
-                        "Facet::compose({}, {})",
+                        "Facet::chain({}, {})",
                         Self::source_expr_string(left),
                         Self::source_expr_string(right)
                     ),
