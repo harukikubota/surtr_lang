@@ -1015,7 +1015,9 @@ fn test_trait_def_parses_method_docs_and_optional_default_bodies() {
             assert_eq!(methods.len(), 2);
             assert_eq!(methods[0].name, "magnitude");
             assert_eq!(methods[0].attrs.doc.as_deref(), Some("Delegates to abs."));
-            assert!(matches!(methods[0].body.as_deref(), Some(Ast::Block(_, stmts)) if stmts.len() == 1));
+            assert!(
+                matches!(methods[0].body.as_deref(), Some(Ast::Block(_, stmts)) if stmts.len() == 1)
+            );
             assert_eq!(methods[1].name, "abs");
             assert_eq!(methods[1].attrs, DeclAttrs::default());
             assert!(methods[1].body.is_none());
@@ -2930,6 +2932,56 @@ Facet::bulk_update(book) {
         }
         other => panic!("Expected bulk update, got {:?}", other),
     }
+}
+
+#[test]
+fn test_facet_bracket_segments_parse_negative_indexes_and_ranges() {
+    let ast = parse(
+        r#"last = List.[-1]
+window = values.[2..-2]"#,
+    )
+    .unwrap();
+
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::FacetSegmentAccess(_, expr, FacetPathSegment::Bracket(_))
+                    if matches!(expr.as_ref(), Ast::Var(_, name) if name == "List")
+            ));
+        }
+        other => panic!("Expected negative List bracket bind, got {:?}", other),
+    }
+
+    match &ast[1] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::FacetSegmentAccess(_, expr, FacetPathSegment::Bracket(_))
+                    if matches!(expr.as_ref(), Ast::Var(_, name) if name == "values")
+            ));
+        }
+        other => panic!("Expected range bracket bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_facet_bracket_segments_reject_malformed_ranges() {
+    let err = parse("bad = List.[1..]").expect_err("unterminated right endpoint should fail");
+    assert!(
+        err.message().contains("expression")
+            || err.message().contains("RBrack")
+            || err.message().contains("unexpected"),
+        "{err:?}"
+    );
+
+    let err = parse("bad = List.[..3]").expect_err("missing left endpoint should fail");
+    assert!(
+        err.message().contains("expression")
+            || err.message().contains("unexpected")
+            || err.message().contains("DotDot"),
+        "{err:?}"
+    );
 }
 
 #[test]

@@ -250,6 +250,14 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_facet_list_set,
     },
     BuiltinImpl {
+        name: "__facet_list_slice_get",
+        func: builtin_facet_list_slice_get,
+    },
+    BuiltinImpl {
+        name: "__facet_list_slice_set",
+        func: builtin_facet_list_slice_set,
+    },
+    BuiltinImpl {
         name: "__facet_map_get",
         func: builtin_facet_map_get,
     },
@@ -1493,7 +1501,11 @@ fn builtin_ordering_is_lt(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtim
     let value = args
         .first()
         .ok_or_else(|| RuntimeError::new("__ordering_is_lt expects Ordering"))?;
-    Ok(Value::Bool(ordering_matches(vm, value, &["Ordering::Less"])?))
+    Ok(Value::Bool(ordering_matches(
+        vm,
+        value,
+        &["Ordering::Less"],
+    )?))
 }
 
 fn builtin_ordering_is_lte(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -1511,7 +1523,11 @@ fn builtin_ordering_is_gt(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtim
     let value = args
         .first()
         .ok_or_else(|| RuntimeError::new("__ordering_is_gt expects Ordering"))?;
-    Ok(Value::Bool(ordering_matches(vm, value, &["Ordering::Greater"])?))
+    Ok(Value::Bool(ordering_matches(
+        vm,
+        value,
+        &["Ordering::Greater"],
+    )?))
 }
 
 fn builtin_ordering_is_gte(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -2209,19 +2225,27 @@ fn facet_index_to_usize(
     index: &SurtrInt,
     len: usize,
 ) -> Result<Result<usize, Value>, RuntimeError> {
-    if index.sign() == Sign::Minus {
-        return Ok(Err(err_result(
-            vm,
-            "IndexOutOfBounds",
-            &format!("index {index} out of bounds for len {len}"),
-        )));
-    }
-    let Some(value) = index.to_usize() else {
-        return Ok(Err(err_result(
-            vm,
-            "IndexOutOfBounds",
-            &format!("index {index} out of bounds for len {len}"),
-        )));
+    let value = if index.sign() == Sign::Minus {
+        let abs = (-index).to_usize().ok_or_else(|| {
+            RuntimeError::new("__facet_list index invariant broken for negative value")
+        })?;
+        if abs == 0 || abs > len {
+            return Ok(Err(err_result(
+                vm,
+                "IndexOutOfBounds",
+                &format!("index {index} out of bounds for len {len}"),
+            )));
+        }
+        len - abs
+    } else {
+        let Some(value) = index.to_usize() else {
+            return Ok(Err(err_result(
+                vm,
+                "IndexOutOfBounds",
+                &format!("index {index} out of bounds for len {len}"),
+            )));
+        };
+        value
     };
     if value >= len {
         return Ok(Err(err_result(
@@ -2231,6 +2255,30 @@ fn facet_index_to_usize(
         )));
     }
     Ok(Ok(value))
+}
+
+fn facet_range_to_bounds(
+    vm: &VM,
+    start: &SurtrInt,
+    end: &SurtrInt,
+    len: usize,
+) -> Result<Result<(usize, usize), Value>, RuntimeError> {
+    let start = match facet_index_to_usize(vm, start, len)? {
+        Ok(value) => value,
+        Err(err) => return Ok(Err(err)),
+    };
+    let end = match facet_index_to_usize(vm, end, len)? {
+        Ok(value) => value,
+        Err(err) => return Ok(Err(err)),
+    };
+    if start > end {
+        return Ok(Err(err_result(
+            vm,
+            "IndexOutOfBounds",
+            &format!("range start {start} exceeds end {end} for len {len}"),
+        )));
+    }
+    Ok(Ok((start, end)))
 }
 
 fn key_not_found_result(vm: &VM, key: &str) -> Value {
@@ -2268,6 +2316,56 @@ fn builtin_facet_list_set(vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtim
     };
     let mut items = list.iter().collect::<Vec<_>>();
     items[index] = args[2].clone();
+    Ok(ok_result(Value::List(ListHandle::from_items(items))))
+}
+
+fn builtin_facet_list_slice_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::List(list) = &args[0] else {
+        return Err(RuntimeError::new("__facet_list_slice_get expects List"));
+    };
+    let Value::Int(start) = &args[1] else {
+        return Err(RuntimeError::new(
+            "__facet_list_slice_get expects Int start",
+        ));
+    };
+    let Value::Int(end) = &args[2] else {
+        return Err(RuntimeError::new("__facet_list_slice_get expects Int end"));
+    };
+    let (start, end) = match facet_range_to_bounds(vm, start, end, list.len)? {
+        Ok(bounds) => bounds,
+        Err(err) => return Ok(err),
+    };
+    let items = list
+        .iter()
+        .skip(start)
+        .take(end - start + 1)
+        .collect::<Vec<_>>();
+    Ok(ok_result(Value::List(ListHandle::from_items(items))))
+}
+
+fn builtin_facet_list_slice_set(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::List(list) = &args[0] else {
+        return Err(RuntimeError::new("__facet_list_slice_set expects List"));
+    };
+    let Value::Int(start) = &args[1] else {
+        return Err(RuntimeError::new(
+            "__facet_list_slice_set expects Int start",
+        ));
+    };
+    let Value::Int(end) = &args[2] else {
+        return Err(RuntimeError::new("__facet_list_slice_set expects Int end"));
+    };
+    let Value::List(replacement) = &args[3] else {
+        return Err(RuntimeError::new(
+            "__facet_list_slice_set expects List replacement",
+        ));
+    };
+    let (start, end) = match facet_range_to_bounds(vm, start, end, list.len)? {
+        Ok(bounds) => bounds,
+        Err(err) => return Ok(err),
+    };
+    let mut items = list.iter().collect::<Vec<_>>();
+    items.splice(start..=end, replacement.iter());
     Ok(ok_result(Value::List(ListHandle::from_items(items))))
 }
 

@@ -2305,8 +2305,7 @@ impl Parser<'_> {
                     self.peek_span(),
                 ));
             }
-            let method =
-                self.parse_trait_method_sig(method_attrs, method_annotator_start)?;
+            let method = self.parse_trait_method_sig(method_attrs, method_annotator_start)?;
             methods.push(method);
             while matches!(self.peek(), Token::Newline) {
                 self.advance();

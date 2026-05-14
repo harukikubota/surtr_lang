@@ -456,7 +456,18 @@ impl Parser<'_> {
             }
             Token::LBrack => {
                 self.advance();
-                let expr = self.parse_expr()?;
+                let start_expr = self.parse_expr()?;
+                let expr = if matches!(self.peek(), Token::DotDot) {
+                    self.advance();
+                    let end_expr = self.parse_expr()?;
+                    let span = Span {
+                        start: start_expr.span().start,
+                        end: end_expr.span().end,
+                    };
+                    Ast::RangeLiteral(span, Box::new(start_expr), Box::new(end_expr))
+                } else {
+                    start_expr
+                };
                 let rbrack = self.expect(&Token::RBrack)?;
                 let display = self.source[expr.span().start..expr.span().end].to_string();
                 Ok((

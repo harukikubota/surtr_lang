@@ -1361,9 +1361,16 @@ impl Checker {
                 name: name.clone(),
                 optional: *optional,
             },
-            ResolvedFacetPathSegment::Bracket(expr) => PendingFacetSegment::Bracket {
-                expr: PendingFacetExpr::Resolved(expr.expr.clone()),
-                display: expr.display.clone(),
+            ResolvedFacetPathSegment::Bracket(expr) => match expr.expr.as_ref() {
+                Resolved::RangeLiteral(_, start, end) => PendingFacetSegment::RangeBracket {
+                    start: PendingFacetExpr::Resolved(start.clone()),
+                    end: PendingFacetExpr::Resolved(end.clone()),
+                    display: expr.display.clone(),
+                },
+                _ => PendingFacetSegment::Bracket {
+                    expr: PendingFacetExpr::Resolved(expr.expr.clone()),
+                    display: expr.display.clone(),
+                },
             },
         }
     }
@@ -1384,7 +1391,8 @@ impl Checker {
                     name.clone()
                 }
             }
-            PendingFacetSegment::Bracket { display, .. } => format!("[{display}]"),
+            PendingFacetSegment::Bracket { display, .. }
+            | PendingFacetSegment::RangeBracket { display, .. } => format!("[{display}]"),
         }
     }
 
@@ -4295,7 +4303,8 @@ impl Checker {
     }
 
     fn facet_chain_candidate_args(args: &[ResolvedRecordLitArg]) -> bool {
-        args.iter().all(|arg| matches!(arg, ResolvedRecordLitArg::Positional(_)))
+        args.iter()
+            .all(|arg| matches!(arg, ResolvedRecordLitArg::Positional(_)))
             && args.iter().any(|arg| match arg {
                 ResolvedRecordLitArg::Positional(expr) => Self::looks_like_facet_path_expr(expr),
                 ResolvedRecordLitArg::Named(_, _) => false,
@@ -4310,6 +4319,18 @@ impl Checker {
             TypedFacetSegment::ListIndex { index, display, .. } => {
                 return PendingFacetSegment::Bracket {
                     expr: PendingFacetExpr::Typed(index.clone()),
+                    display: display.clone(),
+                };
+            }
+            TypedFacetSegment::ListRange {
+                start,
+                end,
+                display,
+                ..
+            } => {
+                return PendingFacetSegment::RangeBracket {
+                    start: PendingFacetExpr::Typed(start.clone()),
+                    end: PendingFacetExpr::Typed(end.clone()),
                     display: display.clone(),
                 };
             }
@@ -5429,6 +5450,11 @@ impl Checker {
                     ..
                 }
                 | TypedFacetSegment::ListIndex {
+                    focus_readonly_root,
+                    focus_type_name,
+                    ..
+                }
+                | TypedFacetSegment::ListRange {
                     focus_readonly_root,
                     focus_type_name,
                     ..
@@ -8001,6 +8027,77 @@ impl Checker {
                 }),
             };
         }
+        if let PendingFacetSegment::RangeBracket {
+            start,
+            end,
+            display,
+        } = segment
+        {
+            let typed_start = match start {
+                PendingFacetExpr::Resolved(expr) => self.check_node(expr)?,
+                PendingFacetExpr::Typed(expr) => self.resolve_typed_node((**expr).clone()),
+            };
+            let typed_end = match end {
+                PendingFacetExpr::Resolved(expr) => self.check_node(expr)?,
+                PendingFacetExpr::Typed(expr) => self.resolve_typed_node((**expr).clone()),
+            };
+            return match self.resolve_ty(source_ty) {
+                Ty::List(inner) => {
+                    for typed_expr in [&typed_start, &typed_end] {
+                        let expr_ty = self.resolve_ty(&typed_expr.ty);
+                        if let Ty::Result(ok, _) = &expr_ty {
+                            if self.types_compatible(ok.as_ref(), &Ty::Int) {
+                                return Err(TypeError {
+                                    message: "Facet bracket expression must be plain Int; unwrap Result<Int> before using it".into(),
+                                    span: typed_expr.span.clone(),
+                                    hint: None,
+                                });
+                            }
+                        }
+                        if !self.types_compatible(&Ty::Int, &expr_ty) {
+                            return Err(TypeError {
+                                message: "List Facet index expression must be Int".into(),
+                                span: typed_expr.span.clone(),
+                                hint: None,
+                            });
+                        }
+                    }
+
+                    let literal_start = match &typed_start.node {
+                        TypedInner::Lit(Lit::Int(index)) => Some(index.clone()),
+                        _ => None,
+                    };
+                    let literal_end = match &typed_end.node {
+                        TypedInner::Lit(Lit::Int(index)) => Some(index.clone()),
+                        _ => None,
+                    };
+                    let focus_ty = Ty::List(Box::new(inner.as_ref().clone()));
+                    Ok((
+                        TypedFacetSegment::ListRange {
+                            start: Box::new(typed_start),
+                            end: Box::new(typed_end),
+                            display: display.clone(),
+                            literal_start,
+                            literal_end,
+                            focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
+                            focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
+                                .map(str::to_string),
+                        },
+                        focus_ty,
+                        true,
+                    ))
+                }
+                other => Err(TypeError {
+                    message: format!(
+                        "Facet segment {} is not supported for {} yet",
+                        Self::pending_segment_display(segment),
+                        self.ty_name(&other)
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                }),
+            };
+        }
         let PendingFacetSegment::Field {
             name: field,
             optional,
@@ -8316,7 +8413,10 @@ impl Checker {
             return Ok(None);
         };
         let root_path_name = match (id.name.as_str(), segment) {
-            ("List", PendingFacetSegment::Bracket { .. }) => "List",
+            (
+                "List",
+                PendingFacetSegment::Bracket { .. } | PendingFacetSegment::RangeBracket { .. },
+            ) => "List",
             ("HashMap", PendingFacetSegment::Bracket { .. }) => "HashMap",
             _ => return Ok(None),
         };

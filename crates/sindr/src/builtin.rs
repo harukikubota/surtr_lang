@@ -300,6 +300,16 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(List<$A>, Int, $A) -> Result<List<$A>>",
     },
     BuiltinMeta {
+        name: "__facet_list_slice_get",
+        arity: 3,
+        sig_str: "(List<$A>, Int, Int) -> Result<List<$A>>",
+    },
+    BuiltinMeta {
+        name: "__facet_list_slice_set",
+        arity: 4,
+        sig_str: "(List<$A>, Int, Int, List<$A>) -> Result<List<$A>>",
+    },
+    BuiltinMeta {
         name: "__facet_map_get",
         arity: 2,
         sig_str: "(HashMap<$A>, String) -> Result<$A>",

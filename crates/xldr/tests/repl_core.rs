@@ -613,6 +613,22 @@ fn core_facet_command_reports_kind_apis_segments_and_stop_points() {
 }
 
 #[test]
+fn core_renders_negative_and_range_list_facets() {
+    let mut engine = engine();
+
+    let last = engine.handle_line("last = List.[-1]");
+    assert!(rendered_text(&last).contains("last: Facet<_, _> = List.[-1]"));
+
+    let window = engine.handle_line("window = List.[1..-1]");
+    assert!(rendered_text(&window).contains("window: Facet<_, _> = List.[1..-1]"));
+
+    let info = engine.handle_line(":facet window");
+    let info = rendered_text(&info);
+    assert!(info.contains("full path: List.[1..-1]"), "{info}");
+    assert!(info.contains("fallible: yes"), "{info}");
+}
+
+#[test]
 fn core_doc_reports_match_and_cond_from_bootstrap_surface() {
     let mut engine = engine();
 
@@ -1153,9 +1169,9 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let typed_doc = doc_text(&typed_doc);
     assert!(typed_doc.contains("impl Compare for Int::compare(self: Self, rhs: Self) -> Ordering"));
     assert!(typed_doc.contains("Return the three-way ordering between the two integer values."));
-    assert!(!typed_doc.contains(
-        "\n  Return the three-way ordering between the two integer values."
-    ));
+    assert!(
+        !typed_doc.contains("\n  Return the three-way ordering between the two integer values.")
+    );
 
     let helper_doc = engine.handle_line(":doc compare");
     let helper_doc = doc_text(&helper_doc);
@@ -1170,7 +1186,10 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let default_less_than_doc = engine.handle_line(":doc lt");
     let default_less_than_doc = doc_text(&default_less_than_doc);
     assert!(default_less_than_doc.contains("Compare::lt"));
-    assert!(!default_less_than_doc.contains("trait Compare {"), "{default_less_than_doc}");
+    assert!(
+        !default_less_than_doc.contains("trait Compare {"),
+        "{default_less_than_doc}"
+    );
 
     let typed_less_than_doc = engine.handle_line(":doc lt(Int, Int)");
     let typed_less_than_doc = doc_text(&typed_less_than_doc);

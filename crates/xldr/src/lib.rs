@@ -338,10 +338,7 @@ fn format_impl_extractor_signature(
     }
 }
 
-fn format_trait_method_signature(
-    trait_name: &str,
-    method: &spire::ast::TraitMethodSig,
-) -> String {
+fn format_trait_method_signature(trait_name: &str, method: &spire::ast::TraitMethodSig) -> String {
     let signature = format_fun_signature(
         &method.name,
         &method.type_params,

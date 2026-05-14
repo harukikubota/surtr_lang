@@ -1994,9 +1994,11 @@ impl ReplEngine {
 
     fn visible_helper_doc_alias(&self, symbol: &str) -> Option<String> {
         if let Some(target) = Self::compare_method_doc_target(symbol) {
-            return self
-                .visible_compare_method_doc_alias(symbol)
-                .or_else(|| self.visible_declaration(symbol).is_none().then(|| target.to_string()));
+            return self.visible_compare_method_doc_alias(symbol).or_else(|| {
+                self.visible_declaration(symbol)
+                    .is_none()
+                    .then(|| target.to_string())
+            });
         }
         self.visible_helper_trait_alias(symbol)
     }
@@ -2404,7 +2406,9 @@ impl ReplEngine {
         let Some(trait_name) = preferred_trait else {
             return 0;
         };
-        if signature.starts_with(&format!("impl {trait_name} for {receiver_ty}::{callee_tail}")) {
+        if signature.starts_with(&format!(
+            "impl {trait_name} for {receiver_ty}::{callee_tail}"
+        )) {
             return 0;
         }
         if crate::surface_path_name(&entry.qualified_name) == format!("{trait_name}::{callee_tail}")
@@ -3684,7 +3688,8 @@ impl ReplEngine {
                     rendered.push('.');
                     rendered.push_str(variant_name);
                 }
-                TypedFacetSegment::ListIndex { display, .. } => {
+                TypedFacetSegment::ListIndex { display, .. }
+                | TypedFacetSegment::ListRange { display, .. } => {
                     if rendered.is_empty() {
                         rendered.push_str("List");
                     }
@@ -3711,6 +3716,7 @@ impl ReplEngine {
             TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
             TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
             TypedFacetSegment::ListIndex { display, .. }
+            | TypedFacetSegment::ListRange { display, .. }
             | TypedFacetSegment::MapKey { display, .. } => format!("[{display}]"),
         }
     }
@@ -3724,7 +3730,8 @@ impl ReplEngine {
                     name.clone()
                 }
             }
-            PendingFacetSegment::Bracket { display, .. } => format!("[{display}]"),
+            PendingFacetSegment::Bracket { display, .. }
+            | PendingFacetSegment::RangeBracket { display, .. } => format!("[{display}]"),
         }
     }
 
@@ -3732,7 +3739,9 @@ impl ReplEngine {
         match segment {
             PendingFacetSegment::Field { name, .. } if name.starts_with('_') => "tuple",
             PendingFacetSegment::Field { .. } => "field",
-            PendingFacetSegment::Bracket { .. } => "container segment",
+            PendingFacetSegment::Bracket { .. } | PendingFacetSegment::RangeBracket { .. } => {
+                "container segment"
+            }
         }
     }
 
@@ -3844,9 +3853,16 @@ impl ReplEngine {
                     current_source = focus_ty;
                     ("variant", true, "variant mismatch returns Result")
                 }
-                TypedFacetSegment::ListIndex { display, .. } => {
+                TypedFacetSegment::ListIndex { display, .. }
+                | TypedFacetSegment::ListRange { display, .. } => {
                     let focus_ty = match &current_source {
-                        Ty::List(inner) => inner.as_ref().clone(),
+                        Ty::List(inner) => match segment {
+                            TypedFacetSegment::ListIndex { .. } => inner.as_ref().clone(),
+                            TypedFacetSegment::ListRange { .. } => {
+                                Ty::List(Box::new(inner.as_ref().clone()))
+                            }
+                            _ => unreachable!(),
+                        },
                         _ => path.focus_ty.clone(),
                     };
                     if prefix.is_empty() {
@@ -3858,14 +3874,34 @@ impl ReplEngine {
                     path_is_fallible = true;
                     segments.push(forge::ReplFacetSegmentInfo {
                         label: prefix.clone(),
-                        kind: "list index".to_string(),
+                        kind: match segment {
+                            TypedFacetSegment::ListIndex { .. } => "list index".to_string(),
+                            TypedFacetSegment::ListRange { .. } => "list range".to_string(),
+                            _ => unreachable!(),
+                        },
                         source_ty: Self::ty_to_string(&current_source),
                         focus_ty: Self::ty_to_string(&focus_ty),
                         fallible: true,
-                        reason: "index miss returns Result".to_string(),
+                        reason: match segment {
+                            TypedFacetSegment::ListIndex { .. } => {
+                                "index miss returns Result".to_string()
+                            }
+                            TypedFacetSegment::ListRange { .. } => {
+                                "range miss returns Result".to_string()
+                            }
+                            _ => unreachable!(),
+                        },
                     });
                     current_source = focus_ty;
-                    ("list index", true, "index miss returns Result")
+                    match segment {
+                        TypedFacetSegment::ListIndex { .. } => {
+                            ("list index", true, "index miss returns Result")
+                        }
+                        TypedFacetSegment::ListRange { .. } => {
+                            ("list range", true, "range miss returns Result")
+                        }
+                        _ => unreachable!(),
+                    }
                 }
                 TypedFacetSegment::MapKey { display, .. } => {
                     let focus_ty = match &current_source {
@@ -3937,7 +3973,11 @@ impl ReplEngine {
                             kind: Self::pending_facet_segment_kind(segment).to_string(),
                             source_ty: "_".to_string(),
                             focus_ty: "_".to_string(),
-                            fallible: matches!(segment, PendingFacetSegment::Bracket { .. }),
+                            fallible: matches!(
+                                segment,
+                                PendingFacetSegment::Bracket { .. }
+                                    | PendingFacetSegment::RangeBracket { .. }
+                            ),
                             reason: "requires Facet context to specialize".to_string(),
                         })
                         .collect(),

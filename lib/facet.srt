@@ -22,6 +22,8 @@ Common path forms:
 - explicit type-root capture in unary function context: `&User.name`
 - tuple root path: `Tuple._0`, `Tuple._1`, ...
 - list root path: `List.[1]`
+- negative list root path: `List.[-1]`
+- list range root path: `List.[1..-1]`
 - dynamic list root path: `List.[index + 1]`
 - map root path: `HashMap.["talk"]`
 - dynamic map root path: `HashMap.[String::trim(name)]`
@@ -30,6 +32,7 @@ Common path forms:
 - property list segment: `User.scores.[1]`
 - property map segment: `User.score.["talk"]`
 - dynamic property segment: `User.scores.[index]`, `User.score.[name]`
+- range property segment: `User.scores.[1..-1]`
 - nested path: `User.profile / Profile.name`, `User.profile.name`
 - function-form nested path: `Facet::chain(User.profile, Profile.name)`
 - enum variant selector: `Expr.Add`
@@ -80,12 +83,15 @@ Readonly follows a different rule boundary from private visibility.
 Container bracket expressions follow these additional rules:
 
 - `List.[expr]` requires plain `Int`
+- `List.[start..end]` requires plain `Int` endpoints and focuses `List<T>`
+- negative list indexes and range endpoints are resolved from the tail: `-1`
+  means the last element
 - `HashMap.[expr]` requires plain `String`
 - `Result<Int>` and `Result<String>` are rejected; unwrap before building the path
 - `put` still accepts only infallible structural paths, so list/map bracket
   segments are excluded even when `expr` itself is pure
-- `const Facet<...>` accepts only literal bracket segments such as `List.[0]`
-  and `HashMap.["talk"]`
+- `const Facet<...>` accepts only literal bracket segments such as `List.[0]`,
+  `List.[-1]`, `List.[1..3]`, and `HashMap.["talk"]`
 """
 @builtin type Facet<$S, $A>
 
@@ -114,7 +120,8 @@ impl Facet {
   List and HashMap path segments are also fallible: they return
   `IndexOutOfBounds` or `KeyNotFound` through `Result`.
   Their bracket expression may be any ordinary runtime expression as long as it
-  resolves to plain `Int` or `String`.
+  resolves to plain `Int` or `String`. List ranges use inclusive endpoints and
+  return a `List<T>` focus.
   The bracket expression is evaluated exactly once per Facet operation.
 
   `Facet::view` may cross readonly fields and readonly struct boundaries because

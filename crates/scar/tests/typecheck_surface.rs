@@ -150,6 +150,14 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_dynamic_container_segments_reject_result_and_wrong_key_types as fn(),
     ),
     (
+        "facet_negative_list_index_and_range_segments_typecheck",
+        facet_negative_list_index_and_range_segments_typecheck as fn(),
+    ),
+    (
+        "facet_range_segments_require_plain_int_endpoints_and_list_values",
+        facet_range_segments_require_plain_int_endpoints_and_list_values as fn(),
+    ),
+    (
         "facet_const_dynamic_container_segments_require_literals",
         facet_const_dynamic_container_segments_require_literals as fn(),
     ),
@@ -1706,6 +1714,69 @@ bad = Facet::view(HashMap.[1], map)"#,
         .contains("HashMap Facet key expression must be String"));
 }
 
+fn facet_negative_list_index_and_range_segments_typecheck() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"scores = [10, 20, 30, 40]
+last = Facet::view(List.[-1], scores)
+window = Facet::view(List.[1..-2], scores)
+updated = Facet::set(List.[1..2], scores, [99, 100, 101])
+bumped = Facet::over(List.[0..1], scores, {|slice| Ok(List::append(slice, [77]))})"#,
+    );
+
+    let last_rhs = typed_bind_rhs(&typed, "last");
+    assert!(matches!(
+        &last_rhs.ty,
+        Ty::Result(ok, err)
+            if matches!(ok.as_ref(), Ty::Int) && matches!(err.as_ref(), Ty::Error)
+    ));
+
+    for name in ["window", "updated", "bumped"] {
+        let rhs = typed_bind_rhs(&typed, name);
+        assert!(
+            matches!(
+                &rhs.ty,
+                Ty::Result(ok, err)
+                    if matches!(ok.as_ref(), Ty::List(_)) && matches!(err.as_ref(), Ty::Error)
+            ),
+            "{name} should be Result<List<_>>, got {:?}",
+            rhs.ty
+        );
+    }
+}
+
+fn facet_range_segments_require_plain_int_endpoints_and_list_values() {
+    let endpoint_err = typecheck_with_rules(
+        r#"def find_index(values: List<Int>) -> Result<Int> { Ok(0) }
+values = [1, 2, 3]
+bad = Facet::view(List.[find_index(values)..1], values)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("Result<Int> range endpoint should fail");
+    assert!(endpoint_err.message.contains(
+        "Facet bracket expression must be plain Int; unwrap Result<Int> before using it"
+    ));
+
+    let set_err = typecheck_with_rules(
+        r#"values = [1, 2, 3]
+bad = Facet::set(List.[0..1], values, 9)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("slice set should require List<A>");
+    assert!(set_err.message.contains("Facet::set value type mismatch"));
+
+    let over_err = typecheck_with_rules(
+        r#"values = [1, 2, 3]
+bad = Facet::over(List.[0..1], values, {|n| Ok(n + 1)})"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("slice over should require List<A> updater");
+    assert!(
+        over_err.message.contains("Facet::over update function")
+            || over_err.message.contains("Argument type mismatch"),
+        "{over_err:?}"
+    );
+}
+
 fn facet_const_dynamic_container_segments_require_literals() {
     let err = typecheck_with_rules(
         r#"index = 0
@@ -2044,9 +2115,9 @@ path = ~user.name"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("shorthand binding should fail");
-    assert!(bind_err
-        .message
-        .contains("must be consumed as the first argument of Facet::view/preview/put/set/over/over_result"));
+    assert!(bind_err.message.contains(
+        "must be consumed as the first argument of Facet::view/preview/put/set/over/over_result"
+    ));
 
     let missing_path_err = typecheck_with_rules(
         r#"defrecord User(name: String)
@@ -3982,8 +4053,7 @@ bound = parse(1) |>= &stringify"#,
                     lhs_ty: Ty::Result(_, _),
                     rhs_ty: Ty::Func(_, _) | Ty::UserFunc { .. } | Ty::BuiltinFunc { .. },
                 }
-            )
-                && args.len() == 2
+            ) && args.len() == 2
                 && matches!(result_ty, Ty::Result(ok, _) if matches!(ok.as_ref(), Ty::Str))
         }
     ));

@@ -851,6 +851,40 @@ print("over variant tuple:" ++ inspect(shape3))"#,
     );
 }
 
+fn facet_list_negative_indexes_and_slice_updates_work() {
+    assert_output(
+        r#"values = ["a", "b", "c", "d"]
+print("last:" ++ inspect(Facet::view(List.[-1], values)))
+print("slice:" ++ inspect(Facet::view(List.[1..-1], values)))
+shrunk =? Facet::set(List.[1..2], values, ["x"])
+print("shrunk:" ++ inspect(shrunk))
+grown =? Facet::over(List.[0..1], shrunk, {|slice| Ok(List::append(slice, ["tail"]))})
+print("grown:" ++ inspect(grown))
+print("neg set:" ++ inspect(Facet::set(List.[-2], values, "z")))"#,
+        &[
+            "last:Ok(\"d\")",
+            "slice:Ok([\"b\", \"c\", \"d\"])",
+            "shrunk:[\"a\", \"x\", \"d\"]",
+            "grown:[\"a\", \"x\", \"tail\", \"d\"]",
+            "neg set:Ok([\"a\", \"b\", \"z\", \"d\"])",
+        ],
+    );
+}
+
+fn facet_list_negative_indexes_and_slice_misses_report_bounds() {
+    assert_output(
+        r#"values = ["a"]
+print(inspect(Facet::view(List.[-2], values)))
+print(inspect(Facet::view(List.[1..2], values)))
+print(inspect(Facet::view(List.[0..-2], values)))"#,
+        &[
+            "Err(IndexOutOfBounds(\"index -2 out of bounds for len 1\"))",
+            "Err(IndexOutOfBounds(\"index 1 out of bounds for len 1\"))",
+            "Err(IndexOutOfBounds(\"index -2 out of bounds for len 1\"))",
+        ],
+    );
+}
+
 fn language_goal_combined() {
     assert_output(
         r#"num = 10
@@ -1017,6 +1051,14 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "facet_api_variants_and_result_patterns_work",
             facet_api_variants_and_result_patterns_work as fn(),
+        ),
+        (
+            "facet_list_negative_indexes_and_slice_updates_work",
+            facet_list_negative_indexes_and_slice_updates_work as fn(),
+        ),
+        (
+            "facet_list_negative_indexes_and_slice_misses_report_bounds",
+            facet_list_negative_indexes_and_slice_misses_report_bounds as fn(),
         ),
         ("language_goal_combined", language_goal_combined as fn()),
     ];

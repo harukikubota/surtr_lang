@@ -170,6 +170,15 @@ pub enum TypedFacetSegment {
         focus_readonly_root: bool,
         focus_type_name: Option<String>,
     },
+    ListRange {
+        start: Box<TypedNode>,
+        end: Box<TypedNode>,
+        display: String,
+        literal_start: Option<SurtrInt>,
+        literal_end: Option<SurtrInt>,
+        focus_readonly_root: bool,
+        focus_type_name: Option<String>,
+    },
     MapKey {
         key: Box<TypedNode>,
         display: String,
@@ -257,6 +266,11 @@ pub enum PendingFacetSegment {
     },
     Bracket {
         expr: PendingFacetExpr,
+        display: String,
+    },
+    RangeBracket {
+        start: PendingFacetExpr,
+        end: PendingFacetExpr,
         display: String,
     },
 }

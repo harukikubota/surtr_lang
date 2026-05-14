@@ -17,13 +17,7 @@ impl Checker {
         fn sanitize(segment: &str) -> String {
             segment
                 .chars()
-                .map(|ch| {
-                    if ch.is_ascii_alphanumeric() {
-                        ch
-                    } else {
-                        '_'
-                    }
-                })
+                .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
                 .collect()
         }
 
@@ -102,12 +96,14 @@ impl Checker {
     fn const_facet_segment_is_allowed(&self, segment: &ResolvedFacetPathSegment) -> bool {
         match segment {
             ResolvedFacetPathSegment::Field { .. } => true,
-            ResolvedFacetPathSegment::Bracket(expr) => {
-                matches!(
-                    expr.expr.as_ref(),
-                    Resolved::Lit(_, Lit::Int(_) | Lit::Str(_))
-                )
-            }
+            ResolvedFacetPathSegment::Bracket(expr) => match expr.expr.as_ref() {
+                Resolved::Lit(_, Lit::Int(_) | Lit::Str(_)) => true,
+                Resolved::RangeLiteral(_, start, end) => matches!(
+                    (start.as_ref(), end.as_ref()),
+                    (Resolved::Lit(_, Lit::Int(_)), Resolved::Lit(_, Lit::Int(_)))
+                ),
+                _ => false,
+            },
         }
     }
 
@@ -1793,13 +1789,16 @@ impl Checker {
                 continue;
             };
             let (_, target_ty, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
-            let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
+            let target_name =
+                self.trait_target_name(&target_ty).ok_or_else(|| {
+                    TypeError {
                 message:
                     "trait impl target must be a concrete named type, tuple type, or function type"
                         .into(),
                 span: Self::ast_ty_span(target_ast_ty).clone(),
                 hint: None,
-            })?;
+            }
+                })?;
             trait_impl_keys_in_stmts
                 .insert((self.trait_instance_key(trait_id, trait_args), target_name));
         }

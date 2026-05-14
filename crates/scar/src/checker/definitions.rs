@@ -1018,16 +1018,16 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
-        let impl_key = (self.trait_instance_key(trait_id, trait_args), target_name.clone());
+        let impl_key = (
+            self.trait_instance_key(trait_id, trait_args),
+            target_name.clone(),
+        );
         let impl_info = self
             .trait_impls
             .get(&impl_key)
             .cloned()
             .ok_or_else(|| TypeError {
-                message: format!(
-                    "Unknown trait impl {} for {}",
-                    trait_id.name, target_name
-                ),
+                message: format!("Unknown trait impl {} for {}", trait_id.name, target_name),
                 span: span.clone(),
                 hint: None,
             })?;

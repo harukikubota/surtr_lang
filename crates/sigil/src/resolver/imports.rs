@@ -23,7 +23,11 @@ fn surface_name(name: &str) -> &str {
     name.strip_prefix("Global::").unwrap_or(name)
 }
 
-fn is_result_facet_chain_conflict(existing_name: &str, incoming_name: &str, short_name: &str) -> bool {
+fn is_result_facet_chain_conflict(
+    existing_name: &str,
+    incoming_name: &str,
+    short_name: &str,
+) -> bool {
     if short_name != "chain" {
         return false;
     }
