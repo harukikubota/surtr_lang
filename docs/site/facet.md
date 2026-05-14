@@ -167,15 +167,22 @@ name_facet = User.name
 List と HashMap の bracket segment は、通常の Facet path では runtime 式を受けられます。
 
 - `List.[expr]` の `expr` は plain `Int`
+- `List.[-1]` のような負 index は末尾基準
+- `List.[start..end]` は inclusive な slice を選ぶ
+- slice endpoint も plain `Int` で、負数は同じく末尾基準
 - `HashMap.[expr]` の `expr` は plain `String`
 - `Result<Int>` / `Result<String>` はそのまま使えないので、先に `=?` や `match` で unwrap する
 - `const Facet<...>` だけは compile-time 固定のままで、bracket segment は literal のみ
 
 ```surtr
 score =? Facet::view(List.[index + 1], scores)
+last =? Facet::view(List.[-1], scores)
+window =? Facet::view(List.[1..-1], scores)
 talk =? Facet::view(HashMap.[String::trim(kind)], score_by_kind)
 
 score2 =? Facet::set(User.scores.[slot], user, 99)
+scores2 =? Facet::set(List.[1..2], scores, [99])
+scores3 =? Facet::over(List.[0..1], scores2, {|slice| Ok(List::append(slice, [77]))})
 user2 =? Facet::over(User.score_by_kind.[kind], user, {|n| Ok(n + 1)})
 ```
 
@@ -189,8 +196,14 @@ talk =? score_by_kind.[kind]
 1 回の Facet operation 中では、bracket expression は先に 1 回だけ評価され、
 read と rebuild の両方で同じ index / key が再利用されます。
 
+single index の focus は要素 `A`、slice の focus は `List<A>` です。
+そのため `Facet::set(List.[1..2], source, replacement)` は slice 置換になり、
+`replacement` の長さは元と同じでなくてもかまいません。
+`Facet::over(List.[1..2], source, update_fun)` も `update_fun: (List<A> -> Result<List<A>>)`
+として slice 全体を受け取ります。
+
 `put` は引き続き infallible structural path 専用です。
-そのため `List.[expr]` / `HashMap.[expr]` は literal かどうかに関係なく `put` では使えません。
+そのため `List.[expr]` / `List.[start..end]` / `HashMap.[expr]` は literal かどうかに関係なく `put` では使えません。
 
 ## record path
 
@@ -450,5 +463,5 @@ facet = User.password
 - variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:facet <binding|expr>` で確認するのが一番わかりやすいです。
 - スコープをまたぐときは `Facet` ではなく、`Facet::view(...)` 済みの値を渡します。
 - `Result` を返す updater とつなぐ field には、`Option<T>` より `T?` の方が更新パイプが短くなります。
-- `List.[expr]` / `HashMap.[expr]` は普通の path では runtime 式を許可しますが、`const Facet<...>` では literal だけに絞られます。
+- `List.[expr]` / `List.[start..end]` / `HashMap.[expr]` は普通の path では runtime 式を許可しますが、`const Facet<...>` では literal だけに絞られます。
 - `bulk_update` は DSL ですが path 能力は通常の Facet API と揃っているので、dynamic bracket や `case_*` も同じ感覚で使えます。

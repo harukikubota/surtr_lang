@@ -8,15 +8,25 @@ shape at this file's top level.
 Facet path note:
 
 - `List.[expr]` selects a list element through a Facet path
+- negative Facet indexes are tail-relative: `List.[-1]` means the last element
+- `List.[start..end]` selects an inclusive slice through a Facet path
+- negative slice endpoints are also tail-relative: `List.[1..-1]`
 - `expr` must have plain `Int` type
+- slice endpoints must both have plain `Int` type
 - the same syntax is available in value-side sugar such as `values.[index + 1]`
-- `const Facet<...>` still requires a literal bracket segment such as `List.[0]`
+- `Facet::set` may replace a selected slice with a different-length `List`
+- `Facet::over` receives the selected slice as `List<$A>` and may return a different-length `List<$A>`
+- `const Facet<...>` still requires a literal bracket segment such as `List.[0]`,
+  `List.[-1]`, or `List.[1..3]`
 
 Examples:
 
 - `Facet::view(List.[1], [10, 20, 30])`
+- `Facet::view(List.[-1], [10, 20, 30])`
+- `Facet::view(List.[1..-1], [10, 20, 30, 40])`
 - `Facet::view(List.[index + 1], scores)`
 - `Facet::set(User.scores.[slot], user, 99)`
+- `Facet::set(List.[1..2], [10, 20, 30, 40], [99])`
 """
 @builtin type List<$A>
 
