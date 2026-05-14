@@ -17,7 +17,7 @@ Surtr 全体では、関数は常に何らかの namespace に属します。標
 標準定義ソースの初期ロード順は次で固定されています。
 
 ```text
-Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, Shell, IO, DynamicSupervisor] -> user source
+Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, Shell, IO, DynamicSupervisor] -> user source
 ```
 
 このうち auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@autoimport` が付いた標準 trait です。  
@@ -42,7 +42,7 @@ concrete error は、最初の標準ステージから使えるようここに�
 
 ### `Kernel`
 
-- `defmod Kernel` の中に `if`, `if_then`, `assert`, `ensure`, `and`, `or`, `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `concat`, `print`, `to_string`, `inspect`, `eprint`, `set_exit_code` のような cross-cutting builtin を置く
+- `defmod Kernel` の中に `if`, `if_then`, `assert`, `ensure`, `and`, `or`, `eq`, `neq`, `concat`, `print`, `to_string`, `inspect`, `eprint`, `set_exit_code` のような cross-cutting builtin を置く
 - auto import される最小の標準 API を置く
 
 primitive type に強く結びつかない builtin は、ここへ集めます。
@@ -50,8 +50,9 @@ primitive type に強く結びつかない builtin は、ここへ集めます�
 説明を標準 surface に残すため `Kernel` に置きます。
 `and` / `or` も宣言上は通常の 2 引数関数ですが、コンパイラが short-circuit
 評価へ lower する call-style helper としてここに置きます。
-comparison / concat 系の call-style helper (`eq`, `lt`, `concat` など) も
+equality / concat 系の call-style helper (`eq`, `neq`, `concat` など) も
 primitive module をまたぐ読みやすさを優先して `Kernel` に置きます。
+ordered comparison は `compare(left, right)` または `< <= > >=` を使い、専用の Boolean helper 名は公開しません。
 
 ### `SpecialTypes`
 

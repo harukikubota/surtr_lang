@@ -145,7 +145,7 @@ $name
 
 ```text
 :doc $b
-:sig gt($left, $right)
+:sig compare($left, $right)
 :sig $ret |>= $up
 :info $xs
 :type $xs
@@ -446,9 +446,10 @@ BindingDocTarget
 有効例:
 
 ```text
-:doc gt(Int, Int)
-:doc gt(left, right)
-:doc gt($left, $right)
+:doc compare(Int, Int)
+:doc lt(Int, Int)
+:doc compare(left, right)
+:doc compare($left, $right)
 :doc ret |>= up
 :doc Result<Int> |>= &parse_int
 :doc xs |> map(&to_string)
@@ -600,9 +601,10 @@ SigTarget
 有効例:
 
 ```text
-:sig gt(Int, Int)
-:sig gt(left, right)
-:sig gt($left, $right)
+:sig compare(Int, Int)
+:sig lt(Int, Int)
+:sig compare(left, right)
+:sig compare($left, $right)
 :sig ret |>= up
 :sig Result<Int> |>= &parse_int
 ```
@@ -610,8 +612,8 @@ SigTarget
 出力例:
 
 ```text
-gt(self: Int, rhs: Int) -> Boolean
-selected_impl: impl Gt for Int
+compare(self: Int, rhs: Int) -> Ordering
+selected_impl: impl Compare for Int
 ```
 
 ### 6.5 struct / record constructor signature
@@ -798,17 +800,17 @@ variants:
 ### 7.5 dispatch info
 
 ```text
-:info gt(Int, Int)
+:info compare(Int, Int)
 ```
 
 出力例:
 
 ```text
-target: gt(Int, Int)
+target: compare(Int, Int)
 kind: function specialization
 
 callable:
-  gt
+  compare
 
 arg keys:
   Int
@@ -819,15 +821,15 @@ resolved arg types:
   Int
 
 selected:
-  impl Gt for Int
+  impl Compare for Int
 
 available:
   doc: yes
   sig: yes
 
 related:
-  :doc gt(Int, Int)
-  :sig gt(Int, Int)
+  :doc compare(Int, Int)
+  :sig compare(Int, Int)
 ```
 
 operator query:
@@ -896,7 +898,7 @@ BitWidth :: TypeIdentity::Enum
 :type StringEncoding
 :type User
 :type add
-:type gt(Int, Int)
+:type compare(Int, Int)
 :type 1 + 2
 ```
 
@@ -1022,9 +1024,9 @@ fallible segments:
 
 | Command | 入力 | 導出 |
 |---|---|---|
-| `:doc` | `:doc gt(Int, Int)` | selected impl method/block doc |
-| `:sig` | `:sig gt(Int, Int)` | specialized signature |
-| `:info` | `:info gt(Int, Int)` | dispatch 解決情報 |
+| `:doc` | `:doc compare(Int, Int)` | selected impl method/block doc |
+| `:sig` | `:sig compare(Int, Int)` | specialized signature |
+| `:info` | `:info compare(Int, Int)` | dispatch 解決情報 |
 | `:doc` | `:doc ret |>= up` | selected operator impl doc |
 | `:sig` | `:sig ret |>= up` | operator application signature |
 
@@ -1156,14 +1158,14 @@ Try:
   :doc print
   :doc User
   :doc User()
-  :doc gt(Int, Int)
+  :doc compare(Int, Int)
   :doc $binding
 ```
 
 ### 12.3 literal argument
 
 ```text
-:sig gt(1, 2)
+:sig compare(1, 2)
 ```
 
 ```text
@@ -1172,18 +1174,18 @@ literal arguments are not accepted in command queries.
 Command queries use concrete types, bindings, or capture queries.
 
 Try:
-  :sig gt(Int, Int)
+  :sig compare(Int, Int)
 
 Or bind values first:
   left = 1
   right = 2
-  :sig gt($left, $right)
+  :sig compare($left, $right)
 ```
 
 ### 12.4 arbitrary expression
 
 ```text
-:sig gt(left + 1, right)
+:sig compare(left + 1, right)
 ```
 
 ```text
@@ -1197,7 +1199,7 @@ Query arguments must be:
 
 Try:
   tmp = left + 1
-  :sig gt($tmp, right)
+  :sig compare($tmp, right)
 ```
 
 ### 12.5 generic type variable
@@ -1410,7 +1412,7 @@ Examples:
   :doc User()
   :doc User(String, Int)
   :doc User!()
-  :doc gt(Int, Int)
+  :doc compare(Int, Int)
   :doc ret |>= up
   :doc $b
 ```
@@ -1434,7 +1436,7 @@ Examples:
   :sig User(String, Int)
   :sig User!()
   :sig StringEncoding
-  :sig gt(Int, Int)
+  :sig compare(Int, Int)
   :sig xs |> map(&to_string)
 ```
 
@@ -1453,7 +1455,7 @@ Examples:
   :info b
   :info $b
   :info StringEncoding
-  :info gt(Int, Int)
+  :info compare(Int, Int)
   :info xs |> map(&to_string)
 ```
 
@@ -1738,9 +1740,9 @@ diagnostic span は局所 token に寄せる。
 :doc User(String, Int)
 :sig User!()
 
-:doc gt(Int, Int)
-:sig gt(Int, Int)
-:info gt(Int, Int)
+:doc compare(Int, Int)
+:sig compare(Int, Int)
+:info compare(Int, Int)
 
 :sig ret |>= up
 :doc Result<Int> |>= &parse_int
@@ -1756,8 +1758,8 @@ diagnostic span は局所 token に寄せる。
 :sig BitWidth::Any(Int)         # enum variant direct query 不可
 :type StringEncoding            # binding ではない
 
-:sig gt(1, 2)                   # literal 不可
-:sig gt(left + 1, right)        # expression 不可
+:sig compare(1, 2)              # literal 不可
+:sig compare(left + 1, right)   # expression 不可
 :sig List<$T>                   # generic type variable 不可
 
 :sig xs |> map(to_string())     # RHS arg function call 不可

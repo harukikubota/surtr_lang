@@ -480,10 +480,6 @@ impl Checker {
                 | "or"
                 | "eq"
                 | "neq"
-                | "lt"
-                | "lte"
-                | "gt"
-                | "gte"
                 | "concat"
         )
     }
@@ -1000,7 +996,7 @@ impl Checker {
         trait_id: &ResolvedId,
         trait_args: &[AstTy],
         target_ast_ty: &AstTy,
-        methods: &[ResolvedTraitImplMethod],
+        _methods: &[ResolvedTraitImplMethod],
     ) -> Result<Vec<TypedNode>, TypeError> {
         let (_, target_ty, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
         let target_name = self
@@ -1022,6 +1018,19 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
+        let impl_key = (self.trait_instance_key(trait_id, trait_args), target_name.clone());
+        let impl_info = self
+            .trait_impls
+            .get(&impl_key)
+            .cloned()
+            .ok_or_else(|| TypeError {
+                message: format!(
+                    "Unknown trait impl {} for {}",
+                    trait_id.name, target_name
+                ),
+                span: span.clone(),
+                hint: None,
+            })?;
         let mut typed_nodes = vec![TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
@@ -1030,6 +1039,9 @@ impl Checker {
                 target_name.clone(),
             ),
         }];
+
+        let mut methods = impl_info.methods.into_values().collect::<Vec<_>>();
+        methods.sort_by(|left, right| left.method_name.cmp(&right.method_name));
 
         for method in methods {
             let trait_method =
@@ -1044,23 +1056,10 @@ impl Checker {
                         span: method.span.clone(),
                         hint: None,
                     })?;
-
-            let inline_method = TraitImplMethodInfo {
-                method_name: method.method_name.clone(),
-                function_id: method.function_id.clone(),
-                type_params: method.type_params.clone(),
-                params: method.params.clone(),
-                ret_ty: method.ret_ty.clone(),
-                body: method.body.clone(),
-                attrs: method.attrs.clone(),
-                span: method.span.clone(),
-                dispatch_override: None,
-                is_builtin: method.is_builtin,
-            };
             let (param_tys, expected_ret, type_params) = self.resolve_trait_impl_method_signature(
                 &trait_info,
                 trait_args,
-                &inline_method,
+                &method,
                 target_ast_ty,
                 &trait_method.ret_ty,
             )?;

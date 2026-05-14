@@ -2022,6 +2022,8 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                         .map(|param| shift_fun_param(param, delta))
                         .collect(),
                     ret_ty: shift_ast_ty(method.ret_ty, delta),
+                    body: method.body.map(|body| Box::new(shift_ast_span(*body, delta))),
+                    attrs: shift_decl_attrs(method.attrs),
                     span: shift_span(method.span, delta),
                 })
                 .collect(),

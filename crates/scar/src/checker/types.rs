@@ -1843,6 +1843,11 @@ impl Checker {
                 lhs_ty: self.resolve_ty(&lhs_ty),
                 rhs_ty: self.resolve_ty(&rhs_ty),
             },
+            TraitCallOrigin::Comparison { op, lhs_ty, rhs_ty } => TraitCallOrigin::Comparison {
+                op,
+                lhs_ty: self.resolve_ty(&lhs_ty),
+                rhs_ty: self.resolve_ty(&rhs_ty),
+            },
         }
     }
 

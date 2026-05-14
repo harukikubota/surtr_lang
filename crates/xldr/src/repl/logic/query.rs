@@ -836,14 +836,14 @@ mod tests {
 
     #[test]
     fn parse_typed_call_query() {
-        let query = parse_repl_query("gt(Int, Int)").expect("query should parse");
+        let query = parse_repl_query("compare(Int, Int)").expect("query should parse");
         assert!(matches!(
             query,
             ReplQuery::TypedCall(ParsedTypedCallQuery {
                 query: TypedCallQuery { callee, args },
                 ..
             })
-            if callee == "gt"
+            if callee == "compare"
                 && matches!(args[0].kind, QueryArgKind::TypeExpr(_))
                 && matches!(args[1].kind, QueryArgKind::TypeExpr(_))
         ));
@@ -851,14 +851,14 @@ mod tests {
 
     #[test]
     fn parse_typed_call_query_with_forced_bindings() {
-        let query = parse_repl_query("gt($left, $right)").expect("query should parse");
+        let query = parse_repl_query("compare($left, $right)").expect("query should parse");
         assert!(matches!(
             query,
             ReplQuery::TypedCall(ParsedTypedCallQuery {
                 query: TypedCallQuery { callee, args },
                 ..
             })
-            if callee == "gt"
+            if callee == "compare"
                 && matches!(args[0].kind, QueryArgKind::ForcedBinding(ref name) if name == "left")
                 && matches!(args[1].kind, QueryArgKind::ForcedBinding(ref name) if name == "right")
         ));
@@ -924,13 +924,13 @@ mod tests {
 
     #[test]
     fn reject_empty_argument() {
-        let err = parse_repl_query("gt(Int, )").expect_err("query should fail");
+        let err = parse_repl_query("compare(Int, )").expect_err("query should fail");
         assert_eq!(err.message(), "Invalid typed call query: empty argument.");
     }
 
     #[test]
     fn reject_missing_closing_paren() {
-        let err = parse_repl_query("gt(Int, Int").expect_err("query should fail");
+        let err = parse_repl_query("compare(Int, Int").expect_err("query should fail");
         assert_eq!(
             err.message(),
             "Invalid typed call query: missing closing `)`."
@@ -939,7 +939,7 @@ mod tests {
 
     #[test]
     fn reject_literal_typed_query_args() {
-        let err = parse_repl_query("gt(1, 2)").expect_err("query should fail");
+        let err = parse_repl_query("compare(1, 2)").expect_err("query should fail");
         assert!(
             err.message()
                 .contains("Unsupported command query argument `1`"),
@@ -950,7 +950,7 @@ mod tests {
 
     #[test]
     fn reject_expression_typed_query_args() {
-        let err = parse_repl_query("gt(left + 1, right)").expect_err("query should fail");
+        let err = parse_repl_query("compare(left + 1, right)").expect_err("query should fail");
         assert!(
             err.message()
                 .contains("Unsupported command query argument `left + 1`"),
@@ -998,7 +998,7 @@ mod tests {
 
     #[test]
     fn parse_typed_call_query_tracks_argument_spans_in_char_offsets() {
-        let query = parse_repl_query("gt($x, Int)").expect("query should parse");
+        let query = parse_repl_query("compare($x, Int)").expect("query should parse");
         assert!(matches!(
             query,
             ReplQuery::TypedCall(ParsedTypedCallQuery {
@@ -1009,12 +1009,12 @@ mod tests {
                 callee_span,
                 span,
             })
-            if callee == "gt"
-                && callee_span == Span { start: 0, end: 2 }
-                && span == Span { start: 0, end: 11 }
+            if callee == "compare"
+                && callee_span == Span { start: 0, end: 7 }
+                && span == Span { start: 0, end: 16 }
                 && args.len() == 2
-                && args[0].span == Span { start: 3, end: 5 }
-                && args[1].span == Span { start: 7, end: 10 }
+                && args[0].span == Span { start: 8, end: 10 }
+                && args[1].span == Span { start: 12, end: 15 }
         ));
     }
 
@@ -1041,18 +1041,18 @@ mod tests {
 
     #[test]
     fn missing_closing_paren_reports_precise_span() {
-        let err = parse_repl_query("gt($x, Int").expect_err("query should fail");
+        let err = parse_repl_query("compare($x, Int").expect_err("query should fail");
         assert_eq!(
             err.message(),
             "Invalid typed call query: missing closing `)`."
         );
-        assert_eq!(err.span(), Span { start: 2, end: 10 });
+        assert_eq!(err.span(), Span { start: 7, end: 15 });
     }
 
     #[test]
     fn empty_argument_reports_precise_span() {
-        let err = parse_repl_query("gt(Int, )").expect_err("query should fail");
+        let err = parse_repl_query("compare(Int, )").expect_err("query should fail");
         assert_eq!(err.message(), "Invalid typed call query: empty argument.");
-        assert_eq!(err.span(), Span { start: 8, end: 8 });
+        assert_eq!(err.span(), Span { start: 13, end: 13 });
     }
 }

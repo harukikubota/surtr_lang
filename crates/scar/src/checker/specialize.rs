@@ -1965,6 +1965,11 @@ impl Checker {
                 lhs_ty: self.substitute_ty_with_mapping(&lhs_ty, mapping),
                 rhs_ty: self.substitute_ty_with_mapping(&rhs_ty, mapping),
             },
+            TraitCallOrigin::Comparison { op, lhs_ty, rhs_ty } => TraitCallOrigin::Comparison {
+                op,
+                lhs_ty: self.substitute_ty_with_mapping(&lhs_ty, mapping),
+                rhs_ty: self.substitute_ty_with_mapping(&rhs_ty, mapping),
+            },
         }
     }
 

@@ -2088,14 +2088,15 @@ impl Checker {
                             return None;
                         };
                         let display_name = method
-                            .function_id
-                            .qualified_name
-                            .as_deref()
-                            .map(|qualified_name| {
-                                callable_definition_display_name(
-                                    qualified_name,
-                                    &method.function_id.name,
-                                )
+                            .display_name_override
+                            .clone()
+                            .or_else(|| {
+                                method.function_id.qualified_name.as_deref().map(|qualified_name| {
+                                    callable_definition_display_name(
+                                        qualified_name,
+                                        &method.function_id.name,
+                                    )
+                                })
                             })
                             .unwrap_or_else(|| {
                                 Checker::surface_name(&method.function_id.name).into()
@@ -2175,11 +2176,15 @@ impl Checker {
                     return None;
                 };
                 let display_name = method
-                    .function_id
-                    .qualified_name
-                    .as_deref()
-                    .map(|qualified_name| {
-                        callable_definition_display_name(qualified_name, &method.function_id.name)
+                    .display_name_override
+                    .clone()
+                    .or_else(|| {
+                        method.function_id.qualified_name.as_deref().map(|qualified_name| {
+                            callable_definition_display_name(
+                                qualified_name,
+                                &method.function_id.name,
+                            )
+                        })
                     })
                     .unwrap_or_else(|| Checker::surface_name(&method.function_id.name).into());
                 return Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
@@ -2432,10 +2437,7 @@ impl Checker {
                     let right_ty = self.ty_name(&typed_args[1].ty);
                     if self.trait_matches_short_name(trait_name, "Eq")
                         || self.trait_matches_short_name(trait_name, "Neq")
-                        || self.trait_matches_short_name(trait_name, "Lt")
-                        || self.trait_matches_short_name(trait_name, "Lte")
-                        || self.trait_matches_short_name(trait_name, "Gt")
-                        || self.trait_matches_short_name(trait_name, "Gte")
+                        || self.trait_matches_short_name(trait_name, "Compare")
                     {
                         return Err(TypeError {
                             message: format!("Cannot compare {} and {}", left_ty, right_ty),
@@ -6830,6 +6832,7 @@ impl Checker {
                                receiver_ty: Ty,
                                dispatch: TraitDispatch,
                                result_ty: Ty,
+                               origin: TraitCallOrigin,
                                typed_left: TypedNode,
                                typed_right: TypedNode| {
             TypedNode {
@@ -6840,7 +6843,7 @@ impl Checker {
                     method_name: method_name.into(),
                     receiver_ty,
                     dispatch,
-                    origin: TraitCallOrigin::Explicit,
+                    origin,
                     args: vec![typed_left, typed_right],
                 },
             }
@@ -6898,6 +6901,7 @@ impl Checker {
                     receiver_ty.clone(),
                     dispatch,
                     receiver_ty,
+                    TraitCallOrigin::Explicit,
                     typed_left,
                     typed_right,
                 ))
@@ -6950,6 +6954,7 @@ impl Checker {
                     receiver_ty,
                     dispatch,
                     Ty::Bool,
+                    TraitCallOrigin::Explicit,
                     typed_left,
                     typed_right,
                 ))
@@ -6957,13 +6962,7 @@ impl Checker {
             BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
                 if !compatible {
                     self.substitutions = compatibility_checkpoint;
-                    let summary = self.trait_implementation_summary(match op {
-                        BinOp::Lt => "Lt",
-                        BinOp::Gt => "Gt",
-                        BinOp::Lte => "Lte",
-                        BinOp::Gte => "Gte",
-                        _ => unreachable!("validated above"),
-                    });
+                    let summary = self.trait_implementation_summary("Compare");
                     return Err(TypeError {
                         message: format!(
                             "Cannot compare {} and {}",
@@ -6975,36 +6974,44 @@ impl Checker {
                     });
                 }
                 let receiver_ty = self.resolve_ty(&lt);
-                let (trait_short_name, method_name, symbol) = match op {
-                    BinOp::Lt => ("Lt", "lt", "<"),
-                    BinOp::Gt => ("Gt", "gt", ">"),
-                    BinOp::Lte => ("Lte", "lte", "<="),
-                    BinOp::Gte => ("Gte", "gte", ">="),
+                let (comparison_op, symbol) = match op {
+                    BinOp::Lt => (ComparisonOperator::Lt, "<"),
+                    BinOp::Gt => (ComparisonOperator::Gt, ">"),
+                    BinOp::Lte => (ComparisonOperator::Lte, "<="),
+                    BinOp::Gte => (ComparisonOperator::Gte, ">="),
                     _ => unreachable!("validated above"),
                 };
-                let ord_trait =
-                    self.trait_key_by_short_name(trait_short_name)
+                let method_name = match comparison_op {
+                    ComparisonOperator::Lt => "lt",
+                    ComparisonOperator::Lte => "lte",
+                    ComparisonOperator::Gt => "gt",
+                    ComparisonOperator::Gte => "gte",
+                };
+                let compare_trait =
+                    self.trait_key_by_short_name("Compare")
                         .ok_or_else(|| TypeError {
-                            message: format!("Unknown trait: {}", trait_short_name),
+                            message: "Unknown trait: Compare".into(),
                             span: span.clone(),
                             hint: None,
                         })?;
                 let dispatch = self
-                    .trait_dispatch_target(&ord_trait, method_name, &receiver_ty)
+                    .trait_dispatch_target(&compare_trait, method_name, &receiver_ty)
                     .ok_or_else(|| TypeError {
-                        message: format!(
-                            "`{}` requires both operands to implement {}",
-                            symbol, trait_short_name
-                        ),
+                        message: format!("`{}` requires both operands to implement Compare", symbol),
                         span: typed_right.span.clone(),
-                        hint: Some(self.trait_implementation_summary(trait_short_name)),
+                        hint: Some(self.trait_implementation_summary("Compare")),
                     })?;
                 Ok(make_trait_call(
-                    ord_trait,
+                    compare_trait,
                     method_name,
                     receiver_ty,
                     dispatch,
                     Ty::Bool,
+                    TraitCallOrigin::Comparison {
+                        op: comparison_op,
+                        lhs_ty: self.resolve_ty(&lt),
+                        rhs_ty: self.resolve_ty(&rt),
+                    },
                     typed_left,
                     typed_right,
                 ))
@@ -7047,6 +7054,7 @@ impl Checker {
                     receiver_ty.clone(),
                     dispatch,
                     receiver_ty,
+                    TraitCallOrigin::Explicit,
                     typed_left,
                     typed_right,
                 ))

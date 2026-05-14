@@ -2693,25 +2693,38 @@ impl Resolver {
                     span: span.clone(),
                 };
                 let resolved_type_params = self.resolve_type_params(type_params)?;
-                let mut resolved_methods = Vec::new();
-                for method in methods {
-                    let spire::ast::TraitMethodSig {
-                        name: method_name,
-                        type_params,
-                        params,
-                        ret_ty,
-                        span: method_span,
-                    } = method;
-                    let method_alias = trait_method_qualified_name(&name, &method_name);
+                let mut method_headers = Vec::new();
+                for method in &methods {
+                    let method_alias = trait_method_qualified_name(&name, &method.name);
                     let qualified_method =
-                        trait_method_qualified_name(&qualified_trait_name, &method_name);
+                        trait_method_qualified_name(&qualified_trait_name, &method.name);
                     let method_uid = self
                         .take_predeclared_id(&method_alias)
                         .or_else(|| self.scope.lookup(&method_alias))
                         .unwrap_or_else(|| self.scope.reserve_id());
                     self.scope.define_with_id(&method_alias, method_uid);
+                    method_headers.push((method.name.clone(), method_uid, qualified_method));
+                }
 
-                    let mut method_resolver = Resolver::with_scope(self.scope.clone());
+                let mut trait_method_scope = self.scope.clone();
+                for (method_name, method_uid, _) in &method_headers {
+                    trait_method_scope.define_with_id(method_name, *method_uid);
+                }
+
+                let mut resolved_methods = Vec::new();
+                for (method, (_, method_uid, qualified_method)) in
+                    methods.into_iter().zip(method_headers.into_iter())
+                {
+                    let spire::ast::TraitMethodSig {
+                        name: method_name,
+                        type_params,
+                        params,
+                        ret_ty,
+                        body,
+                        attrs,
+                        span: method_span,
+                    } = method;
+                    let mut method_resolver = Resolver::with_scope(trait_method_scope.clone());
                     method_resolver.declaration_uids = self.declaration_uids.clone();
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                     method_resolver.declaration_hidden_by_uid =
@@ -2722,6 +2735,9 @@ impl Resolver {
                         .into_iter()
                         .map(|param| method_resolver.resolve_fun_param(param))
                         .collect::<Result<Vec<_>, ResolveError>>()?;
+                    let resolved_body = body
+                        .map(|body| method_resolver.resolve_node(*body).map(Box::new))
+                        .transpose()?;
                     self.scope
                         .advance_next_id_to(method_resolver.scope.next_id());
                     resolved_methods.push(ResolvedTraitMethodSig {
@@ -2735,6 +2751,8 @@ impl Resolver {
                         type_params: self.resolve_type_params(type_params)?,
                         params: resolved_params,
                         ret_ty: self.resolve_type_annotation(ret_ty)?,
+                        body: resolved_body,
+                        attrs: resolve_decl_attrs(&attrs),
                         span: method_span,
                     });
                 }

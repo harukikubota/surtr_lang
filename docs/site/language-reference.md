@@ -114,7 +114,7 @@ match expr {
 - `where` clause は未対応
 - `+`, `-`, `*` はそれぞれ `Add::add`, `Sub::sub`, `Mul::mul` へ resolve される
 - `Numeric` は演算子親ではなく helper capability
-- `Compare` が三値比較の正本で、`Ord` は互換 helper
+- `Compare` が三値比較の正本で、`< <= > >=` も `Compare` を前提に動く
 - `TypeRef<$T>` は compiler-reserved な target type witness
 - `TypeRef<$T>` は trait head で宣言された型引数に対応するときだけ、trait method parameter 型として使える
 - `TypeRef<$T>` は通常関数の引数型、戻り値型、field、local binding には使えない
@@ -431,12 +431,13 @@ private field と property access を含む構造体全体の契約は `./struct
 | `and` | `(Boolean, Boolean) -> Boolean` |
 | `or` | `(Boolean, Boolean) -> Boolean` |
 | `on` | `(($B, $B -> $C), ($A -> $B) -> ($A, $A -> $C))` |
-| `eq` | `($A, $A) -> Boolean` |
-| `neq` | `($A, $A) -> Boolean` |
+| `compare` | `($A, $A) -> Ordering` |
 | `lt` | `($A, $A) -> Boolean` |
 | `lte` | `($A, $A) -> Boolean` |
 | `gt` | `($A, $A) -> Boolean` |
 | `gte` | `($A, $A) -> Boolean` |
+| `eq` | `($A, $A) -> Boolean` |
+| `neq` | `($A, $A) -> Boolean` |
 | `concat` | `(String, String) -> String` |
 | `print` | `(String) -> Unit` |
 | `to_string` | `($A) -> String` |
@@ -451,8 +452,10 @@ private field と property access を含む構造体全体の契約は `./struct
 - `if` / `if_then` の branch が関数型で書かれているのは、選ばれた側だけを評価する special form であることを型で表しているため
 - 普段の source では closure を明示せず `if(flag, "ok", err_reason)` や `if_then(flag, print("ok"))` のように書ける
 - `and` / `or` は宣言上は普通の 2 引数関数だが、コンパイラが short-circuit として解釈する
+- `compare` は ordered comparison の公開 helper で、`Compare::compare` と同じ比較制約に従う
+- `lt` / `lte` / `gt` / `gte` は ordered comparison の公開 helper で、`Compare` の default helper method と同じ比較制約に従う
 - `eq` / `neq` は call-style helper で、`==` / `!=` と同じ比較制約に従う
-- `lt` / `lte` / `gt` / `gte` は call-style helper で、`<` / `<=` / `>` / `>=` と同じ比較制約に従う
+- `<` / `<=` / `>` / `>=` は `Compare` を満たす型に対してのみ使え、それぞれ `Compare::lt` / `Compare::lte` / `Compare::gt` / `Compare::gte` に対応する
 - `concat` は call-style helper で、`++` と同じく `String` 同士だけを受ける
 - `safe_div` / `safe_mod` は失敗時に `Err(ZeroDivisionError)` を返す
 - `set_exit_code` は処理系側で使用位置制約を持つ
@@ -495,7 +498,7 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 現在の標準定義ソース層は次の順序でロードされます。
 
 ```text
-Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Ord, From, TryFrom, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Option, Task, Facet, Float, Config, Project, Random, IO] -> ユーザ拡張
+Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Numeric, Show, Ordering, From, TryFrom, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Option, Task, Facet, Float, Config, Project, Random, IO] -> ユーザ拡張
 ```
 
 ### auto import

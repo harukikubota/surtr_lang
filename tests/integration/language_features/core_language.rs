@@ -293,19 +293,23 @@ print(to_string(neq(Flag::On, Flag::Off)))"#,
     );
 }
 
-fn kernel_ordering_and_concat_helpers_match_operator_behavior() {
+fn kernel_compare_and_concat_helpers_match_operator_behavior() {
     assert_output(
         r#"print(to_string(compare(1, 2)))
 print(to_string(Compare::compare(1, 1)))
 print(to_string(lt(1, 2)))
-print(to_string(lte(2, 2)))
-print(to_string(gt(3, 2)))
 print(to_string(gte(3, 3)))
+print(to_string(1 < 2))
+print(to_string(2 <= 2))
+print(to_string(3 > 2))
+print(to_string(3 >= 3))
 print(concat("hello", " world"))
-print(to_string(lt(1.5, 2.0)))"#,
+print(to_string(1.5 < 2.0))"#,
         &[
             "Ordering::Less",
             "Ordering::Equal",
+            "True",
+            "True",
             "True",
             "True",
             "True",
@@ -1152,8 +1156,8 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
             kernel_eq_neq_helpers_match_operator_behavior as fn(),
         ),
         (
-            "kernel_ordering_and_concat_helpers_match_operator_behavior",
-            kernel_ordering_and_concat_helpers_match_operator_behavior as fn(),
+            "kernel_compare_and_concat_helpers_match_operator_behavior",
+            kernel_compare_and_concat_helpers_match_operator_behavior as fn(),
         ),
         ("concat_strings", concat_strings as fn()),
         ("arithmetic_precedence", arithmetic_precedence as fn()),

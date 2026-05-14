@@ -495,10 +495,6 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         eq_helper_typechecks_as_trait_call as fn(),
     ),
     (
-        "lt_helper_typechecks_as_trait_call",
-        lt_helper_typechecks_as_trait_call as fn(),
-    ),
-    (
         "concat_helper_typechecks_as_trait_call",
         concat_helper_typechecks_as_trait_call as fn(),
     ),
@@ -3329,21 +3325,6 @@ fn eq_helper_typechecks_as_trait_call() {
     }
 }
 
-fn lt_helper_typechecks_as_trait_call() {
-    let typed = typecheck_with_builtin_prelude("flag = lt(1, 2)");
-    let bind = typed.last().expect("binding should exist");
-    match &bind.node {
-        TypedInner::Bind(_, rhs) => {
-            assert!(matches!(
-                rhs.node,
-                TypedInner::TraitCall { ref method_name, .. } if method_name == "lt"
-            ));
-            assert!(matches!(rhs.ty, scar::types::Ty::Bool));
-        }
-        other => panic!("expected bind, got {:?}", other),
-    }
-}
-
 fn concat_helper_typechecks_as_trait_call() {
     let typed = typecheck_with_builtin_prelude(r#"value = concat("a", "b")"#);
     let bind = typed.last().expect("binding should exist");
@@ -4781,34 +4762,125 @@ less = 10ms < 20ms"#,
         .filter_map(|node| match &node.node {
             TypedInner::Bind(_, rhs) => match &rhs.node {
                 TypedInner::TraitCall {
+                    trait_name,
                     method_name,
                     dispatch,
+                    origin,
                     ..
-                } => Some((method_name.as_str(), dispatch)),
+                } => Some((trait_name.as_str(), method_name.as_str(), dispatch, origin)),
                 _ => None,
             },
             _ => None,
         })
         .collect::<Vec<_>>();
 
-    for (method, expected_name) in [
-        ("add", "Duration::add"),
-        ("eq", "Duration::eq"),
-        ("lt", "Duration::lt"),
+    for (trait_name, method, expected_name) in [
+        ("Add", "add", "Duration::add"),
+        ("Eq", "eq", "Duration::eq"),
+        ("Compare", "lt", "Compare::lt"),
     ] {
         assert!(
-            trait_calls.iter().any(|(method_name, dispatch)| {
-                *method_name == method
-                    && matches!(
-                        dispatch,
-                        scar::typed::TraitDispatch::Static(
-                            scar::typed::TraitDispatchTarget::UserFunction { name, .. }
-                        ) if name == expected_name
-                    )
-            }),
-            "{method} should dispatch to {expected_name}"
+            trait_calls
+                .iter()
+                .any(|(actual_trait_name, method_name, dispatch, _)| {
+                    *actual_trait_name == trait_name
+                        && *method_name == method
+                        && matches!(
+                            dispatch,
+                            scar::typed::TraitDispatch::Static(
+                                scar::typed::TraitDispatchTarget::UserFunction { name, .. }
+                            ) if name == expected_name
+                        )
+                }),
+            "{trait_name}::{method} should dispatch to {expected_name}"
         );
     }
+
+    assert!(
+        trait_calls.iter().any(|(trait_name, method_name, _, origin)| {
+            *trait_name == "Compare"
+                && *method_name == "lt"
+                && matches!(
+                    origin,
+                    scar::typed::TraitCallOrigin::Comparison {
+                        op: scar::typed::ComparisonOperator::Lt,
+                        ..
+                    }
+                )
+        }),
+        "< should lower through Compare::lt with a comparison origin"
+    );
+}
+
+#[test]
+fn compare_default_methods_dispatch_to_trait_source_when_impl_omits_override() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"
+defstruct BoxedInt { value: Int }
+
+impl BoxedInt {
+  def new(value: Int) -> Self {
+    BoxedInt { value }
+  }
+}
+
+impl Compare for BoxedInt {
+  def compare(self: Self, rhs: Self) -> Ordering {
+    Compare::compare(self.value, rhs.value)
+  }
+}
+
+less = lt(BoxedInt(1), BoxedInt(2))
+"#,
+    );
+
+    let trait_call = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => match &rhs.node {
+                TypedInner::TraitCall {
+                    trait_name,
+                    method_name,
+                    dispatch,
+                    ..
+                } => Some((trait_name.as_str(), method_name.as_str(), dispatch)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("lt call should typecheck");
+
+    assert_eq!(trait_call.0, "Compare");
+    assert_eq!(trait_call.1, "lt");
+    assert!(matches!(
+        trait_call.2,
+        scar::typed::TraitDispatch::Static(scar::typed::TraitDispatchTarget::UserFunction {
+            name,
+            ..
+        }) if name == "Compare::lt"
+    ));
+}
+
+#[test]
+fn compare_trait_impl_still_requires_compare_method() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"
+defstruct BoxedInt { value: Int }
+
+impl BoxedInt {
+  def new(value: Int) -> Self {
+    BoxedInt { value }
+  }
+}
+
+impl Compare for BoxedInt {}
+"#,
+    );
+    let err = typecheck(resolved)
+        .expect_err("Compare::compare should remain required")
+        .message;
+
+    assert!(err.contains("missing method `compare`"), "{err}");
 }
 
 fn bounded_add_generics_specialize_without_pending_trait_calls() {

@@ -995,6 +995,36 @@ fn test_trait_def_parses_method_signatures() {
 }
 
 #[test]
+fn test_trait_def_parses_method_docs_and_optional_default_bodies() {
+    let ast = parse_with_context(
+        r#"deftrait Numeric {
+  @doc """Delegates to abs."""
+  def magnitude(self: Self) -> Self {
+    abs(self)
+  }
+
+  def abs(self: Self) -> Self
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("trait with documented default method should parse");
+
+    match ast.as_slice() {
+        [Ast::TraitDef(_, name, _, methods, _)] => {
+            assert_eq!(name, "Numeric");
+            assert_eq!(methods.len(), 2);
+            assert_eq!(methods[0].name, "magnitude");
+            assert_eq!(methods[0].attrs.doc.as_deref(), Some("Delegates to abs."));
+            assert!(matches!(methods[0].body.as_deref(), Some(Ast::Block(_, stmts)) if stmts.len() == 1));
+            assert_eq!(methods[1].name, "abs");
+            assert_eq!(methods[1].attrs, DeclAttrs::default());
+            assert!(methods[1].body.is_none());
+        }
+        _ => panic!("Expected TraitDef"),
+    }
+}
+
+#[test]
 fn test_trait_impl_parses_and_keeps_methods() {
     let ast = parse_with_context(
         r#"impl Numeric for Int {

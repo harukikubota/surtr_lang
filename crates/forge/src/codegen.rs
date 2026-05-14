@@ -6026,6 +6026,10 @@ impl Codegen {
                 args,
                 ..
             } => {
+                if let TraitCallOrigin::Comparison { op, .. } = origin {
+                    self.emit_compare_operator_trait_call(*op, dispatch, receiver_ty, args, &node.span)?;
+                    return Ok(());
+                }
                 if let TraitCallOrigin::Operator { op, lhs_ty, .. } = origin {
                     if args.len() == 2
                         && self.template_compatible_callable(&args[0])?
@@ -9698,6 +9702,65 @@ impl Codegen {
         self.emit(Opcode::LoadConst(millis_const));
         self.emit(Opcode::EqInt);
         self.emit_jump_if_false(fail_label);
+    }
+
+    fn emit_compare_operator_trait_call(
+        &mut self,
+        _op: ComparisonOperator,
+        dispatch: &TraitDispatch,
+        receiver_ty: &Ty,
+        args: &[TypedNode],
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        if args.len() != 2 {
+            return Err(CodegenError {
+                message: format!("comparison trait dispatch expects 2 args, got {}", args.len()),
+                span: span.clone(),
+            });
+        }
+
+        match dispatch {
+            TraitDispatch::Pending => {
+                return Err(CodegenError {
+                    message: "bounded trait call must be specialized before codegen".into(),
+                    span: span.clone(),
+                });
+            }
+            TraitDispatch::Static(TraitDispatchTarget::BinOp(binop)) => {
+                self.emit_node(&args[0])?;
+                self.emit_node(&args[1])?;
+                let opcode = self.binop_to_opcode(binop, receiver_ty, span)?;
+                self.emit(opcode);
+                return Ok(());
+            }
+            TraitDispatch::Static(TraitDispatchTarget::Builtin(name)) => {
+                for arg in args {
+                    self.emit_node(arg)?;
+                }
+                let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
+                    message: format!("Unknown builtin: {}", name),
+                    span: span.clone(),
+                })?;
+                self.emit(Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: args.len() as u8,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                });
+            }
+            TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }) => {
+                for arg in args {
+                    self.emit_node(arg)?;
+                }
+                self.emit(Opcode::Call {
+                    fun_idx: *fun_idx,
+                    arity: args.len() as u8,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                });
+            }
+        }
+        Ok(())
     }
 
     fn binop_to_opcode(

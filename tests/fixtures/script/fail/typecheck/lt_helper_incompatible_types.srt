@@ -1,1 +1,0 @@
-print(to_string(lt(1, True)))

@@ -374,6 +374,8 @@ struct TraitMethodInfo {
     type_params: Vec<ResolvedTypeParam>,
     params: Vec<ResolvedFunParam>,
     ret_ty: AstTy,
+    attrs: ResolvedDeclAttrs,
+    body: Option<Box<Resolved>>,
     span: Span,
 }
 
@@ -396,6 +398,7 @@ struct TraitImplMethodInfo {
     body: Box<Resolved>,
     attrs: ResolvedDeclAttrs,
     span: Span,
+    display_name_override: Option<String>,
     dispatch_override: Option<TraitDispatchTarget>,
     is_builtin: bool,
 }

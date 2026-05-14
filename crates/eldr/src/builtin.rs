@@ -726,6 +726,30 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_operator_float_gte,
     },
     BuiltinImpl {
+        name: "__compare_int",
+        func: builtin_compare_int,
+    },
+    BuiltinImpl {
+        name: "__compare_float",
+        func: builtin_compare_float,
+    },
+    BuiltinImpl {
+        name: "__ordering_is_lt",
+        func: builtin_ordering_is_lt,
+    },
+    BuiltinImpl {
+        name: "__ordering_is_lte",
+        func: builtin_ordering_is_lte,
+    },
+    BuiltinImpl {
+        name: "__ordering_is_gt",
+        func: builtin_ordering_is_gt,
+    },
+    BuiltinImpl {
+        name: "__ordering_is_gte",
+        func: builtin_ordering_is_gte,
+    },
+    BuiltinImpl {
         name: "__operator_string_eq",
         func: builtin_operator_string_eq,
     },
@@ -1418,6 +1442,87 @@ fn builtin_operator_float_gt(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Ru
 fn builtin_operator_float_gte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_gte")?;
     Ok(Value::Bool(left >= right))
+}
+
+fn ordering_value(vm: &VM, variant: &str) -> Result<Value, RuntimeError> {
+    let tag = find_variant_tag(vm, variant)?;
+    Ok(Value::Tagged {
+        tag,
+        fields: Vec::new(),
+    })
+}
+
+fn ordering_matches(vm: &VM, value: &Value, variants: &[&str]) -> Result<bool, RuntimeError> {
+    let Value::Tagged { tag, fields } = value else {
+        return Err(RuntimeError::new("ordering predicate expects Ordering"));
+    };
+    if !fields.is_empty() {
+        return Err(RuntimeError::new("ordering predicate expects Ordering"));
+    }
+    for variant in variants {
+        if *tag == find_variant_tag(vm, variant)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn builtin_compare_int(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__compare_int")?;
+    if left < right {
+        ordering_value(vm, "Ordering::Less")
+    } else if left > right {
+        ordering_value(vm, "Ordering::Greater")
+    } else {
+        ordering_value(vm, "Ordering::Equal")
+    }
+}
+
+fn builtin_compare_float(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__compare_float")?;
+    if left < right {
+        ordering_value(vm, "Ordering::Less")
+    } else if left > right {
+        ordering_value(vm, "Ordering::Greater")
+    } else {
+        ordering_value(vm, "Ordering::Equal")
+    }
+}
+
+fn builtin_ordering_is_lt(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = args
+        .first()
+        .ok_or_else(|| RuntimeError::new("__ordering_is_lt expects Ordering"))?;
+    Ok(Value::Bool(ordering_matches(vm, value, &["Ordering::Less"])?))
+}
+
+fn builtin_ordering_is_lte(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = args
+        .first()
+        .ok_or_else(|| RuntimeError::new("__ordering_is_lte expects Ordering"))?;
+    Ok(Value::Bool(ordering_matches(
+        vm,
+        value,
+        &["Ordering::Less", "Ordering::Equal"],
+    )?))
+}
+
+fn builtin_ordering_is_gt(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = args
+        .first()
+        .ok_or_else(|| RuntimeError::new("__ordering_is_gt expects Ordering"))?;
+    Ok(Value::Bool(ordering_matches(vm, value, &["Ordering::Greater"])?))
+}
+
+fn builtin_ordering_is_gte(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = args
+        .first()
+        .ok_or_else(|| RuntimeError::new("__ordering_is_gte expects Ordering"))?;
+    Ok(Value::Bool(ordering_matches(
+        vm,
+        value,
+        &["Ordering::Equal", "Ordering::Greater"],
+    )?))
 }
 
 fn builtin_operator_string_eq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

@@ -356,7 +356,7 @@ pub(crate) fn build_binary_operator_view<'a>(
         "Lt" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A < A -> Boolean (where A: Lt)".into(),
+            op_rule: "A < A -> Boolean (where A: Compare)".into(),
             step: format!("{lhs_display} < {rhs_display} -> Boolean"),
             reason: binary_operator_reason(
                 op_name,
@@ -370,7 +370,7 @@ pub(crate) fn build_binary_operator_view<'a>(
         "Lte" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A <= A -> Boolean (where A: Lte)".into(),
+            op_rule: "A <= A -> Boolean (where A: Compare)".into(),
             step: format!("{lhs_display} <= {rhs_display} -> Boolean"),
             reason: binary_operator_reason(
                 op_name,
@@ -384,7 +384,7 @@ pub(crate) fn build_binary_operator_view<'a>(
         "Gt" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A > A -> Boolean (where A: Gt)".into(),
+            op_rule: "A > A -> Boolean (where A: Compare)".into(),
             step: format!("{lhs_display} > {rhs_display} -> Boolean"),
             reason: binary_operator_reason(
                 op_name,
@@ -398,7 +398,7 @@ pub(crate) fn build_binary_operator_view<'a>(
         "Gte" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A >= A -> Boolean (where A: Gte)".into(),
+            op_rule: "A >= A -> Boolean (where A: Compare)".into(),
             step: format!("{lhs_display} >= {rhs_display} -> Boolean"),
             reason: binary_operator_reason(
                 op_name,
@@ -1004,8 +1004,8 @@ pub(crate) fn binary_operator_reason(
                 lhs_display, op_symbol
             ),
             "Lt" | "Lte" | "Gt" | "Gte" => format!(
-                "Reason: {} does not implement {}, so `{}` is not available.",
-                lhs_display, op_name, op_symbol
+                "Reason: {} does not implement Compare, so `{}` is not available.",
+                lhs_display, op_symbol
             ),
             "Concat" => format!(
                 "Reason: {} does not implement Concat, so `++` is not available.",
@@ -1177,4 +1177,3 @@ pub(crate) fn infer_total_bind_pattern_template(
         help: None,
     })
 }
-

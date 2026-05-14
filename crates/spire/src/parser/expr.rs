@@ -254,12 +254,7 @@ impl Parser<'_> {
     }
 
     pub(super) fn comparison_func_literal_name(body: &str) -> bool {
-        // `le` / `ge` are accepted here as comparison-style helper aliases.
-        // They stay normal function calls, but parse at comparison precedence.
-        matches!(
-            body,
-            "eq" | "neq" | "lt" | "lte" | "gt" | "gte" | "le" | "ge"
-        )
+        matches!(body, "eq" | "neq")
     }
 
     pub(super) fn logical_func_literal_name(body: &str) -> bool {

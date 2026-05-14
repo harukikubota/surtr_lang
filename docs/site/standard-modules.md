@@ -15,7 +15,7 @@ Surtr の標準定義ソースは language surface の一部です。
   - auto import される最小の標準 API
 - trait modules
   - capability: `Numeric`, `Show`, `Compare`, `From`, `TryFrom`
-  - operator dispatch / compatibility: `Eq`, `Ord`, `Concat` など
+  - operator dispatch: `Eq`, `Concat` など
 - type modules
   - `Int`, `String`, `Regex`, `Boolean`, `Error`, `List`, `Generator`, `HashMap`, `Result`, `Range`, `Option`, `Facet`, `Float`
 - effect / runtime-facing modules
@@ -74,5 +74,5 @@ xldr(2)>
 
 - auto import されるのは `Bootstrap`, `Kernel`, `Result` と `@autoimport` 付き標準 trait だけで、他の標準定義ソースは明示 `import` 前提です。
 - `Facet` は標準定義ソースに見えても同一スコープ内でのみ使用可能な capability です。
-- `Ord` は互換 helper で、新しい比較 API の正本は `Compare` です。
+- ordered comparison の公開入口は `Compare` と `< <= > >=` です。
 - REPL は OnceRead universe なので、読み込み後に trait universe を増分更新する前提ではありません。

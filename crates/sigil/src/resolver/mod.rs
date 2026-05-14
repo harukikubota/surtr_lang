@@ -497,6 +497,9 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 rebase_resolved_id(&mut method.id, base, offset);
                 rebase_type_params(&mut method.type_params, base, offset);
                 rebase_fun_params(&mut method.params, base, offset);
+                if let Some(body) = &mut method.body {
+                    rebase_resolved_node(body, base, offset);
+                }
             }
         }
         Resolved::TraitImplDef(_, id, _, _, methods) => {

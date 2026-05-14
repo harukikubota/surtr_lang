@@ -36,7 +36,7 @@ use crate::{
 };
 
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
-const OPERATOR_DOC_ALIASES: &[(&str, &str)] = &[
+const OPERATOR_DOC_TARGETS: &[(&str, &str)] = &[
     ("+", "Add"),
     ("-", "Sub"),
     ("*", "Mul"),
@@ -44,10 +44,31 @@ const OPERATOR_DOC_ALIASES: &[(&str, &str)] = &[
     ("||", "or"),
     ("==", "Eq"),
     ("!=", "Neq"),
-    ("<", "Lt"),
-    ("<=", "Lte"),
-    (">", "Gt"),
-    (">=", "Gte"),
+    ("<", "Compare::lt"),
+    ("<=", "Compare::lte"),
+    (">", "Compare::gt"),
+    (">=", "Compare::gte"),
+    ("/", "Compose"),
+    ("++", "Concat"),
+    ("|>", "PipeApply"),
+    ("|*>", "Functor"),
+    ("|>=", "Chainable"),
+    (">>", "Composable"),
+    (">*", "LiftComposable"),
+    (">=>", "KleisliComposable"),
+];
+const OPERATOR_DOC_TRAIT_ALIASES: &[(&str, &str)] = &[
+    ("+", "Add"),
+    ("-", "Sub"),
+    ("*", "Mul"),
+    ("&&", "and"),
+    ("||", "or"),
+    ("==", "Eq"),
+    ("!=", "Neq"),
+    ("<", "Compare"),
+    ("<=", "Compare"),
+    (">", "Compare"),
+    (">=", "Compare"),
     ("/", "Compose"),
     ("++", "Concat"),
     ("|>", "PipeApply"),
@@ -63,11 +84,19 @@ const METHOD_DOC_TRAIT_ALIASES: &[(&str, &str)] = &[
     ("mul", "Mul"),
     ("eq", "Eq"),
     ("neq", "Neq"),
-    ("lt", "Lt"),
-    ("lte", "Lte"),
-    ("gt", "Gt"),
-    ("gte", "Gte"),
+    ("compare", "Compare"),
+    ("lt", "Compare"),
+    ("lte", "Compare"),
+    ("gt", "Compare"),
+    ("gte", "Compare"),
     ("concat", "Concat"),
+];
+const COMPARE_METHOD_DOC_TARGETS: &[(&str, &str)] = &[
+    ("compare", "Compare::compare"),
+    ("lt", "Compare::lt"),
+    ("lte", "Compare::lte"),
+    ("gt", "Compare::gt"),
+    ("gte", "Compare::gte"),
 ];
 const REPL_UNRESOLVED_TYPE_MESSAGE: &str = "Cannot persist binding with unresolved type variable.";
 const REPL_UNRESOLVED_TYPE_HINT: &str =
@@ -1143,7 +1172,7 @@ impl ReplEngine {
         vec![
             "Usage: :doc <symbol|query>".to_string(),
             "Also: :doc $<binding>".to_string(),
-            "Examples: :doc print, :doc Closure, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User(), :doc gt(Int, Int), :doc $formatter"
+            "Examples: :doc print, :doc Closure, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User(), :doc compare(Int, Int), :doc $formatter"
                 .to_string(),
         ]
     }
@@ -1152,7 +1181,7 @@ impl ReplEngine {
         vec![
             "Usage: :sig <function|query>".to_string(),
             "Also: :sig $<binding>".to_string(),
-            "Examples: :sig print, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig gt(Int, Int), :sig ret |>= up, :sig $formatter"
+            "Examples: :sig print, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig compare(Int, Int), :sig ret |>= up, :sig $formatter"
                 .to_string(),
         ]
     }
@@ -1161,7 +1190,7 @@ impl ReplEngine {
         vec![
             "Usage: :info <query>".to_string(),
             "Accepts: symbol | singleton-owner | $binding | typed-call | typed-operator".to_string(),
-            "Examples: :info print, :info Counter, :info pid, :info $value, :info gt(Int, Int), :info ret |>= up".to_string(),
+            "Examples: :info print, :info Counter, :info pid, :info $value, :info compare(Int, Int), :info ret |>= up".to_string(),
         ]
     }
 
@@ -1300,7 +1329,7 @@ impl ReplEngine {
             return ReplResult::ok(Self::doc_resolved_output(entry));
         }
         let canonical = self
-            .visible_helper_trait_alias(symbol)
+            .visible_helper_doc_alias(symbol)
             .unwrap_or_else(|| Self::canonical_symbol(symbol).to_string());
         let preferred_kind = Self::definition_doc_kind(&canonical);
         let matches = if let Some(matches) = self.type_owner_doc_entries(&canonical) {
@@ -1427,9 +1456,9 @@ impl ReplEngine {
     }
 
     fn canonical_symbol(symbol: &str) -> &str {
-        OPERATOR_DOC_ALIASES
+        OPERATOR_DOC_TARGETS
             .iter()
-            .find_map(|(alias, trait_name)| (*alias == symbol).then_some(*trait_name))
+            .find_map(|(alias, target)| (*alias == symbol).then_some(*target))
             .unwrap_or(symbol)
     }
 
@@ -1488,7 +1517,7 @@ impl ReplEngine {
     fn definition_doc_kind(symbol: &str) -> Option<DocKind> {
         if symbol != "and"
             && symbol != "or"
-            && OPERATOR_DOC_ALIASES
+            && OPERATOR_DOC_TRAIT_ALIASES
                 .iter()
                 .any(|(_, trait_name)| *trait_name == symbol)
         {
@@ -1957,6 +1986,36 @@ impl ReplEngine {
             .find_map(|(method, trait_name)| (*method == symbol).then_some(*trait_name))
     }
 
+    fn compare_method_doc_target(symbol: &str) -> Option<&'static str> {
+        COMPARE_METHOD_DOC_TARGETS
+            .iter()
+            .find_map(|(method, target)| (*method == symbol).then_some(*target))
+    }
+
+    fn visible_helper_doc_alias(&self, symbol: &str) -> Option<String> {
+        if let Some(target) = Self::compare_method_doc_target(symbol) {
+            return self
+                .visible_compare_method_doc_alias(symbol)
+                .or_else(|| self.visible_declaration(symbol).is_none().then(|| target.to_string()));
+        }
+        self.visible_helper_trait_alias(symbol)
+    }
+
+    fn visible_compare_method_doc_alias(&self, symbol: &str) -> Option<String> {
+        let target = Self::compare_method_doc_target(symbol)?;
+        let trait_name = Self::method_trait_alias(symbol)?;
+        let decl = self.visible_declaration(symbol)?;
+        if decl.kind != sigil::DeclarationKind::TraitMethod {
+            return None;
+        }
+        let (owner_fq_name, _) = decl.fq_name.rsplit_once("::")?;
+        let owner = self.declaration_index.get(owner_fq_name)?;
+        (owner.kind == sigil::DeclarationKind::Trait
+            && owner.auto_import
+            && owner.name == trait_name)
+            .then(|| target.to_string())
+    }
+
     fn visible_helper_trait_alias(&self, symbol: &str) -> Option<String> {
         let trait_name = Self::method_trait_alias(symbol)?;
         let decl = self.visible_declaration(symbol)?;
@@ -2236,7 +2295,7 @@ impl ReplEngine {
                 .map(|entry| format!("  {}", crate::surface_path_name(&entry.qualified_name))),
         );
         rendered.push(
-            "Use a qualified name or add type annotations, for example `:doc gt(3, 2)`."
+            "Use a qualified name or add type annotations, for example `:doc compare(Int, Int)`."
                 .to_string(),
         );
         rendered
@@ -2280,7 +2339,7 @@ impl ReplEngine {
             .iter()
             .find_map(|(method, trait_name)| (*method == query.callee).then_some(*trait_name))
             .or_else(|| {
-                OPERATOR_DOC_ALIASES
+                OPERATOR_DOC_TRAIT_ALIASES
                     .iter()
                     .find_map(|(alias, trait_name)| (*alias == query.callee).then_some(*trait_name))
             });
@@ -2310,22 +2369,53 @@ impl ReplEngine {
                 })
             })
             .filter(|entry| {
-                preferred_trait.is_none_or(|trait_name| {
-                    entry
-                        .signature
-                        .as_deref()
-                        .is_some_and(|sig| sig.starts_with(&format!("impl {trait_name} for ")))
-                })
-            })
-            .filter(|entry| {
                 entry
                     .signature
                     .as_deref()
                     .is_none_or(|sig| self.signature_accepts_arg_types(sig, &arg_types))
             })
             .collect::<Vec<_>>();
+        matches.sort_by_key(|entry| {
+            self.typed_call_doc_rank(entry, preferred_trait, receiver_ty, callee_tail)
+        });
+        if let Some(best_rank) = matches
+            .first()
+            .map(|entry| self.typed_call_doc_rank(entry, preferred_trait, receiver_ty, callee_tail))
+        {
+            matches.retain(|entry| {
+                self.typed_call_doc_rank(entry, preferred_trait, receiver_ty, callee_tail)
+                    == best_rank
+            });
+        }
         matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
         matches
+    }
+
+    fn typed_call_doc_rank(
+        &self,
+        entry: &DocEntry,
+        preferred_trait: Option<&str>,
+        receiver_ty: &str,
+        callee_tail: &str,
+    ) -> u8 {
+        let Some(signature) = entry.signature.as_deref() else {
+            return u8::MAX;
+        };
+        let Some(trait_name) = preferred_trait else {
+            return 0;
+        };
+        if signature.starts_with(&format!("impl {trait_name} for {receiver_ty}::{callee_tail}")) {
+            return 0;
+        }
+        if crate::surface_path_name(&entry.qualified_name) == format!("{trait_name}::{callee_tail}")
+            || signature.starts_with(&format!("{trait_name}::{callee_tail}("))
+        {
+            return 1;
+        }
+        if signature.starts_with(&format!("impl {trait_name} for ")) {
+            return 2;
+        }
+        3
     }
 
     fn match_special_form_typed_call_docs<'a>(
@@ -2441,7 +2531,7 @@ impl ReplEngine {
                 .map(|signature| (entry.qualified_name.clone(), signature));
         }
         let canonical = self
-            .visible_helper_trait_alias(symbol)
+            .visible_helper_doc_alias(symbol)
             .unwrap_or_else(|| Self::canonical_symbol(symbol).to_string());
         let qualified_lookup = Self::is_qualified_symbol(&canonical);
         if qualified_lookup
@@ -3410,6 +3500,11 @@ impl ReplEngine {
                         Self::ty_to_string(&typed.ty)
                     )
                 }
+                TraitCallOrigin::Comparison { lhs_ty, rhs_ty, .. } => format!(
+                    "Compare::compare(lhs: {}, rhs: {}) -> Boolean",
+                    Self::ty_to_string(lhs_ty),
+                    Self::ty_to_string(rhs_ty)
+                ),
                 TraitCallOrigin::Explicit => {
                     let trait_short = Self::trait_short_name(trait_name);
                     let params = args

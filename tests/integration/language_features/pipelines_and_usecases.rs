@@ -570,7 +570,7 @@ def allow(user: User) -> Result<User, HiddenUser> {
     user.active,
     and(
       user.name `neq` "banned",
-      or(user.age `gte` 20, user.name `eq` "alice"),
+      or(user.age >= 20, user.name `eq` "alice"),
     ),
   )
 
@@ -579,9 +579,9 @@ def allow(user: User) -> Result<User, HiddenUser> {
 
 def age_band(user: User) -> String {
   if(
-    user.age `lt` 13,
+    user.age < 13,
     "child",
-    if(user.age `lte` 19, "teen", if(user.age `gt` 64, "senior", "adult")),
+    if(user.age <= 19, "teen", if(user.age > 64, "senior", "adult")),
   )
 }
 

@@ -937,70 +937,8 @@ impl Compare for Int {
   xldr(1)> compare(1, 2)
   Ordering::Less
   """
-  def compare(self: Self, rhs: Self) -> Ordering {
-    if(
-      Lt::lt(self, rhs),
-      Ordering::Less,
-      if(Gt::gt(self, rhs), Ordering::Greater, Ordering::Equal),
-    )
-  }
-}
+  @builtin def compare(self: Self, rhs: Self) -> Ordering
 
-impl Ord for Int {
-  @doc """
-  Return `True` when the left integer is strictly less than the right integer.
-  ## REPL
-  xldr(1)> lt(1, 2)
-  True
-  """
-  def lt(self: Self, rhs: Self) -> Boolean {
-    match Compare::compare(self, rhs) {
-      Ordering::Less => True,
-      Ordering::Equal | Ordering::Greater => False,
-    }
-  }
-
-  @doc """
-  Return `True` when the left integer is less than or equal to the right integer.
-  ## REPL
-  xldr(1)> lte(2, 2)
-  True
-  """
-  def lte(self: Self, rhs: Self) -> Boolean {
-    match Compare::compare(self, rhs) {
-      Ordering::Less | Ordering::Equal => True,
-      Ordering::Greater => False,
-    }
-  }
-
-  @doc """
-  Return `True` when the left integer is strictly greater than the right integer.
-  ## REPL
-  xldr(1)> gt(3, 2)
-  True
-  """
-  def gt(self: Self, rhs: Self) -> Boolean {
-    match Compare::compare(self, rhs) {
-      Ordering::Less | Ordering::Equal => False,
-      Ordering::Greater => True,
-    }
-  }
-
-  @doc """
-  Return `True` when the left integer is greater than or equal to the right integer.
-  ## REPL
-  xldr(1)> gte(2, 2)
-  True
-  """
-  def gte(self: Self, rhs: Self) -> Boolean {
-    match Compare::compare(self, rhs) {
-      Ordering::Less => False,
-      Ordering::Equal | Ordering::Greater => True,
-    }
-  }
-}
-
-impl Lt for Int {
   @doc """
   Return `True` when the left integer is strictly less than the right integer.
   ## REPL
@@ -1008,9 +946,7 @@ impl Lt for Int {
   True
   """
   @builtin def lt(self: Self, rhs: Self) -> Boolean
-}
 
-impl Lte for Int {
   @doc """
   Return `True` when the left integer is less than or equal to the right integer.
   ## REPL
@@ -1018,9 +954,7 @@ impl Lte for Int {
   True
   """
   @builtin def lte(self: Self, rhs: Self) -> Boolean
-}
 
-impl Gt for Int {
   @doc """
   Return `True` when the left integer is strictly greater than the right integer.
   ## REPL
@@ -1028,9 +962,7 @@ impl Gt for Int {
   True
   """
   @builtin def gt(self: Self, rhs: Self) -> Boolean
-}
 
-impl Gte for Int {
   @doc """
   Return `True` when the left integer is greater than or equal to the right integer.
   ## REPL

@@ -957,6 +957,49 @@ impl Add for Int {
 }
 
 #[test]
+fn test_resolve_trait_default_method_body_can_reference_later_sibling() {
+    let ast = parse_module_ast(
+        r#"deftrait Numeric {
+  @doc """Delegates to abs."""
+  def magnitude(self: Self) -> Self {
+    abs(self)
+  }
+
+  def abs(self: Self) -> Self
+}"#,
+        "Numeric",
+    );
+
+    let resolved = resolve(ast).expect("trait default bodies should resolve");
+
+    match &resolved[0] {
+        Resolved::TraitDef(_, id, _, methods, _) => {
+            assert_eq!(id.name, "Numeric");
+            assert_eq!(methods.len(), 2);
+            assert_eq!(methods[0].attrs.doc.as_deref(), Some("Delegates to abs."));
+            match methods[0].body.as_deref() {
+                Some(Resolved::Block(_, stmts)) => match &stmts[0] {
+                    Resolved::App(_, func, args) => {
+                        assert_eq!(args.len(), 1);
+                        match func.as_ref() {
+                            Resolved::Var(_, rid) => {
+                                assert_eq!(rid.name, "abs");
+                                assert_eq!(rid.qualified_name.as_deref(), Some("Numeric::abs"));
+                            }
+                            other => panic!("expected sibling trait method var, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected app in default body, got {other:?}"),
+                },
+                other => panic!("expected resolved default body block, got {other:?}"),
+            }
+            assert!(methods[1].body.is_none());
+        }
+        other => panic!("Expected TraitDef, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_resolve_trait_impl_builtin_method_preserves_private_name() {
     let ast = parse_module_ast(
         r#"deftrait Add {

@@ -110,6 +110,11 @@ pub enum TraitCallOrigin {
         lhs_ty: Ty,
         rhs_ty: Ty,
     },
+    Comparison {
+        op: ComparisonOperator,
+        lhs_ty: Ty,
+        rhs_ty: Ty,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +126,14 @@ pub enum OperatorTraitOp {
     Compose,
     LiftCompose,
     KleisliCompose,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ComparisonOperator {
+    Lt,
+    Lte,
+    Gt,
+    Gte,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

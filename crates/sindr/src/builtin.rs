@@ -896,6 +896,36 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Float, Float) -> Boolean",
     },
     BuiltinMeta {
+        name: "__compare_int",
+        arity: 2,
+        sig_str: "(Int, Int) -> Ordering",
+    },
+    BuiltinMeta {
+        name: "__compare_float",
+        arity: 2,
+        sig_str: "(Float, Float) -> Ordering",
+    },
+    BuiltinMeta {
+        name: "__ordering_is_lt",
+        arity: 1,
+        sig_str: "(Ordering) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__ordering_is_lte",
+        arity: 1,
+        sig_str: "(Ordering) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__ordering_is_gt",
+        arity: 1,
+        sig_str: "(Ordering) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__ordering_is_gte",
+        arity: 1,
+        sig_str: "(Ordering) -> Boolean",
+    },
+    BuiltinMeta {
         name: "__operator_string_eq",
         arity: 2,
         sig_str: "(String, String) -> Boolean",

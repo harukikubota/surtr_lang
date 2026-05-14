@@ -26,10 +26,19 @@ test("Float") {
       assert_eq((True, True), (eq(1.5, 1.5), neq(1.5, 2.0)))
     }
 
-    it("supports compare and relational helpers") {
+    it("supports compare helpers and relational operators") {
       assert_eq(
-        (Ordering::Less, True, True, True, True),
-        (compare(1.5, 2.0), lt(1.5, 2.0), lte(1.5, 1.5), gt(2.0, 1.5), gte(2.0, 2.0)),
+        (Ordering::Less, True, True, True, True, True, True, True),
+        (
+          compare(1.5, 2.0),
+          lt(1.5, 2.0),
+          lte(1.5, 1.5),
+          gt(2.0, 1.5),
+          gte(2.0, 2.0),
+          1.5 < 2.0,
+          1.5 <= 1.5,
+          2.0 > 1.5
+        ),
       )
     }
   }

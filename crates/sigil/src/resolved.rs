@@ -382,6 +382,8 @@ pub struct ResolvedTraitMethodSig {
     pub type_params: Vec<ResolvedTypeParam>,
     pub params: Vec<ResolvedFunParam>,
     pub ret_ty: AstTy,
+    pub body: Option<Box<Resolved>>,
+    pub attrs: ResolvedDeclAttrs,
     pub span: Span,
 }
 

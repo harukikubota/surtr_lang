@@ -403,6 +403,8 @@ pub struct TraitMethodSig {
     pub type_params: Vec<TypeParam>,
     pub params: Vec<FunParam>,
     pub ret_ty: AstTy,
+    pub body: Option<Box<Ast>>,
+    pub attrs: DeclAttrs,
     pub span: Span,
 }
 

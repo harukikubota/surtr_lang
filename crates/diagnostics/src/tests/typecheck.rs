@@ -152,7 +152,8 @@ fn type_error_spec_distinguishes_lt_operator_from_source() {
     assert!(spec
         .labels
         .iter()
-        .any(|label| strip_ansi(&label.message) == "   OP rule: A < A -> Boolean (where A: Lt)"));
+        .any(|label| strip_ansi(&label.message)
+            == "   OP rule: A < A -> Boolean (where A: Compare)"));
     assert!(notes_text.contains("Step: Int < Boolean -> Boolean"));
     assert!(notes_text.contains(
         "Reason: `<` compares two ordered values of the same type, but got Int and Boolean."

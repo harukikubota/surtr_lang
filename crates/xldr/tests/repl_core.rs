@@ -859,7 +859,7 @@ fn core_repl_command_and_query_errors_use_diagnostics() {
         "{bad_error_mode_text}"
     );
 
-    let bad_sig_query = engine.handle_line(":sig gt(Int, )");
+    let bad_sig_query = engine.handle_line(":sig compare(Int, )");
     let bad_sig_query_text = strip_ansi(&rendered_text(&bad_sig_query));
     assert!(
         bad_sig_query_text.contains("Error: ReplQueryParseError"),
@@ -1075,9 +1075,42 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "{safe_bind_doc}"
     );
 
-    let typed_sig = engine.handle_line(":sig gt(Int, Int)");
+    let typed_sig = engine.handle_line(":sig compare(Int, Int)");
     let typed_sig = signature_text(&typed_sig);
-    assert!(typed_sig.contains("impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean"));
+    assert!(typed_sig.contains("impl Compare for Int::compare(self: Self, rhs: Self) -> Ordering"));
+
+    let helper_sig = engine.handle_line(":sig compare");
+    let helper_sig = signature_text(&helper_sig);
+    assert_eq!(
+        helper_sig.trim(),
+        "Compare::compare(self: Self, rhs: Self) -> Ordering"
+    );
+
+    let less_than_sig = engine.handle_line(":sig <");
+    let less_than_sig = signature_text(&less_than_sig);
+    assert_eq!(
+        less_than_sig.trim(),
+        "Compare::lt(self: Self, rhs: Self) -> Boolean"
+    );
+
+    let default_less_than_sig = engine.handle_line(":sig lt");
+    let default_less_than_sig = signature_text(&default_less_than_sig);
+    assert_eq!(
+        default_less_than_sig.trim(),
+        "Compare::lt(self: Self, rhs: Self) -> Boolean"
+    );
+
+    let typed_less_than_sig = engine.handle_line(":sig lt(Int, Int)");
+    let typed_less_than_sig = signature_text(&typed_less_than_sig);
+    assert!(
+        typed_less_than_sig
+            .contains("defined:\n  impl Compare for Int::lt(self: Self, rhs: Self) -> Boolean"),
+        "{typed_less_than_sig}"
+    );
+    assert!(
+        typed_less_than_sig.contains("specialized:\n  lt(Int, Int) -> Boolean"),
+        "{typed_less_than_sig}"
+    );
 
     let operator_sig = engine.handle_line(":sig |>");
     let operator_sig = signature_text(&operator_sig);
@@ -1087,10 +1120,6 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let slash_doc = doc_text(&slash_doc);
     assert!(slash_doc.contains("trait Compose"), "{slash_doc}");
     assert!(slash_doc.contains("models the `/` operator"), "{slash_doc}");
-
-    let helper_sig = engine.handle_line(":sig gt");
-    let helper_sig = signature_text(&helper_sig);
-    assert!(helper_sig.contains("trait Gt { gt(self: Self, rhs: Self) -> Boolean }"));
 
     let bind_sig = engine.handle_line(":sig =");
     let bind_sig = signature_text(&bind_sig);
@@ -1120,19 +1149,41 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "@intrinsic def cond(clauses: CondClauses<$A>) -> $A"
     );
 
-    let typed_doc = engine.handle_line(":doc gt(Int, Int)");
+    let typed_doc = engine.handle_line(":doc compare(Int, Int)");
     let typed_doc = doc_text(&typed_doc);
-    assert!(typed_doc.contains("impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean"));
-    assert!(typed_doc.contains(
-        "Return `True` when the left integer is strictly greater than the right integer."
-    ));
+    assert!(typed_doc.contains("impl Compare for Int::compare(self: Self, rhs: Self) -> Ordering"));
+    assert!(typed_doc.contains("Return the three-way ordering between the two integer values."));
     assert!(!typed_doc.contains(
-        "\n  Return `True` when the left integer is strictly greater than the right integer."
+        "\n  Return the three-way ordering between the two integer values."
     ));
 
-    let helper_doc = engine.handle_line(":doc gt");
+    let helper_doc = engine.handle_line(":doc compare");
     let helper_doc = doc_text(&helper_doc);
-    assert!(helper_doc.contains("trait Gt { gt(self: Self, rhs: Self) -> Boolean }"));
+    assert!(helper_doc.contains("Compare::compare"));
+    assert!(helper_doc.contains("Standard `Compare` trait declaration."));
+
+    let operator_doc = engine.handle_line(":doc <");
+    let operator_doc = doc_text(&operator_doc);
+    assert!(operator_doc.contains("Compare::lt"));
+    assert!(!operator_doc.contains("trait Compare {"), "{operator_doc}");
+
+    let default_less_than_doc = engine.handle_line(":doc lt");
+    let default_less_than_doc = doc_text(&default_less_than_doc);
+    assert!(default_less_than_doc.contains("Compare::lt"));
+    assert!(!default_less_than_doc.contains("trait Compare {"), "{default_less_than_doc}");
+
+    let typed_less_than_doc = engine.handle_line(":doc lt(Int, Int)");
+    let typed_less_than_doc = doc_text(&typed_less_than_doc);
+    assert!(
+        typed_less_than_doc.contains("impl Compare for Int::lt(self: Self, rhs: Self) -> Boolean"),
+        "{typed_less_than_doc}"
+    );
+    assert!(
+        typed_less_than_doc.contains(
+            "Return `True` when the left integer is strictly less than the right integer."
+        ),
+        "{typed_less_than_doc}"
+    );
 
     let constructor_doc = engine.handle_line(":doc Duration(Int)");
     let constructor_doc = doc_text(&constructor_doc);
@@ -1200,12 +1251,58 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "Duration::new(value: Int) -> Result<Self, Error>"
     );
 
-    let unsupported = engine.handle_line(":doc gt(make_value(), Int)");
+    let unsupported = engine.handle_line(":doc compare(make_value(), Int)");
     assert!(
         rendered_text(&unsupported).contains("Unsupported command query argument `make_value()`"),
         "{}",
         rendered_text(&unsupported)
     );
+}
+
+#[test]
+fn core_compare_typed_queries_fall_back_to_trait_default_methods_when_impl_override_is_missing() {
+    let mut engine = ReplEngine::from_script_source(
+        "compare_default.srt",
+        r#"
+defstruct Ranked {
+  weight: Int,
+}
+
+impl Ranked {
+  def new(weight: Int) -> Self {
+    Ranked { weight: weight }
+  }
+}
+
+impl Compare for Ranked {
+  @doc """Compare ranked values by weight."""
+  def compare(self: Self, rhs: Self) -> Ordering {
+    Compare::compare(self.weight, rhs.weight)
+  }
+}
+"#,
+    )
+    .expect("compare default preload should bootstrap");
+
+    let sig = engine.handle_line(":sig lt(Ranked, Ranked)");
+    let sig = signature_text(&sig);
+    assert!(
+        sig.contains("defined:\n  Compare::lt(self: Self, rhs: Self) -> Boolean"),
+        "{sig}"
+    );
+    assert!(
+        sig.contains("specialized:\n  lt(Ranked, Ranked) -> Boolean"),
+        "{sig}"
+    );
+
+    let doc = engine.handle_line(":doc lt(Ranked, Ranked)");
+    let doc = doc_text(&doc);
+    assert!(
+        doc.contains("Compare::lt(self: Self, rhs: Self) -> Boolean"),
+        "{doc}"
+    );
+    assert!(doc.contains("Compare::lt"), "{doc}");
+    assert!(!doc.contains("trait Compare {"), "{doc}");
 }
 
 #[test]

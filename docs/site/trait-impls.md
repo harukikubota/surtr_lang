@@ -10,12 +10,10 @@ Surtr の trait system は V1 です。
 - capability trait
   - `Show`, `Compare`, `From`, `TryFrom`, `Numeric`
 - operator dispatch trait
-  - `Add`, `Sub`, `Mul`, `Eq`, `Neq`, `Lt`, `Lte`, `Gt`, `Gte`, `Concat`
+  - `Add`, `Sub`, `Mul`, `Eq`, `Neq`, `Concat`
   - `Functor`, `Chainable`, `PipeApply`, `Compose`, `Composable`, `LiftComposable`, `KleisliComposable`
-- compatibility trait
-  - `Ord`
 
-`Compare` は新しい API が三値比較を要求するときの正本です。`Ord` は grouped Boolean helper としての互換層に留まります。  
+`Compare` は新しい API が三値比較を要求するときの正本です。`< <= > >=` も公開 surface では `Compare` によって意味づけられます。  
 `Numeric` は演算子親ではなく、`safe_div` / `abs` / `min` / `max` のような generic helper 用 capability です。
 
 ## 宣言側

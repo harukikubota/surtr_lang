@@ -338,6 +338,23 @@ fn format_impl_extractor_signature(
     }
 }
 
+fn format_trait_method_signature(
+    trait_name: &str,
+    method: &spire::ast::TraitMethodSig,
+) -> String {
+    let signature = format_fun_signature(
+        &method.name,
+        &method.type_params,
+        &method.params,
+        &Some(method.ret_ty.clone()),
+    );
+    if let Some(rest) = signature.strip_prefix(&method.name) {
+        format!("{}::{}{}", surface_path_name(trait_name), method.name, rest)
+    } else {
+        signature
+    }
+}
+
 fn format_trait_impl_signature(
     trait_name: &str,
     trait_args: &[spire::ast::AstTy],
@@ -476,6 +493,18 @@ fn collect_doc_entries_for_ast(
                         )),
                         doc: doc.clone(),
                     });
+                    for method in methods {
+                        out.push(DocEntry {
+                            qualified_name: qualified_name(
+                                module_path,
+                                &format!("{name}::{}", method.name),
+                            ),
+                            kind: DocKind::Function,
+                            module_path: surface_path_name(module_path).to_string(),
+                            signature: Some(format_trait_method_signature(name, method)),
+                            doc: doc.clone(),
+                        });
+                    }
                 }
             }
             spire::ast::Ast::StructDef(_, name, type_params, _fields, attrs) => {
@@ -2178,6 +2207,12 @@ impl Numeric for Int {
         assert!(docs.iter().any(|entry| {
             entry.qualified_name == "Sample::Numeric"
                 && entry.kind == DocKind::Type
+                && entry.doc == "Trait docs."
+        }));
+        assert!(docs.iter().any(|entry| {
+            entry.qualified_name == "Sample::Numeric::add"
+                && entry.kind == DocKind::Function
+                && entry.signature.as_deref() == Some("Numeric::add(self: Self, rhs: Self) -> Self")
                 && entry.doc == "Trait docs."
         }));
         assert!(docs.iter().any(|entry| {

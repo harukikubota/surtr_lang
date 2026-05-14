@@ -40,11 +40,6 @@ mod tests {
     const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/eq.srt");
     const NEQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/neq.srt");
     const COMPARE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/compare.srt");
-    const LT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/lt.srt");
-    const LTE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/lte.srt");
-    const GT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/gt.srt");
-    const GTE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/gte.srt");
-    const ORD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/ord.srt");
     const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/concat.srt");
     const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/traits/from.srt");
     const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../lib/traits/try_from.srt");
@@ -205,15 +200,10 @@ mod tests {
                 ("Eq", EQ_MODULE_SOURCE),
                 ("Neq", NEQ_MODULE_SOURCE),
                 ("Compare", COMPARE_MODULE_SOURCE),
-                ("Lt", LT_MODULE_SOURCE),
-                ("Lte", LTE_MODULE_SOURCE),
-                ("Gt", GT_MODULE_SOURCE),
-                ("Gte", GTE_MODULE_SOURCE),
                 ("Concat", CONCAT_MODULE_SOURCE),
                 ("Numeric", NUMERIC_MODULE_SOURCE),
                 ("Show", SHOW_MODULE_SOURCE),
                 ("Ordering", ORDERING_MODULE_SOURCE),
-                ("Ord", ORD_MODULE_SOURCE),
                 ("From", FROM_MODULE_SOURCE),
                 ("TryFrom", TRY_FROM_MODULE_SOURCE),
                 ("Encode", ENCODE_MODULE_SOURCE),

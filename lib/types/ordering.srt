@@ -1,8 +1,7 @@
 @doc """
 Standard `Ordering` enum.
 Represents the three-way result of an ordering comparison.
-This is the shared result type used by the `Compare` trait, while boolean
-ordering helpers remain available through `Ord`.
+This is the shared result type used by the `Compare` trait.
 
 ## REPL
 xldr(1)> Ordering::Less

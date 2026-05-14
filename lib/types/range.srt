@@ -99,14 +99,9 @@ impl Compare for Range<Int> {
   Return the lexicographic ordering between two ranges.
   """
   def compare(self: Self, rhs: Self) -> Ordering {
-    if(
-      Lt::lt(self.min, rhs.min),
-      Ordering::Less,
-      if(
-        Gt::gt(self.min, rhs.min),
-        Ordering::Greater,
-        Compare::compare(self.max, rhs.max),
-      ),
-    )
+    match Compare::compare(self.min, rhs.min) {
+      Ordering::Equal => Compare::compare(self.max, rhs.max),
+      order => order,
+    }
   }
 }
