@@ -872,6 +872,14 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         decode_helper_typechecks_format_and_target_witnesses as fn(),
     ),
     (
+        "decode_helper_inside_decode_impl_dispatches_by_receiver_and_witnesses",
+        decode_helper_inside_decode_impl_dispatches_by_receiver_and_witnesses as fn(),
+    ),
+    (
+        "decode_helper_allows_same_pattern_recursive_dispatch",
+        decode_helper_allows_same_pattern_recursive_dispatch as fn(),
+    ),
+    (
         "from_helper_suggests_try_from_when_only_fallible_impl_exists",
         from_helper_suggests_try_from_when_only_fallible_impl_exists as fn(),
     ),
@@ -5286,6 +5294,136 @@ fn decode_helper_typechecks_format_and_target_witnesses() {
             assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
         }
         other => panic!("expected trait call, got {:?}", other),
+    }
+}
+
+fn decode_helper_inside_decode_impl_dispatches_by_receiver_and_witnesses() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord JsonSpecConfig(name: String, entrypoint: String)
+
+impl Decode<JsonFormat, JsonSpecConfig> for JsonValue {
+  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<JsonSpecConfig>) -> Result<JsonSpecConfig, Error> {
+    name_json =? Json::get(self, "name")
+    name =? decode(name_json, JsonFormat, String)
+    entry_json =? Json::get(self, "entrypoint")
+    entry =? entry_json |> decode(JsonFormat, String)
+    Ok(JsonSpecConfig(name, entry))
+  }
+}
+
+cfg = decode(JsonValue::Null, JsonFormat, JsonSpecConfig)"#,
+    );
+    let mut calls = Vec::new();
+    for node in &typed {
+        collect_decode_trait_calls(node, &mut calls);
+    }
+    let string_decode_calls = calls
+        .iter()
+        .filter(|(trait_name, dispatch_name)| {
+            trait_name.as_str() == "Decode<JsonFormat, String>"
+                && dispatch_name
+                    .as_deref()
+                    .is_some_and(|name| name.ends_with("JsonValue::decode"))
+        })
+        .count();
+    assert_eq!(
+        string_decode_calls, 2,
+        "nested direct and pipeline decode calls should dispatch to String decoder: {calls:?}"
+    );
+    assert!(
+        calls.iter().any(|(trait_name, dispatch_name)| {
+            trait_name.as_str() == "Decode<JsonFormat, JsonSpecConfig>"
+                && dispatch_name
+                    .as_deref()
+                    .is_some_and(|name| name.ends_with("JsonValue::decode"))
+        }),
+        "custom Config decoder should still be registered as its own dispatch target: {calls:?}"
+    );
+}
+
+fn decode_helper_allows_same_pattern_recursive_dispatch() {
+    typecheck_with_builtin_prelude(
+        r#"defrecord JsonSpecRecursive(value: String)
+
+impl Decode<JsonFormat, JsonSpecRecursive> for JsonValue {
+  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<JsonSpecRecursive>) -> Result<JsonSpecRecursive, Error> {
+    decode(self, JsonFormat, JsonSpecRecursive)
+  }
+}"#,
+    );
+}
+
+fn collect_decode_trait_calls(node: &TypedNode, calls: &mut Vec<(String, Option<String>)>) {
+    match &node.node {
+        TypedInner::TraitCall {
+            trait_name,
+            method_name,
+            dispatch,
+            args,
+            ..
+        } => {
+            if method_name == "decode" {
+                calls.push((trait_name.clone(), trait_dispatch_name(dispatch)));
+            }
+            for arg in args {
+                collect_decode_trait_calls(arg, calls);
+            }
+        }
+        TypedInner::App(func, args) | TypedInner::InjectCall(func, args) => {
+            collect_decode_trait_calls(func, calls);
+            for arg in args {
+                collect_decode_trait_calls(arg, calls);
+            }
+        }
+        TypedInner::Block(stmts) => {
+            for stmt in stmts {
+                collect_decode_trait_calls(stmt, calls);
+            }
+        }
+        TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs) => {
+            collect_decode_trait_calls(rhs, calls);
+        }
+        TypedInner::Def(_, _, _, _, _, body, _)
+        | TypedInner::ExtractorDef(_, _, _, _, _, body, _) => {
+            collect_decode_trait_calls(body, calls);
+        }
+        TypedInner::Closure(_, _, body)
+        | TypedInner::Semi(body)
+        | TypedInner::FieldAccess(body, _) => {
+            collect_decode_trait_calls(body, calls);
+        }
+        TypedInner::Pipe(left, right)
+        | TypedInner::BinOp(_, left, right)
+        | TypedInner::Compose(_, left, right)
+        | TypedInner::ListCons(left, right) => {
+            collect_decode_trait_calls(left, calls);
+            collect_decode_trait_calls(right, calls);
+        }
+        TypedInner::ConstructorCall(_, args)
+        | TypedInner::ListLiteral(args)
+        | TypedInner::TupleLiteral(args) => {
+            for arg in args {
+                collect_decode_trait_calls(arg, calls);
+            }
+        }
+        TypedInner::If(cond, then_branch, else_branch) => {
+            collect_decode_trait_calls(cond, calls);
+            collect_decode_trait_calls(then_branch, calls);
+            if let Some(else_branch) = else_branch {
+                collect_decode_trait_calls(else_branch, calls);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn trait_dispatch_name(dispatch: &scar::typed::TraitDispatch) -> Option<String> {
+    match dispatch {
+        scar::typed::TraitDispatch::Static(scar::typed::TraitDispatchTarget::UserFunction {
+            name,
+            ..
+        }) => Some(name.clone()),
+        _ => None,
     }
 }
 

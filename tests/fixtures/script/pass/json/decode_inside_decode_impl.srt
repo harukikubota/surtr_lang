@@ -1,0 +1,15 @@
+defrecord JsonSpecNestedConfig(name: String, entrypoint: String)
+
+impl Decode<JsonFormat, JsonSpecNestedConfig> for JsonValue {
+  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<JsonSpecNestedConfig>) -> Result<JsonSpecNestedConfig, Error> {
+    name_json =? Json::get(self, "name")
+    name =? decode(name_json, JsonFormat, String)
+    entry_json =? Json::get(self, "entrypoint")
+    entry =? entry_json |> decode(JsonFormat, String)
+    Ok(JsonSpecNestedConfig(name, entry))
+  }
+}
+
+json =? "{\"name\":\"surtr\",\"entrypoint\":\"boot\"}" |> decode(JsonFormat, JsonValue)
+cfg =? decode(json, JsonFormat, JsonSpecNestedConfig)
+print(cfg.name ++ ":" ++ cfg.entrypoint)

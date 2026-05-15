@@ -68,6 +68,8 @@ deftrait Decode<$Format, $To> {
 - `encode(value, Format)` の第2引数は `TypeRef` witness slot として解釈する
 - `decode(value, Format, Target)` の第2・第3引数は `TypeRef` witness slot として解釈する
 - `value |> encode(Format)` と `value |> decode(Format, Target)` でも同じ witness lowering を使う
+- `Decode` impl 本文内の unqualified `decode(...)` と pipeline partial call も、auto-import された `Decode::decode` helper として解決する
+- dispatch は receiver 引数の型と `Format` / `To` witness で決定し、同じ pattern の再帰的 decode call も許可する
 - `TypeRef` は trait method / trait impl method signature の witness parameter にだけ現れてよい
 - 通常 `def` の parameter / return / field / local annotation では使えない
 
@@ -101,12 +103,15 @@ schema-level decode は builtin ではなく、利用者が
 - unqualified `encode(...)` / `decode(...)` helper は auto-import trait helper として解決する
 - helper call の format / target 引数は `Resolved::TypeRefWitness` に lower する
 - pipeline partial call でも同じ lowering を使う
+- `Decode` impl 本文内でも、unqualified `decode(...)` と pipeline partial call は current impl owner ではなく auto-import trait helper を指す
 - `Encode::encode` / `Decode::decode` の impl dispatch は通常の trait call と同じ registry を通す
 
 ### 2.2 Typechecker
 
 - helper call は generic trait call として型検査する
 - `|>` と `|>=` の RHS に trait helper partial call が来た場合、LHS の型から受け口を concretize する
+- `Decode::decode` の impl dispatch は receiver 引数の型と `Format` / `To` の `TypeRef` witness で決定する
+- `Decode` impl 本文内で同じ receiver / `Format` / `To` pattern の recursive call が現れても compile error にはしない
 - `Decode` は `Facet` を引数に受け取らない
 - `Facet` は decode 前の `JsonValue` inspection、または decode 後の typed value update にだけ使う
 
@@ -159,12 +164,6 @@ compile 側の標準定義ソースロード順は次に固定する。
   - malformed JSON が `Err(JsonParseError(...))` として観測できる
   - type mismatch が `Err(JsonDecodeError(...))` として観測できる
   - custom `impl Decode<JsonFormat, Config> for JsonValue` が `Json::get(...) |>= decode(JsonFormat, T)` と `=?` で書ける
+  - `Decode` impl 本文内の nested `decode(...)` と pipeline partial call が `Json::as_*` 回避なしで書ける
+  - 同じ pattern の recursive decode call が compile error にならない
   - decode 後の typed value に `Facet::over` / `Facet::set` を適用できる
-
----
-
-## 6. Known open issue
-
-- `impl Decode<..., T> for JsonValue` 本文内で unqualified `decode(...)` を再帰的に使うケースは、
-  helper 名解決と impl owner shadowing の境界がまだ完全には固定されていない。
-  将来課題は `doc/open-issues.md` を正本とする。

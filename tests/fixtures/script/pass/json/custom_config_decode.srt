@@ -3,9 +3,9 @@ defrecord JsonSpecConfig(name: String, entrypoint: String)
 impl Decode<JsonFormat, JsonSpecConfig> for JsonValue {
   def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<JsonSpecConfig>) -> Result<JsonSpecConfig, Error> {
     name_json =? Json::get(self, "name")
-    name =? Json::as_string(name_json)
+    name =? decode(name_json, JsonFormat, String)
     entry_json =? Json::get(self, "entrypoint")
-    entry =? Json::as_string(entry_json)
+    entry =? entry_json |> decode(JsonFormat, String)
     Ok(JsonSpecConfig(name, entry))
   }
 }

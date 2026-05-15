@@ -1427,12 +1427,38 @@ impl Resolver {
         let uid = self
             .scope
             .lookup(&method_alias)
-            .or_else(|| self.declaration_uids.get(&method_alias).copied())?;
+            .or_else(|| self.declaration_uids.get(&method_alias).copied())
+            .or_else(|| {
+                let canonical_fq = format!("{}::{}", spec.owner, method_alias);
+                self.declaration_uids.get(&canonical_fq).copied()
+            })
+            .or_else(|| {
+                self.declaration_entries
+                    .iter()
+                    .find_map(|(fq_name, entry)| {
+                        (entry.kind == DeclarationKind::TraitMethod
+                            && entry
+                                .module_path
+                                .strip_prefix("Global::")
+                                .unwrap_or(&entry.module_path)
+                                == spec.owner
+                            && entry.name == method_alias)
+                            .then(|| self.declaration_uids.get(fq_name).copied())
+                            .flatten()
+                    })
+            })?;
         let fq_name = self
             .declaration_fq_name_for_uid(uid)
             .unwrap_or(method_alias);
-        let entry = self.declaration_entries.get(&fq_name)?;
-        (entry.kind == DeclarationKind::TraitMethod).then(|| {
+        let is_trait_method = self
+            .declaration_entries
+            .get(&fq_name)
+            .is_some_and(|entry| entry.kind == DeclarationKind::TraitMethod)
+            || self
+                .declaration_uid_kinds
+                .get(&uid)
+                .is_some_and(|kind| *kind == DeclarationKind::TraitMethod);
+        is_trait_method.then(|| {
             Resolved::Var(
                 span.clone(),
                 ResolvedId {

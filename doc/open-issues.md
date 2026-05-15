@@ -177,24 +177,6 @@
   - directory / metadata surface を増やす場合は Rust integration で実ファイル状態を検証しつつ、spec/compile error のどこに置くかを `docs/dev/テスト方針.md` と同期する。
   - seek や cursor API を導入する場合は rollback / shutdown cleanup と両立することを `eldr` unit test で固定する。
 
-### OI-025 trait helper shadowing inside `Decode` impl
-
-- 背景:
-  - `Encode` / `Decode` helper は `@autoimport` trait helper として導入され、通常の unqualified call と pipeline partial call では既に機能している。
-  - 一方で `impl Decode<JsonFormat, T> for JsonValue` の本文内で、さらに unqualified `decode(...)` を使って別 target へ再帰的に decode するケースでは、helper 名解決と current impl owner の shadowing 境界がまだ曖昧である。
-  - 現行 baseline では `Json::as_string` などの helper を使うことで回避できるため、機能追加自体は完了扱いにしている。
-- 未確定点:
-  - impl 本文内の unqualified `decode(...)` を常に trait helper として優先解決するか
-  - current impl owner method と trait helper capture のどちらを優先するか
-  - call form、pipeline partial call、closure capture で同じ規則を共有できるか
-- 受け入れ条件:
-  - `impl Decode<..., T> for JsonValue` 本文内で unqualified `decode(...)` を使っても、意図した target type へ決定的に dispatch できる。
-  - trait helper 名解決規則が通常 scope と impl scope の両方で一貫する。
-  - 既存の `encode` / `decode` helper と method shadowing の挙動を壊さない。
-- テスト方針:
-  - `unit/sigil` / `unit/scar` に impl 本文内の nested `decode(...)` と pipeline partial call の回帰ケースを追加する。
-  - `spec/json` に custom decoder が unqualified nested `decode(...)` を使う fixture を追加し、`Json::as_*` 回避なしで通ることを固定する。
-
 ### OI-026 FS / Shell surface naming and generic import ergonomics
 
 - 背景:
