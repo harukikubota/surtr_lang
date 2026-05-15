@@ -2364,6 +2364,7 @@ impl Checker {
         trait_name: &str,
         method_name: &str,
         args: &[ResolvedRecordLitArg],
+        receiver_owner_hint: Option<&str>,
     ) -> Result<TypedNode, TypeError> {
         if args
             .iter()
@@ -2444,6 +2445,30 @@ impl Checker {
             })
             .collect::<Result<Vec<_>, _>>()?;
         self.ensure_no_runtime_facet_args(&typed_args, span, "Trait method call")?;
+
+        if let Some(owner_hint) = receiver_owner_hint {
+            if let Some(receiver) = typed_args.first() {
+                let receiver_ty = self.resolve_ty(&receiver.ty);
+                if let Some(receiver_name) = self.trait_target_name(&receiver_ty) {
+                    if Self::surface_name(&receiver_name) != owner_hint {
+                        return Err(TypeError {
+                            message: format!(
+                                "{}::{} helper requires receiver type {}, got {}",
+                                owner_hint,
+                                method_name,
+                                owner_hint,
+                                self.ty_name(&receiver_ty)
+                            ),
+                            span: receiver.span.clone(),
+                            hint: Some(format!(
+                                "Use {}::{} only for {} values.",
+                                owner_hint, method_name, owner_hint
+                            )),
+                        });
+                    }
+                }
+            }
+        }
 
         for (idx, (expected, arg)) in param_tys.iter().zip(&typed_args).enumerate() {
             if !self.types_compatible(expected, &arg.ty) {
@@ -5565,8 +5590,18 @@ impl Checker {
             return Ok(typed);
         }
 
-        if let Some((_id, trait_name, method_name)) = self.trait_method_ref(func) {
-            return self.check_trait_method_call(span, &trait_name, &method_name, args);
+        if let Some((id, trait_name, method_name)) = self.trait_method_ref(func) {
+            let receiver_owner_hint = id
+                .name
+                .strip_suffix(&format!("::{}", method_name))
+                .filter(|owner| *owner == "JsonValue");
+            return self.check_trait_method_call(
+                span,
+                &trait_name,
+                &method_name,
+                args,
+                receiver_owner_hint,
+            );
         }
 
         let typed_func = self.check_node(func)?;

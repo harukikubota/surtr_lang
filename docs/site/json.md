@@ -5,12 +5,13 @@ trait helper で扱います。
 
 ## まず覚えるもの
 
-- text を JSON にする: `Json::parse(text)`
-- JSON を text にする: `Json::stringify(value)`
-- helper で decode する: `decode(value, JsonFormat, TargetType)`
-- helper で encode する: `encode(value, JsonFormat)`
+- text を JSON にする: `Json::decode(text)`
+- JSON を text にする: `Json::encode(value)`
+- JSON から typed value にする: `JsonValue::decode(json, TargetType)`
+- typed value を JSON にする: `JsonValue::encode(value)`
 
-`Json` は auto import されません。`Encode` / `Decode` helper は auto import されます。
+`Json` は auto import されません。`Encode` / `Decode` も auto import されないため、
+decode は `JsonValue::decode` helper、encode は `JsonValue::encode(value)` source alias を使います。
 
 ## `JsonValue`
 
@@ -32,21 +33,19 @@ defenum JsonValue {
 - 小数と指数表記は `JsonValue::Float`
 - object の key は常に `String`
 
-## parse
+## decode / encode
 
 ```surtr
-json =? Json::parse("{\"name\":\"surtr\",\"ok\":true}")
-name =? Json::get(json, "name") |>= decode(JsonFormat, String)
-ok =? Json::get(json, "ok") |>= decode(JsonFormat, Boolean)
+json =? Json::decode("{\"name\":\"surtr\",\"ok\":true}")
+name =? Json::get(json, "name") |>= JsonValue::decode(String)
+ok =? Json::get(json, "ok") |>= JsonValue::decode(Boolean)
 
 assert_eq("surtr", name)
 assert_eq(True, ok)
 ```
 
-`Json::parse` は malformed JSON を `RuntimeError` にせず、
+`Json::decode` は malformed JSON を `RuntimeError` にせず、
 `Err(JsonParseError(...))` として返します。
-
-## stringify
 
 ```surtr
 value = JsonValue::Object(HashMap::from_entries([
@@ -54,7 +53,8 @@ value = JsonValue::Object(HashMap::from_entries([
   ("ok", JsonValue::Bool(True)),
 ]))
 
-text =? Json::stringify(value)
+json =? JsonValue::encode(value)
+text =? Json::encode(json)
 print(text)
 ```
 
@@ -62,51 +62,52 @@ print(text)
 {"name":"surtr","ok":true}
 ```
 
-`encode(value, JsonFormat)` は `Json::stringify(...)` の helper 版です。
-
-```surtr
-text =? encode(JsonValue::Int(42), JsonFormat)
-assert_eq("42", text)
-```
-
-## typed decode
+## typed decode / encode
 
 組み込みの decode は `String`, `Int`, `Float`, `Boolean`, `JsonValue` を扱えます。
 
 ```surtr
-json =? Json::parse("{\"port\":8080}")
-port =? Json::get(json, "port") |>= decode(JsonFormat, Int)
+json =? Json::decode("{\"port\":8080}")
+port =? Json::get(json, "port") |>= JsonValue::decode(Int)
 assert_eq(8080, port)
 ```
 
 pipeline でも同じ helper を使えます。
 
 ```surtr
-json =? "{\"name\":\"surtr\"}" |> decode(JsonFormat, JsonValue)
-name =? Json::get(json, "name") |>= decode(JsonFormat, String)
+json =? Json::decode("{\"name\":\"surtr\"}")
+name =? Json::get(json, "name") |>= JsonValue::decode(String)
 ```
 
-## custom schema decode
+## custom schema
 
-独自型へは `impl Decode<JsonFormat, T> for JsonValue` を書きます。
+独自型への decode は `impl Decode<T> for JsonValue` を書きます。
+独自型から JSON への encode は `impl Encode<JsonValue> for T` を書きます。
 
 ```surtr
-defstruct JsonConfig {
-  name: String,
-  entrypoint: String,
-}
+defrecord JsonConfig(name: String, entrypoint: String)
 
-impl Decode<JsonFormat, JsonConfig> for JsonValue {
-  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<JsonConfig>) -> Result<JsonConfig, Error> {
-    name =? Json::get(self, "name") |>= decode(JsonFormat, String)
-    entrypoint =? Json::get(self, "entrypoint") |>= decode(JsonFormat, String)
-    Ok(JsonConfig { name, entrypoint })
+impl Decode<JsonConfig> for JsonValue {
+  def decode(self: Self, to: TypeRef<JsonConfig>) -> Result<JsonConfig, Error> {
+    name =? Json::get(self, "name") |>= JsonValue::decode(String)
+    entrypoint =? Json::get(self, "entrypoint") |>= JsonValue::decode(String)
+    Ok(JsonConfig(name, entrypoint))
   }
 }
 
-json =? Json::parse("{\"name\":\"surtr\",\"entrypoint\":\"boot\"}")
-cfg =? decode(json, JsonFormat, JsonConfig)
-assert_eq(("surtr", "boot"), (cfg.name, cfg.entrypoint))
+impl Encode<JsonValue> for JsonConfig {
+  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+    Ok(JsonValue::Object(HashMap::from_entries([
+      ("name", JsonValue::String(self.name)),
+      ("entrypoint", JsonValue::String(self.entrypoint)),
+    ])))
+  }
+}
+
+json =? Json::decode("{\"name\":\"surtr\",\"entrypoint\":\"boot\"}")
+cfg =? JsonValue::decode(json, JsonConfig)
+roundtrip_json =? JsonValue::encode(cfg)
+roundtrip_text =? Json::encode(roundtrip_json)
 ```
 
 ## helper functions
@@ -126,7 +127,7 @@ assert_eq(("surtr", "boot"), (cfg.name, cfg.entrypoint))
 たとえば accessor を直接使うと次のようになります。
 
 ```surtr
-json =? Json::parse("\"surtr\"")
+json =? Json::decode("\"surtr\"")
 text =? Json::as_string(json)
 assert_eq("surtr", text)
 ```
@@ -137,10 +138,10 @@ assert_eq("surtr", text)
 - schema mismatch: `JsonDecodeError`
 - stringify failure: `JsonEncodeError`
 
-`decode(...)` が失敗すると `Err(JsonDecodeError(...))` として観測できます。
+`JsonValue::decode(...)` が失敗すると `Err(JsonDecodeError(...))` として観測できます。
 
 ```surtr
-json =? Json::parse("42")
-result = decode(json, JsonFormat, String)
+json =? Json::decode("42")
+result = JsonValue::decode(json, String)
 assert_eq("JsonDecodeError", Error::kind(Result::err(result)))
 ```

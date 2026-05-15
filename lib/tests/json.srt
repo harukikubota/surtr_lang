@@ -22,13 +22,13 @@ test("Json") {
   describe("decode") {
     it("decodes string fields through Result operators") {
       json =? Json::parse("{\"name\":\"surtr\"}")
-      name =? Json::get(json, "name") |>= decode(JsonFormat, String)
+      name =? Json::get(json, "name") |>= JsonValue::decode(String)
       assert_eq("surtr", name)
     }
 
     it("decodes custom schema values") {
       json =? Json::parse("{\"name\":\"surtr\",\"entrypoint\":\"boot\"}")
-      cfg =? decode(json, JsonFormat, JsonConfig)
+      cfg =? JsonValue::decode(json, JsonConfig)
       assert_eq(("surtr", "boot"), (cfg.name, cfg.entrypoint))
     }
   }
@@ -39,7 +39,8 @@ test("Json") {
         ("b", JsonValue::Int(2)),
         ("a", JsonValue::Int(1)),
       ]))
-      text =? encode(value, JsonFormat)
+      json =? JsonValue::encode(value)
+      text =? Json::encode(json)
       assert_eq("{\"a\":1,\"b\":2}", text)
     }
   }

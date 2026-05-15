@@ -59,10 +59,36 @@ const TYPE_REF_HELPERS: &[TypeRefHelperSpec] = &[
         bare_name: "decode",
         owner: "Decode",
         method: "decode",
-        arity: 3,
-        witness_arg_indices: &[1, 2],
+        arity: 2,
+        witness_arg_indices: &[1],
     },
 ];
+
+#[derive(Debug, Clone, Copy)]
+enum TypeRefHelperCall {
+    InScope(&'static TypeRefHelperSpec),
+    ExplicitTrait(&'static TypeRefHelperSpec),
+    JsonValueDecode(&'static TypeRefHelperSpec),
+}
+
+impl TypeRefHelperCall {
+    fn spec(self) -> &'static TypeRefHelperSpec {
+        match self {
+            Self::InScope(spec) | Self::ExplicitTrait(spec) | Self::JsonValueDecode(spec) => spec,
+        }
+    }
+
+    fn allows_canonical_resolution(self) -> bool {
+        !matches!(self, Self::InScope(_))
+    }
+
+    fn helper_owner_hint(self) -> Option<&'static str> {
+        match self {
+            Self::JsonValueDecode(_) => Some("JsonValue"),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CanonicalSpecialForm {
@@ -1402,17 +1428,26 @@ impl Resolver {
         self.desugar_pipeline_rhs_special_form_partial(rhs)
     }
 
-    fn type_ref_helper_for_call(func: &Ast) -> Option<&'static TypeRefHelperSpec> {
+    fn type_ref_helper_for_call(func: &Ast) -> Option<TypeRefHelperCall> {
         match func {
+            Ast::Var(_, name) if name == "decode" || name == "encode" => None,
             Ast::Var(_, name) => TYPE_REF_HELPERS
                 .iter()
-                .find(|spec| spec.bare_name == name.as_str()),
+                .find(|spec| spec.bare_name == name.as_str())
+                .map(TypeRefHelperCall::InScope),
             Ast::Path(_, path) if path.segments.len() >= 2 => {
                 let method = path.segments.last()?;
                 let owner = path.segments.get(path.segments.len() - 2)?;
+                if owner == "JsonValue" && method == "decode" {
+                    return TYPE_REF_HELPERS
+                        .iter()
+                        .find(|spec| spec.owner == "Decode" && spec.method == "decode")
+                        .map(TypeRefHelperCall::JsonValueDecode);
+                }
                 TYPE_REF_HELPERS
                     .iter()
                     .find(|spec| spec.owner == owner.as_str() && spec.method == method.as_str())
+                    .map(TypeRefHelperCall::ExplicitTrait)
             }
             _ => None,
         }
@@ -1421,32 +1456,36 @@ impl Resolver {
     fn resolve_type_ref_helper_func(
         &self,
         span: Span,
-        spec: &TypeRefHelperSpec,
+        helper: TypeRefHelperCall,
     ) -> Option<Resolved> {
+        let spec = helper.spec();
         let method_alias = format!("{}::{}", spec.owner, spec.method);
-        let uid = self
-            .scope
-            .lookup(&method_alias)
-            .or_else(|| self.declaration_uids.get(&method_alias).copied())
-            .or_else(|| {
-                let canonical_fq = format!("{}::{}", spec.owner, method_alias);
-                self.declaration_uids.get(&canonical_fq).copied()
-            })
-            .or_else(|| {
-                self.declaration_entries
-                    .iter()
-                    .find_map(|(fq_name, entry)| {
-                        (entry.kind == DeclarationKind::TraitMethod
-                            && entry
-                                .module_path
-                                .strip_prefix("Global::")
-                                .unwrap_or(&entry.module_path)
-                                == spec.owner
-                            && entry.name == method_alias)
-                            .then(|| self.declaration_uids.get(fq_name).copied())
-                            .flatten()
-                    })
-            })?;
+        let scoped_uid = self.scope.lookup(&method_alias);
+        let uid = if helper.allows_canonical_resolution() {
+            scoped_uid
+                .or_else(|| self.declaration_uids.get(&method_alias).copied())
+                .or_else(|| {
+                    let canonical_fq = format!("{}::{}", spec.owner, method_alias);
+                    self.declaration_uids.get(&canonical_fq).copied()
+                })
+                .or_else(|| {
+                    self.declaration_entries
+                        .iter()
+                        .find_map(|(fq_name, entry)| {
+                            (entry.kind == DeclarationKind::TraitMethod
+                                && entry
+                                    .module_path
+                                    .strip_prefix("Global::")
+                                    .unwrap_or(&entry.module_path)
+                                    == spec.owner
+                                && entry.name == method_alias)
+                                .then(|| self.declaration_uids.get(fq_name).copied())
+                                .flatten()
+                        })
+                })
+        } else {
+            scoped_uid
+        }?;
         let fq_name = self
             .declaration_fq_name_for_uid(uid)
             .unwrap_or(method_alias);
@@ -1462,7 +1501,10 @@ impl Resolver {
             Resolved::Var(
                 span.clone(),
                 ResolvedId {
-                    name: spec.method.into(),
+                    name: helper
+                        .helper_owner_hint()
+                        .map(|owner| format!("{}::{}", owner, spec.method))
+                        .unwrap_or_else(|| spec.method.into()),
                     qualified_name: Some(fq_name),
                     unique_id: uid,
                     compiler_generated: false,
@@ -2128,17 +2170,19 @@ impl Resolver {
                     }
                 }
 
-                if let Some(spec) = Self::type_ref_helper_for_call(&func) {
+                if let Some(helper) = Self::type_ref_helper_for_call(&func) {
+                    let spec = helper.spec();
                     let resolved_func = self
-                        .resolve_type_ref_helper_func(func.span().clone(), spec)
+                        .resolve_type_ref_helper_func(func.span().clone(), helper)
                         .map(Ok)
                         .unwrap_or_else(|| {
                             self.resolve_node(*func.clone()).map_err(|err| {
                                 self.map_undefined_callable_error(err, &func, args.len())
                             })
                         })?;
-                    let injected_receiver = args.len() + 1 == spec.arity;
-                    if args.len() != spec.arity && !injected_receiver {
+                    let direct_arity = args.len();
+                    let injected_receiver = direct_arity + 1 == spec.arity;
+                    if direct_arity != spec.arity && !injected_receiver {
                         return Err(ResolveError {
                             message: format!(
                                 "{} expects exactly {} positional arguments",

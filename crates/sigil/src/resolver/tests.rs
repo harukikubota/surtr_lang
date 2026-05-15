@@ -2118,9 +2118,8 @@ fn test_decode_helper_lowers_format_and_target_args_to_type_ref_witnesses() {
     let module_stages = vec![vec![staged_module(
         "Decode",
         parse_module_ast(
-            r#"@autoimport
-deftrait Decode<$Format, $To> {
-  def decode(self: Self, format: TypeRef<$Format>, to: TypeRef<$To>) -> Result<$To, Error>
+            r#"deftrait Decode<$To> {
+  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
 }"#,
             "Decode",
         ),
@@ -2128,7 +2127,7 @@ deftrait Decode<$Format, $To> {
 
     let resolved = resolve_user_with_modules(
         r#"json = "{}"
-value = decode(json, JsonFormat, Config)"#,
+value = Decode::decode(json, Config)"#,
         &module_stages,
     )
     .expect("decode helper should resolve");
@@ -2139,7 +2138,7 @@ value = decode(json, JsonFormat, Config)"#,
     match bind {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::App(_, func, args) => {
-                assert_eq!(args.len(), 3);
+                assert_eq!(args.len(), 2);
                 match func.as_ref() {
                     Resolved::Var(_, id) => {
                         assert_eq!(id.name, "decode");
@@ -2152,12 +2151,6 @@ value = decode(json, JsonFormat, Config)"#,
                     ResolvedRecordLitArg::Positional(Resolved::Var(_, id)) if id.name == "json"
                 ));
                 match &args[1] {
-                    ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, ty)) => {
-                        assert!(matches!(ty, AstTy::Named(_, name) if name == "JsonFormat"));
-                    }
-                    other => panic!("expected format type witness, got {:?}", other),
-                }
-                match &args[2] {
                     ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, ty)) => {
                         assert!(matches!(ty, AstTy::Named(_, name) if name == "Config"));
                     }
@@ -2175,19 +2168,18 @@ fn test_decode_helper_inside_decode_impl_uses_trait_helper_not_current_method() 
     let module_stages = vec![vec![staged_module(
         "Decode",
         parse_module_ast(
-            r#"@autoimport
-deftrait Decode<$Format, $To> {
-  def decode(self: Self, format: TypeRef<$Format>, to: TypeRef<$To>) -> Result<$To, Error>
+            r#"deftrait Decode<$To> {
+  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
 }"#,
             "Decode",
         ),
     )]];
 
     let resolved = resolve_user_with_modules(
-        r#"impl Decode<JsonFormat, Config> for JsonValue {
-  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<Config>) -> Result<Config, Error> {
-    name = decode(self, JsonFormat, String)
-    entry = self |> decode(JsonFormat, String)
+        r#"impl Decode<Config> for JsonValue {
+  def decode(self: Self, to: TypeRef<Config>) -> Result<Config, Error> {
+    name = JsonValue::decode(self, String)
+    entry = self |> JsonValue::decode(String)
     name
   }
 }"#,
@@ -2210,10 +2202,10 @@ deftrait Decode<$Format, $To> {
         panic!("expected name and entry bindings, got {:?}", stmts);
     };
 
-    assert_decode_helper_call_targets_trait_method(name_rhs.as_ref(), 3);
+    assert_decode_helper_call_targets_trait_method(name_rhs.as_ref(), 2);
     match entry_rhs.as_ref() {
         Resolved::Pipe(_, _, right) => {
-            assert_decode_helper_call_targets_trait_method(right.as_ref(), 2);
+            assert_decode_helper_call_targets_trait_method(right.as_ref(), 1);
         }
         other => panic!("expected pipeline decode helper, got {:?}", other),
     }
@@ -2225,18 +2217,12 @@ fn assert_decode_helper_call_targets_trait_method(node: &Resolved, arity: usize)
             assert_eq!(args.len(), arity);
             match func.as_ref() {
                 Resolved::Var(_, id) => {
-                    assert_eq!(id.name, "decode");
+                    assert_eq!(id.name, "JsonValue::decode");
                     assert_eq!(id.qualified_name.as_deref(), Some("Decode::Decode::decode"));
                 }
                 other => panic!("expected decode helper var, got {:?}", other),
             }
-            let format_idx = arity - 2;
             let target_idx = arity - 1;
-            assert!(matches!(
-                &args[format_idx],
-                ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, AstTy::Named(_, name)))
-                    if name == "JsonFormat"
-            ));
             assert!(matches!(
                 &args[target_idx],
                 ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, AstTy::Named(_, name)))
@@ -2252,9 +2238,8 @@ fn test_encode_helper_lowers_pipeline_partial_format_arg_to_type_ref_witness() {
     let module_stages = vec![vec![staged_module(
         "Encode",
         parse_module_ast(
-            r#"@autoimport
-deftrait Encode<$Format> {
-  def encode(self: Self, format: TypeRef<$Format>) -> Result<String, Error>
+            r#"deftrait Encode<$To> {
+  def encode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
 }"#,
             "Encode",
         ),
@@ -2262,7 +2247,7 @@ deftrait Encode<$Format> {
 
     let resolved = resolve_user_with_modules(
         r#"value = "hello"
-text = value |> encode(JsonFormat)"#,
+text = value |> Encode::encode(JsonValue)"#,
         &module_stages,
     )
     .expect("encode pipeline helper should resolve");
@@ -2287,7 +2272,7 @@ text = value |> encode(JsonFormat)"#,
                     }
                     match &args[0] {
                         ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, ty)) => {
-                            assert!(matches!(ty, AstTy::Named(_, name) if name == "JsonFormat"));
+                            assert!(matches!(ty, AstTy::Named(_, name) if name == "JsonValue"));
                         }
                         other => panic!("expected format type witness, got {:?}", other),
                     }
@@ -2298,6 +2283,112 @@ text = value |> encode(JsonFormat)"#,
         },
         _ => panic!("Expected Bind"),
     }
+}
+
+#[test]
+fn test_json_value_decode_helper_lowers_target_arg_to_type_ref_witness() {
+    let module_stages = vec![vec![staged_module(
+        "Decode",
+        parse_module_ast(
+            r#"deftrait Decode<$To> {
+  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+}"#,
+            "Decode",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules(
+        r#"json = "{}"
+value = JsonValue::decode(json, String)
+entry = json |> JsonValue::decode(String)"#,
+        &module_stages,
+    )
+    .expect("JsonValue::decode helper should resolve");
+
+    let value_bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "value"))
+        .expect("value bind should exist");
+    match value_bind {
+        Resolved::Bind(_, _, rhs) => {
+            assert_json_value_decode_helper_call(rhs.as_ref(), 2);
+        }
+        _ => panic!("Expected Bind"),
+    }
+
+    let entry_bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "entry"))
+        .expect("entry bind should exist");
+    match entry_bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Pipe(_, _, right) => {
+                assert_json_value_decode_helper_call(right.as_ref(), 1);
+            }
+            other => panic!("expected pipeline decode helper, got {:?}", other),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+fn assert_json_value_decode_helper_call(node: &Resolved, arity: usize) {
+    match node {
+        Resolved::App(_, func, args) => {
+            assert_eq!(args.len(), arity);
+            match func.as_ref() {
+                Resolved::Var(_, id) => {
+                    assert_eq!(id.name, "JsonValue::decode");
+                    assert_eq!(id.qualified_name.as_deref(), Some("Decode::Decode::decode"));
+                }
+                other => panic!("expected decode helper var, got {:?}", other),
+            }
+            let target_idx = arity - 1;
+            assert!(matches!(
+                &args[target_idx],
+                ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, AstTy::Named(_, name)))
+                    if name == "String"
+            ));
+        }
+        other => panic!("expected decode helper call, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_decode_and_encode_are_not_bare_helpers_without_autoimport() {
+    let module_stages = vec![
+        vec![staged_module(
+            "Decode",
+            parse_module_ast(
+                r#"deftrait Decode<$To> {
+  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+}"#,
+                "Decode",
+            ),
+        )],
+        vec![staged_module(
+            "Encode",
+            parse_module_ast(
+                r#"deftrait Encode<$To> {
+  def encode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+}"#,
+                "Encode",
+            ),
+        )],
+    ];
+
+    let decode_err = resolve_user_with_modules(r#"value = decode("{}", String)"#, &module_stages)
+        .expect_err("bare decode should not resolve without @autoimport");
+    assert!(
+        decode_err.message.contains("Undefined function decode/2"),
+        "unexpected error: {decode_err:?}"
+    );
+
+    let encode_err = resolve_user_with_modules(r#"value = encode("{}")"#, &module_stages)
+        .expect_err("bare encode should not resolve without @autoimport");
+    assert!(
+        encode_err.message.contains("Undefined function encode/1"),
+        "unexpected error: {encode_err:?}"
+    );
 }
 
 #[test]

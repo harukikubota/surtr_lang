@@ -1,15 +1,15 @@
 defrecord JsonSpecConfig(name: String, entrypoint: String)
 
-impl Decode<JsonFormat, JsonSpecConfig> for JsonValue {
-  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<JsonSpecConfig>) -> Result<JsonSpecConfig, Error> {
+impl Decode<JsonSpecConfig> for JsonValue {
+  def decode(self: Self, to: TypeRef<JsonSpecConfig>) -> Result<JsonSpecConfig, Error> {
     name_json =? Json::get(self, "name")
-    name =? decode(name_json, JsonFormat, String)
+    name =? JsonValue::decode(name_json, String)
     entry_json =? Json::get(self, "entrypoint")
-    entry =? entry_json |> decode(JsonFormat, String)
+    entry =? entry_json |> JsonValue::decode(String)
     Ok(JsonSpecConfig(name, entry))
   }
 }
 
-json =? "{\"name\":\"surtr\",\"entrypoint\":\"boot\"}" |> decode(JsonFormat, JsonValue)
-cfg =? decode(json, JsonFormat, JsonSpecConfig)
+json =? Json::decode("{\"name\":\"surtr\",\"entrypoint\":\"boot\"}")
+cfg =? JsonValue::decode(json, JsonSpecConfig)
 print(cfg.name ++ ":" ++ cfg.entrypoint)

@@ -868,6 +868,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         encode_helper_typechecks_as_generic_trait_call as fn(),
     ),
     (
+        "json_value_encode_source_alias_typechecks",
+        json_value_encode_source_alias_typechecks as fn(),
+    ),
+    (
         "decode_helper_typechecks_format_and_target_witnesses",
         decode_helper_typechecks_format_and_target_witnesses as fn(),
     ),
@@ -878,6 +882,14 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     (
         "decode_helper_allows_same_pattern_recursive_dispatch",
         decode_helper_allows_same_pattern_recursive_dispatch as fn(),
+    ),
+    (
+        "encode_helper_dispatches_to_receiver_impl_with_json_value_target",
+        encode_helper_dispatches_to_receiver_impl_with_json_value_target as fn(),
+    ),
+    (
+        "encode_helper_allows_same_pattern_recursive_dispatch",
+        encode_helper_allows_same_pattern_recursive_dispatch as fn(),
     ),
     (
         "from_helper_suggests_try_from_when_only_fallible_impl_exists",
@@ -5231,7 +5243,7 @@ fn try_from_helper_typechecks_as_generic_trait_call() {
 }
 
 fn encode_helper_typechecks_as_generic_trait_call() {
-    let typed = typecheck_with_builtin_prelude(r#"value = encode("hello", JsonFormat)"#);
+    let typed = typecheck_with_builtin_prelude(r#"value = Encode::encode("hello", JsonValue)"#);
     let rhs = typed
         .iter()
         .find_map(|node| match &node.node {
@@ -5252,9 +5264,9 @@ fn encode_helper_typechecks_as_generic_trait_call() {
             args,
             ..
         } => {
-            assert_eq!(trait_name, "Encode<JsonFormat>");
+            assert_eq!(trait_name, "Encode<JsonValue>");
             assert_eq!(method_name, "encode");
-            assert_eq!(name, "Encode<JsonFormat>::String::encode");
+            assert_eq!(name, "Encode<JsonValue>::String::encode");
             assert_eq!(receiver_ty, &scar::types::Ty::Str);
             assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
             assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
@@ -5263,8 +5275,22 @@ fn encode_helper_typechecks_as_generic_trait_call() {
     }
 }
 
+fn json_value_encode_source_alias_typechecks() {
+    let typed = typecheck_with_builtin_prelude(r#"value = JsonValue::encode("hello")"#);
+    let rhs = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+            _ => None,
+        })
+        .expect("bind rhs should exist");
+    assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
+}
+
 fn decode_helper_typechecks_format_and_target_witnesses() {
-    let typed = typecheck_with_builtin_prelude(r#"value = decode("null", JsonFormat, JsonValue)"#);
+    let typed = typecheck_with_builtin_prelude(
+        r#"value = JsonValue::decode(JsonValue::String("ok"), String)"#,
+    );
     let rhs = typed
         .iter()
         .find_map(|node| match &node.node {
@@ -5285,12 +5311,13 @@ fn decode_helper_typechecks_format_and_target_witnesses() {
             args,
             ..
         } => {
-            assert_eq!(trait_name, "Decode<JsonFormat, JsonValue>");
+            assert_eq!(trait_name, "Decode<String>");
             assert_eq!(method_name, "decode");
-            assert_eq!(name, "Decode<JsonFormat, JsonValue>::String::decode");
-            assert_eq!(receiver_ty, &scar::types::Ty::Str);
+            assert_eq!(name, "Decode<String>::JsonValue::decode");
+            assert!(
+                matches!(receiver_ty, scar::types::Ty::Enum(name, _) if name.ends_with("JsonValue"))
+            );
             assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
-            assert!(matches!(args[2].ty, scar::types::Ty::TypeRef(_)));
             assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
         }
         other => panic!("expected trait call, got {:?}", other),
@@ -5301,17 +5328,17 @@ fn decode_helper_inside_decode_impl_dispatches_by_receiver_and_witnesses() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord JsonSpecConfig(name: String, entrypoint: String)
 
-impl Decode<JsonFormat, JsonSpecConfig> for JsonValue {
-  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<JsonSpecConfig>) -> Result<JsonSpecConfig, Error> {
+impl Decode<JsonSpecConfig> for JsonValue {
+  def decode(self: Self, to: TypeRef<JsonSpecConfig>) -> Result<JsonSpecConfig, Error> {
     name_json =? Json::get(self, "name")
-    name =? decode(name_json, JsonFormat, String)
+    name =? JsonValue::decode(name_json, String)
     entry_json =? Json::get(self, "entrypoint")
-    entry =? entry_json |> decode(JsonFormat, String)
+    entry =? entry_json |> JsonValue::decode(String)
     Ok(JsonSpecConfig(name, entry))
   }
 }
 
-cfg = decode(JsonValue::Null, JsonFormat, JsonSpecConfig)"#,
+cfg = JsonValue::decode(JsonValue::Null, JsonSpecConfig)"#,
     );
     let mut calls = Vec::new();
     for node in &typed {
@@ -5320,7 +5347,7 @@ cfg = decode(JsonValue::Null, JsonFormat, JsonSpecConfig)"#,
     let string_decode_calls = calls
         .iter()
         .filter(|(trait_name, dispatch_name)| {
-            trait_name.as_str() == "Decode<JsonFormat, String>"
+            trait_name.as_str() == "Decode<String>"
                 && dispatch_name
                     .as_deref()
                     .is_some_and(|name| name.ends_with("JsonValue::decode"))
@@ -5332,7 +5359,7 @@ cfg = decode(JsonValue::Null, JsonFormat, JsonSpecConfig)"#,
     );
     assert!(
         calls.iter().any(|(trait_name, dispatch_name)| {
-            trait_name.as_str() == "Decode<JsonFormat, JsonSpecConfig>"
+            trait_name.as_str() == "Decode<JsonSpecConfig>"
                 && dispatch_name
                     .as_deref()
                     .is_some_and(|name| name.ends_with("JsonValue::decode"))
@@ -5345,9 +5372,61 @@ fn decode_helper_allows_same_pattern_recursive_dispatch() {
     typecheck_with_builtin_prelude(
         r#"defrecord JsonSpecRecursive(value: String)
 
-impl Decode<JsonFormat, JsonSpecRecursive> for JsonValue {
-  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<JsonSpecRecursive>) -> Result<JsonSpecRecursive, Error> {
-    decode(self, JsonFormat, JsonSpecRecursive)
+impl Decode<JsonSpecRecursive> for JsonValue {
+  def decode(self: Self, to: TypeRef<JsonSpecRecursive>) -> Result<JsonSpecRecursive, Error> {
+    JsonValue::decode(self, JsonSpecRecursive)
+  }
+}"#,
+    );
+}
+
+fn encode_helper_dispatches_to_receiver_impl_with_json_value_target() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord JsonSpecConfig(name: String, entrypoint: String)
+
+impl Encode<JsonValue> for JsonSpecConfig {
+  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+    Ok(JsonValue::String(self.name))
+  }
+}
+
+json = Encode::encode(JsonSpecConfig("surtr", "boot"), JsonValue)"#,
+    );
+    let rhs = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+            _ => None,
+        })
+        .expect("bind rhs should exist");
+    match &rhs.node {
+        TypedInner::TraitCall {
+            trait_name,
+            method_name,
+            dispatch:
+                scar::typed::TraitDispatch::Static(scar::typed::TraitDispatchTarget::UserFunction {
+                    name,
+                    ..
+                }),
+            args,
+            ..
+        } => {
+            assert_eq!(trait_name, "Encode<JsonValue>");
+            assert_eq!(method_name, "encode");
+            assert_eq!(name, "Encode<JsonValue>::Global::JsonSpecConfig::encode");
+            assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
+        }
+        other => panic!("expected trait call, got {:?}", other),
+    }
+}
+
+fn encode_helper_allows_same_pattern_recursive_dispatch() {
+    typecheck_with_builtin_prelude(
+        r#"defrecord JsonSpecRecursive(value: String)
+
+impl Encode<JsonValue> for JsonSpecRecursive {
+  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+    Encode::encode(self, JsonValue)
   }
 }"#,
     );

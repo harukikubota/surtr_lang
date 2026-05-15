@@ -1,18 +1,17 @@
 @doc """
 Standard `Decode` trait declaration.
-`Decode<$Format, $To>` converts `Self` into `$To` using a concrete format
-marker such as `JsonFormat`.
-The `format` and `to` parameters are signature-level TypeRef witness slots and
-are not meant to be observed at runtime.
-Because `decode(...)` is part of the shared format conversion surface, this
-trait is auto-imported when the standard prelude is loaded.
+`Decode<$To>` converts `Self` into `$To`.
+The `to` parameter is a signature-level TypeRef witness slot and is not meant
+to be observed at runtime.
+Format-specific value owners such as `JsonValue` expose their own helper
+surface, for example `JsonValue::decode(value, Target)`.
 
 ## REPL
-xldr(1)> decode("{\"name\":\"surtr\"}", JsonFormat, JsonValue)
+xldr(1)> json =? Json::decode("{\"name\":\"surtr\"}")
+xldr(2)> JsonValue::decode(json, String)
 Ok(Object(HashMap("name" => String("surtr"))))
 """
-@autoimport
-deftrait Decode<$Format, $To> {
-  # Convert the value into the requested target type for the requested format.
-  def decode(self: Self, format: TypeRef<$Format>, to: TypeRef<$To>) -> Result<$To, Error>
+deftrait Decode<$To> {
+  # Convert the value into the requested target type.
+  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
 }

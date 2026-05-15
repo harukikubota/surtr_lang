@@ -1,13 +1,4 @@
 @doc """
-Marker type for JSON Encode/Decode.
-This enum has one value-level variant only so it remains a normal source type
-while serving as a TypeRef marker at call sites.
-"""
-defenum JsonFormat {
-  Marker,
-}
-
-@doc """
 JSON abstract syntax tree used by the standard library.
 `Object` stores values in `HashMap<JsonValue>`, so keys are always `String`
 and visible ordering follows the `HashMap` deterministic key order.
@@ -49,6 +40,22 @@ defmod Json {
   Values that cannot be represented by JSON return `Err(JsonEncodeError(...))`.
   """
   @builtin def stringify(value: JsonValue) -> Result<String, JsonEncodeError>
+
+  @doc """
+  Decode JSON text into `JsonValue`.
+  This is the public text boundary wrapper around `Json::parse`.
+  """
+  def decode(text: String) -> Result<JsonValue, JsonParseError> {
+    Json::parse(text)
+  }
+
+  @doc """
+  Encode `JsonValue` into JSON text.
+  This is the public text boundary wrapper around `Json::stringify`.
+  """
+  def encode(value: JsonValue) -> Result<String, JsonEncodeError> {
+    Json::stringify(value)
+  }
 
   def get(value: JsonValue, key: String) -> Result<JsonValue, JsonDecodeError> {
     match value {
@@ -119,62 +126,73 @@ defmod Json {
   }
 }
 
-impl Decode<JsonFormat, JsonValue> for String {
-  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
-    Json::parse(self)
+impl JsonValue {
+  @doc """
+  Encode a typed value into `JsonValue`.
+  This source-level alias fixes the JSON target and dispatches through
+  `Encode<JsonValue> for typeof(value)`.
+  """
+  def encode<$T>(value: $T) -> Result<JsonValue, Error> {
+    Encode::encode(value, JsonValue)
   }
 }
 
-impl Decode<JsonFormat, String> for JsonValue {
-  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<String>) -> Result<String, Error> {
+impl Decode<JsonValue> for String {
+  def decode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+    Json::decode(self)
+  }
+}
+
+impl Decode<String> for JsonValue {
+  def decode(self: Self, to: TypeRef<String>) -> Result<String, Error> {
     Json::as_string(self)
   }
 }
 
-impl Decode<JsonFormat, Int> for JsonValue {
-  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<Int>) -> Result<Int, Error> {
+impl Decode<Int> for JsonValue {
+  def decode(self: Self, to: TypeRef<Int>) -> Result<Int, Error> {
     Json::as_int(self)
   }
 }
 
-impl Decode<JsonFormat, Float> for JsonValue {
-  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<Float>) -> Result<Float, Error> {
+impl Decode<Float> for JsonValue {
+  def decode(self: Self, to: TypeRef<Float>) -> Result<Float, Error> {
     Json::as_float(self)
   }
 }
 
-impl Decode<JsonFormat, Boolean> for JsonValue {
-  def decode(self: Self, format: TypeRef<JsonFormat>, to: TypeRef<Boolean>) -> Result<Boolean, Error> {
+impl Decode<Boolean> for JsonValue {
+  def decode(self: Self, to: TypeRef<Boolean>) -> Result<Boolean, Error> {
     Json::as_bool(self)
   }
 }
 
-impl Encode<JsonFormat> for JsonValue {
-  def encode(self: Self, format: TypeRef<JsonFormat>) -> Result<String, Error> {
-    Json::stringify(self)
+impl Encode<JsonValue> for JsonValue {
+  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+    Ok(self)
   }
 }
 
-impl Encode<JsonFormat> for String {
-  def encode(self: Self, format: TypeRef<JsonFormat>) -> Result<String, Error> {
-    Json::stringify(JsonValue::String(self))
+impl Encode<JsonValue> for String {
+  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+    Ok(JsonValue::String(self))
   }
 }
 
-impl Encode<JsonFormat> for Int {
-  def encode(self: Self, format: TypeRef<JsonFormat>) -> Result<String, Error> {
-    Json::stringify(JsonValue::Int(self))
+impl Encode<JsonValue> for Int {
+  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+    Ok(JsonValue::Int(self))
   }
 }
 
-impl Encode<JsonFormat> for Float {
-  def encode(self: Self, format: TypeRef<JsonFormat>) -> Result<String, Error> {
-    Json::stringify(JsonValue::Float(self))
+impl Encode<JsonValue> for Float {
+  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+    Ok(JsonValue::Float(self))
   }
 }
 
-impl Encode<JsonFormat> for Boolean {
-  def encode(self: Self, format: TypeRef<JsonFormat>) -> Result<String, Error> {
-    Json::stringify(JsonValue::Bool(self))
+impl Encode<JsonValue> for Boolean {
+  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+    Ok(JsonValue::Bool(self))
   }
 }
