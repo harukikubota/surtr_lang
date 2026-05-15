@@ -60,6 +60,7 @@ pub struct TypeDefInfo {
     pub kind: TypeKind,
     pub name: Symbol,
     pub type_params: Vec<Symbol>,
+    pub type_param_vars: Vec<u32>,
     pub fields: Vec<(Symbol, Ty)>,
     pub private_fields: HashSet<Symbol>,
     pub readonly_fields: HashSet<Symbol>,
@@ -221,6 +222,7 @@ impl TypeEnv {
                 kind,
                 name,
                 type_params,
+                type_param_vars: Vec::new(),
                 fields: Vec::new(),
                 private_fields: HashSet::new(),
                 readonly_fields: HashSet::new(),
@@ -238,6 +240,7 @@ impl TypeEnv {
         &mut self,
         name: &str,
         fields: Vec<(Symbol, Ty)>,
+        type_param_vars: Vec<u32>,
         private_fields: HashSet<Symbol>,
         readonly_fields: HashSet<Symbol>,
         readonly_root: bool,
@@ -245,6 +248,7 @@ impl TypeEnv {
         let key = canonical_type_key(name);
         let def = self.type_defs.get_mut(&key)?;
         def.fields = fields;
+        def.type_param_vars = type_param_vars;
         def.private_fields = private_fields;
         def.readonly_fields = readonly_fields;
         def.readonly_root = readonly_root;
@@ -392,6 +396,7 @@ mod tests {
         let resolved = env.resolve_type_def_signature(
             "ApiError",
             vec![("code".into(), Ty::Int), ("msg".into(), Ty::Str)],
+            Vec::new(),
             HashSet::new(),
             HashSet::new(),
             false,
@@ -414,6 +419,7 @@ mod tests {
         let resolved = env.resolve_type_def_signature(
             "Pair",
             vec![("first".into(), Ty::Int), ("second".into(), Ty::Str)],
+            Vec::new(),
             HashSet::new(),
             HashSet::new(),
             false,
@@ -437,6 +443,7 @@ mod tests {
         env.resolve_type_def_signature(
             "User",
             vec![("name".into(), Ty::Str), ("password".into(), Ty::Str)],
+            Vec::new(),
             HashSet::from(["password".into()]),
             HashSet::new(),
             false,
@@ -456,6 +463,7 @@ mod tests {
         env.resolve_type_def_signature(
             "Profile",
             vec![("name".into(), Ty::Str), ("score".into(), Ty::Int)],
+            Vec::new(),
             HashSet::new(),
             HashSet::from(["name".into()]),
             true,

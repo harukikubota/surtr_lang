@@ -19,14 +19,7 @@ impl Parser<'_> {
 
     fn wrap_optional_ty(&self, inner: AstTy, end: usize) -> AstTy {
         let start = Self::ast_ty_span(&inner).start;
-        AstTy::Generic(
-            Span { start, end },
-            "Result".to_string(),
-            vec![
-                inner,
-                AstTy::Named(Span { start, end }, "NoneError".to_string()),
-            ],
-        )
+        AstTy::Generic(Span { start, end }, "Option".to_string(), vec![inner])
     }
 
     fn parse_optional_type_suffix(&mut self, mut ty: AstTy) -> AstTy {

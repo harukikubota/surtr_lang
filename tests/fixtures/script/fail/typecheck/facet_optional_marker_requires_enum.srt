@@ -1,0 +1,3 @@
+defrecord User(name: String)
+user = User("alice")
+bad = Facet::set(User.name?, user, "bob")

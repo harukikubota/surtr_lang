@@ -1,0 +1,48 @@
+import Test;
+
+test("Range") {
+  describe("construction helpers") {
+    it("keeps new in declared order and normalized in ascending order") {
+      raw = Range(3, 1)
+      normalized = Range::normalized(3, 1)
+      assert_eq(((3, 1), (1, 3)), ((raw.min, raw.max), (normalized.min, normalized.max)))
+    }
+  }
+
+  describe("ordering helpers") {
+    it("uses lexicographic compare plus structural equality") {
+      left = Range(1, 4)
+      right = Range(2, 0)
+      same = Range(1, 4)
+      different = Range(1, 5)
+      assert_eq(
+        (Ordering::Less, Ordering::Equal, True, True),
+        (
+          compare(left, right),
+          compare(left, same),
+          left == same,
+          left != different,
+        ),
+      )
+    }
+  }
+
+  describe("movement helpers") {
+    it("advances and retreats integer ranges without renormalizing") {
+      raw = Range(3, 1)
+      advanced = Range::advance(raw, 2)
+      retreated = Range::retreat(raw, 2)
+      assert_eq(((5, 3), (1, -1)), ((advanced.min, advanced.max), (retreated.min, retreated.max)))
+    }
+  }
+
+  describe("pattern integration") {
+    it("supports Range(min, max) deconstruction") {
+      value = Range(4, 6)
+      assert_eq((4, 6), match value {
+        Range(min, max) => (min, max),
+        _ => (0, 0),
+      })
+    }
+  }
+}

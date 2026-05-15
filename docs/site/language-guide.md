@@ -196,7 +196,7 @@ def show_abs(x: impl Numeric) -> String {
 - trait は `deftrait Name<$T, ...> { ... }` のように型引数を取れる
 - 実装は `impl Numeric for Int { ... }` の形で書く
 - `+`, `-`, `*` は `Numeric` ではなく `Add` / `Sub` / `Mul` の dispatch
-- `Compare` は三値比較の正本で、`Ord` は互換 helper
+- `Compare` は三値比較の正本で、`< <= > >=` も `Compare` を前提に動く
 - trait 側の型引数を使う実装は `impl Trait<Concrete> for Type { ... }` の形で書く
 - `impl Trait` は parameter 位置だけで使える
 - 戻り値でも同じ型を使いたいときは `<$N: Numeric>` のように名前付き bound を使う
@@ -790,7 +790,7 @@ not_fn = &`Boolean::not`
 現在の Surtr では、標準定義ソースを次の順で先に読み込みます。
 
 ```text
-Bootstrap -> [SpecialTypes, Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Facet, Float] -> user source
+Bootstrap -> [SpecialTypes, Kernel, Numeric, Show, Eq, Ordering, Compare, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Facet, Float] -> user source
 ```
 
 役割の分け方は次のとおりです。
@@ -810,7 +810,7 @@ Bootstrap -> [SpecialTypes, Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, C
   - `Int` や `String` のような型ごとの helper と説明
   - その型自身の `@builtin type` 宣言
 
-auto import されるのは `Bootstrap`, `Kernel`、`@autoimport impl Result` の helper surface と、`@autoimport` が付いた標準 trait です。  
+auto import されるのは `Bootstrap`, `Kernel`、`@autoimport` が付いた標準 `impl Type` owner helper surface と、`@autoimport` が付いた標準 trait です。  
 他の type module も標準定義ソースとして一緒にロードされますが、名前空間としては別レイヤーで保ちます。
 
 ## 13. `@doc` と source ドキュメント

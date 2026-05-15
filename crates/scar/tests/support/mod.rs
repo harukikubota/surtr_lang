@@ -20,11 +20,6 @@ const SHOW_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/show.srt")
 const EQ_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/eq.srt");
 const NEQ_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/neq.srt");
 const COMPARE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/compare.srt");
-const LT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/lt.srt");
-const LTE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/lte.srt");
-const GT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/gt.srt");
-const GTE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/gte.srt");
-const ORD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/ord.srt");
 const CONCAT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/concat.srt");
 const FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/from.srt");
 const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/try_from.srt");
@@ -62,6 +57,7 @@ impl Generator {}"#;
 const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../../lib/types/hash_map.srt");
 const RESULT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/result.srt");
 const DURATION_MODULE_SOURCE: &str = include_str!("../../../../lib/types/duration.srt");
+const RANGE_MODULE_SOURCE: &str = include_str!("../../../../lib/types/range.srt");
 const PROCESS_MODULE_SOURCE: &str = include_str!("../../../../lib/process.srt");
 const FACET_MODULE_SOURCE: &str = include_str!("../../../../lib/facet.srt");
 const FLOAT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/float.srt");
@@ -416,10 +412,6 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
                 "Compare",
                 pick_override("Compare", COMPARE_MODULE_SOURCE, overrides),
             ),
-            ("Lt", pick_override("Lt", LT_MODULE_SOURCE, overrides)),
-            ("Lte", pick_override("Lte", LTE_MODULE_SOURCE, overrides)),
-            ("Gt", pick_override("Gt", GT_MODULE_SOURCE, overrides)),
-            ("Gte", pick_override("Gte", GTE_MODULE_SOURCE, overrides)),
             (
                 "Concat",
                 pick_override("Concat", CONCAT_MODULE_SOURCE, overrides),
@@ -437,7 +429,6 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
                 "Tuple",
                 pick_override("Tuple", TUPLE_MODULE_SOURCE, overrides),
             ),
-            ("Ord", pick_override("Ord", ORD_MODULE_SOURCE, overrides)),
             ("From", pick_override("From", FROM_MODULE_SOURCE, overrides)),
             (
                 "TryFrom",
@@ -520,6 +511,10 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
             (
                 "Duration",
                 pick_override("Duration", DURATION_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Range",
+                pick_override("Range", RANGE_MODULE_SOURCE, overrides),
             ),
             (
                 "Process",

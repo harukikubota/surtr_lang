@@ -2,6 +2,7 @@ use super::scope_init::initialize_scope;
 use super::scope_init::is_doc_only_builtin_decl;
 use super::*;
 use sindr::builtin::{builtin_type_meta_by_name, builtin_type_supports_inherent_impl};
+use spire::ast::FacetPathSegment;
 
 use serde::{Deserialize, Serialize};
 
@@ -190,7 +191,7 @@ pub(super) fn collect_stage_impl_target_resolutions(
     for module in stage {
         for stmt in &module.ast {
             let (name, kind) = match stmt {
-                Ast::StructDef(_, name, _, _) => (name, DeclarationKind::Struct),
+                Ast::StructDef(_, name, ..) => (name, DeclarationKind::Struct),
                 Ast::EnumDef(_, name, _, _, _) => (name, DeclarationKind::Enum),
                 Ast::RecordDef(_, name, _, _) => (name, DeclarationKind::Record),
                 Ast::DeferrorDef(_, name, _, _, _) => (name, DeclarationKind::Deferror),
@@ -404,6 +405,18 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
         ),
         Ast::FieldAccess(span, expr, field) => {
             Ast::FieldAccess(span, Box::new(rewrite_self_ast(*expr, target)), field)
+        }
+        Ast::FacetSegmentAccess(span, expr, segment) => {
+            let segment = match segment {
+                FacetPathSegment::Field { .. } => segment,
+                FacetPathSegment::Bracket(expr) => {
+                    FacetPathSegment::Bracket(spire::ast::FacetBracketExpr {
+                        expr: Box::new(rewrite_self_ast(*expr.expr, target)),
+                        display: expr.display,
+                    })
+                }
+            };
+            Ast::FacetSegmentAccess(span, Box::new(rewrite_self_ast(*expr, target)), segment)
         }
         Ast::StructLit(span, name, fields) => Ast::StructLit(
             span,
@@ -1022,7 +1035,7 @@ pub fn precollect_declaration_index(
                             entry_user_importable(attrs),
                             entry_user_callable(attrs),
                         ),
-                        Ast::StructDef(span, name, _, _) => (
+                        Ast::StructDef(span, name, ..) => (
                             span,
                             name.as_str(),
                             DeclarationKind::Struct,
@@ -1059,7 +1072,7 @@ pub fn precollect_declaration_index(
 
                 if matches!(
                     stmt,
-                    Ast::StructDef(_, name, _, _)
+                    Ast::StructDef(_, name, ..)
                         | Ast::RecordDef(_, name, _, _)
                         | Ast::DeferrorDef(_, name, _, _, _)
                         if is_reserved_builtin_type_redefinition(name)
@@ -1163,7 +1176,7 @@ impl Resolver {
             let mut local_targets = HashMap::new();
             for stmt in &stmts {
                 let (name, kind) = match stmt {
-                    Ast::StructDef(_, name, _, _) => (name, DeclarationKind::Struct),
+                    Ast::StructDef(_, name, ..) => (name, DeclarationKind::Struct),
                     Ast::EnumDef(_, name, _, _, _) => (name, DeclarationKind::Enum),
                     Ast::RecordDef(_, name, _, _) => (name, DeclarationKind::Record),
                     Ast::DeferrorDef(_, name, _, _, _) => (name, DeclarationKind::Deferror),
@@ -1369,8 +1382,11 @@ impl Resolver {
                                 ));
                             }
                             Ast::IntrinsicDecl(method_span, method_name, signature, attrs) => {
-                                let lowered_name =
-                                    lower_impl_member_name(lowered_module_path, &target, &method_name);
+                                let lowered_name = lower_impl_member_name(
+                                    lowered_module_path,
+                                    &target,
+                                    &method_name,
+                                );
                                 lowered.push(Ast::IntrinsicDecl(
                                     method_span,
                                     lowered_name,
@@ -1712,7 +1728,7 @@ impl Resolver {
                     self.scope.define_with_id(&head.name, uid);
                     define_surface_alias(&mut self.scope, &head.name, uid);
                 }
-                Ast::StructDef(span, name, _, _)
+                Ast::StructDef(span, name, ..)
                 | Ast::RecordDef(span, name, _, _)
                 | Ast::DeferrorDef(span, name, _, _, _) => {
                     let surface = surface_name(name).to_string();

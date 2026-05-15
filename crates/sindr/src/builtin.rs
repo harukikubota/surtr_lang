@@ -155,6 +155,11 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Result<$T>, Result<()>) -> Result<$T>",
     },
     BuiltinMeta {
+        name: "__recover_kind",
+        arity: 3,
+        sig_str: "(Result<$T>, String, (Error -> Result<$T>)) -> Result<$T>",
+    },
+    BuiltinMeta {
         name: "__test_push",
         arity: 2,
         sig_str: "(String, String) -> Unit",
@@ -250,12 +255,12 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Facet<$S, $A>, $S) -> Result<$A>",
     },
     BuiltinMeta {
-        name: "compose",
+        name: "__facet_chain",
         arity: 2,
         sig_str: "(Facet<$S, $A>, Facet<$A, $B>) -> Facet<$S, $B>",
     },
     BuiltinMeta {
-        name: "__facet_replace",
+        name: "__facet_put",
         arity: 3,
         sig_str: "(Facet<$S, $A>, $S, $A) -> $S",
     },
@@ -273,6 +278,46 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         name: "over_result",
         arity: 3,
         sig_str: "(Facet<$S, Result<$A>>, $S, (Result<$A> -> Result<Result<$A>>)) -> Result<$S>",
+    },
+    BuiltinMeta {
+        name: "case_set",
+        arity: 3,
+        sig_str: "(Facet<$S, $A>, $S, $A) -> Result<$S>",
+    },
+    BuiltinMeta {
+        name: "case_over",
+        arity: 3,
+        sig_str: "(Facet<$S, $A>, $S, ($A -> Result<$A>)) -> Result<$S>",
+    },
+    BuiltinMeta {
+        name: "__facet_list_get",
+        arity: 2,
+        sig_str: "(List<$A>, Int) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "__facet_list_set",
+        arity: 3,
+        sig_str: "(List<$A>, Int, $A) -> Result<List<$A>>",
+    },
+    BuiltinMeta {
+        name: "__facet_list_slice_get",
+        arity: 3,
+        sig_str: "(List<$A>, Int, Int) -> Result<List<$A>>",
+    },
+    BuiltinMeta {
+        name: "__facet_list_slice_set",
+        arity: 4,
+        sig_str: "(List<$A>, Int, Int, List<$A>) -> Result<List<$A>>",
+    },
+    BuiltinMeta {
+        name: "__facet_map_get",
+        arity: 2,
+        sig_str: "(HashMap<$A>, String) -> Result<$A>",
+    },
+    BuiltinMeta {
+        name: "__facet_map_set_existing",
+        arity: 3,
+        sig_str: "(HashMap<$A>, String, $A) -> Result<HashMap<$A>>",
     },
     BuiltinMeta {
         name: "__test_capture_stdout",
@@ -861,6 +906,36 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Float, Float) -> Boolean",
     },
     BuiltinMeta {
+        name: "__compare_int",
+        arity: 2,
+        sig_str: "(Int, Int) -> Ordering",
+    },
+    BuiltinMeta {
+        name: "__compare_float",
+        arity: 2,
+        sig_str: "(Float, Float) -> Ordering",
+    },
+    BuiltinMeta {
+        name: "__ordering_is_lt",
+        arity: 1,
+        sig_str: "(Ordering) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__ordering_is_lte",
+        arity: 1,
+        sig_str: "(Ordering) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__ordering_is_gt",
+        arity: 1,
+        sig_str: "(Ordering) -> Boolean",
+    },
+    BuiltinMeta {
+        name: "__ordering_is_gte",
+        arity: 1,
+        sig_str: "(Ordering) -> Boolean",
+    },
+    BuiltinMeta {
         name: "__operator_string_eq",
         arity: 2,
         sig_str: "(String, String) -> Boolean",
@@ -1085,7 +1160,8 @@ pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&
         Some("String::replace") => "string_replace",
         Some("Json::parse") => "json_parse",
         Some("Json::stringify") => "json_stringify",
-        Some("Facet::replace") => "__facet_replace",
+        Some("Facet::chain") => "__facet_chain",
+        Some("Facet::put") => "__facet_put",
         Some("Process::self") => "__process_self",
         Some("Process::sleep") => "__process_sleep",
         Some("Agent::pid") => "__process_pid",
@@ -1175,22 +1251,26 @@ mod tests {
     }
 
     #[test]
-    fn qualified_replace_builtins_resolve_to_distinct_runtime_names() {
+    fn qualified_put_builtins_resolve_to_distinct_runtime_names() {
+        assert_eq!(
+            builtin_runtime_name("chain", Some("Facet::chain")),
+            "__facet_chain"
+        );
         assert_eq!(
             builtin_runtime_name("replace", Some("String::replace")),
             "string_replace"
         );
         assert_eq!(
-            builtin_runtime_name("replace", Some("Facet::replace")),
-            "__facet_replace"
+            builtin_runtime_name("put", Some("Facet::put")),
+            "__facet_put"
         );
         assert_eq!(
             builtin_runtime_name("replace", Some("Regex::replace")),
             "__regex_replace"
         );
         assert_eq!(
-            builtin_meta_for_decl("replace", Some("Facet::replace"))
-                .expect("facet replace builtin metadata")
+            builtin_meta_for_decl("put", Some("Facet::put"))
+                .expect("facet put builtin metadata")
                 .sig_str,
             "(Facet<$S, $A>, $S, $A) -> $S"
         );

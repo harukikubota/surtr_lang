@@ -1,0 +1,53 @@
+defrecord ScoreBook(scores: List<Int>, by_kind: HashMap<Int>, nick: String?)
+defrecord ResultBook(nick: Result<String>?)
+
+def inc(n: Int) -> Result<Int> { Ok(n + 1) }
+def bang(name: String) -> Result<String> { Ok(name ++ "!") }
+def keep(value: Result<String>) -> Result<Result<String>> { Ok(value) }
+
+values = [10, 20]
+map = HashMap::from_entries([("talk", 80)])
+pair = ("alice", 42)
+book = ScoreBook(values, map, Option::None)
+
+print(inspect(Facet::view(Tuple._1, pair)))
+print(inspect(Facet::view(List.[1], values)))
+print(inspect(Facet::view(HashMap.["talk"], map)))
+print(inspect(values.[1]))
+print(inspect(map.["talk"]))
+print(inspect(Facet::view(ScoreBook.scores.[1], book)))
+print(inspect(Facet::view(ScoreBook.by_kind.["talk"], book)))
+print(inspect(Facet::view(~book.scores.[0])))
+print(inspect(Facet::view(ScoreBook.scores / List.[0], book)))
+
+get_first: (List<Int> -> Result<Int>) = &List.[0]
+get_talk: (HashMap<Int> -> Result<Int>) = &HashMap.["talk"]
+print(inspect(get_first(values)))
+print(inspect(get_talk(map)))
+
+book2 =? Facet::set(ScoreBook.scores.[0], book, 99)
+book3 =? Facet::over(ScoreBook.by_kind.["talk"], book2, &inc)
+book4 =? Facet::case_set(ScoreBook.nick.Some, book3, "alice")
+book5 =? Facet::case_over(ScoreBook.nick.Some?, book4, &bang)
+book6 =? Facet::case_over(ScoreBook.nick.Some?, ScoreBook(book5.scores, book5.by_kind, Option::None), &bang)
+
+print(inspect(book5.scores))
+print(inspect(HashMap::get(book5.by_kind, "talk")))
+print(inspect(book5.nick))
+print(inspect(book6.nick))
+
+book7 =? Facet::bulk_update(book5) {
+  scores.[1] <- set(25)
+  by_kind.["talk"] <- over(&inc)
+  nick.Some? <- case_over(&bang)
+}
+result_book = ResultBook(Option::Some(Ok("alice")))
+result_book2 =? Facet::case_over(ResultBook.nick.Some, result_book, &bang)
+result_book3 =? Facet::case_over(ResultBook.nick.Some, result_book2, &keep)
+result_book4 =? Facet::case_over(ResultBook.nick.Some, ResultBook(Option::Some(Err(NoneError))), &bang)
+
+print(inspect(book7.scores))
+print(inspect(HashMap::get(book7.by_kind, "talk")))
+print(inspect(book7.nick))
+print(inspect(result_book3.nick))
+print(inspect(result_book4.nick))

@@ -1,7 +1,57 @@
 use super::*;
 use sindr::builtin::builtin_type_meta_by_name;
+use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
+
+static SYNTHETIC_DEFAULT_METHOD_UID: AtomicU32 = AtomicU32::new(0x6000_0000);
 
 impl Checker {
+    fn next_synthetic_default_method_uid() -> u32 {
+        SYNTHETIC_DEFAULT_METHOD_UID.fetch_add(1, AtomicOrdering::Relaxed)
+    }
+
+    fn synthetic_default_method_symbol(
+        trait_instance_key: &str,
+        target_name: &str,
+        method_name: &str,
+    ) -> String {
+        fn sanitize(segment: &str) -> String {
+            segment
+                .chars()
+                .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                .collect()
+        }
+
+        format!(
+            "__default__{}__{}__{}",
+            sanitize(trait_instance_key),
+            sanitize(target_name),
+            sanitize(method_name)
+        )
+    }
+
+    fn trait_method_display_name(trait_id: &ResolvedId, method_name: &str) -> String {
+        format!("{}::{}", Self::surface_name(&trait_id.name), method_name)
+    }
+
+    fn synthesized_default_method_id(
+        &self,
+        trait_instance_key: &str,
+        _trait_id: &ResolvedId,
+        target_name: &str,
+        method_name: &str,
+        span: &Span,
+    ) -> ResolvedId {
+        let qualified_name =
+            Self::synthetic_default_method_symbol(trait_instance_key, target_name, method_name);
+        ResolvedId {
+            name: method_name.to_string(),
+            qualified_name: Some(qualified_name),
+            unique_id: Self::next_synthetic_default_method_uid(),
+            compiler_generated: true,
+            span: span.clone(),
+        }
+    }
+
     fn struct_new_contract_error(
         &self,
         struct_name: &str,
@@ -43,6 +93,35 @@ impl Checker {
         }
     }
 
+    fn const_facet_segment_is_allowed(&self, segment: &ResolvedFacetPathSegment) -> bool {
+        match segment {
+            ResolvedFacetPathSegment::Field { .. } => true,
+            ResolvedFacetPathSegment::Bracket(expr) => match expr.expr.as_ref() {
+                Resolved::Lit(_, Lit::Int(_) | Lit::Str(_)) => true,
+                Resolved::RangeLiteral(_, start, end) => matches!(
+                    (start.as_ref(), end.as_ref()),
+                    (Resolved::Lit(_, Lit::Int(_)), Resolved::Lit(_, Lit::Int(_)))
+                ),
+                _ => false,
+            },
+        }
+    }
+
+    fn const_has_dynamic_bracket_segment(&self, value: &Resolved) -> bool {
+        match value {
+            Resolved::FieldAccess(_, inner, _) => self.const_has_dynamic_bracket_segment(inner),
+            Resolved::FacetSegmentAccess(_, inner, segment) => {
+                self.const_has_dynamic_bracket_segment(inner)
+                    || !self.const_facet_segment_is_allowed(segment)
+            }
+            Resolved::BinOp(_, BinOp::Slash, left, right) => {
+                self.const_has_dynamic_bracket_segment(left)
+                    || self.const_has_dynamic_bracket_segment(right)
+            }
+            _ => false,
+        }
+    }
+
     fn const_surface_is_allowed(&self, value: &Resolved) -> bool {
         match value {
             Resolved::Lit(_, _) => true,
@@ -51,6 +130,9 @@ impl Checker {
                 .get(&id.unique_id)
                 .is_none_or(|meta| matches!(meta.kind, ConstKind::FacetPath)),
             Resolved::FieldAccess(_, inner, _) => self.const_surface_is_allowed(inner),
+            Resolved::FacetSegmentAccess(_, inner, segment) => {
+                self.const_surface_is_allowed(inner) && self.const_facet_segment_is_allowed(segment)
+            }
             Resolved::InferredFacetCapture(_, _) => false,
             Resolved::BinOp(_, BinOp::Slash, left, right) => {
                 self.const_surface_is_allowed(left) && self.const_surface_is_allowed(right)
@@ -66,6 +148,17 @@ impl Checker {
             };
 
             if !self.const_surface_is_allowed(value) {
+                if self.const_has_dynamic_bracket_segment(value) {
+                    return Err(TypeError {
+                        message:
+                            "const Facet path bracket segments must use literal Int or String values"
+                                .into(),
+                        span: span.clone(),
+                        hint: Some(
+                            "Use literal container keys in const Facet paths and keep dynamic bracket expressions in local bindings or Facet API calls.".into(),
+                        ),
+                    });
+                }
                 return Err(TypeError {
                     message: "const value must be a primitive literal or a facet path".into(),
                     span: span.clone(),
@@ -126,9 +219,15 @@ impl Checker {
         // Pass 1: reserve deterministic tags for all user-defined types.
         for stmt in stmts {
             let maybe_decl = match stmt {
-                Resolved::StructDef(_, id, _, _) => {
-                    Some((&id.name, &id.span, TypeKind::Struct, Vec::new()))
-                }
+                Resolved::StructDef(_, id, type_params, _, _) => Some((
+                    &id.name,
+                    &id.span,
+                    TypeKind::Struct,
+                    type_params
+                        .iter()
+                        .map(|param| param.name.clone())
+                        .collect::<Vec<_>>(),
+                )),
                 Resolved::RecordDef(_, id, _) => {
                     Some((&id.name, &id.span, TypeKind::Record, Vec::new()))
                 }
@@ -186,12 +285,17 @@ impl Checker {
         // Pass 2: finalize field signatures and constructor-like bindings.
         for stmt in stmts {
             match stmt {
-                Resolved::StructDef(_, id, fields, attrs) => {
+                Resolved::StructDef(_, id, type_params, fields, attrs) => {
+                    let mut tyvars = HashMap::new();
+                    self.seed_signature_type_params(type_params, &mut tyvars);
                     let ty_fields = fields
                         .iter()
                         .map(|f| {
-                            let field_ty =
-                                self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?;
+                            let field_ty = self.resolve_signature_ast_ty_in_context(
+                                &f.ty,
+                                TypeSyntaxContext::General,
+                                &mut tyvars,
+                            )?;
                             if self.ty_contains_process_init(&field_ty) {
                                 return Err(TypeError {
                                     message:
@@ -214,10 +318,18 @@ impl Checker {
                         .filter(|field| field.readonly)
                         .map(|field| field.name.clone())
                         .collect::<HashSet<_>>();
+                    let type_param_vars = type_params
+                        .iter()
+                        .filter_map(|param| match tyvars.get(&param.name) {
+                            Some(Ty::Var(var)) => Some(*var),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
                     self.env
                         .resolve_type_def_signature(
                             &id.name,
                             ty_fields.clone(),
+                            type_param_vars,
                             private_fields,
                             readonly_fields,
                             attrs.readonly,
@@ -258,6 +370,7 @@ impl Checker {
                         .resolve_type_def_signature(
                             &id.name,
                             ty_fields.clone(),
+                            Vec::new(),
                             private_fields,
                             HashSet::new(),
                             false,
@@ -290,6 +403,7 @@ impl Checker {
                         .resolve_type_def_signature(
                             &id.name,
                             ty_fields,
+                            Vec::new(),
                             private_fields,
                             HashSet::new(),
                             false,
@@ -305,6 +419,7 @@ impl Checker {
                         .env
                         .resolve_type_def_signature(
                             &id.name,
+                            Vec::new(),
                             Vec::new(),
                             HashSet::new(),
                             HashSet::new(),
@@ -419,7 +534,7 @@ impl Checker {
 
         for stmt in stmts {
             match stmt {
-                Resolved::StructDef(_, id, fields, _)
+                Resolved::StructDef(_, id, _, fields, _)
                 | Resolved::RecordDef(_, id, fields)
                 | Resolved::DeferrorDef(_, id, fields, _) => {
                     decl_spans.insert(id.name.clone(), id.span.clone());
@@ -670,7 +785,9 @@ impl Checker {
         let mut structs_with_new: HashSet<String> = HashSet::new();
 
         for stmt in stmts {
-            if let Resolved::StructDef(_, id, fields, _attrs) = stmt {
+            if let Resolved::StructDef(_, id, type_params, fields, _attrs) = stmt {
+                let mut tyvars = HashMap::new();
+                self.seed_signature_type_params(type_params, &mut tyvars);
                 let expected_self_ty = Ty::Struct(
                     id.name.clone(),
                     fields
@@ -678,9 +795,10 @@ impl Checker {
                         .map(|field| {
                             Ok((
                                 field.name.clone(),
-                                self.resolve_ast_ty_in_context(
+                                self.resolve_signature_ast_ty_in_context(
                                     &field.ty,
                                     TypeSyntaxContext::General,
+                                    &mut tyvars,
                                 )?,
                             ))
                         })
@@ -940,10 +1058,7 @@ impl Checker {
 
     fn compiler_trait_target_names(&self, trait_name: &str) -> &'static [&'static str] {
         if self.trait_matches_short_name(trait_name, "Add")
-            || self.trait_matches_short_name(trait_name, "Lt")
-            || self.trait_matches_short_name(trait_name, "Lte")
-            || self.trait_matches_short_name(trait_name, "Gt")
-            || self.trait_matches_short_name(trait_name, "Gte")
+            || self.trait_matches_short_name(trait_name, "Compare")
         {
             return &["Float", "Int"];
         }
@@ -972,8 +1087,8 @@ impl Checker {
         let display = Self::surface_ast_ty_key(&info.target_ast_ty);
         let base = display.split('<').next().unwrap_or(display.as_str());
         match base {
-            "TypeRef" | "Hole" | "Closure" | "MatchArms" | "CondClauses"
-            | "BulkUpdateEntries" | "Self" => None,
+            "TypeRef" | "Hole" | "Closure" | "MatchArms" | "CondClauses" | "BulkUpdateEntries"
+            | "Self" => None,
             _ => Some(display),
         }
     }
@@ -1117,16 +1232,29 @@ impl Checker {
                 Some(BinOp::Sub)
             } else if self.trait_matches_short_name(trait_name, "Mul") && method_name == "mul" {
                 Some(BinOp::Mul)
-            } else if self.trait_matches_short_name(trait_name, "Lt") && method_name == "lt" {
-                Some(BinOp::Lt)
-            } else if self.trait_matches_short_name(trait_name, "Lte") && method_name == "lte" {
-                Some(BinOp::Lte)
-            } else if self.trait_matches_short_name(trait_name, "Gt") && method_name == "gt" {
-                Some(BinOp::Gt)
-            } else if self.trait_matches_short_name(trait_name, "Gte") && method_name == "gte" {
-                Some(BinOp::Gte)
             } else {
                 None
+            };
+            if let Some(op) = op {
+                return Some(TraitDispatchTarget::BinOp(op));
+            }
+        }
+        if self.trait_matches_short_name(trait_name, "Compare") && method_name == "compare" {
+            return match target_name {
+                "Int" => Some(TraitDispatchTarget::Builtin("__compare_int".into())),
+                "Float" => Some(TraitDispatchTarget::Builtin("__compare_float".into())),
+                _ => None,
+            };
+        }
+        if self.trait_matches_short_name(trait_name, "Compare")
+            && matches!(target_name, "Int" | "Float")
+        {
+            let op = match method_name {
+                "lt" => Some(BinOp::Lt),
+                "lte" => Some(BinOp::Lte),
+                "gt" => Some(BinOp::Gt),
+                "gte" => Some(BinOp::Gte),
+                _ => None,
             };
             if let Some(op) = op {
                 return Some(TraitDispatchTarget::BinOp(op));
@@ -1376,6 +1504,8 @@ impl Checker {
                         type_params: method.type_params.clone(),
                         params: method.params.clone(),
                         ret_ty: method.ret_ty.clone(),
+                        attrs: method.attrs.clone(),
+                        body: method.body.clone(),
                         span: method.span.clone(),
                     },
                 );
@@ -1441,6 +1571,7 @@ impl Checker {
                         body: method.body.clone(),
                         attrs: method.attrs.clone(),
                         span: method.span.clone(),
+                        display_name_override: None,
                         dispatch_override: self.trait_dispatch_override(
                             &trait_instance_key,
                             &method.method_name,
@@ -1451,8 +1582,11 @@ impl Checker {
                 );
             }
 
-            for required_method in trait_info.methods.keys() {
-                if !method_map.contains_key(required_method) {
+            for (required_method, trait_method) in &trait_info.methods {
+                if method_map.contains_key(required_method) {
+                    continue;
+                }
+                let Some(default_body) = trait_method.body.clone() else {
                     return Err(TypeError {
                         message: format!(
                             "Trait impl {} for {} is missing method `{}`",
@@ -1461,7 +1595,36 @@ impl Checker {
                         span: span.clone(),
                         hint: None,
                     });
-                }
+                };
+                method_map.insert(
+                    required_method.clone(),
+                    TraitImplMethodInfo {
+                        method_name: required_method.clone(),
+                        function_id: self.synthesized_default_method_id(
+                            &trait_instance_key,
+                            &trait_info.id,
+                            &target_name,
+                            required_method,
+                            &trait_method.span,
+                        ),
+                        type_params: trait_method.type_params.clone(),
+                        params: trait_method.params.clone(),
+                        ret_ty: None,
+                        body: default_body,
+                        attrs: trait_method.attrs.clone(),
+                        span: trait_method.span.clone(),
+                        display_name_override: Some(Self::trait_method_display_name(
+                            &trait_info.id,
+                            required_method,
+                        )),
+                        dispatch_override: self.trait_dispatch_override(
+                            &trait_instance_key,
+                            required_method,
+                            &target_name,
+                        ),
+                        is_builtin: false,
+                    },
+                );
             }
 
             for method_name in method_map.keys() {
@@ -1619,19 +1782,26 @@ impl Checker {
 
     pub(super) fn predeclare_functions(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
         let mut fun_idx = self.env.next_fun_idx;
-        let trait_impl_method_ids_in_stmts = stmts
-            .iter()
-            .filter_map(|stmt| match stmt {
-                Resolved::TraitImplDef(_, _, _, _, methods) => Some(
-                    methods
-                        .iter()
-                        .map(|method| method.function_id.unique_id)
-                        .collect::<Vec<_>>(),
-                ),
-                _ => None,
-            })
-            .flatten()
-            .collect::<HashSet<_>>();
+        let mut trait_impl_keys_in_stmts = HashSet::new();
+
+        for stmt in stmts {
+            let Resolved::TraitImplDef(_, trait_id, trait_args, target_ast_ty, _) = stmt else {
+                continue;
+            };
+            let (_, target_ty, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
+            let target_name =
+                self.trait_target_name(&target_ty).ok_or_else(|| {
+                    TypeError {
+                message:
+                    "trait impl target must be a concrete named type, tuple type, or function type"
+                        .into(),
+                span: Self::ast_ty_span(target_ast_ty).clone(),
+                hint: None,
+            }
+                })?;
+            trait_impl_keys_in_stmts
+                .insert((self.trait_instance_key(trait_id, trait_args), target_name));
+        }
 
         for stmt in stmts {
             match stmt {
@@ -1845,6 +2015,13 @@ impl Checker {
         });
 
         for trait_impl in trait_impls {
+            let impl_key = (
+                self.trait_instance_key(&trait_impl.trait_id, &trait_impl.trait_args),
+                trait_impl.target_name.clone(),
+            );
+            if !trait_impl_keys_in_stmts.contains(&impl_key) {
+                continue;
+            }
             let trait_key = self.trait_key(&trait_impl.trait_id);
             let trait_info = self
                 .traits
@@ -1859,9 +2036,6 @@ impl Checker {
             methods.sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
 
             for (method_name, method) in methods {
-                if !trait_impl_method_ids_in_stmts.contains(&method.function_id.unique_id) {
-                    continue;
-                }
                 if method.is_builtin {
                     continue;
                 }

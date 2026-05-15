@@ -120,7 +120,7 @@ fn ast_decl_attrs(ast: &Ast) -> Option<&DeclAttrs> {
         | Ast::BuiltinExtractorDecl(_, _, _, _, attrs)
         | Ast::BuiltinTypeDecl(_, _, attrs)
         | Ast::ResultCtorDecl(_, _, _, _, attrs)
-        | Ast::StructDef(_, _, _, attrs)
+        | Ast::StructDef(_, _, _, _, attrs)
         | Ast::RecordDef(_, _, _, attrs)
         | Ast::DeferrorDef(_, _, _, _, attrs)
         | Ast::EnumDef(_, _, _, _, attrs)
@@ -309,6 +309,9 @@ fn rewrite_process_self_refs(node: Ast) -> Ast {
         ),
         Ast::FieldAccess(span, expr, field) => {
             Ast::FieldAccess(span, Box::new(rewrite_process_self_refs(*expr)), field)
+        }
+        Ast::FacetSegmentAccess(span, expr, segment) => {
+            Ast::FacetSegmentAccess(span, Box::new(rewrite_process_self_refs(*expr)), segment)
         }
         Ast::FacetCapture(span, expr) => {
             Ast::FacetCapture(span, Box::new(rewrite_process_self_refs(*expr)))
@@ -2276,13 +2279,33 @@ impl Parser<'_> {
             if matches!(self.peek(), Token::Eof) {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
+            let mut method_attrs = DeclAttrs::default();
+            let mut method_annotator_start = None;
+            while let Token::Annotator(name) = self.peek().clone() {
+                let annotator_span = self.peek_span();
+                if method_annotator_start.is_none() {
+                    method_annotator_start = Some(annotator_span.start);
+                }
+                self.advance();
+                self.skip_newlines();
+                match name.as_str() {
+                    "doc" => parse_doc_attr_in_place(self, &mut method_attrs)?,
+                    _ => {
+                        return Err(ParseError::syntax(
+                            "Only @doc is allowed before trait methods",
+                            annotator_span,
+                        ));
+                    }
+                }
+                self.skip_newlines();
+            }
             if !matches!(self.peek(), Token::Def) {
                 return Err(ParseError::syntax(
                     "trait body may only contain `def` signatures",
                     self.peek_span(),
                 ));
             }
-            let method = self.parse_trait_method_sig()?;
+            let method = self.parse_trait_method_sig(method_attrs, method_annotator_start)?;
             methods.push(method);
             while matches!(self.peek(), Token::Newline) {
                 self.advance();
@@ -2302,7 +2325,11 @@ impl Parser<'_> {
         ))
     }
 
-    pub(super) fn parse_trait_method_sig(&mut self) -> Result<TraitMethodSig, ParseError> {
+    pub(super) fn parse_trait_method_sig(
+        &mut self,
+        attrs: DeclAttrs,
+        annotator_start: Option<usize>,
+    ) -> Result<TraitMethodSig, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Def)?;
         let (name, _) = self.expect_ident()?;
@@ -2360,20 +2387,48 @@ impl Parser<'_> {
             lookahead += 1;
         }
 
-        if matches!(
+        validate_doc_visibility(
+            &attrs,
+            &Span {
+                start: annotator_start.unwrap_or(sp.start),
+                end: sp.end,
+            },
+        )?;
+
+        let (body, end) = if matches!(
             self.tokens.get(lookahead).map(|sp| &sp.token),
             Some(Token::LBrace)
         ) {
-            return Err(ParseError::syntax(
-                "trait method declarations must not have a body",
-                self.tokens[lookahead].span.clone(),
-            ));
-        }
-
-        let end = if self.pos > 0 {
-            self.tokens[self.pos - 1].span.end
+            self.skip_newlines();
+            self.expect(&Token::LBrace)?;
+            self.impl_target_stack.push("Self".to_string());
+            let body_stmts = self.parse_block_stmts();
+            self.impl_target_stack.pop();
+            let body_stmts = body_stmts?;
+            if body_stmts.is_empty() {
+                return Err(ParseError::syntax(
+                    "Function body must not be empty",
+                    self.peek_span(),
+                ));
+            }
+            let end = self.expect(&Token::RBrace)?;
+            (
+                Some(Box::new(Ast::Block(
+                    Span {
+                        start: sp.start,
+                        end: end.end,
+                    },
+                    body_stmts,
+                ))),
+                end.end,
+            )
         } else {
-            sp.end
+            let end = if self.pos > 0 {
+                self.tokens[self.pos - 1].span.end
+            } else {
+                sp.end
+            };
+            (None, end)
         };
 
         Ok(TraitMethodSig {
@@ -2381,8 +2436,10 @@ impl Parser<'_> {
             type_params,
             params,
             ret_ty,
+            body,
+            attrs,
             span: Span {
-                start: sp.start,
+                start: annotator_start.unwrap_or(sp.start),
                 end,
             },
         })
@@ -2439,6 +2496,7 @@ impl Parser<'_> {
         let sp = self.peek_span();
         self.expect(&Token::Defstruct)?;
         let (name, _) = self.expect_qualified_ident(2, "type")?;
+        let type_params = self.parse_decl_type_params()?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -2473,6 +2531,7 @@ impl Parser<'_> {
                 end: end.end,
             },
             name,
+            type_params,
             fields,
             attrs,
         ))

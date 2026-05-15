@@ -134,6 +134,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_result_chain,
     },
     BuiltinImpl {
+        name: "__recover_kind",
+        func: builtin_result_recover_kind,
+    },
+    BuiltinImpl {
         name: "__test_push",
         func: builtin_test_push,
     },
@@ -210,11 +214,11 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_facet_preview,
     },
     BuiltinImpl {
-        name: "compose",
+        name: "__facet_chain",
         func: builtin_facet_compose,
     },
     BuiltinImpl {
-        name: "__facet_replace",
+        name: "__facet_put",
         func: builtin_facet_replace,
     },
     BuiltinImpl {
@@ -228,6 +232,38 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "over_result",
         func: builtin_facet_over_result,
+    },
+    BuiltinImpl {
+        name: "case_set",
+        func: builtin_facet_case_set,
+    },
+    BuiltinImpl {
+        name: "case_over",
+        func: builtin_facet_case_over,
+    },
+    BuiltinImpl {
+        name: "__facet_list_get",
+        func: builtin_facet_list_get,
+    },
+    BuiltinImpl {
+        name: "__facet_list_set",
+        func: builtin_facet_list_set,
+    },
+    BuiltinImpl {
+        name: "__facet_list_slice_get",
+        func: builtin_facet_list_slice_get,
+    },
+    BuiltinImpl {
+        name: "__facet_list_slice_set",
+        func: builtin_facet_list_slice_set,
+    },
+    BuiltinImpl {
+        name: "__facet_map_get",
+        func: builtin_facet_map_get,
+    },
+    BuiltinImpl {
+        name: "__facet_map_set_existing",
+        func: builtin_facet_map_set_existing,
     },
     BuiltinImpl {
         name: "__test_capture_stdout",
@@ -696,6 +732,30 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
     BuiltinImpl {
         name: "__operator_float_gte",
         func: builtin_operator_float_gte,
+    },
+    BuiltinImpl {
+        name: "__compare_int",
+        func: builtin_compare_int,
+    },
+    BuiltinImpl {
+        name: "__compare_float",
+        func: builtin_compare_float,
+    },
+    BuiltinImpl {
+        name: "__ordering_is_lt",
+        func: builtin_ordering_is_lt,
+    },
+    BuiltinImpl {
+        name: "__ordering_is_lte",
+        func: builtin_ordering_is_lte,
+    },
+    BuiltinImpl {
+        name: "__ordering_is_gt",
+        func: builtin_ordering_is_gt,
+    },
+    BuiltinImpl {
+        name: "__ordering_is_gte",
+        func: builtin_ordering_is_gte,
     },
     BuiltinImpl {
         name: "__operator_string_eq",
@@ -1392,6 +1452,95 @@ fn builtin_operator_float_gte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, R
     Ok(Value::Bool(left >= right))
 }
 
+fn ordering_value(vm: &VM, variant: &str) -> Result<Value, RuntimeError> {
+    let tag = find_variant_tag(vm, variant)?;
+    Ok(Value::Tagged {
+        tag,
+        fields: Vec::new(),
+    })
+}
+
+fn ordering_matches(vm: &VM, value: &Value, variants: &[&str]) -> Result<bool, RuntimeError> {
+    let Value::Tagged { tag, fields } = value else {
+        return Err(RuntimeError::new("ordering predicate expects Ordering"));
+    };
+    if !fields.is_empty() {
+        return Err(RuntimeError::new("ordering predicate expects Ordering"));
+    }
+    for variant in variants {
+        if *tag == find_variant_tag(vm, variant)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn builtin_compare_int(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_int_pair(&args, "__compare_int")?;
+    if left < right {
+        ordering_value(vm, "Ordering::Less")
+    } else if left > right {
+        ordering_value(vm, "Ordering::Greater")
+    } else {
+        ordering_value(vm, "Ordering::Equal")
+    }
+}
+
+fn builtin_compare_float(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let (left, right) = expect_float_pair(&args, "__compare_float")?;
+    if left < right {
+        ordering_value(vm, "Ordering::Less")
+    } else if left > right {
+        ordering_value(vm, "Ordering::Greater")
+    } else {
+        ordering_value(vm, "Ordering::Equal")
+    }
+}
+
+fn builtin_ordering_is_lt(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = args
+        .first()
+        .ok_or_else(|| RuntimeError::new("__ordering_is_lt expects Ordering"))?;
+    Ok(Value::Bool(ordering_matches(
+        vm,
+        value,
+        &["Ordering::Less"],
+    )?))
+}
+
+fn builtin_ordering_is_lte(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = args
+        .first()
+        .ok_or_else(|| RuntimeError::new("__ordering_is_lte expects Ordering"))?;
+    Ok(Value::Bool(ordering_matches(
+        vm,
+        value,
+        &["Ordering::Less", "Ordering::Equal"],
+    )?))
+}
+
+fn builtin_ordering_is_gt(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = args
+        .first()
+        .ok_or_else(|| RuntimeError::new("__ordering_is_gt expects Ordering"))?;
+    Ok(Value::Bool(ordering_matches(
+        vm,
+        value,
+        &["Ordering::Greater"],
+    )?))
+}
+
+fn builtin_ordering_is_gte(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = args
+        .first()
+        .ok_or_else(|| RuntimeError::new("__ordering_is_gte expects Ordering"))?;
+    Ok(Value::Bool(ordering_matches(
+        vm,
+        value,
+        &["Ordering::Equal", "Ordering::Greater"],
+    )?))
+}
+
 fn builtin_operator_string_eq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (Value::Str(left), Value::Str(right)) = (&args[0], &args[1]) else {
         return Err(RuntimeError::new(
@@ -1820,6 +1969,47 @@ fn builtin_result_chain(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runtime
     })
 }
 
+fn builtin_result_recover_kind(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let result = decode_result_arg(&args[0], "__recover_kind", "value")?;
+    let marker = decode_callable_arg(&args[1], "__recover_kind", "marker")?;
+    let expected_kind = recover_kind_marker_name(vm, &marker)?;
+    let handler = decode_callable_arg(&args[2], "__recover_kind", "handler")?;
+
+    match result {
+        Ok(value) => Ok(ok_result(value)),
+        Err(err) if err.kind == expected_kind => {
+            let handler_result = vm.invoke_callable_sync(handler, vec![err_value(err.clone())])?;
+            match decode_result_arg(&handler_result, "__recover_kind", "handler result")? {
+                Ok(value) => Ok(ok_result(value)),
+                Err(rich) => Ok(err_result_from_rich_error(rich)),
+            }
+        }
+        Err(err) => Ok(err_result_from_rich_error(err)),
+    }
+}
+
+fn recover_kind_marker_name(vm: &VM, marker: &Callable) -> Result<String, RuntimeError> {
+    let qualified_name = match &marker.target {
+        sindr::runtime::CallableTarget::Function(fun_idx) => vm
+            .function_entries()
+            .get(*fun_idx as usize)
+            .and_then(|entry| entry.qualified_name.as_deref())
+            .ok_or_else(|| {
+                RuntimeError::new(format!(
+                    "__recover_kind marker references unknown function {}",
+                    fun_idx
+                ))
+            })?,
+        other => {
+            return Err(RuntimeError::new(format!(
+                "__recover_kind marker must be a deferror constructor function, got {:?}",
+                other
+            )))
+        }
+    };
+    Ok(qualified_name.to_string())
+}
+
 fn builtin_test_push(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let Value::Str(kind) = &args[0] else {
         return Err(RuntimeError::new("__test_push expects String as kind"));
@@ -2030,6 +2220,175 @@ fn builtin_map_values_list(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Runt
     Ok(Value::List(ListHandle::from_items(map.values())))
 }
 
+fn facet_index_to_usize(
+    vm: &VM,
+    index: &SurtrInt,
+    len: usize,
+) -> Result<Result<usize, Value>, RuntimeError> {
+    let value = if index.sign() == Sign::Minus {
+        let abs = (-index).to_usize().ok_or_else(|| {
+            RuntimeError::new("__facet_list index invariant broken for negative value")
+        })?;
+        if abs == 0 || abs > len {
+            return Ok(Err(err_result(
+                vm,
+                "IndexOutOfBounds",
+                &format!("index {index} out of bounds for len {len}"),
+            )));
+        }
+        len - abs
+    } else {
+        let Some(value) = index.to_usize() else {
+            return Ok(Err(err_result(
+                vm,
+                "IndexOutOfBounds",
+                &format!("index {index} out of bounds for len {len}"),
+            )));
+        };
+        value
+    };
+    if value >= len {
+        return Ok(Err(err_result(
+            vm,
+            "IndexOutOfBounds",
+            &format!("index {index} out of bounds for len {len}"),
+        )));
+    }
+    Ok(Ok(value))
+}
+
+fn facet_range_to_bounds(
+    vm: &VM,
+    start: &SurtrInt,
+    end: &SurtrInt,
+    len: usize,
+) -> Result<Result<(usize, usize), Value>, RuntimeError> {
+    let start = match facet_index_to_usize(vm, start, len)? {
+        Ok(value) => value,
+        Err(err) => return Ok(Err(err)),
+    };
+    let end = match facet_index_to_usize(vm, end, len)? {
+        Ok(value) => value,
+        Err(err) => return Ok(Err(err)),
+    };
+    if start > end {
+        return Ok(Err(err_result(
+            vm,
+            "IndexOutOfBounds",
+            &format!("range start {start} exceeds end {end} for len {len}"),
+        )));
+    }
+    Ok(Ok((start, end)))
+}
+
+fn key_not_found_result(vm: &VM, key: &str) -> Value {
+    err_result(vm, "KeyNotFound", &format!("key not found: {key}"))
+}
+
+fn builtin_facet_list_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::List(list) = &args[0] else {
+        return Err(RuntimeError::new("__facet_list_get expects List"));
+    };
+    let Value::Int(index) = &args[1] else {
+        return Err(RuntimeError::new("__facet_list_get expects Int index"));
+    };
+    let index = match facet_index_to_usize(vm, index, list.len)? {
+        Ok(index) => index,
+        Err(err) => return Ok(err),
+    };
+    let value = list
+        .iter()
+        .nth(index)
+        .ok_or_else(|| RuntimeError::new("__facet_list_get invariant broken after bounds check"))?;
+    Ok(ok_result(value))
+}
+
+fn builtin_facet_list_set(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::List(list) = &args[0] else {
+        return Err(RuntimeError::new("__facet_list_set expects List"));
+    };
+    let Value::Int(index) = &args[1] else {
+        return Err(RuntimeError::new("__facet_list_set expects Int index"));
+    };
+    let index = match facet_index_to_usize(vm, index, list.len)? {
+        Ok(index) => index,
+        Err(err) => return Ok(err),
+    };
+    let mut items = list.iter().collect::<Vec<_>>();
+    items[index] = args[2].clone();
+    Ok(ok_result(Value::List(ListHandle::from_items(items))))
+}
+
+fn builtin_facet_list_slice_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::List(list) = &args[0] else {
+        return Err(RuntimeError::new("__facet_list_slice_get expects List"));
+    };
+    let Value::Int(start) = &args[1] else {
+        return Err(RuntimeError::new(
+            "__facet_list_slice_get expects Int start",
+        ));
+    };
+    let Value::Int(end) = &args[2] else {
+        return Err(RuntimeError::new("__facet_list_slice_get expects Int end"));
+    };
+    let (start, end) = match facet_range_to_bounds(vm, start, end, list.len)? {
+        Ok(bounds) => bounds,
+        Err(err) => return Ok(err),
+    };
+    let items = list
+        .iter()
+        .skip(start)
+        .take(end - start + 1)
+        .collect::<Vec<_>>();
+    Ok(ok_result(Value::List(ListHandle::from_items(items))))
+}
+
+fn builtin_facet_list_slice_set(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let Value::List(list) = &args[0] else {
+        return Err(RuntimeError::new("__facet_list_slice_set expects List"));
+    };
+    let Value::Int(start) = &args[1] else {
+        return Err(RuntimeError::new(
+            "__facet_list_slice_set expects Int start",
+        ));
+    };
+    let Value::Int(end) = &args[2] else {
+        return Err(RuntimeError::new("__facet_list_slice_set expects Int end"));
+    };
+    let Value::List(replacement) = &args[3] else {
+        return Err(RuntimeError::new(
+            "__facet_list_slice_set expects List replacement",
+        ));
+    };
+    let (start, end) = match facet_range_to_bounds(vm, start, end, list.len)? {
+        Ok(bounds) => bounds,
+        Err(err) => return Ok(err),
+    };
+    let mut items = list.iter().collect::<Vec<_>>();
+    items.splice(start..=end, replacement.iter());
+    Ok(ok_result(Value::List(ListHandle::from_items(items))))
+}
+
+fn builtin_facet_map_get(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let map = decode_hash_map_arg(&args[0], "__facet_map_get", "map")?;
+    let key = decode_string_arg(&args[1], "__facet_map_get", "key")?;
+    match map.get(key) {
+        Some(value) => Ok(ok_result(value)),
+        None => Ok(key_not_found_result(vm, key)),
+    }
+}
+
+fn builtin_facet_map_set_existing(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let map = decode_hash_map_arg(&args[0], "__facet_map_set_existing", "map")?;
+    let key = decode_string_arg(&args[1], "__facet_map_set_existing", "key")?;
+    if !map.contains_key(key) {
+        return Ok(key_not_found_result(vm, key));
+    }
+    Ok(ok_result(Value::HashMap(
+        map.insert(key.to_string(), args[2].clone()),
+    )))
+}
+
 fn builtin_facet_view(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Facet::view should be lowered in Forge (runtime builtin call indicates lowering bug)",
@@ -2044,13 +2403,13 @@ fn builtin_facet_preview(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, Runti
 
 fn builtin_facet_compose(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
-        "Facet::compose should be lowered in Forge (runtime builtin call indicates lowering bug)",
+        "Facet::chain should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
 fn builtin_facet_replace(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
-        "Facet::replace should be lowered in Forge (runtime builtin call indicates lowering bug)",
+        "Facet::put should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
@@ -2069,6 +2428,18 @@ fn builtin_facet_over(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeE
 fn builtin_facet_over_result(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
     Err(RuntimeError::new(
         "Facet::over_result should be lowered in Forge (runtime builtin call indicates lowering bug)",
+    ))
+}
+
+fn builtin_facet_case_set(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Facet::case_set should be lowered in Forge (runtime builtin call indicates lowering bug)",
+    ))
+}
+
+fn builtin_facet_case_over(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Facet::case_over should be lowered in Forge (runtime builtin call indicates lowering bug)",
     ))
 }
 
@@ -5465,6 +5836,84 @@ mod tests {
             }
             other => panic!("expected List<String>, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn facet_list_get_and_set_report_index_bounds() {
+        let mut vm = test_vm();
+        let list = Value::List(ListHandle::from_items(vec![
+            Value::Int(int(10)),
+            Value::Int(int(20)),
+        ]));
+
+        let got = call_builtin(
+            &mut vm,
+            builtin_id("__facet_list_get"),
+            vec![list.clone(), Value::Int(int(1))],
+        )
+        .expect("facet list get should return Result");
+        assert!(matches!(got, Value::Tagged { tag: 0, .. }));
+
+        let missing = call_builtin(
+            &mut vm,
+            builtin_id("__facet_list_get"),
+            vec![list.clone(), Value::Int(int(9))],
+        )
+        .expect("facet list miss should return Err result");
+        assert!(
+            matches!(
+                missing,
+                Value::Tagged {
+                    tag: 1,
+                    ref fields
+                }
+                    if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "IndexOutOfBounds")
+            ),
+            "{missing:?}"
+        );
+
+        let updated = call_builtin(
+            &mut vm,
+            builtin_id("__facet_list_set"),
+            vec![list, Value::Int(int(0)), Value::Int(int(99))],
+        )
+        .expect("facet list set should return Result");
+        assert!(matches!(updated, Value::Tagged { tag: 0, .. }));
+    }
+
+    #[test]
+    fn facet_map_get_and_set_report_key_not_found() {
+        let mut vm = test_vm();
+        let map = Value::HashMap(HashMapHandle::from_entries(vec![(
+            "talk".into(),
+            Value::Int(int(80)),
+        )]));
+
+        let got = call_builtin(
+            &mut vm,
+            builtin_id("__facet_map_get"),
+            vec![map.clone(), Value::Str("talk".into())],
+        )
+        .expect("facet map get should return Result");
+        assert!(matches!(got, Value::Tagged { tag: 0, .. }));
+
+        let missing = call_builtin(
+            &mut vm,
+            builtin_id("__facet_map_set_existing"),
+            vec![map, Value::Str("missing".into()), Value::Int(int(1))],
+        )
+        .expect("facet map miss should return Err result");
+        assert!(
+            matches!(
+                missing,
+                Value::Tagged {
+                    tag: 1,
+                    ref fields
+                }
+                    if matches!(fields.first(), Some(Value::Error(rich)) if rich.kind == "KeyNotFound")
+            ),
+            "{missing:?}"
+        );
     }
 
     #[test]

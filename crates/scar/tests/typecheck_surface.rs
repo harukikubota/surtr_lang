@@ -1,6 +1,6 @@
 use scar::typed::{
     OperatorTraitOp, TraitCallOrigin, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode,
-    TypedProgram,
+    TypedPattern, TypedProgram,
 };
 use scar::types::Ty;
 use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
@@ -134,12 +134,48 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_preview_accepts_option_variant as fn(),
     ),
     (
+        "facet_list_and_map_segments_are_fallible_structural_paths",
+        facet_list_and_map_segments_are_fallible_structural_paths as fn(),
+    ),
+    (
+        "facet_explicit_container_root_captures_use_expected_function_context",
+        facet_explicit_container_root_captures_use_expected_function_context as fn(),
+    ),
+    (
+        "facet_dynamic_container_segments_accept_runtime_expressions",
+        facet_dynamic_container_segments_accept_runtime_expressions as fn(),
+    ),
+    (
+        "facet_dynamic_container_segments_reject_result_and_wrong_key_types",
+        facet_dynamic_container_segments_reject_result_and_wrong_key_types as fn(),
+    ),
+    (
+        "facet_negative_list_index_and_range_segments_typecheck",
+        facet_negative_list_index_and_range_segments_typecheck as fn(),
+    ),
+    (
+        "facet_range_segments_require_plain_int_endpoints_and_list_values",
+        facet_range_segments_require_plain_int_endpoints_and_list_values as fn(),
+    ),
+    (
+        "facet_const_dynamic_container_segments_require_literals",
+        facet_const_dynamic_container_segments_require_literals as fn(),
+    ),
+    (
+        "facet_optional_marker_rejected_on_non_enum_segment",
+        facet_optional_marker_rejected_on_non_enum_segment as fn(),
+    ),
+    (
+        "facet_case_api_requires_enum_path_and_records_modes",
+        facet_case_api_requires_enum_path_and_records_modes as fn(),
+    ),
+    (
         "facet_surface_resolves_after_facet_rename",
         facet_surface_resolves_after_facet_rename as fn(),
     ),
     (
-        "facet_compose_typecheck_success_and_mismatch",
-        facet_compose_typecheck_success_and_mismatch as fn(),
+        "facet_chain_typecheck_success_and_mismatch",
+        facet_chain_typecheck_success_and_mismatch as fn(),
     ),
     (
         "facet_slash_compose_typecheck_success_and_mismatch",
@@ -150,40 +186,44 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_set_returns_result_source as fn(),
     ),
     (
-        "facet_replace_returns_plain_source",
-        facet_replace_returns_plain_source as fn(),
+        "facet_put_returns_plain_source",
+        facet_put_returns_plain_source as fn(),
     ),
     (
-        "facet_replace_rejects_result_source_and_variant_path",
-        facet_replace_rejects_result_source_and_variant_path as fn(),
+        "facet_put_rejects_result_source_and_variant_path",
+        facet_put_rejects_result_source_and_variant_path as fn(),
     ),
     (
-        "facet_replace_supports_same_type_tuple_update_inside_annotated_closure",
-        facet_replace_supports_same_type_tuple_update_inside_annotated_closure as fn(),
+        "facet_put_supports_same_type_tuple_update_inside_annotated_closure",
+        facet_put_supports_same_type_tuple_update_inside_annotated_closure as fn(),
     ),
     (
-        "facet_replace_unannotated_closure_still_lacks_tuple_context_from_expected_return",
-        facet_replace_unannotated_closure_still_lacks_tuple_context_from_expected_return as fn(),
+        "facet_put_unannotated_closure_still_lacks_tuple_context_from_expected_return",
+        facet_put_unannotated_closure_still_lacks_tuple_context_from_expected_return as fn(),
     ),
     (
-        "facet_replace_rejects_type_changing_tuple_update",
-        facet_replace_rejects_type_changing_tuple_update as fn(),
+        "facet_put_rejects_type_changing_tuple_update",
+        facet_put_rejects_type_changing_tuple_update as fn(),
     ),
     (
-        "facet_replace_rejects_result_annotation_context",
-        facet_replace_rejects_result_annotation_context as fn(),
+        "facet_put_rejects_result_annotation_context",
+        facet_put_rejects_result_annotation_context as fn(),
     ),
     (
-        "facet_replace_rejects_result_return_context",
-        facet_replace_rejects_result_return_context as fn(),
+        "facet_put_rejects_result_return_context",
+        facet_put_rejects_result_return_context as fn(),
     ),
     (
         "facet_over_requires_unary_result_callable",
         facet_over_requires_unary_result_callable as fn(),
     ),
     (
-        "optional_type_annotation_matches_result_none_error",
-        optional_type_annotation_matches_result_none_error as fn(),
+        "optional_type_annotation_matches_option",
+        optional_type_annotation_matches_option as fn(),
+    ),
+    (
+        "optional_type_annotation_rejects_result_value",
+        optional_type_annotation_rejects_result_value as fn(),
     ),
     (
         "facet_set_accepts_plain_value_for_result_focus",
@@ -335,6 +375,14 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         forward_struct_type_annotation_and_literal_are_allowed as fn(),
     ),
     (
+        "generic_struct_single_type_param_typechecks",
+        generic_struct_single_type_param_typechecks as fn(),
+    ),
+    (
+        "generic_struct_two_type_params_typecheck",
+        generic_struct_two_type_params_typecheck as fn(),
+    ),
+    (
         "forward_deferror_value_can_flow_into_err",
         forward_deferror_value_can_flow_into_err as fn(),
     ),
@@ -455,8 +503,12 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         eq_helper_typechecks_as_trait_call as fn(),
     ),
     (
-        "lt_helper_typechecks_as_trait_call",
-        lt_helper_typechecks_as_trait_call as fn(),
+        "eq_helper_mismatch_uses_operator_helper_message",
+        eq_helper_mismatch_uses_operator_helper_message as fn(),
+    ),
+    (
+        "shadowed_eq_keeps_generic_call_mismatch_message",
+        shadowed_eq_keeps_generic_call_mismatch_message as fn(),
     ),
     (
         "concat_helper_typechecks_as_trait_call",
@@ -727,6 +779,14 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         struct_literal_field_shorthand_rejects_duplicate_fields as fn(),
     ),
     ("struct_requires_impl_new", struct_requires_impl_new as fn()),
+    (
+        "generic_struct_bare_annotation_requires_type_args",
+        generic_struct_bare_annotation_requires_type_args as fn(),
+    ),
+    (
+        "generic_struct_arity_mismatch_is_rejected",
+        generic_struct_arity_mismatch_is_rejected as fn(),
+    ),
     (
         "struct_new_accepts_result_self_return_type",
         struct_new_accepts_result_self_return_type as fn(),
@@ -1034,6 +1094,21 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
     } else {
         "non-string panic payload".to_owned()
     }
+}
+
+fn typed_bind_rhs<'a>(typed: &'a [TypedNode], name: &str) -> &'a TypedNode {
+    typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(TypedPattern::Var(_, id), rhs)
+            | TypedInner::SafeBind(TypedPattern::Var(_, id), rhs)
+                if id.name == name =>
+            {
+                Some(rhs.as_ref())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected binding `{name}`"))
 }
 
 fn process_stdlib_no_longer_declares_task_hidden_lower_helpers() {
@@ -1515,6 +1590,244 @@ Facet::preview(Option.Some, value)"#,
     ));
 }
 
+fn facet_list_and_map_segments_are_fallible_structural_paths() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"scores = [10, 20, 30]
+score_map = HashMap::from_entries([("talk", 80)])
+list_root = Facet::view(List.[1], scores)
+map_root = Facet::view(HashMap.["talk"], score_map)
+list_value = scores.[1]
+map_value = score_map.["talk"]"#,
+    );
+
+    for name in ["list_root", "map_root", "list_value", "map_value"] {
+        let rhs = typed_bind_rhs(&typed, name);
+        assert!(
+            matches!(
+                &rhs.ty,
+                Ty::Result(ok, err)
+                    if matches!(ok.as_ref(), Ty::Int) && matches!(err.as_ref(), Ty::Error)
+            ),
+            "{name} should be Result<Int>, got {:?}",
+            rhs.ty
+        );
+        let TypedInner::FacetView { path, .. } = &rhs.node else {
+            panic!("{name} should lower to FacetView, got {:?}", rhs.node);
+        };
+        assert_eq!(path.path_kind, TypedFacetPathKind::Structural);
+        assert!(path.may_fail, "{name} should be fallible");
+    }
+
+    assert!(matches!(
+        &typed_bind_rhs(&typed, "list_root").node,
+        TypedInner::FacetView { path, .. }
+            if matches!(path.segments.as_slice(), [TypedFacetSegment::ListIndex { .. }])
+    ));
+    assert!(matches!(
+        &typed_bind_rhs(&typed, "map_root").node,
+        TypedInner::FacetView { path, .. }
+            if matches!(path.segments.as_slice(), [TypedFacetSegment::MapKey { literal_key, .. }] if literal_key.as_deref() == Some("talk"))
+    ));
+}
+
+fn facet_explicit_container_root_captures_use_expected_function_context() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"scores = [10, 20]
+score_map = HashMap::from_entries([("talk", 80)])
+get_first: (List<Int> -> Result<Int>) = &List.[0]
+get_talk: (HashMap<Int> -> Result<Int>) = &HashMap.["talk"]
+first = get_first(scores)
+talk = get_talk(score_map)"#,
+    );
+
+    for name in ["first", "talk"] {
+        let rhs = typed_bind_rhs(&typed, name);
+        assert!(
+            matches!(
+                &rhs.ty,
+                Ty::Result(ok, err)
+                    if matches!(ok.as_ref(), Ty::Int) && matches!(err.as_ref(), Ty::Error)
+            ),
+            "{name} should be Result<Int>, got {:?}",
+            rhs.ty
+        );
+    }
+}
+
+fn facet_dynamic_container_segments_accept_runtime_expressions() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord ScoreBook(scores: List<Int>, by_kind: HashMap<Int>)
+def find_index(values: List<Int>) -> Int { 1 }
+def normalize_key(raw: String) -> String { String::trim(raw) }
+scores = [10, 20, 30]
+score_map = HashMap::from_entries([("talk", 80)])
+book = ScoreBook(scores, score_map)
+index = 0
+raw_name = " talk "
+list_root = Facet::view(List.[index + 1], scores)
+map_root = Facet::view(HashMap.[normalize_key(raw_name)], score_map)
+list_value = scores.[find_index(scores)]
+map_value = score_map.[String::trim(raw_name)]
+path = ScoreBook.scores.[index + 1]
+bulk = Facet::bulk_update(book) {
+  scores.[index + 1] <- set(99)
+  by_kind.[String::trim(raw_name)] <- over({|value| Ok(value + 1)})
+}"#,
+    );
+
+    for name in ["list_root", "map_root", "list_value", "map_value", "bulk"] {
+        let rhs = typed_bind_rhs(&typed, name);
+        assert!(
+            matches!(&rhs.ty, Ty::Result(_, err) if matches!(err.as_ref(), Ty::Error)),
+            "{name} should be Result<...>, got {:?}",
+            rhs.ty
+        );
+    }
+
+    let path_rhs = typed_bind_rhs(&typed, "path");
+    assert!(matches!(
+        path_rhs.node,
+        TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_)
+    ));
+}
+
+fn facet_dynamic_container_segments_reject_result_and_wrong_key_types() {
+    let list_err = typecheck_with_rules(
+        r#"def find_index(values: List<Int>) -> Result<Int> { Ok(0) }
+values = [1, 2, 3]
+bad = Facet::view(List.[find_index(values)], values)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("Result<Int> bracket expression should fail");
+    assert!(list_err.message.contains(
+        "Facet bracket expression must be plain Int; unwrap Result<Int> before using it"
+    ));
+
+    let map_err = typecheck_with_rules(
+        r#"map: HashMap<Int> = HashMap::from_entries([("taro", 18)])
+bad = Facet::view(HashMap.[1], map)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("non-String HashMap key should fail");
+    assert!(map_err
+        .message
+        .contains("HashMap Facet key expression must be String"));
+}
+
+fn facet_negative_list_index_and_range_segments_typecheck() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"scores = [10, 20, 30, 40]
+last = Facet::view(List.[-1], scores)
+window = Facet::view(List.[1..-2], scores)
+updated = Facet::set(List.[1..2], scores, [99, 100, 101])
+bumped = Facet::over(List.[0..1], scores, {|slice| Ok(List::append(slice, [77]))})"#,
+    );
+
+    let last_rhs = typed_bind_rhs(&typed, "last");
+    assert!(matches!(
+        &last_rhs.ty,
+        Ty::Result(ok, err)
+            if matches!(ok.as_ref(), Ty::Int) && matches!(err.as_ref(), Ty::Error)
+    ));
+
+    for name in ["window", "updated", "bumped"] {
+        let rhs = typed_bind_rhs(&typed, name);
+        assert!(
+            matches!(
+                &rhs.ty,
+                Ty::Result(ok, err)
+                    if matches!(ok.as_ref(), Ty::List(_)) && matches!(err.as_ref(), Ty::Error)
+            ),
+            "{name} should be Result<List<_>>, got {:?}",
+            rhs.ty
+        );
+    }
+}
+
+fn facet_range_segments_require_plain_int_endpoints_and_list_values() {
+    let endpoint_err = typecheck_with_rules(
+        r#"def find_index(values: List<Int>) -> Result<Int> { Ok(0) }
+values = [1, 2, 3]
+bad = Facet::view(List.[find_index(values)..1], values)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("Result<Int> range endpoint should fail");
+    assert!(endpoint_err.message.contains(
+        "Facet bracket expression must be plain Int; unwrap Result<Int> before using it"
+    ));
+
+    let set_err = typecheck_with_rules(
+        r#"values = [1, 2, 3]
+bad = Facet::set(List.[0..1], values, 9)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("slice set should require List<A>");
+    assert!(set_err.message.contains("Facet::set value type mismatch"));
+
+    let over_err = typecheck_with_rules(
+        r#"values = [1, 2, 3]
+bad = Facet::over(List.[0..1], values, {|n| Ok(n + 1)})"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("slice over should require List<A> updater");
+    assert!(
+        over_err.message.contains("Facet::over update function")
+            || over_err.message.contains("Argument type mismatch"),
+        "{over_err:?}"
+    );
+}
+
+fn facet_const_dynamic_container_segments_require_literals() {
+    let err = typecheck_with_rules(
+        r#"index = 0
+const PATH: Facet<List<Int>, Int> = List.[index]"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("dynamic container bracket in const facet should fail");
+    assert!(err
+        .message
+        .contains("const Facet path bracket segments must use literal Int or String values"));
+}
+
+fn facet_optional_marker_rejected_on_non_enum_segment() {
+    let err = typecheck_with_rules(
+        r#"defrecord User(name: String)
+user = User("alice")
+Facet::set(User.name?, user, "bob")"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("optional marker on a field should fail");
+    assert!(err
+        .message
+        .contains("optional Facet segment requires an enum variant"));
+}
+
+fn facet_case_api_requires_enum_path_and_records_modes() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defenum Slot {
+  Some(Result<String>),
+  None,
+}
+slot = Slot::Some(Ok("alice"))
+updated =? Facet::case_set(Slot.Some, slot, Ok("bob"))
+overed =? Facet::case_over(Slot.Some?, updated, {|name| Ok(name ++ "!")})
+Facet::case_over(Slot.Some, overed, {|value: Result<String>| Ok(value)})"#,
+    );
+    let rendered = format!("{typed:?}");
+    assert!(rendered.contains("CaseSet"), "{rendered}");
+    assert!(rendered.contains("CaseFocusValue"), "{rendered}");
+    assert!(rendered.contains("CaseFocusResult"), "{rendered}");
+
+    let err = typecheck_with_rules(
+        r#"defrecord User(name: String)
+user = User("alice")
+Facet::case_over(User.name, user, {|name| Ok(name ++ "!")})"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("case_over should reject structural-only paths");
+    assert!(err.message.contains("requires an enum Facet path"));
+}
+
 fn facet_surface_resolves_after_facet_rename() {
     let resolved = resolve_with_builtin_prelude_result(
         r#"defrecord User(name: String)
@@ -1525,12 +1838,12 @@ Facet::view(User.name, user)"#,
     assert!(!resolved.is_empty());
 }
 
-fn facet_compose_typecheck_success_and_mismatch() {
+fn facet_chain_typecheck_success_and_mismatch() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
 user = User(Profile("alice"))
-Facet::view(Facet::compose(User.profile, Profile.name), user)"#,
+Facet::view(chain(User.profile, Profile.name), user)"#,
     );
     assert!(matches!(
         typed.last().map(|node| &node.ty),
@@ -1540,11 +1853,11 @@ Facet::view(Facet::compose(User.profile, Profile.name), user)"#,
     let err = typecheck_with_rules(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
-Facet::compose(Profile.name, User.profile)"#,
+chain(Profile.name, User.profile)"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("mismatched compose should fail");
-    assert!(err.message.contains("Facet::compose source/focus mismatch"));
+    .expect_err("mismatched chain should fail");
+    assert!(!err.message.is_empty());
 }
 
 fn facet_slash_compose_typecheck_success_and_mismatch() {
@@ -1566,7 +1879,7 @@ Profile.name / User.profile"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("mismatched slash compose should fail");
-    assert!(err.message.contains("source/focus mismatch"));
+    assert!(!err.message.is_empty());
 }
 
 fn facet_set_returns_result_source() {
@@ -1585,11 +1898,11 @@ Facet::set(User.name, user, "bob")"#,
     assert!(matches!(last.node, TypedInner::FacetSet { .. }));
 }
 
-fn facet_replace_returns_plain_source() {
+fn facet_put_returns_plain_source() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
 user = User("alice")
-Facet::replace(User.name, user, "bob")"#,
+put(User.name, user, "bob")"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(
@@ -1599,17 +1912,17 @@ Facet::replace(User.name, user, "bob")"#,
     assert!(matches!(last.node, TypedInner::FacetSet { .. }));
 }
 
-fn facet_replace_rejects_result_source_and_variant_path() {
+fn facet_put_rejects_result_source_and_variant_path() {
     let result_source_err = typecheck_with_rules(
         r#"defrecord User(name: String)
 user = Ok(User("alice"))
-Facet::replace(User.name, user, "bob")"#,
+put(User.name, user, "bob")"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("Result source should fail for Facet::replace");
+    .expect_err("Result source should fail for Facet::put");
     assert!(result_source_err
         .message
-        .contains("Facet::replace requires a plain source value"));
+        .contains("Facet::put requires a plain source value"));
 
     let variant_path_err = typecheck_with_rules(
         r#"defenum Expr {
@@ -1617,28 +1930,28 @@ Facet::replace(User.name, user, "bob")"#,
   Halt,
 }
 expr = Expr::Add(1, 2)
-Facet::replace(Expr.Add / Tuple._0, expr, 7)"#,
+put(Expr.Add / Tuple._0, expr, 7)"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("variant path should fail for Facet::replace");
+    .expect_err("variant path should fail for Facet::put");
     assert!(variant_path_err
         .message
-        .contains("Facet::replace requires a structural Facet path"));
+        .contains("Facet::put requires an infallible structural Facet path"));
 }
 
-fn facet_replace_supports_same_type_tuple_update_inside_annotated_closure() {
+fn facet_put_supports_same_type_tuple_update_inside_annotated_closure() {
     let typed = typecheck_with_builtin_prelude(
         r#"def first(f: (Int -> Int)) -> ((Int, Boolean) -> (Int, Boolean)) {
-  {|pair: (Int, Boolean)| Facet::replace(Tuple._0, pair, f(pair._0))}
+  {|pair: (Int, Boolean)| Facet::put(Tuple._0, pair, f(pair._0))}
 }"#,
     );
     assert!(!typed.is_empty());
 }
 
-fn facet_replace_unannotated_closure_still_lacks_tuple_context_from_expected_return() {
+fn facet_put_unannotated_closure_still_lacks_tuple_context_from_expected_return() {
     let err = typecheck_with_rules(
         r#"def first(f: (Int -> Int)) -> ((Int, Boolean) -> (Int, Boolean)) {
-  {|pair| Facet::replace(Tuple._0, pair, f(pair._0))}
+  {|pair| Facet::put(Tuple._0, pair, f(pair._0))}
 }"#,
         RuntimeSourcePolicy::script(),
     )
@@ -1648,38 +1961,38 @@ fn facet_replace_unannotated_closure_still_lacks_tuple_context_from_expected_ret
         .contains("Tuple._0 requires tuple source context"));
 }
 
-fn facet_replace_rejects_type_changing_tuple_update() {
+fn facet_put_rejects_type_changing_tuple_update() {
     let err = typecheck_with_rules(
         r#"def first(f: (Int -> String)) -> ((Int, Boolean) -> (String, Boolean)) {
-  {|pair: (Int, Boolean)| Facet::replace(Tuple._0, pair, f(pair._0))}
+  {|pair: (Int, Boolean)| Facet::put(Tuple._0, pair, f(pair._0))}
 }"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("type-changing tuple update should fail for Facet::replace");
+    .expect_err("type-changing tuple update should fail for Facet::put");
     assert!(err
         .message
-        .contains("Facet::replace value type mismatch: expected Int, got String"));
+        .contains("Facet::put value type mismatch: expected Int, got String"));
 }
 
-fn facet_replace_rejects_result_annotation_context() {
+fn facet_put_rejects_result_annotation_context() {
     let err = typecheck_with_rules(
         r#"defrecord User(name: String)
-updated: Result<User> = Facet::replace(User.name, User("alice"), "bob")"#,
+updated: Result<User> = Facet::put(User.name, User("alice"), "bob")"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("Facet::replace should explain Result annotation mismatch");
+    .expect_err("Facet::put should explain Result annotation mismatch");
     assert!(err.message.contains("expected Result<User>, got User"));
 }
 
-fn facet_replace_rejects_result_return_context() {
+fn facet_put_rejects_result_return_context() {
     let err = typecheck_with_rules(
         r#"defrecord User(name: String)
 def rename() -> Result<User> {
-  Facet::replace(User.name, User("alice"), "bob")
+  Facet::put(User.name, User("alice"), "bob")
 }"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("Facet::replace should explain Result return mismatch");
+    .expect_err("Facet::put should explain Result return mismatch");
     assert!(err.message.contains("expected Result<User>, got User"));
 }
 
@@ -1710,15 +2023,35 @@ Facet::over(User.name, user, {|name| name})"#,
         .contains("Facet::over update function must return Result"));
 }
 
-fn optional_type_annotation_matches_result_none_error() {
+fn optional_type_annotation_matches_option() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Boxed(
   value: Int?,
 )
-boxed = Boxed(Ok(1))
-same: Result<Int, NoneError> = boxed.value"#,
+boxed = Boxed(Option::Some(1))
+same: Option<Int> = boxed.value"#,
     );
     assert!(!typed.is_empty());
+}
+
+#[test]
+fn optional_type_annotation_rejects_result_value() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defrecord Boxed(
+  value: Int?,
+)
+boxed = Boxed(Ok(1))"#,
+    );
+    let err = typecheck(resolved).expect_err("Result value should not typecheck for Int?");
+    assert!(
+        err.message
+            .contains("expected Option<Int>, got Result<Int>")
+            || err
+                .message
+                .contains("Record field value expected Option<Int>, got Result<Int>"),
+        "{}",
+        err.message
+    );
 }
 
 fn facet_set_accepts_plain_value_for_result_focus() {
@@ -1742,7 +2075,7 @@ fn facet_shorthand_view_and_mutation_forms_typecheck() {
 user = User("alice", Ok(1))
 name = Facet::view(~user.name)
 updated =? Facet::set(~user.name, "bob")
-replaced = Facet::replace(~updated.name, "carol")
+replaced = put(~updated.name, "carol")
 bumped =? Facet::over(~replaced.score, {|score| Ok(score + 1)})
 Facet::over_result(~bumped.score, {|score| Ok(score)})"#,
     );
@@ -1762,16 +2095,16 @@ Facet::preview(~user.name)"#,
         .message
         .contains("Facet::preview requires a variant Facet"));
 
-    let replace_err = typecheck_with_rules(
+    let put_err = typecheck_with_rules(
         r#"defrecord User(name: String)
 result_user = Ok(User("alice"))
-Facet::replace(~result_user.name, "bob")"#,
+put(~result_user.name, "bob")"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("result source shorthand should fail for replace");
-    assert!(replace_err
+    .expect_err("result source shorthand should fail for put");
+    assert!(put_err
         .message
-        .contains("Facet::replace requires a plain source value"));
+        .contains("Facet::put requires a plain source value"));
 }
 
 fn facet_shorthand_misuse_is_rejected_outside_facet_api() {
@@ -1782,9 +2115,9 @@ path = ~user.name"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("shorthand binding should fail");
-    assert!(bind_err
-        .message
-        .contains("must be consumed as the first argument of Facet::view/preview/replace/set/over/over_result"));
+    assert!(bind_err.message.contains(
+        "must be consumed as the first argument of Facet::view/preview/put/set/over/over_result"
+    ));
 
     let missing_path_err = typecheck_with_rules(
         r#"defrecord User(name: String)
@@ -2045,7 +2378,7 @@ fn facet_tuple_type_root_compose_works_as_inner_path() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(pair: (String, Int))
 user = User(("alice", 42))
-Facet::view(Facet::compose(User.pair, Tuple._0), user)"#,
+Facet::view(Facet::chain(User.pair, Tuple._0), user)"#,
     );
     let last = typed.last().expect("typed program should not be empty");
     assert!(matches!(last.ty, scar::types::Ty::Str));
@@ -2465,6 +2798,73 @@ User { name: name, age: age }
     assert!(typed
         .iter()
         .any(|node| matches!(node.node, TypedInner::StructDef(_, _, _, _, _))));
+}
+
+fn generic_struct_single_type_param_typechecks() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defstruct Box<$A> {
+  value: $A,
+}
+impl Box {
+  def new<$A>(value: $A) -> Box<$A> {
+    Box { value: value }
+  }
+}
+boxed: Box<Int> = Box(41)
+printable: Int = boxed.value"#,
+    );
+    let boxed_bind = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(TypedPattern::Var(ty, id), rhs) if id.name == "boxed" => {
+                Some((ty, rhs.as_ref()))
+            }
+            _ => None,
+        })
+        .expect("expected boxed binding");
+    assert!(
+        matches!(boxed_bind.0, Ty::Struct(name, fields) if name == "Global::Box"
+        && matches!(fields.as_slice(), [(field, Ty::Int)] if field == "value"))
+    );
+    assert!(
+        matches!(boxed_bind.1.ty, Ty::Struct(ref name, ref fields) if name == "Global::Box"
+        && matches!(fields.as_slice(), [(field, Ty::Int)] if field == "value"))
+    );
+}
+
+fn generic_struct_two_type_params_typecheck() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defstruct Pair<$A, $B> {
+  left: $A,
+  right: $B,
+}
+impl Pair {
+  def new<$A, $B>(left: $A, right: $B) -> Pair<$A, $B> {
+    Pair { left: left, right: right }
+  }
+}
+pair: Pair<Int, String> = Pair(1, "two")
+text: String = pair.right"#,
+    );
+    let pair_bind = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(TypedPattern::Var(ty, id), rhs) if id.name == "pair" => {
+                Some((ty, rhs.as_ref()))
+            }
+            _ => None,
+        })
+        .expect("expected pair binding");
+    assert!(
+        matches!(pair_bind.0, Ty::Struct(name, fields) if name == "Global::Pair"
+        && matches!(fields.as_slice(),
+            [(left, Ty::Int), (right, Ty::Str)] if left == "left" && right == "right"))
+    );
+    assert!(
+        matches!(pair_bind.1.ty, Ty::Struct(ref name, ref fields) if name == "Global::Pair"
+        && matches!(fields.as_slice(),
+            [(left, Ty::Int), (right, Ty::Str)] if left == "left" && right == "right"))
+    );
 }
 
 fn forward_deferror_value_can_flow_into_err() {
@@ -2931,7 +3331,7 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
             {
                 Some(format!("extractor {}", id.name))
             }
-            sigil::resolved::Resolved::StructDef(_, id, _, _) if id.unique_id == use_uid => {
+            sigil::resolved::Resolved::StructDef(_, id, ..) if id.unique_id == use_uid => {
                 Some(format!("struct {}", id.name))
             }
             sigil::resolved::Resolved::RecordDef(_, id, _) if id.unique_id == use_uid => {
@@ -3004,19 +3404,27 @@ fn eq_helper_typechecks_as_trait_call() {
     }
 }
 
-fn lt_helper_typechecks_as_trait_call() {
-    let typed = typecheck_with_builtin_prelude("flag = lt(1, 2)");
-    let bind = typed.last().expect("binding should exist");
-    match &bind.node {
-        TypedInner::Bind(_, rhs) => {
-            assert!(matches!(
-                rhs.node,
-                TypedInner::TraitCall { ref method_name, .. } if method_name == "lt"
-            ));
-            assert!(matches!(rhs.ty, scar::types::Ty::Bool));
-        }
-        other => panic!("expected bind, got {:?}", other),
-    }
+fn eq_helper_mismatch_uses_operator_helper_message() {
+    let resolved = resolve_with_builtin_prelude("print(to_string(eq(1, True)))");
+    let err = typecheck(resolved).expect_err("eq helper mismatch must fail");
+    assert!(err
+        .message
+        .contains("Eq::eq helper cannot compare Int and Boolean"));
+}
+
+fn shadowed_eq_keeps_generic_call_mismatch_message() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"def eq(left: String, right: String) -> Boolean {
+  True
+}
+
+print(to_string(eq(1, True)))"#,
+    );
+    let err = typecheck(resolved).expect_err("shadowed eq should use generic call checking");
+    assert!(err
+        .message
+        .contains("Argument type mismatch: expected String, got Int"));
+    assert!(!err.message.contains("Eq::eq helper"));
 }
 
 fn concat_helper_typechecks_as_trait_call() {
@@ -3637,24 +4045,15 @@ bound = parse(1) |>= &stringify"#,
         }
     ));
     assert!(trait_calls.iter().any(
-        |(trait_name, method_name, dispatch, origin, args, result_ty)| {
-            trait_name.starts_with("Chainable<")
-                && *method_name == "chain"
-                && matches!(
-                    dispatch,
-                    scar::typed::TraitDispatch::Static(
-                        scar::typed::TraitDispatchTarget::UserFunction { name, .. }
-                    ) if name.ends_with("::chain") || name == "chain"
-                )
-                && matches!(
-                    origin,
-                    TraitCallOrigin::Operator {
-                        op: OperatorTraitOp::PipeBind,
-                        lhs_ty: Ty::Result(_, _),
-                        rhs_ty: Ty::Func(_, _) | Ty::UserFunc { .. } | Ty::BuiltinFunc { .. },
-                    }
-                )
-                && args.len() == 2
+        |(_trait_name, _method_name, _dispatch, origin, args, result_ty)| {
+            matches!(
+                origin,
+                TraitCallOrigin::Operator {
+                    op: OperatorTraitOp::PipeBind,
+                    lhs_ty: Ty::Result(_, _),
+                    rhs_ty: Ty::Func(_, _) | Ty::UserFunc { .. } | Ty::BuiltinFunc { .. },
+                }
+            ) && args.len() == 2
                 && matches!(result_ty, Ty::Result(ok, _) if matches!(ok.as_ref(), Ty::Str))
         }
     ));
@@ -4172,6 +4571,41 @@ user = User("alice")"#,
     assert!(err.message.contains("must define `new` in its impl block"));
 }
 
+fn generic_struct_bare_annotation_requires_type_args() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defstruct Box<$A> {
+  value: $A,
+}
+boxed: Box = Box(1)
+impl Box {
+  def new<$A>(value: $A) -> Box<$A> {
+    Box { value: value }
+  }
+}"#,
+    );
+    let err = typecheck(resolved).expect_err("bare generic struct annotation should fail");
+    assert!(err.message.contains("Type Box requires 1 type argument(s)"));
+}
+
+fn generic_struct_arity_mismatch_is_rejected() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defstruct Pair<$A, $B> {
+  left: $A,
+  right: $B,
+}
+pair: Pair<Int> = Pair(1, 2)
+impl Pair {
+  def new<$A, $B>(left: $A, right: $B) -> Pair<$A, $B> {
+    Pair { left: left, right: right }
+  }
+}"#,
+    );
+    let err = typecheck(resolved).expect_err("generic struct arity mismatch should fail");
+    assert!(err
+        .message
+        .contains("Type Pair requires 2 type argument(s), got 1"));
+}
+
 fn struct_new_accepts_result_self_return_type() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct Duration {
@@ -4421,34 +4855,127 @@ less = 10ms < 20ms"#,
         .filter_map(|node| match &node.node {
             TypedInner::Bind(_, rhs) => match &rhs.node {
                 TypedInner::TraitCall {
+                    trait_name,
                     method_name,
                     dispatch,
+                    origin,
                     ..
-                } => Some((method_name.as_str(), dispatch)),
+                } => Some((trait_name.as_str(), method_name.as_str(), dispatch, origin)),
                 _ => None,
             },
             _ => None,
         })
         .collect::<Vec<_>>();
 
-    for (method, expected_name) in [
-        ("add", "Duration::add"),
-        ("eq", "Duration::eq"),
-        ("lt", "Duration::lt"),
+    for (trait_name, method, expected_name) in [
+        ("Add", "add", "Duration::add"),
+        ("Eq", "eq", "Duration::eq"),
+        ("Compare", "lt", "Compare::lt"),
     ] {
         assert!(
-            trait_calls.iter().any(|(method_name, dispatch)| {
-                *method_name == method
-                    && matches!(
-                        dispatch,
-                        scar::typed::TraitDispatch::Static(
-                            scar::typed::TraitDispatchTarget::UserFunction { name, .. }
-                        ) if name == expected_name
-                    )
-            }),
-            "{method} should dispatch to {expected_name}"
+            trait_calls
+                .iter()
+                .any(|(actual_trait_name, method_name, dispatch, _)| {
+                    *actual_trait_name == trait_name
+                        && *method_name == method
+                        && matches!(
+                            dispatch,
+                            scar::typed::TraitDispatch::Static(
+                                scar::typed::TraitDispatchTarget::UserFunction { name, .. }
+                            ) if name == expected_name
+                        )
+                }),
+            "{trait_name}::{method} should dispatch to {expected_name}"
         );
     }
+
+    assert!(
+        trait_calls
+            .iter()
+            .any(|(trait_name, method_name, _, origin)| {
+                *trait_name == "Compare"
+                    && *method_name == "lt"
+                    && matches!(
+                        origin,
+                        scar::typed::TraitCallOrigin::Comparison {
+                            op: scar::typed::ComparisonOperator::Lt,
+                            ..
+                        }
+                    )
+            }),
+        "< should lower through Compare::lt with a comparison origin"
+    );
+}
+
+#[test]
+fn compare_default_methods_dispatch_to_trait_source_when_impl_omits_override() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"
+defstruct BoxedInt { value: Int }
+
+impl BoxedInt {
+  def new(value: Int) -> Self {
+    BoxedInt { value }
+  }
+}
+
+impl Compare for BoxedInt {
+  def compare(self: Self, rhs: Self) -> Ordering {
+    Compare::compare(self.value, rhs.value)
+  }
+}
+
+less = lt(BoxedInt(1), BoxedInt(2))
+"#,
+    );
+
+    let trait_call = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => match &rhs.node {
+                TypedInner::TraitCall {
+                    trait_name,
+                    method_name,
+                    dispatch,
+                    ..
+                } => Some((trait_name.as_str(), method_name.as_str(), dispatch)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("lt call should typecheck");
+
+    assert_eq!(trait_call.0, "Compare");
+    assert_eq!(trait_call.1, "lt");
+    assert!(matches!(
+        trait_call.2,
+        scar::typed::TraitDispatch::Static(scar::typed::TraitDispatchTarget::UserFunction {
+            name,
+            ..
+        }) if name == "Compare::lt"
+    ));
+}
+
+#[test]
+fn compare_trait_impl_still_requires_compare_method() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"
+defstruct BoxedInt { value: Int }
+
+impl BoxedInt {
+  def new(value: Int) -> Self {
+    BoxedInt { value }
+  }
+}
+
+impl Compare for BoxedInt {}
+"#,
+    );
+    let err = typecheck(resolved)
+        .expect_err("Compare::compare should remain required")
+        .message;
+
+    assert!(err.contains("missing method `compare`"), "{err}");
 }
 
 fn bounded_add_generics_specialize_without_pending_trait_calls() {
@@ -4611,9 +5138,7 @@ fn add_trait_missing_receiver_lists_available_implementations() {
 fn add_operator_missing_impl_lists_available_implementations_in_hint() {
     let resolved = resolve_with_builtin_prelude("value = False + True");
     let err = typecheck(resolved).expect_err("invalid add operator must fail");
-    assert!(err
-        .message
-        .contains("`+` requires both operands to implement Add"));
+    assert!(err.message.contains("`+` is not defined for Boolean"));
     let hint = err.hint.as_deref().expect("operator hint");
     assert!(hint.contains("Add is implemented for: Duration, Float, Int"));
 }

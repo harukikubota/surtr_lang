@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Facet bracket expression must be plain Int; unwrap Result<Int> before using it

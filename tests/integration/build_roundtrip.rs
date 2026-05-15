@@ -177,7 +177,7 @@ fn dump_opcode_histogram_adds_static_opcode_counts() {
 }
 
 #[test]
-fn dump_peephole_candidates_reports_remaining_branch_fusion_opportunities() {
+fn dump_peephole_candidates_omits_fully_lowered_result_helpers_patterns() {
     let fixture = repo_root().join("tests/fixtures/script/pass/stdmod/result_helpers.srt");
     let dump = surtr_command()
         .args([
@@ -204,11 +204,25 @@ fn dump_peephole_candidates_reports_remaining_branch_fusion_opportunities() {
             == 0,
         "expected no remaining branch-fusion candidates in result_helpers dump: {json}"
     );
+    let items = json["peephole_candidates"]["items"]
+        .as_array()
+        .expect("peephole items should be an array");
     assert!(
-        json["peephole_candidates"]["items"]
-            .as_array()
-            .is_some_and(|items| items.is_empty()),
-        "expected no remaining peephole candidates in result_helpers dump: {json}"
+        items
+            .iter()
+            .all(|item| item["kind"].as_str() == Some("tail_call_closure")),
+        "expected only tail-call closure candidates in result_helpers dump: {json}"
+    );
+    assert!(
+        json["peephole_candidates"]["summary"]["tail_call_closure"]
+            .as_u64()
+            .unwrap_or(0)
+            == 0,
+        "expected no remaining tail-call closure candidates in result_helpers dump: {json}"
+    );
+    assert!(
+        items.is_empty(),
+        "expected no peephole candidates once result_helpers lowering is complete: {json}"
     );
 }
 
@@ -252,7 +266,10 @@ fn dump_peephole_candidates_include_operand_details() {
         .expect("expected a load_const_store_local candidate");
     assert!(item["pc"].as_u64().is_some());
     assert!(item["function"].is_null());
-    assert_eq!(item["opcode_window"], serde_json::json!(["LoadConst", "StoreLocal"]));
+    assert_eq!(
+        item["opcode_window"],
+        serde_json::json!(["LoadConst", "StoreLocal"])
+    );
     let operands = item["operands"]
         .as_array()
         .expect("operands must be an array");
@@ -351,6 +368,146 @@ fn dump_opcode_histogram_tracks_result_branch_opcode_batch() {
             .is_some(),
         "expected JumpIfLocalTagNe optimization summary entry: {json}"
     );
+}
+
+#[test]
+fn dump_opcode_histogram_tracks_tail_call_closure_fusion() {
+    let temp = unique_temp_dir("surtr_dump_tail_call_closure");
+    let source_path = temp.join("tail_call_closure.srt");
+    write_source(
+        &source_path,
+        r#"def apply_tail(f: (Int -> Int), value: Int) -> Int {
+  f(value)
+}
+
+add1: (Int -> Int) = {|x| x + 1}
+print(to_string(apply_tail(add1, 41)))
+"#,
+    );
+
+    let dump = surtr_command()
+        .args([
+            "dump",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--format",
+            "json",
+            "--opcode-histogram",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    assert!(
+        json["opcode_histogram"]["TailCallClosure"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "expected TailCallClosure histogram entries: {json}"
+    );
+    assert!(
+        json["optimization_summary"]["apply_compose"]["tail_call_closure"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "expected TailCallClosure apply/compose summary entry: {json}"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn dump_opcode_histogram_tracks_callable_templates_and_wrapper_reduction() {
+    let temp = unique_temp_dir("surtr_dump_callable_templates");
+    let source_path = temp.join("callable_templates.srt");
+    write_source(
+        &source_path,
+        r#"def add(x: Int, y: Int) -> Int {
+  x + y
+}
+
+def inc(x: Int) -> Int {
+  x + 1
+}
+
+def parse(text: String) -> Result<Int> {
+  Ok(41)
+}
+
+def render(x: Int) -> Result<String> {
+  Ok(to_string(x))
+}
+
+partial = &add(&1, 1)
+plain = partial >> &inc
+mapped: Result<Int> = Ok(1) |*> add(2)
+pipeline = &parse >=> &render
+
+print(to_string(plain(40)))
+match mapped {
+  Ok(v) => print(to_string(v)),
+  Err(e) => print("mapped err"),
+}
+match pipeline("x") {
+  Ok(v) => print(v),
+  Err(e) => print("pipeline err"),
+}
+"#,
+    );
+
+    let dump = surtr_command()
+        .args([
+            "dump",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--format",
+            "json",
+            "--opcode-histogram",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(
+        dump.status.success(),
+        "dump failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&dump.stdout),
+        String::from_utf8_lossy(&dump.stderr)
+    );
+
+    let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
+    assert_eq!(json["header"]["version"], 2);
+    assert!(
+        json["summary"]["callable_template_count"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "expected callable templates in dump summary: {json}"
+    );
+    assert!(
+        json["optimization_summary"]["apply_compose"]["template_partial_calls"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "expected template partial call entries: {json}"
+    );
+    assert!(
+        json["optimization_summary"]["apply_compose"]["template_compose_calls"]
+            .as_u64()
+            .unwrap_or(0)
+            > 0,
+        "expected template compose call entries: {json}"
+    );
+    assert!(
+        json["function_summary"]["summary"]["generated_wrapper_functions"]
+            .as_u64()
+            .is_some(),
+        "expected generated wrapper count in function summary: {json}"
+    );
+
+    let _ = fs::remove_dir_all(temp);
 }
 
 #[test]

@@ -69,18 +69,17 @@ pub fn type_error_spec(source: &str, error: &TypeErrorDiagnostic) -> DiagnosticS
                     {
                         format!("{}\n{}", existing, help)
                     }
+                    Some(existing) if existing == help => existing,
                     _ => help,
                 }
             } else {
                 match spec.help.take() {
+                    Some(existing) if existing == help => existing,
                     Some(existing) => format!("{}\n{}", existing, help),
                     None => help,
                 }
             });
         }
-    }
-    if error.message == "Only total MatchBlock patterns can be used with `=`" {
-        spec.help = None;
     }
     if spec.help.is_none() {
         if let (Some(expected), Some(got)) = extract_expected_got(&spec.message) {

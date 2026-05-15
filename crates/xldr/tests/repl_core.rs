@@ -548,7 +548,7 @@ fn core_static_impl_methods_keep_runtime_arity_in_sync() {
 }
 
 #[test]
-fn core_renders_top_level_facet_compose_expressions_without_codegen_leak() {
+fn core_renders_top_level_facet_chain_expressions_without_codegen_leak() {
     let mut engine = engine();
 
     let tuple_facet = engine.handle_line("a = Tuple._1");
@@ -561,7 +561,7 @@ fn core_renders_top_level_facet_compose_expressions_without_codegen_leak() {
     let slash = rendered_text(&slash);
     assert!(slash.contains("Facet<_, _> = Tuple._1.Oct"), "{slash}");
 
-    let helper = engine.handle_line("Facet::compose(a, ep)");
+    let helper = engine.handle_line("Facet::chain(a, ep)");
     let helper = rendered_text(&helper);
     assert!(helper.contains("Facet<_, _> = Tuple._1.Oct"), "{helper}");
 }
@@ -610,6 +610,22 @@ fn core_facet_command_reports_kind_apis_segments_and_stop_points() {
         fallible.contains("variant mismatch returns Result"),
         "{fallible}"
     );
+}
+
+#[test]
+fn core_renders_negative_and_range_list_facets() {
+    let mut engine = engine();
+
+    let last = engine.handle_line("last = List.[-1]");
+    assert!(rendered_text(&last).contains("last: Facet<_, _> = List.[-1]"));
+
+    let window = engine.handle_line("window = List.[1..-1]");
+    assert!(rendered_text(&window).contains("window: Facet<_, _> = List.[1..-1]"));
+
+    let info = engine.handle_line(":facet window");
+    let info = rendered_text(&info);
+    assert!(info.contains("full path: List.[1..-1]"), "{info}");
+    assert!(info.contains("fallible: yes"), "{info}");
 }
 
 #[test]
@@ -859,7 +875,7 @@ fn core_repl_command_and_query_errors_use_diagnostics() {
         "{bad_error_mode_text}"
     );
 
-    let bad_sig_query = engine.handle_line(":sig gt(Int, )");
+    let bad_sig_query = engine.handle_line(":sig compare(Int, )");
     let bad_sig_query_text = strip_ansi(&rendered_text(&bad_sig_query));
     assert!(
         bad_sig_query_text.contains("Error: ReplQueryParseError"),
@@ -1075,9 +1091,42 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "{safe_bind_doc}"
     );
 
-    let typed_sig = engine.handle_line(":sig gt(Int, Int)");
+    let typed_sig = engine.handle_line(":sig compare(Int, Int)");
     let typed_sig = signature_text(&typed_sig);
-    assert!(typed_sig.contains("impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean"));
+    assert!(typed_sig.contains("impl Compare for Int::compare(self: Self, rhs: Self) -> Ordering"));
+
+    let helper_sig = engine.handle_line(":sig compare");
+    let helper_sig = signature_text(&helper_sig);
+    assert_eq!(
+        helper_sig.trim(),
+        "Compare::compare(self: Self, rhs: Self) -> Ordering"
+    );
+
+    let less_than_sig = engine.handle_line(":sig <");
+    let less_than_sig = signature_text(&less_than_sig);
+    assert_eq!(
+        less_than_sig.trim(),
+        "Compare::lt(self: Self, rhs: Self) -> Boolean"
+    );
+
+    let default_less_than_sig = engine.handle_line(":sig lt");
+    let default_less_than_sig = signature_text(&default_less_than_sig);
+    assert_eq!(
+        default_less_than_sig.trim(),
+        "Compare::lt(self: Self, rhs: Self) -> Boolean"
+    );
+
+    let typed_less_than_sig = engine.handle_line(":sig lt(Int, Int)");
+    let typed_less_than_sig = signature_text(&typed_less_than_sig);
+    assert!(
+        typed_less_than_sig
+            .contains("defined:\n  impl Compare for Int::lt(self: Self, rhs: Self) -> Boolean"),
+        "{typed_less_than_sig}"
+    );
+    assert!(
+        typed_less_than_sig.contains("specialized:\n  lt(Int, Int) -> Boolean"),
+        "{typed_less_than_sig}"
+    );
 
     let operator_sig = engine.handle_line(":sig |>");
     let operator_sig = signature_text(&operator_sig);
@@ -1087,10 +1136,6 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let slash_doc = doc_text(&slash_doc);
     assert!(slash_doc.contains("trait Compose"), "{slash_doc}");
     assert!(slash_doc.contains("models the `/` operator"), "{slash_doc}");
-
-    let helper_sig = engine.handle_line(":sig gt");
-    let helper_sig = signature_text(&helper_sig);
-    assert!(helper_sig.contains("trait Gt { gt(self: Self, rhs: Self) -> Boolean }"));
 
     let bind_sig = engine.handle_line(":sig =");
     let bind_sig = signature_text(&bind_sig);
@@ -1120,19 +1165,44 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "@intrinsic def cond(clauses: CondClauses<$A>) -> $A"
     );
 
-    let typed_doc = engine.handle_line(":doc gt(Int, Int)");
+    let typed_doc = engine.handle_line(":doc compare(Int, Int)");
     let typed_doc = doc_text(&typed_doc);
-    assert!(typed_doc.contains("impl Gt for Int::gt(self: Self, rhs: Self) -> Boolean"));
-    assert!(typed_doc.contains(
-        "Return `True` when the left integer is strictly greater than the right integer."
-    ));
-    assert!(!typed_doc.contains(
-        "\n  Return `True` when the left integer is strictly greater than the right integer."
-    ));
+    assert!(typed_doc.contains("impl Compare for Int::compare(self: Self, rhs: Self) -> Ordering"));
+    assert!(typed_doc.contains("Return the three-way ordering between the two integer values."));
+    assert!(
+        !typed_doc.contains("\n  Return the three-way ordering between the two integer values.")
+    );
 
-    let helper_doc = engine.handle_line(":doc gt");
+    let helper_doc = engine.handle_line(":doc compare");
     let helper_doc = doc_text(&helper_doc);
-    assert!(helper_doc.contains("trait Gt { gt(self: Self, rhs: Self) -> Boolean }"));
+    assert!(helper_doc.contains("Compare::compare"));
+    assert!(helper_doc.contains("Standard `Compare` trait declaration."));
+
+    let operator_doc = engine.handle_line(":doc <");
+    let operator_doc = doc_text(&operator_doc);
+    assert!(operator_doc.contains("Compare::lt"));
+    assert!(!operator_doc.contains("trait Compare {"), "{operator_doc}");
+
+    let default_less_than_doc = engine.handle_line(":doc lt");
+    let default_less_than_doc = doc_text(&default_less_than_doc);
+    assert!(default_less_than_doc.contains("Compare::lt"));
+    assert!(
+        !default_less_than_doc.contains("trait Compare {"),
+        "{default_less_than_doc}"
+    );
+
+    let typed_less_than_doc = engine.handle_line(":doc lt(Int, Int)");
+    let typed_less_than_doc = doc_text(&typed_less_than_doc);
+    assert!(
+        typed_less_than_doc.contains("impl Compare for Int::lt(self: Self, rhs: Self) -> Boolean"),
+        "{typed_less_than_doc}"
+    );
+    assert!(
+        typed_less_than_doc.contains(
+            "Return `True` when the left integer is strictly less than the right integer."
+        ),
+        "{typed_less_than_doc}"
+    );
 
     let constructor_doc = engine.handle_line(":doc Duration(Int)");
     let constructor_doc = doc_text(&constructor_doc);
@@ -1200,12 +1270,58 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "Duration::new(value: Int) -> Result<Self, Error>"
     );
 
-    let unsupported = engine.handle_line(":doc gt(make_value(), Int)");
+    let unsupported = engine.handle_line(":doc compare(make_value(), Int)");
     assert!(
         rendered_text(&unsupported).contains("Unsupported command query argument `make_value()`"),
         "{}",
         rendered_text(&unsupported)
     );
+}
+
+#[test]
+fn core_compare_typed_queries_fall_back_to_trait_default_methods_when_impl_override_is_missing() {
+    let mut engine = ReplEngine::from_script_source(
+        "compare_default.srt",
+        r#"
+defstruct Ranked {
+  weight: Int,
+}
+
+impl Ranked {
+  def new(weight: Int) -> Self {
+    Ranked { weight: weight }
+  }
+}
+
+impl Compare for Ranked {
+  @doc """Compare ranked values by weight."""
+  def compare(self: Self, rhs: Self) -> Ordering {
+    Compare::compare(self.weight, rhs.weight)
+  }
+}
+"#,
+    )
+    .expect("compare default preload should bootstrap");
+
+    let sig = engine.handle_line(":sig lt(Ranked, Ranked)");
+    let sig = signature_text(&sig);
+    assert!(
+        sig.contains("defined:\n  Compare::lt(self: Self, rhs: Self) -> Boolean"),
+        "{sig}"
+    );
+    assert!(
+        sig.contains("specialized:\n  lt(Ranked, Ranked) -> Boolean"),
+        "{sig}"
+    );
+
+    let doc = engine.handle_line(":doc lt(Ranked, Ranked)");
+    let doc = doc_text(&doc);
+    assert!(
+        doc.contains("Compare::lt(self: Self, rhs: Self) -> Boolean"),
+        "{doc}"
+    );
+    assert!(doc.contains("Compare::lt"), "{doc}");
+    assert!(!doc.contains("trait Compare {"), "{doc}");
 }
 
 #[test]
@@ -1223,6 +1339,62 @@ fn core_sig_type_owner_falls_back_to_constructor_signatures() {
     assert!(point_sig.contains("fg: Option"), "{point_sig}");
     assert!(point_sig.contains("italic: Boolean"), "{point_sig}");
     assert!(point_sig.contains("-> Self"), "{point_sig}");
+}
+
+#[test]
+fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fallbacks() {
+    let mut engine = engine();
+
+    let constructor_doc = doc_text(&engine.handle_line(":doc Range(Int, Int)"));
+    assert!(constructor_doc.contains("Range::new"), "{constructor_doc}");
+    assert!(constructor_doc.contains("min: $A"), "{constructor_doc}");
+    assert!(constructor_doc.contains("max: $A"), "{constructor_doc}");
+    assert!(
+        constructor_doc.contains("-> Range<$A>"),
+        "{constructor_doc}"
+    );
+    assert!(
+        constructor_doc.contains("Construct a range while preserving the input order."),
+        "{constructor_doc}"
+    );
+
+    let range_sig = signature_text(&engine.handle_line(":sig Range"));
+    assert!(range_sig.contains("Range::new"), "{range_sig}");
+    assert!(range_sig.contains("min: $A"), "{range_sig}");
+    assert!(range_sig.contains("max: $A"), "{range_sig}");
+    assert!(range_sig.contains("-> Range<$A>"), "{range_sig}");
+
+    let range_empty_call_sig = signature_text(&engine.handle_line(":sig Range()"));
+    assert_eq!(range_empty_call_sig.trim(), range_sig.trim());
+
+    let extractor_doc = doc_text(&engine.handle_line(":doc Range!()"));
+    assert!(
+        extractor_doc.contains("Range::deconstruct"),
+        "{extractor_doc}"
+    );
+    assert!(
+        extractor_doc.contains("MatchResult<($A, $A), Error>"),
+        "{extractor_doc}"
+    );
+    assert!(
+        extractor_doc.contains("Deconstruct a `Range` into `(min, max)` in pattern position."),
+        "{extractor_doc}"
+    );
+
+    let extractor_sig = signature_text(&engine.handle_line(":sig Range!()"));
+    assert!(
+        extractor_sig.contains(
+            "defined:\n  Range::deconstruct<$A>(self: Range<$A>) -> MatchResult<($A, $A), Error>"
+        ),
+        "{extractor_sig}"
+    );
+    assert!(
+        extractor_sig.contains("specialized:\n  Range!() -> MatchResult<($A, $A), Error>"),
+        "{extractor_sig}"
+    );
+
+    let extractor_sig_no_args = signature_text(&engine.handle_line(":sig Range!"));
+    assert_eq!(extractor_sig_no_args.trim(), extractor_sig.trim());
 }
 
 #[test]
@@ -1961,12 +2133,12 @@ fn core_sig_supports_tuple_field_sugar_and_facet_expression_queries() {
         "{result_pair_text}"
     );
 
-    let compose_sig =
-        engine.handle_line(":sig Facet::compose(StyledDocSegment.style, StyledDocStyle.bold)");
-    let compose_sig = rendered_text(&compose_sig);
+    let chain_sig =
+        engine.handle_line(":sig Facet::chain(StyledDocSegment.style, StyledDocStyle.bold)");
+    let chain_sig = rendered_text(&chain_sig);
     assert!(
-        compose_sig.contains("Unsupported command query argument `StyledDocSegment.style`"),
-        "{compose_sig}"
+        chain_sig.contains("Unsupported command query argument `StyledDocSegment.style`"),
+        "{chain_sig}"
     );
 
     let over_result_sig = engine.handle_line(

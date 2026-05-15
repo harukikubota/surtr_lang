@@ -80,7 +80,7 @@ fn test_private_field_modifier_is_preserved() {
     )
     .unwrap();
     match &ast[0] {
-        Ast::StructDef(_, name, fields, attrs) => {
+        Ast::StructDef(_, name, _, fields, attrs) => {
             assert_eq!(name, "Global::User");
             assert_eq!(fields[0].name, "password");
             assert_eq!(fields[0].visibility, Visibility::Private);
@@ -95,6 +95,45 @@ fn test_private_field_modifier_is_preserved() {
 }
 
 #[test]
+fn test_generic_struct_type_params_are_preserved() {
+    let ast =
+        parse_with_context("defstruct Box<$A> { value: $A }", ParserContext::project(0)).unwrap();
+    match &ast[0] {
+        Ast::StructDef(_, name, type_params, fields, attrs) => {
+            assert_eq!(name, "Global::Box");
+            assert_eq!(type_params.len(), 1);
+            assert_eq!(type_params[0].name, "$A");
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0].name, "value");
+            assert!(matches!(fields[0].ty, AstTy::Named(_, ref ty) if ty == "$A"));
+            assert_eq!(attrs, &DeclAttrs::default());
+        }
+        _ => panic!("Expected StructDef"),
+    }
+}
+
+#[test]
+fn test_generic_struct_two_type_params_are_preserved() {
+    let ast = parse_with_context(
+        "defstruct Pair<$A, $B> { left: $A, right: $B }",
+        ParserContext::project(0),
+    )
+    .unwrap();
+    match &ast[0] {
+        Ast::StructDef(_, name, type_params, fields, _) => {
+            assert_eq!(name, "Global::Pair");
+            assert_eq!(type_params.len(), 2);
+            assert_eq!(type_params[0].name, "$A");
+            assert_eq!(type_params[1].name, "$B");
+            assert_eq!(fields.len(), 2);
+            assert!(matches!(fields[0].ty, AstTy::Named(_, ref ty) if ty == "$A"));
+            assert!(matches!(fields[1].ty, AstTy::Named(_, ref ty) if ty == "$B"));
+        }
+        _ => panic!("Expected StructDef"),
+    }
+}
+
+#[test]
 fn test_readonly_struct_field_modifier_is_preserved() {
     let ast = parse_with_context(
         "defstruct User { readonly profile: Profile, public readonly name: String }",
@@ -102,7 +141,7 @@ fn test_readonly_struct_field_modifier_is_preserved() {
     )
     .unwrap();
     match &ast[0] {
-        Ast::StructDef(_, name, fields, attrs) => {
+        Ast::StructDef(_, name, _, fields, attrs) => {
             assert_eq!(name, "Global::User");
             assert_eq!(fields[0].name, "profile");
             assert!(fields[0].readonly);
@@ -137,7 +176,7 @@ fn test_readonly_struct_metadata_and_field_modifier_are_preserved() {
     )
     .unwrap();
     match &ast[0] {
-        Ast::StructDef(_, name, fields, attrs) => {
+        Ast::StructDef(_, name, _, fields, attrs) => {
             assert_eq!(name, "Global::User");
             assert!(attrs.readonly);
             assert_eq!(fields[0].name, "password");
@@ -166,7 +205,7 @@ defrecord Point(x: Float, y: Float)"#,
     .expect("annotated struct and record should parse");
 
     match &ast[0] {
-        Ast::StructDef(_, name, fields, attrs) => {
+        Ast::StructDef(_, name, _, fields, attrs) => {
             assert_eq!(name, "Global::User");
             assert_eq!(fields.len(), 1);
             assert_eq!(attrs.doc.as_deref(), Some("User docs."));
@@ -580,11 +619,14 @@ fn test_facet_bulk_update_special_form_parses() {
                 Ast::BulkUpdate(_, source, entries) => {
                     assert!(matches!(source.as_ref(), Ast::Var(_, name) if name == "user"));
                     assert_eq!(entries.len(), 3);
-                    assert_eq!(entries[0].path, vec!["name"]);
+                    assert_eq!(entries[0].path, vec![FacetPathSegment::field("name")]);
                     assert!(matches!(entries[0].kind, BulkUpdateEntryKind::Set(_)));
-                    assert_eq!(entries[1].path, vec!["score"]);
-                    assert!(matches!(entries[1].kind, BulkUpdateEntryKind::OverResult(_)));
-                    assert_eq!(entries[2].path, vec!["address"]);
+                    assert_eq!(entries[1].path, vec![FacetPathSegment::field("score")]);
+                    assert!(matches!(
+                        entries[1].kind,
+                        BulkUpdateEntryKind::OverResult(_)
+                    ));
+                    assert_eq!(entries[2].path, vec![FacetPathSegment::field("address")]);
                     assert!(matches!(entries[2].kind, BulkUpdateEntryKind::Nested(_)));
                 }
                 other => panic!("Expected BulkUpdate, got {other:?}"),
@@ -618,7 +660,8 @@ fn test_facet_bulk_update_rejects_non_whitelisted_leaf_call() {
 
     assert!(err
         .message()
-        .contains("set(value), over(update_fun), or over_result(update_fun)"));
+        .contains("set(value), over(update_fun), over_result(update_fun)"));
+    assert!(err.message().contains("case_set(payload)"));
 }
 
 #[test]
@@ -946,6 +989,38 @@ fn test_trait_def_parses_method_signatures() {
             assert!(matches!(methods[0].ret_ty, AstTy::Named(_, ref ty) if ty == "Self"));
             assert_eq!(methods[1].name, "abs");
             assert_eq!(methods[1].params.len(), 1);
+        }
+        _ => panic!("Expected TraitDef"),
+    }
+}
+
+#[test]
+fn test_trait_def_parses_method_docs_and_optional_default_bodies() {
+    let ast = parse_with_context(
+        r#"deftrait Numeric {
+  @doc """Delegates to abs."""
+  def magnitude(self: Self) -> Self {
+    abs(self)
+  }
+
+  def abs(self: Self) -> Self
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("trait with documented default method should parse");
+
+    match ast.as_slice() {
+        [Ast::TraitDef(_, name, _, methods, _)] => {
+            assert_eq!(name, "Numeric");
+            assert_eq!(methods.len(), 2);
+            assert_eq!(methods[0].name, "magnitude");
+            assert_eq!(methods[0].attrs.doc.as_deref(), Some("Delegates to abs."));
+            assert!(
+                matches!(methods[0].body.as_deref(), Some(Ast::Block(_, stmts)) if stmts.len() == 1)
+            );
+            assert_eq!(methods[1].name, "abs");
+            assert_eq!(methods[1].attrs, DeclAttrs::default());
+            assert!(methods[1].body.is_none());
         }
         _ => panic!("Expected TraitDef"),
     }
@@ -1945,7 +2020,7 @@ fn test_prefix_bang_binds_tighter_than_and() {
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::App(_, func, args) => {
-                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "and"));
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "&&"));
                 assert!(matches!(
                     args.as_slice(),
                     [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
@@ -1987,7 +2062,7 @@ fn test_prefix_bang_preserves_grouping() {
                         if matches!(
                             inner.as_ref(),
                             Ast::App(_, inner_func, inner_args)
-                                if matches!(inner_func.as_ref(), Ast::Var(_, name) if name == "and")
+                                if matches!(inner_func.as_ref(), Ast::Var(_, name) if name == "&&")
                                     && matches!(
                                         inner_args.as_slice(),
                                         [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
@@ -2110,7 +2185,7 @@ fn test_symbolic_and_is_lower_precedence_than_comparison_ops() {
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::App(_, func, args) => {
-                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "and"));
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "&&"));
                 assert!(matches!(
                     args.as_slice(),
                     [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
@@ -2139,7 +2214,7 @@ fn test_symbolic_or_lowers_to_call() {
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::App(_, func, args) => {
-                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "or"));
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "||"));
                 assert!(matches!(
                     args.as_slice(),
                     [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
@@ -2197,6 +2272,26 @@ fn test_func_literal_operator_lowers_to_binop() {
                         && matches!(right.as_ref(), Ast::Var(_, name) if name == "right")
             ));
         }
+        other => panic!("Expected bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_bare_and_call_stays_plain_name() {
+    let ast = parse("x = and(left, right)").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, func, args) => {
+                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "and"));
+                assert!(matches!(
+                    args.as_slice(),
+                    [RecordLitArg::Positional(left), RecordLitArg::Positional(right)]
+                        if matches!(left, Ast::Var(_, name) if name == "left")
+                            && matches!(right, Ast::Var(_, name) if name == "right")
+                ));
+            }
+            other => panic!("Expected bare and(...) call, got {:?}", other),
+        },
         other => panic!("Expected bind, got {:?}", other),
     }
 }
@@ -2733,6 +2828,160 @@ fn test_qualified_capture_and_flow_parse() {
         },
         _ => panic!("Expected bind"),
     }
+}
+
+#[test]
+fn test_capture_allows_facet_bracket_segments() {
+    let ast = parse(
+        r#"first = &List.[0]
+talk = &HashMap.["talk"]
+user_score = &User.scores.[1]"#,
+    )
+    .unwrap();
+
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::Capture(_, target, args)
+                    if args.is_empty()
+                        && matches!(target.as_ref(),
+                            Ast::FacetSegmentAccess(_, expr, FacetPathSegment::Bracket(_))
+                                if matches!(expr.as_ref(), Ast::Var(_, name) if name == "List")
+                        )
+            ));
+        }
+        other => panic!("Expected List bracket capture bind, got {:?}", other),
+    }
+
+    match &ast[1] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::Capture(_, target, args)
+                    if args.is_empty()
+                        && matches!(target.as_ref(),
+                            Ast::FacetSegmentAccess(_, expr, FacetPathSegment::Bracket(_))
+                                if matches!(expr.as_ref(), Ast::Var(_, name) if name == "HashMap")
+                        )
+            ));
+        }
+        other => panic!("Expected HashMap bracket capture bind, got {:?}", other),
+    }
+
+    match &ast[2] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::Capture(_, target, args)
+                    if args.is_empty()
+                        && matches!(target.as_ref(),
+                            Ast::FacetSegmentAccess(_, expr, FacetPathSegment::Bracket(_))
+                                if matches!(expr.as_ref(),
+                                    Ast::FieldAccess(_, owner, field)
+                                        if field == "scores"
+                                            && matches!(owner.as_ref(), Ast::Var(_, name) if name == "User")
+                                )
+                        )
+            ));
+        }
+        other => panic!("Expected property bracket capture bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_facet_bracket_segments_parse_dynamic_expressions() {
+    let ast = parse(
+        r#"list_value = List.[index + 1]
+map_value = HashMap.[String::trim(raw_name)]
+Facet::bulk_update(book) {
+  scores.[n] <- set(1)
+}"#,
+    )
+    .unwrap();
+
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::FacetSegmentAccess(_, expr, FacetPathSegment::Bracket(_))
+                    if matches!(expr.as_ref(), Ast::Var(_, name) if name == "List")
+            ));
+        }
+        other => panic!("Expected dynamic List bracket bind, got {:?}", other),
+    }
+
+    match &ast[1] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::FacetSegmentAccess(_, expr, FacetPathSegment::Bracket(_))
+                    if matches!(expr.as_ref(), Ast::Var(_, name) if name == "HashMap")
+            ));
+        }
+        other => panic!("Expected dynamic HashMap bracket bind, got {:?}", other),
+    }
+
+    match &ast[2] {
+        Ast::BulkUpdate(_, _, entries) => {
+            assert!(matches!(
+                entries.as_slice(),
+                [BulkUpdateEntry { path, .. }]
+                    if matches!(path.as_slice(), [FacetPathSegment::Field { name, .. }, FacetPathSegment::Bracket(_)] if name == "scores")
+            ));
+        }
+        other => panic!("Expected bulk update, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_facet_bracket_segments_parse_negative_indexes_and_ranges() {
+    let ast = parse(
+        r#"last = List.[-1]
+window = values.[2..-2]"#,
+    )
+    .unwrap();
+
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::FacetSegmentAccess(_, expr, FacetPathSegment::Bracket(_))
+                    if matches!(expr.as_ref(), Ast::Var(_, name) if name == "List")
+            ));
+        }
+        other => panic!("Expected negative List bracket bind, got {:?}", other),
+    }
+
+    match &ast[1] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::FacetSegmentAccess(_, expr, FacetPathSegment::Bracket(_))
+                    if matches!(expr.as_ref(), Ast::Var(_, name) if name == "values")
+            ));
+        }
+        other => panic!("Expected range bracket bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_facet_bracket_segments_reject_malformed_ranges() {
+    let err = parse("bad = List.[1..]").expect_err("unterminated right endpoint should fail");
+    assert!(
+        err.message().contains("expression")
+            || err.message().contains("RBrack")
+            || err.message().contains("unexpected"),
+        "{err:?}"
+    );
+
+    let err = parse("bad = List.[..3]").expect_err("missing left endpoint should fail");
+    assert!(
+        err.message().contains("expression")
+            || err.message().contains("unexpected")
+            || err.message().contains("DotDot"),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -3398,14 +3647,13 @@ fn test_parenthesized_single_type_annotation_is_rejected() {
 }
 
 #[test]
-fn test_optional_type_annotation_lowers_to_result_none_error() {
+fn test_optional_type_annotation_lowers_to_option() {
     let ast = parse("value: Int? = input").unwrap();
     match &ast[0] {
         Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Generic(_, name, args)), rhs) => {
-            assert_eq!(name, "Result");
-            assert_eq!(args.len(), 2);
+            assert_eq!(name, "Option");
+            assert_eq!(args.len(), 1);
             assert!(matches!(&args[0], AstTy::Named(_, inner) if inner == "Int"));
-            assert!(matches!(&args[1], AstTy::Named(_, inner) if inner == "NoneError"));
             assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "input"));
         }
         other => panic!("Expected optional type bind, got {:?}", other),
@@ -3463,7 +3711,7 @@ fn test_facet_capture_shorthand_parses_field_access_chain() {
 
 #[test]
 fn test_facet_capture_shorthand_parses_grouped_and_call_roots() {
-    let ast = parse("Facet::replace(~(make_pair())._1, 99)").unwrap();
+    let ast = parse("put(~(make_pair())._1, 99)").unwrap();
     match &ast[0] {
         Ast::App(_, _, args) => {
             assert!(matches!(
@@ -3493,6 +3741,72 @@ fn test_facet_capture_shorthand_allows_bare_inner_expr_for_later_diagnostics() {
         }
         other => panic!("Expected App, got {:?}", other),
     }
+}
+
+#[test]
+fn parses_facet_index_and_key_segments() {
+    let ast = parse("updated =? Facet::set(~user.score.[\"talk\"], 90)").unwrap();
+    let Ast::SafeBind(_, _, rhs) = &ast[0] else {
+        panic!("expected safe bind");
+    };
+    let Ast::App(_, callee, args) = rhs.as_ref() else {
+        panic!("expected Facet::set call");
+    };
+    assert!(matches!(callee.as_ref(), Ast::Path(_, path) if path.segments == vec!["Facet", "set"]));
+    assert!(matches!(
+        &args[0],
+        RecordLitArg::Positional(Ast::FacetCapture(_, inner))
+            if matches!(
+                inner.as_ref(),
+                Ast::FacetSegmentAccess(_, _, FacetPathSegment::Bracket(_))
+            )
+    ));
+}
+
+#[test]
+fn parses_container_root_facet_paths() {
+    let ast = parse(r#"print(inspect(Facet::view(HashMap.["taro"], map)))"#).unwrap();
+    let rendered = format!("{ast:?}");
+    assert!(rendered.contains("FacetSegmentAccess"), "{rendered}");
+    assert!(rendered.contains("Bracket"), "{rendered}");
+
+    let ast = parse("print(inspect(Facet::view(List.[0], values)))").unwrap();
+    let rendered = format!("{ast:?}");
+    assert!(rendered.contains("FacetSegmentAccess"), "{rendered}");
+    assert!(rendered.contains("Bracket"), "{rendered}");
+}
+
+#[test]
+fn parses_optional_enum_facet_segment() {
+    let ast = parse("print(inspect(Facet::view(Option.Some?, option)))").unwrap();
+    let Ast::App(_, _, print_args) = &ast[0] else {
+        panic!("expected print call");
+    };
+    assert_eq!(print_args.len(), 1);
+}
+
+#[test]
+fn parses_bulk_update_index_key_optional_and_case_actions() {
+    let ast = parse(
+        r#"user2 =? Facet::bulk_update(user) {
+  score.["talk"] <- over({|score| Ok(score + 1)})
+  scores.[1] <- set(500)
+  nickname.Some? <- case_over({|name| Ok(name ++ "!")})
+  phone.Some <- case_set("090")
+}"#,
+    )
+    .unwrap();
+    let Ast::SafeBind(_, _, rhs) = &ast[0] else {
+        panic!("expected safe bind");
+    };
+    let Ast::BulkUpdate(_, _, entries) = rhs.as_ref() else {
+        panic!("expected bulk update");
+    };
+    assert_eq!(entries.len(), 4);
+    assert!(matches!(entries[0].path[1], FacetPathSegment::Bracket(_)));
+    assert!(matches!(entries[1].path[1], FacetPathSegment::Bracket(_)));
+    assert!(matches!(entries[2].kind, BulkUpdateEntryKind::CaseOver(_)));
+    assert!(matches!(entries[3].kind, BulkUpdateEntryKind::CaseSet(_)));
 }
 
 #[test]

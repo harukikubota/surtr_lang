@@ -174,70 +174,8 @@ impl Compare for Float {
   xldr(1)> compare(1.5, 2.0)
   Ordering::Less
   """
-  def compare(self: Self, rhs: Self) -> Ordering {
-    if(
-      Lt::lt(self, rhs),
-      Ordering::Less,
-      if(Gt::gt(self, rhs), Ordering::Greater, Ordering::Equal),
-    )
-  }
-}
+  @builtin def compare(self: Self, rhs: Self) -> Ordering
 
-impl Ord for Float {
-  @doc """
-  Return `True` when the left float is strictly less than the right float.
-  ## REPL
-  xldr(1)> lt(1.5, 2.0)
-  True
-  """
-  def lt(self: Self, rhs: Self) -> Boolean {
-    match Compare::compare(self, rhs) {
-      Ordering::Less => True,
-      Ordering::Equal | Ordering::Greater => False,
-    }
-  }
-
-  @doc """
-  Return `True` when the left float is less than or equal to the right float.
-  ## REPL
-  xldr(1)> lte(1.5, 1.5)
-  True
-  """
-  def lte(self: Self, rhs: Self) -> Boolean {
-    match Compare::compare(self, rhs) {
-      Ordering::Less | Ordering::Equal => True,
-      Ordering::Greater => False,
-    }
-  }
-
-  @doc """
-  Return `True` when the left float is strictly greater than the right float.
-  ## REPL
-  xldr(1)> gt(2.0, 1.5)
-  True
-  """
-  def gt(self: Self, rhs: Self) -> Boolean {
-    match Compare::compare(self, rhs) {
-      Ordering::Less | Ordering::Equal => False,
-      Ordering::Greater => True,
-    }
-  }
-
-  @doc """
-  Return `True` when the left float is greater than or equal to the right float.
-  ## REPL
-  xldr(1)> gte(2.0, 2.0)
-  True
-  """
-  def gte(self: Self, rhs: Self) -> Boolean {
-    match Compare::compare(self, rhs) {
-      Ordering::Less => False,
-      Ordering::Equal | Ordering::Greater => True,
-    }
-  }
-}
-
-impl Lt for Float {
   @doc """
   Return `True` when the left float is strictly less than the right float.
   ## REPL
@@ -245,9 +183,7 @@ impl Lt for Float {
   True
   """
   @builtin def lt(self: Self, rhs: Self) -> Boolean
-}
 
-impl Lte for Float {
   @doc """
   Return `True` when the left float is less than or equal to the right float.
   ## REPL
@@ -255,9 +191,7 @@ impl Lte for Float {
   True
   """
   @builtin def lte(self: Self, rhs: Self) -> Boolean
-}
 
-impl Gt for Float {
   @doc """
   Return `True` when the left float is strictly greater than the right float.
   ## REPL
@@ -265,9 +199,7 @@ impl Gt for Float {
   True
   """
   @builtin def gt(self: Self, rhs: Self) -> Boolean
-}
 
-impl Gte for Float {
   @doc """
   Return `True` when the left float is greater than or equal to the right float.
   ## REPL

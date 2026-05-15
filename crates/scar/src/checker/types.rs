@@ -460,6 +460,17 @@ impl Checker {
                         if let Some(def) = self.env.lookup_type_def(name) {
                             match &def.kind {
                                 crate::env::TypeKind::Struct => {
+                                    if !def.type_params.is_empty() {
+                                        return Err(TypeError {
+                                            message: format!(
+                                                "Type {} requires {} type argument(s)",
+                                                name,
+                                                def.type_params.len()
+                                            ),
+                                            span: span.clone(),
+                                            hint: None,
+                                        });
+                                    }
                                     return Ok(Ty::Struct(def.name.clone(), def.fields.clone()));
                                 }
                                 crate::env::TypeKind::Record => {
@@ -668,7 +679,7 @@ impl Checker {
                                         .into(),
                                 span: span.clone(),
                                 hint: Some(
-                                    "Use Result<T> in local code, or Result<T, NoneError> / T? for optional-style values."
+                                    "Use Result<T> in local code, or Option<T> / T? for optional-style values."
                                         .into(),
                                 ),
                             });
@@ -711,6 +722,10 @@ impl Checker {
                         .map(|arg| self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General))
                         .collect::<Result<Vec<_>, _>>()?;
                     match def.kind {
+                        crate::env::TypeKind::Struct => Ok(Ty::Struct(
+                            def.name.clone(),
+                            self.instantiate_type_def_fields(def, &resolved_args),
+                        )),
                         crate::env::TypeKind::Enum => Ok(Ty::Enum(def.name.clone(), resolved_args)),
                         _ => Err(TypeError {
                             message: format!(
@@ -880,7 +895,10 @@ impl Checker {
                 self.resolve_hole_surface_ty(span, context)
             }
             AstTy::Named(span, name)
-                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses" | "BulkUpdateEntries") =>
+                if matches!(
+                    Self::surface_type_name(name),
+                    "MatchArms" | "CondClauses" | "BulkUpdateEntries"
+                ) =>
             {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
             }
@@ -912,7 +930,10 @@ impl Checker {
                 Err(self.type_ref_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _)
-                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses" | "BulkUpdateEntries") =>
+                if matches!(
+                    Self::surface_type_name(name),
+                    "MatchArms" | "CondClauses" | "BulkUpdateEntries"
+                ) =>
             {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
             }
@@ -1146,6 +1167,10 @@ impl Checker {
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     match def.kind {
+                        crate::env::TypeKind::Struct => Ok(Ty::Struct(
+                            def.name.clone(),
+                            self.instantiate_type_def_fields(&def, &resolved_args),
+                        )),
                         crate::env::TypeKind::Enum => Ok(Ty::Enum(def.name.clone(), resolved_args)),
                         _ => Err(TypeError {
                             message: format!(
@@ -1574,6 +1599,115 @@ impl Checker {
         self.instantiate_ty_with_fresh(ty, &mut fresh)
     }
 
+    fn substitute_type_def_ty(&self, ty: &Ty, bindings: &HashMap<u32, Ty>) -> Ty {
+        match ty {
+            Ty::Var(var) => bindings.get(var).cloned().unwrap_or(Ty::Var(*var)),
+            Ty::List(inner) => Ty::List(Box::new(self.substitute_type_def_ty(inner, bindings))),
+            Ty::Hole => Ty::Hole,
+            Ty::TypeRef(inner) => {
+                Ty::TypeRef(Box::new(self.substitute_type_def_ty(inner, bindings)))
+            }
+            Ty::Lazy(inner) => Ty::Lazy(Box::new(self.substitute_type_def_ty(inner, bindings))),
+            Ty::Pid(name) => Ty::Pid(name.clone()),
+            Ty::Facet(source, focus) => Ty::Facet(
+                Box::new(self.substitute_type_def_ty(source, bindings)),
+                Box::new(self.substitute_type_def_ty(focus, bindings)),
+            ),
+            Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .iter()
+                    .map(|item| self.substitute_type_def_ty(item, bindings))
+                    .collect(),
+            ),
+            Ty::Func(params, ret) => Ty::Func(
+                params
+                    .iter()
+                    .map(|param| self.substitute_type_def_ty(param, bindings))
+                    .collect(),
+                Box::new(self.substitute_type_def_ty(ret, bindings)),
+            ),
+            Ty::BuiltinFunc { name, params, ret } => Ty::BuiltinFunc {
+                name: name.clone(),
+                params: params
+                    .iter()
+                    .map(|param| self.substitute_type_def_ty(param, bindings))
+                    .collect(),
+                ret: Box::new(self.substitute_type_def_ty(ret, bindings)),
+            },
+            Ty::UserFunc {
+                fun_idx,
+                type_params,
+                params,
+                ret,
+            } => Ty::UserFunc {
+                fun_idx: *fun_idx,
+                type_params: type_params.clone(),
+                params: params
+                    .iter()
+                    .map(|param| self.substitute_type_def_ty(param, bindings))
+                    .collect(),
+                ret: Box::new(self.substitute_type_def_ty(ret, bindings)),
+            },
+            Ty::Struct(name, fields) => Ty::Struct(
+                name.clone(),
+                fields
+                    .iter()
+                    .map(|(field, field_ty)| {
+                        (
+                            field.clone(),
+                            self.substitute_type_def_ty(field_ty, bindings),
+                        )
+                    })
+                    .collect(),
+            ),
+            Ty::Record(name, fields) => Ty::Record(
+                name.clone(),
+                fields
+                    .iter()
+                    .map(|(field, field_ty)| {
+                        (
+                            field.clone(),
+                            self.substitute_type_def_ty(field_ty, bindings),
+                        )
+                    })
+                    .collect(),
+            ),
+            Ty::Enum(name, args) => Ty::Enum(
+                name.clone(),
+                args.iter()
+                    .map(|arg| self.substitute_type_def_ty(arg, bindings))
+                    .collect(),
+            ),
+            Ty::Result(ok, err) => Ty::Result(
+                Box::new(self.substitute_type_def_ty(ok, bindings)),
+                Box::new(self.substitute_type_def_ty(err, bindings)),
+            ),
+            other => other.clone(),
+        }
+    }
+
+    pub(super) fn instantiate_type_def_fields(
+        &self,
+        def: &crate::env::TypeDefInfo,
+        args: &[Ty],
+    ) -> Vec<(String, Ty)> {
+        let bindings = def
+            .type_param_vars
+            .iter()
+            .copied()
+            .zip(args.iter().cloned())
+            .collect::<HashMap<_, _>>();
+        def.fields
+            .iter()
+            .map(|(field, field_ty)| {
+                (
+                    field.clone(),
+                    self.substitute_type_def_ty(field_ty, &bindings),
+                )
+            })
+            .collect()
+    }
+
     pub(super) fn instantiate_enum_variant(
         &mut self,
         variant: &crate::env::EnumVariantInfo,
@@ -1705,6 +1839,11 @@ impl Checker {
         match origin {
             TraitCallOrigin::Explicit => TraitCallOrigin::Explicit,
             TraitCallOrigin::Operator { op, lhs_ty, rhs_ty } => TraitCallOrigin::Operator {
+                op,
+                lhs_ty: self.resolve_ty(&lhs_ty),
+                rhs_ty: self.resolve_ty(&rhs_ty),
+            },
+            TraitCallOrigin::Comparison { op, lhs_ty, rhs_ty } => TraitCallOrigin::Comparison {
                 op,
                 lhs_ty: self.resolve_ty(&lhs_ty),
                 rhs_ty: self.resolve_ty(&rhs_ty),
@@ -1892,6 +2031,7 @@ impl Checker {
                 TypedInner::FacetPath(self.resolve_typed_facet_path(path))
             }
             TypedInner::PendingFacetPath(path) => TypedInner::PendingFacetPath(PendingFacetPath {
+                root_path_name: path.root_path_name,
                 source_ty_hint: path.source_ty_hint.map(|ty| self.resolve_ty(&ty)),
                 segments: path.segments,
             }),

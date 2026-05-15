@@ -390,9 +390,6 @@ pub enum OpcodeView {
     NegInt,
     NegFloat,
     NotBool,
-    ListNew {
-        len: u32,
-    },
     ListEmpty,
     StructNew {
         type_id: u32,

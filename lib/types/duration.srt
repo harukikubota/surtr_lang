@@ -11,7 +11,7 @@ xldr(2)> Duration(250)
 Ok(250ms)
 """
 defstruct Duration {
-  private millis: Int,
+  readonly millis: Int,
 }
 
 deferror InvalidDuration(message: String) {
@@ -35,17 +35,6 @@ impl Duration {
       Err(InvalidDuration("duration must be non-negative: #{value}")),
       Ok(Duration { millis: value })
     )
-  }
-
-  @doc """
-  Return the millisecond count stored in the duration.
-
-  ## REPL
-  xldr(1)> millis(250ms)
-  250
-  """
-  def millis(self: Self) -> Int {
-    self.millis
   }
 
   @doc """
@@ -128,84 +117,6 @@ impl Compare for Duration {
       Ordering::Less,
       if(self.millis > rhs.millis, Ordering::Greater, Ordering::Equal),
     )
-  }
-}
-
-impl Ord for Duration {
-  @doc """
-  Return `True` when the left duration is strictly less than the right duration.
-  """
-  def lt(self: Self, rhs: Self) -> Boolean {
-    match Compare::compare(self, rhs) {
-      Ordering::Less => True,
-      Ordering::Equal | Ordering::Greater => False,
-    }
-  }
-
-  @doc """
-  Return `True` when the left duration is less than or equal to the right duration.
-  """
-  def lte(self: Self, rhs: Self) -> Boolean {
-    match Compare::compare(self, rhs) {
-      Ordering::Less | Ordering::Equal => True,
-      Ordering::Greater => False,
-    }
-  }
-
-  @doc """
-  Return `True` when the left duration is strictly greater than the right duration.
-  """
-  def gt(self: Self, rhs: Self) -> Boolean {
-    match Compare::compare(self, rhs) {
-      Ordering::Less | Ordering::Equal => False,
-      Ordering::Greater => True,
-    }
-  }
-
-  @doc """
-  Return `True` when the left duration is greater than or equal to the right duration.
-  """
-  def gte(self: Self, rhs: Self) -> Boolean {
-    match Compare::compare(self, rhs) {
-      Ordering::Less => False,
-      Ordering::Equal | Ordering::Greater => True,
-    }
-  }
-}
-
-impl Lt for Duration {
-  @doc """
-  Return `True` when the left duration is strictly less than the right duration.
-  """
-  def lt(self: Self, rhs: Self) -> Boolean {
-    self.millis < rhs.millis
-  }
-}
-
-impl Lte for Duration {
-  @doc """
-  Return `True` when the left duration is less than or equal to the right duration.
-  """
-  def lte(self: Self, rhs: Self) -> Boolean {
-    self.millis <= rhs.millis
-  }
-}
-
-impl Gt for Duration {
-  @doc """
-  Return `True` when the left duration is strictly greater than the right duration.
-  """
-  def gt(self: Self, rhs: Self) -> Boolean {
-    self.millis > rhs.millis
-  }
-}
-
-impl Gte for Duration {
-  @doc """
-  Return `True` when the left duration is greater than or equal to the right duration.
-  """
-  def gte(self: Self, rhs: Self) -> Boolean {
-    self.millis >= rhs.millis
   }
 }
 

@@ -389,6 +389,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         }
         Resolved::Grouped(_, inner)
         | Resolved::FieldAccess(_, inner, _)
+        | Resolved::FacetSegmentAccess(_, inner, _)
         | Resolved::FacetCapture(_, inner)
         | Resolved::Semi(_, inner) => {
             rebase_resolved_node(inner, base, offset);
@@ -457,7 +458,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 rebase_record_arg(arg, base, offset);
             }
         }
-        Resolved::StructDef(_, id, fields, _) | Resolved::RecordDef(_, id, fields) => {
+        Resolved::StructDef(_, id, _, fields, _) | Resolved::RecordDef(_, id, fields) => {
             rebase_resolved_id(id, base, offset);
             rebase_fields(fields, base, offset);
         }
@@ -496,6 +497,9 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 rebase_resolved_id(&mut method.id, base, offset);
                 rebase_type_params(&mut method.type_params, base, offset);
                 rebase_fun_params(&mut method.params, base, offset);
+                if let Some(body) = &mut method.body {
+                    rebase_resolved_node(body, base, offset);
+                }
             }
         }
         Resolved::TraitImplDef(_, id, _, _, methods) => {

@@ -1,0 +1,3 @@
+defrecord User(scores: List<Int>)
+user = User([1, 2])
+bad = Facet::put(User.scores.[0], user, 9)

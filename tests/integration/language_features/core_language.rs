@@ -277,6 +277,36 @@ fn symbolic_boolean_operators_require_boolean_operands() {
     );
 }
 
+fn symbolic_boolean_operators_ignore_local_logic_helpers() {
+    assert_output(
+        r#"def and(left: Boolean, right: Boolean) -> Boolean {
+  print("local and")
+  right
+}
+
+def or(left: Boolean, right: Boolean) -> Boolean {
+  print("local or")
+  right
+}
+
+def rhs_true() -> Boolean {
+  print("rhs true")
+  True
+}
+
+def rhs_false() -> Boolean {
+  print("rhs false")
+  False
+}
+
+print(to_string(False && rhs_true()))
+print(to_string(True || rhs_false()))
+print(to_string(and(False, True)))
+print(to_string(or(True, False)))"#,
+        &["False", "True", "local and", "True", "local or", "False"],
+    );
+}
+
 fn kernel_eq_neq_helpers_match_operator_behavior() {
     assert_output(
         r#"defenum Flag {
@@ -293,16 +323,18 @@ print(to_string(neq(Flag::On, Flag::Off)))"#,
     );
 }
 
-fn kernel_ordering_and_concat_helpers_match_operator_behavior() {
+fn kernel_compare_and_concat_helpers_match_operator_behavior() {
     assert_output(
         r#"print(to_string(compare(1, 2)))
 print(to_string(Compare::compare(1, 1)))
 print(to_string(lt(1, 2)))
-print(to_string(lte(2, 2)))
-print(to_string(gt(3, 2)))
 print(to_string(gte(3, 3)))
+print(to_string(1 < 2))
+print(to_string(2 <= 2))
+print(to_string(3 > 2))
+print(to_string(3 >= 3))
 print(concat("hello", " world"))
-print(to_string(lt(1.5, 2.0)))"#,
+print(to_string(1.5 < 2.0))"#,
         &[
             "Ordering::Less",
             "Ordering::Equal",
@@ -310,8 +342,34 @@ print(to_string(lt(1.5, 2.0)))"#,
             "True",
             "True",
             "True",
+            "True",
+            "True",
             "hello world",
             "True",
+        ],
+    );
+}
+
+fn symbolic_value_operators_ignore_local_helper_names() {
+    assert_output(
+        r#"def add(left: Int, right: Int) -> Int { 999 }
+def eq(left: Int, right: Int) -> Boolean { False }
+def neq(left: Boolean, right: Boolean) -> Boolean { False }
+def lt(left: Int, right: Int) -> Boolean { False }
+def gte(left: Int, right: Int) -> Boolean { False }
+def concat(left: String, right: String) -> String { "wrong" }
+
+print(to_string(1 + 2))
+print(to_string(3 == 3))
+print(to_string(True != False))
+print(to_string(1 < 2))
+print(to_string(3 >= 3))
+print("a" ++ "b")
+print(to_string(add(1, 2)))
+print(to_string(eq(3, 3)))
+print(to_string(concat("a", "b")))"#,
+        &[
+            "3", "True", "True", "True", "True", "ab", "999", "False", "wrong",
         ],
     );
 }
@@ -325,7 +383,10 @@ fn arithmetic_precedence() {
 }
 
 fn equality_reject_mixed_types() {
-    assert_compile_error("x = 1 == \"one\"", "Cannot compare");
+    assert_compile_error(
+        "x = 1 == \"one\"",
+        "`==` requires the same type on both sides",
+    );
 }
 
 fn list_literal_int() {
@@ -1148,12 +1209,20 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
             symbolic_boolean_operators_require_boolean_operands as fn(),
         ),
         (
+            "symbolic_boolean_operators_ignore_local_logic_helpers",
+            symbolic_boolean_operators_ignore_local_logic_helpers as fn(),
+        ),
+        (
             "kernel_eq_neq_helpers_match_operator_behavior",
             kernel_eq_neq_helpers_match_operator_behavior as fn(),
         ),
         (
-            "kernel_ordering_and_concat_helpers_match_operator_behavior",
-            kernel_ordering_and_concat_helpers_match_operator_behavior as fn(),
+            "kernel_compare_and_concat_helpers_match_operator_behavior",
+            kernel_compare_and_concat_helpers_match_operator_behavior as fn(),
+        ),
+        (
+            "symbolic_value_operators_ignore_local_helper_names",
+            symbolic_value_operators_ignore_local_helper_names as fn(),
         ),
         ("concat_strings", concat_strings as fn()),
         ("arithmetic_precedence", arithmetic_precedence as fn()),

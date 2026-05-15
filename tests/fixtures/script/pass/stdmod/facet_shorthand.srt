@@ -2,7 +2,7 @@ defrecord User(name: String, score: Result<Int>)
 
 pair = ("alice", 42)
 print(to_string(Facet::view(~pair._1)))
-print(to_string(Facet::replace(~pair._1, 99)._1))
+print(to_string(put(~pair._1, 99)._1))
 
 user = User("alice", Ok(1))
 print(Facet::view(~user.name))

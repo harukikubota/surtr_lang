@@ -7,9 +7,9 @@
 ## 要点
 
 - 対象は user function への末尾 call です
-- 判定は bytecode 上で「`Call` / `CallClosure` の直後が `Return` か」で決まります
+- 判定は bytecode 上で「`Call` / `CallClosure` の直後が `Return` か」、または `CallClosure; Return` から圧縮された `TailCallClosure` かで決まります
 - top-level call 自体は再利用対象にしません
-- `CallClosure` は target が user function のときだけ対象です
+- `CallClosure` / `TailCallClosure` は target が user function のときだけ `tail_calls_optimized` の対象です
 
 ## TCO 対象になる形
 
@@ -131,17 +131,21 @@ top-level 実行開始用の frame は再利用しません。
 
 ### 6. builtin target への `CallClosure`
 
-callable value の target が builtin の場合は、現在の TCO 対象にしていません。
+callable value の target が builtin の場合は、user-function TCO 対象にしていません。
+`TailCallClosure` に圧縮されている場合は現在 frame の caller へ直接返りますが、
+`tail_calls_optimized` には含めません。
 
 ## 実装上の見方
 
-現状の TCO は dedicated な tail-call opcode ではなく、通常の `Call` / `CallClosure` を使って実装しています。
+現状の TCO は通常の `Call` / `CallClosure` と、`CallClosure; Return` を圧縮した `TailCallClosure` を使って実装しています。
 
 - Forge:
   - 関数本体と closure 本体の末尾位置を tail-position 用に codegen する
   - `Block` の最後、`if` の各 branch、`match` の各 arm で `Call` / `CallClosure` の直後に `Return` が並ぶ形を作る
+  - ラベル境界を跨がない `CallClosure; Return` を `TailCallClosure` へ畳み込む
 - Eldr:
   - 非 top-level frame 上で、次 opcode が `Return` のとき current frame を再利用する
+  - user function target の `TailCallClosure` でも current frame を再利用し、`tail_calls_optimized` を増やす
   - 観測上は `tail_calls_optimized` が増える
 
 つまり、「source 上で末尾っぽく見えるか」よりも、「その位置が最終的に `Call -> Return` へ lower されるか」が実際の判定基準です。
@@ -159,6 +163,7 @@ callable value の target が builtin の場合は、現在の TCO 対象にし�
 
 ## いまの割り切り
 
-- 「TCO を保証する surface 規則」を厳密に定義している段階ではない
-- 現時点では Forge/Eldr の最小実装に合わせて、対象になる形を運用上説明している
+- source 上の末尾位置は「現在の関数 / closure / extractor / process handler の返り値そのものになる式位置」として扱う
+- `Facet` は compile-time-only なので runtime TCO 対象ではない。ただし Facet API に渡す closure の body 内 tail call は通常の closure TCO と同じ
+- process / task / worker の hidden builtin、`Process::sleep`、IO は user-function TCO ではなく scheduler / runtime effect の契約で扱う
 - 将来、明示的な tail marker や別 lowering を入れたら、この文書も更新が必要

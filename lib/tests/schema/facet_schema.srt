@@ -1,3 +1,5 @@
+defrecord ScoreFixture(scores: List<Int>, score: HashMap<Int>)
+
 defmod FacetSchema {
   def demo_fixture() -> ((Config, Result<String>), (String, Int), BitWidth) {
     (
@@ -21,5 +23,9 @@ defmod FacetSchema {
 
   def bump(value: Int) -> Result<Int> {
     Ok(value + 1)
+  }
+
+  def score_fixture(scores: List<Int>, score: HashMap<Int>) -> ScoreFixture {
+    ScoreFixture(scores, score)
   }
 }

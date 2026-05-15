@@ -165,6 +165,61 @@ match bound_grouped {
     );
 }
 
+fn flow_and_compose_operators_ignore_local_helper_names() {
+    assert_output(
+        r#"def pipe_apply(value: Int, f: (Int -> Int)) -> Int { 999 }
+def compose(left: (Int -> Int), right: (Int -> Int)) -> String { "wrong compose" }
+def map(value: Result<Int>, f: (Int -> Int)) -> Result<Int> { Err(NoneError) }
+def chain(value: Result<Int>, f: (Int -> Result<Int>)) -> Result<Int> { Err(NoneError) }
+def lift_compose(left: (Int -> Result<Int>), right: (Int -> String)) -> String { "wrong lift" }
+def kleisli_compose(left: (Int -> Result<Int>), right: (Int -> Result<String>)) -> String { "wrong kleisli" }
+
+def inc(x: Int) -> Int { x + 1 }
+def double(x: Int) -> Int { x * 2 }
+def check(x: Int) -> Result<Int> { Ok(x + 10) }
+def render_plain(x: Int) -> String { to_string(x) }
+def render_result(x: Int) -> Result<String> { Ok(to_string(x)) }
+
+f: (Int -> Int) = &inc
+g: (Int -> Int) = &double
+check_fn: (Int -> Result<Int>) = &check
+render_plain_fn: (Int -> String) = &render_plain
+render_result_fn: (Int -> Result<String>) = &render_result
+
+print(to_string(1 |> f))
+plain = f >> g
+print(to_string(plain(3)))
+mapped: Result<Int> = Ok(1) |*> f
+bound: Result<Int> = Ok(1) |>= check_fn
+lifted = check_fn >* render_plain_fn
+kleisli = check_fn >=> render_result_fn
+print(inspect(mapped))
+print(inspect(bound))
+print(inspect(lifted(1)))
+print(inspect(kleisli(1)))
+print(to_string(pipe_apply(1, f)))
+print(compose(f, g))
+print(inspect(map(Ok(1), f)))
+print(inspect(chain(Ok(1), check_fn)))
+print(lift_compose(check_fn, render_plain_fn))
+print(kleisli_compose(check_fn, render_result_fn))"#,
+        &[
+            "2",
+            "8",
+            "Ok(2)",
+            "Ok(11)",
+            "Ok(\"11\")",
+            "Ok(\"11\")",
+            "999",
+            "wrong compose",
+            "Err(NoneError(\"None Value.\"))",
+            "Err(NoneError(\"None Value.\"))",
+            "wrong lift",
+            "wrong kleisli",
+        ],
+    );
+}
+
 fn flow_bind_closure_safebind_receives_result_context() {
     assert_output(
         r#"deferror Oops {
@@ -570,7 +625,7 @@ def allow(user: User) -> Result<User, HiddenUser> {
     user.active,
     and(
       user.name `neq` "banned",
-      or(user.age `gte` 20, user.name `eq` "alice"),
+      or(user.age >= 20, user.name `eq` "alice"),
     ),
   )
 
@@ -579,9 +634,9 @@ def allow(user: User) -> Result<User, HiddenUser> {
 
 def age_band(user: User) -> String {
   if(
-    user.age `lt` 13,
+    user.age < 13,
     "child",
-    if(user.age `lte` 19, "teen", if(user.age `gt` 64, "senior", "adult")),
+    if(user.age <= 19, "teen", if(user.age > 64, "senior", "adult")),
   )
 }
 
@@ -796,6 +851,40 @@ print("over variant tuple:" ++ inspect(shape3))"#,
     );
 }
 
+fn facet_list_negative_indexes_and_slice_updates_work() {
+    assert_output(
+        r#"values = ["a", "b", "c", "d"]
+print("last:" ++ inspect(Facet::view(List.[-1], values)))
+print("slice:" ++ inspect(Facet::view(List.[1..-1], values)))
+shrunk =? Facet::set(List.[1..2], values, ["x"])
+print("shrunk:" ++ inspect(shrunk))
+grown =? Facet::over(List.[0..1], shrunk, {|slice| Ok(List::append(slice, ["tail"]))})
+print("grown:" ++ inspect(grown))
+print("neg set:" ++ inspect(Facet::set(List.[-2], values, "z")))"#,
+        &[
+            "last:Ok(\"d\")",
+            "slice:Ok([\"b\", \"c\", \"d\"])",
+            "shrunk:[\"a\", \"x\", \"d\"]",
+            "grown:[\"a\", \"x\", \"tail\", \"d\"]",
+            "neg set:Ok([\"a\", \"b\", \"z\", \"d\"])",
+        ],
+    );
+}
+
+fn facet_list_negative_indexes_and_slice_misses_report_bounds() {
+    assert_output(
+        r#"values = ["a"]
+print(inspect(Facet::view(List.[-2], values)))
+print(inspect(Facet::view(List.[1..2], values)))
+print(inspect(Facet::view(List.[0..-2], values)))"#,
+        &[
+            "Err(IndexOutOfBounds(\"index -2 out of bounds for len 1\"))",
+            "Err(IndexOutOfBounds(\"index 1 out of bounds for len 1\"))",
+            "Err(IndexOutOfBounds(\"index -2 out of bounds for len 1\"))",
+        ],
+    );
+}
+
 fn language_goal_combined() {
     assert_output(
         r#"num = 10
@@ -884,6 +973,10 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
             flow_operators_accept_function_value_variables_and_grouped_calls as fn(),
         ),
         (
+            "flow_and_compose_operators_ignore_local_helper_names",
+            flow_and_compose_operators_ignore_local_helper_names as fn(),
+        ),
+        (
             "flow_bind_closure_safebind_receives_result_context",
             flow_bind_closure_safebind_receives_result_context as fn(),
         ),
@@ -958,6 +1051,14 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "facet_api_variants_and_result_patterns_work",
             facet_api_variants_and_result_patterns_work as fn(),
+        ),
+        (
+            "facet_list_negative_indexes_and_slice_updates_work",
+            facet_list_negative_indexes_and_slice_updates_work as fn(),
+        ),
+        (
+            "facet_list_negative_indexes_and_slice_misses_report_bounds",
+            facet_list_negative_indexes_and_slice_misses_report_bounds as fn(),
         ),
         ("language_goal_combined", language_goal_combined as fn()),
     ];

@@ -53,6 +53,18 @@ pub struct ResolvedProcessHandlerUid {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedFacetBracketExpr {
+    pub expr: Box<Resolved>,
+    pub display: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ResolvedFacetPathSegment {
+    Field { name: Symbol, optional: bool },
+    Bracket(ResolvedFacetBracketExpr),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ResolvedStructLitField {
     Explicit(Symbol, Resolved),
     Shorthand(Symbol, Resolved),
@@ -148,8 +160,11 @@ pub enum Resolved {
     /// Field access: `expr.field`
     FieldAccess(Span, Box<Resolved>, Symbol),
 
+    /// Non-identifier Facet path segment, or an identifier segment with an optional marker.
+    FacetSegmentAccess(Span, Box<Resolved>, ResolvedFacetPathSegment),
+
     /// Inferred field/facet capture: `_.field` / `_.field.subfield`
-    InferredFacetCapture(Span, Vec<Symbol>),
+    InferredFacetCapture(Span, Vec<ResolvedFacetPathSegment>),
 
     /// Compiler-managed Facet shorthand capture: `~source.path`
     FacetCapture(Span, Box<Resolved>),
@@ -168,7 +183,13 @@ pub enum Resolved {
     TypeRefWitness(Span, AstTy),
 
     /// Struct definition (passed through for Scar)
-    StructDef(Span, ResolvedId, Vec<ResolvedField>, ResolvedDeclAttrs),
+    StructDef(
+        Span,
+        ResolvedId,
+        Vec<ResolvedTypeParam>,
+        Vec<ResolvedField>,
+        ResolvedDeclAttrs,
+    ),
 
     /// Record definition (passed through for Scar)
     RecordDef(Span, ResolvedId, Vec<ResolvedField>),
@@ -361,6 +382,8 @@ pub struct ResolvedTraitMethodSig {
     pub type_params: Vec<ResolvedTypeParam>,
     pub params: Vec<ResolvedFunParam>,
     pub ret_ty: AstTy,
+    pub body: Option<Box<Resolved>>,
+    pub attrs: ResolvedDeclAttrs,
     pub span: Span,
 }
 

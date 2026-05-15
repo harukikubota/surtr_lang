@@ -1,0 +1,12 @@
+defstruct Box<$A> {
+  value: $A,
+}
+
+impl Box {
+  def new<$A>(value: $A) -> Box<$A> {
+    Box { value: value }
+  }
+}
+
+boxed: Box<Int> = Box(41)
+print(to_string(boxed.value))

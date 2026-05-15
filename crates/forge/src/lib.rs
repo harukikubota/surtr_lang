@@ -19,14 +19,15 @@ mod tests {
     use crate::opcode::Opcode;
     use crate::registry::TypeKind;
     use scar::typed::{
-        ComposeFlavor, TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode,
-        TypedPattern,
+        ComposeFlavor, TypedClosureParam, TypedFunParam, TypedInner, TypedMatchArm,
+        TypedMatchPattern, TypedNode, TypedPattern,
     };
     use scar::types::Ty;
     use sigil::resolved::ResolvedId;
     use sindr::builtin::builtin_id_by_name;
+    use sindr::ir::{CallableTemplateComposeFlavor, CallableTemplateKind};
     use sindr::primitives::int;
-    use spire::ast::{Ast, Lit, Span, Visibility};
+    use spire::ast::{Ast, BinOp, Lit, Span, Visibility};
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
     const SPECIAL_TYPES_SOURCE: &str = include_str!("../../../lib/types/special_types.srt");
@@ -39,11 +40,6 @@ mod tests {
     const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/eq.srt");
     const NEQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/neq.srt");
     const COMPARE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/compare.srt");
-    const LT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/lt.srt");
-    const LTE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/lte.srt");
-    const GT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/gt.srt");
-    const GTE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/gte.srt");
-    const ORD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/ord.srt");
     const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/concat.srt");
     const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/traits/from.srt");
     const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../lib/traits/try_from.srt");
@@ -72,6 +68,7 @@ mod tests {
     const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../lib/types/hash_map.srt");
     const RESULT_MODULE_SOURCE: &str = include_str!("../../../lib/types/result.srt");
     const DURATION_MODULE_SOURCE: &str = include_str!("../../../lib/types/duration.srt");
+    const RANGE_MODULE_SOURCE: &str = include_str!("../../../lib/types/range.srt");
     const PROCESS_MODULE_SOURCE: &str = include_str!("../../../lib/process.srt");
     const OPTION_MODULE_SOURCE: &str = include_str!("../../../lib/types/option.srt");
     const LENS_MODULE_SOURCE: &str = include_str!("../../../lib/facet.srt");
@@ -203,15 +200,10 @@ mod tests {
                 ("Eq", EQ_MODULE_SOURCE),
                 ("Neq", NEQ_MODULE_SOURCE),
                 ("Compare", COMPARE_MODULE_SOURCE),
-                ("Lt", LT_MODULE_SOURCE),
-                ("Lte", LTE_MODULE_SOURCE),
-                ("Gt", GT_MODULE_SOURCE),
-                ("Gte", GTE_MODULE_SOURCE),
                 ("Concat", CONCAT_MODULE_SOURCE),
                 ("Numeric", NUMERIC_MODULE_SOURCE),
                 ("Show", SHOW_MODULE_SOURCE),
                 ("Ordering", ORDERING_MODULE_SOURCE),
-                ("Ord", ORD_MODULE_SOURCE),
                 ("From", FROM_MODULE_SOURCE),
                 ("TryFrom", TRY_FROM_MODULE_SOURCE),
                 ("Encode", ENCODE_MODULE_SOURCE),
@@ -233,6 +225,7 @@ mod tests {
                 ("HashMap", HASH_MAP_MODULE_SOURCE),
                 ("Result", RESULT_MODULE_SOURCE),
                 ("Duration", DURATION_MODULE_SOURCE),
+                ("Range", RANGE_MODULE_SOURCE),
                 ("Process", PROCESS_MODULE_SOURCE),
                 ("Option", OPTION_MODULE_SOURCE),
                 ("Facet", LENS_MODULE_SOURCE),
@@ -366,6 +359,13 @@ mod tests {
         }
     }
 
+    fn closure_param(name: &str, unique_id: u32, ty: Ty) -> TypedClosureParam {
+        TypedClosureParam {
+            id: resolved_id(name, unique_id),
+            ty,
+        }
+    }
+
     fn local_var(name: &str, unique_id: u32, ty: Ty) -> TypedNode {
         TypedNode {
             ty,
@@ -402,6 +402,15 @@ mod tests {
             },
             span: test_span(),
             node: TypedInner::Var(resolved_id(name, unique_id)),
+        }
+    }
+
+    fn builtin_app(name: &str, args: Vec<TypedNode>, ret: Ty) -> TypedNode {
+        let params = args.iter().map(|arg| arg.ty.clone()).collect::<Vec<_>>();
+        TypedNode {
+            ty: ret.clone(),
+            span: test_span(),
+            node: TypedInner::App(Box::new(builtin_func_var(name, 9_000, params, ret)), args),
         }
     }
 
@@ -501,6 +510,36 @@ mod tests {
         }
     }
 
+    fn str_lit(value: &str) -> TypedNode {
+        TypedNode {
+            ty: Ty::Str,
+            span: test_span(),
+            node: TypedInner::Lit(Lit::Str(value.to_string())),
+        }
+    }
+
+    fn list_lit_int(values: impl IntoIterator<Item = i64>) -> TypedNode {
+        TypedNode {
+            ty: Ty::List(Box::new(Ty::Int)),
+            span: test_span(),
+            node: TypedInner::ListLiteral(values.into_iter().map(int_lit).collect()),
+        }
+    }
+
+    fn assert_no_call_builtin(bytecode: &sindr::ir::Bytecode, builtin_name: &str) {
+        let builtin_id = builtin_id_by_name(builtin_name)
+            .unwrap_or_else(|| panic!("{builtin_name} builtin metadata must exist"));
+        assert!(!bytecode.opcodes.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id: id,
+                    ..
+                } if *id == builtin_id
+            )
+        }));
+    }
+
     fn unit_lit() -> TypedNode {
         TypedNode {
             ty: Ty::Unit,
@@ -591,7 +630,7 @@ mod tests {
             .filter(|op| matches!(op, Opcode::ListHead))
             .count();
 
-        assert_eq!(list_head_count, 1024);
+        assert_eq!(list_head_count, 512);
     }
 
     #[test]
@@ -615,7 +654,7 @@ mod tests {
             .filter(|op| matches!(op, Opcode::ListHead))
             .count();
 
-        assert_eq!(list_head_count, 1024);
+        assert_eq!(list_head_count, 512);
     }
 
     #[test]
@@ -645,10 +684,37 @@ mod tests {
 
     #[test]
     fn function_calls_compile_under_current_opcode_set() {
-        let bytecode = codegen_source(
-            r#"def add(x: Int, y: Int) -> Int { x + y }
-print(to_string(add(1, 2)))"#,
-        );
+        let bytecode = codegen_typed(vec![
+            TypedNode {
+                ty: Ty::Unit,
+                span: test_span(),
+                node: TypedInner::Def(
+                    0,
+                    resolved_id("add", 1),
+                    Vec::new(),
+                    vec![fun_param("x", 2, Ty::Int), fun_param("y", 3, Ty::Int)],
+                    Ty::Int,
+                    Box::new(TypedNode {
+                        ty: Ty::Int,
+                        span: test_span(),
+                        node: TypedInner::BinOp(
+                            BinOp::Add,
+                            Box::new(local_var("x", 2, Ty::Int)),
+                            Box::new(local_var("y", 3, Ty::Int)),
+                        ),
+                    }),
+                    Visibility::Public,
+                ),
+            },
+            TypedNode {
+                ty: Ty::Int,
+                span: test_span(),
+                node: TypedInner::App(
+                    Box::new(user_func_var("add", 4, 0, vec![Ty::Int, Ty::Int], Ty::Int)),
+                    vec![int_lit(1), int_lit(2)],
+                ),
+            },
+        ]);
 
         assert!(bytecode
             .opcodes
@@ -675,10 +741,24 @@ print(to_string(add(1, 2)))"#,
 
     #[test]
     fn zero_capture_closure_literal_omits_capture_closure_zero() {
-        let bytecode = codegen_source(
-            r#"add1: (Int -> Int) = {|x| x + 1}
-print(to_string(add1(2)))"#,
-        );
+        let x = closure_param("x", 10, Ty::Int);
+        let bytecode = codegen_typed(vec![TypedNode {
+            ty: Ty::Func(vec![Ty::Int], Box::new(Ty::Int)),
+            span: test_span(),
+            node: TypedInner::Closure(
+                vec![x.clone()],
+                Vec::new(),
+                Box::new(TypedNode {
+                    ty: Ty::Int,
+                    span: test_span(),
+                    node: TypedInner::BinOp(
+                        BinOp::Add,
+                        Box::new(local_var("x", x.id.unique_id, Ty::Int)),
+                        Box::new(int_lit(1)),
+                    ),
+                }),
+            ),
+        }]);
 
         assert!(!bytecode
             .opcodes
@@ -688,16 +768,84 @@ print(to_string(add1(2)))"#,
 
     #[test]
     fn capturing_closure_literal_still_emits_capture_closure() {
-        let bytecode = codegen_source(
-            r#"base = 10
-add_base: (Int -> Int) = {|x| x + base}
-print(to_string(add_base(2)))"#,
-        );
+        let base = resolved_id("base", 20);
+        let x = closure_param("x", 21, Ty::Int);
+        let bytecode = codegen_typed(vec![
+            TypedNode {
+                ty: Ty::Unit,
+                span: test_span(),
+                node: TypedInner::Bind(
+                    TypedPattern::Var(Ty::Int, base.clone()),
+                    Box::new(int_lit(10)),
+                ),
+            },
+            TypedNode {
+                ty: Ty::Func(vec![Ty::Int], Box::new(Ty::Int)),
+                span: test_span(),
+                node: TypedInner::Closure(
+                    vec![x.clone()],
+                    vec![base.clone()],
+                    Box::new(TypedNode {
+                        ty: Ty::Int,
+                        span: test_span(),
+                        node: TypedInner::BinOp(
+                            BinOp::Add,
+                            Box::new(local_var("x", x.id.unique_id, Ty::Int)),
+                            Box::new(local_var("base", base.unique_id, Ty::Int)),
+                        ),
+                    }),
+                ),
+            },
+        ]);
 
         assert!(bytecode
             .opcodes
             .iter()
             .any(|op| matches!(op, Opcode::CaptureClosure(count) if *count > 0)));
+    }
+
+    #[test]
+    fn tail_closure_call_lowers_to_fused_tail_opcode() {
+        let f = fun_param("f", 30, Ty::Func(vec![Ty::Int], Box::new(Ty::Int)));
+        let value = fun_param("value", 31, Ty::Int);
+        let bytecode = codegen_typed(vec![TypedNode {
+            ty: Ty::Unit,
+            span: test_span(),
+            node: TypedInner::Def(
+                0,
+                resolved_id("apply_tail", 32),
+                Vec::new(),
+                vec![f.clone(), value.clone()],
+                Ty::Int,
+                Box::new(TypedNode {
+                    ty: Ty::Int,
+                    span: test_span(),
+                    node: TypedInner::App(
+                        Box::new(local_var("f", f.id.unique_id, f.ty.clone())),
+                        vec![local_var("value", value.id.unique_id, Ty::Int)],
+                    ),
+                }),
+                Visibility::Public,
+            ),
+        }]);
+        let apply_tail = bytecode
+            .functions
+            .iter()
+            .find(|entry| {
+                entry
+                    .qualified_name
+                    .as_deref()
+                    .is_some_and(|name| name.ends_with("apply_tail"))
+            })
+            .expect("apply_tail function should be present");
+        let body = function_body_opcodes(&bytecode, apply_tail.fun_idx);
+
+        assert!(body
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::TailCallClosure { arity: 1, .. })));
+        assert!(!body
+            .windows(2)
+            .any(|ops| { matches!(ops, [Opcode::CallClosure { .. }, Opcode::Return]) }));
     }
 
     #[test]
@@ -802,7 +950,7 @@ print(to_string(add_base(2)))"#,
     }
 
     #[test]
-    fn direct_compose_wrapper_embeds_user_calls_without_captured_callables() {
+    fn direct_compose_uses_callable_template_without_generated_wrapper() {
         let bytecode = codegen_typed(vec![
             identity_def("left_int", 0, 30, 31, Ty::Int),
             identity_def("right_int", 1, 32, 33, Ty::Int),
@@ -816,39 +964,22 @@ print(to_string(add_base(2)))"#,
                 ),
             },
         ]);
-        let compose_entry = bytecode
-            .functions
-            .iter()
-            .find(|entry| {
-                entry.flags.generated
-                    && !entry.flags.closure
-                    && entry.qualified_name.is_none()
-                    && entry.arity == 1
-            })
-            .expect("direct compose wrapper should take only the input");
-        let compose_body = function_body_opcodes(&bytecode, compose_entry.fun_idx);
         let top_level = top_level_opcodes(&bytecode);
 
-        assert!(compose_body.iter().any(|op| matches!(
-            op,
-            Opcode::Call {
-                fun_idx: 0,
-                arity: 1,
-                ..
+        assert!(bytecode.callable_templates.iter().any(|template| matches!(
+            template.kind,
+            CallableTemplateKind::ComposeDirect {
+                flavor: CallableTemplateComposeFlavor::Plain,
             }
         )));
-        assert!(compose_body.iter().any(|op| matches!(
-            op,
-            Opcode::Call {
-                fun_idx: 1,
-                arity: 1,
-                ..
-            }
-        )));
-        assert!(!compose_body
+        assert!(!bytecode
+            .functions
             .iter()
-            .any(|op| matches!(op, Opcode::CallClosure { .. })));
-        assert!(!top_level
+            .any(|entry| entry.flags.generated && !entry.flags.closure && entry.arity == 1));
+        assert!(top_level
+            .iter()
+            .any(|op| matches!(op, Opcode::LoadCallableTemplateRef(_))));
+        assert!(top_level
             .iter()
             .any(|op| matches!(op, Opcode::CaptureClosure(2))));
     }
@@ -914,12 +1045,12 @@ print("ok")"#,
 
     #[test]
     fn direct_int_bitwise_builtin_calls_lower_to_specialized_opcodes() {
-        let bytecode = codegen_source(
-            r#"negated = Int::bit_not(6)
-left = Int::bit_and(6, 3)
-mid = Int::bit_or(6, 3)
-right = Int::bit_xor(6, 3)"#,
-        );
+        let bytecode = codegen_typed(vec![
+            builtin_app("bit_not", vec![int_lit(6)], Ty::Int),
+            builtin_app("bit_and", vec![int_lit(6), int_lit(3)], Ty::Int),
+            builtin_app("bit_or", vec![int_lit(6), int_lit(3)], Ty::Int),
+            builtin_app("bit_xor", vec![int_lit(6), int_lit(3)], Ty::Int),
+        ]);
 
         assert!(bytecode
             .opcodes
@@ -938,100 +1069,78 @@ right = Int::bit_xor(6, 3)"#,
             .iter()
             .any(|op| matches!(op, Opcode::BitXorInt)));
 
-        let bit_not_id =
-            builtin_id_by_name("bit_not").expect("bit_not builtin metadata must exist");
-        let bit_and_id =
-            builtin_id_by_name("bit_and").expect("bit_and builtin metadata must exist");
-        let bit_or_id = builtin_id_by_name("bit_or").expect("bit_or builtin metadata must exist");
-        let bit_xor_id =
-            builtin_id_by_name("bit_xor").expect("bit_xor builtin metadata must exist");
-
-        assert!(!bytecode.opcodes.iter().any(|op| {
-            matches!(
-                op,
-                Opcode::CallBuiltin {
-                    builtin_id,
-                    ..
-                } if *builtin_id == bit_not_id
-                    || *builtin_id == bit_and_id
-                    || *builtin_id == bit_or_id
-                    || *builtin_id == bit_xor_id
-            )
-        }));
+        for name in ["bit_not", "bit_and", "bit_or", "bit_xor"] {
+            assert_no_call_builtin(&bytecode, name);
+        }
     }
 
     #[test]
     fn direct_string_len_builtin_call_lowers_to_specialized_opcode() {
-        let bytecode = codegen_source(r#"size = String::len("あb")"#);
+        let bytecode = codegen_typed(vec![builtin_app(
+            "string_len",
+            vec![str_lit("あb")],
+            Ty::Int,
+        )]);
 
         assert!(bytecode
             .opcodes
             .iter()
             .any(|op| matches!(op, Opcode::StringLen)));
 
-        let string_len_id =
-            builtin_id_by_name("string_len").expect("string_len builtin metadata must exist");
-        assert!(!bytecode.opcodes.iter().any(|op| {
-            matches!(
-                op,
-                Opcode::CallBuiltin {
-                    builtin_id,
-                    ..
-                } if *builtin_id == string_len_id
-            )
-        }));
+        assert_no_call_builtin(&bytecode, "string_len");
     }
 
     #[test]
     fn direct_list_len_builtin_call_lowers_to_specialized_opcode() {
-        let bytecode = codegen_source(r#"size = List::len([1, 2, 3])"#);
+        let bytecode = codegen_typed(vec![builtin_app(
+            "len",
+            vec![list_lit_int([1, 2, 3])],
+            Ty::Int,
+        )]);
 
         assert!(bytecode
             .opcodes
             .iter()
             .any(|op| matches!(op, Opcode::ListLen)));
 
-        let len_id = builtin_id_by_name("len").expect("len builtin metadata must exist");
-        assert!(!bytecode.opcodes.iter().any(|op| {
-            matches!(
-                op,
-                Opcode::CallBuiltin {
-                    builtin_id,
-                    ..
-                } if *builtin_id == len_id
-            )
-        }));
+        assert_no_call_builtin(&bytecode, "len");
     }
 
     #[test]
     fn direct_safe_mod_builtin_call_lowers_to_specialized_opcode() {
-        let bytecode = codegen_source(r#"rem = Int::safe_mod(7, 3)"#);
+        let bytecode = codegen_typed(vec![builtin_app(
+            "safe_mod",
+            vec![int_lit(7), int_lit(3)],
+            Ty::Int,
+        )]);
 
         assert!(bytecode
             .opcodes
             .iter()
             .any(|op| matches!(op, Opcode::SafeModInt)));
 
-        let safe_mod_id =
-            builtin_id_by_name("safe_mod").expect("safe_mod builtin metadata must exist");
-        assert!(!bytecode.opcodes.iter().any(|op| {
-            matches!(
-                op,
-                Opcode::CallBuiltin {
-                    builtin_id,
-                    ..
-                } if *builtin_id == safe_mod_id
-            )
-        }));
+        assert_no_call_builtin(&bytecode, "safe_mod");
     }
 
     #[test]
     fn direct_string_predicate_builtin_calls_lower_to_specialized_opcodes() {
-        let bytecode = codegen_source(
-            r#"has = String::contains("surtr", "urt")
-starts = String::starts_with("surtr", "sur")
-ends = String::ends_with("surtr", "tr")"#,
-        );
+        let bytecode = codegen_typed(vec![
+            builtin_app(
+                "string_contains",
+                vec![str_lit("surtr"), str_lit("urt")],
+                Ty::Bool,
+            ),
+            builtin_app(
+                "string_starts_with",
+                vec![str_lit("surtr"), str_lit("sur")],
+                Ty::Bool,
+            ),
+            builtin_app(
+                "string_ends_with",
+                vec![str_lit("surtr"), str_lit("tr")],
+                Ty::Bool,
+            ),
+        ]);
 
         assert!(bytecode
             .opcodes
@@ -1047,26 +1156,24 @@ ends = String::ends_with("surtr", "tr")"#,
             .any(|op| matches!(op, Opcode::StringEndsWith)));
 
         for name in ["string_contains", "string_starts_with", "string_ends_with"] {
-            let builtin_id = builtin_id_by_name(name)
-                .unwrap_or_else(|| panic!("{name} builtin metadata must exist"));
-            assert!(!bytecode.opcodes.iter().any(|op| {
-                matches!(
-                    op,
-                    Opcode::CallBuiltin {
-                        builtin_id: id,
-                        ..
-                    } if *id == builtin_id
-                )
-            }));
+            assert_no_call_builtin(&bytecode, name);
         }
     }
 
     #[test]
     fn direct_string_split_and_replace_stay_as_builtin_calls() {
-        let bytecode = codegen_source(
-            r#"parts = String::split("a,b", ",")
-text = String::replace("banana", "na", "NA")"#,
-        );
+        let bytecode = codegen_typed(vec![
+            builtin_app(
+                "string_split",
+                vec![str_lit("a,b"), str_lit(",")],
+                Ty::List(Box::new(Ty::Str)),
+            ),
+            builtin_app(
+                "string_replace",
+                vec![str_lit("banana"), str_lit("na"), str_lit("NA")],
+                Ty::Str,
+            ),
+        ]);
 
         for (name, arity) in [("string_split", 2), ("string_replace", 3)] {
             let builtin_id = builtin_id_by_name(name)
@@ -1085,27 +1192,44 @@ text = String::replace("banana", "na", "NA")"#,
     }
 
     #[test]
-    fn int_bit_index_helpers_stay_as_builtin_calls() {
-        let bytecode = codegen_source(
-            r#"tested = Int::test_bit(5, 0)
-setted = Int::set_bit(0, 1)
-cleared = Int::clear_bit(7, 1)
-toggled = Int::toggle_bit(5, 0)"#,
-        );
+    fn direct_shift_and_bit_index_builtins_lower_to_specialized_opcodes() {
+        let bytecode = codegen_typed(vec![
+            builtin_app(
+                "shl",
+                vec![int_lit(1), int_lit(3)],
+                Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
+            ),
+            builtin_app(
+                "shr",
+                vec![int_lit(8), int_lit(1)],
+                Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
+            ),
+            builtin_app("test_bit", vec![int_lit(5), int_lit(0)], Ty::Bool),
+            builtin_app("set_bit", vec![int_lit(0), int_lit(1)], Ty::Int),
+            builtin_app("clear_bit", vec![int_lit(7), int_lit(1)], Ty::Int),
+            builtin_app("toggle_bit", vec![int_lit(5), int_lit(0)], Ty::Int),
+        ]);
 
-        for name in ["test_bit", "set_bit", "clear_bit", "toggle_bit"] {
-            let builtin_id = builtin_id_by_name(name)
-                .unwrap_or_else(|| panic!("{name} builtin metadata must exist"));
-            assert!(bytecode.opcodes.iter().any(|op| {
-                matches!(
-                    op,
-                    Opcode::CallBuiltin {
-                        builtin_id: id,
-                        arity: 2,
-                        ..
-                    } if *id == builtin_id
-                )
-            }));
+        for opcode in [
+            Opcode::ShlInt,
+            Opcode::ShrInt,
+            Opcode::TestBitInt,
+            Opcode::SetBitInt,
+            Opcode::ClearBitInt,
+            Opcode::ToggleBitInt,
+        ] {
+            assert!(bytecode.opcodes.iter().any(|op| *op == opcode));
+        }
+
+        for name in [
+            "shl",
+            "shr",
+            "test_bit",
+            "set_bit",
+            "clear_bit",
+            "toggle_bit",
+        ] {
+            assert_no_call_builtin(&bytecode, name);
         }
     }
 
@@ -1168,6 +1292,50 @@ user3 = Facet::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
     }
 
     #[test]
+    fn facet_container_segments_lower_without_public_facet_builtin_calls() {
+        let bytecode = codegen_source(
+            r#"defrecord User(scores: List<Int>, score: HashMap<Int>)
+user = User([10, 20], HashMap::from_entries([("talk", 80)]))
+value1 =? Facet::view(List.[1], user.scores)
+value2 =? Facet::view(HashMap.["talk"], user.score)
+value3 =? Facet::view(User.scores.[1], user)
+value4 =? Facet::set(User.score.["talk"], user, 90)"#,
+        );
+
+        for name in ["view", "set"] {
+            let facet_id = builtin_id_by_name(name).expect("facet builtin metadata must exist");
+            assert!(!bytecode.opcodes.iter().any(|op| {
+                matches!(
+                    op,
+                    Opcode::CallBuiltin {
+                        builtin_id,
+                        ..
+                    } if *builtin_id == facet_id
+                )
+            }));
+        }
+        for name in [
+            "__facet_list_get",
+            "__facet_map_get",
+            "__facet_map_set_existing",
+        ] {
+            let helper_id = builtin_id_by_name(name).expect("facet helper metadata must exist");
+            assert!(
+                bytecode.opcodes.iter().any(|op| {
+                    matches!(
+                        op,
+                        Opcode::CallBuiltin {
+                            builtin_id,
+                            ..
+                        } if *builtin_id == helper_id
+                    )
+                }),
+                "expected helper call {name}"
+            );
+        }
+    }
+
+    #[test]
     fn facet_bindings_are_erased_and_only_viewed_values_are_captured() {
         let bytecode = codegen_source(
             r#"defrecord User(name: String)
@@ -1178,8 +1346,8 @@ result = getter()"#,
         );
 
         let facet_view_id = builtin_id_by_name("view").expect("view builtin metadata must exist");
-        let facet_compose_id =
-            builtin_id_by_name("compose").expect("compose builtin metadata must exist");
+        let facet_chain_id =
+            builtin_id_by_name("__facet_chain").expect("facet chain builtin metadata must exist");
 
         assert!(!bytecode.opcodes.iter().any(|op| {
             matches!(
@@ -1187,7 +1355,7 @@ result = getter()"#,
                 Opcode::CallBuiltin {
                     builtin_id,
                     ..
-                } if *builtin_id == facet_view_id || *builtin_id == facet_compose_id
+                } if *builtin_id == facet_view_id || *builtin_id == facet_chain_id
             )
         }));
         assert!(bytecode

@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Type Box requires 1 type argument(s)

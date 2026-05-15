@@ -3,6 +3,19 @@ Standard `HashMap` type declaration.
 `HashMap<$V>` is an immutable map with `String` keys and
 value-only generics.
 The canonical builtin head is fixed to this shape.
+
+Facet path note:
+
+- `HashMap.[expr]` selects a map value through a Facet path
+- `expr` must have plain `String` type
+- the same syntax is available in value-side sugar such as `scores.[user_name]`
+- `const Facet<...>` still requires a literal bracket segment such as `HashMap.["talk"]`
+
+Examples:
+
+- `Facet::view(HashMap.["talk"], scores)`
+- `Facet::view(HashMap.[kind], scores)`
+- `Facet::over(User.score_by_kind.[kind], user, {|n| Ok(n + 1)})`
 """
 @builtin type HashMap<$V>
 

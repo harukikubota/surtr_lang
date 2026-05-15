@@ -17,10 +17,10 @@ Surtr 全体では、関数は常に何らかの namespace に属します。標
 標準定義ソースの初期ロード順は次で固定されています。
 
 ```text
-Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Ord, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Facet, Float] -> user source
+Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, Shell, IO, DynamicSupervisor] -> user source
 ```
 
-このうち auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@autoimport` が付いた標準 trait です。  
+このうち auto import されるのは `Bootstrap`, `Kernel` と、`@autoimport` が付いた標準 `impl Type` owner helper surface および標準 trait です。  
 他の標準定義ソースは標準定義ソースとして同梱されますが、名前空間としては明示 import 前提です。
 
 ## 2. 各モジュールの役割
@@ -42,7 +42,7 @@ concrete error は、最初の標準ステージから使えるようここに�
 
 ### `Kernel`
 
-- `defmod Kernel` の中に `if`, `if_then`, `assert`, `ensure`, `and`, `or`, `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `concat`, `print`, `to_string`, `inspect`, `eprint`, `set_exit_code` のような cross-cutting builtin を置く
+- `defmod Kernel` の中に `if`, `if_then`, `assert`, `ensure`, `and`, `or`, `eq`, `neq`, `concat`, `print`, `to_string`, `inspect`, `eprint`, `set_exit_code` のような cross-cutting builtin を置く
 - auto import される最小の標準 API を置く
 
 primitive type に強く結びつかない builtin は、ここへ集めます。
@@ -50,8 +50,9 @@ primitive type に強く結びつかない builtin は、ここへ集めます�
 説明を標準 surface に残すため `Kernel` に置きます。
 `and` / `or` も宣言上は通常の 2 引数関数ですが、コンパイラが short-circuit
 評価へ lower する call-style helper としてここに置きます。
-comparison / concat 系の call-style helper (`eq`, `lt`, `concat` など) も
+equality / concat 系の call-style helper (`eq`, `neq`, `concat` など) も
 primitive module をまたぐ読みやすさを優先して `Kernel` に置きます。
+ordered comparison は `compare(left, right)` または `< <= > >=` を使い、専用の Boolean helper 名は公開しません。
 
 ### `SpecialTypes`
 
@@ -71,8 +72,10 @@ primitive module をまたぐ読みやすさを優先して `Kernel` に置き�
 - `Boolean`
 - `Error`
 - `List`
+- `Generator`
 - `HashMap`
 - `Result`
+- `Range`
 - `Facet`
 - `Float`
 
@@ -405,8 +408,8 @@ REPL は起動時に標準定義ソースと preload script を読み切った O
 - REPL 中の `defstruct` / `defenum` / `deftrait` / `impl` / `defmod` は増分 universe 更新を前提にしない
 - trait impl 候補一覧や diagnostics は、その起動時 universe を前提に固定される
 
-データ型の field で欠損を表したい場合は、`Option<T>` より `T?` を先に検討してください。
-`T?` は `Result<T, NoneError>` に下がるので、Facet 更新や `Result` を返す helper と直接つながります。
+データ型の field で欠損を表したい場合は、`T?` または `Option<T>` を使います。
+`T?` は `Option<T>` に下がる sugar です。
 
 ```surtr
 user.nickname
@@ -416,7 +419,7 @@ user.nickname
 ```
 
 `Option<T>` field を `Result` パイプへ流すと、上のような往復変換が必要です。
-`nickname: String?` なら field 自体が `Result` 系なので、この変換を省けます。
+`nickname: String?` も同じく `Option<String>` なので、この変換規則は変わりません。
 
 ## 12. `Facet` module の位置づけ
 
@@ -466,14 +469,14 @@ Token.Ident
 - selector は PascalCase 固定
 - 実行時の値がその variant でなければ `Err(VariantMismatch(...))` になる
 
-ネストした path は `/` または `Facet::compose` でつなぎます。
+ネストした path は `/` または `Facet::chain` でつなぎます。
 
 ```surtr
 User.profile / Profile.name
-Facet::compose(User.profile, Profile.name)
+Facet::chain(User.profile, Profile.name)
 ```
 
-compose 後の表示は canonical path に正規化されます。
+chain 後の表示は canonical path に正規化されます。
 `User.profile / Profile.name` は `User.profile.name` として扱われ、root path の
 重複は表示に残りません。
 
@@ -562,15 +565,27 @@ focus が `Result<A>` のとき、`over` は `Ok(value)` の payload だけを�
 - successful payload だけ触りたいなら `over` の方が軽い
 - `~source.path` shorthand は source を伴う `Facet` API の第1引数だけで使える
 
+### `Facet::case_*`
+
+enum case path の最後の payload を直接更新したいときは `case_*` を使います。
+
+- `Facet::case_set(facet, source, value)`
+- `Facet::case_over(facet, source, update_fun)`
+
+通常の `set` / `over` / `over_result` と同じく `Result<S>` を返しますが、
+用途は「path の最後が enum case payload である」場合に絞られます。
+
 ### `Facet::bulk_update`
 
 `Facet::bulk_update(source) { ... }` は、relative path ごとの Facet 更新を
 改行区切りで並べる special form です。
 
 - 返り値: `Result<S>`
-- 許可される update 形: `set`, `over`, `over_result`
+- 許可される update 形: `set`, `over`, `over_result`, `case_set`, `case_over`
 - nested path 形: `path { ... }`
 - 通常 block ではないため、任意の式や `S -> Result<S>` updater は置けない
+- `List.[expr]` は plain `Int`、`HashMap.[expr]` は plain `String` を要求する
+- `const Facet<...>` に含める bracket segment は literal のみ
 
 ```surtr
 updated =? Facet::bulk_update(user) {
@@ -578,15 +593,16 @@ updated =? Facet::bulk_update(user) {
   profile {
     nickname <- over_result({|name: Result<String>| Ok(name)})
   }
+  score_by_kind.[kind] <- set(9)
 }
 ```
 
-### `Facet::compose`
+### `Facet::chain`
 
-`Facet::compose(outer, inner)` は 2 つの path を順につなぎます。`outer / inner` は同じ意味の operator sugar です。
+`Facet::chain(outer, inner)` は 2 つの path を順につなぎます。`outer / inner` は同じ意味の operator sugar です。
 
 ```surtr
-profile_name = Facet::compose(User.profile, Profile.name)
+profile_name = Facet::chain(User.profile, Profile.name)
 name = Facet::view(profile_name, user)
 ```
 

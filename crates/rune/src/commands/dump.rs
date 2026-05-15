@@ -216,6 +216,7 @@ fn build_dump_json(
             "opcode_count": inspected.bytecode.opcodes.len(),
             "constant_count": inspected.bytecode.constants.len(),
             "function_count": inspected.bytecode.functions.len(),
+            "callable_template_count": inspected.bytecode.callable_templates.len(),
             "type_entry_count": inspected.bytecode.type_registry.entries().len(),
             "error_template_count": inspected.bytecode.error_templates.len(),
             "num_locals": inspected.bytecode.num_locals,
@@ -269,6 +270,7 @@ fn optimization_summary(bytecode: &Bytecode) -> Value {
     let mut capture_closure_total = 0usize;
     let mut capture_closure_zero = 0usize;
     let mut call_closure = 0usize;
+    let mut tail_call_closure = 0usize;
     let mut direct_builtin_calls = 0usize;
     let mut direct_user_calls = 0usize;
     for opcode in &bytecode.opcodes {
@@ -280,6 +282,7 @@ fn optimization_summary(bytecode: &Bytecode) -> Value {
                 }
             }
             Opcode::CallClosure { .. } => call_closure += 1,
+            Opcode::TailCallClosure { .. } => tail_call_closure += 1,
             Opcode::CallBuiltin { .. } => direct_builtin_calls += 1,
             Opcode::Call { .. } => direct_user_calls += 1,
             _ => {}
@@ -291,10 +294,40 @@ fn optimization_summary(bytecode: &Bytecode) -> Value {
         .iter()
         .filter(|entry| entry.flags.generated)
         .count();
+    let generated_wrapper_functions = bytecode
+        .functions
+        .iter()
+        .filter(|entry| {
+            entry.flags.generated
+                && !entry.flags.closure
+                && (entry.flags.partial_apply_wrapper || entry.qualified_name.is_none())
+        })
+        .count();
     let partial_apply_wrappers = bytecode
         .functions
         .iter()
         .filter(|entry| entry.flags.partial_apply_wrapper)
+        .count();
+    let template_partial_calls = bytecode
+        .callable_templates
+        .iter()
+        .filter(|template| {
+            matches!(
+                template.kind,
+                sindr::ir::CallableTemplateKind::PartialDirectCall { .. }
+                    | sindr::ir::CallableTemplateKind::InjectDirectCall { .. }
+            )
+        })
+        .count();
+    let template_compose_calls = bytecode
+        .callable_templates
+        .iter()
+        .filter(|template| {
+            matches!(
+                template.kind,
+                sindr::ir::CallableTemplateKind::ComposeDirect { .. }
+            )
+        })
         .count();
 
     json!({
@@ -327,6 +360,10 @@ fn optimization_summary(bytecode: &Bytecode) -> Value {
                 "count": jump_if_local_tag_ne,
                 "estimated_saved_opcodes": jump_if_local_tag_ne
             },
+            "TailCallClosure": {
+                "count": tail_call_closure,
+                "estimated_saved_opcodes": tail_call_closure
+            },
             "estimated_saved_opcodes_total": store_const
                 + copy_local
                 + (eq_local_tag * 3)
@@ -334,13 +371,18 @@ fn optimization_summary(bytecode: &Bytecode) -> Value {
                 + make_err
                 + jump_if_local_tag_eq
                 + jump_if_local_tag_ne
+                + tail_call_closure
         },
         "apply_compose": {
             "call_closure": call_closure,
+            "tail_call_closure": tail_call_closure,
             "capture_closure_total": capture_closure_total,
             "capture_closure_zero": capture_closure_zero,
             "generated_functions": generated_functions,
+            "generated_wrapper_functions": generated_wrapper_functions,
             "partial_apply_wrappers": partial_apply_wrappers,
+            "template_partial_calls": template_partial_calls,
+            "template_compose_calls": template_compose_calls,
             "direct_calls": direct_builtin_calls + direct_user_calls,
             "direct_builtin_calls": direct_builtin_calls,
             "direct_user_calls": direct_user_calls
@@ -366,6 +408,15 @@ fn function_summary(bytecode: &Bytecode) -> Value {
         .iter()
         .filter(|entry| entry.flags.partial_apply_wrapper)
         .count();
+    let generated_wrapper_functions = bytecode
+        .functions
+        .iter()
+        .filter(|entry| {
+            entry.flags.generated
+                && !entry.flags.closure
+                && (entry.flags.partial_apply_wrapper || entry.qualified_name.is_none())
+        })
+        .count();
     let functions_with_call_closure = items
         .iter()
         .filter(|item| item["call_counts"]["call_closure"].as_u64().unwrap_or(0) > 0)
@@ -374,6 +425,7 @@ fn function_summary(bytecode: &Bytecode) -> Value {
     json!({
         "summary": {
             "generated_function_count": generated_function_count,
+            "generated_wrapper_functions": generated_wrapper_functions,
             "partial_apply_wrapper_count": partial_apply_wrapper_count,
             "functions_with_call_closure": functions_with_call_closure
         },
@@ -389,6 +441,7 @@ fn function_summary_entry(bytecode: &Bytecode, entry: &FunctionEntry) -> Value {
     let mut call = 0usize;
     let mut call_builtin = 0usize;
     let mut call_closure = 0usize;
+    let mut tail_call_closure = 0usize;
     let mut capture_closure = 0usize;
     let mut capture_closure_zero = 0usize;
 
@@ -398,6 +451,7 @@ fn function_summary_entry(bytecode: &Bytecode, entry: &FunctionEntry) -> Value {
             Opcode::Call { .. } => call += 1,
             Opcode::CallBuiltin { .. } => call_builtin += 1,
             Opcode::CallClosure { .. } => call_closure += 1,
+            Opcode::TailCallClosure { .. } => tail_call_closure += 1,
             Opcode::CaptureClosure(count) => {
                 capture_closure += 1;
                 if *count == 0 {
@@ -428,6 +482,7 @@ fn function_summary_entry(bytecode: &Bytecode, entry: &FunctionEntry) -> Value {
             "call": call,
             "call_builtin": call_builtin,
             "call_closure": call_closure,
+            "tail_call_closure": tail_call_closure,
             "capture_closure": capture_closure,
             "capture_closure_zero": capture_closure_zero
         }
@@ -464,6 +519,8 @@ fn peephole_candidates(bytecode: &Bytecode) -> Value {
             ]
         ) {
             Some(("branch_fusion", 2usize))
+        } else if matches!(remaining, [Opcode::CallClosure { .. }, Opcode::Return, ..]) {
+            Some(("tail_call_closure", 2usize))
         } else {
             None
         };
@@ -571,6 +628,24 @@ fn operand_summary(bytecode: &Bytecode, opcode: &Opcode) -> Value {
         Opcode::JumpIfTrue(target) => json!({
             "opcode": "JumpIfTrue",
             "target": target
+        }),
+        Opcode::CallClosure {
+            arity,
+            span_start,
+            span_end,
+        } => json!({
+            "opcode": "CallClosure",
+            "arity": arity,
+            "span": [span_start, span_end]
+        }),
+        Opcode::TailCallClosure {
+            arity,
+            span_start,
+            span_end,
+        } => json!({
+            "opcode": "TailCallClosure",
+            "arity": arity,
+            "span": [span_start, span_end]
         }),
         other => json!({
             "opcode": other.kind_name()

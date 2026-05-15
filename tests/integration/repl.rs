@@ -325,10 +325,15 @@ fn repl_rejects_persisting_unresolved_result_callable_binding() {
         "{combined}"
     );
     assert!(
-        combined.contains("Add a type annotation or use the value in a context that determines the success type."),
+        combined.contains(
+            "Add a type annotation or use the value in a context that determines the success type."
+        ),
         "{combined}"
     );
-    assert!(!combined.contains("todo: (-> Result<_, Error>)"), "{combined}");
+    assert!(
+        !combined.contains("todo: (-> Result<_, Error>)"),
+        "{combined}"
+    );
 }
 
 #[test]
@@ -342,10 +347,7 @@ fn repl_rejects_persisting_unresolved_result_value_binding() {
         combined.contains("Cannot persist binding with unresolved type variable."),
         "{combined}"
     );
-    assert!(
-        combined.contains("ret = todo()"),
-        "{combined}"
-    );
+    assert!(combined.contains("ret = todo()"), "{combined}");
     assert!(!combined.contains("ret: Result<_, Error>"), "{combined}");
 }
 
@@ -360,7 +362,10 @@ fn repl_accepts_explicitly_constrained_result_binding() {
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("ret: Result<Int, Error> = Err(NoneError"), "{stdout}");
+    assert!(
+        stdout.contains("ret: Result<Int, Error> = Err(NoneError"),
+        "{stdout}"
+    );
     assert!(stdout.contains("type: Result<Int, Error>"), "{stdout}");
 }
 
@@ -377,10 +382,12 @@ fn repl_accepts_result_mapping_when_chunk_constrains_type() {
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("mapped: Result<String, Error> = Err(NoneError"), "{stdout}");
+    assert!(
+        stdout.contains("mapped: Result<String, Error> = Err(NoneError"),
+        "{stdout}"
+    );
     assert!(stdout.contains("type: Result<String, Error>"), "{stdout}");
 }
-
 
 #[test]
 fn repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli() {
@@ -465,6 +472,38 @@ fn repl_sig_attached_extractor_owner_query_matches_zero_arg_form() {
     );
     assert!(
         stdout.contains("specialized:\n  Duration!(Duration) -> MatchResult<Int, Error>"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn repl_range_constructor_and_extractor_queries_render_through_cli() {
+    let output =
+        run_repl_session(":doc Range(Int, Int)\n:sig Range\n:sig Range()\n:doc Range!()\n:sig Range!\n:sig Range!()\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("Range::new"), "{stdout}");
+    assert!(stdout.contains("min: $A"), "{stdout}");
+    assert!(stdout.contains("max: $A"), "{stdout}");
+    assert!(stdout.contains("-> Range<$A>"), "{stdout}");
+    assert!(
+        stdout.contains("Construct a range while preserving the input order."),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Range::deconstruct"), "{stdout}");
+    assert!(stdout.contains("MatchResult<($A, $A), Error>"), "{stdout}");
+    assert!(
+        stdout.contains("Deconstruct a `Range` into `(min, max)` in pattern position."),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("specialized:\n  Range!() -> MatchResult<($A, $A), Error>"),
         "{stdout}"
     );
 }
@@ -1044,9 +1083,9 @@ fn repl_supports_deferred_lens_bindings_and_lens_command() {
 }
 
 #[test]
-fn repl_renders_top_level_lens_compose_expressions() {
+fn repl_renders_top_level_lens_chain_expressions() {
     let output =
-        run_repl_session("ep = IntBase.Oct\na = Tuple._1\na / ep\nFacet::compose(a, ep)\n:quit\n");
+        run_repl_session("ep = IntBase.Oct\na = Tuple._1\na / ep\nFacet::chain(a, ep)\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",

@@ -1,0 +1,12 @@
+defstruct Pair<$A, $B> {
+  left: $A,
+  right: $B,
+}
+
+impl Pair {
+  def new<$A, $B>(left: $A, right: $B) -> Pair<$A, $B> {
+    Pair { left: left, right: right }
+  }
+}
+
+pair: Pair<Int> = Pair(1, 2)

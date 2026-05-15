@@ -1,0 +1,2 @@
+phase: typecheck
+contains: optional Facet segment requires an enum variant

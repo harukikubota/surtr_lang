@@ -1,0 +1,10 @@
+def even(n: Int) -> Boolean {
+  if(n == 0, True, odd(n - 1))
+}
+
+def odd(n: Int) -> Boolean {
+  if(n == 0, False, even(n - 1))
+}
+
+print(to_string(even(42)))
+print(to_string(odd(42)))

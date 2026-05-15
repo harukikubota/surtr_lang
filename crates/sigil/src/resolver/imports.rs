@@ -23,6 +23,22 @@ fn surface_name(name: &str) -> &str {
     name.strip_prefix("Global::").unwrap_or(name)
 }
 
+fn is_result_facet_chain_conflict(
+    existing_name: &str,
+    incoming_name: &str,
+    short_name: &str,
+) -> bool {
+    if short_name != "chain" {
+        return false;
+    }
+    let existing = surface_name(existing_name);
+    let incoming = surface_name(incoming_name);
+    matches!(
+        (existing, incoming),
+        ("Result::chain", "Facet::chain") | ("Facet::chain", "Result::chain")
+    )
+}
+
 pub(super) fn build_global_scope(
     index: &DeclarationIndex,
     declaration_uids: &HashMap<String, u32>,
@@ -819,6 +835,11 @@ fn bind_import_name(
                 .find_map(|(fq_name, known_uid)| (*known_uid == uid).then_some(fq_name))
                 .cloned()
                 .unwrap_or_else(|| format!("{}::{}", module_name, short_name));
+            if is_result_facet_chain_conflict(&existing_name, &incoming_name, short_name) {
+                // Keep bare `chain` bound to Result::chain and let Scar reinterpret
+                // Facet-shaped `chain(...)` calls as Facet::chain.
+                return Ok(());
+            }
             return Err(ResolveError {
                 message: format!(
                     "Auto-import conflict for `{}` between `{}` and `{}`",

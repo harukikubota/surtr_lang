@@ -1,0 +1,4 @@
+defrecord Name(value: String)
+defrecord User(nick: Option<Name>)
+user = User(Option::Some(Name("alice")))
+bad = Facet::case_set(User.nick.Some.value, user, "bob")

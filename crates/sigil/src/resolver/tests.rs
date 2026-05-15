@@ -957,6 +957,49 @@ impl Add for Int {
 }
 
 #[test]
+fn test_resolve_trait_default_method_body_can_reference_later_sibling() {
+    let ast = parse_module_ast(
+        r#"deftrait Numeric {
+  @doc """Delegates to abs."""
+  def magnitude(self: Self) -> Self {
+    abs(self)
+  }
+
+  def abs(self: Self) -> Self
+}"#,
+        "Numeric",
+    );
+
+    let resolved = resolve(ast).expect("trait default bodies should resolve");
+
+    match &resolved[0] {
+        Resolved::TraitDef(_, id, _, methods, _) => {
+            assert_eq!(id.name, "Numeric");
+            assert_eq!(methods.len(), 2);
+            assert_eq!(methods[0].attrs.doc.as_deref(), Some("Delegates to abs."));
+            match methods[0].body.as_deref() {
+                Some(Resolved::Block(_, stmts)) => match &stmts[0] {
+                    Resolved::App(_, func, args) => {
+                        assert_eq!(args.len(), 1);
+                        match func.as_ref() {
+                            Resolved::Var(_, rid) => {
+                                assert_eq!(rid.name, "abs");
+                                assert_eq!(rid.qualified_name.as_deref(), Some("Numeric::abs"));
+                            }
+                            other => panic!("expected sibling trait method var, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected app in default body, got {other:?}"),
+                },
+                other => panic!("expected resolved default body block, got {other:?}"),
+            }
+            assert!(methods[1].body.is_none());
+        }
+        other => panic!("Expected TraitDef, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_resolve_trait_impl_builtin_method_preserves_private_name() {
     let ast = parse_module_ast(
         r#"deftrait Add {
@@ -1223,8 +1266,9 @@ fn test_struct_readonly_metadata_and_fields_resolve() {
         .expect("readonly struct should resolve");
 
     match &resolved[0] {
-        Resolved::StructDef(_, id, fields, attrs) => {
+        Resolved::StructDef(_, id, type_params, fields, attrs) => {
             assert_eq!(id.name, "Global::User");
+            assert!(type_params.is_empty());
             assert!(attrs.readonly);
             assert_eq!(fields[0].name, "password");
             assert_eq!(fields[0].visibility, spire::ast::Visibility::Private);
@@ -1232,6 +1276,34 @@ fn test_struct_readonly_metadata_and_fields_resolve() {
             assert_eq!(fields[1].name, "name");
             assert_eq!(fields[1].visibility, spire::ast::Visibility::Public);
             assert!(fields[1].readonly);
+        }
+        other => panic!("Expected StructDef, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_generic_struct_type_params_and_fields_resolve() {
+    let ast = spire::parse_with_context(
+        "defstruct Pair<$A, $B> { left: $A, right: $B }",
+        spire::ParserContext::project(0),
+    )
+    .expect("generic struct should parse");
+    let mut resolver = Resolver::new();
+    let resolved = resolver
+        .resolve_program(ast)
+        .expect("generic struct should resolve");
+
+    match &resolved[0] {
+        Resolved::StructDef(_, id, type_params, fields, attrs) => {
+            assert_eq!(id.name, "Global::Pair");
+            assert_eq!(type_params.len(), 2);
+            assert_eq!(type_params[0].name, "$A");
+            assert_eq!(type_params[1].name, "$B");
+            assert_eq!(fields[0].name, "left");
+            assert!(matches!(fields[0].ty, spire::ast::AstTy::Named(_, ref ty) if ty == "$A"));
+            assert_eq!(fields[1].name, "right");
+            assert!(matches!(fields[1].ty, spire::ast::AstTy::Named(_, ref ty) if ty == "$B"));
+            assert_eq!(*attrs, ResolvedDeclAttrs::default());
         }
         other => panic!("Expected StructDef, got {other:?}"),
     }
@@ -1654,6 +1726,77 @@ x = True || rhs()"#,
             other => panic!("Expected If for ||, got {:?}", other),
         },
         _ => panic!("Expected Bind with If"),
+    }
+}
+
+#[test]
+fn test_symbolic_and_ignores_local_and_binding() {
+    let resolved = parse_and_resolve(
+        r#"def rhs() -> Boolean { True }
+def and(left: Boolean, right: Boolean) -> Boolean { right }
+x = False && rhs()"#,
+    )
+    .expect("symbolic && should still resolve as builtin logic");
+    match &resolved[2] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::If(_, cond, then_branch, Some(else_branch)) => {
+                assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(false))));
+                assert!(matches!(then_branch.as_ref(), Resolved::App(_, _, _)));
+                assert!(matches!(
+                    else_branch.as_ref(),
+                    Resolved::Lit(_, Lit::Bool(false))
+                ));
+            }
+            other => panic!("Expected If for && despite local and, got {:?}", other),
+        },
+        other => panic!("Expected Bind for && regression, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_symbolic_or_ignores_local_or_binding() {
+    let resolved = parse_and_resolve(
+        r#"def rhs() -> Boolean { False }
+def or(left: Boolean, right: Boolean) -> Boolean { right }
+x = True || rhs()"#,
+    )
+    .expect("symbolic || should still resolve as builtin logic");
+    match &resolved[2] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::If(_, cond, then_branch, Some(else_branch)) => {
+                assert!(matches!(cond.as_ref(), Resolved::Lit(_, Lit::Bool(true))));
+                assert!(matches!(
+                    then_branch.as_ref(),
+                    Resolved::Lit(_, Lit::Bool(true))
+                ));
+                assert!(matches!(else_branch.as_ref(), Resolved::App(_, _, _)));
+            }
+            other => panic!("Expected If for || despite local or, got {:?}", other),
+        },
+        other => panic!("Expected Bind for || regression, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_bare_and_call_still_uses_local_binding() {
+    let resolved = parse_and_resolve(
+        r#"def and(left: Boolean, right: Boolean) -> Boolean { right }
+x = and(False, True)"#,
+    )
+    .expect("bare and(...) should still follow normal name resolution");
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, func, args) => {
+                assert!(matches!(
+                    func.as_ref(),
+                    Resolved::Var(_, id)
+                        if id.name == "and" && id.qualified_name.as_deref() == Some("and")
+                ));
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("Expected plain App for bare and(...), got {:?}", other),
+        },
+        other => panic!("Expected Bind for bare and(...), got {:?}", other),
     }
 }
 
@@ -2204,7 +2347,7 @@ defstruct User {
     };
 
     let def_id = match &resolved[1] {
-        Resolved::StructDef(_, id, _, _) => id.unique_id,
+        Resolved::StructDef(_, id, ..) => id.unique_id,
         _ => panic!("Expected StructDef"),
     };
 
@@ -2292,7 +2435,7 @@ deferror NotFound(code: String) {
                 },
                 Resolved::Def(_, id, _, _, _, _, _)
                 | Resolved::RecordDef(_, id, _)
-                | Resolved::StructDef(_, id, _, _)
+                | Resolved::StructDef(_, id, ..)
                 | Resolved::DeferrorDef(_, id, _, _) => vec![id.unique_id],
                 _ => Vec::new(),
             })
@@ -3401,6 +3544,76 @@ fn test_tuple_type_root_resolves_in_field_access() {
         },
         other => panic!("Expected Bind, got {:?}", other),
     }
+}
+
+#[test]
+fn resolves_inferred_facet_capture_with_map_key() {
+    let resolved = parse_and_resolve(
+        r#"users = []
+names = users |*> _.score.["talk"]"#,
+    )
+    .unwrap();
+    let rendered = format!("{resolved:?}");
+    assert!(rendered.contains("InferredFacetCapture"), "{rendered}");
+    assert!(rendered.contains("Bracket"), "{rendered}");
+}
+
+#[test]
+fn resolves_container_root_facet_paths() {
+    let module_stages = vec![vec![staged_module(
+        "Facet",
+        parse_module_ast(
+            r#"@builtin def view(facet: Facet<$S, $A>, source: $S) -> Result<$A>"#,
+            "Facet",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules(
+        r#"map = ()
+value = Facet::view(HashMap.["taro"], map)"#,
+        &module_stages,
+    )
+    .unwrap();
+    let rendered = format!("{resolved:?}");
+    assert!(rendered.contains("HashMap"), "{rendered}");
+    assert!(rendered.contains("Bracket"), "{rendered}");
+
+    let resolved = resolve_user_with_modules(
+        r#"values = []
+value = Facet::view(List.[0], values)"#,
+        &module_stages,
+    )
+    .unwrap();
+    let rendered = format!("{resolved:?}");
+    assert!(rendered.contains("List"), "{rendered}");
+    assert!(rendered.contains("Bracket"), "{rendered}");
+}
+
+#[test]
+fn resolves_bulk_update_case_actions_as_facet_calls() {
+    let module_stages = vec![vec![staged_module(
+        "Facet",
+        parse_module_ast(
+            r#"@builtin def case_set(facet: Facet<$S, $A>, source: $S, value: $A) -> Result<$S>
+@builtin def set(facet: Facet<$S, $A>, source: $S, value: $A) -> Result<$S>"#,
+            "Facet",
+        ),
+    )]];
+    let resolved = resolve_user_with_modules(
+        r#"user = ()
+user2 =? Facet::bulk_update(user) {
+  nickname.Some <- case_set("alice")
+  scores.[1] <- set(500)
+}"#,
+        &module_stages,
+    )
+    .unwrap();
+    let rendered = format!("{resolved:?}");
+    assert!(
+        rendered.contains("Facet::case_set") || rendered.contains("case_set"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("FacetCapture"), "{rendered}");
 }
 
 #[test]

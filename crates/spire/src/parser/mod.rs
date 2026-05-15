@@ -286,6 +286,7 @@ impl<'a> Parser<'a> {
             | Ast::FacetCapture(_, _)
             | Ast::Closure(_, _, _)
             | Ast::Grouped(_, _)
+            | Ast::FacetSegmentAccess(_, _, _)
             | Ast::App(_, _, _) => Some(stmt),
             _ => None,
         }
@@ -493,9 +494,10 @@ fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, Pa
                 attrs,
             ))
         }
-        Ast::StructDef(span, name, fields, attrs) => Ok(Ast::StructDef(
+        Ast::StructDef(span, name, type_params, fields, attrs) => Ok(Ast::StructDef(
             span.clone(),
             qualify_namespace_head(namespace, &name, 2, &span, "type", true)?,
+            type_params,
             fields,
             attrs,
         )),
@@ -606,7 +608,7 @@ fn owner_head_name(node: &Ast) -> Option<&str> {
         | Ast::Defgenserver(_, name, _, _, _)
         | Ast::Defsupervisor(_, name, _, _, _)
         | Ast::DefdynamicSupervisor(_, name, _, _, _)
-        | Ast::StructDef(_, name, _, _)
+        | Ast::StructDef(_, name, ..)
         | Ast::RecordDef(_, name, _, _)
         | Ast::DeferrorDef(_, name, _, _, _)
         | Ast::EnumDef(_, name, _, _, _) => Some(name.as_str()),
@@ -683,9 +685,10 @@ fn canonicalize_root_owner_heads(ast: Vec<Ast>) -> Result<Vec<Ast>, ParseError> 
                     attrs,
                 ))
             }
-            Ast::StructDef(span, name, fields, attrs) => Ok(Ast::StructDef(
+            Ast::StructDef(span, name, type_params, fields, attrs) => Ok(Ast::StructDef(
                 span,
                 canonicalize_root_owner_name(&name),
+                type_params,
                 fields,
                 attrs,
             )),
@@ -720,6 +723,20 @@ fn rewrite_process_owner_refs_in_body(body: Vec<Ast>, old_name: &str, new_name: 
         .collect()
 }
 
+fn rewrite_facet_path_segment_refs(
+    segment: FacetPathSegment,
+    old_name: &str,
+    new_name: &str,
+) -> FacetPathSegment {
+    match segment {
+        FacetPathSegment::Field { .. } => segment,
+        FacetPathSegment::Bracket(expr) => FacetPathSegment::Bracket(FacetBracketExpr {
+            expr: Box::new(rewrite_process_owner_refs(*expr.expr, old_name, new_name)),
+            display: expr.display,
+        }),
+    }
+}
+
 fn rewrite_process_owner_bulk_entries(
     entries: Vec<BulkUpdateEntry>,
     old_name: &str,
@@ -729,7 +746,11 @@ fn rewrite_process_owner_bulk_entries(
         .into_iter()
         .map(|entry| BulkUpdateEntry {
             span: entry.span,
-            path: entry.path,
+            path: entry
+                .path
+                .into_iter()
+                .map(|segment| rewrite_facet_path_segment_refs(segment, old_name, new_name))
+                .collect(),
             kind: match entry.kind {
                 BulkUpdateEntryKind::Set(expr) => {
                     BulkUpdateEntryKind::Set(rewrite_process_owner_refs(expr, old_name, new_name))
@@ -738,6 +759,12 @@ fn rewrite_process_owner_bulk_entries(
                     BulkUpdateEntryKind::Over(rewrite_process_owner_refs(expr, old_name, new_name))
                 }
                 BulkUpdateEntryKind::OverResult(expr) => BulkUpdateEntryKind::OverResult(
+                    rewrite_process_owner_refs(expr, old_name, new_name),
+                ),
+                BulkUpdateEntryKind::CaseSet(expr) => BulkUpdateEntryKind::CaseSet(
+                    rewrite_process_owner_refs(expr, old_name, new_name),
+                ),
+                BulkUpdateEntryKind::CaseOver(expr) => BulkUpdateEntryKind::CaseOver(
                     rewrite_process_owner_refs(expr, old_name, new_name),
                 ),
                 BulkUpdateEntryKind::Nested(entries) => BulkUpdateEntryKind::Nested(
@@ -883,6 +910,11 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
             span,
             Box::new(rewrite_process_owner_refs(*expr, old_name, new_name)),
             field,
+        ),
+        Ast::FacetSegmentAccess(span, expr, segment) => Ast::FacetSegmentAccess(
+            span,
+            Box::new(rewrite_process_owner_refs(*expr, old_name, new_name)),
+            rewrite_facet_path_segment_refs(segment, old_name, new_name),
         ),
         Ast::StructLit(span, name, fields) => Ast::StructLit(
             span,
@@ -1449,12 +1481,26 @@ fn shift_ast_path(path: AstPath, delta: usize) -> AstPath {
     }
 }
 
+fn shift_facet_path_segment(segment: FacetPathSegment, delta: usize) -> FacetPathSegment {
+    match segment {
+        FacetPathSegment::Field { .. } => segment,
+        FacetPathSegment::Bracket(expr) => FacetPathSegment::Bracket(FacetBracketExpr {
+            expr: Box::new(shift_ast_span(*expr.expr, delta)),
+            display: expr.display,
+        }),
+    }
+}
+
 fn shift_bulk_update_entries(entries: Vec<BulkUpdateEntry>, delta: usize) -> Vec<BulkUpdateEntry> {
     entries
         .into_iter()
         .map(|entry| BulkUpdateEntry {
             span: shift_span(entry.span, delta),
-            path: entry.path,
+            path: entry
+                .path
+                .into_iter()
+                .map(|segment| shift_facet_path_segment(segment, delta))
+                .collect(),
             kind: match entry.kind {
                 BulkUpdateEntryKind::Set(expr) => {
                     BulkUpdateEntryKind::Set(shift_ast_span(expr, delta))
@@ -1464,6 +1510,12 @@ fn shift_bulk_update_entries(entries: Vec<BulkUpdateEntry>, delta: usize) -> Vec
                 }
                 BulkUpdateEntryKind::OverResult(expr) => {
                     BulkUpdateEntryKind::OverResult(shift_ast_span(expr, delta))
+                }
+                BulkUpdateEntryKind::CaseSet(expr) => {
+                    BulkUpdateEntryKind::CaseSet(shift_ast_span(expr, delta))
+                }
+                BulkUpdateEntryKind::CaseOver(expr) => {
+                    BulkUpdateEntryKind::CaseOver(shift_ast_span(expr, delta))
                 }
                 BulkUpdateEntryKind::Nested(entries) => {
                     BulkUpdateEntryKind::Nested(shift_bulk_update_entries(entries, delta))
@@ -1610,13 +1662,26 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*expr, delta)),
             field,
         ),
+        Ast::FacetSegmentAccess(span, expr, segment) => Ast::FacetSegmentAccess(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*expr, delta)),
+            shift_facet_path_segment(segment, delta),
+        ),
         Ast::FacetCapture(span, expr) => Ast::FacetCapture(
             shift_span(span, delta),
             Box::new(shift_ast_span(*expr, delta)),
         ),
-        Ast::StructDef(span, name, fields, attrs) => Ast::StructDef(
+        Ast::StructDef(span, name, type_params, fields, attrs) => Ast::StructDef(
             shift_span(span, delta),
             name,
+            type_params
+                .into_iter()
+                .map(|param| TypeParam {
+                    name: param.name,
+                    bound: param.bound,
+                    span: shift_span(param.span, delta),
+                })
+                .collect(),
             fields
                 .into_iter()
                 .map(|f| StructField {
@@ -1957,6 +2022,10 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                         .map(|param| shift_fun_param(param, delta))
                         .collect(),
                     ret_ty: shift_ast_ty(method.ret_ty, delta),
+                    body: method
+                        .body
+                        .map(|body| Box::new(shift_ast_span(*body, delta))),
+                    attrs: shift_decl_attrs(method.attrs),
                     span: shift_span(method.span, delta),
                 })
                 .collect(),
@@ -2048,8 +2117,9 @@ impl Ast {
             | Ast::Match(s, _, _)
             | Ast::BulkUpdate(s, _, _)
             | Ast::FieldAccess(s, _, _)
+            | Ast::FacetSegmentAccess(s, _, _)
             | Ast::FacetCapture(s, _)
-            | Ast::StructDef(s, _, _, _)
+            | Ast::StructDef(s, ..)
             | Ast::RecordDef(s, _, _, _)
             | Ast::StructLit(s, _, _)
             | Ast::InternalStructLit(s, _, _)

@@ -9,8 +9,8 @@ use eldr::interactive::InteractiveChunkPolicy;
 use eldr::value::{TypeKind, Value};
 use forge::bytecode::populate_error_template_lines;
 use scar::typed::{
-    TraitCallOrigin, TypedFacetOverMode, TypedFacetPath, TypedFacetSegment, TypedInner, TypedNode,
-    TypedPattern,
+    PendingFacetSegment, TraitCallOrigin, TypedFacetOverMode, TypedFacetPath, TypedFacetSegment,
+    TypedInner, TypedNode, TypedPattern,
 };
 use scar::types::Ty;
 use sigil::error::ResolveError;
@@ -36,7 +36,7 @@ use crate::{
 };
 
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
-const OPERATOR_DOC_ALIASES: &[(&str, &str)] = &[
+const OPERATOR_DOC_TARGETS: &[(&str, &str)] = &[
     ("+", "Add"),
     ("-", "Sub"),
     ("*", "Mul"),
@@ -44,10 +44,31 @@ const OPERATOR_DOC_ALIASES: &[(&str, &str)] = &[
     ("||", "or"),
     ("==", "Eq"),
     ("!=", "Neq"),
-    ("<", "Lt"),
-    ("<=", "Lte"),
-    (">", "Gt"),
-    (">=", "Gte"),
+    ("<", "Compare::lt"),
+    ("<=", "Compare::lte"),
+    (">", "Compare::gt"),
+    (">=", "Compare::gte"),
+    ("/", "Compose"),
+    ("++", "Concat"),
+    ("|>", "PipeApply"),
+    ("|*>", "Functor"),
+    ("|>=", "Chainable"),
+    (">>", "Composable"),
+    (">*", "LiftComposable"),
+    (">=>", "KleisliComposable"),
+];
+const OPERATOR_DOC_TRAIT_ALIASES: &[(&str, &str)] = &[
+    ("+", "Add"),
+    ("-", "Sub"),
+    ("*", "Mul"),
+    ("&&", "and"),
+    ("||", "or"),
+    ("==", "Eq"),
+    ("!=", "Neq"),
+    ("<", "Compare"),
+    ("<=", "Compare"),
+    (">", "Compare"),
+    (">=", "Compare"),
     ("/", "Compose"),
     ("++", "Concat"),
     ("|>", "PipeApply"),
@@ -63,14 +84,21 @@ const METHOD_DOC_TRAIT_ALIASES: &[(&str, &str)] = &[
     ("mul", "Mul"),
     ("eq", "Eq"),
     ("neq", "Neq"),
-    ("lt", "Lt"),
-    ("lte", "Lte"),
-    ("gt", "Gt"),
-    ("gte", "Gte"),
+    ("compare", "Compare"),
+    ("lt", "Compare"),
+    ("lte", "Compare"),
+    ("gt", "Compare"),
+    ("gte", "Compare"),
     ("concat", "Concat"),
 ];
-const REPL_UNRESOLVED_TYPE_MESSAGE: &str =
-    "Cannot persist binding with unresolved type variable.";
+const COMPARE_METHOD_DOC_TARGETS: &[(&str, &str)] = &[
+    ("compare", "Compare::compare"),
+    ("lt", "Compare::lt"),
+    ("lte", "Compare::lte"),
+    ("gt", "Compare::gt"),
+    ("gte", "Compare::gte"),
+];
+const REPL_UNRESOLVED_TYPE_MESSAGE: &str = "Cannot persist binding with unresolved type variable.";
 const REPL_UNRESOLVED_TYPE_HINT: &str =
     "Add a type annotation or use the value in a context that determines the success type.";
 
@@ -1144,7 +1172,7 @@ impl ReplEngine {
         vec![
             "Usage: :doc <symbol|query>".to_string(),
             "Also: :doc $<binding>".to_string(),
-            "Examples: :doc print, :doc Closure, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User(), :doc gt(Int, Int), :doc $formatter"
+            "Examples: :doc print, :doc Closure, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User(), :doc compare(Int, Int), :doc $formatter"
                 .to_string(),
         ]
     }
@@ -1153,7 +1181,7 @@ impl ReplEngine {
         vec![
             "Usage: :sig <function|query>".to_string(),
             "Also: :sig $<binding>".to_string(),
-            "Examples: :sig print, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig gt(Int, Int), :sig ret |>= up, :sig $formatter"
+            "Examples: :sig print, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig compare(Int, Int), :sig ret |>= up, :sig $formatter"
                 .to_string(),
         ]
     }
@@ -1162,7 +1190,7 @@ impl ReplEngine {
         vec![
             "Usage: :info <query>".to_string(),
             "Accepts: symbol | singleton-owner | $binding | typed-call | typed-operator".to_string(),
-            "Examples: :info print, :info Counter, :info pid, :info $value, :info gt(Int, Int), :info ret |>= up".to_string(),
+            "Examples: :info print, :info Counter, :info pid, :info $value, :info compare(Int, Int), :info ret |>= up".to_string(),
         ]
     }
 
@@ -1301,7 +1329,7 @@ impl ReplEngine {
             return ReplResult::ok(Self::doc_resolved_output(entry));
         }
         let canonical = self
-            .visible_helper_trait_alias(symbol)
+            .visible_helper_doc_alias(symbol)
             .unwrap_or_else(|| Self::canonical_symbol(symbol).to_string());
         let preferred_kind = Self::definition_doc_kind(&canonical);
         let matches = if let Some(matches) = self.type_owner_doc_entries(&canonical) {
@@ -1428,9 +1456,9 @@ impl ReplEngine {
     }
 
     fn canonical_symbol(symbol: &str) -> &str {
-        OPERATOR_DOC_ALIASES
+        OPERATOR_DOC_TARGETS
             .iter()
-            .find_map(|(alias, trait_name)| (*alias == symbol).then_some(*trait_name))
+            .find_map(|(alias, target)| (*alias == symbol).then_some(*target))
             .unwrap_or(symbol)
     }
 
@@ -1489,7 +1517,7 @@ impl ReplEngine {
     fn definition_doc_kind(symbol: &str) -> Option<DocKind> {
         if symbol != "and"
             && symbol != "or"
-            && OPERATOR_DOC_ALIASES
+            && OPERATOR_DOC_TRAIT_ALIASES
                 .iter()
                 .any(|(_, trait_name)| *trait_name == symbol)
         {
@@ -1958,6 +1986,38 @@ impl ReplEngine {
             .find_map(|(method, trait_name)| (*method == symbol).then_some(*trait_name))
     }
 
+    fn compare_method_doc_target(symbol: &str) -> Option<&'static str> {
+        COMPARE_METHOD_DOC_TARGETS
+            .iter()
+            .find_map(|(method, target)| (*method == symbol).then_some(*target))
+    }
+
+    fn visible_helper_doc_alias(&self, symbol: &str) -> Option<String> {
+        if let Some(target) = Self::compare_method_doc_target(symbol) {
+            return self.visible_compare_method_doc_alias(symbol).or_else(|| {
+                self.visible_declaration(symbol)
+                    .is_none()
+                    .then(|| target.to_string())
+            });
+        }
+        self.visible_helper_trait_alias(symbol)
+    }
+
+    fn visible_compare_method_doc_alias(&self, symbol: &str) -> Option<String> {
+        let target = Self::compare_method_doc_target(symbol)?;
+        let trait_name = Self::method_trait_alias(symbol)?;
+        let decl = self.visible_declaration(symbol)?;
+        if decl.kind != sigil::DeclarationKind::TraitMethod {
+            return None;
+        }
+        let (owner_fq_name, _) = decl.fq_name.rsplit_once("::")?;
+        let owner = self.declaration_index.get(owner_fq_name)?;
+        (owner.kind == sigil::DeclarationKind::Trait
+            && owner.auto_import
+            && owner.name == trait_name)
+            .then(|| target.to_string())
+    }
+
     fn visible_helper_trait_alias(&self, symbol: &str) -> Option<String> {
         let trait_name = Self::method_trait_alias(symbol)?;
         let decl = self.visible_declaration(symbol)?;
@@ -2237,7 +2297,7 @@ impl ReplEngine {
                 .map(|entry| format!("  {}", crate::surface_path_name(&entry.qualified_name))),
         );
         rendered.push(
-            "Use a qualified name or add type annotations, for example `:doc gt(3, 2)`."
+            "Use a qualified name or add type annotations, for example `:doc compare(Int, Int)`."
                 .to_string(),
         );
         rendered
@@ -2281,7 +2341,7 @@ impl ReplEngine {
             .iter()
             .find_map(|(method, trait_name)| (*method == query.callee).then_some(*trait_name))
             .or_else(|| {
-                OPERATOR_DOC_ALIASES
+                OPERATOR_DOC_TRAIT_ALIASES
                     .iter()
                     .find_map(|(alias, trait_name)| (*alias == query.callee).then_some(*trait_name))
             });
@@ -2311,22 +2371,55 @@ impl ReplEngine {
                 })
             })
             .filter(|entry| {
-                preferred_trait.is_none_or(|trait_name| {
-                    entry
-                        .signature
-                        .as_deref()
-                        .is_some_and(|sig| sig.starts_with(&format!("impl {trait_name} for ")))
-                })
-            })
-            .filter(|entry| {
                 entry
                     .signature
                     .as_deref()
                     .is_none_or(|sig| self.signature_accepts_arg_types(sig, &arg_types))
             })
             .collect::<Vec<_>>();
+        matches.sort_by_key(|entry| {
+            self.typed_call_doc_rank(entry, preferred_trait, receiver_ty, callee_tail)
+        });
+        if let Some(best_rank) = matches
+            .first()
+            .map(|entry| self.typed_call_doc_rank(entry, preferred_trait, receiver_ty, callee_tail))
+        {
+            matches.retain(|entry| {
+                self.typed_call_doc_rank(entry, preferred_trait, receiver_ty, callee_tail)
+                    == best_rank
+            });
+        }
         matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
         matches
+    }
+
+    fn typed_call_doc_rank(
+        &self,
+        entry: &DocEntry,
+        preferred_trait: Option<&str>,
+        receiver_ty: &str,
+        callee_tail: &str,
+    ) -> u8 {
+        let Some(signature) = entry.signature.as_deref() else {
+            return u8::MAX;
+        };
+        let Some(trait_name) = preferred_trait else {
+            return 0;
+        };
+        if signature.starts_with(&format!(
+            "impl {trait_name} for {receiver_ty}::{callee_tail}"
+        )) {
+            return 0;
+        }
+        if crate::surface_path_name(&entry.qualified_name) == format!("{trait_name}::{callee_tail}")
+            || signature.starts_with(&format!("{trait_name}::{callee_tail}("))
+        {
+            return 1;
+        }
+        if signature.starts_with(&format!("impl {trait_name} for ")) {
+            return 2;
+        }
+        3
     }
 
     fn match_special_form_typed_call_docs<'a>(
@@ -2442,7 +2535,7 @@ impl ReplEngine {
                 .map(|signature| (entry.qualified_name.clone(), signature));
         }
         let canonical = self
-            .visible_helper_trait_alias(symbol)
+            .visible_helper_doc_alias(symbol)
             .unwrap_or_else(|| Self::canonical_symbol(symbol).to_string());
         let qualified_lookup = Self::is_qualified_symbol(&canonical);
         if qualified_lookup
@@ -3373,7 +3466,7 @@ impl ReplEngine {
             TypedInner::FacetPath(_path) => {
                 let rendered = match expr {
                     Ast::BinOp(_, BinOp::Slash, left, right) => format!(
-                        "Facet::compose({}, {})",
+                        "Facet::chain({}, {})",
                         Self::source_expr_string(left),
                         Self::source_expr_string(right)
                     ),
@@ -3385,7 +3478,7 @@ impl ReplEngine {
                 let _ = path;
                 let rendered = match expr {
                     Ast::BinOp(_, BinOp::Slash, left, right) => format!(
-                        "Facet::compose({}, {})",
+                        "Facet::chain({}, {})",
                         Self::source_expr_string(left),
                         Self::source_expr_string(right)
                     ),
@@ -3411,6 +3504,11 @@ impl ReplEngine {
                         Self::ty_to_string(&typed.ty)
                     )
                 }
+                TraitCallOrigin::Comparison { lhs_ty, rhs_ty, .. } => format!(
+                    "Compare::compare(lhs: {}, rhs: {}) -> Boolean",
+                    Self::ty_to_string(lhs_ty),
+                    Self::ty_to_string(rhs_ty)
+                ),
                 TraitCallOrigin::Explicit => {
                     let trait_short = Self::trait_short_name(trait_name);
                     let params = args
@@ -3543,21 +3641,7 @@ impl ReplEngine {
                 idx
             )),
             TypedInner::FacetPath(path) => Some(Self::render_typed_facet_path(path)),
-            TypedInner::PendingFacetPath(path) => Some(path.segments.iter().enumerate().fold(
-                String::new(),
-                |mut acc, (index, segment)| {
-                    if index == 0 && segment.starts_with('_') {
-                        acc.push_str("Tuple");
-                    } else if !acc.is_empty() && !segment.starts_with('_') {
-                        acc.push('.');
-                    }
-                    if segment.starts_with('_') {
-                        acc.push('.');
-                    }
-                    acc.push_str(segment);
-                    acc
-                },
-            )),
+            TypedInner::PendingFacetPath(path) => Some(Self::render_pending_facet_path(path)),
             TypedInner::Closure(..) => Some("{|...| ...}".to_string()),
             TypedInner::Lit(lit) => Some(Self::literal_source(lit)),
             _ => None,
@@ -3604,6 +3688,19 @@ impl ReplEngine {
                     rendered.push('.');
                     rendered.push_str(variant_name);
                 }
+                TypedFacetSegment::ListIndex { display, .. }
+                | TypedFacetSegment::ListRange { display, .. } => {
+                    if rendered.is_empty() {
+                        rendered.push_str("List");
+                    }
+                    rendered.push_str(&format!(".[{display}]"));
+                }
+                TypedFacetSegment::MapKey { display, .. } => {
+                    if rendered.is_empty() {
+                        rendered.push_str("HashMap");
+                    }
+                    rendered.push_str(&format!(".[{display}]"));
+                }
             }
         }
         if rendered.is_empty() {
@@ -3618,7 +3715,57 @@ impl ReplEngine {
             TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
             TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
             TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
+            TypedFacetSegment::ListIndex { display, .. }
+            | TypedFacetSegment::ListRange { display, .. }
+            | TypedFacetSegment::MapKey { display, .. } => format!("[{display}]"),
         }
+    }
+
+    fn pending_facet_segment_label(segment: &PendingFacetSegment) -> String {
+        match segment {
+            PendingFacetSegment::Field { name, optional } => {
+                if *optional {
+                    format!("{name}?")
+                } else {
+                    name.clone()
+                }
+            }
+            PendingFacetSegment::Bracket { display, .. }
+            | PendingFacetSegment::RangeBracket { display, .. } => format!("[{display}]"),
+        }
+    }
+
+    fn pending_facet_segment_kind(segment: &PendingFacetSegment) -> &'static str {
+        match segment {
+            PendingFacetSegment::Field { name, .. } if name.starts_with('_') => "tuple",
+            PendingFacetSegment::Field { .. } => "field",
+            PendingFacetSegment::Bracket { .. } | PendingFacetSegment::RangeBracket { .. } => {
+                "container segment"
+            }
+        }
+    }
+
+    fn render_pending_facet_path(path: &scar::typed::PendingFacetPath) -> String {
+        if path.segments.is_empty() {
+            return "<facet>".to_string();
+        }
+        let mut rendered = path.root_path_name.clone().unwrap_or_default();
+        for segment in &path.segments {
+            let label = Self::pending_facet_segment_label(segment);
+            if rendered.is_empty() {
+                if matches!(
+                    segment,
+                    PendingFacetSegment::Field { name, .. } if name.starts_with('_')
+                ) {
+                    rendered.push_str("Tuple");
+                    rendered.push('.');
+                }
+            } else {
+                rendered.push('.');
+            }
+            rendered.push_str(&label);
+        }
+        rendered
     }
 
     fn facet_info_from_path(
@@ -3706,13 +3853,91 @@ impl ReplEngine {
                     current_source = focus_ty;
                     ("variant", true, "variant mismatch returns Result")
                 }
+                TypedFacetSegment::ListIndex { display, .. }
+                | TypedFacetSegment::ListRange { display, .. } => {
+                    let focus_ty = match &current_source {
+                        Ty::List(inner) => match segment {
+                            TypedFacetSegment::ListIndex { .. } => inner.as_ref().clone(),
+                            TypedFacetSegment::ListRange { .. } => {
+                                Ty::List(Box::new(inner.as_ref().clone()))
+                            }
+                            _ => unreachable!(),
+                        },
+                        _ => path.focus_ty.clone(),
+                    };
+                    if prefix.is_empty() {
+                        prefix.push_str("List.");
+                    } else {
+                        prefix.push('.');
+                    }
+                    prefix.push_str(&format!("[{display}]"));
+                    path_is_fallible = true;
+                    segments.push(forge::ReplFacetSegmentInfo {
+                        label: prefix.clone(),
+                        kind: match segment {
+                            TypedFacetSegment::ListIndex { .. } => "list index".to_string(),
+                            TypedFacetSegment::ListRange { .. } => "list range".to_string(),
+                            _ => unreachable!(),
+                        },
+                        source_ty: Self::ty_to_string(&current_source),
+                        focus_ty: Self::ty_to_string(&focus_ty),
+                        fallible: true,
+                        reason: match segment {
+                            TypedFacetSegment::ListIndex { .. } => {
+                                "index miss returns Result".to_string()
+                            }
+                            TypedFacetSegment::ListRange { .. } => {
+                                "range miss returns Result".to_string()
+                            }
+                            _ => unreachable!(),
+                        },
+                    });
+                    current_source = focus_ty;
+                    match segment {
+                        TypedFacetSegment::ListIndex { .. } => {
+                            ("list index", true, "index miss returns Result")
+                        }
+                        TypedFacetSegment::ListRange { .. } => {
+                            ("list range", true, "range miss returns Result")
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                TypedFacetSegment::MapKey { display, .. } => {
+                    let focus_ty = match &current_source {
+                        Ty::Enum(name, args)
+                            if name.rsplit("::").next().unwrap_or(name) == "HashMap"
+                                && args.len() == 1 =>
+                        {
+                            args[0].clone()
+                        }
+                        _ => path.focus_ty.clone(),
+                    };
+                    if prefix.is_empty() {
+                        prefix.push_str("HashMap.");
+                    } else {
+                        prefix.push('.');
+                    }
+                    prefix.push_str(&format!("[{display}]"));
+                    path_is_fallible = true;
+                    segments.push(forge::ReplFacetSegmentInfo {
+                        label: prefix.clone(),
+                        kind: "map key".to_string(),
+                        source_ty: Self::ty_to_string(&current_source),
+                        focus_ty: Self::ty_to_string(&focus_ty),
+                        fallible: true,
+                        reason: "key miss returns Result".to_string(),
+                    });
+                    current_source = focus_ty;
+                    ("map key", true, "key miss returns Result")
+                }
             };
             let _ = (kind, fallible, reason, label);
         }
         forge::ReplFacetInfo {
             ty: Self::ty_to_string(ty),
             path_kind: path.path_kind.as_str().to_string(),
-            view_result_ty: if source_is_result || path_is_fallible {
+            view_result_ty: if source_is_result || path_is_fallible || path.may_fail {
                 format!("Result<{}, Error>", Self::ty_to_string(&path.focus_ty))
             } else {
                 Self::ty_to_string(&path.focus_ty)
@@ -3727,23 +3952,7 @@ impl ReplEngine {
         match &node.node {
             TypedInner::FacetPath(path) => Some(Self::facet_info_from_path(path, &node.ty, false)),
             TypedInner::PendingFacetPath(path) => {
-                let full_path = if path.segments.is_empty() {
-                    "<facet>".to_string()
-                } else {
-                    let mut rendered = String::new();
-                    for (index, segment) in path.segments.iter().enumerate() {
-                        if index == 0 && segment.starts_with('_') {
-                            rendered.push_str("Tuple");
-                        } else if !rendered.is_empty() && !segment.starts_with('_') {
-                            rendered.push('.');
-                        }
-                        if segment.starts_with('_') {
-                            rendered.push('.');
-                        }
-                        rendered.push_str(segment);
-                    }
-                    rendered
-                };
+                let full_path = Self::render_pending_facet_path(path);
                 Some(forge::ReplFacetInfo {
                     ty: Self::ty_to_string(&node.ty),
                     path_kind: "structural".to_string(),
@@ -3753,19 +3962,22 @@ impl ReplEngine {
                         .segments
                         .iter()
                         .map(|segment| forge::ReplFacetSegmentInfo {
-                            label: if segment.starts_with('_') {
-                                format!("Tuple.{segment}")
+                            label: if matches!(
+                                segment,
+                                PendingFacetSegment::Field { name, .. } if name.starts_with('_')
+                            ) {
+                                format!("Tuple.{}", Self::pending_facet_segment_label(segment))
                             } else {
-                                segment.clone()
+                                Self::pending_facet_segment_label(segment)
                             },
-                            kind: if segment.starts_with('_') {
-                                "tuple".to_string()
-                            } else {
-                                "field".to_string()
-                            },
+                            kind: Self::pending_facet_segment_kind(segment).to_string(),
                             source_ty: "_".to_string(),
                             focus_ty: "_".to_string(),
-                            fallible: false,
+                            fallible: matches!(
+                                segment,
+                                PendingFacetSegment::Bracket { .. }
+                                    | PendingFacetSegment::RangeBracket { .. }
+                            ),
                             reason: "requires Facet context to specialize".to_string(),
                         })
                         .collect(),
@@ -4335,6 +4547,25 @@ impl ReplEngine {
         args.iter().map(|arg| self.query_arg_type(arg)).collect()
     }
 
+    fn repl_operator_query_unresolved_generic_error() -> String {
+        format!(
+            "Cannot use unresolved generic binding in REPL operator query. {}",
+            REPL_UNRESOLVED_TYPE_HINT
+        )
+    }
+
+    fn repl_typed_operator_operand_error(source: &str) -> String {
+        format!(
+            "Unsupported typed operator query operand `{source}`. Use an existing binding or a concrete type such as `(Int -> String)`."
+        )
+    }
+
+    fn repl_operator_query_rhs_error(operator: &str) -> String {
+        format!(
+            "Unsupported operator query `{operator}`. Use a direct callable or binding on the right-hand side."
+        )
+    }
+
     fn query_arg_ast_types(&self, args: &[QueryArg]) -> Result<Vec<AstTy>, String> {
         args.iter().map(|arg| self.query_arg_ast_ty(arg)).collect()
     }
@@ -4345,13 +4576,11 @@ impl ReplEngine {
                 let Some(ty) = self.binding_type(name) else {
                     return Err(format!("Unknown query binding `{name}`."));
                 };
-                let parsed = parse_binding_query_type(&ty)
-                    .ok_or_else(|| format!("Binding `{name}` has unsupported query type `{ty}`."))?;
+                let parsed = parse_binding_query_type(&ty).ok_or_else(|| {
+                    format!("Binding `{name}` has unsupported query type `{ty}`.")
+                })?;
                 if ast_ty_contains_query_placeholder(&parsed) {
-                    return Err(format!(
-                        "Cannot use unresolved generic binding in REPL operator query. {}",
-                        REPL_UNRESOLVED_TYPE_HINT
-                    ));
+                    return Err(Self::repl_operator_query_unresolved_generic_error());
                 }
                 Ok(parsed)
             }
@@ -4359,33 +4588,23 @@ impl ReplEngine {
                 let Some(ty) = self.binding_type(name) else {
                     return Err(format!("Unknown query binding `{name}`."));
                 };
-                let parsed = parse_binding_query_type(&ty)
-                    .ok_or_else(|| format!("Binding `{name}` has unsupported query type `{ty}`."))?;
+                let parsed = parse_binding_query_type(&ty).ok_or_else(|| {
+                    format!("Binding `{name}` has unsupported query type `{ty}`.")
+                })?;
                 if ast_ty_contains_query_placeholder(&parsed) {
-                    return Err(format!(
-                        "Cannot use unresolved generic binding in REPL operator query. {}",
-                        REPL_UNRESOLVED_TYPE_HINT
-                    ));
+                    return Err(Self::repl_operator_query_unresolved_generic_error());
                 }
                 Ok(parsed)
             }
             QueryArgKind::Capture(capture) => self.capture_query_type(capture),
-            QueryArgKind::PipePlaceholder => Err(
-                "Pipe placeholder `_1` is only valid inside a top-level `|>` call."
-                    .to_string(),
-            ),
-            QueryArgKind::TypeExpr(_) => ast_ty_from_query_arg(arg).ok_or_else(|| {
-                format!(
-                    "Unsupported typed operator query operand `{}`. Use an existing binding or a concrete type such as `(Int -> String)`.",
-                    arg.source
-                )
-            }),
+            QueryArgKind::PipePlaceholder => {
+                Err("Pipe placeholder `_1` is only valid inside a top-level `|>` call.".to_string())
+            }
+            QueryArgKind::TypeExpr(_) => ast_ty_from_query_arg(arg)
+                .ok_or_else(|| Self::repl_typed_operator_operand_error(&arg.source)),
         }?;
         if ast_ty_contains_query_placeholder(&ty) {
-            return Err(format!(
-                "Cannot use unresolved generic binding in REPL operator query. {}",
-                REPL_UNRESOLVED_TYPE_HINT
-            ));
+            return Err(Self::repl_operator_query_unresolved_generic_error());
         }
         Ok(ty)
     }
@@ -4395,23 +4614,10 @@ impl ReplEngine {
         query: &TypedOperatorQuery,
     ) -> Result<(String, AstTy), String> {
         let OperatorRhs::QueryArg(rhs) = &query.rhs else {
-            return Err(format!(
-                "Unsupported operator query `{}`. Use a direct callable or binding on the right-hand side.",
-                query.operator
-            ));
+            return Err(Self::repl_operator_query_rhs_error(query.operator));
         };
-        let lhs_ty = self.query_arg_ast_ty(&query.lhs).map_err(|_| {
-            format!(
-                "Unsupported typed operator query operand `{}`. Use an existing binding or a concrete type such as `(Int -> String)`.",
-                query.lhs.source
-            )
-        })?;
-        let rhs_ty = self.query_arg_ast_ty(rhs).map_err(|_| {
-            format!(
-                "Unsupported typed operator query operand `{}`. Use an existing binding or a concrete type such as `(Int -> String)`.",
-                rhs.source
-            )
-        })?;
+        let lhs_ty = self.query_arg_ast_ty(&query.lhs)?;
+        let rhs_ty = self.query_arg_ast_ty(rhs)?;
         match query.operator {
             "|>" => {
                 let (params, ret) = Self::query_unary_func_parts(&rhs_ty, "|>")?;
@@ -6435,8 +6641,9 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::Match(span, _, _)
         | Ast::BulkUpdate(span, _, _)
         | Ast::FieldAccess(span, _, _)
+        | Ast::FacetSegmentAccess(span, _, _)
         | Ast::FacetCapture(span, _)
-        | Ast::StructDef(span, _, _, _)
+        | Ast::StructDef(span, ..)
         | Ast::RecordDef(span, _, _, _)
         | Ast::StructLit(span, _, _)
         | Ast::InternalStructLit(span, _, _)
@@ -7245,6 +7452,7 @@ mod tests {
             error_templates: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
+            callable_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
             runtime_process_specs: Vec::new(),
@@ -7370,6 +7578,7 @@ mod tests {
                     dbg_templates: Vec::new(),
                     error_template_base: 0,
                     error_templates: Vec::new(),
+                    callable_templates: Vec::new(),
                     functions: Vec::new(),
                     docs: Vec::new(),
                     runtime_process_specs: Vec::new(),

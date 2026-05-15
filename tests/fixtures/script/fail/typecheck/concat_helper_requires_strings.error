@@ -1,2 +1,2 @@
 phase: typecheck
-contains: ++ requires (String, String)
+contains: Concat::concat helper requires String on both sides, but got String and Int

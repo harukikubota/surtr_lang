@@ -7,10 +7,22 @@ use super::scope_init::{
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
 use spire::ast::{
-    AstPath, BinOp, BulkUpdateEntry, BulkUpdateEntryKind, DbgArg, InterpolatedPart, Symbol,
+    AstPath, BinOp, BulkUpdateEntry, BulkUpdateEntryKind, DbgArg, FacetPathSegment,
+    InterpolatedPart,
 };
 
 const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
+const LIST_TYPE_ROOT_UID: u32 = u32::MAX - 8;
+const HASH_MAP_TYPE_ROOT_UID: u32 = u32::MAX - 9;
+
+fn special_facet_root_uid(name: &str) -> Option<u32> {
+    match name {
+        "Tuple" => Some(TUPLE_TYPE_ROOT_UID),
+        "List" => Some(LIST_TYPE_ROOT_UID),
+        "HashMap" => Some(HASH_MAP_TYPE_ROOT_UID),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 struct TypeRefHelperSpec {
@@ -404,7 +416,9 @@ impl Resolver {
                 match &entry.kind {
                     BulkUpdateEntryKind::Set(expr)
                     | BulkUpdateEntryKind::Over(expr)
-                    | BulkUpdateEntryKind::OverResult(expr) => {
+                    | BulkUpdateEntryKind::OverResult(expr)
+                    | BulkUpdateEntryKind::CaseSet(expr)
+                    | BulkUpdateEntryKind::CaseOver(expr) => {
                         resolver.collect_capture_placeholders(
                             expr,
                             allow_placeholders,
@@ -488,6 +502,7 @@ impl Resolver {
             | Ast::Grouped(_, rhs)
             | Ast::Semi(_, rhs)
             | Ast::FieldAccess(_, rhs, _)
+            | Ast::FacetSegmentAccess(_, rhs, _)
             | Ast::FacetCapture(_, rhs) => self.collect_capture_placeholders(
                 rhs,
                 allow_placeholders,
@@ -1188,13 +1203,17 @@ impl Resolver {
         Ok(self.make_closure_from_call(&span, params, target, rewritten_args))
     }
 
-    fn inferred_facet_capture_segments(expr: &Ast) -> Option<Vec<String>> {
+    fn inferred_facet_capture_segments(expr: &Ast) -> Option<Vec<FacetPathSegment>> {
         let mut segments = Vec::new();
         let mut current = expr;
         loop {
             match current {
                 Ast::FieldAccess(_, inner, field) => {
-                    segments.push(field.clone());
+                    segments.push(FacetPathSegment::field(field.clone()));
+                    current = inner.as_ref();
+                }
+                Ast::FacetSegmentAccess(_, inner, segment) => {
+                    segments.push(segment.clone());
                     current = inner.as_ref();
                 }
                 Ast::Grouped(_, inner) => {
@@ -1207,6 +1226,33 @@ impl Resolver {
                 _ => return None,
             }
         }
+    }
+
+    fn resolve_facet_path_segment(
+        &mut self,
+        segment: FacetPathSegment,
+    ) -> Result<ResolvedFacetPathSegment, ResolveError> {
+        Ok(match segment {
+            FacetPathSegment::Field { name, optional } => {
+                ResolvedFacetPathSegment::Field { name, optional }
+            }
+            FacetPathSegment::Bracket(expr) => {
+                ResolvedFacetPathSegment::Bracket(ResolvedFacetBracketExpr {
+                    expr: Box::new(self.resolve_node(*expr.expr)?),
+                    display: expr.display,
+                })
+            }
+        })
+    }
+
+    fn resolve_facet_path_segments(
+        &mut self,
+        segments: Vec<FacetPathSegment>,
+    ) -> Result<Vec<ResolvedFacetPathSegment>, ResolveError> {
+        segments
+            .into_iter()
+            .map(|segment| self.resolve_facet_path_segment(segment))
+            .collect()
     }
 
     fn pipe_slot_span(expr: &Ast) -> Option<Span> {
@@ -1229,7 +1275,8 @@ impl Resolver {
             | Ast::SafeBind(_, _, rhs)
             | Ast::Grouped(_, rhs)
             | Ast::Semi(_, rhs)
-            | Ast::FieldAccess(_, rhs, _) => Self::pipe_slot_span(rhs),
+            | Ast::FieldAccess(_, rhs, _)
+            | Ast::FacetSegmentAccess(_, rhs, _) => Self::pipe_slot_span(rhs),
             Ast::BinOp(_, _, left, right)
             | Ast::Pipe(_, left, right)
             | Ast::ContextMap(_, left, right)
@@ -1794,21 +1841,18 @@ impl Resolver {
                     None
                 }
             })
-            .or_else(|| {
-                if name == "Tuple" {
-                    Some(TUPLE_TYPE_ROOT_UID)
-                } else {
-                    None
-                }
-            })
+            .or_else(|| special_facet_root_uid(&name))
             .ok_or_else(|| ResolveError {
                 message: format!("Undefined variable: {}", name),
                 span: span.clone(),
                 related_labels: Vec::new(),
             })?;
-        let qualified_name = (uid != TUPLE_TYPE_ROOT_UID)
-            .then(|| self.declaration_fq_name_for_uid(uid))
-            .flatten();
+        let qualified_name = (!matches!(
+            uid,
+            TUPLE_TYPE_ROOT_UID | LIST_TYPE_ROOT_UID | HASH_MAP_TYPE_ROOT_UID
+        ))
+        .then(|| self.declaration_fq_name_for_uid(uid))
+        .flatten();
         if self
             .declaration_uid_kinds
             .get(&uid)
@@ -1911,9 +1955,9 @@ impl Resolver {
 
 impl Resolver {
     fn flatten_bulk_update_entries(
-        prefix: &[Symbol],
+        prefix: &[FacetPathSegment],
         entries: Vec<BulkUpdateEntry>,
-        out: &mut Vec<(Span, Vec<Symbol>, BulkUpdateEntryKind)>,
+        out: &mut Vec<(Span, Vec<FacetPathSegment>, BulkUpdateEntryKind)>,
     ) {
         for entry in entries {
             let mut path = prefix.to_vec();
@@ -1930,11 +1974,17 @@ impl Resolver {
     fn make_bulk_update_capture_path(
         span: &Span,
         root_name: &str,
-        path: &[Symbol],
+        path: &[FacetPathSegment],
     ) -> Result<Ast, ResolveError> {
         let mut expr = Ast::Var(span.clone(), root_name.to_string());
         for segment in path {
-            expr = Ast::FieldAccess(span.clone(), Box::new(expr), segment.clone());
+            expr = match segment {
+                FacetPathSegment::Field {
+                    name,
+                    optional: false,
+                } => Ast::FieldAccess(span.clone(), Box::new(expr), name.clone()),
+                other => Ast::FacetSegmentAccess(span.clone(), Box::new(expr), other.clone()),
+            };
         }
         Ok(Ast::FacetCapture(span.clone(), Box::new(expr)))
     }
@@ -1990,12 +2040,15 @@ impl Resolver {
                 BulkUpdateEntryKind::Over(update_fun) => {
                     Self::make_facet_intrinsic_call(&entry_span, "over", capture, update_fun)
                 }
-                BulkUpdateEntryKind::OverResult(update_fun) => Self::make_facet_intrinsic_call(
-                    &entry_span,
-                    "over_result",
-                    capture,
-                    update_fun,
-                ),
+                BulkUpdateEntryKind::OverResult(update_fun) => {
+                    Self::make_facet_intrinsic_call(&entry_span, "over_result", capture, update_fun)
+                }
+                BulkUpdateEntryKind::CaseSet(value) => {
+                    Self::make_facet_intrinsic_call(&entry_span, "case_set", capture, value)
+                }
+                BulkUpdateEntryKind::CaseOver(update_fun) => {
+                    Self::make_facet_intrinsic_call(&entry_span, "case_over", capture, update_fun)
+                }
                 BulkUpdateEntryKind::Nested(_) => unreachable!("nested entries must be flattened"),
             };
             let closure = Ast::Closure(
@@ -2265,13 +2318,31 @@ impl Resolver {
             Ast::FieldAccess(span, expr, field) => {
                 let original = Ast::FieldAccess(span.clone(), expr.clone(), field.clone());
                 if let Some(segments) = Self::inferred_facet_capture_segments(&original) {
-                    return Ok(Resolved::InferredFacetCapture(span, segments));
+                    return Ok(Resolved::InferredFacetCapture(
+                        span,
+                        self.resolve_facet_path_segments(segments)?,
+                    ));
                 }
                 if matches!(expr.as_ref(), Ast::Var(_, name) if name == "ctx") {
                     return Ok(Resolved::ProcessContextHandler(span, field));
                 }
                 let resolved_expr = self.resolve_node(*expr)?;
                 Ok(Resolved::FieldAccess(span, Box::new(resolved_expr), field))
+            }
+            Ast::FacetSegmentAccess(span, expr, segment) => {
+                let original = Ast::FacetSegmentAccess(span.clone(), expr.clone(), segment.clone());
+                if let Some(segments) = Self::inferred_facet_capture_segments(&original) {
+                    return Ok(Resolved::InferredFacetCapture(
+                        span,
+                        self.resolve_facet_path_segments(segments)?,
+                    ));
+                }
+                let resolved_expr = self.resolve_node(*expr)?;
+                Ok(Resolved::FacetSegmentAccess(
+                    span,
+                    Box::new(resolved_expr),
+                    self.resolve_facet_path_segment(segment)?,
+                ))
             }
             Ast::FacetCapture(span, expr) => {
                 let resolved_expr = self.resolve_node(*expr)?;
@@ -2294,7 +2365,7 @@ impl Resolver {
             }
 
             // Struct/Record/Deferror definitions — reuse predeclared IDs
-            Ast::StructDef(span, name, fields, attrs) => {
+            Ast::StructDef(span, name, type_params, fields, attrs) => {
                 let uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -2311,6 +2382,7 @@ impl Resolver {
                     compiler_generated: false,
                     span: span.clone(),
                 };
+                let resolved_type_params = self.resolve_type_params(type_params)?;
                 let rfields = fields
                     .into_iter()
                     .map(|f| {
@@ -2327,6 +2399,7 @@ impl Resolver {
                 Ok(Resolved::StructDef(
                     span,
                     rid,
+                    resolved_type_params,
                     rfields,
                     resolve_decl_attrs(&attrs),
                 ))
@@ -2620,25 +2693,38 @@ impl Resolver {
                     span: span.clone(),
                 };
                 let resolved_type_params = self.resolve_type_params(type_params)?;
-                let mut resolved_methods = Vec::new();
-                for method in methods {
-                    let spire::ast::TraitMethodSig {
-                        name: method_name,
-                        type_params,
-                        params,
-                        ret_ty,
-                        span: method_span,
-                    } = method;
-                    let method_alias = trait_method_qualified_name(&name, &method_name);
+                let mut method_headers = Vec::new();
+                for method in &methods {
+                    let method_alias = trait_method_qualified_name(&name, &method.name);
                     let qualified_method =
-                        trait_method_qualified_name(&qualified_trait_name, &method_name);
+                        trait_method_qualified_name(&qualified_trait_name, &method.name);
                     let method_uid = self
                         .take_predeclared_id(&method_alias)
                         .or_else(|| self.scope.lookup(&method_alias))
                         .unwrap_or_else(|| self.scope.reserve_id());
                     self.scope.define_with_id(&method_alias, method_uid);
+                    method_headers.push((method.name.clone(), method_uid, qualified_method));
+                }
 
-                    let mut method_resolver = Resolver::with_scope(self.scope.clone());
+                let mut trait_method_scope = self.scope.clone();
+                for (method_name, method_uid, _) in &method_headers {
+                    trait_method_scope.define_with_id(method_name, *method_uid);
+                }
+
+                let mut resolved_methods = Vec::new();
+                for (method, (_, method_uid, qualified_method)) in
+                    methods.into_iter().zip(method_headers.into_iter())
+                {
+                    let spire::ast::TraitMethodSig {
+                        name: method_name,
+                        type_params,
+                        params,
+                        ret_ty,
+                        body,
+                        attrs,
+                        span: method_span,
+                    } = method;
+                    let mut method_resolver = Resolver::with_scope(trait_method_scope.clone());
                     method_resolver.declaration_uids = self.declaration_uids.clone();
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                     method_resolver.declaration_hidden_by_uid =
@@ -2649,6 +2735,9 @@ impl Resolver {
                         .into_iter()
                         .map(|param| method_resolver.resolve_fun_param(param))
                         .collect::<Result<Vec<_>, ResolveError>>()?;
+                    let resolved_body = body
+                        .map(|body| method_resolver.resolve_node(*body).map(Box::new))
+                        .transpose()?;
                     self.scope
                         .advance_next_id_to(method_resolver.scope.next_id());
                     resolved_methods.push(ResolvedTraitMethodSig {
@@ -2662,6 +2751,8 @@ impl Resolver {
                         type_params: self.resolve_type_params(type_params)?,
                         params: resolved_params,
                         ret_ty: self.resolve_type_annotation(ret_ty)?,
+                        body: resolved_body,
+                        attrs: resolve_decl_attrs(&attrs),
                         span: method_span,
                     });
                 }

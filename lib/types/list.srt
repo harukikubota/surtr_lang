@@ -4,6 +4,29 @@ Standard `List` type declaration.
 patterns.
 The canonical builtin head is `List<$A>`, and the compiler validates that exact
 shape at this file's top level.
+
+Facet path note:
+
+- `List.[expr]` selects a list element through a Facet path
+- negative Facet indexes are tail-relative: `List.[-1]` means the last element
+- `List.[start..end]` selects an inclusive slice through a Facet path
+- negative slice endpoints are also tail-relative: `List.[1..-1]`
+- `expr` must have plain `Int` type
+- slice endpoints must both have plain `Int` type
+- the same syntax is available in value-side sugar such as `values.[index + 1]`
+- `Facet::set` may replace a selected slice with a different-length `List`
+- `Facet::over` receives the selected slice as `List<$A>` and may return a different-length `List<$A>`
+- `const Facet<...>` still requires a literal bracket segment such as `List.[0]`,
+  `List.[-1]`, or `List.[1..3]`
+
+Examples:
+
+- `Facet::view(List.[1], [10, 20, 30])`
+- `Facet::view(List.[-1], [10, 20, 30])`
+- `Facet::view(List.[1..-1], [10, 20, 30, 40])`
+- `Facet::view(List.[index + 1], scores)`
+- `Facet::set(User.scores.[slot], user, 99)`
+- `Facet::set(List.[1..2], [10, 20, 30, 40], [99])`
 """
 @builtin type List<$A>
 
@@ -172,6 +195,26 @@ impl List {
           Ordering::Less => head,
           Ordering::Equal | Ordering::Greater => current,
         },
+        cmp,
+      ),
+    }
+  }
+
+  defp _min_max_go(values: List<$A>, current: ($A, $A), cmp: ($A, $A -> Ordering)) -> ($A, $A) {
+    match values {
+      [] => current,
+      [head, ..tail] => _min_max_go(
+        tail,
+        (
+          match cmp(head, current._0) {
+            Ordering::Less => head,
+            _ => current._0,
+          },
+          match cmp(head, current._1) {
+            Ordering::Greater => head,
+            _ => current._1,
+          },
+        ),
         cmp,
       ),
     }
@@ -435,6 +478,21 @@ impl List {
   """
   def min<$A: Compare>(values: List<$A>) -> Result<$A, NoneError> {
     min_by(values, {|left, right| Compare::compare(left, right)})
+  }
+
+  @doc """
+  Return both the smallest and largest elements in a list.
+  Requires `Compare` for the element type.
+  Empty lists return `Err(NoneError)`.
+  ## REPL
+  xldr(1)> List::min_max([3, 1, 4, 2])
+  Ok((1, 4))
+  """
+  def min_max<$A: Compare>(values: List<$A>) -> Result<($A, $A), NoneError> {
+    match values {
+      [] => Err(NoneError),
+      [head, ..tail] => Ok(_min_max_go(tail, (head, head), &compare)),
+    }
   }
 
   @doc """

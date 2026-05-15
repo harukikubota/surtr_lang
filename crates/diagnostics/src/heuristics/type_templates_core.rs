@@ -1,3 +1,7 @@
+use sindr::operator_diagnostics::{
+    operator_profile_by_name, operator_profile_by_symbol, OperatorFamily, BIND_RULE_TEXT,
+};
+
 pub(crate) struct TemplateSpec {
     pub(crate) labels: Vec<DiagnosticLabel>,
     pub(crate) notes: Vec<String>,
@@ -32,6 +36,8 @@ pub(crate) enum BinaryOperatorFailureKind {
 #[derive(Debug, Clone)]
 pub(crate) struct ParsedBinaryOperatorError {
     op_name_hint: Option<&'static str>,
+    source_name_hint: Option<&'static str>,
+    display_symbol_hint: Option<&'static str>,
     left_ty: Option<String>,
     right_ty: Option<String>,
     failure_kind: BinaryOperatorFailureKind,
@@ -163,24 +169,67 @@ pub(crate) fn infer_operator_mismatch_template(
     message: &str,
 ) -> Option<TemplateSpec> {
     let parsed = parse_binary_operator_error(message)?;
-    let line_idx = line_index_for_span(lines, focus.start)?;
-    let (line_start, line_end) = lines[line_idx];
-    let line = slice_chars(source, line_start, line_end);
-    let chars: Vec<char> = line.chars().collect();
-    let focus_col = focus.start.saturating_sub(line_start);
-    let op_span = match parsed.op_name_hint {
-        Some(op_name) => find_backtick_operator_span(line_start, &chars, focus_col)
-            .or_else(|| find_operator_symbol_span(line_start, &chars, op_name, focus_col))?,
-        None => find_any_binary_operator_span(line_start, &chars, focus_col)?,
+    let (line_idx, line_start) = if let Some(call_name) = parsed.source_name_hint {
+        let (call_span, _) = find_call_site_and_args(source, lines, focus, call_name)?;
+        let line_idx = line_index_for_span(lines, call_span.start)?;
+        (line_idx, lines[line_idx].0)
+    } else {
+        let line_idx = line_index_for_span(lines, focus.start)?;
+        (line_idx, lines[line_idx].0)
     };
-    let op_symbol = slice_chars(source, op_span.start, op_span.end);
-    let op_display = binary_operator_display_symbol(&op_symbol);
-    let op_name = parsed
-        .op_name_hint
-        .or_else(|| binary_op_name_from_symbol(&op_display))
-        .unwrap_or("Eq");
-    let ((left_start, left_end), (right_start, right_end)) =
-        find_binary_operand_spans(&chars, op_span.start - line_start, op_span.end - line_start)?;
+    let (left_start, left_end, right_start, right_end, op_span, op_display, op_name) =
+        if let Some(call_name) = parsed.source_name_hint {
+            let (call_span, arg_spans) = find_call_site_and_args(source, lines, focus, call_name)?;
+            let [left_arg, right_arg] = arg_spans.as_slice() else {
+                return None;
+            };
+            let op_span = Span {
+                start: call_span.start,
+                end: call_span.start + call_name.chars().count(),
+            };
+            (
+                left_arg.start - line_start,
+                left_arg.end - line_start,
+                right_arg.start - line_start,
+                right_arg.end - line_start,
+                op_span,
+                parsed
+                    .display_symbol_hint
+                    .unwrap_or(call_name)
+                    .to_string(),
+                parsed.op_name_hint.unwrap_or("Eq"),
+            )
+        } else {
+            let (_, line_end) = lines[line_idx];
+            let line = slice_chars(source, line_start, line_end);
+            let chars: Vec<char> = line.chars().collect();
+            let focus_col = focus.start.saturating_sub(line_start);
+            let op_span = match parsed.op_name_hint {
+                Some(op_name) => find_backtick_operator_span(line_start, &chars, focus_col)
+                    .or_else(|| find_operator_symbol_span(line_start, &chars, op_name, focus_col))?,
+                None => find_any_binary_operator_span(line_start, &chars, focus_col)?,
+            };
+            let op_symbol = slice_chars(source, op_span.start, op_span.end);
+            let op_display = binary_operator_display_symbol(&op_symbol);
+            let op_name = parsed
+                .op_name_hint
+                .or_else(|| binary_op_name_from_symbol(&op_display))
+                .unwrap_or("Eq");
+            let ((left_start, left_end), (right_start, right_end)) = find_binary_operand_spans(
+                &chars,
+                op_span.start - line_start,
+                op_span.end - line_start,
+            )?;
+            (
+                left_start,
+                left_end,
+                right_start,
+                right_end,
+                op_span,
+                op_display,
+                op_name,
+            )
+        };
     let left_ty = parsed.left_ty.as_deref().unwrap_or("unknown");
     let right_ty = parsed.right_ty.as_deref().unwrap_or(left_ty);
     let view =
@@ -202,6 +251,22 @@ pub(crate) fn parse_binary_operator_error(message: &str) -> Option<ParsedBinaryO
         let (left_ty, right_ty) = types.split_once(" and ")?;
         return Some(ParsedBinaryOperatorError {
             op_name_hint: Some(binary_canonical_op_name(op_name)?),
+            source_name_hint: None,
+            display_symbol_hint: None,
+            left_ty: Some(left_ty.to_string()),
+            right_ty: Some(right_ty.to_string()),
+            failure_kind: BinaryOperatorFailureKind::IncompatibleTypes,
+        });
+    }
+    if let Some((symbol, rest)) = message
+        .strip_prefix('`')
+        .and_then(|tail| tail.split_once("` requires the same type on both sides, but got "))
+    {
+        let (left_ty, right_ty) = rest.split_once(" and ")?;
+        return Some(ParsedBinaryOperatorError {
+            op_name_hint: Some(binary_op_name_from_symbol(symbol)?),
+            source_name_hint: None,
+            display_symbol_hint: None,
             left_ty: Some(left_ty.to_string()),
             right_ty: Some(right_ty.to_string()),
             failure_kind: BinaryOperatorFailureKind::IncompatibleTypes,
@@ -212,6 +277,30 @@ pub(crate) fn parse_binary_operator_error(message: &str) -> Option<ParsedBinaryO
         let (left_ty, right_ty) = tail.split_once(" and ")?;
         return Some(ParsedBinaryOperatorError {
             op_name_hint: None,
+            source_name_hint: None,
+            display_symbol_hint: None,
+            left_ty: Some(left_ty.to_string()),
+            right_ty: Some(right_ty.to_string()),
+            failure_kind: BinaryOperatorFailureKind::IncompatibleTypes,
+        });
+    }
+    if let Some(tail) = message.strip_prefix("Eq::eq helper cannot compare ") {
+        let (left_ty, right_ty) = tail.split_once(" and ")?;
+        return Some(ParsedBinaryOperatorError {
+            op_name_hint: Some("Eq"),
+            source_name_hint: Some("eq"),
+            display_symbol_hint: Some("=="),
+            left_ty: Some(left_ty.to_string()),
+            right_ty: Some(right_ty.to_string()),
+            failure_kind: BinaryOperatorFailureKind::IncompatibleTypes,
+        });
+    }
+    if let Some(tail) = message.strip_prefix("Neq::neq helper cannot compare ") {
+        let (left_ty, right_ty) = tail.split_once(" and ")?;
+        return Some(ParsedBinaryOperatorError {
+            op_name_hint: Some("Neq"),
+            source_name_hint: Some("neq"),
+            display_symbol_hint: Some("!="),
             left_ty: Some(left_ty.to_string()),
             right_ty: Some(right_ty.to_string()),
             failure_kind: BinaryOperatorFailureKind::IncompatibleTypes,
@@ -226,6 +315,21 @@ pub(crate) fn parse_binary_operator_error(message: &str) -> Option<ParsedBinaryO
         let (left_ty, right_ty) = tail.split_once(", ")?;
         return Some(ParsedBinaryOperatorError {
             op_name_hint: Some("Concat"),
+            source_name_hint: None,
+            display_symbol_hint: None,
+            left_ty: Some(left_ty.to_string()),
+            right_ty: Some(right_ty.to_string()),
+            failure_kind: BinaryOperatorFailureKind::IncompatibleTypes,
+        });
+    }
+    if let Some((left_ty, right_ty)) = message
+        .strip_prefix("Concat::concat helper requires String on both sides, but got ")
+        .and_then(|tail| tail.split_once(" and "))
+    {
+        return Some(ParsedBinaryOperatorError {
+            op_name_hint: Some("Concat"),
+            source_name_hint: Some("concat"),
+            display_symbol_hint: Some("++"),
             left_ty: Some(left_ty.to_string()),
             right_ty: Some(right_ty.to_string()),
             failure_kind: BinaryOperatorFailureKind::IncompatibleTypes,
@@ -240,14 +344,31 @@ pub(crate) fn parse_binary_operator_error(message: &str) -> Option<ParsedBinaryO
                 binary_op_name_from_symbol(symbol)
                     .or_else(|| binary_canonical_op_name(trait_name))?,
             ),
+            source_name_hint: None,
+            display_symbol_hint: None,
             left_ty: None,
             right_ty: None,
+            failure_kind: BinaryOperatorFailureKind::MissingImplementation,
+        });
+    }
+    if let Some((symbol, ty)) = message
+        .strip_prefix('`')
+        .and_then(|tail| tail.split_once("` is not defined for "))
+    {
+        return Some(ParsedBinaryOperatorError {
+            op_name_hint: Some(binary_op_name_from_symbol(symbol)?),
+            source_name_hint: None,
+            display_symbol_hint: None,
+            left_ty: Some(ty.to_string()),
+            right_ty: Some(ty.to_string()),
             failure_kind: BinaryOperatorFailureKind::MissingImplementation,
         });
     }
     if let Some(ty) = message.strip_prefix("== / != not supported for ") {
         return Some(ParsedBinaryOperatorError {
             op_name_hint: None,
+            source_name_hint: None,
+            display_symbol_hint: None,
             left_ty: Some(ty.to_string()),
             right_ty: Some(ty.to_string()),
             failure_kind: BinaryOperatorFailureKind::MissingImplementation,
@@ -258,6 +379,8 @@ pub(crate) fn parse_binary_operator_error(message: &str) -> Option<ParsedBinaryO
         let (left_ty, right_ty) = tail.split_once(", ")?;
         return Some(ParsedBinaryOperatorError {
             op_name_hint: Some("Concat"),
+            source_name_hint: None,
+            display_symbol_hint: None,
             left_ty: Some(left_ty.to_string()),
             right_ty: Some(right_ty.to_string()),
             failure_kind: BinaryOperatorFailureKind::MissingImplementation,
@@ -282,11 +405,17 @@ pub(crate) fn build_binary_operator_view<'a>(
     } else {
         "Boolean"
     };
+    let profile = operator_profile_by_name(op_name)
+        .or_else(|| operator_profile_by_symbol(op_symbol))
+        .copied();
     match op_name {
         "Add" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A + A -> A (where A: Add)".into(),
+            op_rule: profile
+                .map(|profile| profile.canonical_rule)
+                .unwrap_or("A + A -> A")
+                .into(),
             step: format!("{lhs_display} + {rhs_display} -> <type error>"),
             reason: binary_operator_reason(
                 op_name,
@@ -295,12 +424,15 @@ pub(crate) fn build_binary_operator_view<'a>(
                 &rhs_display,
                 failure_kind,
             ),
-            help: "Use the same Add type on both sides, for example `Int + Int` or `Float + Float`.".into(),
+            help: binary_operator_help(profile, failure_kind),
         },
         "Sub" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A - A -> A (where A: Sub)".into(),
+            op_rule: profile
+                .map(|profile| profile.canonical_rule)
+                .unwrap_or("A - A -> A")
+                .into(),
             step: format!("{lhs_display} - {rhs_display} -> <type error>"),
             reason: binary_operator_reason(
                 op_name,
@@ -309,12 +441,15 @@ pub(crate) fn build_binary_operator_view<'a>(
                 &rhs_display,
                 failure_kind,
             ),
-            help: "Use the same Sub type on both sides, for example `Int - Int` or `Float - Float`.".into(),
+            help: binary_operator_help(profile, failure_kind),
         },
         "Mul" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A * A -> A (where A: Mul)".into(),
+            op_rule: profile
+                .map(|profile| profile.canonical_rule)
+                .unwrap_or("A * A -> A")
+                .into(),
             step: format!("{lhs_display} * {rhs_display} -> <type error>"),
             reason: binary_operator_reason(
                 op_name,
@@ -323,12 +458,15 @@ pub(crate) fn build_binary_operator_view<'a>(
                 &rhs_display,
                 failure_kind,
             ),
-            help: "Use the same Mul type on both sides, for example `Int * Int` or `Float * Float`.".into(),
+            help: binary_operator_help(profile, failure_kind),
         },
         "Eq" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A == A -> Boolean".into(),
+            op_rule: profile
+                .map(|profile| profile.canonical_rule)
+                .unwrap_or("A == A -> Boolean")
+                .into(),
             step: format!("{lhs_display} == {rhs_display} -> Boolean"),
             reason: binary_operator_reason(
                 op_name,
@@ -337,12 +475,15 @@ pub(crate) fn build_binary_operator_view<'a>(
                 &rhs_display,
                 failure_kind,
             ),
-            help: "Compare two values of the same type, or convert one side before comparing.".into(),
+            help: binary_operator_help(profile, failure_kind),
         },
         "Neq" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A != A -> Boolean".into(),
+            op_rule: profile
+                .map(|profile| profile.canonical_rule)
+                .unwrap_or("A != A -> Boolean")
+                .into(),
             step: format!("{lhs_display} != {rhs_display} -> Boolean"),
             reason: binary_operator_reason(
                 op_name,
@@ -351,12 +492,15 @@ pub(crate) fn build_binary_operator_view<'a>(
                 &rhs_display,
                 failure_kind,
             ),
-            help: "Compare two values of the same type, or convert one side before comparing.".into(),
+            help: binary_operator_help(profile, failure_kind),
         },
         "Lt" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A < A -> Boolean (where A: Lt)".into(),
+            op_rule: profile
+                .map(|profile| profile.canonical_rule)
+                .unwrap_or("A < A -> Boolean")
+                .into(),
             step: format!("{lhs_display} < {rhs_display} -> Boolean"),
             reason: binary_operator_reason(
                 op_name,
@@ -365,12 +509,15 @@ pub(crate) fn build_binary_operator_view<'a>(
                 &rhs_display,
                 failure_kind,
             ),
-            help: "Use the same ordered type on both sides, or convert one side before comparing.".into(),
+            help: binary_operator_help(profile, failure_kind),
         },
         "Lte" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A <= A -> Boolean (where A: Lte)".into(),
+            op_rule: profile
+                .map(|profile| profile.canonical_rule)
+                .unwrap_or("A <= A -> Boolean")
+                .into(),
             step: format!("{lhs_display} <= {rhs_display} -> Boolean"),
             reason: binary_operator_reason(
                 op_name,
@@ -379,12 +526,15 @@ pub(crate) fn build_binary_operator_view<'a>(
                 &rhs_display,
                 failure_kind,
             ),
-            help: "Use the same ordered type on both sides, or convert one side before comparing.".into(),
+            help: binary_operator_help(profile, failure_kind),
         },
         "Gt" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A > A -> Boolean (where A: Gt)".into(),
+            op_rule: profile
+                .map(|profile| profile.canonical_rule)
+                .unwrap_or("A > A -> Boolean")
+                .into(),
             step: format!("{lhs_display} > {rhs_display} -> Boolean"),
             reason: binary_operator_reason(
                 op_name,
@@ -393,12 +543,15 @@ pub(crate) fn build_binary_operator_view<'a>(
                 &rhs_display,
                 failure_kind,
             ),
-            help: "Use the same ordered type on both sides, or convert one side before comparing.".into(),
+            help: binary_operator_help(profile, failure_kind),
         },
         "Gte" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "A >= A -> Boolean (where A: Gte)".into(),
+            op_rule: profile
+                .map(|profile| profile.canonical_rule)
+                .unwrap_or("A >= A -> Boolean")
+                .into(),
             step: format!("{lhs_display} >= {rhs_display} -> Boolean"),
             reason: binary_operator_reason(
                 op_name,
@@ -407,12 +560,15 @@ pub(crate) fn build_binary_operator_view<'a>(
                 &rhs_display,
                 failure_kind,
             ),
-            help: "Use the same ordered type on both sides, or convert one side before comparing.".into(),
+            help: binary_operator_help(profile, failure_kind),
         },
         "Concat" => BinaryOperatorView {
             lhs_actual: left_ty,
             rhs_actual: right_ty,
-            op_rule: "String ++ String -> String".into(),
+            op_rule: profile
+                .map(|profile| profile.canonical_rule)
+                .unwrap_or("String ++ String -> String")
+                .into(),
             step: format!("{lhs_display} ++ {rhs_display} -> String"),
             reason: binary_operator_reason(
                 op_name,
@@ -421,7 +577,7 @@ pub(crate) fn build_binary_operator_view<'a>(
                 &rhs_display,
                 failure_kind,
             ),
-            help: "Convert both sides to String, or use an operator/helper that matches the current types.".into(),
+            help: binary_operator_help(profile, failure_kind),
         },
         other => BinaryOperatorView {
             lhs_actual: left_ty,
@@ -967,12 +1123,12 @@ pub(crate) fn binary_operator_reason(
             "Add" | "Sub" | "Mul" => {
                 if lhs_display == rhs_display {
                     format!(
-                "Reason: `{}` requires an operator trait implementation, but both sides are {}.",
+                "Reason: `{}` requires a visible implementation for {}.",
                         op_symbol, lhs_display
                     )
                 } else {
                     format!(
-                        "Reason: `{}` requires the same operator trait type on both sides, but got {} and {}.",
+                        "Reason: `{}` requires the same type on both sides, but got {} and {}.",
                         op_symbol, lhs_display, rhs_display
                     )
                 }
@@ -995,27 +1151,36 @@ pub(crate) fn binary_operator_reason(
             ),
         },
         BinaryOperatorFailureKind::MissingImplementation => match op_name {
-            "Add" | "Sub" | "Mul" => format!(
-                "Reason: {} does not implement {}, so `{}` is not available.",
-                lhs_display, op_name, op_symbol
-            ),
-            "Eq" | "Neq" => format!(
-                "Reason: {} does not implement Eq, so `{}` is not available.",
-                lhs_display, op_symbol
-            ),
-            "Lt" | "Lte" | "Gt" | "Gte" => format!(
-                "Reason: {} does not implement {}, so `{}` is not available.",
-                lhs_display, op_name, op_symbol
-            ),
-            "Concat" => format!(
-                "Reason: {} does not implement Concat, so `++` is not available.",
-                lhs_display
-            ),
+            "Add" | "Sub" | "Mul" | "Eq" | "Neq" | "Lt" | "Lte" | "Gt" | "Gte" | "Concat" =>
+                format!("Reason: `{}` is not defined for {}.", op_symbol, lhs_display),
             _ => format!(
                 "Reason: {} does not implement the trait required by `{}`.",
                 lhs_display, op_symbol
             ),
         },
+    }
+}
+
+fn binary_operator_help(
+    profile: Option<sindr::operator_diagnostics::OperatorProfile>,
+    failure_kind: BinaryOperatorFailureKind,
+) -> String {
+    match profile.map(|profile| profile.family) {
+        Some(OperatorFamily::OpenSameTypeSelf) => match failure_kind {
+            BinaryOperatorFailureKind::IncompatibleTypes => {
+                "Use the same type on both sides.".into()
+            }
+            BinaryOperatorFailureKind::MissingImplementation => {
+                "Use a type with a visible implementation for this operator.".into()
+            }
+        },
+        Some(OperatorFamily::OpenSameTypeBoolean) => {
+            "Compare two values of the same type, or convert one side before comparing.".into()
+        }
+        Some(OperatorFamily::OpenDedicatedReturn) => {
+            "Convert both sides to String, or use an operator/helper that matches the current types.".into()
+        }
+        _ => "Use operand types that match the operator's contract.".into(),
     }
 }
 
@@ -1158,9 +1323,7 @@ pub(crate) fn infer_total_bind_pattern_template(
             DiagnosticLabel {
                 source_id: None,
                 span: op_span,
-                message: hint
-                    .unwrap_or("Use `=?` for partial destructuring and extractor-driven matches.")
-                    .to_string(),
+                message: BIND_RULE_TEXT.to_string(),
                 color: Some(Color::Yellow),
             },
             DiagnosticLabel {
@@ -1174,7 +1337,9 @@ pub(crate) fn infer_total_bind_pattern_template(
             },
         ],
         notes: Vec::new(),
-        help: None,
+        help: Some(
+            hint.unwrap_or("Use `=?` for partial destructuring and extractor-driven matches.")
+                .to_string(),
+        ),
     })
 }
-

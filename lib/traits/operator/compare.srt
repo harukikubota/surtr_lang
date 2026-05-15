@@ -1,15 +1,83 @@
 @doc """
 Standard `Compare` trait declaration.
 `Compare` models three-way comparison and returns `Ordering`.
-The unqualified helper `compare(...)` comes from this auto-imported trait
-surface rather than from a compiler-only builtin shim.
+The unqualified helpers `compare(...)`, `lt(...)`, `lte(...)`, `gt(...)`, and
+`gte(...)` come from this auto-imported trait surface.
 
 ## REPL
 xldr(1)> Compare::compare(1, 2)
 Ordering::Less
+xldr(2)> lt(1, 2)
+True
 """
 @autoimport
 deftrait Compare {
+  @doc """
+  Return the three-way ordering between two values.
+  ## REPL
+  xldr(1)> compare(1, 2)
+  Ordering::Less
+  """
   # Return the three-way ordering result.
   def compare(self: Self, rhs: Self) -> Ordering
+
+  @doc """
+  Standard `Lt` operator trait declaration.
+  `Lt` models the `<` / `lt(...)` contract.
+
+  ## REPL
+  xldr(1)> lt(1, 2)
+  True
+  """
+  def lt(self: Self, rhs: Self) -> Boolean {
+    match compare(self, rhs) {
+      Ordering::Less => True,
+      Ordering::Equal | Ordering::Greater => False,
+    }
+  }
+
+  @doc """
+  Standard `Lte` operator trait declaration.
+  `Lte` models the `<=` / `lte(...)` contract.
+
+  ## REPL
+  xldr(1)> lte(1, 2)
+  True
+  """
+  def lte(self: Self, rhs: Self) -> Boolean {
+    match compare(self, rhs) {
+      Ordering::Less | Ordering::Equal => True,
+      Ordering::Greater => False,
+    }
+  }
+
+  @doc """
+  Standard `Gt` operator trait declaration.
+  `Gt` models the `>` / `gt(...)` contract.
+
+  ## REPL
+  xldr(1)> gt(2, 1)
+  True
+  """
+  def gt(self: Self, rhs: Self) -> Boolean {
+    match compare(self, rhs) {
+      Ordering::Less | Ordering::Equal => False,
+      Ordering::Greater => True,
+    }
+  }
+
+  @doc """
+  Standard `Gte` operator trait declaration.
+  `Gte` models the `>=` / `gte(...)` contract.
+
+  ## REPL
+  xldr(1)> gte(2, 1)
+  True
+  """
+  def gte(self: Self, rhs: Self) -> Boolean {
+    match compare(self, rhs) {
+      Ordering::Less => False,
+      Ordering::Equal | Ordering::Greater => True,
+    }
+  }
 }

@@ -67,6 +67,8 @@
 - opcode 別実行回数
 
 `tail_calls_optimized` は current frame を再利用した user-function tail call 回数を表す。
+direct `Call` と、target が user function の `CallClosure` / `TailCallClosure` が対象である。
+builtin / template target の `TailCallClosure` は frame を caller へ返す圧縮実行として扱うが、この値には含めない。
 TCO が効いた実行では `return_count` や `max_frame_depth` が非最適化時より小さくなりうる。
 
 ### 3.1.1 `--vm-stats-json`
@@ -246,8 +248,9 @@ opcode window を追加する。各候補は `pc` / `function` / `source` /
 
 `operands` は window 内 opcode の機械可読な operand summary である。
 すでに専用 opcode へ畳み込み済みの箇所は候補としては現れない。たとえば
-`EqLocalTag + JumpIfFalse/JumpIfTrue` が `JumpIfLocalTagEq/JumpIfLocalTagNe` へ
-lowering 済みの場合、`branch_fusion` は報告されず、専用 opcode の出現数は
+`EqLocalTag + JumpIfFalse/JumpIfTrue` が `JumpIfLocalTagEq/JumpIfLocalTagNe` へ、
+`CallClosure + Return` が `TailCallClosure` へ lowering 済みの場合、それぞれ
+`branch_fusion` / `tail_call_closure` は報告されず、専用 opcode の出現数は
 `--opcode-histogram` / `optimization_summary` 側で観測する。
 
 ```json

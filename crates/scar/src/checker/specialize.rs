@@ -1542,6 +1542,7 @@ impl Checker {
                 segments: path.segments,
             }),
             TypedInner::PendingFacetPath(path) => TypedInner::PendingFacetPath(PendingFacetPath {
+                root_path_name: path.root_path_name,
                 source_ty_hint: path
                     .source_ty_hint
                     .map(|ty| self.substitute_ty_with_mapping(&ty, mapping)),
@@ -1960,6 +1961,11 @@ impl Checker {
         match origin {
             TraitCallOrigin::Explicit => TraitCallOrigin::Explicit,
             TraitCallOrigin::Operator { op, lhs_ty, rhs_ty } => TraitCallOrigin::Operator {
+                op,
+                lhs_ty: self.substitute_ty_with_mapping(&lhs_ty, mapping),
+                rhs_ty: self.substitute_ty_with_mapping(&rhs_ty, mapping),
+            },
+            TraitCallOrigin::Comparison { op, lhs_ty, rhs_ty } => TraitCallOrigin::Comparison {
                 op,
                 lhs_ty: self.substitute_ty_with_mapping(&lhs_ty, mapping),
                 rhs_ty: self.substitute_ty_with_mapping(&rhs_ty, mapping),

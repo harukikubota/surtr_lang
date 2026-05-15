@@ -1,2 +1,2 @@
 phase: typecheck
-contains: must be consumed as the first argument of Facet::view/preview/replace/set/over/over_result
+contains: must be consumed as the first argument of Facet::view/preview/put/set/over/over_result

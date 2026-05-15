@@ -1,2 +1,2 @@
 phase: typecheck
-contains: Cannot compare Int and Boolean
+contains: `==` requires the same type on both sides, but got Int and Boolean

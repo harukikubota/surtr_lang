@@ -167,6 +167,12 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         Resolved::FieldAccess(_, expr, _) | Resolved::FacetCapture(_, expr) => {
             collect_captures_inner(expr, bound, free)
         }
+        Resolved::FacetSegmentAccess(_, expr, segment) => {
+            collect_captures_inner(expr, bound, free);
+            if let ResolvedFacetPathSegment::Bracket(bracket) = segment {
+                collect_captures_inner(&bracket.expr, bound, free);
+            }
+        }
         Resolved::InferredFacetCapture(_, _) => {}
         Resolved::ProcessContextHandler(_, _) => {}
         Resolved::TypeRefWitness(_, _) => {}
@@ -192,7 +198,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 }
             }
         }
-        Resolved::StructDef(_, _, _, _)
+        Resolved::StructDef(_, _, _, _, _)
         | Resolved::RecordDef(_, _, _)
         | Resolved::DeferrorDef(_, _, _, _)
         | Resolved::EnumDef(_, _, _, _, _)

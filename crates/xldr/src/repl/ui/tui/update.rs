@@ -58,7 +58,7 @@ static GLOBAL_COMMANDS: &[(&str, &str)] = &[
     ("help", ":help  — show help"),
     ("doc", ":doc <symbol>  — show docs"),
     ("error", ":error [full|summary]  — set error display mode"),
-    ("sig", ":sig <symbol|expr>  — show signature"),
+    ("sig", ":sig <function|query>  — show signature"),
     ("info", ":info <query>  — show derived info"),
     (
         "type",

@@ -1,0 +1,3 @@
+defrecord User(name: String)
+user = User("alice")
+bad = Facet::case_over(User.name, user, {|name| Ok(name ++ "!")})

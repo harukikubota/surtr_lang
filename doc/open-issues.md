@@ -3,7 +3,7 @@
 > 目的: V9 正本でまだ固定していない未解決事項だけを追跡する。
 > 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md`、開発者向け spec は `docs/dev/` 配下を正本とする。`doc/` は draft / input / tmp 置き場として扱う。
 
-最終更新日: 2026-05-11
+最終更新日: 2026-05-13
 
 ---
 
@@ -36,22 +36,6 @@
   - `Value::Error` の表示契約が将来ぶれない。
 - テスト方針:
   - `unit/sindr` の `display_for_rich_error_*` 系テストで採用形式を固定する。
-
-### OI-011 apply / compose lowering 最適化方針
-
-- 背景:
-  - `|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>` の外部契約は固まっている。
-  - 一方で `forge` は compose 系で pending / synthetic callable を使う経路をまだ残しており、最適化方針は未固定である。
-- 未確定点:
-  - 即時適用 compose をどこまで直接 lower するか
-  - synthetic callable と直接 lowering の選択基準
-  - 追加最適化が debug 性能や span 診断に与える影響
-- 受け入れ条件:
-  - 最適化前後で外部挙動と診断位置が変わらない。
-  - codegen / VM の責務境界を壊さない。
-- テスト方針:
-  - 既存 spec / compile_errors / integration を回帰基準にする。
-  - IR / opcode 選択が変わる場合は unit test で固定する。
 
 ### OI-012 `.eldr` viewer follow-up
 
@@ -233,7 +217,7 @@
 
 - 背景:
   - `Facet::bulk_update(source) { ... }` は relative path をその場で列挙できるようになったが、entry 内に既存 path 値や composed path を埋め込む surface はまだ持っていない。
-  - 現行の `Facet::compose` / `/` は通常式としては使える一方、bulk entry の left-hand path へ直接埋め込む記法は未定義である。
+  - 現行の `Facet::chain` / `/` は通常式としては使える一方、bulk entry の left-hand path へ直接埋め込む記法は未定義である。
   - 将来的に Elixir の pin 演算子に近い surface を導入すれば、`^user_country.name` のような path capture / path embedding が候補になりうる。
 - 未確定点:
   - bulk entry の左辺で既存 path 値を埋め込めるようにするか
@@ -247,7 +231,25 @@
 - テスト方針:
   - parser で embedded path / dotted extension / nested block の優先順位を固定する。
   - resolver / integration で embedded path が `Facet::set` / `Facet::over` の既存意味論へ正しく lower されることを回帰基準にする。
-  - syntax を導入しない場合も、`Facet::compose` を bulk 内で許可しない compile error fixture を残して境界を固定する。
+- syntax を導入しない場合も、`Facet::chain` を bulk 内で許可しない compile error fixture を残して境界を固定する。
+
+### OI-028 generic `Range` comparison impl runtime mismatch
+
+- 背景:
+  - `Range<$A>` 自体は標準ライブラリへ追加済みで、`Range::normalized` と `Range::deconstruct` も generic に動作している。
+  - 一方で `impl Compare for Range<impl Compare>`、`impl Eq for Range<impl Eq>`、`impl Neq for Range<impl Neq>` を実際の stdlib surface として有効化すると、runtime で `Call arity mismatch` に当たり安定しない。
+  - parser / resolver / typechecker の構文面では既存 stdlib パターンに沿って受理されるため、問題は generic impl specialization か runtime call shape の同期にある可能性が高い。
+- 未確定点:
+  - `Range<impl Trait>` target の trait impl を runtime まで正しく specialize する責務がどこにあるか
+  - tuple の `impl Compare for (impl Compare, ...)` と `Range<impl Compare>` で何が違うか
+  - generic target impl と monomorphic impl の共存を許可するか、禁止するか
+- 受け入れ条件:
+  - `impl Compare for Range<impl Compare>`、`impl Eq for Range<impl Eq>`、`impl Neq for Range<impl Neq>` が runtime mismatch なしに動作する。
+  - もしくは、generic impl target に現行制約があるなら docs / diagnostics / tests で明示される。
+- テスト方針:
+  - `lib/types/range.srt` を generic impl へ切り替える回帰ケースを `lib/tests/range.srt` に追加する。
+  - `unit/scar` / `unit/forge` / `unit/eldr` で impl specialization 後の arity と call target shape を固定する。
+  - `integration/repl` で `:sig Range`, `:doc Range(Int, Int)`, `Range("a", "c") == Range("a", "c")` の surface を最終形で固定する。
 
 ---
 

@@ -1,2 +1,2 @@
 phase: typecheck
-contains: Cannot compare Int and Boolean
+contains: Eq::eq helper cannot compare Int and Boolean

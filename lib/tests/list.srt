@@ -18,6 +18,23 @@ test("List") {
       assert_eq((), result)
       assert_stdout_eq([])
     }
+
+    it("min_max returns min and max in one result") {
+      assert_eq("Ok((1, 4))", inspect(List::min_max([3, 1, 4, 2])))
+    }
+
+    it("min_max keeps a singleton as both bounds") {
+      assert_eq("Ok((7, 7))", inspect(List::min_max([7])))
+    }
+
+    it("min_max handles duplicates") {
+      assert_eq("Ok((1, 2))", inspect(List::min_max([2, 2, 1, 2])))
+    }
+
+    it("min_max returns NoneError for empty lists") {
+      values: List<Int> = []
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(List::min_max(values)))
+    }
   }
 
   describe("monad laws") {

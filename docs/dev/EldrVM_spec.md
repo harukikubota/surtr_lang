@@ -66,7 +66,10 @@ user-facing `Result` の domain error として返す。
 - `Callable` は `lexical_captures` を保持する
 - 関数呼び出し時、`locals` には `lexical_captures` → 実引数 の順で先頭から配置する
 - `Call` 実行後は、呼び出し先がフレーム完成状態で開始する
+- tail-position は、現在の関数 / closure / extractor / process handler の返り値そのものになる式位置を指す
 - user function への tail-position call は、次 opcode が `Return` の場合に限り current `CallFrame` を再利用してよい
+- 対象は direct `Call` と、target が user function の `CallClosure` / `TailCallClosure` に限る
+- builtin / template target の tail-position call は user-function TCO ではなく、必要なら圧縮 opcode の実行規約として扱う
 - frame 再利用時も外部意味は変わらず、返り値 1 個・呼び出し元への復帰位置・operand stack 契約は維持する
 
 ### 3.3 返り値
@@ -198,7 +201,7 @@ compile / surface 契約との対応は次のとおり。
 - user code は `Error` を一般の first-class data として保持しない
 - `Error` が surface 上で生存するのは `Err(Error)`、`match` の `Err(err)` で束縛された局所スコープ、標準定義ソース内の `Error` 観測 helper の引数位置に限る
 - `Result::map_err` / `Result::cause` / `assert` / `ensure` は、この既存 `Error` 値を forward してよい
-- `Result::recover_kind` だけは existing `Error` value ではなく concrete `deferror` kind marker surface を受ける
+- `Result::recover_kind` だけは existing `Error` value ではなく concrete `deferror` kind marker surface を受ける。compiler は marker payload を runtime 値として評価せず、kind 名だけを hidden builtin `__recover_kind` へ渡して runtime 側で判定と handler 呼び出しを行う
 
 - parallel error は持たない
 - `Result::cause(result, err)` は `err` chain の末尾に既存 error chain を付ける
@@ -240,7 +243,9 @@ Opcode は以下のカテゴリを持つ。
 補足:
 
 - `CallBuiltin` は `builtin_id` ベースでディスパッチする
-- `BitNotInt` / `BitAndInt` / `BitOrInt` / `BitXorInt` は `Int::bit_not` / `bit_and` / `bit_or` / `bit_xor` の direct call を対象にした monomorphic fast-path とする
+- `BitNotInt` / `BitAndInt` / `BitOrInt` / `BitXorInt` / `ShlInt` / `ShrInt` / `TestBitInt` / `SetBitInt` / `ClearBitInt` / `ToggleBitInt` は `Int::bit_not` / `bit_and` / `bit_or` / `bit_xor` / `shl` / `shr` / `test_bit` / `set_bit` / `clear_bit` / `toggle_bit` の direct call を対象にした monomorphic fast-path とする
+- `ShlInt` / `ShrInt` は負 shift count を `RuntimeError` ではなく `Err(NegativeShiftCount(...))` の `Result` 値として返す
+- `TestBitInt` / `SetBitInt` / `ClearBitInt` / `ToggleBitInt` は負 bit index を `RuntimeError` ではなく `Err(NegativeBitIndex(...))` の `Result` 値として返す
 - `StoreConstLocal { const_idx, local_idx }` は `LoadConst(const_idx); StoreLocal(local_idx)` と同じ意味の圧縮 opcode とする。operand stack へ中間値を push せず、定数値を現在フレームの local slot に直接保存する。`const_idx` は `LoadConst` と同じ relocation / verifier 規則に従う
 - `CopyLocal { src_local_idx, dst_local_idx }` は `LoadLocal(src_local_idx); StoreLocal(dst_local_idx)` と同じ意味の圧縮 opcode とする。operand stack を経由せず、現在フレーム内で local 値を clone して保存する
 - `EqLocalTag { local_idx, tag_const_idx }` は `LoadLocal(local_idx); GetTag; LoadConst(tag_const_idx); EqTag` と同じ意味の圧縮 opcode とする。`tag_const_idx` は `Constant::Tag` を指し、`LoadConst` と同じ relocation / verifier 規則に従う
@@ -248,6 +253,7 @@ Opcode は以下のカテゴリを持つ。
 - `MakeErr` は stack top の `Error` payload を `Tagged { tag: 1, fields: [payload] }` に包む Result 専用 constructor opcode とする。payload が `Error` でない bytecode は runtime error とする
 - `JumpIfLocalTagEq { local_idx, tag_const_idx, target_pc }` と `JumpIfLocalTagNe { local_idx, tag_const_idx, target_pc }` は `EqLocalTag` の直後に続く `JumpIfTrue` / `JumpIfFalse` を 1 opcode に畳み込む branch-fused fast-path とする。どちらも判定後の operand stack に Bool 中間値を残さない
 - `JumpIfLocalTagEq` / `JumpIfLocalTagNe` の `tag_const_idx` は `Constant::Tag` を指し、`LoadConst` と同じ relocation / verifier 規則に従う。`target_pc` は `Jump*` と同じ jump-target verifier / relocation 規則に従う
+- `TailCallClosure { arity, span_start, span_end }` は tail position の `CallClosure { arity, span_start, span_end }; Return` と同じ意味の圧縮 opcode とする。callable / argument / lexical capture の評価規約は `CallClosure` と同じで、結果は現在フレームの呼び出し元へ直接返る。target が user function の場合だけ user-function TCO として `tail_calls_optimized` を増やす。builtin / template target は圧縮実行として現在 frame の caller へ返るが、user-function TCO 観測値には含めない
 
 実 opcode 一覧とオペランドは `crates/forge/src/opcode.rs` を正とする。
 
@@ -285,8 +291,9 @@ Opcode は以下のカテゴリを持つ。
 - 組込み関数メタデータは単一テーブルで管理する
 - `Bootstrap` module の `@builtin` 宣言はこの共有テーブルに対応する宣言層であり、builtin の追加起点ではない
 - VM は `builtin_id` により実装関数をディスパッチする
-- `Facet::view` / `Facet::set` / `Facet::over` / `Facet::over_result` / `Facet::compose` / Facet `/` compose は compile-time lowering 対象であり、runtime builtin として直接到達した場合は防御的に `RuntimeError` とする
+- `Facet::view` / `Facet::preview` / `Facet::put` / `Facet::set` / `Facet::over` / `Facet::over_result` / `Facet::case_set` / `Facet::case_over` / `Facet::chain` / Facet `/` chain は compile-time lowering 対象であり、runtime builtin として直接到達した場合は防御的に `RuntimeError` とする
 - Facet の variant mismatch は `Err(VariantMismatch(detail))` で返し、`detail` には失敗 segment（index と path 表示）を含める
+- Facet の fallible container path segment は internal polymorphic helper `__facet_list_get` / `__facet_list_set` / `__facet_map_get` / `__facet_map_set_existing` に lower し、list miss は `IndexOutOfBounds`、map miss は `KeyNotFound` を `Result` で返す
 - `eprint` は `Error` 値を診断表示し、それ以外の値への適用は VM 側ガード対象とする
 - `Error::kind` / `Error::message` / `Error::format` は `Error` 値を introspection / 表示文字列化する runtime builtin とし、それ以外の値への適用は VM 側ガード対象とする
 - `Result::recover` は compiler が lowering する special form であり、runtime builtin としては持たない
@@ -314,7 +321,7 @@ Opcode は以下のカテゴリを持つ。
 - malformed JSON は `Err(JsonParseError(line, column, detail))` を返し、`RuntimeError` にしない
 - `JsonValue` 以外の値が `json_stringify` に渡った場合は `Err(JsonEncodeError(detail))` を返す。`TypeRegistry` 不整合や variant arity 不整合は VM 内部不整合として `RuntimeError` でよい
 
-組込み宣言の読み込み順序は compile 側で `Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Lt, Lte, Gt, Gte, Concat, Numeric, Show, Ordering, Tuple, Ord, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Option, Generator, HashMap, Result, Duration, Process, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc] -> [Test] -> ユーザ拡張` に固定される。同一 stage 内の import は file 読み込み順に依存せず compile 側で解決され、later stage 参照は compile error になる。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
+組込み宣言の読み込み順序は compile 側で `Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Numeric, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Option, Generator, HashMap, Result, Duration, Process, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc] -> [Test] -> ユーザ拡張` に固定される。同一 stage 内の import は file 読み込み順に依存せず compile 側で解決され、later stage 参照は compile error になる。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
 
 ### 7.2 TypeRegistry
 

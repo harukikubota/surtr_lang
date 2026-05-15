@@ -25,4 +25,6 @@ pub use sources::{
     compose_script_sources, parse_module_stages,
 };
 #[allow(unused_imports)]
+pub use timing::env_flag_enabled;
+#[allow(unused_imports)]
 pub use timing::{format_timing_report, CacheStatsSnapshot, SlowFixtureTiming, TimingReportInput};

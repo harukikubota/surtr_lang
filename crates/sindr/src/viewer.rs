@@ -98,6 +98,9 @@ pub enum OpcodeView {
     LoadFunctionRef {
         fun_idx: u32,
     },
+    LoadCallableTemplateRef {
+        template_id: u32,
+    },
     LoadLocal {
         local_idx: u32,
     },
@@ -119,6 +122,12 @@ pub enum OpcodeView {
     StringLen,
     ListLen,
     SafeModInt,
+    ShlInt,
+    ShrInt,
+    TestBitInt,
+    SetBitInt,
+    ClearBitInt,
+    ToggleBitInt,
     StringContains,
     StringStartsWith,
     StringEndsWith,
@@ -167,9 +176,6 @@ pub enum OpcodeView {
     NegInt,
     NegFloat,
     NotBool,
-    ListNew {
-        len: u32,
-    },
     ListEmpty,
     ListNil,
     ListCons,
@@ -221,6 +227,11 @@ pub enum OpcodeView {
         message_const_idx: u32,
     },
     CallClosure {
+        arity: u8,
+        span_start: u32,
+        span_end: u32,
+    },
+    TailCallClosure {
         arity: u8,
         span_start: u32,
         span_end: u32,
@@ -482,6 +493,9 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
                 .unwrap_or_else(|| format!("builtin#{id}")),
         },
         Opcode::LoadFunctionRef(fun_idx) => OpcodeView::LoadFunctionRef { fun_idx: *fun_idx },
+        Opcode::LoadCallableTemplateRef(template_id) => OpcodeView::LoadCallableTemplateRef {
+            template_id: *template_id,
+        },
         Opcode::LoadLocal(local_idx) => OpcodeView::LoadLocal {
             local_idx: *local_idx,
         },
@@ -512,6 +526,12 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
         Opcode::StringLen => OpcodeView::StringLen,
         Opcode::ListLen => OpcodeView::ListLen,
         Opcode::SafeModInt => OpcodeView::SafeModInt,
+        Opcode::ShlInt => OpcodeView::ShlInt,
+        Opcode::ShrInt => OpcodeView::ShrInt,
+        Opcode::TestBitInt => OpcodeView::TestBitInt,
+        Opcode::SetBitInt => OpcodeView::SetBitInt,
+        Opcode::ClearBitInt => OpcodeView::ClearBitInt,
+        Opcode::ToggleBitInt => OpcodeView::ToggleBitInt,
         Opcode::StringContains => OpcodeView::StringContains,
         Opcode::StringStartsWith => OpcodeView::StringStartsWith,
         Opcode::StringEndsWith => OpcodeView::StringEndsWith,
@@ -568,7 +588,6 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
         Opcode::NegInt => OpcodeView::NegInt,
         Opcode::NegFloat => OpcodeView::NegFloat,
         Opcode::NotBool => OpcodeView::NotBool,
-        Opcode::ListNew { len } => OpcodeView::ListNew { len: *len },
         Opcode::ListEmpty => OpcodeView::ListEmpty,
         Opcode::ListNil => OpcodeView::ListNil,
         Opcode::ListCons => OpcodeView::ListCons,
@@ -638,6 +657,15 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
             span_start,
             span_end,
         } => OpcodeView::CallClosure {
+            arity: *arity,
+            span_start: *span_start,
+            span_end: *span_end,
+        },
+        Opcode::TailCallClosure {
+            arity,
+            span_start,
+            span_end,
+        } => OpcodeView::TailCallClosure {
             arity: *arity,
             span_start: *span_start,
             span_end: *span_end,
@@ -810,6 +838,7 @@ mod tests {
                 num_params: 0,
             }],
             dbg_templates: Vec::new(),
+            callable_templates: Vec::new(),
             functions: vec![FunctionEntry {
                 fun_idx: 0,
                 entry_pc: 0,
@@ -940,5 +969,13 @@ mod tests {
                 .is_some(),
             true
         );
+    }
+
+    #[test]
+    #[cfg(feature = "viewer-schema")]
+    fn viewer_schema_does_not_include_list_new_opcode() {
+        let schema_json =
+            serde_json::to_string(&viewer_schema()).expect("viewer schema must serialize");
+        assert!(!schema_json.contains("\"ListNew\""));
     }
 }

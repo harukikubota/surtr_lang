@@ -15,9 +15,9 @@ Surtr の標準定義ソースは language surface の一部です。
   - auto import される最小の標準 API
 - trait modules
   - capability: `Numeric`, `Show`, `Compare`, `From`, `TryFrom`
-  - operator dispatch / compatibility: `Eq`, `Ord`, `Concat` など
+  - operator dispatch: `Eq`, `Concat` など
 - type modules
-  - `Int`, `String`, `Regex`, `Boolean`, `Error`, `List`, `Result`, `Option`, `HashMap`, `Facet`, `Float`
+  - `Int`, `String`, `Regex`, `Boolean`, `Error`, `List`, `Generator`, `HashMap`, `Result`, `Range`, `Option`, `Facet`, `Float`
 - effect / runtime-facing modules
   - `Process`, `IO`, `File`, `FS`, `Shell`, `Task`, `Random`, `Json`
 
@@ -27,6 +27,7 @@ Surtr の標準定義ソースは language surface の一部です。
 - 数値演算の契約: `../../lib/traits/numeric.srt`
 - 変換: `../../lib/traits/from.srt`, `../../lib/traits/try_from.srt`
 - 型ごとの helper: `../../lib/types/int.srt`, `../../lib/types/string.srt`, `../../lib/types/list.srt` など
+- range helpers と generator range: `../../lib/types/range.srt`, `../../lib/types/generator.srt`
 - 正規表現: `../../lib/types/regex.srt`
 - JSON: `../../lib/types/json.srt`, `../../lib/traits/encode.srt`, `../../lib/traits/decode.srt`
 - Facet path: `../../lib/facet.srt`
@@ -35,7 +36,7 @@ Surtr の標準定義ソースは language surface の一部です。
 
 ## auto import されるもの
 
-auto import されるのは `Bootstrap`, `Kernel`, `Result` と、`@autoimport` が付いた標準 trait です。  
+auto import されるのは `Bootstrap`, `Kernel` と、`@autoimport` が付いた標準 `impl Type` owner helper surface / 標準 trait です。  
 それ以外の標準定義ソースは同梱されますが、名前空間としては明示 import 前提です。
 
 ## REPL で見える最小例
@@ -46,7 +47,7 @@ hello
 xldr(2)>
 ```
 
-`print` が import なしで使えるのは `Kernel` が auto import されるためです。`Ok` / `Err` が bare 名で使えるのは `Result` が auto import されるためです。
+`print` が import なしで使えるのは `Kernel` が auto import されるためです。`map_err(...)` や `chain(...)` のような標準 owner helper が bare 名で使えるのは、対応する `@autoimport impl Type` surface が auto import されるためです。
 
 ## 次に読むページ
 
@@ -57,6 +58,7 @@ xldr(2)>
 - `FS` / `Shell` を触りたいなら `./shell.md`
 - trait 系を見たいなら `./trait-impls.md`
 - path 操作を見たいなら `./facet.md`
+- range の違いを整理したいなら `./range.md`
 
 ## 確認したソース
 
@@ -70,7 +72,7 @@ xldr(2)>
 
 ## 躓きやすいポイント
 
-- auto import されるのは `Bootstrap`, `Kernel`, `Result` と `@autoimport` 付き標準 trait だけで、他の標準定義ソースは明示 `import` 前提です。
+- auto import されるのは `Bootstrap`, `Kernel` と `@autoimport` 付き標準 `impl Type` owner helper surface / 標準 trait だけで、他の標準定義ソースは明示 `import` 前提です。
 - `Facet` は標準定義ソースに見えても同一スコープ内でのみ使用可能な capability です。
-- `Ord` は互換 helper で、新しい比較 API の正本は `Compare` です。
+- ordered comparison の公開入口は `Compare` と `< <= > >=` です。
 - REPL は OnceRead universe なので、読み込み後に trait universe を増分更新する前提ではありません。

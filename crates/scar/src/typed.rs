@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sigil::resolved::{ResolvedId, ResolvedProcessHandlerUid, ResolvedProcessSpec};
+use sigil::resolved::{Resolved, ResolvedId, ResolvedProcessHandlerUid, ResolvedProcessSpec};
 use sindr::primitives::SurtrInt;
 use spire::ast::{BinOp, Lit, ProcessSpec, Span, SupervisorInitSpec, Visibility};
 
@@ -110,6 +110,11 @@ pub enum TraitCallOrigin {
         lhs_ty: Ty,
         rhs_ty: Ty,
     },
+    Comparison {
+        op: ComparisonOperator,
+        lhs_ty: Ty,
+        rhs_ty: Ty,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +126,14 @@ pub enum OperatorTraitOp {
     Compose,
     LiftCompose,
     KleisliCompose,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ComparisonOperator {
+    Lt,
+    Lte,
+    Gt,
+    Gte,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -144,7 +157,32 @@ pub enum TypedFacetSegment {
         enum_name: String,
         variant_name: String,
         variant_tag: u32,
+        discriminant: SurtrInt,
         payload_arity: u32,
+        optional: bool,
+        focus_readonly_root: bool,
+        focus_type_name: Option<String>,
+    },
+    ListIndex {
+        index: Box<TypedNode>,
+        display: String,
+        literal_index: Option<SurtrInt>,
+        focus_readonly_root: bool,
+        focus_type_name: Option<String>,
+    },
+    ListRange {
+        start: Box<TypedNode>,
+        end: Box<TypedNode>,
+        display: String,
+        literal_start: Option<SurtrInt>,
+        literal_end: Option<SurtrInt>,
+        focus_readonly_root: bool,
+        focus_type_name: Option<String>,
+    },
+    MapKey {
+        key: Box<TypedNode>,
+        display: String,
+        literal_key: Option<String>,
         focus_readonly_root: bool,
         focus_type_name: Option<String>,
     },
@@ -189,22 +227,67 @@ pub struct TypedFacetPath {
     pub segments: Vec<TypedFacetSegment>,
 }
 
+impl TypedFacetPath {
+    pub fn has_variant_segment(&self) -> bool {
+        self.segments
+            .iter()
+            .any(|segment| matches!(segment, TypedFacetSegment::Variant { .. }))
+    }
+
+    pub fn final_segment_is_variant(&self) -> bool {
+        self.segments
+            .last()
+            .is_some_and(|segment| matches!(segment, TypedFacetSegment::Variant { .. }))
+    }
+
+    pub fn is_infallible_structural(&self) -> bool {
+        !self.may_fail && !self.has_variant_segment()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingFacetPath {
+    pub root_path_name: Option<String>,
     pub source_ty_hint: Option<Ty>,
-    pub segments: Vec<String>,
+    pub segments: Vec<PendingFacetSegment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PendingFacetExpr {
+    Resolved(Box<Resolved>),
+    Typed(Box<TypedNode>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PendingFacetSegment {
+    Field {
+        name: String,
+        optional: bool,
+    },
+    Bracket {
+        expr: PendingFacetExpr,
+        display: String,
+    },
+    RangeBracket {
+        start: PendingFacetExpr,
+        end: PendingFacetExpr,
+        display: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypedFacetSetMode {
     Exact,
     WrapPlainResult,
+    CaseSet,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypedFacetOverMode {
     FocusValue,
     FocusResult,
+    CaseFocusValue,
+    CaseFocusResult,
 }
 
 /// Inner structure of a typed node.

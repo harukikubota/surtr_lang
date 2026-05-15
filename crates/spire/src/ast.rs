@@ -297,9 +297,50 @@ pub struct AstMatchArm {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct FacetBracketExpr {
+    pub expr: Box<Ast>,
+    pub display: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FacetPathSegment {
+    Field { name: Symbol, optional: bool },
+    Bracket(FacetBracketExpr),
+}
+
+impl FacetPathSegment {
+    pub fn field(name: impl Into<Symbol>) -> Self {
+        Self::Field {
+            name: name.into(),
+            optional: false,
+        }
+    }
+
+    pub fn optional_field(name: impl Into<Symbol>) -> Self {
+        Self::Field {
+            name: name.into(),
+            optional: true,
+        }
+    }
+
+    pub fn display_label(&self) -> String {
+        match self {
+            Self::Field { name, optional } => {
+                if *optional {
+                    format!("{name}?")
+                } else {
+                    name.clone()
+                }
+            }
+            Self::Bracket(expr) => format!("[{}]", expr.display),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct BulkUpdateEntry {
     pub span: Span,
-    pub path: Vec<Symbol>,
+    pub path: Vec<FacetPathSegment>,
     pub kind: BulkUpdateEntryKind,
 }
 
@@ -308,6 +349,8 @@ pub enum BulkUpdateEntryKind {
     Set(Ast),
     Over(Ast),
     OverResult(Ast),
+    CaseSet(Ast),
+    CaseOver(Ast),
     Nested(Vec<BulkUpdateEntry>),
 }
 
@@ -360,6 +403,8 @@ pub struct TraitMethodSig {
     pub type_params: Vec<TypeParam>,
     pub params: Vec<FunParam>,
     pub ret_ty: AstTy,
+    pub body: Option<Box<Ast>>,
+    pub attrs: DeclAttrs,
     pub span: Span,
 }
 
@@ -514,11 +559,14 @@ pub enum Ast {
     /// Field access: `user.name`, `pair._0`
     FieldAccess(Span, Box<Ast>, Symbol),
 
+    /// Non-identifier Facet path segment, or an identifier segment with an optional marker.
+    FacetSegmentAccess(Span, Box<Ast>, FacetPathSegment),
+
     /// Compiler-managed Facet shorthand capture: `~source.path`
     FacetCapture(Span, Box<Ast>),
 
-    /// Struct definition: `defstruct User { name: String, age: Int }`
-    StructDef(Span, Symbol, Vec<StructField>, DeclAttrs),
+    /// Struct definition: `defstruct Box<$A> { value: $A }`
+    StructDef(Span, Symbol, Vec<TypeParam>, Vec<StructField>, DeclAttrs),
 
     /// Record definition: `defrecord Point(x: Float, y: Float)`
     RecordDef(Span, Symbol, Vec<RecordField>, DeclAttrs),

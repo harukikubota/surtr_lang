@@ -277,7 +277,9 @@ defmod Bootstrap {
 @doc """
 Concrete bootstrap error for "no value" situations.
 `NoneError` is the standard failure used by optional-style sugar such as `T?`.
-`T?` lowers to `Result<T, NoneError>` and is separate from `Option::None`.
+`T?` now lowers to `Option<T>`.
+Use `Result<T, NoneError>` explicitly when "missing value" should participate in
+Result-style failure propagation.
 """
 deferror NoneError { "None Value." }
 
@@ -308,6 +310,13 @@ The `detail` field keeps the user-facing message flexible so the runtime can
 attach the relevant bounds information.
 """
 deferror IndexOutOfBounds(detail: String) { detail }
+
+@doc """
+Concrete bootstrap error for Facet HashMap key access when the key is missing.
+`HashMap::get` keeps returning `NoneError`; Facet paths use this error so a
+missing path segment is visible in diagnostics.
+"""
+deferror KeyNotFound(key: String) { "key not found: #{key}" }
 
 @doc """
 Concrete bootstrap error for enum-variant selector mismatch in Facet access.
