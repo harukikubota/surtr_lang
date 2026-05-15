@@ -101,6 +101,7 @@ const COMPARE_METHOD_DOC_TARGETS: &[(&str, &str)] = &[
 const REPL_UNRESOLVED_TYPE_MESSAGE: &str = "Cannot persist binding with unresolved type variable.";
 const REPL_UNRESOLVED_TYPE_HINT: &str =
     "Add a type annotation or use the value in a context that determines the success type.";
+const COMPLETION_DEFAULT_LIMIT: usize = 5;
 
 const STAGE_PARSE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
 
@@ -284,6 +285,42 @@ struct ReplDefRecord {
     line: usize,
     name: String,
     arity: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplCompletionKind {
+    Variable,
+    TypeConstructor,
+    TypePath,
+    FunctionCall,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplCompletionCandidate {
+    pub label: String,
+    pub replacement: String,
+    pub kind: ReplCompletionKind,
+    pub detail: Option<String>,
+    pub replace_start: usize,
+    pub replace_end: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplSignatureHelp {
+    pub lines: Vec<String>,
+    pub active_parameter: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReplCompletion {
+    pub candidates: Vec<ReplCompletionCandidate>,
+    pub signature: Option<ReplSignatureHelp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompletionCallContext {
+    callee: String,
+    active_parameter: usize,
 }
 
 pub struct ReplEngine {
@@ -1088,6 +1125,237 @@ impl ReplEngine {
         self.symbols.iter().cloned().collect()
     }
 
+    pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
+        let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
+        let (replace_start, replace_end, prefix) = completion_token(input, cursor);
+        let call_context = completion_call_context(input, cursor);
+        let signature = call_context
+            .as_ref()
+            .and_then(|context| self.signature_help_for_call(context));
+
+        let mut candidates = Vec::new();
+        if call_context.is_none() && prefix.is_empty() {
+            return ReplCompletion {
+                candidates,
+                signature,
+            };
+        }
+        if let Some(context) = call_context.as_ref() {
+            let expected_ty = signature
+                .as_ref()
+                .and_then(|_| self.expected_param_type_for_call(context));
+            self.push_variable_completion_candidates(
+                &mut candidates,
+                &prefix,
+                replace_start,
+                replace_end,
+                expected_ty.as_deref(),
+            );
+            if candidates.is_empty() && expected_ty.is_none() {
+                self.push_global_completion_candidates(
+                    &mut candidates,
+                    &prefix,
+                    replace_start,
+                    replace_end,
+                );
+            }
+        } else {
+            self.push_global_completion_candidates(
+                &mut candidates,
+                &prefix,
+                replace_start,
+                replace_end,
+            );
+        }
+
+        candidates.truncate(COMPLETION_DEFAULT_LIMIT);
+        ReplCompletion {
+            candidates,
+            signature,
+        }
+    }
+
+    fn push_global_completion_candidates(
+        &self,
+        candidates: &mut Vec<ReplCompletionCandidate>,
+        prefix: &str,
+        replace_start: usize,
+        replace_end: usize,
+    ) {
+        self.push_variable_completion_candidates(
+            candidates,
+            prefix,
+            replace_start,
+            replace_end,
+            None,
+        );
+        self.push_type_constructor_completion_candidates(
+            candidates,
+            prefix,
+            replace_start,
+            replace_end,
+        );
+        self.push_function_completion_candidates(candidates, prefix, replace_start, replace_end);
+    }
+
+    fn push_variable_completion_candidates(
+        &self,
+        candidates: &mut Vec<ReplCompletionCandidate>,
+        prefix: &str,
+        replace_start: usize,
+        replace_end: usize,
+        expected_ty: Option<&str>,
+    ) {
+        let mut seen = BTreeSet::new();
+        for binding in self.binding_records.iter().rev() {
+            if !seen.insert(binding.name.as_str()) {
+                continue;
+            }
+            if !binding.name.starts_with(prefix) {
+                continue;
+            }
+            if let Some(expected_ty) = expected_ty {
+                if !Self::parameter_type_accepts_arg_type(expected_ty, &binding.ty) {
+                    continue;
+                }
+            }
+            push_completion_candidate(
+                candidates,
+                ReplCompletionCandidate {
+                    label: binding.name.clone(),
+                    replacement: binding.name.clone(),
+                    kind: ReplCompletionKind::Variable,
+                    detail: Some(binding.ty.clone()),
+                    replace_start,
+                    replace_end,
+                },
+            );
+        }
+    }
+
+    fn push_type_constructor_completion_candidates(
+        &self,
+        candidates: &mut Vec<ReplCompletionCandidate>,
+        prefix: &str,
+        replace_start: usize,
+        replace_end: usize,
+    ) {
+        for decl in self.declaration_index.values() {
+            if !matches!(
+                decl.kind,
+                sigil::DeclarationKind::Struct
+                    | sigil::DeclarationKind::Record
+                    | sigil::DeclarationKind::Enum
+            ) || !Self::declaration_is_completion_surface(decl)
+            {
+                continue;
+            }
+            let label = crate::surface_path_name(&decl.name).to_string();
+            if !label.starts_with(prefix) {
+                continue;
+            }
+            push_completion_candidate(
+                candidates,
+                ReplCompletionCandidate {
+                    label: label.clone(),
+                    replacement: label,
+                    kind: ReplCompletionKind::TypeConstructor,
+                    detail: self.declaration_signature(decl),
+                    replace_start,
+                    replace_end,
+                },
+            );
+        }
+    }
+
+    fn push_function_completion_candidates(
+        &self,
+        candidates: &mut Vec<ReplCompletionCandidate>,
+        prefix: &str,
+        replace_start: usize,
+        replace_end: usize,
+    ) {
+        let qualified_prefix = prefix.contains("::");
+        for entry in self.docs.iter().rev() {
+            if entry.kind != DocKind::Function {
+                continue;
+            }
+            let qualified_label = crate::surface_path_name(&entry.qualified_name).to_string();
+            let tail = qualified_label
+                .rsplit("::")
+                .next()
+                .unwrap_or(qualified_label.as_str())
+                .to_string();
+            let (label, kind) = if qualified_prefix {
+                if !qualified_label.starts_with(prefix) {
+                    continue;
+                }
+                if !self.doc_entry_is_completion_surface(entry, &qualified_label) {
+                    continue;
+                }
+                (qualified_label, ReplCompletionKind::TypePath)
+            } else {
+                if !tail.starts_with(prefix) {
+                    continue;
+                }
+                if self.sigil_session.lookup_uid(&tail).is_none() {
+                    continue;
+                }
+                if !self.doc_entry_is_completion_surface(entry, &tail) {
+                    continue;
+                }
+                (tail, ReplCompletionKind::FunctionCall)
+            };
+            let detail = Self::display_signature_for_doc_entry(entry).map(|signature| {
+                Self::render_signature_with_qualified_name(&entry.qualified_name, signature)
+            });
+            push_completion_candidate(
+                candidates,
+                ReplCompletionCandidate {
+                    label: label.clone(),
+                    replacement: label,
+                    kind,
+                    detail,
+                    replace_start,
+                    replace_end,
+                },
+            );
+        }
+    }
+
+    fn doc_entry_is_completion_surface(&self, entry: &DocEntry, lookup: &str) -> bool {
+        if let Some(decl) = self.qualified_declaration(&entry.qualified_name) {
+            return Self::declaration_is_completion_surface(decl);
+        }
+        if Self::is_qualified_symbol(lookup) {
+            self.qualified_declaration(lookup)
+                .is_none_or(Self::declaration_is_completion_surface)
+        } else {
+            self.sigil_session.lookup_uid(lookup).is_some()
+        }
+    }
+
+    fn signature_help_for_call(
+        &self,
+        context: &CompletionCallContext,
+    ) -> Option<ReplSignatureHelp> {
+        let (qualified_name, signature) = self.find_signature(&context.callee)?;
+        let rendered = Self::render_signature_with_qualified_name(&qualified_name, signature);
+        Some(ReplSignatureHelp {
+            lines: vec![highlight_signature_parameter(
+                &rendered,
+                context.active_parameter,
+            )],
+            active_parameter: Some(context.active_parameter),
+        })
+    }
+
+    fn expected_param_type_for_call(&self, context: &CompletionCallContext) -> Option<String> {
+        let (_qualified_name, signature) = self.find_signature(&context.callee)?;
+        let types = Self::signature_param_types(&signature)?;
+        types.get(context.active_parameter).cloned()
+    }
+
     pub fn prompt(&self) -> String {
         if self.pending.is_empty() {
             format!("xldr({})> ", self.next_line)
@@ -1664,6 +1932,10 @@ impl ReplEngine {
 
     fn declaration_is_public_surface(entry: &sigil::DeclarationEntry) -> bool {
         entry.visibility == spire::ast::Visibility::Public
+    }
+
+    fn declaration_is_completion_surface(entry: &sigil::DeclarationEntry) -> bool {
+        Self::declaration_is_public_surface(entry) && !entry.hidden && entry.user_callable
     }
 
     fn parse_pid_type_name(ty: &str) -> Option<&str> {
@@ -7383,6 +7655,150 @@ fn parse_stage_modules_parallel(
 
 pub(crate) fn xldr_version() -> &'static str {
     XLDR_VERSION
+}
+
+fn clamp_to_char_boundary(input: &str, mut cursor: usize) -> usize {
+    cursor = cursor.min(input.len());
+    while cursor > 0 && !input.is_char_boundary(cursor) {
+        cursor -= 1;
+    }
+    cursor
+}
+
+fn completion_token(input: &str, cursor: usize) -> (usize, usize, String) {
+    let cursor = clamp_to_char_boundary(input, cursor);
+    let before = &input[..cursor];
+    let start = before
+        .char_indices()
+        .rev()
+        .find_map(|(idx, ch)| (!completion_token_char(ch)).then_some(idx + ch.len_utf8()))
+        .unwrap_or(0);
+    (start, cursor, input[start..cursor].to_string())
+}
+
+fn completion_token_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':')
+}
+
+fn completion_call_context(input: &str, cursor: usize) -> Option<CompletionCallContext> {
+    let cursor = clamp_to_char_boundary(input, cursor);
+    let before = &input[..cursor];
+    let open = innermost_unclosed_lparen(before)?;
+    let callee_end = before[..open].trim_end().len();
+    let callee_start = before[..callee_end]
+        .char_indices()
+        .rev()
+        .find_map(|(idx, ch)| (!completion_token_char(ch)).then_some(idx + ch.len_utf8()))
+        .unwrap_or(0);
+    let callee = before[callee_start..callee_end].trim();
+    if callee.is_empty() {
+        return None;
+    }
+    let args = &before[open + 1..];
+    Some(CompletionCallContext {
+        callee: callee.to_string(),
+        active_parameter: active_call_parameter(args),
+    })
+}
+
+fn innermost_unclosed_lparen(input: &str) -> Option<usize> {
+    let mut stack = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (idx, ch) in input.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '(' => stack.push(idx),
+            ')' => {
+                stack.pop();
+            }
+            _ => {}
+        }
+    }
+
+    stack.pop()
+}
+
+fn active_call_parameter(args: &str) -> usize {
+    let mut active = 0usize;
+    let mut paren_depth = 0usize;
+    let mut angle_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for ch in args.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '<' => angle_depth += 1,
+            '>' => angle_depth = angle_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            ',' if paren_depth == 0 && angle_depth == 0 && bracket_depth == 0 => active += 1,
+            _ => {}
+        }
+    }
+
+    active
+}
+
+fn highlight_signature_parameter(signature: &str, active_parameter: usize) -> String {
+    let Some((head, rest)) = signature.split_once('(') else {
+        return signature.to_string();
+    };
+    let Some((params_src, tail)) = rest.rsplit_once(')') else {
+        return signature.to_string();
+    };
+    let mut params = split_top_level_commas(params_src)
+        .into_iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if let Some(param) = params.get_mut(active_parameter) {
+        if let Some((name, ty)) = param.split_once(':') {
+            *param = format!("{}: [{}]", name.trim(), ty.trim());
+        } else {
+            *param = format!("[{}]", param.trim());
+        }
+    }
+    format!("{head}({}){tail}", params.join(", "))
+}
+
+fn push_completion_candidate(
+    candidates: &mut Vec<ReplCompletionCandidate>,
+    candidate: ReplCompletionCandidate,
+) {
+    if candidates
+        .iter()
+        .any(|existing| existing.label == candidate.label && existing.kind == candidate.kind)
+    {
+        return;
+    }
+    candidates.push(candidate);
 }
 
 fn split_top_level_commas(input: &str) -> Vec<&str> {

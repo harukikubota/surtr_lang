@@ -22,7 +22,9 @@ use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 #[cfg(feature = "line-editor")]
 use rustyline::{Context, Helper};
 
-use crate::repl::logic::core::{xldr_version, ReplEngine};
+use crate::repl::logic::core::{
+    xldr_version, ReplCompletion, ReplCompletionCandidate, ReplCompletionKind, ReplEngine,
+};
 use crate::repl::logic::{present_for_cli, styled, ReplResult};
 use crate::{CommandError, CommandResult};
 
@@ -226,7 +228,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
     let mut history = TerminalHistory::default();
     let mut last_background_progress = Instant::now();
 
-    redraw_terminal_prompt(&mut stdout, &engine.prompt(), &buffer, cursor_chars)
+    redraw_terminal_prompt(&mut stdout, engine, &buffer, cursor_chars)
         .map_err(|_| CommandError::message(1, "repl: failed to redraw prompt"))?;
 
     loop {
@@ -262,7 +264,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
 
         match handle_terminal_key(&mut history, &mut buffer, &mut cursor_chars, key) {
             TerminalAction::Continue => {
-                redraw_terminal_prompt(&mut stdout, &engine.prompt(), &buffer, cursor_chars)
+                redraw_terminal_prompt(&mut stdout, engine, &buffer, cursor_chars)
                     .map_err(|_| CommandError::message(1, "repl: failed to redraw prompt"))?;
             }
             TerminalAction::Submit(line) => {
@@ -584,7 +586,7 @@ fn print_terminal_result(
     let mut lines = present_for_cli(result, color);
     lines.extend(result.stderr.iter().cloned());
     if lines.is_empty() {
-        redraw_terminal_prompt(stdout, &engine.prompt(), buffer, cursor_chars)?;
+        redraw_terminal_prompt(stdout, engine, buffer, cursor_chars)?;
         return Ok(());
     }
 
@@ -592,22 +594,62 @@ fn print_terminal_result(
         write!(stdout, "\r\x1b[L\r\x1b[2K{line}\r\n")?;
     }
     stdout.flush()?;
-    redraw_terminal_prompt(stdout, &engine.prompt(), buffer, cursor_chars)
+    redraw_terminal_prompt(stdout, engine, buffer, cursor_chars)
 }
 
 #[cfg(feature = "line-editor")]
 fn redraw_terminal_prompt(
     stdout: &mut io::Stdout,
-    prompt: &str,
+    engine: &ReplEngine,
     buffer: &str,
     cursor_chars: usize,
 ) -> io::Result<()> {
+    let prompt = engine.prompt();
     let column = prompt.chars().count().saturating_add(cursor_chars) as u16;
-    write!(stdout, "\r\x1b[2K{prompt}{buffer}\r")?;
+    let cursor_byte = byte_index_for_char_position(buffer, cursor_chars);
+    let completion = engine.completions(buffer, cursor_byte);
+    let completion_lines = render_completion_lines(&completion);
+    write!(stdout, "\r\x1b[J{prompt}{buffer}")?;
+    for line in &completion_lines {
+        write!(stdout, "\r\n\x1b[2K{line}")?;
+    }
+    if !completion_lines.is_empty() {
+        write!(stdout, "\x1b[{}A", completion_lines.len())?;
+    }
+    write!(stdout, "\r")?;
     if column > 0 {
         write!(stdout, "\x1b[{}C", column)?;
     }
     stdout.flush()
+}
+
+#[cfg(feature = "line-editor")]
+fn render_completion_lines(completion: &ReplCompletion) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(signature) = &completion.signature {
+        lines.extend(signature.lines.iter().map(|line| format!("sig  {line}")));
+    }
+    lines.extend(
+        completion
+            .candidates
+            .iter()
+            .map(render_completion_candidate),
+    );
+    lines
+}
+
+#[cfg(feature = "line-editor")]
+fn render_completion_candidate(candidate: &ReplCompletionCandidate) -> String {
+    let kind = match candidate.kind {
+        ReplCompletionKind::Variable => "var ",
+        ReplCompletionKind::TypeConstructor => "type",
+        ReplCompletionKind::TypePath => "path",
+        ReplCompletionKind::FunctionCall => "call",
+    };
+    match &candidate.detail {
+        Some(detail) => format!("{kind} {:<18} {detail}", candidate.label),
+        None => format!("{kind} {}", candidate.label),
+    }
 }
 
 #[cfg(feature = "line-editor")]

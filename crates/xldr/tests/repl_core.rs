@@ -1,6 +1,7 @@
 use std::fs;
 use std::time::Duration;
 
+use xldr::repl::logic::core::ReplCompletionKind;
 use xldr::repl::logic::{ReplOutput, ReplResult};
 use xldr::ReplEngine;
 
@@ -164,6 +165,106 @@ fn signature_text(result: &ReplResult) -> String {
         }
         other => panic!("expected signature output, got {}", output_kind(other)),
     }
+}
+
+#[test]
+fn core_completion_returns_limited_global_candidates_with_details() {
+    let mut engine = engine();
+    assert!(
+        engine.completions("", 0).candidates.is_empty(),
+        "empty prompt should not show global completion noise"
+    );
+    assert!(rendered_text(&engine.handle_line("answer = 42")).contains("answer: Int"));
+
+    let completion = engine.completions("ans", 3);
+    assert!(
+        completion.candidates.len() <= 5,
+        "completion should default to five rows: {:?}",
+        completion.candidates
+    );
+    let answer = completion
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "answer")
+        .expect("answer binding should be suggested");
+    assert_eq!(answer.kind, ReplCompletionKind::Variable);
+    assert_eq!(answer.detail.as_deref(), Some("Int"));
+
+    let print = engine
+        .completions("pri", 3)
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "print")
+        .expect("pathless function calls should be suggested");
+    assert_eq!(print.kind, ReplCompletionKind::FunctionCall);
+    assert!(print
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("print(")));
+}
+
+#[test]
+fn core_completion_returns_type_constructors_and_type_paths() {
+    let engine = engine();
+
+    let duration = engine
+        .completions("Dur", 3)
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "Duration")
+        .expect("type constructor should be suggested");
+    assert_eq!(duration.kind, ReplCompletionKind::TypeConstructor);
+    assert!(duration
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("Duration")));
+
+    let int_min = engine
+        .completions("Int::mi", "Int::mi".len())
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "Int::min")
+        .expect("qualified type path should be suggested");
+    assert_eq!(int_min.kind, ReplCompletionKind::TypePath);
+    assert!(int_min
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("Int::min(")));
+}
+
+#[test]
+fn core_completion_uses_argument_position_for_variable_candidates_and_signature_help() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("n = 3")).contains("n: Int"));
+    assert!(rendered_text(&engine.handle_line(r#"s = "text""#)).contains("s: String"));
+
+    let input = "Int::min(";
+    let completion = engine.completions(input, input.len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("signature help should be available at call argument position");
+    assert_eq!(signature.active_parameter, Some(0));
+    let signature_text = signature.lines.join("\n");
+    assert!(signature_text.contains("Int::min("), "{signature_text}");
+    assert!(
+        signature_text.contains("[Int]"),
+        "active parameter type should be highlighted: {signature_text}"
+    );
+
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"n"),
+        "Int binding should be suggested: {labels:?}"
+    );
+    assert!(
+        !labels.contains(&"s"),
+        "String binding should not be suggested for Int argument: {labels:?}"
+    );
 }
 
 fn status_text(result: &ReplResult) -> String {
