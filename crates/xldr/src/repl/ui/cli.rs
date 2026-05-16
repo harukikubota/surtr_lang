@@ -623,11 +623,12 @@ fn redraw_terminal_prompt(
     buffer: &str,
     cursor_chars: usize,
 ) -> io::Result<()> {
+    let color = styled::color_enabled_from_env();
     let prompt = engine.prompt();
     let column = prompt.chars().count().saturating_add(cursor_chars) as u16;
     let cursor_byte = byte_index_for_char_position(buffer, cursor_chars);
     let completion = engine.completions(buffer, cursor_byte);
-    let completion_lines = render_completion_lines(&completion);
+    let completion_lines = render_completion_lines(&completion, color);
     let completion_rows = completion_lines
         .iter()
         .map(|line| terminal_rows_for_line(line))
@@ -649,7 +650,7 @@ fn redraw_terminal_prompt(
 #[cfg(feature = "line-editor")]
 fn terminal_rows_for_line(line: &str) -> usize {
     let width = terminal_width();
-    let columns = line.chars().count().max(1);
+    let columns = visible_line_width(line).max(1);
     columns.div_ceil(width)
 }
 
@@ -663,32 +664,68 @@ fn terminal_width() -> usize {
 }
 
 #[cfg(feature = "line-editor")]
-fn render_completion_lines(completion: &ReplCompletion) -> Vec<String> {
+fn render_completion_lines(completion: &ReplCompletion, color: bool) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(signature) = &completion.signature {
-        lines.extend(signature.lines.iter().map(|line| format!("sig  {line}")));
+        lines.extend(signature.lines.iter().map(|line| {
+            if color {
+                styled::completion_signature_line(line)
+            } else {
+                format!("sig  {line}")
+            }
+        }));
     }
     lines.extend(
         completion
             .candidates
             .iter()
-            .map(render_completion_candidate),
+            .map(|candidate| render_completion_candidate(candidate, color)),
     );
     lines
 }
 
 #[cfg(feature = "line-editor")]
-fn render_completion_candidate(candidate: &ReplCompletionCandidate) -> String {
+fn render_completion_candidate(candidate: &ReplCompletionCandidate, color: bool) -> String {
     let kind = match candidate.kind {
         ReplCompletionKind::Variable => "var ",
         ReplCompletionKind::TypeConstructor => "type",
         ReplCompletionKind::TypePath => "path",
         ReplCompletionKind::FunctionCall => "call",
     };
-    match &candidate.detail {
-        Some(detail) => format!("{kind} {:<18} {detail}", candidate.label),
-        None => format!("{kind} {}", candidate.label),
+    if color {
+        styled::completion_candidate_line(kind, &candidate.label, candidate.detail.as_deref())
+    } else {
+        match &candidate.detail {
+            Some(detail) => format!("{kind} {:<18} {detail}", candidate.label),
+            None => format!("{kind} {}", candidate.label),
+        }
     }
+}
+
+#[cfg(feature = "line-editor")]
+fn visible_line_width(line: &str) -> usize {
+    strip_ansi(line).chars().count()
+}
+
+#[cfg(feature = "line-editor")]
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::new();
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && matches!(chars.peek(), Some('[')) {
+            chars.next();
+            for next in chars.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+
+    out
 }
 
 #[cfg(feature = "line-editor")]
@@ -775,6 +812,10 @@ mod command_error_tests {
 #[cfg(all(test, feature = "line-editor"))]
 mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use crate::repl::logic::core::{
+        ReplCompletion, ReplCompletionCandidate, ReplCompletionKind, ReplSignatureHelp,
+    };
 
     #[test]
     fn submitted_terminal_line_keeps_prompt_and_input_together() {
@@ -963,5 +1004,67 @@ mod tests {
         assert_eq!(action, super::TerminalAction::Continue);
         assert_eq!(buffer, "ad");
         assert_eq!(cursor_chars, 1);
+    }
+
+    #[test]
+    fn render_completion_lines_stays_plain_when_color_is_off() {
+        let completion = ReplCompletion {
+            signature: Some(ReplSignatureHelp {
+                lines: vec!["Kernel::print(a: [String]) -> Unit".to_string()],
+                active_parameter: Some(0),
+            }),
+            candidates: vec![ReplCompletionCandidate {
+                label: "print".to_string(),
+                replacement: "print".to_string(),
+                kind: ReplCompletionKind::FunctionCall,
+                detail: Some("Kernel::print(a: [String]) -> Unit".to_string()),
+                replace_start: 0,
+                replace_end: 0,
+            }],
+        };
+
+        let rendered = super::render_completion_lines(&completion, false);
+        assert_eq!(
+            rendered,
+            vec![
+                "sig  Kernel::print(a: [String]) -> Unit".to_string(),
+                "call print              Kernel::print(a: [String]) -> Unit".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn render_completion_lines_adds_ansi_when_color_is_on() {
+        let completion = ReplCompletion {
+            signature: Some(ReplSignatureHelp {
+                lines: vec!["Kernel::print(a: [String]) -> Unit".to_string()],
+                active_parameter: Some(0),
+            }),
+            candidates: vec![
+                ReplCompletionCandidate {
+                    label: "name".to_string(),
+                    replacement: "name".to_string(),
+                    kind: ReplCompletionKind::Variable,
+                    detail: Some("String".to_string()),
+                    replace_start: 0,
+                    replace_end: 0,
+                },
+                ReplCompletionCandidate {
+                    label: "print".to_string(),
+                    replacement: "print".to_string(),
+                    kind: ReplCompletionKind::FunctionCall,
+                    detail: Some("Kernel::print(a: [String]) -> Unit".to_string()),
+                    replace_start: 0,
+                    replace_end: 0,
+                },
+            ],
+        };
+
+        let rendered = super::render_completion_lines(&completion, true);
+        assert!(rendered[0].contains("\x1b["), "{rendered:?}");
+        assert!(rendered[1].contains("\x1b[1;90mvar \x1b[0m"), "{rendered:?}");
+        assert!(rendered[1].contains("\x1b[36mname"), "{rendered:?}");
+        assert!(rendered[2].contains("\x1b[1;90mcall\x1b[0m"), "{rendered:?}");
+        assert!(rendered[2].contains("\x1b[1;35mprint"), "{rendered:?}");
     }
 }

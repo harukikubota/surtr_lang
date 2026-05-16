@@ -92,6 +92,41 @@ pub fn signature(signature: &str) -> String {
     signature_doc(signature)
 }
 
+pub fn completion_signature_line(signature: &str) -> String {
+    concat([
+        styled("sig", Style::fg(Color::Cyan)),
+        styled("  ", Style::fg(Color::Default)),
+        signature_doc(signature),
+    ])
+}
+
+pub fn completion_candidate_line(kind: &str, label: &str, detail: Option<&str>) -> String {
+    let label_style = match kind {
+        "var " => Style::fg(Color::Cyan),
+        "type" => Style::fg(Color::BrightCyan).bold(),
+        "path" => Style::fg(Color::Cyan),
+        "call" => Style::fg(Color::Magenta).bold(),
+        _ => Style::default(),
+    };
+    let padded_label = format!("{label:<18}");
+    let mut parts = vec![
+        styled(kind, Style::fg(Color::BrightBlack).bold()),
+        " ".to_string(),
+        styled(&padded_label, label_style),
+    ];
+    if let Some(detail) = detail {
+        let detail_rendered = if detail.contains("->") || detail.contains('(') || detail.contains(": ")
+        {
+            signature_doc(detail)
+        } else {
+            type_doc(detail)
+        };
+        parts.push(" ".to_string());
+        parts.push(detail_rendered);
+    }
+    concat(parts)
+}
+
 pub fn info_line(line: &str) -> String {
     if let Some(rest) = line.strip_prefix("## ") {
         return styled(rest, Style::fg(Color::Yellow).bold());
@@ -900,5 +935,31 @@ mod tests {
         assert!(example.contains("ret"), "{example:?}");
         assert!(example.contains("\x1b[36m:\x1b[0m"), "{example:?}");
         assert!(example.contains("\x1b[96mInt\x1b[0m"), "{example:?}");
+    }
+
+    #[test]
+    fn completion_signature_line_styles_prefix_and_signature_tokens() {
+        let rendered = completion_signature_line("Kernel::print(a: [String]) -> Unit");
+        assert!(rendered.contains("\x1b[36msig\x1b[0m"), "{rendered:?}");
+        assert!(rendered.contains("\x1b[1;96mString\x1b[0m"), "{rendered:?}");
+        assert!(rendered.contains("\x1b[1;96mUnit\x1b[0m"), "{rendered:?}");
+    }
+
+    #[test]
+    fn completion_candidate_line_styles_kind_label_and_detail() {
+        let variable = completion_candidate_line("var ", "name", Some("String"));
+        assert!(variable.contains("\x1b[1;90mvar \x1b[0m"), "{variable:?}");
+        assert!(variable.contains("\x1b[36mname"), "{variable:?}");
+        assert!(variable.contains("\x1b[96mString\x1b[0m"), "{variable:?}");
+
+        let callable = completion_candidate_line(
+            "call",
+            "print",
+            Some("Kernel::print(a: [String]) -> Unit"),
+        );
+        assert!(callable.contains("\x1b[1;90mcall\x1b[0m"), "{callable:?}");
+        assert!(callable.contains("\x1b[1;35mprint"), "{callable:?}");
+        assert!(callable.contains("\x1b[36ma\x1b[0m"), "{callable:?}");
+        assert!(callable.contains("\x1b[1;96mString\x1b[0m"), "{callable:?}");
     }
 }
