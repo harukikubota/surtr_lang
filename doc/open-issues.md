@@ -39,18 +39,6 @@
   - `unit/sindr` で chunk 整合性と参照先妥当性を固定する。
   - `integration` で dump 出力が必要テーブルを欠かさないことを維持する。
 
-### OI-016 HashMap v1 follow-up
-
-- 解決済み:
-  - `hash![key => value, ...]` / `hash![]` literal sugar を採用する。
-  - key は `String` 型を得られる任意の式、value は同一型の式とする。
-  - runtime 内部表現は `HashMap<String, Value>` とし、duplicate key は既存どおり後勝ちで上書きする。
-  - `inspect(HashMap)` / `to_string(HashMap)` は生成可能な literal 形式 `hash!["key" => value, ...]` を返し、表示順はキー昇順 deterministic order とする。
-- 固定先:
-  - `doc/要件定義v9.md` / `docs/dev/EldrVM_spec.md` / `docs/dev/テスト方針.md` / `lib/types/hash_map.srt` に同期済み。
-- テスト方針:
-  - `unit/spire` / `unit/scar` / `unit/forge` / `unit/eldr` / `unit/sindr` / script fixture で literal、型検査、lowering、表示、duplicate key、key order を固定する。
-
 ### OI-017 Worker API 最終形
 
 - 背景:
