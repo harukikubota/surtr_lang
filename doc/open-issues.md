@@ -195,26 +195,6 @@
   - `lib/tests/file_system.srt` では `FS::*` を qualified call で使う形を維持する。
   - escape syntax や alias import を導入する場合は `compile_errors/modules` と `spec/modules` の両方に fixture を追加する。
 
-### OI-027 Facet compose path embedding and pin-like path capture
-
-- 背景:
-  - `Facet::bulk_update(source) { ... }` は relative path をその場で列挙できるようになったが、entry 内に既存 path 値や composed path を埋め込む surface はまだ持っていない。
-  - 現行の `Facet::chain` / `/` は通常式としては使える一方、bulk entry の left-hand path へ直接埋め込む記法は未定義である。
-  - 将来的に Elixir の pin 演算子に近い surface を導入すれば、`^user_country.name` のような path capture / path embedding が候補になりうる。
-- 未確定点:
-  - bulk entry の左辺で既存 path 値を埋め込めるようにするか
-  - その場合に `^path.segment` のような pin-like syntax を採用するか、別記法にするか
-  - embedded path と通常 field / tuple / prism path の優先順位と parse 規則
-  - lexical value capture と Facet path capture をどう区別するか
-- 受け入れ条件:
-  - 導入する場合、`Facet::bulk_update` の「通常コードに lower できる DSL」という説明を壊さない。
-  - composed path / embedded path / dotted path / nested block が同一の path 意味論へ正規化される。
-  - pin-like syntax を入れる場合、既存の capture / pattern / unary operator surface と衝突しない。
-- テスト方針:
-  - parser で embedded path / dotted extension / nested block の優先順位を固定する。
-  - resolver / integration で embedded path が `Facet::set` / `Facet::over` の既存意味論へ正しく lower されることを回帰基準にする。
-- syntax を導入しない場合も、`Facet::chain` を bulk 内で許可しない compile error fixture を残して境界を固定する。
-
 ### OI-028 generic `Range` comparison impl runtime mismatch
 
 - 背景:
