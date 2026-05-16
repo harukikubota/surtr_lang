@@ -1304,11 +1304,17 @@ impl ReplEngine {
                 if !self.doc_entry_is_completion_surface(entry, &tail) {
                     continue;
                 }
-                (tail, ReplCompletionKind::FunctionCall)
+                (tail.clone(), ReplCompletionKind::FunctionCall)
             };
-            let detail = Self::display_signature_for_doc_entry(entry).map(|signature| {
-                Self::render_signature_with_qualified_name(&entry.qualified_name, signature)
-            });
+            let detail = if qualified_prefix {
+                Self::display_signature_for_doc_entry(entry).map(|signature| {
+                    Self::render_signature_with_qualified_name(&entry.qualified_name, signature)
+                })
+            } else {
+                self.find_signature(&tail).map(|(qualified_name, signature)| {
+                    Self::render_signature_with_qualified_name(&qualified_name, signature)
+                })
+            };
             push_completion_candidate(
                 candidates,
                 ReplCompletionCandidate {

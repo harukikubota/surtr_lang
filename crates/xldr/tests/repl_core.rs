@@ -303,6 +303,62 @@ fn core_completion_uses_argument_position_for_variable_candidates_and_signature_
     );
 }
 
+#[test]
+fn core_completion_prefers_trait_surface_for_neq_helper_details() {
+    let engine = engine();
+
+    let bare = engine.completions("neq", "neq".len());
+    let neq = bare
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "neq")
+        .expect("neq helper should be suggested");
+    let bare_detail = neq
+        .detail
+        .as_deref()
+        .expect("neq helper should include detail");
+    assert_eq!(
+        bare_detail,
+        "trait Neq { neq(self: Self, rhs: Self) -> Boolean }"
+    );
+
+    let call = engine.completions("neq(", "neq(".len());
+    let call_signature = call
+        .signature
+        .as_ref()
+        .expect("neq call-site should show signature help");
+    assert_eq!(call_signature.active_parameter, Some(0));
+    let call_text = call_signature.lines.join("\n");
+    assert_eq!(
+        call_text.trim(),
+        "trait Neq { neq(self: [Self], rhs: Self) -> Boolean }"
+    );
+
+    let inferred = engine.completions("neq(1", "neq(1".len());
+    let inferred_signature = inferred
+        .signature
+        .as_ref()
+        .expect("neq(1 should keep signature help visible");
+    assert_eq!(inferred_signature.active_parameter, Some(0));
+    let inferred_text = inferred_signature.lines.join("\n");
+    assert_eq!(
+        inferred_text.trim(),
+        "trait Neq { neq(self: [Self], rhs: Self) -> Boolean }"
+    );
+
+    let second_arg = engine.completions("neq(,)", "neq(,)".len() - 1);
+    let second_signature = second_arg
+        .signature
+        .as_ref()
+        .expect("neq(,) should keep signature help visible");
+    assert_eq!(second_signature.active_parameter, Some(1));
+    let second_text = second_signature.lines.join("\n");
+    assert_eq!(
+        second_text.trim(),
+        "trait Neq { neq(self: Self, rhs: [Self]) -> Boolean }"
+    );
+}
+
 fn status_text(result: &ReplResult) -> String {
     match &result.output {
         ReplOutput::StatusMessage(message) => message.clone(),
@@ -1285,6 +1341,13 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "Compare::lt(self: Self, rhs: Self) -> Boolean"
     );
 
+    let neq_helper_sig = engine.handle_line(":sig neq");
+    let neq_helper_sig = signature_text(&neq_helper_sig);
+    assert_eq!(
+        neq_helper_sig.trim(),
+        "trait Neq { neq(self: Self, rhs: Self) -> Boolean }"
+    );
+
     let typed_less_than_sig = engine.handle_line(":sig lt(Int, Int)");
     let typed_less_than_sig = signature_text(&typed_less_than_sig);
     assert!(
@@ -1295,6 +1358,17 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     assert!(
         typed_less_than_sig.contains("specialized:\n  lt(Int, Int) -> Boolean"),
         "{typed_less_than_sig}"
+    );
+
+    let typed_neq_sig = engine.handle_line(":sig neq(Int, Int)");
+    let typed_neq_sig = signature_text(&typed_neq_sig);
+    assert!(
+        typed_neq_sig.contains("defined:\n  impl Neq for Int::neq(self: Self, rhs: Self) -> Boolean"),
+        "{typed_neq_sig}"
+    );
+    assert!(
+        typed_neq_sig.contains("specialized:\n  neq(Int, Int) -> Boolean"),
+        "{typed_neq_sig}"
     );
 
     let operator_sig = engine.handle_line(":sig |>");
@@ -1347,6 +1421,11 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     assert!(helper_doc.contains("Compare::compare"));
     assert!(helper_doc.contains("Standard `Compare` trait declaration."));
 
+    let neq_helper_doc = engine.handle_line(":doc neq");
+    let neq_helper_doc = doc_text(&neq_helper_doc);
+    assert!(neq_helper_doc.contains("trait Neq { neq(self: Self, rhs: Self) -> Boolean }"));
+    assert!(neq_helper_doc.contains("Standard `Neq` operator trait declaration."));
+
     let operator_doc = engine.handle_line(":doc <");
     let operator_doc = doc_text(&operator_doc);
     assert!(operator_doc.contains("Compare::lt"));
@@ -1371,6 +1450,17 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
             "Return `True` when the left integer is strictly less than the right integer."
         ),
         "{typed_less_than_doc}"
+    );
+
+    let typed_neq_doc = engine.handle_line(":doc neq(Int, Int)");
+    let typed_neq_doc = doc_text(&typed_neq_doc);
+    assert!(
+        typed_neq_doc.contains("impl Neq for Int::neq(self: Self, rhs: Self) -> Boolean"),
+        "{typed_neq_doc}"
+    );
+    assert!(
+        typed_neq_doc.contains("Return `True` when the integer values differ."),
+        "{typed_neq_doc}"
     );
 
     let constructor_doc = engine.handle_line(":doc Duration(Int)");
