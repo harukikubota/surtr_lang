@@ -1630,6 +1630,16 @@ impl Parser<'_> {
                 }
 
                 let mut elems = vec![first];
+                if matches!(parser.peek(), Token::RBrack) {
+                    let end = parser.expect(&Token::RBrack)?;
+                    return Ok(Ast::ListLiteral(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        elems,
+                    ));
+                }
                 elems.push(parser.parse_expr()?);
                 while matches!(parser.peek(), Token::Comma) {
                     parser.advance();

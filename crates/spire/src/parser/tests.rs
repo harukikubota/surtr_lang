@@ -2500,6 +2500,21 @@ fn test_list_cons_expr() {
 }
 
 #[test]
+fn test_single_item_list_literal_accepts_trailing_comma() {
+    let ast = parse("nums = [1,]").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::ListLiteral(_, elems) => {
+                assert_eq!(elems.len(), 1);
+                assert!(matches!(elems[0], Ast::Lit(_, Lit::Int(ref n)) if *n == int(1)));
+            }
+            other => panic!("Expected ListLiteral, got {other:?}"),
+        },
+        other => panic!("Expected Bind, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_range_literal_expr() {
     let ast = parse("nums = [1..3]").unwrap();
     match &ast[0] {
@@ -2526,6 +2541,23 @@ fn test_string_range_literal_expr() {
             other => panic!("Expected RangeLiteral, got {other:?}"),
         },
         other => panic!("Expected Bind, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_single_item_list_pattern_accepts_trailing_comma() {
+    let ast = parse("[head,] =? value").unwrap();
+    match &ast[0] {
+        Ast::SafeBind(_, pattern, rhs) => {
+            assert!(matches!(
+                pattern,
+                AstPattern::ListCons(_, head, tail)
+                    if matches!(head.as_ref(), AstPattern::Var(_, name) if name == "head")
+                    && matches!(tail.as_ref(), AstPattern::ListNil(_))
+            ));
+            assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
+        }
+        other => panic!("Expected SafeBind, got {other:?}"),
     }
 }
 

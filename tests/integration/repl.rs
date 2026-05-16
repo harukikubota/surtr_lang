@@ -257,6 +257,22 @@ fn repl_pipe_stdin_prints_prompts_and_eval_output() {
 }
 
 #[test]
+fn repl_accepts_single_item_list_literal_with_trailing_comma() {
+    let output = run_repl_session("[1,]\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(stdout.contains("xldr(1)> [1]"), "{stdout}");
+    assert!(!stderr.contains("ParseError"), "{stderr}");
+}
+
+#[test]
 fn repl_static_impl_methods_keep_declared_arity() {
     let output = run_repl_session(
         "print(to_string(Generator::to_list(Generator::range(1, 3))))\nprint(to_string(String::codepoints(\"a\", StringEncoding::Ascii)))\n:quit\n",

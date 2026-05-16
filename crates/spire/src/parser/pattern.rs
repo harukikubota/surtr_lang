@@ -80,6 +80,10 @@ impl Parser<'_> {
                 }
 
                 let mut items = vec![first];
+                if matches!(parser.peek(), Token::RBrack) {
+                    let end = parser.expect(&Token::RBrack)?;
+                    return Ok(super::fixed_bind_list_pattern(sp.start, end.end, items));
+                }
                 items.push(parser.parse_bind_pattern()?);
                 while matches!(parser.peek(), Token::Comma) {
                     parser.advance();
