@@ -342,8 +342,29 @@ impl FacetPathSegment {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BulkUpdateEntry {
     pub span: Span,
-    pub path: Vec<FacetPathSegment>,
+    pub path: BulkUpdatePath,
     pub kind: BulkUpdateEntryKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BulkUpdatePath {
+    Segments(Span, Vec<FacetPathSegment>),
+    Pin(Span, Symbol),
+    Chain(Span, Box<BulkUpdatePath>, Box<BulkUpdatePath>),
+    StripLeft(Span, Box<BulkUpdatePath>, usize),
+    StripRight(Span, Box<BulkUpdatePath>, usize),
+}
+
+impl BulkUpdatePath {
+    pub fn span(&self) -> &Span {
+        match self {
+            Self::Segments(span, _)
+            | Self::Pin(span, _)
+            | Self::Chain(span, _, _)
+            | Self::StripLeft(span, _, _)
+            | Self::StripRight(span, _, _) => span,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

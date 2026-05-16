@@ -4646,6 +4646,16 @@ impl Checker {
             unreachable!("validated argument form above")
         };
 
+        if let Resolved::FacetCapture(capture_span, expr) = left_expr {
+            let (source_expr, pending_path) =
+                self.expand_facet_capture_path("Facet::chain", capture_span, expr)?;
+            let (_, _, source_value_ty) =
+                self.check_facet_source_value("Facet::chain", &source_expr)?;
+            let left_path =
+                self.specialize_pending_facet_path(pending_path, span, Some(&source_value_ty))?;
+            return self.compose_facet_paths(span, left_path, right_expr, "Facet::chain");
+        }
+
         let left = self.check_node(left_expr)?;
         match left.node {
             TypedInner::FacetPath(path) => {

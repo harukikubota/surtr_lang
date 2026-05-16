@@ -737,6 +737,38 @@ fn rewrite_facet_path_segment_refs(
     }
 }
 
+fn rewrite_bulk_update_path_refs(
+    path: BulkUpdatePath,
+    old_name: &str,
+    new_name: &str,
+) -> BulkUpdatePath {
+    match path {
+        BulkUpdatePath::Segments(span, segments) => BulkUpdatePath::Segments(
+            span,
+            segments
+                .into_iter()
+                .map(|segment| rewrite_facet_path_segment_refs(segment, old_name, new_name))
+                .collect(),
+        ),
+        BulkUpdatePath::Pin(span, name) => BulkUpdatePath::Pin(span, name),
+        BulkUpdatePath::Chain(span, left, right) => BulkUpdatePath::Chain(
+            span,
+            Box::new(rewrite_bulk_update_path_refs(*left, old_name, new_name)),
+            Box::new(rewrite_bulk_update_path_refs(*right, old_name, new_name)),
+        ),
+        BulkUpdatePath::StripLeft(span, inner, count) => BulkUpdatePath::StripLeft(
+            span,
+            Box::new(rewrite_bulk_update_path_refs(*inner, old_name, new_name)),
+            count,
+        ),
+        BulkUpdatePath::StripRight(span, inner, count) => BulkUpdatePath::StripRight(
+            span,
+            Box::new(rewrite_bulk_update_path_refs(*inner, old_name, new_name)),
+            count,
+        ),
+    }
+}
+
 fn rewrite_process_owner_bulk_entries(
     entries: Vec<BulkUpdateEntry>,
     old_name: &str,
@@ -746,11 +778,7 @@ fn rewrite_process_owner_bulk_entries(
         .into_iter()
         .map(|entry| BulkUpdateEntry {
             span: entry.span,
-            path: entry
-                .path
-                .into_iter()
-                .map(|segment| rewrite_facet_path_segment_refs(segment, old_name, new_name))
-                .collect(),
+            path: rewrite_bulk_update_path_refs(entry.path, old_name, new_name),
             kind: match entry.kind {
                 BulkUpdateEntryKind::Set(expr) => {
                     BulkUpdateEntryKind::Set(rewrite_process_owner_refs(expr, old_name, new_name))
@@ -1493,16 +1521,40 @@ fn shift_facet_path_segment(segment: FacetPathSegment, delta: usize) -> FacetPat
     }
 }
 
+fn shift_bulk_update_path(path: BulkUpdatePath, delta: usize) -> BulkUpdatePath {
+    match path {
+        BulkUpdatePath::Segments(span, segments) => BulkUpdatePath::Segments(
+            shift_span(span, delta),
+            segments
+                .into_iter()
+                .map(|segment| shift_facet_path_segment(segment, delta))
+                .collect(),
+        ),
+        BulkUpdatePath::Pin(span, name) => BulkUpdatePath::Pin(shift_span(span, delta), name),
+        BulkUpdatePath::Chain(span, left, right) => BulkUpdatePath::Chain(
+            shift_span(span, delta),
+            Box::new(shift_bulk_update_path(*left, delta)),
+            Box::new(shift_bulk_update_path(*right, delta)),
+        ),
+        BulkUpdatePath::StripLeft(span, inner, count) => BulkUpdatePath::StripLeft(
+            shift_span(span, delta),
+            Box::new(shift_bulk_update_path(*inner, delta)),
+            count,
+        ),
+        BulkUpdatePath::StripRight(span, inner, count) => BulkUpdatePath::StripRight(
+            shift_span(span, delta),
+            Box::new(shift_bulk_update_path(*inner, delta)),
+            count,
+        ),
+    }
+}
+
 fn shift_bulk_update_entries(entries: Vec<BulkUpdateEntry>, delta: usize) -> Vec<BulkUpdateEntry> {
     entries
         .into_iter()
         .map(|entry| BulkUpdateEntry {
             span: shift_span(entry.span, delta),
-            path: entry
-                .path
-                .into_iter()
-                .map(|segment| shift_facet_path_segment(segment, delta))
-                .collect(),
+            path: shift_bulk_update_path(entry.path, delta),
             kind: match entry.kind {
                 BulkUpdateEntryKind::Set(expr) => {
                     BulkUpdateEntryKind::Set(shift_ast_span(expr, delta))

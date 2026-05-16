@@ -7,7 +7,7 @@ use super::scope_init::{
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
 use spire::ast::{
-    AstPath, BinOp, BulkUpdateEntry, BulkUpdateEntryKind, DbgArg, FacetPathSegment,
+    AstPath, BinOp, BulkUpdateEntry, BulkUpdateEntryKind, BulkUpdatePath, DbgArg, FacetPathSegment,
     InterpolatedPart,
 };
 
@@ -2023,16 +2023,24 @@ impl Resolver {
 
 impl Resolver {
     fn flatten_bulk_update_entries(
-        prefix: &[FacetPathSegment],
+        prefix: Option<BulkUpdatePath>,
         entries: Vec<BulkUpdateEntry>,
-        out: &mut Vec<(Span, Vec<FacetPathSegment>, BulkUpdateEntryKind)>,
+        out: &mut Vec<(Span, BulkUpdatePath, BulkUpdateEntryKind)>,
     ) {
         for entry in entries {
-            let mut path = prefix.to_vec();
-            path.extend(entry.path);
+            let path = match &prefix {
+                Some(prefix) => {
+                    let span = Span {
+                        start: prefix.span().start,
+                        end: entry.path.span().end,
+                    };
+                    BulkUpdatePath::Chain(span, Box::new(prefix.clone()), Box::new(entry.path))
+                }
+                None => entry.path,
+            };
             match entry.kind {
                 BulkUpdateEntryKind::Nested(children) => {
-                    Self::flatten_bulk_update_entries(&path, children, out);
+                    Self::flatten_bulk_update_entries(Some(path), children, out);
                 }
                 kind => out.push((entry.span, path, kind)),
             }
@@ -2057,12 +2065,119 @@ impl Resolver {
         Ok(Ast::FacetCapture(span.clone(), Box::new(expr)))
     }
 
+    fn static_bulk_update_segments(
+        path: &BulkUpdatePath,
+    ) -> Result<Option<Vec<FacetPathSegment>>, ResolveError> {
+        match path {
+            BulkUpdatePath::Segments(_, segments) => Ok(Some(segments.clone())),
+            BulkUpdatePath::Pin(_, _) => Ok(None),
+            BulkUpdatePath::Chain(_, left, right) => {
+                let Some(mut left_segments) = Self::static_bulk_update_segments(left)? else {
+                    return Ok(None);
+                };
+                let Some(right_segments) = Self::static_bulk_update_segments(right)? else {
+                    return Ok(None);
+                };
+                left_segments.extend(right_segments);
+                Ok(Some(left_segments))
+            }
+            BulkUpdatePath::StripLeft(span, inner, count) => {
+                let Some(segments) = Self::static_bulk_update_segments(inner)? else {
+                    return Err(ResolveError {
+                        message:
+                            "bulk_update path strip operations require a concrete DSL path fragment"
+                                .into(),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    });
+                };
+                if *count >= segments.len() {
+                    return Err(ResolveError {
+                        message: "bulk_update target path cannot be empty".into(),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    });
+                }
+                Ok(Some(segments.into_iter().skip(*count).collect()))
+            }
+            BulkUpdatePath::StripRight(span, inner, count) => {
+                let Some(mut segments) = Self::static_bulk_update_segments(inner)? else {
+                    return Err(ResolveError {
+                        message:
+                            "bulk_update path strip operations require a concrete DSL path fragment"
+                                .into(),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    });
+                };
+                if *count >= segments.len() {
+                    return Err(ResolveError {
+                        message: "bulk_update target path cannot be empty".into(),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    });
+                }
+                let keep = segments.len() - *count;
+                segments.truncate(keep);
+                Ok(Some(segments))
+            }
+        }
+    }
+
+    fn make_bulk_update_path_expr(
+        span: &Span,
+        root_name: &str,
+        path: &BulkUpdatePath,
+    ) -> Result<Ast, ResolveError> {
+        if let Some(segments) = Self::static_bulk_update_segments(path)? {
+            if segments.is_empty() {
+                return Err(ResolveError {
+                    message: "bulk_update target path cannot be empty".into(),
+                    span: span.clone(),
+                    related_labels: Vec::new(),
+                });
+            }
+            return Self::make_bulk_update_capture_path(span, root_name, &segments);
+        }
+
+        match path {
+            BulkUpdatePath::Pin(pin_span, name) => Ok(Ast::Var(pin_span.clone(), name.clone())),
+            BulkUpdatePath::Chain(chain_span, left, right) => {
+                let left_expr = Self::make_bulk_update_path_expr(chain_span, root_name, left)?;
+                let right_expr = Self::make_bulk_update_path_expr(chain_span, root_name, right)?;
+                Ok(Ast::App(
+                    chain_span.clone(),
+                    Box::new(Ast::Path(
+                        chain_span.clone(),
+                        AstPath {
+                            span: chain_span.clone(),
+                            segments: vec!["Facet".into(), "chain".into()],
+                        },
+                    )),
+                    vec![
+                        RecordLitArg::Positional(left_expr),
+                        RecordLitArg::Positional(right_expr),
+                    ],
+                ))
+            }
+            BulkUpdatePath::Segments(_, _)
+            | BulkUpdatePath::StripLeft(_, _, _)
+            | BulkUpdatePath::StripRight(_, _, _) => unreachable!("static paths handled above"),
+        }
+    }
+
     fn make_facet_intrinsic_call(
         span: &Span,
         method: &str,
         path_expr: Ast,
+        source_expr: Option<Ast>,
         value_expr: Ast,
     ) -> Ast {
+        let mut args = vec![RecordLitArg::Positional(path_expr)];
+        if let Some(source_expr) = source_expr {
+            args.push(RecordLitArg::Positional(source_expr));
+        }
+        args.push(RecordLitArg::Positional(value_expr));
         Ast::App(
             span.clone(),
             Box::new(Ast::Path(
@@ -2072,10 +2187,7 @@ impl Resolver {
                     segments: vec!["Facet".into(), method.into()],
                 },
             )),
-            vec![
-                RecordLitArg::Positional(path_expr),
-                RecordLitArg::Positional(value_expr),
-            ],
+            args,
         )
     }
 
@@ -2086,7 +2198,7 @@ impl Resolver {
         entries: Vec<BulkUpdateEntry>,
     ) -> Result<Resolved, ResolveError> {
         let mut flat_entries = Vec::new();
-        Self::flatten_bulk_update_entries(&[], entries, &mut flat_entries);
+        Self::flatten_bulk_update_entries(None, entries, &mut flat_entries);
 
         let mut expr = Ast::ConstructorCall(
             source.span().clone(),
@@ -2100,23 +2212,44 @@ impl Resolver {
             .map(|(index, (span, path, kind))| (index, span, path, kind))
         {
             let param_name = format!("__bulk_state_{}_{}", span.start, index);
-            let capture = Self::make_bulk_update_capture_path(&entry_span, &param_name, &path)?;
+            let capture = Self::make_bulk_update_path_expr(&entry_span, &param_name, &path)?;
+            let source_expr = if matches!(capture, Ast::FacetCapture(_, _)) {
+                None
+            } else {
+                Some(Ast::Var(entry_span.clone(), param_name.clone()))
+            };
             let body = match kind {
                 BulkUpdateEntryKind::Set(value) => {
-                    Self::make_facet_intrinsic_call(&entry_span, "set", capture, value)
+                    Self::make_facet_intrinsic_call(&entry_span, "set", capture, source_expr, value)
                 }
-                BulkUpdateEntryKind::Over(update_fun) => {
-                    Self::make_facet_intrinsic_call(&entry_span, "over", capture, update_fun)
-                }
-                BulkUpdateEntryKind::OverResult(update_fun) => {
-                    Self::make_facet_intrinsic_call(&entry_span, "over_result", capture, update_fun)
-                }
-                BulkUpdateEntryKind::CaseSet(value) => {
-                    Self::make_facet_intrinsic_call(&entry_span, "case_set", capture, value)
-                }
-                BulkUpdateEntryKind::CaseOver(update_fun) => {
-                    Self::make_facet_intrinsic_call(&entry_span, "case_over", capture, update_fun)
-                }
+                BulkUpdateEntryKind::Over(update_fun) => Self::make_facet_intrinsic_call(
+                    &entry_span,
+                    "over",
+                    capture,
+                    source_expr,
+                    update_fun,
+                ),
+                BulkUpdateEntryKind::OverResult(update_fun) => Self::make_facet_intrinsic_call(
+                    &entry_span,
+                    "over_result",
+                    capture,
+                    source_expr,
+                    update_fun,
+                ),
+                BulkUpdateEntryKind::CaseSet(value) => Self::make_facet_intrinsic_call(
+                    &entry_span,
+                    "case_set",
+                    capture,
+                    source_expr,
+                    value,
+                ),
+                BulkUpdateEntryKind::CaseOver(update_fun) => Self::make_facet_intrinsic_call(
+                    &entry_span,
+                    "case_over",
+                    capture,
+                    source_expr,
+                    update_fun,
+                ),
                 BulkUpdateEntryKind::Nested(_) => unreachable!("nested entries must be flattened"),
             };
             let closure = Ast::Closure(

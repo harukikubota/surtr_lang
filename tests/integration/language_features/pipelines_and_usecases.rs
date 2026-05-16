@@ -851,6 +851,45 @@ print("over variant tuple:" ++ inspect(shape3))"#,
     );
 }
 
+fn facet_bulk_update_accepts_pinned_and_operation_paths() {
+    assert_output(
+        r#"defrecord Country(name: String)
+defrecord Address(country: Country)
+defrecord User(address: Address)
+
+address_to_country_name = Address.country.name
+user = User(Address(Country("Osaka")))
+
+updated =? Facet::bulk_update(user) {
+  address.^address_to_country_name <- set("Tokyo")
+}
+
+same =? Facet::bulk_update(updated) {
+  Facet::strip_right(address.country, 1) <- set(Address(Country("Nagoya")))
+}
+
+chained =? Facet::bulk_update(same) {
+  address / ^address_to_country_name <- set("Kyoto")
+}
+
+print(updated.address.country.name)
+print(same.address.country.name)
+print(chained.address.country.name)"#,
+        &["Tokyo", "Nagoya", "Kyoto"],
+    );
+}
+
+fn facet_bulk_update_rejects_nested_proc_operation() {
+    assert_compile_error(
+        r#"defrecord User(name: String)
+user = User("alice")
+updated =? Facet::bulk_update(user) {
+  name <- set(set("bob"))
+}"#,
+        "bulk_update operation calls cannot be nested",
+    );
+}
+
 fn facet_list_negative_indexes_and_slice_updates_work() {
     assert_output(
         r#"values = ["a", "b", "c", "d"]
@@ -1051,6 +1090,14 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "facet_api_variants_and_result_patterns_work",
             facet_api_variants_and_result_patterns_work as fn(),
+        ),
+        (
+            "facet_bulk_update_accepts_pinned_and_operation_paths",
+            facet_bulk_update_accepts_pinned_and_operation_paths as fn(),
+        ),
+        (
+            "facet_bulk_update_rejects_nested_proc_operation",
+            facet_bulk_update_rejects_nested_proc_operation as fn(),
         ),
         (
             "facet_list_negative_indexes_and_slice_updates_work",

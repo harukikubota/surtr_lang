@@ -2,6 +2,13 @@ use super::context::ParseUnitKind;
 use super::*;
 use sindr::primitives::int;
 
+fn bulk_path_segments(path: &BulkUpdatePath) -> &[FacetPathSegment] {
+    match path {
+        BulkUpdatePath::Segments(_, segments) => segments,
+        other => panic!("expected bulk path segments, got {other:?}"),
+    }
+}
+
 #[test]
 fn test_bind_and_var() {
     let ast = parse("x = 42").unwrap();
@@ -619,14 +626,23 @@ fn test_facet_bulk_update_special_form_parses() {
                 Ast::BulkUpdate(_, source, entries) => {
                     assert!(matches!(source.as_ref(), Ast::Var(_, name) if name == "user"));
                     assert_eq!(entries.len(), 3);
-                    assert_eq!(entries[0].path, vec![FacetPathSegment::field("name")]);
+                    assert_eq!(
+                        bulk_path_segments(&entries[0].path),
+                        [FacetPathSegment::field("name")]
+                    );
                     assert!(matches!(entries[0].kind, BulkUpdateEntryKind::Set(_)));
-                    assert_eq!(entries[1].path, vec![FacetPathSegment::field("score")]);
+                    assert_eq!(
+                        bulk_path_segments(&entries[1].path),
+                        [FacetPathSegment::field("score")]
+                    );
                     assert!(matches!(
                         entries[1].kind,
                         BulkUpdateEntryKind::OverResult(_)
                     ));
-                    assert_eq!(entries[2].path, vec![FacetPathSegment::field("address")]);
+                    assert_eq!(
+                        bulk_path_segments(&entries[2].path),
+                        [FacetPathSegment::field("address")]
+                    );
                     assert!(matches!(entries[2].kind, BulkUpdateEntryKind::Nested(_)));
                 }
                 other => panic!("Expected BulkUpdate, got {other:?}"),
@@ -2927,7 +2943,7 @@ Facet::bulk_update(book) {
             assert!(matches!(
                 entries.as_slice(),
                 [BulkUpdateEntry { path, .. }]
-                    if matches!(path.as_slice(), [FacetPathSegment::Field { name, .. }, FacetPathSegment::Bracket(_)] if name == "scores")
+                    if matches!(bulk_path_segments(path), [FacetPathSegment::Field { name, .. }, FacetPathSegment::Bracket(_)] if name == "scores")
             ));
         }
         other => panic!("Expected bulk update, got {:?}", other),
@@ -3803,8 +3819,14 @@ fn parses_bulk_update_index_key_optional_and_case_actions() {
         panic!("expected bulk update");
     };
     assert_eq!(entries.len(), 4);
-    assert!(matches!(entries[0].path[1], FacetPathSegment::Bracket(_)));
-    assert!(matches!(entries[1].path[1], FacetPathSegment::Bracket(_)));
+    assert!(matches!(
+        bulk_path_segments(&entries[0].path)[1],
+        FacetPathSegment::Bracket(_)
+    ));
+    assert!(matches!(
+        bulk_path_segments(&entries[1].path)[1],
+        FacetPathSegment::Bracket(_)
+    ));
     assert!(matches!(entries[2].kind, BulkUpdateEntryKind::CaseOver(_)));
     assert!(matches!(entries[3].kind, BulkUpdateEntryKind::CaseSet(_)));
 }

@@ -2009,15 +2009,152 @@ impl Parser<'_> {
         })
     }
 
-    fn parse_bulk_update_path(&mut self) -> Result<Vec<FacetPathSegment>, ParseError> {
-        let (first, _) = self.expect_ident()?;
-        let mut segments = vec![FacetPathSegment::field(first)];
+    fn parse_bulk_update_path(&mut self) -> Result<BulkUpdatePath, ParseError> {
+        self.parse_bulk_update_path_chain()
+    }
+
+    fn parse_bulk_update_path_chain(&mut self) -> Result<BulkUpdatePath, ParseError> {
+        let mut path = self.parse_bulk_update_path_primary()?;
+        while matches!(self.peek(), Token::Slash) {
+            self.advance();
+            self.skip_newlines();
+            let right = self.parse_bulk_update_path_primary()?;
+            let span = Span {
+                start: path.span().start,
+                end: right.span().end,
+            };
+            path = BulkUpdatePath::Chain(span, Box::new(path), Box::new(right));
+            self.skip_newlines();
+        }
+        Ok(path)
+    }
+
+    fn parse_bulk_update_path_primary(&mut self) -> Result<BulkUpdatePath, ParseError> {
+        let start_span = self.peek_span();
+        match self.peek().clone() {
+            Token::Caret => {
+                self.advance();
+                let (name, name_span) = self.expect_ident()?;
+                Ok(BulkUpdatePath::Pin(
+                    Span {
+                        start: start_span.start,
+                        end: name_span.end,
+                    },
+                    name,
+                ))
+            }
+            Token::Ident(name) if name == "Facet" => {
+                let save = self.pos;
+                self.advance();
+                if self.has_path_separator() {
+                    self.consume_path_separator()?;
+                    if let Token::Ident(method) = self.peek().clone() {
+                        if matches!(method.as_str(), "strip_left" | "strip_right") {
+                            return self.parse_bulk_update_path_operation(start_span, method);
+                        }
+                    }
+                }
+                self.pos = save;
+                self.parse_bulk_update_relative_path()
+            }
+            Token::Ident(_) => self.parse_bulk_update_relative_path(),
+            _ => Err(ParseError::syntax(
+                "Bulk update path must start with a path segment, pinned FacetPath (^name), or whitelisted Facet path operation",
+                start_span,
+            )),
+        }
+    }
+
+    fn parse_bulk_update_relative_path(&mut self) -> Result<BulkUpdatePath, ParseError> {
+        let start = self.peek_span().start;
+        let (first, first_span) = self.expect_ident()?;
+        let mut path = BulkUpdatePath::Segments(
+            Span {
+                start,
+                end: first_span.end,
+            },
+            vec![FacetPathSegment::field(first)],
+        );
         while matches!(self.peek(), Token::Dot) {
             self.advance();
-            let (segment, _) = self.parse_facet_path_segment_after_dot()?;
-            segments.push(segment);
+            if matches!(self.peek(), Token::Caret) {
+                let pin_start = self.peek_span();
+                self.advance();
+                let (name, name_span) = self.expect_ident()?;
+                let pin = BulkUpdatePath::Pin(
+                    Span {
+                        start: pin_start.start,
+                        end: name_span.end,
+                    },
+                    name,
+                );
+                let span = Span {
+                    start: path.span().start,
+                    end: pin.span().end,
+                };
+                path = BulkUpdatePath::Chain(span, Box::new(path), Box::new(pin));
+                continue;
+            }
+            let (segment, segment_span) = self.parse_facet_path_segment_after_dot()?;
+            match &mut path {
+                BulkUpdatePath::Segments(span, segments) => {
+                    span.end = segment_span.end;
+                    segments.push(segment);
+                }
+                _ => {
+                    let right = BulkUpdatePath::Segments(segment_span.clone(), vec![segment]);
+                    let span = Span {
+                        start: path.span().start,
+                        end: segment_span.end,
+                    };
+                    path = BulkUpdatePath::Chain(span, Box::new(path), Box::new(right));
+                }
+            }
         }
-        Ok(segments)
+        Ok(path)
+    }
+
+    fn parse_bulk_update_path_operation(
+        &mut self,
+        start_span: Span,
+        method: Symbol,
+    ) -> Result<BulkUpdatePath, ParseError> {
+        let method_span = self.advance().span.clone();
+        self.skip_newlines();
+        self.expect(&Token::LParen)?;
+        self.skip_newlines();
+        let inner = self.parse_bulk_update_path_chain()?;
+        self.skip_newlines();
+        self.expect(&Token::Comma)?;
+        self.skip_newlines();
+        let count_span = self.peek_span();
+        let Token::Int(count) = self.peek().clone() else {
+            return Err(ParseError::syntax(
+                "Facet path operation count must be an integer literal",
+                count_span,
+            ));
+        };
+        self.advance();
+        let Some(count) = count.to_usize() else {
+            return Err(ParseError::syntax(
+                "Facet path operation count must fit in usize",
+                count_span,
+            ));
+        };
+        self.skip_newlines();
+        let end = self.expect(&Token::RParen)?;
+        let span = Span {
+            start: start_span.start,
+            end: end.end,
+        };
+        match method.as_str() {
+            "strip_left" => Ok(BulkUpdatePath::StripLeft(span, Box::new(inner), count)),
+            "strip_right" => Ok(BulkUpdatePath::StripRight(span, Box::new(inner), count)),
+            _ => Err(ParseError::syntax(
+                "Unsupported bulk_update path operation",
+                method_span,
+            )),
+        }
     }
 
     fn parse_bulk_update_leaf(&mut self) -> Result<BulkUpdateEntryKind, ParseError> {
@@ -2056,6 +2193,12 @@ impl Parser<'_> {
             RecordLitArg::Positional(expr) => expr,
             RecordLitArg::Named(_, _) => unreachable!("validated positional args"),
         };
+        if bulk_update_proc_contains_operation_call(&inner) {
+            return Err(ParseError::syntax(
+                "bulk_update operation calls cannot be nested. Use a single whitelisted operation at the leaf.",
+                inner.span().clone(),
+            ));
+        }
 
         match name.as_str() {
             "set" => Ok(BulkUpdateEntryKind::Set(inner)),
@@ -2149,5 +2292,153 @@ fn expand_top_level_or_pattern(pattern: AstPattern) -> Vec<AstPattern> {
     match pattern {
         AstPattern::Or(_, patterns) => patterns,
         pattern => vec![pattern],
+    }
+}
+
+fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
+    match expr {
+        Ast::App(_, func, args) => {
+            let is_bulk_proc = match func.as_ref() {
+                Ast::Var(_, name) => {
+                    matches!(
+                        name.as_str(),
+                        "set" | "over" | "over_result" | "case_set" | "case_over"
+                    )
+                }
+                Ast::Path(_, path) => {
+                    matches!(
+                        path.segments.as_slice(),
+                        [module, name]
+                            if module == "Facet"
+                                && matches!(
+                                    name.as_str(),
+                                    "set" | "over" | "over_result" | "case_set" | "case_over"
+                                )
+                    )
+                }
+                _ => false,
+            };
+            is_bulk_proc
+                || bulk_update_proc_contains_operation_call(func)
+                || args.iter().any(|arg| match arg {
+                    RecordLitArg::Positional(inner) | RecordLitArg::Named(_, inner) => {
+                        bulk_update_proc_contains_operation_call(inner)
+                    }
+                })
+        }
+        Ast::Block(_, stmts) | Ast::ListLiteral(_, stmts) | Ast::TupleLiteral(_, stmts) => {
+            stmts.iter().any(bulk_update_proc_contains_operation_call)
+        }
+        Ast::Bind(_, _, rhs)
+        | Ast::SafeBind(_, _, rhs)
+        | Ast::Grouped(_, rhs)
+        | Ast::FacetCapture(_, rhs)
+        | Ast::Semi(_, rhs) => bulk_update_proc_contains_operation_call(rhs),
+        Ast::BinOp(_, _, lhs, rhs)
+        | Ast::Pipe(_, lhs, rhs)
+        | Ast::ContextMap(_, lhs, rhs)
+        | Ast::ContextBind(_, lhs, rhs)
+        | Ast::Compose(_, lhs, rhs)
+        | Ast::LiftedCompose(_, lhs, rhs)
+        | Ast::KleisliCompose(_, lhs, rhs)
+        | Ast::ListCons(_, lhs, rhs)
+        | Ast::RangeLiteral(_, lhs, rhs) => {
+            bulk_update_proc_contains_operation_call(lhs)
+                || bulk_update_proc_contains_operation_call(rhs)
+        }
+        Ast::FieldAccess(_, target, _) => bulk_update_proc_contains_operation_call(target),
+        Ast::Match(_, scrutinee, arms) => {
+            bulk_update_proc_contains_operation_call(scrutinee)
+                || arms.iter().any(|arm| {
+                    arm.guard
+                        .as_ref()
+                        .is_some_and(bulk_update_proc_contains_operation_call)
+                        || bulk_update_proc_contains_operation_call(&arm.body)
+                })
+        }
+        Ast::BulkUpdate(_, source, entries) => {
+            bulk_update_proc_contains_operation_call(source)
+                || entries
+                    .iter()
+                    .any(|entry| bulk_update_entry_contains_operation_call(entry))
+        }
+        Ast::Capture(_, target, args) => {
+            bulk_update_proc_contains_operation_call(target)
+                || args.iter().any(bulk_update_proc_contains_operation_call)
+        }
+        Ast::Closure(_, _, body) => bulk_update_proc_contains_operation_call(body),
+        Ast::Dbg(_, args) => args
+            .iter()
+            .any(|arg| bulk_update_proc_contains_operation_call(&arg.expr)),
+        Ast::StructLit(_, _, fields) => fields.iter().any(|field| match field {
+            StructLitField::Explicit(_, expr) => bulk_update_proc_contains_operation_call(expr),
+            StructLitField::Shorthand(_) => false,
+        }),
+        Ast::InternalStructLit(_, _, fields) => fields.iter().any(|field| match field {
+            StructLitField::Explicit(_, expr) => bulk_update_proc_contains_operation_call(expr),
+            StructLitField::Shorthand(_) => false,
+        }),
+        Ast::ConstructorCall(_, _, args) => args.iter().any(|arg| match arg {
+            RecordLitArg::Positional(inner) | RecordLitArg::Named(_, inner) => {
+                bulk_update_proc_contains_operation_call(inner)
+            }
+        }),
+        Ast::FacetSegmentAccess(_, target, segment) => {
+            bulk_update_proc_contains_operation_call(target)
+                || match segment {
+                    FacetPathSegment::Bracket(bracket) => {
+                        bulk_update_proc_contains_operation_call(&bracket.expr)
+                    }
+                    FacetPathSegment::Field { .. } => false,
+                }
+        }
+        Ast::InterpolatedStr(_, parts) => parts.iter().any(|part| match part {
+            InterpolatedPart::Text(_) => false,
+            InterpolatedPart::Expr(expr) => bulk_update_proc_contains_operation_call(expr),
+        }),
+        Ast::Lit(_, _)
+        | Ast::Var(_, _)
+        | Ast::InternalVar(_, _)
+        | Ast::Path(_, _)
+        | Ast::FuncLiteralRef(_, _)
+        | Ast::ListNil(_)
+        | Ast::CapturePlaceholder(_, _)
+        | Ast::StructDef(..)
+        | Ast::RecordDef(..)
+        | Ast::EnumDef(..)
+        | Ast::ConstDef(..)
+        | Ast::SupervisorInit(..)
+        | Ast::BuiltinDecl(..)
+        | Ast::IntrinsicDecl(..)
+        | Ast::BuiltinExtractorDecl(..)
+        | Ast::BuiltinTypeDecl(..)
+        | Ast::ResultCtorDecl(..)
+        | Ast::Def(..)
+        | Ast::DeferrorDef(..)
+        | Ast::ExtractorDef(..)
+        | Ast::TraitDef(..)
+        | Ast::ImplDef(..)
+        | Ast::TraitImplDef(..)
+        | Ast::Import(..)
+        | Ast::Include(..)
+        | Ast::Defmod(..)
+        | Ast::Defagent(..)
+        | Ast::Defgenserver(..)
+        | Ast::Defsupervisor(..)
+        | Ast::DefdynamicSupervisor(..)
+        | Ast::Namespace(..) => false,
+    }
+}
+
+fn bulk_update_entry_contains_operation_call(entry: &BulkUpdateEntry) -> bool {
+    match &entry.kind {
+        BulkUpdateEntryKind::Set(expr)
+        | BulkUpdateEntryKind::Over(expr)
+        | BulkUpdateEntryKind::OverResult(expr)
+        | BulkUpdateEntryKind::CaseSet(expr)
+        | BulkUpdateEntryKind::CaseOver(expr) => bulk_update_proc_contains_operation_call(expr),
+        BulkUpdateEntryKind::Nested(entries) => entries
+            .iter()
+            .any(bulk_update_entry_contains_operation_call),
     }
 }
