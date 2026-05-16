@@ -2186,6 +2186,9 @@ impl Checker {
     pub(super) fn resolve_typed_pattern(&self, pattern: TypedPattern) -> TypedPattern {
         match pattern {
             TypedPattern::Var(ty, id) => TypedPattern::Var(self.resolve_ty(&ty), id),
+            TypedPattern::Pin(ty, id, dispatch) => {
+                TypedPattern::Pin(self.resolve_ty(&ty), id, dispatch)
+            }
             TypedPattern::As(ty, inner, id) => TypedPattern::As(
                 self.resolve_ty(&ty),
                 Box::new(self.resolve_typed_pattern(*inner)),
@@ -2244,6 +2247,11 @@ impl Checker {
     ) -> TypedMatchPattern {
         match pattern {
             TypedMatchPattern::Binding(id) => TypedMatchPattern::Binding(id),
+            TypedMatchPattern::Pin { id, ty, dispatch } => TypedMatchPattern::Pin {
+                id,
+                ty: self.resolve_ty(&ty),
+                dispatch,
+            },
             TypedMatchPattern::As(inner, id) => {
                 TypedMatchPattern::As(Box::new(self.resolve_typed_match_pattern(*inner)), id)
             }

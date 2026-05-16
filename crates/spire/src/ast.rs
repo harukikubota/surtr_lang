@@ -262,6 +262,8 @@ pub enum AstPattern {
     Var(Span, Symbol),
     /// `x: Int`
     Annotated(Span, Symbol, AstTy),
+    /// `^x`
+    Pin(Span, Symbol),
     /// `_`
     Wildcard(Span),
     /// `[]`

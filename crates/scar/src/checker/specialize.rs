@@ -1728,6 +1728,9 @@ impl Checker {
             TypedPattern::Var(ty, id) => {
                 TypedPattern::Var(self.substitute_ty_with_mapping(&ty, mapping), id)
             }
+            TypedPattern::Pin(ty, id, dispatch) => {
+                TypedPattern::Pin(self.substitute_ty_with_mapping(&ty, mapping), id, dispatch)
+            }
             TypedPattern::As(ty, inner, id) => TypedPattern::As(
                 self.substitute_ty_with_mapping(&ty, mapping),
                 Box::new(self.substitute_typed_pattern_with_mapping(*inner, mapping)),
@@ -1802,6 +1805,11 @@ impl Checker {
     ) -> TypedMatchPattern {
         match pattern {
             TypedMatchPattern::Binding(id) => TypedMatchPattern::Binding(id),
+            TypedMatchPattern::Pin { id, ty, dispatch } => TypedMatchPattern::Pin {
+                id,
+                ty: self.substitute_ty_with_mapping(&ty, mapping),
+                dispatch,
+            },
             TypedMatchPattern::As(inner, id) => TypedMatchPattern::As(
                 Box::new(self.substitute_typed_match_pattern_with_mapping(*inner, mapping)),
                 id,

@@ -337,6 +337,39 @@ impl Checker {
                 self.env.bind_var(id.unique_id, bind_ty);
                 Ok(TypedMatchPattern::Binding(id.clone()))
             }
+            ResolvedPattern::Pin(id) => {
+                let pinned_ty =
+                    self.env
+                        .lookup_var(id.unique_id)
+                        .cloned()
+                        .ok_or_else(|| TypeError {
+                            message: format!(
+                                "Pinned pattern requires an existing value `{}`",
+                                id.name
+                            ),
+                            span: id.span.clone(),
+                            hint: None,
+                        })?;
+                let expected_ty = self.resolve_ty(expected_ty);
+                let pinned_ty = self.resolve_ty(&pinned_ty);
+                if !self.types_compatible(&pinned_ty, &expected_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Pinned pattern type mismatch: expected {}, got {}",
+                            self.ty_name(&pinned_ty),
+                            self.ty_name(&expected_ty)
+                        ),
+                        span: id.span.clone(),
+                        hint: None,
+                    });
+                }
+                let dispatch = self.eq_dispatch_for_pattern_pin(&expected_ty, &id.span)?;
+                Ok(TypedMatchPattern::Pin {
+                    id: id.clone(),
+                    ty: expected_ty,
+                    dispatch,
+                })
+            }
             ResolvedPattern::As(inner, alias, alias_ty) => {
                 let typed_inner = self.check_match_subpattern(inner, expected_ty)?;
                 let alias_bind_ty = if let Some(ast_ty) = alias_ty {
@@ -701,6 +734,7 @@ impl Checker {
                 items.iter().all(|item| self.is_match_catch_all(item))
             }
             TypedMatchPattern::BoolLit(_)
+            | TypedMatchPattern::Pin { .. }
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
             | TypedMatchPattern::DurationLit(_)
@@ -729,6 +763,7 @@ impl Checker {
                 .iter()
                 .any(|item| self.match_pattern_has_bindings(item)),
             TypedMatchPattern::Wildcard
+            | TypedMatchPattern::Pin { .. }
             | TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)

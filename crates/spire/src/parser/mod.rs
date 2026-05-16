@@ -1285,6 +1285,7 @@ fn pattern_span(pat: &AstPattern) -> &Span {
     match pat {
         AstPattern::Var(span, _)
         | AstPattern::Annotated(span, _, _)
+        | AstPattern::Pin(span, _)
         | AstPattern::Wildcard(span)
         | AstPattern::ListNil(span)
         | AstPattern::ListCons(span, _, _)
@@ -1354,6 +1355,7 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
         AstPattern::Annotated(span, name, ty) => {
             AstPattern::Annotated(shift_span(span, delta), name, shift_ast_ty(ty, delta))
         }
+        AstPattern::Pin(span, name) => AstPattern::Pin(shift_span(span, delta), name),
         AstPattern::Wildcard(span) => AstPattern::Wildcard(shift_span(span, delta)),
         AstPattern::ListNil(span) => AstPattern::ListNil(shift_span(span, delta)),
         AstPattern::ListCons(span, head, tail) => AstPattern::ListCons(

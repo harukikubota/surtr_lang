@@ -769,6 +769,7 @@ impl Checker {
                 Ok(())
             }
             TypedPattern::Wildcard(_)
+            | TypedPattern::Pin(_, _, _)
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)

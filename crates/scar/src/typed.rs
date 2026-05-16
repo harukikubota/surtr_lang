@@ -463,6 +463,7 @@ pub enum TypedInterpolatedPart {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypedPattern {
     Var(Ty, ResolvedId),
+    Pin(Ty, ResolvedId, TraitDispatch),
     As(Ty, Box<TypedPattern>, ResolvedId),
     Wildcard(Ty),
     ListNil(Ty),
@@ -490,6 +491,11 @@ pub enum TypedPattern {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypedMatchPattern {
     Binding(ResolvedId),
+    Pin {
+        id: ResolvedId,
+        ty: Ty,
+        dispatch: TraitDispatch,
+    },
     /// `inner @ alias`
     As(Box<TypedMatchPattern>, ResolvedId),
     /// `_`

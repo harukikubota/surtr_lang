@@ -422,6 +422,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             '&' => Token::Amp,
             '~' => Token::Tilde,
             '$' => Token::Dollar,
+            '^' => Token::Caret,
             _ => {
                 return Err(ParseError::syntax(
                     format!("Unexpected character: '{}'", c),

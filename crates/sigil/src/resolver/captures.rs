@@ -271,6 +271,7 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
             collect_bind_pattern_bindings(tail, bound);
         }
         ResolvedPattern::Wildcard(_)
+        | ResolvedPattern::Pin(_)
         | ResolvedPattern::ListNil(_)
         | ResolvedPattern::IntLit(_, _)
         | ResolvedPattern::StrLit(_, _)

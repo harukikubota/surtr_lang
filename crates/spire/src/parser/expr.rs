@@ -664,6 +664,10 @@ impl Parser<'_> {
             // Capture / placeholder capture: &foo, &foo(&1), &1
             Token::Amp => self.parse_capture_expr(sp),
             Token::Tilde => self.parse_facet_capture_expr(sp),
+            Token::Caret => Err(ParseError::syntax(
+                "Pin operator ^ is only allowed in MatchBlock patterns and bulk_update paths.",
+                sp,
+            )),
 
             Token::FuncLiteral(_) => Err(ParseError::syntax(
                 "FuncLiteral must appear in infix position",
@@ -908,9 +912,21 @@ impl Parser<'_> {
                 .unwrap_or(false);
             if matches!(self.peek(), Token::LParen) {
                 self.advance();
-                let args = self.parse_call_args()?;
+                let args = if path_name == "Kernel::is_match" {
+                    self.parse_is_match_args()?
+                } else {
+                    self.parse_call_args()?
+                };
                 self.skip_newlines();
                 let end_span = self.expect(&Token::RParen)?;
+                if path_name == "Kernel::is_match" {
+                    return self.finish_is_match_special_form(
+                        name_span.start,
+                        end_span.end,
+                        args,
+                        "Kernel::is_match",
+                    );
+                }
                 if path_name == "Facet::bulk_update" {
                     if args.len() != 1
                         || args
@@ -1059,9 +1075,21 @@ impl Parser<'_> {
         // Function call or constructor call: name(args)
         if matches!(self.peek(), Token::LParen) {
             self.advance();
-            let args = self.parse_call_args()?;
+            let args = if name == "is_match" {
+                self.parse_is_match_args()?
+            } else {
+                self.parse_call_args()?
+            };
             self.skip_newlines();
             let end_span = self.expect(&Token::RParen)?;
+            if name == "is_match" {
+                return self.finish_is_match_special_form(
+                    name_span.start,
+                    end_span.end,
+                    args,
+                    "is_match",
+                );
+            }
             let func = self.std_hidden_ref(name_span.clone(), name.clone());
 
             if is_uppercase {
@@ -1272,6 +1300,100 @@ impl Parser<'_> {
         }
 
         Ok(args)
+    }
+
+    fn parse_is_match_args(&mut self) -> Result<Vec<RecordLitArg>, ParseError> {
+        self.skip_newlines();
+        if matches!(self.peek(), Token::RParen) {
+            return Ok(Vec::new());
+        }
+        let term = self.parse_record_lit_arg()?;
+        self.skip_newlines();
+        if !matches!(self.peek(), Token::Comma) {
+            return Ok(vec![term]);
+        }
+        self.advance();
+        self.skip_newlines();
+        let pattern = self.parse_match_pattern()?;
+        self.skip_newlines();
+        if matches!(self.peek(), Token::Comma) {
+            return Err(ParseError::syntax(
+                "is_match expects exactly 2 positional arguments",
+                self.peek_span(),
+            ));
+        }
+        let pattern_expr = Ast::Match(
+            super::pattern_span(&pattern).clone(),
+            Box::new(Ast::Lit(super::pattern_span(&pattern).clone(), Lit::Unit)),
+            vec![AstMatchArm {
+                pattern,
+                guard: None,
+                body: Ast::Lit(self.peek_span(), Lit::Unit),
+            }],
+        );
+        Ok(vec![term, RecordLitArg::Positional(pattern_expr)])
+    }
+
+    fn finish_is_match_special_form(
+        &self,
+        start: usize,
+        end: usize,
+        args: Vec<RecordLitArg>,
+        name: &str,
+    ) -> Result<Ast, ParseError> {
+        if args.len() != 2
+            || args
+                .iter()
+                .any(|arg| matches!(arg, RecordLitArg::Named(_, _)))
+        {
+            return Err(ParseError::syntax(
+                format!("{name} expects exactly 2 positional arguments"),
+                Span { start, end },
+            ));
+        }
+        let mut iter = args.into_iter();
+        let term = match iter.next().expect("checked arg length") {
+            RecordLitArg::Positional(expr) => expr,
+            RecordLitArg::Named(_, _) => unreachable!("validated positional args"),
+        };
+        let pattern_expr = match iter.next().expect("checked arg length") {
+            RecordLitArg::Positional(expr) => expr,
+            RecordLitArg::Named(_, _) => unreachable!("validated positional args"),
+        };
+        let Ast::Match(_, _, mut arms) = pattern_expr else {
+            return Ok(Ast::App(
+                Span { start, end },
+                Box::new(Ast::Var(Span { start, end: start }, name.into())),
+                vec![
+                    RecordLitArg::Positional(term),
+                    RecordLitArg::Positional(pattern_expr),
+                ],
+            ));
+        };
+        let pattern = arms.remove(0).pattern;
+        if super::pattern::pattern_contains_binding_var(&pattern) {
+            return Err(ParseError::syntax(
+                "`is_match` pattern does not allow binding variables. Use `_` to ignore a value, or use `if_let` / `match` when you need bindings.",
+                super::pattern_span(&pattern).clone(),
+            ));
+        }
+        let span = Span { start, end };
+        Ok(Ast::Match(
+            span.clone(),
+            Box::new(term),
+            vec![
+                AstMatchArm {
+                    pattern,
+                    guard: None,
+                    body: Ast::Lit(span.clone(), Lit::Bool(true)),
+                },
+                AstMatchArm {
+                    pattern: AstPattern::Wildcard(span.clone()),
+                    guard: None,
+                    body: Ast::Lit(span, Lit::Bool(false)),
+                },
+            ],
+        ))
     }
 
     pub(super) fn parse_trailing_block_expr_from_lbrace(

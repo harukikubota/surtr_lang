@@ -49,6 +49,30 @@ impl Resolver {
                 self.define_pattern_binding(name, span, seen)?,
                 ty,
             )),
+            AstPattern::Pin(span, name) => {
+                if seen.contains_key(&name) {
+                    return Err(ResolveError {
+                        message: format!(
+                            "Pinned pattern requires an existing value `{}` outside the same pattern",
+                            name
+                        ),
+                        span,
+                        related_labels: Vec::new(),
+                    });
+                }
+                let uid = self.scope.lookup(&name).ok_or_else(|| ResolveError {
+                    message: format!("Pinned pattern requires an existing value `{}`", name),
+                    span: span.clone(),
+                    related_labels: Vec::new(),
+                })?;
+                Ok(ResolvedPattern::Pin(ResolvedId {
+                    name,
+                    qualified_name: None,
+                    unique_id: uid,
+                    compiler_generated: false,
+                    span,
+                }))
+            }
             AstPattern::Wildcard(span) => Ok(ResolvedPattern::Wildcard(span)),
             AstPattern::ListNil(span) => Ok(ResolvedPattern::ListNil(span)),
             AstPattern::ListCons(_, head, tail) => Ok(ResolvedPattern::ListCons(

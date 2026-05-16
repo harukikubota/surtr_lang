@@ -547,7 +547,7 @@ fn rebase_record_arg(arg: &mut ResolvedRecordLitArg, base: u32, offset: u32) {
 
 fn rebase_pattern(pattern: &mut ResolvedPattern, base: u32, offset: u32) {
     match pattern {
-        ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
+        ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) | ResolvedPattern::Pin(id) => {
             rebase_resolved_id(id, base, offset);
         }
         ResolvedPattern::Wildcard(_)

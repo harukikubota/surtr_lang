@@ -1587,8 +1587,12 @@ fn test_is_match_conversion() {
 
 #[test]
 fn test_is_match_rejects_binding_variable_pattern() {
-    let err = parse_and_resolve("x = is_match(Ok(1), Ok(v))").expect_err("must fail");
-    assert!(err.message.contains("does not allow binding variables"));
+    let err = spire::parse_with_context(
+        "x = is_match(Ok(1), Ok(v))",
+        spire::ParserContext::project(0),
+    )
+    .expect_err("must fail");
+    assert!(err.message().contains("does not allow binding variables"));
 }
 
 #[test]

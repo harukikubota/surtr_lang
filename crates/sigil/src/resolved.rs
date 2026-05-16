@@ -316,6 +316,7 @@ pub enum ResolvedInterpolatedPart {
 pub enum ResolvedPattern {
     Var(ResolvedId),
     Annotated(ResolvedId, AstTy),
+    Pin(ResolvedId),
     Wildcard(Span),
     ListNil(Span),
     ListCons(Box<ResolvedPattern>, Box<ResolvedPattern>),

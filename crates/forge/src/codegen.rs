@@ -4146,6 +4146,7 @@ fn collect_pattern_binding_infos(
             );
         }
         TypedPattern::Wildcard(_)
+        | TypedPattern::Pin(_, _, _)
         | TypedPattern::ListNil(_)
         | TypedPattern::IntLit(_, _)
         | TypedPattern::StrLit(_, _)
@@ -4549,6 +4550,20 @@ impl Codegen {
         self.state.next_slot += 1;
         self.state.slot_map.insert(unique_id, slot);
         slot
+    }
+
+    fn existing_slot_for_id(&self, id: &ResolvedId, span: &Span) -> Result<u32, CodegenError> {
+        self.state
+            .slot_map
+            .get(&id.unique_id)
+            .copied()
+            .ok_or_else(|| CodegenError {
+                message: format!(
+                    "Pinned value `{}` is not available in the local scope",
+                    id.name
+                ),
+                span: span.clone(),
+            })
     }
 
     fn reserve_fun_idx(&mut self) -> u32 {
@@ -8165,6 +8180,12 @@ impl Codegen {
     ) -> Result<PatternDecomp, CodegenError> {
         let decomp = match pat {
             TypedPattern::Var(_, _) | TypedPattern::Wildcard(_) => PatternDecomp::None,
+            TypedPattern::Pin(ty, id, dispatch) => {
+                let pinned_slot = self.existing_slot_for_id(id, err_span)?;
+                self.emit_eq_dispatch_from_slots(dispatch, ty, slot, pinned_slot, err_span)?;
+                self.emit_jump_if_false(fail_label);
+                PatternDecomp::None
+            }
             TypedPattern::As(_, inner, _) => self.emit_pattern_test_from_local_with_mode(
                 inner,
                 slot,
@@ -8333,6 +8354,7 @@ impl Codegen {
                 self.emit_pattern_bind_from_local(inner, slot, decomp)?;
             }
             TypedPattern::Wildcard(_)
+            | TypedPattern::Pin(_, _, _)
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
@@ -9050,7 +9072,8 @@ impl Codegen {
                     };
 
                     let pat = &arm.pattern;
-                    let decomp = self.emit_match_pattern_test(pat, scrut_slot, next_arm)?;
+                    let decomp =
+                        self.emit_match_pattern_test(pat, scrut_slot, next_arm, &scrutinee.span)?;
                     self.emit_match_pattern_bind(pat, scrut_slot, Some(decomp))?;
                     if let Some(guard) = &arm.guard {
                         self.emit_node(guard)?;
@@ -9412,7 +9435,8 @@ impl Codegen {
             };
 
             let pat = &arm.pattern;
-            let decomp = self.emit_match_pattern_test(pat, scrut_slot, next_arm)?;
+            let decomp =
+                self.emit_match_pattern_test(pat, scrut_slot, next_arm, &scrutinee.span)?;
             self.emit_match_pattern_bind(pat, scrut_slot, Some(decomp))?;
             if let Some(guard) = &arm.guard {
                 self.emit_node(guard)?;
@@ -9440,11 +9464,18 @@ impl Codegen {
         pat: &TypedMatchPattern,
         slot: u32,
         fail_label: Label,
+        err_span: &Span,
     ) -> Result<MatchPatternDecomp, CodegenError> {
         let decomp = match pat {
             TypedMatchPattern::Binding(_) | TypedMatchPattern::Wildcard => MatchPatternDecomp::None,
+            TypedMatchPattern::Pin { id, ty, dispatch } => {
+                let pinned_slot = self.existing_slot_for_id(id, err_span)?;
+                self.emit_eq_dispatch_from_slots(dispatch, ty, slot, pinned_slot, err_span)?;
+                self.emit_jump_if_false(fail_label);
+                MatchPatternDecomp::None
+            }
             TypedMatchPattern::As(inner, _) => {
-                self.emit_match_pattern_test(inner, slot, fail_label)?
+                self.emit_match_pattern_test(inner, slot, fail_label, err_span)?
             }
             TypedMatchPattern::BoolLit(b) => {
                 self.emit(Opcode::LoadLocal(slot));
@@ -9482,7 +9513,7 @@ impl Codegen {
                 let success_label = self.fresh_label();
                 for item in items {
                     let next_label = self.fresh_label();
-                    self.emit_match_pattern_test(item, slot, next_label)?;
+                    self.emit_match_pattern_test(item, slot, next_label, err_span)?;
                     self.emit_jump(success_label);
                     self.patch_label(next_label);
                 }
@@ -9500,7 +9531,8 @@ impl Codegen {
                         field_index: index as u32,
                     });
                     self.emit(Opcode::StoreLocal(item_slot));
-                    let item_decomp = self.emit_match_pattern_test(item, item_slot, fail_label)?;
+                    let item_decomp =
+                        self.emit_match_pattern_test(item, item_slot, fail_label, err_span)?;
                     children.push(MatchPatternDecompChild {
                         slot: item_slot,
                         decomp: item_decomp,
@@ -9530,7 +9562,7 @@ impl Codegen {
                     });
                     self.emit(Opcode::StoreLocal(inner_slot));
                     let field_decomp =
-                        self.emit_match_pattern_test(field_pat, inner_slot, fail_label)?;
+                        self.emit_match_pattern_test(field_pat, inner_slot, fail_label, err_span)?;
                     children.push(MatchPatternDecompChild {
                         slot: inner_slot,
                         decomp: field_decomp,
@@ -9571,7 +9603,8 @@ impl Codegen {
                 )?;
                 let mut children = Vec::with_capacity(items.len());
                 for (item, item_slot) in items.iter().zip(item_slots.iter()) {
-                    let item_decomp = self.emit_match_pattern_test(item, *item_slot, fail_label)?;
+                    let item_decomp =
+                        self.emit_match_pattern_test(item, *item_slot, fail_label, err_span)?;
                     children.push(MatchPatternDecompChild {
                         slot: *item_slot,
                         decomp: item_decomp,
@@ -9602,6 +9635,7 @@ impl Codegen {
                 self.emit_match_pattern_bind(inner, slot, decomp)?;
             }
             TypedMatchPattern::Wildcard
+            | TypedMatchPattern::Pin { .. }
             | TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
@@ -9730,7 +9764,12 @@ impl Codegen {
             self.emit(Opcode::LoadLocal(current_slot));
             self.emit(Opcode::ListHead);
             self.emit(Opcode::StoreLocal(head_slot));
-            let head_decomp = self.emit_match_pattern_test(head, head_slot, fail_label)?;
+            let head_decomp = self.emit_match_pattern_test(
+                head,
+                head_slot,
+                fail_label,
+                &Span { start: 0, end: 0 },
+            )?;
 
             let tail_slot = self.state.next_slot;
             self.state.next_slot += 1;
@@ -9743,7 +9782,12 @@ impl Codegen {
             current_slot = tail_slot;
         }
 
-        let tail_decomp = self.emit_match_pattern_test(current_pat, current_slot, fail_label)?;
+        let tail_decomp = self.emit_match_pattern_test(
+            current_pat,
+            current_slot,
+            fail_label,
+            &Span { start: 0, end: 0 },
+        )?;
         let decomp = links.into_iter().rev().fold(
             tail_decomp,
             |tail, (head_slot, head_decomp, tail_slot)| MatchPatternDecomp::ListCons {
@@ -9844,6 +9888,77 @@ impl Codegen {
             self.emit(Opcode::NotBool);
         }
         Ok(())
+    }
+
+    fn emit_enum_eq_from_slots(&mut self, op: &BinOp, left_slot: u32, right_slot: u32) {
+        self.emit(Opcode::LoadLocal(left_slot));
+        self.emit(Opcode::GetField { field_index: 0 });
+        self.emit(Opcode::LoadLocal(right_slot));
+        self.emit(Opcode::GetField { field_index: 0 });
+        self.emit(Opcode::EqInt);
+        if matches!(op, BinOp::Neq) {
+            self.emit(Opcode::NotBool);
+        }
+    }
+
+    fn emit_eq_dispatch_from_slots(
+        &mut self,
+        dispatch: &TraitDispatch,
+        receiver_ty: &Ty,
+        left_slot: u32,
+        right_slot: u32,
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        match dispatch {
+            TraitDispatch::Pending => Err(CodegenError {
+                message: "bounded trait call must be specialized before codegen".into(),
+                span: span.clone(),
+            }),
+            TraitDispatch::Static(TraitDispatchTarget::BinOp(op))
+                if matches!(op, BinOp::Eq | BinOp::Neq)
+                    && matches!(receiver_ty, Ty::Enum(_, _)) =>
+            {
+                self.emit_enum_eq_from_slots(op, left_slot, right_slot);
+                Ok(())
+            }
+            TraitDispatch::Static(TraitDispatchTarget::BinOp(op)) => {
+                self.emit(Opcode::LoadLocal(left_slot));
+                self.emit(Opcode::LoadLocal(right_slot));
+                let opcode = self.binop_to_opcode(op, receiver_ty, span)?;
+                self.emit(opcode);
+                Ok(())
+            }
+            TraitDispatch::Static(TraitDispatchTarget::Builtin(name)) => {
+                self.emit(Opcode::LoadLocal(left_slot));
+                self.emit(Opcode::LoadLocal(right_slot));
+                if let Some(opcode) = Self::direct_builtin_opcode(name, 2) {
+                    self.emit(opcode);
+                } else {
+                    let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
+                        message: format!("Unknown builtin: {}", name),
+                        span: span.clone(),
+                    })?;
+                    self.emit(Opcode::CallBuiltin {
+                        builtin_id,
+                        arity: 2,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
+                }
+                Ok(())
+            }
+            TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }) => {
+                self.emit(Opcode::LoadLocal(left_slot));
+                self.emit(Opcode::LoadLocal(right_slot));
+                self.emit(Opcode::Call {
+                    fun_idx: *fun_idx,
+                    arity: 2,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                });
+                Ok(())
+            }
+        }
     }
 
     fn emit_duration_payload_from_local(&mut self, slot: u32) {

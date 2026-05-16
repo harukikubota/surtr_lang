@@ -84,7 +84,7 @@ impl Parser<'_> {
                         Err(err) => {
                             let looks_like_bind = matches!(
                                 self.tokens.get(save).map(|sp| &sp.token),
-                                Some(Token::LParen | Token::LBrack)
+                                Some(Token::LParen | Token::LBrack | Token::Caret)
                             ) && self
                                 .stmt_has_top_level_assignment_from(save)
                                 || matches!(

@@ -1450,6 +1450,7 @@ impl ScarSession {
     fn rewrite_fun_indices_in_pattern(pattern: &mut TypedPattern, rewrites: &HashMap<u32, u32>) {
         match pattern {
             TypedPattern::Var(ty, _)
+            | TypedPattern::Pin(ty, _, _)
             | TypedPattern::As(ty, _, _)
             | TypedPattern::Wildcard(ty)
             | TypedPattern::ListNil(ty)
@@ -1492,6 +1493,7 @@ impl ScarSession {
                 }
             }
             TypedPattern::Var(_, _)
+            | TypedPattern::Pin(_, _, _)
             | TypedPattern::Wildcard(_)
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
@@ -1525,6 +1527,7 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_match_pattern(tail, rewrites);
             }
             TypedMatchPattern::Binding(_)
+            | TypedMatchPattern::Pin { .. }
             | TypedMatchPattern::Wildcard
             | TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)

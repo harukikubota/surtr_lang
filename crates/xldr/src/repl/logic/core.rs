@@ -7213,6 +7213,7 @@ fn collect_unresolved_pattern_binding_names(pat: &TypedPattern, names: &mut Vec<
         }
         TypedPattern::ResultOk(_, inner) => collect_unresolved_pattern_binding_names(inner, names),
         TypedPattern::Wildcard(_)
+        | TypedPattern::Pin(_, _, _)
         | TypedPattern::ListNil(_)
         | TypedPattern::IntLit(_, _)
         | TypedPattern::StrLit(_, _)
