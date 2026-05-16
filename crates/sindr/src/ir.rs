@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::fmt;
 
 use crate::builtin::builtin_meta_by_id;
 use crate::primitives::{BuiltinId, FunctionId, RuntimeTag, SurtrInt};
-use crate::runtime::{CallableOrigin, TypeEntry, TypeRegistry};
+use crate::runtime::{validate_type_registry_append, CallableOrigin, TypeEntry, TypeRegistry};
 
 /// Surtr bytecode instructions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -773,6 +775,8 @@ pub struct BytecodeChunk {
     pub const_base: u32,
     pub constants: Vec<Constant>,
     pub new_locals: usize,
+    /// Base offset of runtime type metadata when this chunk is produced.
+    pub type_registry_base: u32,
     pub type_entries: Vec<TypeEntry>,
     /// Base offset of error templates in the VM-wide pool when this chunk is produced.
     pub error_template_base: u32,
@@ -869,6 +873,217 @@ impl Default for CallableTemplateMetadata {
             full_signature: None,
         }
     }
+}
+
+/// Shared bytecode verifier error used by producers and the VM.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BytecodeValidationError {
+    message: String,
+}
+
+impl BytecodeValidationError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for BytecodeValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for BytecodeValidationError {}
+
+impl From<crate::runtime::TypeRegistryError> for BytecodeValidationError {
+    fn from(value: crate::runtime::TypeRegistryError) -> Self {
+        Self::new(value.to_string())
+    }
+}
+
+pub fn validate_type_registry_append_entries(
+    existing: &[TypeEntry],
+    entries: &[TypeEntry],
+) -> Result<(), BytecodeValidationError> {
+    validate_type_registry_append(existing, entries).map_err(Into::into)
+}
+
+pub fn validate_program_function_table(
+    opcodes: &[Opcode],
+    callable_templates: &[CallableTemplate],
+    runtime_process_specs: &[RuntimeProcessSpec],
+    functions: &[FunctionEntry],
+) -> Result<(), BytecodeValidationError> {
+    let halt_pos = top_level_halt_pos(opcodes, "bytecode")?;
+    let mut seen_fun_idxs = BTreeSet::new();
+    for (idx, entry) in functions.iter().enumerate() {
+        if entry.fun_idx as usize != idx {
+            return Err(BytecodeValidationError::new(format!(
+                "Function table invariant violated: functions[{}].fun_idx = {}",
+                idx, entry.fun_idx
+            )));
+        }
+        if !seen_fun_idxs.insert(entry.fun_idx) {
+            return Err(BytecodeValidationError::new(format!(
+                "Bytecode verifier: duplicate function entry for fun_idx {}",
+                entry.fun_idx
+            )));
+        }
+        validate_function_entry_pc(entry, opcodes.len(), halt_pos, "")?;
+    }
+
+    validate_function_refs(
+        functions.len(),
+        opcodes,
+        callable_templates,
+        runtime_process_specs,
+    )
+}
+
+pub fn validate_chunk_function_table(
+    opcodes: &[Opcode],
+    callable_templates: &[CallableTemplate],
+    runtime_process_specs: &[RuntimeProcessSpec],
+    functions: &[FunctionEntry],
+    base_function_len: usize,
+    allow_existing_replacements: bool,
+) -> Result<usize, BytecodeValidationError> {
+    let halt_pos = top_level_halt_pos(opcodes, "chunk")?;
+    let mut seen_fun_idxs = BTreeSet::new();
+    let mut next_append_idx = base_function_len;
+    let mut sorted_entries = functions.iter().collect::<Vec<_>>();
+    sorted_entries.sort_by_key(|entry| entry.fun_idx);
+
+    for entry in sorted_entries {
+        let idx = entry.fun_idx as usize;
+        if !seen_fun_idxs.insert(entry.fun_idx) {
+            return Err(BytecodeValidationError::new(format!(
+                "Bytecode verifier: duplicate function entry for fun_idx {}",
+                entry.fun_idx
+            )));
+        }
+        if idx < base_function_len {
+            if !allow_existing_replacements {
+                return Err(BytecodeValidationError::new(format!(
+                    "Function table invariant violated in chunk: fun_idx {} would replace existing prefix len {}",
+                    idx, base_function_len
+                )));
+            }
+        } else if idx == next_append_idx {
+            next_append_idx += 1;
+        } else {
+            return Err(BytecodeValidationError::new(format!(
+                "Function table invariant violated in chunk: fun_idx {} > len {}",
+                idx, next_append_idx
+            )));
+        }
+        validate_function_entry_pc(entry, opcodes.len(), halt_pos, "chunk ")?;
+    }
+
+    validate_function_refs(
+        next_append_idx,
+        opcodes,
+        callable_templates,
+        runtime_process_specs,
+    )?;
+    Ok(next_append_idx)
+}
+
+fn top_level_halt_pos(opcodes: &[Opcode], context: &str) -> Result<usize, BytecodeValidationError> {
+    if let Some(pos) = opcodes.iter().position(|op| matches!(op, Opcode::Halt)) {
+        return Ok(pos);
+    }
+    if opcodes
+        .iter()
+        .any(|op| matches!(op, Opcode::Return | Opcode::TailCallClosure { .. }))
+    {
+        return Err(BytecodeValidationError::new("Return at top-level"));
+    }
+    Err(BytecodeValidationError::new(format!(
+        "Bytecode verifier: {context} missing Halt"
+    )))
+}
+
+fn validate_function_entry_pc(
+    entry: &FunctionEntry,
+    opcode_len: usize,
+    halt_pos: usize,
+    context: &str,
+) -> Result<(), BytecodeValidationError> {
+    if entry.entry_pc as usize >= opcode_len {
+        return Err(BytecodeValidationError::new(format!(
+            "Bytecode verifier: function {} entry_pc out of {}bounds: {}",
+            entry.fun_idx, context, entry.entry_pc
+        )));
+    }
+    if entry.entry_pc as usize <= halt_pos {
+        return Err(BytecodeValidationError::new(format!(
+            "Bytecode verifier: function {} entry_pc {} must be after top-level Halt {}",
+            entry.fun_idx, entry.entry_pc, halt_pos
+        )));
+    }
+    Ok(())
+}
+
+fn validate_function_refs(
+    function_len: usize,
+    opcodes: &[Opcode],
+    callable_templates: &[CallableTemplate],
+    runtime_process_specs: &[RuntimeProcessSpec],
+) -> Result<(), BytecodeValidationError> {
+    for op in opcodes {
+        match op {
+            Opcode::LoadFunctionRef(fun_idx) | Opcode::Call { fun_idx, .. } => {
+                validate_function_ref(function_len, *fun_idx, "opcode")?;
+            }
+            _ => {}
+        }
+    }
+
+    for template in callable_templates {
+        match &template.kind {
+            CallableTemplateKind::PartialDirectCall { target, .. }
+            | CallableTemplateKind::InjectDirectCall { target, .. } => {
+                if let CallableTemplateDirectTarget::Function(fun_idx) = target {
+                    validate_function_ref(function_len, *fun_idx, "callable template")?;
+                }
+            }
+            CallableTemplateKind::ComposeDirect { .. } => {}
+        }
+    }
+
+    for spec in runtime_process_specs {
+        validate_function_ref(
+            function_len,
+            spec.init.callable.fun_idx,
+            "runtime process init",
+        )?;
+        for handler in &spec.handlers {
+            validate_function_ref(function_len, handler.fun_idx, "runtime process handler")?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_function_ref(
+    function_len: usize,
+    fun_idx: FunctionId,
+    context: &str,
+) -> Result<(), BytecodeValidationError> {
+    if fun_idx as usize >= function_len {
+        return Err(BytecodeValidationError::new(format!(
+            "Bytecode verifier: Unknown function index {} in {} (function table len {})",
+            fun_idx, context, function_len
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

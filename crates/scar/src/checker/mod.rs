@@ -874,6 +874,63 @@ fn format_builtin_type_param_suffix(params: &[&str]) -> String {
 type TraitImplKey = (String, String);
 type TraitImplIndex = HashMap<String, Vec<TraitImplKey>>;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+struct SpecializationKey {
+    function_name: String,
+    type_args: Vec<CanonicalTyKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+enum CanonicalTyKey {
+    Int,
+    Float,
+    String,
+    Boolean,
+    Unit,
+    Error,
+    Hole,
+    Var(u32),
+    List(Box<CanonicalTyKey>),
+    Tuple(Vec<CanonicalTyKey>),
+    Func {
+        params: Vec<CanonicalTyKey>,
+        ret: Box<CanonicalTyKey>,
+    },
+    TypeRef(Box<CanonicalTyKey>),
+    Lazy(Box<CanonicalTyKey>),
+    Facet {
+        source: Box<CanonicalTyKey>,
+        focus: Box<CanonicalTyKey>,
+    },
+    Pid(String),
+    BuiltinFunc {
+        name: String,
+        params: Vec<CanonicalTyKey>,
+        ret: Box<CanonicalTyKey>,
+    },
+    UserFunc {
+        type_params: Vec<u32>,
+        params: Vec<CanonicalTyKey>,
+        ret: Box<CanonicalTyKey>,
+    },
+    Struct {
+        name: String,
+        fields: Vec<(String, CanonicalTyKey)>,
+    },
+    Record {
+        name: String,
+        fields: Vec<(String, CanonicalTyKey)>,
+    },
+    Enum {
+        name: String,
+        args: Vec<CanonicalTyKey>,
+    },
+    Result {
+        ok: Box<CanonicalTyKey>,
+        err: Box<CanonicalTyKey>,
+    },
+}
+
 #[derive(Debug, Clone)]
 struct PersistentCheckerState {
     env: TypeEnv,
@@ -883,6 +940,7 @@ struct PersistentCheckerState {
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
+    specialization_fun_idxs: HashMap<SpecializationKey, u32>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<(String, String), TraitImplInfo>,
     trait_impl_index_by_base_trait: TraitImplIndex,
@@ -900,6 +958,7 @@ impl PersistentCheckerState {
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
             specializable_defs: HashMap::new(),
+            specialization_fun_idxs: HashMap::new(),
             traits: HashMap::new(),
             trait_impls: HashMap::new(),
             trait_impl_index_by_base_trait: HashMap::new(),
@@ -917,6 +976,7 @@ impl PersistentCheckerState {
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
             specializable_defs: self.specializable_defs.clone(),
+            specialization_fun_idxs: self.specialization_fun_idxs.clone(),
             traits: self.traits.clone(),
             trait_impls: self.trait_impls.clone(),
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
@@ -937,6 +997,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             impl_method_uids: checkpoint.impl_method_uids,
             function_ids_by_name: checkpoint.function_ids_by_name,
             specializable_defs: checkpoint.specializable_defs,
+            specialization_fun_idxs: checkpoint.specialization_fun_idxs,
             traits: checkpoint.traits,
             trait_impls: checkpoint.trait_impls,
             trait_impl_index_by_base_trait: checkpoint.trait_impl_index_by_base_trait,
@@ -955,6 +1016,8 @@ pub struct ScarCheckpoint {
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
+    #[serde(default)]
+    specialization_fun_idxs: HashMap<SpecializationKey, u32>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<(String, String), TraitImplInfo>,
     trait_impl_index_by_base_trait: TraitImplIndex,
@@ -1103,6 +1166,10 @@ impl ScarSession {
         for def in self.state.specializable_defs.values_mut() {
             Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
         }
+        Self::rewrite_specialization_fun_indices(
+            &mut self.state.specialization_fun_idxs,
+            &fun_idx_rewrites,
+        );
         self.state.env.next_fun_idx = self.state.env.next_fun_idx.max(next_fun_idx);
     }
 
@@ -1142,7 +1209,22 @@ impl ScarSession {
         for def in self.state.specializable_defs.values_mut() {
             Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
         }
+        Self::rewrite_specialization_fun_indices(
+            &mut self.state.specialization_fun_idxs,
+            &fun_idx_rewrites,
+        );
         self.state.env.next_fun_idx = self.state.env.next_fun_idx.max(next_fun_idx);
+    }
+
+    fn rewrite_specialization_fun_indices(
+        specialization_fun_idxs: &mut HashMap<SpecializationKey, u32>,
+        rewrites: &HashMap<u32, u32>,
+    ) {
+        for fun_idx in specialization_fun_idxs.values_mut() {
+            if let Some(new_fun_idx) = rewrites.get(fun_idx) {
+                *fun_idx = *new_fun_idx;
+            }
+        }
     }
 
     fn specializable_fun_idxs_by_name(&self) -> HashMap<String, u32> {
@@ -1583,6 +1665,92 @@ impl Default for ScarSession {
     }
 }
 
+#[cfg(test)]
+mod specialization_state_tests {
+    use super::*;
+
+    fn test_span() -> Span {
+        Span { start: 0, end: 0 }
+    }
+
+    fn resolved_id(name: &str, qualified_name: &str, unique_id: u32) -> ResolvedId {
+        ResolvedId {
+            name: name.to_string(),
+            qualified_name: Some(qualified_name.to_string()),
+            unique_id,
+            compiler_generated: false,
+            span: test_span(),
+        }
+    }
+
+    fn user_func_ty(fun_idx: u32) -> Ty {
+        Ty::UserFunc {
+            fun_idx,
+            type_params: Vec::new(),
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Int),
+        }
+    }
+
+    fn specialization_key() -> SpecializationKey {
+        SpecializationKey {
+            function_name: "Global::helper".to_string(),
+            type_args: vec![CanonicalTyKey::Int],
+        }
+    }
+
+    fn session_with_cached_specialization(uid: u32, old_fun_idx: u32) -> ScarSession {
+        let mut session = ScarSession::new();
+        let id = resolved_id("helper", "Global::helper", uid);
+        session
+            .state
+            .function_ids_by_name
+            .insert("Global::helper".to_string(), id);
+        session
+            .state
+            .env
+            .vars
+            .insert(uid, user_func_ty(old_fun_idx));
+        session
+            .state
+            .specialization_fun_idxs
+            .insert(specialization_key(), old_fun_idx);
+        session
+    }
+
+    #[test]
+    fn reconcile_function_indices_rewrites_specialization_cache_values() {
+        let mut session = session_with_cached_specialization(10, 40);
+
+        session.reconcile_function_indices([("Global::helper", 77)]);
+
+        assert_eq!(
+            session
+                .state
+                .specialization_fun_idxs
+                .get(&specialization_key())
+                .copied(),
+            Some(77)
+        );
+    }
+
+    #[test]
+    fn reconcile_visible_function_indices_rewrites_specialization_cache_values() {
+        let mut session = session_with_cached_specialization(10, 40);
+
+        session.reconcile_visible_function_indices([(10, 77)]);
+
+        assert_eq!(
+            session
+                .state
+                .specialization_fun_idxs
+                .get(&specialization_key())
+                .copied(),
+            Some(77)
+        );
+    }
+}
+
 struct Checker {
     env: TypeEnv,
     function_return_ty: Option<Ty>,
@@ -1597,6 +1765,7 @@ struct Checker {
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
+    specialization_fun_idxs: HashMap<SpecializationKey, u32>,
     substitutions: HashMap<u32, Ty>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
     runtime_policy: RuntimeSourcePolicy,
@@ -1672,6 +1841,7 @@ impl Checker {
             impl_method_uids: state.impl_method_uids,
             function_ids_by_name: state.function_ids_by_name,
             specializable_defs: state.specializable_defs,
+            specialization_fun_idxs: state.specialization_fun_idxs,
             substitutions: HashMap::new(),
             tyvar_bounds: state.tyvar_bounds,
             runtime_policy: context.runtime_policy,
@@ -2273,6 +2443,7 @@ impl Checker {
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
             specializable_defs: self.specializable_defs.clone(),
+            specialization_fun_idxs: self.specialization_fun_idxs.clone(),
             traits: self.traits.clone(),
             trait_impls: self.trait_impls.clone(),
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
@@ -2290,6 +2461,7 @@ impl Checker {
             impl_method_uids: self.impl_method_uids,
             function_ids_by_name: self.function_ids_by_name,
             specializable_defs: self.specializable_defs,
+            specialization_fun_idxs: self.specialization_fun_idxs,
             traits: self.traits,
             trait_impls: self.trait_impls,
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait,

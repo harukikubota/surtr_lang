@@ -1575,8 +1575,8 @@ pub struct DefaultStdlibSnapshot {
     pub default_stage_count: usize,
 }
 
-const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 9;
-const TEST_SEMANTIC_PREFIX_CACHE_SCHEMA: u32 = 4;
+const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 10;
+const TEST_SEMANTIC_PREFIX_CACHE_SCHEMA: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedStdlibSemanticEnvelope {

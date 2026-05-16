@@ -1199,6 +1199,57 @@ fn core_range_bindings_keep_constructor_and_compare_fun_indices_in_sync() {
 }
 
 #[test]
+fn core_range_generic_helpers_survive_sig_doc_interleaving() {
+    let mut engine = engine();
+
+    let a = engine.handle_line("a = 20ms");
+    assert!(!a.should_exit);
+    assert!(rendered_text(&a).contains("a: Duration = 20ms"));
+
+    let sig = signature_text(&engine.handle_line(":sig compare(Duration, Duration)"));
+    assert!(sig.contains("compare(Duration, Duration)"), "{sig}");
+
+    let doc = doc_text(&engine.handle_line(":doc Range(Int, Int)"));
+    assert!(!doc.contains("Unknown function index"), "{doc}");
+    assert!(!doc.contains("Call arity mismatch"), "{doc}");
+
+    let b = engine.handle_line("b =? 10ms");
+    assert!(!b.should_exit);
+    assert!(rendered_text(&b).contains("b: Duration = 10ms"));
+
+    let neq = engine.handle_line("Range(a,b) != Range(b, 100ms)");
+    assert!(!neq.should_exit);
+    let text = rendered_text(&neq);
+    assert!(text.contains("True"), "{text}");
+    assert!(!text.contains("Unknown function index"), "{text}");
+    assert!(!text.contains("Call arity mismatch"), "{text}");
+}
+
+#[test]
+fn core_range_generic_helpers_survive_runtime_error_rollback() {
+    let mut engine = engine();
+
+    let a = engine.handle_line("a = 20ms");
+    assert!(!a.should_exit);
+    assert!(rendered_text(&a).contains("a: Duration = 20ms"));
+
+    let b = engine.handle_line("b =? 10ms");
+    assert!(!b.should_exit);
+    assert!(rendered_text(&b).contains("b: Duration = 10ms"));
+
+    let runtime_error = engine.handle_line("Process::self()");
+    assert!(matches!(runtime_error.output, ReplOutput::EvalError { .. }));
+    assert!(rendered_text(&runtime_error).contains("Process::self"));
+
+    let neq = engine.handle_line("Range(a,b) != Range(b, 100ms)");
+    assert!(!neq.should_exit);
+    let text = rendered_text(&neq);
+    assert!(text.contains("True"), "{text}");
+    assert!(!text.contains("Unknown function index"), "{text}");
+    assert!(!text.contains("Call arity mismatch"), "{text}");
+}
+
+#[test]
 fn core_renders_top_level_facet_chain_expressions_without_codegen_leak() {
     let mut engine = engine();
 

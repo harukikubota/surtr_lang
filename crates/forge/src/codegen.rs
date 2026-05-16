@@ -5,14 +5,15 @@ use scar::types::Ty;
 use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_id_by_name;
 use sindr::ir::{
-    BootEntrySource, CallableTemplate, CallableTemplateArg, CallableTemplateComposeFlavor,
-    CallableTemplateDirectTarget, CallableTemplateKind, CallableTemplateMetadata, CompileInfo,
-    DbgArgTemplate, DbgTemplate, DocEntry, FunctionFlags, RuntimeBootPlan, RuntimeCallableRef,
-    RuntimeHandlerArg, RuntimeHandlerDependency, RuntimeHandlerKind, RuntimeHandlerOverride,
-    RuntimeHandlerSpec, RuntimeHandlerTarget, RuntimeInitPolicy, RuntimeInitResultShape,
-    RuntimeInitSpec, RuntimeLifecycleSpec, RuntimeProcessDependencies, RuntimeStateSpec,
-    RuntimeSupervisionSpec, RuntimeSupervisorOverrideEntry, RuntimeSupervisorPolicy,
-    RuntimeTypeRef, SingletonBootEntry,
+    validate_chunk_function_table, validate_program_function_table,
+    validate_type_registry_append_entries, BootEntrySource, CallableTemplate, CallableTemplateArg,
+    CallableTemplateComposeFlavor, CallableTemplateDirectTarget, CallableTemplateKind,
+    CallableTemplateMetadata, CompileInfo, DbgArgTemplate, DbgTemplate, DocEntry, FunctionFlags,
+    RuntimeBootPlan, RuntimeCallableRef, RuntimeHandlerArg, RuntimeHandlerDependency,
+    RuntimeHandlerKind, RuntimeHandlerOverride, RuntimeHandlerSpec, RuntimeHandlerTarget,
+    RuntimeInitPolicy, RuntimeInitResultShape, RuntimeInitSpec, RuntimeLifecycleSpec,
+    RuntimeProcessDependencies, RuntimeStateSpec, RuntimeSupervisionSpec,
+    RuntimeSupervisorOverrideEntry, RuntimeSupervisorPolicy, RuntimeTypeRef, SingletonBootEntry,
 };
 use sindr::names::{surface_path_name, surface_rendered_name};
 use sindr::primitives::{int, SurtrInt};
@@ -51,7 +52,7 @@ pub fn codegen_typed_program(typed: TypedProgram) -> Result<Bytecode, CodegenErr
         build_runtime_process_specs(&process_specs, &nodes, &state.functions)?;
     let runtime_boot_plan = build_runtime_boot_plan(&boot_plan, &process_specs)?;
     validate_required_singletons(&nodes, &process_specs, &runtime_boot_plan)?;
-    Ok(Bytecode {
+    let bytecode = Bytecode {
         opcodes,
         constants: state.constants,
         num_locals: state.next_slot as usize,
@@ -74,7 +75,22 @@ pub fn codegen_typed_program(typed: TypedProgram) -> Result<Bytecode, CodegenErr
         pc_spans: Vec::new(),
         runtime_process_specs,
         runtime_boot_plan,
-    })
+    };
+    validate_program_function_table(
+        &bytecode.opcodes,
+        &bytecode.callable_templates,
+        &bytecode.runtime_process_specs.entries,
+        &bytecode.functions,
+    )
+    .map_err(codegen_validation_error)?;
+    Ok(bytecode)
+}
+
+fn codegen_validation_error(error: impl std::fmt::Display) -> CodegenError {
+    CodegenError {
+        message: error.to_string(),
+        span: Span { start: 0, end: 0 },
+    }
 }
 
 fn validate_required_singletons(
@@ -558,6 +574,7 @@ pub fn compose_bytecode_with_chunk(
         })?;
 
     let const_base = base.constants.len();
+    let type_registry_base = base.type_registry.entries().len();
     let error_template_base = base.error_templates.len();
     let dbg_template_base = base.dbg_templates.len();
     if chunk.const_base as usize != const_base {
@@ -565,6 +582,15 @@ pub fn compose_bytecode_with_chunk(
             message: format!(
                 "chunk constant base mismatch: chunk={}, base={}",
                 chunk.const_base, const_base
+            ),
+            span: Span { start: 0, end: 0 },
+        });
+    }
+    if chunk.type_registry_base as usize != type_registry_base {
+        return Err(CodegenError {
+            message: format!(
+                "chunk type registry base mismatch: chunk={}, base={}",
+                chunk.type_registry_base, type_registry_base
             ),
             span: Span { start: 0, end: 0 },
         });
@@ -607,6 +633,17 @@ pub fn compose_bytecode_with_chunk(
         &mut chunk.runtime_process_specs,
         base.functions.len(),
     )?;
+    validate_chunk_function_table(
+        &chunk.opcodes,
+        &chunk.callable_templates,
+        &chunk.runtime_process_specs,
+        &chunk.functions,
+        base.functions.len(),
+        false,
+    )
+    .map_err(codegen_validation_error)?;
+    validate_type_registry_append_entries(base.type_registry.entries(), &chunk.type_entries)
+        .map_err(codegen_validation_error)?;
 
     let mut base_ops = base.opcodes;
     relocate_base_ops_for_insert(&mut base_ops, base_halt, chunk_top_len)?;
@@ -643,8 +680,6 @@ pub fn compose_bytecode_with_chunk(
         let idx = entry.fun_idx as usize;
         if idx == functions.len() {
             functions.push(entry);
-        } else if idx < functions.len() {
-            functions[idx] = entry;
         } else {
             return Err(CodegenError {
                 message: format!(
@@ -659,7 +694,9 @@ pub fn compose_bytecode_with_chunk(
 
     base.opcodes = opcodes;
     base.constants.extend(chunk.constants);
-    base.type_registry.extend(chunk.type_entries);
+    base.type_registry
+        .try_extend(chunk.type_entries)
+        .map_err(codegen_validation_error)?;
     base.error_templates.extend(chunk.error_templates);
     base.dbg_templates.extend(chunk.dbg_templates);
     base.callable_templates.extend(chunk.callable_templates);
@@ -1940,14 +1977,22 @@ impl ForgeSession {
         let runtime_process_specs =
             build_runtime_process_specs(&process_specs, &typed_for_meta, &functions)?.entries;
         let runtime_boot_plan = build_runtime_boot_plan(&boot_plan, &process_specs)?;
-        Ok((
-            BytecodeChunk {
-                runtime_process_specs,
-                runtime_boot_plan,
-                ..chunk
-            },
-            meta,
-        ))
+        let base_function_len = self.state.functions.len().saturating_sub(functions.len());
+        let chunk = BytecodeChunk {
+            runtime_process_specs,
+            runtime_boot_plan,
+            ..chunk
+        };
+        validate_chunk_function_table(
+            &chunk.opcodes,
+            &chunk.callable_templates,
+            &chunk.runtime_process_specs,
+            &chunk.functions,
+            base_function_len,
+            false,
+        )
+        .map_err(codegen_validation_error)?;
+        Ok((chunk, meta))
     }
 
     fn codegen_chunk_nodes_with_options(
@@ -1958,6 +2003,7 @@ impl ForgeSession {
         let before = self.state.clone();
         let typed_for_meta = typed.clone();
         let const_base = before.constants.len();
+        let type_registry_base = before.type_registry.entries().len();
         let error_template_base = before.error_templates.len();
         let dbg_template_base = before.dbg_templates.len();
         let mut gene = Codegen::from_state(before.clone());
@@ -1989,6 +2035,10 @@ impl ForgeSession {
             message: "constant base exceeds u32".into(),
             span: Span { start: 0, end: 0 },
         })?;
+        let type_registry_base = u32::try_from(type_registry_base).map_err(|_| CodegenError {
+            message: "type registry base exceeds u32".into(),
+            span: Span { start: 0, end: 0 },
+        })?;
         let error_template_base = u32::try_from(error_template_base).map_err(|_| CodegenError {
             message: "error template base exceeds u32".into(),
             span: Span { start: 0, end: 0 },
@@ -2005,6 +2055,7 @@ impl ForgeSession {
                 const_base,
                 constants: new_constants,
                 new_locals,
+                type_registry_base,
                 type_entries,
                 error_template_base,
                 error_templates,
@@ -2409,19 +2460,20 @@ mod tests {
                 Constant::Str("boom".into()),
             ],
             new_locals: 3,
+            type_registry_base: 1,
             type_entries: vec![type_entry(3, "Global::ChunkType")],
             error_template_base: 1,
             error_templates: vec![err_template(1, "Global::ChunkError")],
             dbg_template_base: 1,
             dbg_templates: vec![dbg_template(1)],
             callable_templates: Vec::new(),
-            functions: vec![function_entry(1, 5, 10), function_entry(2, 10, 12)],
+            functions: vec![function_entry(2, 5, 10), function_entry(3, 10, 12)],
             docs: vec![
                 doc_entry("Global::base_doc"),
                 doc_entry("Global::chunk_doc"),
             ],
             signatures: Vec::new(),
-            runtime_process_specs: vec![runtime_process_spec("Global::ChunkAgent", 1)],
+            runtime_process_specs: vec![runtime_process_spec("Global::ChunkAgent", 2)],
             runtime_boot_plan: RuntimeBootPlan {
                 singletons: vec![singleton_boot("Global::ChunkAgent")],
                 ..RuntimeBootPlan::default()
@@ -3528,16 +3580,19 @@ mod tests {
         );
         assert!(matches!(bytecode.opcodes[9], Opcode::Halt));
 
-        assert_eq!(bytecode.functions.len(), 3);
+        assert_eq!(bytecode.functions.len(), 4);
         assert_eq!(bytecode.functions[0].fun_idx, 0);
         assert_eq!(bytecode.functions[0].entry_pc, 10);
         assert_eq!(bytecode.functions[0].end_pc, 12);
         assert_eq!(bytecode.functions[1].fun_idx, 1);
-        assert_eq!(bytecode.functions[1].entry_pc, 14);
-        assert_eq!(bytecode.functions[1].end_pc, 19);
+        assert_eq!(bytecode.functions[1].entry_pc, 12);
+        assert_eq!(bytecode.functions[1].end_pc, 14);
         assert_eq!(bytecode.functions[2].fun_idx, 2);
-        assert_eq!(bytecode.functions[2].entry_pc, 19);
-        assert_eq!(bytecode.functions[2].end_pc, 21);
+        assert_eq!(bytecode.functions[2].entry_pc, 14);
+        assert_eq!(bytecode.functions[2].end_pc, 19);
+        assert_eq!(bytecode.functions[3].fun_idx, 3);
+        assert_eq!(bytecode.functions[3].entry_pc, 19);
+        assert_eq!(bytecode.functions[3].end_pc, 21);
 
         assert_eq!(bytecode.constants.len(), 7);
         assert_eq!(bytecode.error_templates.len(), 2);
@@ -3593,9 +3648,15 @@ mod tests {
 
         let mut dbg_chunk = relocatable_chunk();
         dbg_chunk.dbg_template_base += 1;
-        let err = compose_bytecode_with_chunk(base, dbg_chunk)
+        let err = compose_bytecode_with_chunk(base.clone(), dbg_chunk)
             .expect_err("dbg template base mismatch must fail");
         assert!(err.message.contains("chunk dbg template base mismatch"));
+
+        let mut type_chunk = relocatable_chunk();
+        type_chunk.type_registry_base += 1;
+        let err = compose_bytecode_with_chunk(base, type_chunk)
+            .expect_err("type registry base mismatch must fail");
+        assert!(err.message.contains("chunk type registry base mismatch"));
     }
 
     #[test]
@@ -3608,6 +3669,7 @@ mod tests {
 
         assert!(err
             .message
+            .to_ascii_lowercase()
             .contains("function table invariant violated in chunk"));
     }
 
@@ -6690,38 +6752,56 @@ impl Codegen {
             }
 
             TypedInner::StructDef(tag, name, field_names, field_policies, _) => {
-                self.state.type_registry.register(TypeEntry {
-                    tag: *tag,
-                    name: name.clone(),
-                    kind: TypeKind::Struct,
-                    field_names: field_names.clone(),
-                    private_flags: field_policies.iter().map(|policy| policy.private).collect(),
-                });
+                self.state
+                    .type_registry
+                    .try_register(TypeEntry {
+                        tag: *tag,
+                        name: name.clone(),
+                        kind: TypeKind::Struct,
+                        field_names: field_names.clone(),
+                        private_flags: field_policies.iter().map(|policy| policy.private).collect(),
+                    })
+                    .map_err(|err| CodegenError {
+                        message: err.to_string(),
+                        span: node.span.clone(),
+                    })?;
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
             TypedInner::RecordDef(tag, name, field_names, field_policies, _) => {
-                self.state.type_registry.register(TypeEntry {
-                    tag: *tag,
-                    name: name.clone(),
-                    kind: TypeKind::Record,
-                    field_names: field_names.clone(),
-                    private_flags: field_policies.iter().map(|policy| policy.private).collect(),
-                });
+                self.state
+                    .type_registry
+                    .try_register(TypeEntry {
+                        tag: *tag,
+                        name: name.clone(),
+                        kind: TypeKind::Record,
+                        field_names: field_names.clone(),
+                        private_flags: field_policies.iter().map(|policy| policy.private).collect(),
+                    })
+                    .map_err(|err| CodegenError {
+                        message: err.to_string(),
+                        span: node.span.clone(),
+                    })?;
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
             TypedInner::EnumDef(_, variants) => {
                 for variant in variants {
-                    self.state.type_registry.register(TypeEntry {
-                        tag: variant.tag,
-                        name: variant.constructor_name.clone(),
-                        kind: TypeKind::EnumVariant,
-                        field_names: variant.field_names.clone(),
-                        private_flags: vec![false; variant.field_names.len()],
-                    });
+                    self.state
+                        .type_registry
+                        .try_register(TypeEntry {
+                            tag: variant.tag,
+                            name: variant.constructor_name.clone(),
+                            kind: TypeKind::EnumVariant,
+                            field_names: variant.field_names.clone(),
+                            private_flags: vec![false; variant.field_names.len()],
+                        })
+                        .map_err(|err| CodegenError {
+                            message: err.to_string(),
+                            span: node.span.clone(),
+                        })?;
                 }
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));

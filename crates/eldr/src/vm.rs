@@ -1,10 +1,11 @@
 use sindr::builtin::builtin_meta_by_id;
 use sindr::ir::{
-    line_column_for_offset, Bytecode, BytecodeChunk, CallableTemplate, CallableTemplateArg,
-    CallableTemplateComposeFlavor, CallableTemplateDirectTarget, CallableTemplateKind, Constant,
-    DocEntry, FunctionEntry, Opcode, RuntimeHandlerTarget, RuntimeInitPolicy,
-    RuntimeProcessInstance, RuntimeProcessSpec, RuntimeProcessSpecTable, RuntimeSupervisorPolicy,
-    SourceMap,
+    line_column_for_offset, validate_chunk_function_table, validate_program_function_table,
+    validate_type_registry_append_entries, Bytecode, BytecodeChunk, CallableTemplate,
+    CallableTemplateArg, CallableTemplateComposeFlavor, CallableTemplateDirectTarget,
+    CallableTemplateKind, Constant, DocEntry, FunctionEntry, Opcode, RuntimeHandlerTarget,
+    RuntimeInitPolicy, RuntimeProcessInstance, RuntimeProcessSpec, RuntimeProcessSpecTable,
+    RuntimeSupervisorPolicy, SourceMap,
 };
 use sindr::names::IMPLICIT_ROOT_NAMESPACE_PREFIX;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
@@ -3504,6 +3505,7 @@ impl VM {
             const_base: chunk_const_base,
             constants,
             new_locals,
+            type_registry_base: chunk_type_registry_base,
             type_entries,
             error_template_base: chunk_error_template_base,
             error_templates,
@@ -3519,6 +3521,7 @@ impl VM {
         self.ensure_root_supervisor_booted()?;
         let code_base = self.bytecode.opcodes.len();
         let const_base = self.bytecode.constants.len();
+        let type_registry_base = self.bytecode.type_registry.entries().len();
         let error_template_base = self.bytecode.error_templates.len();
         let dbg_template_base = self.bytecode.dbg_templates.len();
         if chunk_const_base as usize != const_base {
@@ -3531,6 +3534,12 @@ impl VM {
             return Err(RuntimeError::new(format!(
                 "Chunk error template base mismatch: chunk={}, vm={}",
                 chunk_error_template_base, error_template_base
+            )));
+        }
+        if chunk_type_registry_base as usize != type_registry_base {
+            return Err(RuntimeError::new(format!(
+                "Chunk type registry base mismatch: chunk={}, vm={}",
+                chunk_type_registry_base, type_registry_base
             )));
         }
         if chunk_dbg_template_base as usize != dbg_template_base {
@@ -3548,7 +3557,10 @@ impl VM {
             dbg_template_base,
         )?;
         self.bytecode.constants.extend(constants);
-        self.bytecode.type_registry.extend(type_entries);
+        self.bytecode
+            .type_registry
+            .try_extend(type_entries)
+            .map_err(|err| RuntimeError::new(format!("Bytecode verifier: {}", err)))?;
         self.bytecode.error_templates.extend(error_templates);
         self.bytecode.dbg_templates.extend(dbg_templates);
         self.bytecode.callable_templates.extend(callable_templates);
@@ -4759,8 +4771,16 @@ impl VM {
     }
 
     fn verify_program(bytecode: &Bytecode) -> Result<(), RuntimeError> {
-        Self::verify_type_registry_entries(bytecode.type_registry.entries(), None)?;
+        validate_type_registry_append_entries(&[], bytecode.type_registry.entries())
+            .map_err(|err| RuntimeError::new(format!("Bytecode verifier: {}", err)))?;
         Self::verify_source_map_entries(bytecode.source_map.as_ref(), bytecode.opcodes.len(), "")?;
+        validate_program_function_table(
+            &bytecode.opcodes,
+            &bytecode.callable_templates,
+            &bytecode.runtime_process_specs.entries,
+            &bytecode.functions,
+        )
+        .map_err(|err| RuntimeError::new(err.to_string()))?;
 
         let halt_pos = if let Some(pos) = bytecode
             .opcodes
@@ -4833,14 +4853,7 @@ impl VM {
                         )));
                     }
                 }
-                Opcode::LoadFunctionRef(fun_idx) | Opcode::Call { fun_idx, .. } => {
-                    if bytecode.functions.get(*fun_idx as usize).is_none() {
-                        return Err(RuntimeError::new(format!(
-                            "Bytecode verifier: Unknown function index {} (unknown function ref)",
-                            fun_idx
-                        )));
-                    }
-                }
+                Opcode::LoadFunctionRef(_) | Opcode::Call { .. } => {}
                 Opcode::LoadCallableTemplateRef(template_id) => {
                     if !bytecode
                         .callable_templates
@@ -4872,35 +4885,15 @@ impl VM {
             }
         }
 
-        for (idx, entry) in bytecode.functions.iter().enumerate() {
-            if entry.fun_idx as usize != idx {
-                return Err(RuntimeError::new(format!(
-                    "Function table invariant violated: functions[{}].fun_idx = {}",
-                    idx, entry.fun_idx
-                )));
-            }
-            if entry.entry_pc as usize >= bytecode.opcodes.len() {
-                return Err(RuntimeError::new(format!(
-                    "Function {} entry_pc out of bounds: {}",
-                    entry.fun_idx, entry.entry_pc
-                )));
-            }
-            if entry.entry_pc as usize <= halt_pos {
-                return Err(RuntimeError::new(format!(
-                    "Bytecode verifier: function {} entry_pc {} must be after top-level Halt {}",
-                    entry.fun_idx, entry.entry_pc, halt_pos
-                )));
-            }
-        }
-
         Ok(())
     }
 
     fn verify_chunk(&self, chunk: &BytecodeChunk) -> Result<(), RuntimeError> {
-        Self::verify_type_registry_entries(
+        validate_type_registry_append_entries(
+            self.bytecode.type_registry.entries(),
             &chunk.type_entries,
-            Some(self.bytecode.type_registry.entries()),
-        )?;
+        )
+        .map_err(|err| RuntimeError::new(format!("Bytecode verifier: {}", err)))?;
         Self::verify_source_map_entries(chunk.source_map.as_ref(), chunk.opcodes.len(), "chunk")?;
 
         let const_base = self.bytecode.constants.len();
@@ -4916,6 +4909,13 @@ impl VM {
             return Err(RuntimeError::new(format!(
                 "Chunk error template base mismatch: chunk={}, vm={}",
                 chunk.error_template_base, error_template_base
+            )));
+        }
+        let type_registry_base = self.bytecode.type_registry.entries().len();
+        if chunk.type_registry_base as usize != type_registry_base {
+            return Err(RuntimeError::new(format!(
+                "Chunk type registry base mismatch: chunk={}, vm={}",
+                chunk.type_registry_base, type_registry_base
             )));
         }
 
@@ -4985,71 +4985,15 @@ impl VM {
             }
         }
 
-        let mut seen_fun_idxs = BTreeSet::new();
-        let mut next_append_idx = self.bytecode.functions.len();
-        let mut sorted_entries = chunk.functions.iter().collect::<Vec<_>>();
-        sorted_entries.sort_by_key(|entry| entry.fun_idx);
-
-        for entry in sorted_entries {
-            let idx = entry.fun_idx as usize;
-            if !seen_fun_idxs.insert(entry.fun_idx) {
-                return Err(RuntimeError::new(format!(
-                    "Bytecode verifier: duplicate function entry for fun_idx {}",
-                    entry.fun_idx
-                )));
-            }
-            if idx > next_append_idx {
-                return Err(RuntimeError::new(format!(
-                    "Function table invariant violated in chunk: fun_idx {} > len {}",
-                    idx, next_append_idx
-                )));
-            }
-            if idx == next_append_idx {
-                next_append_idx += 1;
-            }
-            if entry.entry_pc as usize >= chunk.opcodes.len() {
-                return Err(RuntimeError::new(format!(
-                    "Bytecode verifier: function {} entry_pc out of chunk bounds: {}",
-                    entry.fun_idx, entry.entry_pc
-                )));
-            }
-            if entry.entry_pc as usize <= halt_pos {
-                return Err(RuntimeError::new(format!(
-                    "Bytecode verifier: function {} entry_pc {} must be after top-level Halt {}",
-                    entry.fun_idx, entry.entry_pc, halt_pos
-                )));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn verify_type_registry_entries(
-        entries: &[sindr::runtime::TypeEntry],
-        existing: Option<&[sindr::runtime::TypeEntry]>,
-    ) -> Result<(), RuntimeError> {
-        let mut seen_tags = BTreeSet::new();
-        if let Some(existing) = existing {
-            for entry in existing {
-                seen_tags.insert(entry.tag);
-            }
-        }
-
-        for entry in entries {
-            if matches!(entry.tag, 0 | 1) {
-                return Err(RuntimeError::new(format!(
-                    "Bytecode verifier: reserved result tag reused in TypeRegistry: {}",
-                    entry.tag
-                )));
-            }
-
-            if !seen_tags.insert(entry.tag) {
-                return Err(RuntimeError::new(format!(
-                    "Bytecode verifier: duplicate type tag in TypeRegistry: {}",
-                    entry.tag
-                )));
-            }
-        }
+        validate_chunk_function_table(
+            &chunk.opcodes,
+            &chunk.callable_templates,
+            &chunk.runtime_process_specs,
+            &chunk.functions,
+            self.bytecode.functions.len(),
+            true,
+        )
+        .map_err(|err| RuntimeError::new(err.to_string()))?;
 
         Ok(())
     }
@@ -7768,13 +7712,13 @@ mod tests {
                 Opcode::Halt,
             ],
         );
-        let duration_tag = 0;
+        let duration_tag = 20;
         bytecode.type_registry.register(TypeEntry {
             tag: duration_tag,
             name: "Duration".into(),
             kind: TypeKind::Struct,
             field_names: vec!["millis".into()],
-            private_flags: Vec::new(),
+            private_flags: vec![false],
         });
         bytecode.constants = vec![Constant::Tag(duration_tag), Constant::Int(int(10))];
         let mut vm = VM::new(bytecode);
@@ -7819,13 +7763,13 @@ mod tests {
             ],
         );
         bytecode.type_registry.register(TypeEntry {
-            tag: 0,
+            tag: 20,
             name: "Duration".into(),
             kind: TypeKind::Struct,
             field_names: vec!["millis".into()],
-            private_flags: Vec::new(),
+            private_flags: vec![false],
         });
-        bytecode.constants = vec![Constant::Tag(0), Constant::Int(int(10))];
+        bytecode.constants = vec![Constant::Tag(20), Constant::Int(int(10))];
         let mut vm = VM::new(bytecode);
         let pid = vm
             .allocate_process_instance("Sleeper".into(), Some(Value::Unit), None, None)
@@ -8013,6 +7957,7 @@ mod tests {
             const_base: 0,
             constants: vec![Constant::Str("rolled back".into())],
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -8875,6 +8820,7 @@ mod tests {
             const_base: 0,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
@@ -9271,6 +9217,7 @@ mod tests {
             const_base: 0,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
@@ -9937,6 +9884,7 @@ mod tests {
             const_base: 0,
             constants: vec![Constant::Int(int(99)), Constant::Int(int(7))],
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -9966,6 +9914,7 @@ mod tests {
             const_base: 1,
             constants: vec![Constant::Int(int(42))],
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -10008,6 +9957,7 @@ mod tests {
             const_base: 0,
             constants: vec![Constant::Str("new message".into())],
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -10059,6 +10009,7 @@ mod tests {
                 const_base: 0,
                 constants: vec![Constant::Str("boom".into())],
                 new_locals: 0,
+                type_registry_base: 0,
                 type_entries: Vec::new(),
                 dbg_template_base: 0,
                 dbg_templates: Vec::new(),
@@ -10136,6 +10087,7 @@ mod tests {
             const_base: 1,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -10165,6 +10117,7 @@ mod tests {
             const_base: 1,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -10198,6 +10151,7 @@ mod tests {
             const_base: 0,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -10241,6 +10195,7 @@ mod tests {
             const_base: 0,
             constants: vec![Constant::Str("hello".into())],
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -10271,6 +10226,7 @@ mod tests {
             const_base: 0,
             constants: vec![Constant::Int(int(1))],
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -10309,6 +10265,7 @@ mod tests {
             const_base: 0,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -10354,6 +10311,7 @@ mod tests {
             const_base: 0,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -10383,9 +10341,9 @@ mod tests {
     }
 
     #[test]
-    fn run_rejects_reserved_type_tag_in_registry() {
+    fn type_registry_rejects_reserved_type_tag() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
-        bytecode.type_registry.register(TypeEntry {
+        let err = bytecode.type_registry.try_register(TypeEntry {
             tag: 0,
             name: "Bad".into(),
             kind: TypeKind::Struct,
@@ -10393,21 +10351,26 @@ mod tests {
             private_flags: vec![],
         });
 
-        let err = VM::new(bytecode).run().expect_err("must fail");
-        assert!(err.message.contains("reserved result tag"));
+        assert!(err
+            .expect_err("reserved result tags must be rejected")
+            .to_string()
+            .contains("reserved result tag"));
     }
 
     #[test]
-    fn run_rejects_duplicate_type_tag_in_registry() {
+    fn type_registry_rejects_duplicate_type_tag() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
-        bytecode.type_registry.register(TypeEntry {
-            tag: 10,
-            name: "A".into(),
-            kind: TypeKind::Struct,
-            field_names: vec![],
-            private_flags: vec![],
-        });
-        bytecode.type_registry.register(TypeEntry {
+        bytecode
+            .type_registry
+            .try_register(TypeEntry {
+                tag: 10,
+                name: "A".into(),
+                kind: TypeKind::Struct,
+                field_names: vec![],
+                private_flags: vec![],
+            })
+            .expect("first type entry should be valid");
+        let err = bytecode.type_registry.try_register(TypeEntry {
             tag: 10,
             name: "B".into(),
             kind: TypeKind::Record,
@@ -10415,8 +10378,10 @@ mod tests {
             private_flags: vec![],
         });
 
-        let err = VM::new(bytecode).run().expect_err("must fail");
-        assert!(err.message.contains("duplicate type tag"));
+        assert!(err
+            .expect_err("duplicate type tags must be rejected")
+            .to_string()
+            .contains("duplicate type tag"));
     }
 
     #[test]
@@ -10478,6 +10443,7 @@ mod tests {
             const_base: 0,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: vec![TypeEntry {
                 tag: 1,
                 name: "Bad".into(),
@@ -10519,6 +10485,7 @@ mod tests {
             const_base: 0,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 1,
             type_entries: vec![TypeEntry {
                 tag: 10,
                 name: "Duplicate".into(),

@@ -6776,6 +6776,9 @@ impl ReplEngine {
             }
             Err(e) => {
                 let committed_source = self.pending.clone();
+                self.sigil_session.rollback(sigil_cp);
+                self.scar_session.rollback(scar_cp);
+                self.forge_session.rollback(forge_cp);
                 let location = e
                     .context
                     .call_site
@@ -8368,6 +8371,7 @@ mod tests {
             const_base: 0,
             constants: vec![Constant::Int(sindr::primitives::int(1))],
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
@@ -8506,6 +8510,7 @@ mod tests {
                     const_base: 0,
                     constants: vec![sindr::ir::Constant::Int(sindr::primitives::int(1))],
                     new_locals: 0,
+                    type_registry_base: 0,
                     type_entries: Vec::new(),
                     dbg_template_base: 0,
                     dbg_templates: Vec::new(),
