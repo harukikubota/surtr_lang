@@ -840,6 +840,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         range_duration_comparisons_specialize_without_pending_trait_calls as fn(),
     ),
     (
+        "generic_struct_constructor_calls_remain_polymorphic_within_closure_body",
+        generic_struct_constructor_calls_remain_polymorphic_within_closure_body as fn(),
+    ),
+    (
         "generic_struct_constructor_calls_remain_polymorphic_within_one_source",
         generic_struct_constructor_calls_remain_polymorphic_within_one_source as fn(),
     ),
@@ -5273,6 +5277,87 @@ b = Box(10ms)"#,
                 && matches!(fields.as_slice(), [(field, Ty::Struct(inner, _inner_fields))]
                     if field == "value"
                         && inner == "Duration")
+    ));
+}
+
+fn generic_struct_constructor_calls_remain_polymorphic_within_closure_body() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"factory = {||
+  raw = Range(3, 1)
+  dur = Range(10ms, 20ms)
+  (raw, dur)
+}"#,
+    );
+
+    let factory = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(TypedPattern::Var(_, id), rhs) if id.name == "factory" => Some(rhs),
+            _ => None,
+        })
+        .expect("expected factory binding");
+
+    let TypedInner::Closure(_, _, body) = &factory.node else {
+        panic!("expected closure");
+    };
+    let TypedInner::Block(stmts) = &body.node else {
+        panic!("expected closure body block");
+    };
+
+    let mut range_bindings = stmts.iter().filter_map(|node| match &node.node {
+        TypedInner::Bind(TypedPattern::Var(ty, id), rhs)
+            if id.name == "raw" || id.name == "dur" =>
+        {
+            Some((id.name.as_str(), ty, rhs.as_ref()))
+        }
+        _ => None,
+    });
+
+    let raw = range_bindings.next().expect("expected raw binding");
+    let dur = range_bindings.next().expect("expected dur binding");
+
+    assert_eq!(raw.0, "raw");
+    assert!(matches!(
+        raw.1,
+        Ty::Struct(name, fields)
+            if (name == "Range" || name == "Global::Range")
+                && matches!(fields.as_slice(), [(min, Ty::Int), (max, Ty::Int)]
+                    if min == "min" && max == "max")
+    ));
+    assert!(matches!(
+        raw.2.ty,
+        Ty::Struct(ref name, ref fields)
+            if (name == "Range" || name == "Global::Range")
+                && matches!(fields.as_slice(), [(min, Ty::Int), (max, Ty::Int)]
+                    if min == "min" && max == "max")
+    ));
+
+    assert_eq!(dur.0, "dur");
+    assert!(matches!(
+        dur.1,
+        Ty::Struct(name, fields)
+            if (name == "Range" || name == "Global::Range")
+                && matches!(
+                    fields.as_slice(),
+                    [(min, Ty::Struct(inner_min, _)), (max, Ty::Struct(inner_max, _))]
+                        if min == "min"
+                            && max == "max"
+                            && inner_min == "Duration"
+                            && inner_max == "Duration"
+                )
+    ));
+    assert!(matches!(
+        dur.2.ty,
+        Ty::Struct(ref name, ref fields)
+            if (name == "Range" || name == "Global::Range")
+                && matches!(
+                    fields.as_slice(),
+                    [(min, Ty::Struct(inner_min, _)), (max, Ty::Struct(inner_max, _))]
+                        if min == "min"
+                            && max == "max"
+                            && inner_min == "Duration"
+                            && inner_max == "Duration"
+                )
     ));
 }
 

@@ -792,6 +792,9 @@ impl Checker {
                 let mut typed_stmts = Vec::new();
                 let mut last_ty = Ty::Unit;
                 for s in stmts {
+                    // Inference substitutions are statement-local inside blocks too.
+                    // Otherwise an earlier generic call can monomorphize later siblings.
+                    self.substitutions.clear();
                     let t = self.check_node(s)?;
                     last_ty = t.ty.clone();
                     typed_stmts.push(t);
@@ -1669,10 +1672,10 @@ impl Checker {
         if let Some(message) = self.bound_mismatch_message(expected, actual) {
             return message;
         }
+        let rendered = self.diagnostic_ty_names(&[expected, actual]);
         format!(
             "Argument type mismatch: expected {}, got {}",
-            self.ty_name(expected),
-            self.ty_name(actual)
+            rendered[0], rendered[1]
         )
     }
 
@@ -1681,11 +1684,12 @@ impl Checker {
             (Ty::Var(var), actual_ty) => {
                 let bounds = self.tyvar_bound_names(var);
                 if !bounds.is_empty() && !self.ty_satisfies_bounds(&actual_ty, &bounds) {
+                    let rendered = self.diagnostic_ty_names(&[expected, &actual_ty]);
                     Some(format!(
                         "Argument type mismatch: expected {} implementing {}, got {}",
-                        self.ty_name(expected),
+                        rendered[0],
                         bounds.join(" + "),
-                        self.ty_name(&actual_ty)
+                        rendered[1]
                     ))
                 } else {
                     None
@@ -1726,7 +1730,7 @@ impl Checker {
                 "{}\n`{}` evaluates this call before composition; the result type {} is not a function value.",
                 signature,
                 op_name,
-                self.ty_name(&typed.ty)
+                self.diagnostic_ty_name(&typed.ty)
             )
         } else {
             format!(
@@ -1819,15 +1823,18 @@ impl Checker {
     }
 
     pub(super) fn callable_signature_from_parts(&self, params: &[Ty], ret: &Ty) -> String {
-        let param_str = params
+        let ty_refs = params
             .iter()
-            .map(|ty| self.ty_name(ty))
-            .collect::<Vec<_>>()
-            .join(", ");
+            .map(|ty| ty as &Ty)
+            .chain(std::iter::once(ret))
+            .collect::<Vec<_>>();
+        let rendered = self.diagnostic_ty_names(&ty_refs);
+        let (rendered_params, rendered_ret) = rendered.split_at(params.len());
+        let param_str = rendered_params.join(", ");
         if param_str.is_empty() {
-            format!("(-> {})", self.ty_name(ret))
+            format!("(-> {})", rendered_ret[0])
         } else {
-            format!("({} -> {})", param_str, self.ty_name(ret))
+            format!("({} -> {})", param_str, rendered_ret[0])
         }
     }
 
@@ -1848,6 +1855,13 @@ impl Checker {
         ret: &Ty,
         first_param_name: Option<&str>,
     ) -> String {
+        let ty_refs = params
+            .iter()
+            .map(|ty| ty as &Ty)
+            .chain(std::iter::once(ret))
+            .collect::<Vec<_>>();
+        let rendered = self.diagnostic_ty_names(&ty_refs);
+        let (rendered_params, rendered_ret) = rendered.split_at(params.len());
         let param_list = params
             .iter()
             .enumerate()
@@ -1856,7 +1870,9 @@ impl Checker {
                     (0, Some(name)) => name.to_string(),
                     _ => format!("arg{}", idx + 1),
                 };
-                format!("{}: {}", name, self.ty_name(ty))
+                let rendered_ty = &rendered_params[idx];
+                let _ = ty;
+                format!("{}: {}", name, rendered_ty)
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -1864,7 +1880,7 @@ impl Checker {
             "Call target signature: {}({}) -> {}",
             display_name,
             param_list,
-            self.ty_name(ret)
+            rendered_ret[0]
         )
     }
 
@@ -6582,7 +6598,10 @@ impl Checker {
                 }
                 Some(other) => {
                     return Err(TypeError {
-                        message: format!("Expected function type, got {}", self.ty_name(other)),
+                        message: format!(
+                            "Expected function type, got {}",
+                            self.diagnostic_ty_name(other)
+                        ),
                         span: span.clone(),
                         hint: None,
                     });
@@ -6607,8 +6626,8 @@ impl Checker {
                             message: format!(
                                 "closure parameter `{}` expected {}, got {}",
                                 param.id.name,
-                                self.ty_name(param_ty),
-                                self.ty_name(&annotated)
+                                self.diagnostic_ty_names(&[param_ty, &annotated])[0],
+                                self.diagnostic_ty_names(&[param_ty, &annotated])[1]
                             ),
                             span: param.id.span.clone(),
                             hint: None,
@@ -6752,7 +6771,7 @@ impl Checker {
                 return Err(TypeError {
                     message: format!(
                         "Expected function type, got {}",
-                        self.ty_name(&self.resolve_ty(expected_ty))
+                        self.diagnostic_ty_name(&self.resolve_ty(expected_ty))
                     ),
                     span: span.clone(),
                     hint: None,
@@ -6881,7 +6900,7 @@ impl Checker {
             Ty::Func(params, ret) => (params.clone(), ret.as_ref().clone()),
             other => {
                 return Err(TypeError {
-                    message: format!("Not a function: {}", self.ty_name(other)),
+                    message: format!("Not a function: {}", self.diagnostic_ty_name(other)),
                     span: typed_target.span.clone(),
                     hint: Some(
                         "Capture (`&`) requires a function name, function value, or closure."

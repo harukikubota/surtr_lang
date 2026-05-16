@@ -1728,6 +1728,130 @@ impl Checker {
         instantiated
     }
 
+    fn diagnostic_tyvar_name(index: usize) -> String {
+        let mut value = index;
+        let mut name = String::new();
+        loop {
+            let rem = value % 26;
+            name.push((b'A' + rem as u8) as char);
+            if value < 26 {
+                break;
+            }
+            value = (value / 26) - 1;
+        }
+        format!("${}", name.chars().rev().collect::<String>())
+    }
+
+    fn diagnostic_ty_name_with_state(
+        &self,
+        ty: &Ty,
+        tyvars: &mut HashMap<u32, String>,
+        next_tyvar_index: &mut usize,
+    ) -> String {
+        match ty {
+            Ty::Int => "Int".into(),
+            Ty::Float => "Float".into(),
+            Ty::Str => "String".into(),
+            Ty::Bool => "Boolean".into(),
+            Ty::Unit => "Unit".into(),
+            Ty::Error => "Error".into(),
+            Ty::Hole => "_".into(),
+            Ty::List(inner) => format!(
+                "List<{}>",
+                self.diagnostic_ty_name_with_state(inner, tyvars, next_tyvar_index)
+            ),
+            Ty::Lazy(inner) => format!(
+                "Lazy<{}>",
+                self.diagnostic_ty_name_with_state(inner, tyvars, next_tyvar_index)
+            ),
+            Ty::TypeRef(inner) => format!(
+                "TypeRef<{}>",
+                self.diagnostic_ty_name_with_state(inner, tyvars, next_tyvar_index)
+            ),
+            Ty::Pid(name) => format!("PID<{}>", Self::surface_name(name)),
+            Ty::Facet(source, focus) => format!(
+                "Facet<{}, {}>",
+                self.diagnostic_ty_name_with_state(source, tyvars, next_tyvar_index),
+                self.diagnostic_ty_name_with_state(focus, tyvars, next_tyvar_index)
+            ),
+            Ty::Tuple(items) => format!(
+                "({})",
+                items
+                    .iter()
+                    .map(|item| {
+                        self.diagnostic_ty_name_with_state(item, tyvars, next_tyvar_index)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Ty::Result(ok, _) => format!(
+                "Result<{}>",
+                self.diagnostic_ty_name_with_state(ok, tyvars, next_tyvar_index)
+            ),
+            Ty::Var(var) => tyvars
+                .entry(*var)
+                .or_insert_with(|| {
+                    let name = Self::diagnostic_tyvar_name(*next_tyvar_index);
+                    *next_tyvar_index += 1;
+                    name
+                })
+                .clone(),
+            Ty::Struct(name, _) | Ty::Record(name, _) => Self::surface_name(name).to_string(),
+            Ty::Enum(name, args) => {
+                if args.is_empty() {
+                    Self::surface_name(name).to_string()
+                } else {
+                    format!(
+                        "{}<{}>",
+                        Self::surface_name(name),
+                        args.iter()
+                            .map(|arg| {
+                                self.diagnostic_ty_name_with_state(arg, tyvars, next_tyvar_index)
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                }
+            }
+            Ty::Func(params, ret) => {
+                let param_str = params
+                    .iter()
+                    .map(|ty| self.diagnostic_ty_name_with_state(ty, tyvars, next_tyvar_index))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if param_str.is_empty() {
+                    format!(
+                        "(-> {})",
+                        self.diagnostic_ty_name_with_state(ret, tyvars, next_tyvar_index)
+                    )
+                } else {
+                    format!(
+                        "({} -> {})",
+                        param_str,
+                        self.diagnostic_ty_name_with_state(ret, tyvars, next_tyvar_index)
+                    )
+                }
+            }
+            Ty::BuiltinFunc { name, .. } => format!("Builtin({})", name),
+            Ty::UserFunc { .. } => "UserFunc".into(),
+        }
+    }
+
+    pub(super) fn diagnostic_ty_names(&self, tys: &[&Ty]) -> Vec<String> {
+        let mut tyvars = HashMap::new();
+        let mut next_tyvar_index = 0usize;
+        tys.iter()
+            .map(|ty| self.diagnostic_ty_name_with_state(ty, &mut tyvars, &mut next_tyvar_index))
+            .collect()
+    }
+
+    pub(super) fn diagnostic_ty_name(&self, ty: &Ty) -> String {
+        self.diagnostic_ty_names(&[ty])
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+    }
+
     pub(super) fn ty_name(&self, ty: &Ty) -> String {
         match ty {
             Ty::Int => "Int".into(),

@@ -39,6 +39,22 @@ fn strip_ansi(input: &str) -> String {
     output
 }
 
+fn contains_numeric_tyvar(input: &str) -> bool {
+    let chars: Vec<char> = input.chars().collect();
+    for idx in 0..chars.len() {
+        if chars[idx] != '$' {
+            continue;
+        }
+        if chars
+            .get(idx + 1)
+            .is_some_and(|next| next.is_ascii_digit())
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn write_math_module(temp: &Path) {
     write_source(
         &temp.join("lib/math.srt"),
@@ -155,6 +171,70 @@ test("String") {
     assert!(stdout.contains("assert_eq failed: expected \"tes\", got \"bad\""));
     assert!(stdout.contains("lib/tests/math.srt"));
     assert!(!stdout.contains("note:"));
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn test_command_runs_range_library_tests_with_polymorphic_constructor_calls() {
+    let repo = repo_root();
+    let output = run_surtr(&repo, &["test", "range"]);
+    assert!(
+        output.status.success(),
+        "range test command should succeed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("[PASS] Range > construction helpers > keeps constructor polymorphism across different endpoint types in one scope"));
+    assert!(stdout.contains("test result: passed=6, failed=0, total=6"));
+}
+
+#[test]
+fn test_command_type_errors_hide_numeric_inference_variables_in_diagnostics() {
+    let temp = unique_temp_dir("surtr_test_command_hidden_numeric_tyvars");
+    write_source(
+        &temp.join("lib/tests/generic_diag.srt"),
+        r#"import Test;
+
+defstruct Box<$A> {
+  value: $A,
+}
+
+impl Box {
+  def new<$A: Compare>(value: $A) -> Box<$A> {
+    Box { value }
+  }
+}
+
+test("Diagnostics") {
+  it("renders user-facing placeholders") {
+    bad = Box(Option::Some(1))
+    assert_eq("unreachable", inspect(bad))
+  }
+}
+"#,
+    );
+
+    let output = run_surtr(&temp, &["test", "generic_diag"]);
+    assert!(
+        !output.status.success(),
+        "generic diagnostic test should fail\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(
+        stderr.contains("Argument type mismatch: expected $A implementing Compare, got Option<Int>"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("Call target signature: Box::new(arg1: $A) -> Box"),
+        "{stderr}"
+    );
+    assert!(!contains_numeric_tyvar(&stderr), "{stderr}");
 
     let _ = fs::remove_dir_all(temp);
 }
