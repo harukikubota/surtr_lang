@@ -37,6 +37,54 @@ impl Float {
   def max(a: Float, b: Float) -> Float {
     if(a >= b, a, b)
   }
+
+  @doc """
+  Round `value` down to the nearest integer value, keeping the result as `Float`.
+  ## REPL
+  xldr(1)> Float::floor(1.8)
+  1.0
+  """
+  @builtin def floor(value: Float) -> Float
+
+  @doc """
+  Round `value` up to the nearest integer value, keeping the result as `Float`.
+  ## REPL
+  xldr(1)> Float::ceil(1.2)
+  2.0
+  """
+  @builtin def ceil(value: Float) -> Float
+
+  @doc """
+  Round `value` to the nearest integer value, keeping the result as `Float`.
+  ## REPL
+  xldr(1)> Float::round(1.5)
+  2.0
+  """
+  @builtin def round(value: Float) -> Float
+
+  @doc """
+  Drop the fractional part of `value`, keeping the result as `Float`.
+  ## REPL
+  xldr(1)> Float::trunc(-1.8)
+  -1.0
+  """
+  @builtin def trunc(value: Float) -> Float
+
+  @doc """
+  Return the builtin `pi` constant as a finite `Float`.
+  ## REPL
+  xldr(1)> Float::pi()
+  3.141592653589793
+  """
+  @builtin def pi() -> Float
+
+  @doc """
+  Return the builtin `e` constant as a finite `Float`.
+  ## REPL
+  xldr(1)> Float::e()
+  2.718281828459045
+  """
+  @builtin def e() -> Float
 }
 
 impl Add for Float {

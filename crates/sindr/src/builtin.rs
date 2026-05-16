@@ -846,6 +846,36 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Float, Float) -> Float",
     },
     BuiltinMeta {
+        name: "floor",
+        arity: 1,
+        sig_str: "(Float) -> Float",
+    },
+    BuiltinMeta {
+        name: "ceil",
+        arity: 1,
+        sig_str: "(Float) -> Float",
+    },
+    BuiltinMeta {
+        name: "round",
+        arity: 1,
+        sig_str: "(Float) -> Float",
+    },
+    BuiltinMeta {
+        name: "trunc",
+        arity: 1,
+        sig_str: "(Float) -> Float",
+    },
+    BuiltinMeta {
+        name: "pi",
+        arity: 0,
+        sig_str: "() -> Float",
+    },
+    BuiltinMeta {
+        name: "e",
+        arity: 0,
+        sig_str: "() -> Float",
+    },
+    BuiltinMeta {
         name: "__operator_int_eq",
         arity: 2,
         sig_str: "(Int, Int) -> Boolean",

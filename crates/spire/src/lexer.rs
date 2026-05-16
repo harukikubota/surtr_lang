@@ -250,6 +250,12 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 let val: f64 = text.parse().map_err(|_| {
                     ParseError::syntax(format!("Invalid float: {}", text), Span { start, end: i })
                 })?;
+                if !val.is_finite() {
+                    return Err(ParseError::syntax(
+                        format!("Float literal must be finite: {}", text),
+                        Span { start, end: i },
+                    ));
+                }
                 tokens.push(Spanned {
                     token: Token::Float(val),
                     span: Span { start, end: i },
@@ -703,6 +709,13 @@ mod tests {
     fn test_float() {
         let tokens = tokenize("2.5").unwrap();
         assert!(matches!(tokens[0].token, Token::Float(f) if (f - 2.5).abs() < 1e-10));
+    }
+
+    #[test]
+    fn test_float_rejects_non_finite_literal() {
+        let literal = format!("{}.0", "9".repeat(400));
+        let err = tokenize(&literal).expect_err("expected non-finite float literal to fail");
+        assert!(err.message().contains("Float literal must be finite"));
     }
 
     #[test]

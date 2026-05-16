@@ -186,10 +186,7 @@ fn format_ast_ty(ty: &spire::ast::AstTy) -> String {
     }
 }
 
-fn rewrite_self_ast_ty(
-    ty: &spire::ast::AstTy,
-    self_ty: &spire::ast::AstTy,
-) -> spire::ast::AstTy {
+fn rewrite_self_ast_ty(ty: &spire::ast::AstTy, self_ty: &spire::ast::AstTy) -> spire::ast::AstTy {
     match ty {
         spire::ast::AstTy::Named(_, name) if name == "Self" => self_ty.clone(),
         spire::ast::AstTy::Named(_, _) | spire::ast::AstTy::ImplTrait(_, _) => ty.clone(),
@@ -347,17 +344,17 @@ fn format_impl_method_signature(
     params: &[spire::ast::FunParam],
     ret_ty: &Option<spire::ast::AstTy>,
 ) -> String {
-    let self_ty = spire::ast::AstTy::Named(
-        spire::ast::Span { start: 0, end: 0 },
-        target.to_string(),
-    );
+    let self_ty =
+        spire::ast::AstTy::Named(spire::ast::Span { start: 0, end: 0 }, target.to_string());
     let params = params
         .iter()
-        .map(|param| format!(
-            "{}: {}",
-            param.name,
-            format_ast_ty(&rewrite_self_ast_ty(&param.ty, &self_ty))
-        ))
+        .map(|param| {
+            format!(
+                "{}: {}",
+                param.name,
+                format_ast_ty(&rewrite_self_ast_ty(&param.ty, &self_ty))
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
     let type_params = format_type_params(type_params);
@@ -382,10 +379,8 @@ fn format_impl_extractor_signature(
     param: &spire::ast::ExtractorParam,
     ret_ty: &spire::ast::AstTy,
 ) -> String {
-    let self_ty = spire::ast::AstTy::Named(
-        spire::ast::Span { start: 0, end: 0 },
-        target.to_string(),
-    );
+    let self_ty =
+        spire::ast::AstTy::Named(spire::ast::Span { start: 0, end: 0 }, target.to_string());
     let type_params = format_type_params(type_params);
     let param = match &param.ty {
         Some(ty) => format!(
@@ -448,11 +443,13 @@ fn format_trait_impl_method_signature(
 ) -> String {
     let params = params
         .iter()
-        .map(|param| format!(
-            "{}: {}",
-            param.name,
-            format_ast_ty(&rewrite_self_ast_ty(&param.ty, target_ty))
-        ))
+        .map(|param| {
+            format!(
+                "{}: {}",
+                param.name,
+                format_ast_ty(&rewrite_self_ast_ty(&param.ty, target_ty))
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
     let type_params = format_type_params(type_params);
@@ -966,7 +963,11 @@ fn collect_signature_entries_for_ast(
                                 qualified_method_name,
                                 DocKind::Function,
                                 format_impl_method_signature(
-                                    target, name, type_params, params, ret_ty,
+                                    target,
+                                    name,
+                                    type_params,
+                                    params,
+                                    ret_ty,
                                 ),
                             );
                         }
@@ -1006,7 +1007,11 @@ fn collect_signature_entries_for_ast(
                                 qualified_method_name,
                                 DocKind::Function,
                                 format_impl_extractor_signature(
-                                    target, name, type_params, param, ret_ty,
+                                    target,
+                                    name,
+                                    type_params,
+                                    param,
+                                    ret_ty,
                                 ),
                             );
                         }
@@ -1050,7 +1055,13 @@ fn collect_signature_entries_for_ast(
                     };
                     if let Some((name, type_params, params, ret_ty)) = method_parts {
                         let rendered = format_trait_impl_method_signature(
-                            trait_name, trait_args, target_ty, name, type_params, params, ret_ty,
+                            trait_name,
+                            trait_args,
+                            target_ty,
+                            name,
+                            type_params,
+                            params,
+                            ret_ty,
                         );
                         push_signature_entry(
                             out,
@@ -1128,12 +1139,7 @@ pub fn collect_signature_entries(
     user_module_path: Option<&str>,
 ) -> Vec<SignatureEntry> {
     let mut signatures = Vec::new();
-    collect_signature_entries_into(
-        &mut signatures,
-        module_stages,
-        user_ast,
-        user_module_path,
-    );
+    collect_signature_entries_into(&mut signatures, module_stages, user_ast, user_module_path);
     signatures
 }
 
@@ -1157,12 +1163,7 @@ pub fn collect_signature_entries_with_base(
     user_module_path: Option<&str>,
 ) -> Vec<SignatureEntry> {
     let mut signatures = base_signatures.to_vec();
-    collect_signature_entries_into(
-        &mut signatures,
-        module_stages,
-        user_ast,
-        user_module_path,
-    );
+    collect_signature_entries_into(&mut signatures, module_stages, user_ast, user_module_path);
     signatures
 }
 
@@ -1210,11 +1211,7 @@ fn collect_signature_entries_into(
         }
     }
 
-    collect_signature_entries_for_ast(
-        user_ast,
-        user_module_path.unwrap_or_default(),
-        signatures,
-    );
+    collect_signature_entries_for_ast(user_ast, user_module_path.unwrap_or_default(), signatures);
 }
 
 #[derive(Debug, Clone, PartialEq)]

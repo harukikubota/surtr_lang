@@ -308,7 +308,9 @@ Opcode は以下のカテゴリを持つ。
 - regex 系は Rust `regex` crate のラッパーとして builtin 実装し、regex 未サポート構文は `RegexCompileError` として返す
 - `RegexCaptures` の runtime 表現は `groups: Vec<Option<(start, end)>>`, `name_to_index: HashMap<String, usize>`, `input: String` を保持する
 - random 系は `CallBuiltin` で実装し、Opcode は追加しない。`RandomGenerator` は opaque な seedable state として保持し、半開区間が空の場合は `InvalidRandomRange` を `Result` の `Err` として返す
-- `Float` の厳密契約は `doc/float.md` を参照する
+- `Float` は finite-only の `f64` ラッパーとして扱う
+- VM は `LoadConst`, float arithmetic opcode, float builtin helper, `safe_div`, JSON bridge の各経路で non-finite value を user-visible `Float` として生成しない
+- `Float` helper surface では `abs`, `min`, `max`, `floor`, `ceil`, `round`, `trunc`, `pi`, `e` を提供する
 
 ### 7.1 Json builtins
 

@@ -79,11 +79,7 @@ impl Resolver {
         let [value_expr, err_expr] =
             collect_fixed_positional_args(span.clone(), args, "map_err", 2)?;
         let value = self.resolve_node(value_expr)?;
-        let err = self.resolve_error_constructor_expr(
-            err_expr,
-            "map_err",
-            "error argument",
-        )?;
+        let err = self.resolve_error_constructor_expr(err_expr, "map_err", "error argument")?;
         Ok(Resolved::MapErr(span, Box::new(value), Box::new(err)))
     }
 
@@ -92,14 +88,9 @@ impl Resolver {
         span: Span,
         args: Vec<RecordLitArg>,
     ) -> Result<Resolved, ResolveError> {
-        let [value_expr, err_expr] =
-            collect_fixed_positional_args(span.clone(), args, "cause", 2)?;
+        let [value_expr, err_expr] = collect_fixed_positional_args(span.clone(), args, "cause", 2)?;
         let value = self.resolve_node(value_expr)?;
-        let err = self.resolve_error_constructor_expr(
-            err_expr,
-            "cause",
-            "error argument",
-        )?;
+        let err = self.resolve_error_constructor_expr(err_expr, "cause", "error argument")?;
         Ok(Resolved::Cause(span, Box::new(value), Box::new(err)))
     }
 
@@ -111,11 +102,7 @@ impl Resolver {
         let [value_expr, marker_expr, handler_expr] =
             collect_fixed_positional_args(span.clone(), args, "recover_kind", 3)?;
         let value = self.resolve_node(value_expr)?;
-        let marker = self.resolve_error_constructor_expr(
-            marker_expr,
-            "recover_kind",
-            "marker",
-        )?;
+        let marker = self.resolve_error_constructor_expr(marker_expr, "recover_kind", "marker")?;
         let handler = self.resolve_node(handler_expr)?;
         Ok(Resolved::RecoverKind(
             span,

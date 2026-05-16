@@ -31,6 +31,7 @@ defenum JsonValue {
 
 - 整数は `JsonValue::Int`
 - 小数と指数表記は `JsonValue::Float`
+- `JsonValue::Float` の中身は finite-only の `Float`
 - object の key は常に `String`
 
 ## decode / encode

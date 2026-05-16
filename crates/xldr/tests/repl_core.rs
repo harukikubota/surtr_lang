@@ -1789,8 +1789,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let typed_neq_sig = engine.handle_line(":sig neq(Int, Int)");
     let typed_neq_sig = signature_text(&typed_neq_sig);
     assert!(
-        typed_neq_sig
-            .contains("defined:\n  impl Neq for Int::neq(self: Int, rhs: Int) -> Boolean"),
+        typed_neq_sig.contains("defined:\n  impl Neq for Int::neq(self: Int, rhs: Int) -> Boolean"),
         "{typed_neq_sig}"
     );
     assert!(
@@ -1916,8 +1915,9 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_sig = engine.handle_line(":sig Duration!()");
     let extractor_sig = signature_text(&extractor_sig);
     assert!(
-        extractor_sig
-            .contains("defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"),
+        extractor_sig.contains(
+            "defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"
+        ),
         "{extractor_sig}"
     );
     assert!(
@@ -1932,8 +1932,9 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_sig_explicit_self = engine.handle_line(":sig Duration!(Duration)");
     let extractor_sig_explicit_self = signature_text(&extractor_sig_explicit_self);
     assert!(
-        extractor_sig_explicit_self
-            .contains("defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"),
+        extractor_sig_explicit_self.contains(
+            "defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"
+        ),
         "{extractor_sig_explicit_self}"
     );
     assert!(

@@ -1878,9 +1878,7 @@ impl Checker {
             .join(", ");
         format!(
             "Call target signature: {}({}) -> {}",
-            display_name,
-            param_list,
-            rendered_ret[0]
+            display_name, param_list, rendered_ret[0]
         )
     }
 

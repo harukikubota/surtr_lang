@@ -8,7 +8,8 @@ use sindr::names::surface_path_name;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
     quote_surtr_string_literal, Callable, FileHandleValue, HashMapHandle, ListHandle, Location,
-    RandomGeneratorHandle, RegexCapturesHandle, RegexHandle, RegexMatchHandle, RichError, TypeEntry,
+    RandomGeneratorHandle, RegexCapturesHandle, RegexHandle, RegexMatchHandle, RichError,
+    TypeEntry,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -687,6 +688,30 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_operator_float_mul,
     },
     BuiltinImpl {
+        name: "floor",
+        func: builtin_float_floor,
+    },
+    BuiltinImpl {
+        name: "ceil",
+        func: builtin_float_ceil,
+    },
+    BuiltinImpl {
+        name: "round",
+        func: builtin_float_round,
+    },
+    BuiltinImpl {
+        name: "trunc",
+        func: builtin_float_trunc,
+    },
+    BuiltinImpl {
+        name: "pi",
+        func: builtin_float_pi,
+    },
+    BuiltinImpl {
+        name: "e",
+        func: builtin_float_e,
+    },
+    BuiltinImpl {
         name: "__operator_int_eq",
         func: builtin_operator_int_eq,
     },
@@ -1321,10 +1346,11 @@ fn builtin_safe_div(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError
             }
         }
         (Value::Float(a), Value::Float(b)) => {
-            if *b == 0.0 {
+            let (a, b) = expect_finite_float_pair(*a, *b, "safe_div")?;
+            if b == 0.0 {
                 Ok(err_result(vm, "ZeroDivisionError", "division by zero"))
             } else {
-                Ok(ok_result(Value::Float(a / b)))
+                Ok(ok_result(float_value(a / b, "safe_div")?))
             }
         }
         (left, right) => Err(RuntimeError::new(format!(
@@ -1367,6 +1393,33 @@ fn expect_float_pair(args: &[Value], name: &str) -> Result<(f64, f64), RuntimeEr
     Ok((*left, *right))
 }
 
+fn expect_finite_float(value: f64, name: &str) -> Result<f64, RuntimeError> {
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(RuntimeError::new(format!(
+            "{name} expects finite Float values"
+        )))
+    }
+}
+
+fn expect_finite_float_pair(left: f64, right: f64, name: &str) -> Result<(f64, f64), RuntimeError> {
+    Ok((
+        expect_finite_float(left, name)?,
+        expect_finite_float(right, name)?,
+    ))
+}
+
+fn float_value(value: f64, name: &str) -> Result<Value, RuntimeError> {
+    if value.is_finite() {
+        Ok(Value::Float(value))
+    } else {
+        Err(RuntimeError::new(format!(
+            "{name} produced non-finite value"
+        )))
+    }
+}
+
 fn builtin_operator_int_add(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_int_pair(&args, "__operator_int_add")?;
     Ok(Value::Int(left + right))
@@ -1384,17 +1437,80 @@ fn builtin_operator_int_mul(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
 
 fn builtin_operator_float_add(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_add")?;
-    Ok(Value::Float(left + right))
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_add")?;
+    float_value(left + right, "__operator_float_add")
 }
 
 fn builtin_operator_float_sub(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_sub")?;
-    Ok(Value::Float(left - right))
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_sub")?;
+    float_value(left - right, "__operator_float_sub")
 }
 
 fn builtin_operator_float_mul(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_mul")?;
-    Ok(Value::Float(left * right))
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_mul")?;
+    float_value(left * right, "__operator_float_mul")
+}
+
+fn builtin_float_floor(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = expect_finite_float(
+        args.first()
+            .and_then(|arg| match arg {
+                Value::Float(value) => Some(*value),
+                _ => None,
+            })
+            .ok_or_else(|| RuntimeError::new("float_floor expects (Float)"))?,
+        "float_floor",
+    )?;
+    float_value(value.floor(), "float_floor")
+}
+
+fn builtin_float_ceil(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = expect_finite_float(
+        args.first()
+            .and_then(|arg| match arg {
+                Value::Float(value) => Some(*value),
+                _ => None,
+            })
+            .ok_or_else(|| RuntimeError::new("float_ceil expects (Float)"))?,
+        "float_ceil",
+    )?;
+    float_value(value.ceil(), "float_ceil")
+}
+
+fn builtin_float_round(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = expect_finite_float(
+        args.first()
+            .and_then(|arg| match arg {
+                Value::Float(value) => Some(*value),
+                _ => None,
+            })
+            .ok_or_else(|| RuntimeError::new("float_round expects (Float)"))?,
+        "float_round",
+    )?;
+    float_value(value.round(), "float_round")
+}
+
+fn builtin_float_trunc(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = expect_finite_float(
+        args.first()
+            .and_then(|arg| match arg {
+                Value::Float(value) => Some(*value),
+                _ => None,
+            })
+            .ok_or_else(|| RuntimeError::new("float_trunc expects (Float)"))?,
+        "float_trunc",
+    )?;
+    float_value(value.trunc(), "float_trunc")
+}
+
+fn builtin_float_pi(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    float_value(std::f64::consts::PI, "float_pi")
+}
+
+fn builtin_float_e(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    float_value(std::f64::consts::E, "float_e")
 }
 
 fn builtin_operator_int_eq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -1429,31 +1545,37 @@ fn builtin_operator_int_gte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
 
 fn builtin_operator_float_eq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_eq")?;
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_eq")?;
     Ok(Value::Bool(left == right))
 }
 
 fn builtin_operator_float_neq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_neq")?;
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_neq")?;
     Ok(Value::Bool(left != right))
 }
 
 fn builtin_operator_float_lt(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_lt")?;
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_lt")?;
     Ok(Value::Bool(left < right))
 }
 
 fn builtin_operator_float_lte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_lte")?;
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_lte")?;
     Ok(Value::Bool(left <= right))
 }
 
 fn builtin_operator_float_gt(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_gt")?;
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_gt")?;
     Ok(Value::Bool(left > right))
 }
 
 fn builtin_operator_float_gte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_gte")?;
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_gte")?;
     Ok(Value::Bool(left >= right))
 }
 
@@ -1493,6 +1615,7 @@ fn builtin_compare_int(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeEr
 
 fn builtin_compare_float(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__compare_float")?;
+    let (left, right) = expect_finite_float_pair(left, right, "__compare_float")?;
     if left < right {
         ordering_value(vm, "Ordering::Less")
     } else if left > right {
@@ -3853,8 +3976,7 @@ fn decode_string_encoding(vm: &VM, value: &Value) -> Result<StringEncodingMode, 
             "expected StringEncoding enum value for encoding argument",
         ));
     };
-    let entry =
-        lookup_tagged_type_entry(vm, *tag, format!("unknown StringEncoding tag: {}", tag))?;
+    let entry = lookup_tagged_type_entry(vm, *tag, format!("unknown StringEncoding tag: {}", tag))?;
     match type_name_leaf(&entry.name) {
         "Utf8" => Ok(StringEncodingMode::Utf8),
         "Ascii" => Ok(StringEncodingMode::Ascii),
@@ -4028,7 +4150,13 @@ fn json_value_to_surtr(
                     vec![Value::Int(BigInt::from(value))],
                 ))
             } else if let Some(value) = number.as_f64() {
-                Ok(json_variant(ctors.float, 3, vec![Value::Float(value)]))
+                if value.is_finite() {
+                    Ok(json_variant(ctors.float, 3, vec![Value::Float(value)]))
+                } else {
+                    Err(RuntimeError::new(
+                        "JsonValue::Float cannot represent NaN or infinity",
+                    ))
+                }
             } else {
                 Err(RuntimeError::new(
                     "serde_json number could not be represented",
@@ -5348,6 +5476,48 @@ mod tests {
         )
         .expect_err("safe_mod must reject non-int inputs");
         assert!(err.message.contains("safe_mod expects (Int, Int)"));
+    }
+
+    #[test]
+    fn float_builtins_reject_non_finite_inputs_and_results() {
+        let mut vm = test_vm();
+
+        let err = call_builtin(
+            &mut vm,
+            builtin_id("__operator_float_add"),
+            vec![Value::Float(f64::MAX), Value::Float(f64::MAX)],
+        )
+        .expect_err("float add must reject infinity result");
+        assert!(err.message.contains("non-finite value"));
+
+        let err = call_builtin(
+            &mut vm,
+            builtin_id("__compare_float"),
+            vec![Value::Float(f64::INFINITY), Value::Float(1.0)],
+        )
+        .expect_err("float compare must reject infinity input");
+        assert!(err
+            .message
+            .contains("__compare_float expects finite Float values"));
+    }
+
+    #[test]
+    fn float_builtins_expose_rounding_and_constants() {
+        let mut vm = test_vm();
+
+        let floor = call_builtin(&mut vm, builtin_id("floor"), vec![Value::Float(1.8)])
+            .expect("floor should succeed");
+        assert!(matches!(floor, Value::Float(value) if value == 1.0));
+
+        let round = call_builtin(&mut vm, builtin_id("round"), vec![Value::Float(-1.5)])
+            .expect("round should succeed");
+        assert!(matches!(round, Value::Float(value) if value == -2.0));
+
+        let pi = call_builtin(&mut vm, builtin_id("pi"), vec![]).expect("pi should succeed");
+        assert!(matches!(pi, Value::Float(value) if value == std::f64::consts::PI));
+
+        let e = call_builtin(&mut vm, builtin_id("e"), vec![]).expect("e should succeed");
+        assert!(matches!(e, Value::Float(value) if value == std::f64::consts::E));
     }
 
     #[test]

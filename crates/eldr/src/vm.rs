@@ -4825,8 +4825,7 @@ impl VM {
                         )));
                     }
                 }
-                Opcode::LoadBuiltinRef(builtin_id)
-                | Opcode::CallBuiltin { builtin_id, .. } => {
+                Opcode::LoadBuiltinRef(builtin_id) | Opcode::CallBuiltin { builtin_id, .. } => {
                     if builtin_meta_by_id(*builtin_id).is_none() {
                         return Err(RuntimeError::new(format!(
                             "Bytecode verifier: unknown builtin ref {}",
@@ -5482,9 +5481,9 @@ impl VM {
             }
 
             // Arithmetic (Float)
-            Opcode::AddFloat => self.float_binop(|a, b| Value::Float(a + b))?,
-            Opcode::SubFloat => self.float_binop(|a, b| Value::Float(a - b))?,
-            Opcode::MulFloat => self.float_binop(|a, b| Value::Float(a * b))?,
+            Opcode::AddFloat => self.float_binop("AddFloat", |a, b| a + b)?,
+            Opcode::SubFloat => self.float_binop("SubFloat", |a, b| a - b)?,
+            Opcode::MulFloat => self.float_binop("MulFloat", |a, b| a * b)?,
 
             // Comparison (Int)
             Opcode::EqInt => self.int_binop(|a, b| Ok(Value::Bool(a == b)))?,
@@ -5495,12 +5494,12 @@ impl VM {
             Opcode::GteInt => self.int_binop(|a, b| Ok(Value::Bool(a >= b)))?,
 
             // Comparison (Float)
-            Opcode::EqFloat => self.float_binop(|a, b| Value::Bool(a == b))?,
-            Opcode::NeqFloat => self.float_binop(|a, b| Value::Bool(a != b))?,
-            Opcode::LtFloat => self.float_binop(|a, b| Value::Bool(a < b))?,
-            Opcode::GtFloat => self.float_binop(|a, b| Value::Bool(a > b))?,
-            Opcode::LteFloat => self.float_binop(|a, b| Value::Bool(a <= b))?,
-            Opcode::GteFloat => self.float_binop(|a, b| Value::Bool(a >= b))?,
+            Opcode::EqFloat => self.float_predicate(|a, b| a == b)?,
+            Opcode::NeqFloat => self.float_predicate(|a, b| a != b)?,
+            Opcode::LtFloat => self.float_predicate(|a, b| a < b)?,
+            Opcode::GtFloat => self.float_predicate(|a, b| a > b)?,
+            Opcode::LteFloat => self.float_predicate(|a, b| a <= b)?,
+            Opcode::GteFloat => self.float_predicate(|a, b| a >= b)?,
 
             // Comparison (String)
             Opcode::EqStr => {
@@ -5579,7 +5578,7 @@ impl VM {
             }
             Opcode::NegFloat => {
                 let a = self.pop_float()?;
-                self.stack.push(Value::Float(-a));
+                self.stack.push(Self::finite_float_value(-a, "NegFloat")?);
             }
             Opcode::NotBool => {
                 let a = self.pop_bool()?;
@@ -6431,7 +6430,7 @@ impl VM {
         Ok(match constant {
             Constant::Int(n) => Value::Int(n.clone()),
             Constant::Tag(tag) => Value::Tag(*tag),
-            Constant::Float(f) => Value::Float(*f),
+            Constant::Float(f) => Self::finite_float_value(*f, "LoadConst")?,
             Constant::Str(s) => Value::Str(s.clone()),
             Constant::Bool(b) => Value::Bool(*b),
             Constant::Unit => Value::Unit,
@@ -6572,7 +6571,8 @@ impl VM {
 
     fn pop_float(&mut self) -> Result<f64, RuntimeError> {
         match self.pop_stack()? {
-            Value::Float(f) => Ok(f),
+            Value::Float(f) if f.is_finite() => Ok(f),
+            Value::Float(_) => Err(RuntimeError::new("Expected finite Float")),
             other => Err(RuntimeError::new(format!(
                 "Expected Float, got {:?}",
                 other
@@ -6605,13 +6605,35 @@ impl VM {
         Ok(())
     }
 
-    fn float_binop<F>(&mut self, f: F) -> Result<(), RuntimeError>
+    fn finite_float_value(value: f64, op_name: &str) -> Result<Value, RuntimeError> {
+        if value.is_finite() {
+            Ok(Value::Float(value))
+        } else if op_name == "LoadConst" {
+            Err(RuntimeError::new("Float constants must be finite"))
+        } else {
+            Err(RuntimeError::new(format!(
+                "Float operation produced non-finite value: {op_name}"
+            )))
+        }
+    }
+
+    fn float_binop<F>(&mut self, op_name: &str, f: F) -> Result<(), RuntimeError>
     where
-        F: FnOnce(f64, f64) -> Value,
+        F: FnOnce(f64, f64) -> f64,
     {
         let b = self.pop_float()?;
         let a = self.pop_float()?;
-        self.stack.push(f(a, b));
+        self.stack.push(Self::finite_float_value(f(a, b), op_name)?);
+        Ok(())
+    }
+
+    fn float_predicate<F>(&mut self, f: F) -> Result<(), RuntimeError>
+    where
+        F: FnOnce(f64, f64) -> bool,
+    {
+        let b = self.pop_float()?;
+        let a = self.pop_float()?;
+        self.stack.push(Value::Bool(f(a, b)));
         Ok(())
     }
 }
@@ -7510,6 +7532,45 @@ mod tests {
                 other => panic!("expected Err(Value::Error), got {other:?}"),
             },
             other => panic!("expected Err result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_const_rejects_non_finite_float_constants() {
+        let mut bytecode = base_bytecode(vec![Opcode::LoadConst(0), Opcode::Halt]);
+        bytecode.constants = vec![Constant::Float(f64::INFINITY)];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::RuntimeError(err) => {
+                assert!(err.message.contains("Float constants must be finite"))
+            }
+            other => panic!("expected runtime error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn add_float_rejects_non_finite_results() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::AddFloat,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Float(f64::MAX), Constant::Float(f64::MAX)];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        match vm.step_context(&mut ctx) {
+            StepOutcome::RuntimeError(err) => {
+                assert!(err
+                    .message
+                    .contains("Float operation produced non-finite value"))
+            }
+            other => panic!("expected runtime error, got {other:?}"),
         }
     }
 

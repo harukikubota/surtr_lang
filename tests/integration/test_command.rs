@@ -45,10 +45,7 @@ fn contains_numeric_tyvar(input: &str) -> bool {
         if chars[idx] != '$' {
             continue;
         }
-        if chars
-            .get(idx + 1)
-            .is_some_and(|next| next.is_ascii_digit())
-        {
+        if chars.get(idx + 1).is_some_and(|next| next.is_ascii_digit()) {
             return true;
         }
     }
@@ -227,7 +224,8 @@ test("Diagnostics") {
 
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
     assert!(
-        stderr.contains("Argument type mismatch: expected $A implementing Compare, got Option<Int>"),
+        stderr
+            .contains("Argument type mismatch: expected $A implementing Compare, got Option<Int>"),
         "{stderr}"
     );
     assert!(

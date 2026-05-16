@@ -52,6 +52,7 @@ xldr(2)>
 ## 次に読むページ
 
 - `Kernel` を先に触りたいなら `./kernel.md`
+- `Float` を触りたいなら `./float.md`
 - `Regex` を触りたいなら `./regex.md`
 - `Json` を触りたいなら `./json.md`
 - `File` を触りたいなら `./file-io.md`

@@ -8,7 +8,6 @@
 ## 主な内部資料
 
 - [../../doc/open-issues.md](../../doc/open-issues.md)
-- [../../doc/float.md](../../doc/float.md)
 - [../../doc/example_project_mahjong.md](../../doc/example_project_mahjong.md)
 - [../../doc/optimize/001_tail_call_optimization.md](../../doc/optimize/001_tail_call_optimization.md)
 - [./tail-call-optimization.md](./tail-call-optimization.md)
