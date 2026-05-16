@@ -12,7 +12,7 @@ use super::app::{App, Completion, CompletionItem, FocusPane, InputBuffer, InputM
 pub(super) fn current_token_prefix(buf: &InputBuffer) -> String {
     let before = &buf.text[..buf.cursor_byte];
     before
-        .split(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '{' | '}' | ',' | ':'))
+        .split(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '{' | '}' | ','))
         .next_back()
         .unwrap_or("")
         .to_string()
@@ -30,17 +30,18 @@ pub(super) fn refresh_completion(app: &mut App, engine: &ReplEngine) {
             };
         }
         InputMode::Insert => {
-            let prefix = current_token_prefix(&app.input);
-            if prefix.is_empty() {
+            let completion = engine.completions(&app.input.text, app.input.cursor_byte);
+            if completion.candidates.is_empty() {
                 app.completion.clear();
             } else {
-                let symbols = engine.completion_symbols();
-                let items: Vec<CompletionItem> = symbols
-                    .iter()
-                    .filter(|s| s.starts_with(&prefix))
-                    .map(|s| CompletionItem {
-                        label: s.clone(),
-                        detail: None,
+                let items: Vec<CompletionItem> = completion
+                    .candidates
+                    .into_iter()
+                    .map(|candidate| CompletionItem {
+                        label: candidate.replacement,
+                        detail: candidate.detail,
+                        replace_start: candidate.replace_start,
+                        replace_end: candidate.replace_end,
                     })
                     .collect();
                 app.completion = Completion {
@@ -89,6 +90,8 @@ fn command_completions(prefix: &str, focus: FocusPane) -> Vec<CompletionItem> {
         .map(|(name, usage)| CompletionItem {
             label: name.to_string(),
             detail: Some(usage.to_string()),
+            replace_start: 0,
+            replace_end: prefix.len(),
         })
         .collect()
 }
@@ -201,6 +204,58 @@ fn handle_docs_pane(app: &mut App, key: KeyEvent) {
             app.selected_doc = Some(next);
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_token_prefix_keeps_qualified_type_paths() {
+        let mut buf = InputBuffer::default();
+        buf.set("String::re".to_string());
+        assert_eq!(current_token_prefix(&buf), "String::re");
+    }
+
+    #[test]
+    fn refresh_completion_uses_engine_candidates_for_qualified_paths() {
+        let engine = ReplEngine::new().expect("REPL engine should bootstrap");
+        let mut app = App::new();
+        app.input.set("String::re".to_string());
+
+        refresh_completion(&mut app, &engine);
+
+        let labels = app
+            .completion
+            .items
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            labels.contains(&"String::repeat"),
+            "qualified TUI completion should use engine candidates: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn completion_apply_replaces_only_engine_reported_range() {
+        let engine = ReplEngine::new().expect("REPL engine should bootstrap");
+        let mut app = App::new();
+        app.input.set("foo=Str".to_string());
+
+        refresh_completion(&mut app, &engine);
+        assert!(app.completion.visible, "completion should be visible");
+        app.completion.selected = app
+            .completion
+            .items
+            .iter()
+            .position(|item| item.label == "String")
+            .expect("String completion should be present");
+
+        let mut buf = app.input.clone();
+        app.completion.apply(&mut buf);
+        assert_eq!(buf.text, "foo=String");
     }
 }
 

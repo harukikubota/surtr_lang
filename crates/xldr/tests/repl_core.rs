@@ -233,6 +233,93 @@ fn core_completion_returns_type_constructors_and_type_paths() {
 }
 
 #[test]
+fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
+    let engine = engine();
+
+    for (prefix, expected) in [("Str", "String"), ("Lis", "List"), ("Fac", "Facet")] {
+        let candidate = engine
+            .completions(prefix, prefix.len())
+            .candidates
+            .into_iter()
+            .find(|candidate| candidate.label == expected)
+            .unwrap_or_else(|| panic!("{expected} should be suggested for prefix {prefix}"));
+        assert_eq!(candidate.kind, ReplCompletionKind::TypeConstructor);
+    }
+
+    let string_repeat = engine
+        .completions("String::re", "String::re".len())
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "String::repeat")
+        .expect("qualified String helper should be suggested");
+    assert_eq!(string_repeat.kind, ReplCompletionKind::TypePath);
+
+    let facet_view = engine
+        .completions("Facet::v", "Facet::v".len())
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "Facet::view")
+        .expect("qualified Facet helper should be suggested");
+    assert_eq!(facet_view.kind, ReplCompletionKind::TypePath);
+
+    let all_labels = engine
+        .completions("M", 1)
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        !all_labels.iter().any(|label| label == "MatchResult"),
+        "MatchResult should not be suggested: {all_labels:?}"
+    );
+
+    let excluded = [
+        "MatchArms",
+        "CondClauses",
+        "BulkUpdateEntries",
+        "Hole",
+        "Lazy",
+        "TypeRef",
+        "ProcessInit",
+        "Closure",
+    ];
+    for name in excluded {
+        let labels = engine
+            .completions(name, name.len())
+            .candidates
+            .into_iter()
+            .map(|candidate| candidate.label)
+            .collect::<Vec<_>>();
+        assert!(
+            !labels.iter().any(|label| label == name),
+            "{name} should not be suggested: {labels:?}"
+        );
+    }
+}
+
+#[test]
+fn core_completion_hides_global_noise_for_empty_constructor_call_arguments() {
+    let engine = engine();
+    let completion = engine.completions("Duration(", "Duration(".len());
+
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("constructor call should still show signature help");
+    assert_eq!(signature.active_parameter, Some(0));
+    assert!(
+        signature.lines.join("\n").contains("Duration"),
+        "constructor signature should remain visible: {:?}",
+        signature.lines
+    );
+    assert!(
+        completion.candidates.is_empty(),
+        "empty constructor argument position should not show unrelated global candidates: {:?}",
+        completion.candidates
+    );
+}
+
+#[test]
 fn core_completion_hides_trait_impl_members_from_qualified_type_paths() {
     let engine = engine();
     let labels = engine
@@ -1363,7 +1450,8 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let typed_neq_sig = engine.handle_line(":sig neq(Int, Int)");
     let typed_neq_sig = signature_text(&typed_neq_sig);
     assert!(
-        typed_neq_sig.contains("defined:\n  impl Neq for Int::neq(self: Self, rhs: Self) -> Boolean"),
+        typed_neq_sig
+            .contains("defined:\n  impl Neq for Int::neq(self: Self, rhs: Self) -> Boolean"),
         "{typed_neq_sig}"
     );
     assert!(

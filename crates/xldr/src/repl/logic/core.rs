@@ -1151,7 +1151,7 @@ impl ReplEngine {
                 replace_end,
                 expected_ty.as_deref(),
             );
-            if candidates.is_empty() && expected_ty.is_none() {
+            if candidates.is_empty() && expected_ty.is_none() && !prefix.is_empty() {
                 self.push_global_completion_candidates(
                     &mut candidates,
                     &prefix,
@@ -1241,16 +1241,9 @@ impl ReplEngine {
         replace_end: usize,
     ) {
         for decl in self.declaration_index.values() {
-            if !matches!(
-                decl.kind,
-                sigil::DeclarationKind::Struct
-                    | sigil::DeclarationKind::Record
-                    | sigil::DeclarationKind::Enum
-            ) || !Self::declaration_is_completion_surface(decl)
-            {
+            let Some(label) = Self::completion_visible_owner_label(decl) else {
                 continue;
-            }
-            let label = crate::surface_path_name(&decl.name).to_string();
+            };
             if !label.starts_with(prefix) {
                 continue;
             }
@@ -1311,9 +1304,10 @@ impl ReplEngine {
                     Self::render_signature_with_qualified_name(&entry.qualified_name, signature)
                 })
             } else {
-                self.find_signature(&tail).map(|(qualified_name, signature)| {
-                    Self::render_signature_with_qualified_name(&qualified_name, signature)
-                })
+                self.find_signature(&tail)
+                    .map(|(qualified_name, signature)| {
+                        Self::render_signature_with_qualified_name(&qualified_name, signature)
+                    })
             };
             push_completion_candidate(
                 candidates,
@@ -1942,6 +1936,38 @@ impl ReplEngine {
 
     fn declaration_is_completion_surface(entry: &sigil::DeclarationEntry) -> bool {
         Self::declaration_is_public_surface(entry) && !entry.hidden && entry.user_callable
+    }
+
+    fn completion_visible_owner_label(entry: &sigil::DeclarationEntry) -> Option<String> {
+        if !Self::declaration_is_public_surface(entry) || entry.hidden {
+            return None;
+        }
+        if !matches!(
+            entry.kind,
+            sigil::DeclarationKind::Struct
+                | sigil::DeclarationKind::Record
+                | sigil::DeclarationKind::Enum
+                | sigil::DeclarationKind::BuiltinType
+        ) {
+            return None;
+        }
+        let label = crate::surface_path_name(&entry.fq_name).to_string();
+        Self::completion_visible_owner_name(&label).then_some(label)
+    }
+
+    fn completion_visible_owner_name(label: &str) -> bool {
+        !matches!(
+            crate::surface_path_name(label),
+            "MatchResult"
+                | "MatchArms"
+                | "CondClauses"
+                | "BulkUpdateEntries"
+                | "Hole"
+                | "Lazy"
+                | "TypeRef"
+                | "ProcessInit"
+                | "Closure"
+        )
     }
 
     fn parse_pid_type_name(ty: &str) -> Option<&str> {
@@ -7448,13 +7474,16 @@ impl ReplEngine {
                     .iter()
                     .rev()
                     .find(|entry| {
-                        entry.qualified_name.as_deref().is_some_and(|qualified_name| {
-                            self.sigil_session.lookup_uid(qualified_name) == Some(uid)
-                                || (Self::symbol_matches(qualified_name, name)
-                                    && entry.signature.as_deref().is_some_and(|signature| {
-                                        signature.starts_with(&format!("{name}("))
-                                    }))
-                        })
+                        entry
+                            .qualified_name
+                            .as_deref()
+                            .is_some_and(|qualified_name| {
+                                self.sigil_session.lookup_uid(qualified_name) == Some(uid)
+                                    || (Self::symbol_matches(qualified_name, name)
+                                        && entry.signature.as_deref().is_some_and(|signature| {
+                                            signature.starts_with(&format!("{name}("))
+                                        }))
+                            })
                     })
                     .map(|entry| entry.fun_idx)?;
                 Some((uid, fun_idx))

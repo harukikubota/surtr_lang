@@ -57,6 +57,8 @@ pub(super) struct DocEntry {
 pub(super) struct CompletionItem {
     pub(super) label: String,
     pub(super) detail: Option<String>,
+    pub(super) replace_start: usize,
+    pub(super) replace_end: usize,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -87,10 +89,10 @@ impl Completion {
 
     pub(super) fn apply(&self, buf: &mut InputBuffer) {
         if let Some(item) = self.items.get(self.selected) {
-            let prefix_len = super::update::current_token_prefix(buf).len();
-            let cursor = buf.cursor_byte;
-            buf.text.drain((cursor - prefix_len)..cursor);
-            buf.cursor_byte -= prefix_len;
+            let replace_start = item.replace_start.min(buf.text.len());
+            let replace_end = item.replace_end.min(buf.text.len()).max(replace_start);
+            buf.text.drain(replace_start..replace_end);
+            buf.cursor_byte = replace_start;
             for ch in item.label.chars() {
                 buf.insert_char(ch);
             }
