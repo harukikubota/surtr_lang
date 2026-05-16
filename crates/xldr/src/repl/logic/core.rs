@@ -1240,10 +1240,14 @@ impl ReplEngine {
         replace_start: usize,
         replace_end: usize,
     ) {
+        let mut seen = BTreeSet::new();
         for decl in self.declaration_index.values() {
-            let Some(label) = Self::completion_visible_owner_label(decl) else {
+            let Some(label) = self.completion_visible_owner_label(decl) else {
                 continue;
             };
+            if !seen.insert(label.clone()) {
+                continue;
+            }
             if !label.starts_with(prefix) {
                 continue;
             }
@@ -1259,6 +1263,26 @@ impl ReplEngine {
                 },
             );
         }
+
+        for label in self.completion_visible_module_labels() {
+            if !seen.insert(label.clone()) {
+                continue;
+            }
+            if !label.starts_with(prefix) {
+                continue;
+            }
+            push_completion_candidate(
+                candidates,
+                ReplCompletionCandidate {
+                    label: label.clone(),
+                    replacement: label,
+                    kind: ReplCompletionKind::TypeConstructor,
+                    detail: None,
+                    replace_start,
+                    replace_end,
+                },
+            );
+        }
     }
 
     fn push_function_completion_candidates(
@@ -1269,6 +1293,7 @@ impl ReplEngine {
         replace_end: usize,
     ) {
         let qualified_prefix = prefix.contains("::");
+        let mut seen = BTreeSet::new();
         for entry in self.docs.iter().rev() {
             if entry.kind != DocKind::Function {
                 continue;
@@ -1291,7 +1316,9 @@ impl ReplEngine {
                 if !tail.starts_with(prefix) {
                     continue;
                 }
-                if self.sigil_session.lookup_uid(&tail).is_none() {
+                if self.sigil_session.lookup_uid(&tail).is_none()
+                    && self.visible_helper_doc_alias(&tail).is_none()
+                {
                     continue;
                 }
                 if !self.doc_entry_is_completion_surface(entry, &tail) {
@@ -1299,6 +1326,9 @@ impl ReplEngine {
                 }
                 (tail.clone(), ReplCompletionKind::FunctionCall)
             };
+            if !seen.insert(label.clone()) {
+                continue;
+            }
             let detail = if qualified_prefix {
                 Self::display_signature_for_doc_entry(entry).map(|signature| {
                     Self::render_signature_with_qualified_name(&entry.qualified_name, signature)
@@ -1321,6 +1351,56 @@ impl ReplEngine {
                 },
             );
         }
+
+        for decl in self.declaration_index.values() {
+            if !Self::declaration_is_function_completion_surface(decl) {
+                continue;
+            }
+            let (label, kind) = if qualified_prefix {
+                let qualified_label = crate::surface_path_name(&decl.fq_name).to_string();
+                if !qualified_label.starts_with(prefix) {
+                    continue;
+                }
+                (qualified_label, ReplCompletionKind::TypePath)
+            } else {
+                let Some(visible_label) = self.visible_completion_label(decl) else {
+                    continue;
+                };
+                if !visible_label.starts_with(prefix) {
+                    continue;
+                }
+                (visible_label, ReplCompletionKind::FunctionCall)
+            };
+            if !seen.insert(label.clone()) {
+                continue;
+            }
+            let detail = self.declaration_signature(decl);
+            push_completion_candidate(
+                candidates,
+                ReplCompletionCandidate {
+                    label: label.clone(),
+                    replacement: label,
+                    kind,
+                    detail,
+                    replace_start,
+                    replace_end,
+                },
+            );
+        }
+    }
+
+    fn declaration_is_function_completion_surface(entry: &sigil::DeclarationEntry) -> bool {
+        Self::declaration_is_completion_surface(entry)
+            && matches!(
+                entry.kind,
+                sigil::DeclarationKind::Def
+                    | sigil::DeclarationKind::Extractor
+                    | sigil::DeclarationKind::TraitMethod
+                    | sigil::DeclarationKind::EnumVariant
+                    | sigil::DeclarationKind::ResultCtor
+                    | sigil::DeclarationKind::ImplMethod
+                    | sigil::DeclarationKind::ImplCtorNew
+            )
     }
 
     fn doc_entry_is_completion_surface(&self, entry: &DocEntry, lookup: &str) -> bool {
@@ -1332,6 +1412,7 @@ impl ReplEngine {
                 .is_some_and(Self::declaration_is_completion_surface)
         } else {
             self.sigil_session.lookup_uid(lookup).is_some()
+                || self.visible_helper_doc_alias(lookup).is_some()
         }
     }
 
@@ -1938,7 +2019,7 @@ impl ReplEngine {
         Self::declaration_is_public_surface(entry) && !entry.hidden && entry.user_callable
     }
 
-    fn completion_visible_owner_label(entry: &sigil::DeclarationEntry) -> Option<String> {
+    fn completion_visible_owner_label(&self, entry: &sigil::DeclarationEntry) -> Option<String> {
         if !Self::declaration_is_public_surface(entry) || entry.hidden {
             return None;
         }
@@ -1951,8 +2032,26 @@ impl ReplEngine {
         ) {
             return None;
         }
-        let label = crate::surface_path_name(&entry.fq_name).to_string();
+        let label = self
+            .visible_completion_label(entry)
+            .unwrap_or_else(|| crate::surface_path_name(&entry.fq_name).to_string());
         Self::completion_visible_owner_name(&label).then_some(label)
+    }
+
+    fn visible_completion_label(&self, entry: &sigil::DeclarationEntry) -> Option<String> {
+        let qualified_uid = self.sigil_session.lookup_uid(&entry.fq_name).or_else(|| {
+            self.sigil_session
+                .lookup_uid(crate::surface_path_name(&entry.fq_name))
+        })?;
+        let mut labels = Vec::new();
+        labels.push(crate::surface_path_name(&entry.name).to_string());
+        if let Some(tail) = entry.name.rsplit("::").next() {
+            labels.push(tail.to_string());
+        }
+        labels.push(crate::surface_path_name(&entry.fq_name).to_string());
+        labels
+            .into_iter()
+            .find(|label| self.sigil_session.lookup_uid(label) == Some(qualified_uid))
     }
 
     fn completion_visible_owner_name(label: &str) -> bool {
@@ -1968,6 +2067,27 @@ impl ReplEngine {
                 | "ProcessInit"
                 | "Closure"
         )
+    }
+
+    fn completion_visible_module_labels(&self) -> Vec<String> {
+        let mut labels = BTreeSet::new();
+        for entry in self.declaration_index.values() {
+            if !Self::declaration_is_public_surface(entry) || entry.hidden {
+                continue;
+            }
+            let module_label = crate::surface_path_name(&entry.module_path);
+            if Self::completion_visible_module_name(module_label) {
+                labels.insert(module_label.to_string());
+            }
+        }
+        labels.into_iter().collect()
+    }
+
+    fn completion_visible_module_name(label: &str) -> bool {
+        !label.is_empty()
+            && !label.contains("::")
+            && !label.starts_with("__")
+            && Self::completion_visible_owner_name(label)
     }
 
     fn parse_pid_type_name(ty: &str) -> Option<&str> {
@@ -6562,7 +6682,7 @@ fn compile_repl_preload_from_module_stages(
         Some(compile_sources.user_module_path.as_str()),
     );
 
-    let declaration_index = if module_stage_asts.len() == snapshot.default_stage_count {
+    let mut declaration_index = if module_stage_asts.len() == snapshot.default_stage_count {
         snapshot.declaration_index.clone()
     } else {
         sigil::precollect_declaration_index(&module_stage_asts).map_err(|e| {
@@ -6575,6 +6695,14 @@ fn compile_repl_preload_from_module_stages(
             }
         })?
     };
+    merge_user_preload_declarations(
+        &mut declaration_index,
+        &user_ast,
+        &compile_sources.user_module_path,
+        module_stage_asts.len(),
+        &compile_sources.sources,
+        compile_sources.user_source_id,
+    )?;
 
     let mut staged_program = sigil::resolve_staged_program_from_state(
         &module_stage_asts,
@@ -7001,6 +7129,43 @@ fn prepare_script_preload(
         source_for_parse,
         include_modules,
     }))
+}
+
+fn merge_user_preload_declarations(
+    declaration_index: &mut sigil::DeclarationIndex,
+    user_ast: &[Ast],
+    user_module_path: &str,
+    stage_index: usize,
+    sources: &SourceRegistry,
+    source_id: SourceId,
+) -> Result<(), ReplLoadError> {
+    if user_ast.is_empty() {
+        return Ok(());
+    }
+
+    let stage = vec![sigil::StagedModuleAst {
+        module_path: user_module_path.to_string(),
+        doc_module_path: Some(user_module_path.to_string()),
+        ast: user_ast.to_vec(),
+        module_doc: None,
+        auto_import: false,
+        process_spec: None,
+    }];
+    let user_index = sigil::precollect_declaration_index(&[stage]).map_err(|e| {
+        let spec = diagnostics::simple_error("ResolveError", &e.message, e.span, None);
+        ReplLoadError::Diagnostic {
+            phase: "resolve".to_string(),
+            sources: sources.clone(),
+            source_id,
+            spec,
+        }
+    })?;
+
+    for (fq_name, mut entry) in user_index {
+        entry.stage_index = stage_index;
+        declaration_index.insert(fq_name, entry);
+    }
+    Ok(())
 }
 
 fn collect_preload_include_directives(

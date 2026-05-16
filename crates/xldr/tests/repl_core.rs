@@ -236,7 +236,13 @@ fn core_completion_returns_type_constructors_and_type_paths() {
 fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
     let engine = engine();
 
-    for (prefix, expected) in [("Str", "String"), ("Lis", "List"), ("Fac", "Facet")] {
+    for (prefix, expected) in [
+        ("Str", "String"),
+        ("Lis", "List"),
+        ("Fac", "Facet"),
+        ("IO", "IO"),
+        ("Jso", "Json"),
+    ] {
         let candidate = engine
             .completions(prefix, prefix.len())
             .candidates
@@ -295,6 +301,86 @@ fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
             "{name} should not be suggested: {labels:?}"
         );
     }
+}
+
+#[test]
+fn core_completion_shows_user_defined_module_owners() {
+    let engine = ReplEngine::from_module_source(
+        "demo_module.srt",
+        r#"
+defmod Demo {
+  @doc """
+  Say hi.
+  """
+  def hello() -> String { "hi" }
+}
+"#,
+    )
+    .expect("module preload should bootstrap");
+
+    let demo = engine
+        .completions("Dem", 3)
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "Demo")
+        .expect("user-defined module owner should be suggested");
+    assert_eq!(demo.kind, ReplCompletionKind::TypeConstructor);
+
+    let hello = engine
+        .completions("Demo::h", "Demo::h".len())
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "Demo::hello")
+        .expect("user-defined module member should be suggested");
+    assert_eq!(hello.kind, ReplCompletionKind::TypePath);
+}
+
+#[test]
+fn core_completion_shows_script_preload_owner_and_members_without_docs() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name, age }
+  }
+
+  def birthday(self) -> Self {
+    put(~self.age, self.age + 1)
+  }
+}
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let user = engine
+        .completions("U", "U".len())
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "User")
+        .expect("script preload owner should be suggested without docs");
+    assert_eq!(user.kind, ReplCompletionKind::TypeConstructor);
+
+    let ctor = engine
+        .completions("User::n", "User::n".len())
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "User::new")
+        .expect("undocumented impl ctor should be suggested");
+    assert_eq!(ctor.kind, ReplCompletionKind::TypePath);
+
+    let method = engine
+        .completions("User::b", "User::b".len())
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "User::birthday")
+        .expect("undocumented impl method should be suggested");
+    assert_eq!(method.kind, ReplCompletionKind::TypePath);
 }
 
 #[test]
