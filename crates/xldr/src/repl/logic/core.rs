@@ -7442,15 +7442,13 @@ impl ReplEngine {
                     .iter()
                     .rev()
                     .find(|entry| {
-                        entry
-                            .qualified_name
-                            .as_deref()
-                            .and_then(|qualified_name| qualified_name.rsplit("::").next())
-                            == Some(name.as_str())
-                            || entry
-                                .signature
-                                .as_deref()
-                                .is_some_and(|signature| signature.starts_with(&format!("{name}(")))
+                        entry.qualified_name.as_deref().is_some_and(|qualified_name| {
+                            self.sigil_session.lookup_uid(qualified_name) == Some(uid)
+                                || (Self::symbol_matches(qualified_name, name)
+                                    && entry.signature.as_deref().is_some_and(|signature| {
+                                        signature.starts_with(&format!("{name}("))
+                                    }))
+                        })
                     })
                     .map(|entry| entry.fun_idx)?;
                 Some((uid, fun_idx))

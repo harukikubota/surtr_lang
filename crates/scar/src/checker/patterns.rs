@@ -456,6 +456,12 @@ impl Checker {
         let keys = self.env.vars.keys().copied().collect::<Vec<_>>();
         for key in keys {
             if let Some(ty) = self.env.vars.get(&key).cloned() {
+                if matches!(
+                    ty,
+                    Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } | Ty::Func(_, _)
+                ) {
+                    continue;
+                }
                 self.env.vars.insert(key, self.resolve_ty(&ty));
             }
         }

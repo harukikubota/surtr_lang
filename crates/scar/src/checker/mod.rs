@@ -2360,6 +2360,10 @@ impl Checker {
             let t = profile_enabled.then(Instant::now);
             for stmt in stmts {
                 stmt_count += 1;
+                // Inference substitutions are expression-local. Letting them leak
+                // across sibling top-level statements can accidentally monomorphize
+                // later generic calls based on earlier ones.
+                self.substitutions.clear();
                 let stmt_label = profile_enabled.then(|| Self::profile_stmt_label(&stmt));
                 let stmt_start = profile_enabled.then(Instant::now);
                 if let Resolved::ConstDef(..) = &stmt {

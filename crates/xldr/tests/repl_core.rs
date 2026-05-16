@@ -649,6 +649,38 @@ fn core_static_impl_methods_keep_runtime_arity_in_sync() {
 }
 
 #[test]
+fn core_range_bindings_keep_constructor_and_compare_fun_indices_in_sync() {
+    let mut engine = engine();
+
+    let a = engine.handle_line("a = 20ms");
+    assert!(!a.should_exit);
+    assert!(rendered_text(&a).contains("a: Duration = 20ms"));
+
+    let a_typed = engine.handle_line("a =? 20ms");
+    assert!(!a_typed.should_exit);
+    assert!(rendered_text(&a_typed).contains("a: Duration = 20ms"));
+
+    let b_typed = engine.handle_line("b =? 10ms");
+    assert!(!b_typed.should_exit);
+    assert!(rendered_text(&b_typed).contains("b: Duration = 10ms"));
+
+    let range = engine.handle_line("Range(a,b)");
+    assert!(!range.should_exit);
+    assert!(rendered_text(&range).contains("Range(min: 20ms, max: 10ms)"));
+
+    let normalized = engine.handle_line("Range::normalized(a,b)");
+    assert!(!normalized.should_exit);
+    assert!(rendered_text(&normalized).contains("Range(min: 10ms, max: 20ms)"));
+
+    let neq = engine.handle_line("Range(b,a) != Range(b, 100ms)");
+    assert!(!neq.should_exit);
+    let text = rendered_text(&neq);
+    assert!(text.contains("True"), "{text}");
+    assert!(!text.contains("Unknown function index"), "{text}");
+    assert!(!text.contains("Call arity mismatch"), "{text}");
+}
+
+#[test]
 fn core_renders_top_level_facet_chain_expressions_without_codegen_leak() {
     let mut engine = engine();
 

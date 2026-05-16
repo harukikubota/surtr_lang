@@ -840,6 +840,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         range_duration_comparisons_specialize_without_pending_trait_calls as fn(),
     ),
     (
+        "generic_struct_constructor_calls_remain_polymorphic_within_one_source",
+        generic_struct_constructor_calls_remain_polymorphic_within_one_source as fn(),
+    ),
+    (
         "scar_session_preserves_trait_registry_across_chunks",
         scar_session_preserves_trait_registry_across_chunks as fn(),
     ),
@@ -5213,6 +5217,63 @@ neq = left != right"#,
     );
 
     assert!(!typed.iter().any(has_pending_trait_call));
+}
+
+fn generic_struct_constructor_calls_remain_polymorphic_within_one_source() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defstruct Box<$A> {
+  value: $A,
+}
+impl Box {
+  def new<$A>(value: $A) -> Box<$A> {
+    Box { value: value }
+  }
+}
+a = Box(1)
+b = Box(10ms)"#,
+    );
+
+    let mut bindings = typed.iter().filter_map(|node| match &node.node {
+        TypedInner::Bind(TypedPattern::Var(ty, id), rhs) if id.name == "a" || id.name == "b" => {
+            Some((id.name.as_str(), ty, rhs.as_ref()))
+        }
+        _ => None,
+    });
+
+    let a = bindings.next().expect("expected a binding");
+    let b = bindings.next().expect("expected b binding");
+
+    assert_eq!(a.0, "a");
+    assert!(matches!(
+        a.1,
+        Ty::Struct(name, fields)
+            if name == "Global::Box"
+                && matches!(fields.as_slice(), [(field, Ty::Int)] if field == "value")
+    ));
+    assert!(matches!(
+        a.2.ty,
+        Ty::Struct(ref name, ref fields)
+            if name == "Global::Box"
+                && matches!(fields.as_slice(), [(field, Ty::Int)] if field == "value")
+    ));
+
+    assert_eq!(b.0, "b");
+    assert!(matches!(
+        b.1,
+        Ty::Struct(name, fields)
+            if name == "Global::Box"
+                && matches!(fields.as_slice(), [(field, Ty::Struct(inner, _inner_fields))]
+                    if field == "value"
+                        && inner == "Duration")
+    ));
+    assert!(matches!(
+        b.2.ty,
+        Ty::Struct(ref name, ref fields)
+            if name == "Global::Box"
+                && matches!(fields.as_slice(), [(field, Ty::Struct(inner, _inner_fields))]
+                    if field == "value"
+                        && inner == "Duration")
+    ));
 }
 
 fn scar_session_preserves_trait_registry_across_chunks() {
