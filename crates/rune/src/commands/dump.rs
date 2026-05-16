@@ -14,6 +14,7 @@ use crate::error::{ExecutionEnv, RuneError, RuneResult};
 
 pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
     let mut format = "json";
+    let mut format_seen = false;
     let mut entry: Option<String> = None;
     let mut include_opcode_histogram = false;
     let mut include_peephole_candidates = false;
@@ -25,11 +26,18 @@ pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
                 if i >= args.len() {
                     return Err(RuneError::message(1, "dump: missing value for --format"));
                 }
+                if format_seen {
+                    return Err(RuneError::message(
+                        1,
+                        "dump: --format may only be specified once",
+                    ));
+                }
+                format_seen = true;
                 format = args[i].as_str();
             }
             "--entry" => {
                 i += 1;
-                if i >= args.len() {
+                if i >= args.len() || args[i].starts_with('-') {
                     return Err(RuneError::message(1, "dump: missing value for --entry"));
                 }
                 if entry.is_some() {
@@ -41,9 +49,21 @@ pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
                 entry = Some(args[i].clone());
             }
             "--opcode-histogram" => {
+                if include_opcode_histogram {
+                    return Err(RuneError::message(
+                        1,
+                        "dump: --opcode-histogram may only be specified once",
+                    ));
+                }
                 include_opcode_histogram = true;
             }
             "--peephole-candidates" => {
+                if include_peephole_candidates {
+                    return Err(RuneError::message(
+                        1,
+                        "dump: --peephole-candidates may only be specified once",
+                    ));
+                }
                 include_peephole_candidates = true;
             }
             other => {
@@ -63,6 +83,18 @@ pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
                 "dump: unsupported format '{}'. supported: json, viewer-json",
                 format
             ),
+        ));
+    }
+    if format == "viewer-json" && include_opcode_histogram {
+        return Err(RuneError::message(
+            1,
+            "dump: --opcode-histogram is only supported with --format json",
+        ));
+    }
+    if format == "viewer-json" && include_peephole_candidates {
+        return Err(RuneError::message(
+            1,
+            "dump: --peephole-candidates is only supported with --format json",
         ));
     }
 
@@ -666,6 +698,108 @@ fn function_for_pc(bytecode: &Bytecode, pc: usize) -> Option<&FunctionEntry> {
         let end = function_end_pc(bytecode, entry);
         pc >= start && pc < end
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dump_rejects_duplicate_format_option() {
+        let err = dispatch(
+            "missing.eldr",
+            &[
+                "--format".to_string(),
+                "json".to_string(),
+                "--format".to_string(),
+                "viewer-json".to_string(),
+            ],
+        )
+        .expect_err("duplicate dump format must fail before reading input");
+
+        assert_eq!(err.summary(), "dump: --format may only be specified once");
+    }
+
+    #[test]
+    fn dump_rejects_option_like_entry_value() {
+        let err = dispatch(
+            "missing.srt",
+            &["--entry".to_string(), "--format".to_string()],
+        )
+        .expect_err("option-looking entry value must fail");
+
+        assert_eq!(err.summary(), "dump: missing value for --entry");
+    }
+
+    #[test]
+    fn dump_rejects_opcode_histogram_with_viewer_json() {
+        let err = dispatch(
+            "missing.eldr",
+            &[
+                "--format".to_string(),
+                "viewer-json".to_string(),
+                "--opcode-histogram".to_string(),
+            ],
+        )
+        .expect_err("viewer-json histogram flag must fail before reading input");
+
+        assert_eq!(
+            err.summary(),
+            "dump: --opcode-histogram is only supported with --format json"
+        );
+    }
+
+    #[test]
+    fn dump_rejects_duplicate_opcode_histogram() {
+        let err = dispatch(
+            "missing.eldr",
+            &[
+                "--opcode-histogram".to_string(),
+                "--opcode-histogram".to_string(),
+            ],
+        )
+        .expect_err("duplicate histogram flag must fail before reading input");
+
+        assert_eq!(
+            err.summary(),
+            "dump: --opcode-histogram may only be specified once"
+        );
+    }
+
+    #[test]
+    fn dump_rejects_peephole_candidates_with_viewer_json() {
+        let err = dispatch(
+            "missing.eldr",
+            &[
+                "--format".to_string(),
+                "viewer-json".to_string(),
+                "--peephole-candidates".to_string(),
+            ],
+        )
+        .expect_err("viewer-json peephole flag must fail before reading input");
+
+        assert_eq!(
+            err.summary(),
+            "dump: --peephole-candidates is only supported with --format json"
+        );
+    }
+
+    #[test]
+    fn dump_rejects_duplicate_peephole_candidates() {
+        let err = dispatch(
+            "missing.eldr",
+            &[
+                "--peephole-candidates".to_string(),
+                "--peephole-candidates".to_string(),
+            ],
+        )
+        .expect_err("duplicate peephole flag must fail before reading input");
+
+        assert_eq!(
+            err.summary(),
+            "dump: --peephole-candidates may only be specified once"
+        );
+    }
 }
 
 fn function_end_pc(bytecode: &Bytecode, entry: &FunctionEntry) -> usize {

@@ -1,7 +1,7 @@
 use std::env;
 use std::fs;
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use eldr::vm::{VmTestDiagnostic, VmTestEvent, VmTestEventKind};
 use forge::bytecode::{stable_hash_hex, Bytecode};
@@ -60,11 +60,20 @@ pub(crate) fn parse_test_options(args: &[String]) -> RuneResult<TestOptions> {
 
     for arg in args {
         match arg.as_str() {
-            "--quiet" | "-q" => quiet = true,
+            "--quiet" | "-q" => {
+                if quiet {
+                    return Err(RuneError::usage("test: --quiet may only be specified once"));
+                }
+                quiet = true;
+            }
             value if value.starts_with('-') && value != "--all" => {
                 return Err(RuneError::usage(format!("test: unknown option `{value}`")));
             }
             value => {
+                validate_test_selector(value.trim())?;
+                if value == "--all" && selector.as_deref() == Some("--all") {
+                    return Err(RuneError::usage("test: --all may only be specified once"));
+                }
                 if selector.replace(value.trim().to_string()).is_some() {
                     return Err(RuneError::usage(
                         "test: expected exactly one lib-relative test name",
@@ -90,6 +99,26 @@ pub(crate) fn parse_test_options(args: &[String]) -> RuneResult<TestOptions> {
     };
 
     Ok(TestOptions { mode, quiet })
+}
+
+fn validate_test_selector(selector: &str) -> RuneResult<()> {
+    if selector == "--all" {
+        return Ok(());
+    }
+    let path = Path::new(selector);
+    if path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(RuneError::usage(
+            "test: selector must stay within lib/tests",
+        ));
+    }
+    Ok(())
 }
 
 fn test_command(options: TestOptions, env: ExecutionEnv) -> RuneResult<()> {
@@ -693,8 +722,8 @@ fn byte_span(source: &str, start_byte: usize, end_byte: usize) -> Span {
 
 fn test_color_enabled() -> bool {
     match env::var("SURTR_TEST_COLOR") {
-        Ok(value) if value.eq_ignore_ascii_case("always") => true,
-        Ok(value) if value.eq_ignore_ascii_case("never") => false,
+        Ok(value) if value.trim().eq_ignore_ascii_case("always") => true,
+        Ok(value) if value.trim().eq_ignore_ascii_case("never") => false,
         _ if env::var_os("NO_COLOR").is_some() => false,
         _ => std::io::stdout().is_terminal(),
     }
@@ -784,9 +813,16 @@ fn display_path(path: &Path) -> String {
 mod tests {
     use super::{
         colorize_text, note_line, parse_test_options, resolve_test_script_path, summary_color,
-        summary_line, test_event_line, TestMode, TestOutputColor, TestRunSummary,
+        summary_line, test_color_enabled, test_event_line, TestMode, TestOutputColor,
+        TestRunSummary,
     };
     use std::path::Path;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn test_options_require_single_selector() {
@@ -814,6 +850,49 @@ mod tests {
         let opts = parse_test_options(&["--all".to_string(), "-q".to_string()]).expect("quiet all");
         assert_eq!(opts.mode, TestMode::All);
         assert!(opts.quiet);
+    }
+
+    #[test]
+    fn parse_test_options_rejects_duplicate_quiet() {
+        let err = parse_test_options(&[
+            "--quiet".to_string(),
+            "-q".to_string(),
+            "string".to_string(),
+        ])
+        .expect_err("duplicate quiet flag must fail");
+
+        assert_eq!(err.summary(), "test: --quiet may only be specified once");
+    }
+
+    #[test]
+    fn parse_test_options_rejects_duplicate_all() {
+        let err = parse_test_options(&["--all".to_string(), "--all".to_string()])
+            .expect_err("duplicate all flag must fail");
+
+        assert_eq!(err.summary(), "test: --all may only be specified once");
+    }
+
+    #[test]
+    fn selector_rejects_parent_components() {
+        let err =
+            parse_test_options(&["../string".to_string()]).expect_err("parent selector must fail");
+
+        assert_eq!(err.summary(), "test: selector must stay within lib/tests");
+    }
+
+    #[test]
+    fn selector_rejects_absolute_paths() {
+        let err = parse_test_options(&["/tmp/string".to_string()])
+            .expect_err("absolute selector must fail");
+
+        assert_eq!(err.summary(), "test: selector must stay within lib/tests");
+    }
+
+    #[test]
+    fn selector_allows_all_flag_after_path_validation() {
+        let opts = parse_test_options(&["--all".to_string()]).expect("--all should parse");
+
+        assert_eq!(opts.mode, TestMode::All);
     }
 
     #[test]
@@ -869,5 +948,19 @@ mod tests {
             "  \x1b[33mnote:\x1b[0m expected 1, got 2"
         );
         assert_eq!(colorize_text("x", TestOutputColor::Red, false), "x");
+    }
+
+    #[test]
+    fn test_color_env_trims_value() {
+        let _guard = env_lock().lock().expect("env lock");
+        let previous = std::env::var("SURTR_TEST_COLOR").ok();
+        std::env::set_var("SURTR_TEST_COLOR", " always ");
+
+        assert!(test_color_enabled());
+
+        match previous {
+            Some(value) => std::env::set_var("SURTR_TEST_COLOR", value),
+            None => std::env::remove_var("SURTR_TEST_COLOR"),
+        }
     }
 }

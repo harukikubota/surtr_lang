@@ -77,8 +77,13 @@ pub(crate) fn store(
 
 fn enabled() -> bool {
     !matches!(
-        env::var("SURTR_RUN_CACHE").ok().as_deref(),
-        Some("0") | Some("false") | Some("FALSE") | Some("no") | Some("NO")
+        env::var("SURTR_RUN_CACHE")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("0") | Some("false") | Some("no")
     )
 }
 
@@ -95,7 +100,9 @@ fn cache_path(
 
 fn cache_root() -> PathBuf {
     if let Some(path) = env::var_os("SURTR_RUN_CACHE_DIR") {
-        return PathBuf::from(path);
+        if !path.to_string_lossy().trim().is_empty() {
+            return PathBuf::from(path);
+        }
     }
 
     target_root_from_current_exe()
@@ -210,4 +217,44 @@ fn current_exe_fingerprint() -> Option<String> {
             )))
         })
         .clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cache_root, enabled};
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn run_cache_false_env_values_are_trimmed_and_case_insensitive() {
+        let _guard = env_lock().lock().expect("env lock");
+        let previous = std::env::var("SURTR_RUN_CACHE").ok();
+        std::env::set_var("SURTR_RUN_CACHE", " False ");
+
+        assert!(!enabled());
+
+        match previous {
+            Some(value) => std::env::set_var("SURTR_RUN_CACHE", value),
+            None => std::env::remove_var("SURTR_RUN_CACHE"),
+        }
+    }
+
+    #[test]
+    fn run_cache_empty_dir_env_uses_default_root() {
+        let _guard = env_lock().lock().expect("env lock");
+        let previous = std::env::var("SURTR_RUN_CACHE_DIR").ok();
+        std::env::set_var("SURTR_RUN_CACHE_DIR", " ");
+
+        assert_ne!(cache_root(), PathBuf::from(" "));
+
+        match previous {
+            Some(value) => std::env::set_var("SURTR_RUN_CACHE_DIR", value),
+            None => std::env::remove_var("SURTR_RUN_CACHE_DIR"),
+        }
+    }
 }

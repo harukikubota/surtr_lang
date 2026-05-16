@@ -12,7 +12,14 @@ pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
     }
 
     let file_path = &args[0];
+    if file_path.starts_with('-') {
+        return Err(RuneError::message(
+            1,
+            format!("check: unknown option '{}'", file_path),
+        ));
+    }
     let mut format = "json";
+    let mut format_seen = false;
     let mut i = 1usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -21,6 +28,13 @@ pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
                 if i >= args.len() {
                     return Err(RuneError::message(1, "check: missing value for --format"));
                 }
+                if format_seen {
+                    return Err(RuneError::message(
+                        1,
+                        "check: --format may only be specified once",
+                    ));
+                }
+                format_seen = true;
                 format = args[i].as_str();
             }
             other => {
@@ -67,5 +81,32 @@ fn check_command(file_path: &str) -> RuneResult<()> {
             println!("{text}");
             Err(RuneError::silent(error.exit_code()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_rejects_duplicate_format_option() {
+        let err = dispatch(&[
+            "missing.srt".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+        ])
+        .expect_err("duplicate check format must fail before reading input");
+
+        assert_eq!(err.summary(), "check: --format may only be specified once");
+    }
+
+    #[test]
+    fn check_rejects_option_like_input() {
+        let err = dispatch(&["--bad".to_string()])
+            .expect_err("option-looking check input must fail before reading input");
+
+        assert_eq!(err.summary(), "check: unknown option '--bad'");
     }
 }

@@ -11,12 +11,31 @@ fn parse_repl_options(args: &[String]) -> RuneResult<xldr::ReplOptions> {
 
     while i < args.len() {
         match args[i].as_str() {
-            "--quiet" => options.quiet = true,
-            "--banner" => options.banner = xldr::BannerMode::Detailed,
-            "--version" => options.version = true,
+            "--quiet" => {
+                if options.quiet {
+                    return Err(RuneError::usage("repl: --quiet may only be specified once"));
+                }
+                options.quiet = true;
+            }
+            "--banner" => {
+                if options.banner == xldr::BannerMode::Detailed {
+                    return Err(RuneError::usage(
+                        "repl: --banner may only be specified once",
+                    ));
+                }
+                options.banner = xldr::BannerMode::Detailed;
+            }
+            "--version" => {
+                if options.version {
+                    return Err(RuneError::usage(
+                        "repl: --version may only be specified once",
+                    ));
+                }
+                options.version = true;
+            }
             "--script" => {
                 i += 1;
-                if i >= args.len() {
+                if i >= args.len() || args[i].starts_with('-') {
                     return Err(RuneError::usage("repl: missing value for --script"));
                 }
                 if options.script_path.is_some() {
@@ -28,7 +47,7 @@ fn parse_repl_options(args: &[String]) -> RuneResult<xldr::ReplOptions> {
             }
             "--module" => {
                 i += 1;
-                if i >= args.len() {
+                if i >= args.len() || args[i].starts_with('-') {
                     return Err(RuneError::usage("repl: missing value for --module"));
                 }
                 if options.module_path.is_some() {
@@ -91,9 +110,69 @@ mod tests {
     }
 
     #[test]
+    fn parse_repl_options_rejects_duplicate_quiet() {
+        let err = parse_repl_options(&["--quiet".to_string(), "--quiet".to_string()])
+            .expect_err("duplicate quiet flag must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("--quiet may only be specified once"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_duplicate_banner() {
+        let err = parse_repl_options(&["--banner".to_string(), "--banner".to_string()])
+            .expect_err("duplicate banner flag must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("--banner may only be specified once"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_duplicate_version() {
+        let err = parse_repl_options(&["--version".to_string(), "--version".to_string()])
+            .expect_err("duplicate version flag must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("--version may only be specified once"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn parse_repl_options_rejects_missing_module_value() {
         let err = parse_repl_options(&["--module".to_string()])
             .expect_err("missing module value must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("missing value for --module"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_option_like_script_value() {
+        let err = parse_repl_options(&["--script".to_string(), "--module".to_string()])
+            .expect_err("option-looking script value must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("missing value for --script"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_option_like_module_value() {
+        let err = parse_repl_options(&["--module".to_string(), "--script".to_string()])
+            .expect_err("option-looking module value must fail");
 
         let rendered = format!("{err:?}");
         assert!(

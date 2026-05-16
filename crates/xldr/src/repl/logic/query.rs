@@ -438,6 +438,12 @@ fn parse_capture_query_arg(
     let input = &ctx.source[range.clone()];
     let kind = if let Some(slot) = input.strip_prefix('&') {
         if let Ok(index) = slot.parse::<u32>() {
+            if index == 0 {
+                return Err(ReplQueryParseError::new(
+                    "Capture placeholder slots start at &1.",
+                    ctx.span_for_local_bytes(range.start, range.end),
+                ));
+            }
             CaptureQueryArgKind::Slot(index)
         } else if input.contains('(') {
             return Err(ReplQueryParseError::new(
@@ -981,6 +987,17 @@ mod tests {
             parse_repl_query("map(&List::map(&1, &add(Int, &1)))").expect_err("query should fail");
         assert!(
             err.message().contains("nested capture applications"),
+            "{}",
+            err.message()
+        );
+    }
+
+    #[test]
+    fn parse_capture_query_rejects_zero_slot() {
+        let err = parse_repl_query("map(&add(Int, &0))").expect_err("query should fail");
+
+        assert!(
+            err.message().contains("placeholder slots start at &1"),
             "{}",
             err.message()
         );
