@@ -2646,7 +2646,9 @@ impl ReplEngine {
             }
             _ => self
                 .find_signature(&decl.fq_name)
-                .map(|(_, signature)| signature),
+                .map(|(qualified_name, signature)| {
+                    Self::render_signature_with_qualified_name(&qualified_name, signature)
+                }),
         }
     }
 

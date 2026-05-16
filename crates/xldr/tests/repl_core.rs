@@ -378,6 +378,18 @@ impl User {
         .find(|candidate| candidate.label == "User::new")
         .expect("undocumented impl ctor should be suggested");
     assert_eq!(ctor.kind, ReplCompletionKind::TypePath);
+    assert!(
+        ctor.detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("User::new(name: String, age: Int) -> User")),
+        "constructor completion detail should use surface names: {ctor:?}"
+    );
+    assert!(
+        ctor.detail
+            .as_deref()
+            .is_none_or(|detail| !detail.contains("Global::")),
+        "constructor completion detail must not expose Global: {ctor:?}"
+    );
 
     let method = engine
         .completions("User::b", "User::b".len())
@@ -386,6 +398,20 @@ impl User {
         .find(|candidate| candidate.label == "User::birthday")
         .expect("undocumented impl method should be suggested");
     assert_eq!(method.kind, ReplCompletionKind::TypePath);
+    assert!(
+        method
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("User::birthday(self: User) -> User")),
+        "method completion detail should use surface names: {method:?}"
+    );
+    assert!(
+        method
+            .detail
+            .as_deref()
+            .is_none_or(|detail| !detail.contains("Global::")),
+        "method completion detail must not expose Global: {method:?}"
+    );
 }
 
 #[test]
