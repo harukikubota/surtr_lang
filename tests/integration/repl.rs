@@ -435,16 +435,17 @@ fn repl_sig_type_owner_constructor_fallback_renders_through_cli() {
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(
-        stdout.contains("Duration::new(value: Int) -> Result<Self, Error>"),
+        stdout.contains("Duration::new(value: Int) -> Result<Duration, Error>"),
         "{stdout}"
     );
     assert!(
         stdout
-            .matches("Duration::new(value: Int) -> Result<Self, Error>")
+            .matches("Duration::new(value: Int) -> Result<Duration, Error>")
             .count()
             >= 2,
         "{stdout}"
     );
+    assert!(!stdout.contains("Result<Self, Error>"), "{stdout}");
     assert!(stdout.contains("* Option::Some"), "{stdout}");
     assert!(stdout.contains("* Option::None"), "{stdout}");
 }
@@ -479,7 +480,7 @@ fn repl_sig_attached_extractor_owner_query_matches_zero_arg_form() {
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(
         stdout
-            .matches("Duration::deconstruct(self: Self) -> MatchResult<Int, Error>")
+            .matches("Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>")
             .count()
             >= 3,
         "{stdout}"

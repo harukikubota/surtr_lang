@@ -5017,7 +5017,8 @@ impl ReplEngine {
                 (
                     qualified_name,
                     format!(
-                        "{}::new({params}) -> Self",
+                        "{}::new({params}) -> {}",
+                        crate::surface_path_name(&decl.fq_name),
                         crate::surface_path_name(&decl.fq_name)
                     ),
                 )

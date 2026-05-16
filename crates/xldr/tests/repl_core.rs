@@ -489,7 +489,7 @@ impl Pairwise for Duo {
 
     let sig = signature_text(&engine.handle_line(":sig pair(Duo, Duo)"));
     assert!(
-        sig.contains("defined:\n  impl Pairwise for Duo::pair(self: Self, rhs: Self) -> Self"),
+        sig.contains("defined:\n  impl Pairwise for Duo::pair(self: Duo, rhs: Duo) -> Duo"),
         "{sig}"
     );
     assert!(
@@ -1744,7 +1744,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 
     let typed_sig = engine.handle_line(":sig compare(Int, Int)");
     let typed_sig = signature_text(&typed_sig);
-    assert!(typed_sig.contains("impl Compare for Int::compare(self: Self, rhs: Self) -> Ordering"));
+    assert!(typed_sig.contains("impl Compare for Int::compare(self: Int, rhs: Int) -> Ordering"));
 
     let helper_sig = engine.handle_line(":sig compare");
     let helper_sig = signature_text(&helper_sig);
@@ -1778,7 +1778,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let typed_less_than_sig = signature_text(&typed_less_than_sig);
     assert!(
         typed_less_than_sig
-            .contains("defined:\n  impl Compare for Int::lt(self: Self, rhs: Self) -> Boolean"),
+            .contains("defined:\n  impl Compare for Int::lt(self: Int, rhs: Int) -> Boolean"),
         "{typed_less_than_sig}"
     );
     assert!(
@@ -1790,7 +1790,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let typed_neq_sig = signature_text(&typed_neq_sig);
     assert!(
         typed_neq_sig
-            .contains("defined:\n  impl Neq for Int::neq(self: Self, rhs: Self) -> Boolean"),
+            .contains("defined:\n  impl Neq for Int::neq(self: Int, rhs: Int) -> Boolean"),
         "{typed_neq_sig}"
     );
     assert!(
@@ -1837,7 +1837,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 
     let typed_doc = engine.handle_line(":doc compare(Int, Int)");
     let typed_doc = doc_text(&typed_doc);
-    assert!(typed_doc.contains("impl Compare for Int::compare(self: Self, rhs: Self) -> Ordering"));
+    assert!(typed_doc.contains("impl Compare for Int::compare(self: Int, rhs: Int) -> Ordering"));
     assert!(typed_doc.contains("Return the three-way ordering between the two integer values."));
     assert!(
         !typed_doc.contains("\n  Return the three-way ordering between the two integer values.")
@@ -1869,7 +1869,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let typed_less_than_doc = engine.handle_line(":doc lt(Int, Int)");
     let typed_less_than_doc = doc_text(&typed_less_than_doc);
     assert!(
-        typed_less_than_doc.contains("impl Compare for Int::lt(self: Self, rhs: Self) -> Boolean"),
+        typed_less_than_doc.contains("impl Compare for Int::lt(self: Int, rhs: Int) -> Boolean"),
         "{typed_less_than_doc}"
     );
     assert!(
@@ -1882,7 +1882,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let typed_neq_doc = engine.handle_line(":doc neq(Int, Int)");
     let typed_neq_doc = doc_text(&typed_neq_doc);
     assert!(
-        typed_neq_doc.contains("impl Neq for Int::neq(self: Self, rhs: Self) -> Boolean"),
+        typed_neq_doc.contains("impl Neq for Int::neq(self: Int, rhs: Int) -> Boolean"),
         "{typed_neq_doc}"
     );
     assert!(
@@ -1893,7 +1893,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let constructor_doc = engine.handle_line(":doc Duration(Int)");
     let constructor_doc = doc_text(&constructor_doc);
     assert!(
-        constructor_doc.contains("Duration::new(value: Int) -> Result<Self, Error>"),
+        constructor_doc.contains("Duration::new(value: Int) -> Result<Duration, Error>"),
         "{constructor_doc}"
     );
     assert!(
@@ -1904,7 +1904,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_doc = engine.handle_line(":doc Duration!()");
     let extractor_doc = doc_text(&extractor_doc);
     assert!(
-        extractor_doc.contains("Duration::deconstruct(self: Self) -> MatchResult<Int, Error>"),
+        extractor_doc.contains("Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"),
         "{extractor_doc}"
     );
     assert!(
@@ -1917,7 +1917,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_sig = signature_text(&extractor_sig);
     assert!(
         extractor_sig
-            .contains("defined:\n  Duration::deconstruct(self: Self) -> MatchResult<Int, Error>"),
+            .contains("defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"),
         "{extractor_sig}"
     );
     assert!(
@@ -1933,7 +1933,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_sig_explicit_self = signature_text(&extractor_sig_explicit_self);
     assert!(
         extractor_sig_explicit_self
-            .contains("defined:\n  Duration::deconstruct(self: Self) -> MatchResult<Int, Error>"),
+            .contains("defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"),
         "{extractor_sig_explicit_self}"
     );
     assert!(
@@ -2024,7 +2024,7 @@ fn core_sig_type_owner_falls_back_to_constructor_signatures() {
     assert!(point_sig.contains("StyledDocStyle::new("), "{point_sig}");
     assert!(point_sig.contains("fg: Option"), "{point_sig}");
     assert!(point_sig.contains("italic: Boolean"), "{point_sig}");
-    assert!(point_sig.contains("-> Self"), "{point_sig}");
+    assert!(point_sig.contains("-> StyledDocStyle"), "{point_sig}");
 }
 
 #[test]
@@ -2693,7 +2693,7 @@ fn core_eldr_sig_queries_do_not_depend_on_docs_chunk() {
 
     let sig = signature_text(&restored.handle_line(":sig compare(Int, Int)"));
     assert!(
-        sig.contains("impl Compare for Int::compare(self: Self, rhs: Self) -> Ordering"),
+        sig.contains("impl Compare for Int::compare(self: Int, rhs: Int) -> Ordering"),
         "{sig}"
     );
     assert!(

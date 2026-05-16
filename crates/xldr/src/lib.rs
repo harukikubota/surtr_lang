@@ -186,6 +186,38 @@ fn format_ast_ty(ty: &spire::ast::AstTy) -> String {
     }
 }
 
+fn rewrite_self_ast_ty(
+    ty: &spire::ast::AstTy,
+    self_ty: &spire::ast::AstTy,
+) -> spire::ast::AstTy {
+    match ty {
+        spire::ast::AstTy::Named(_, name) if name == "Self" => self_ty.clone(),
+        spire::ast::AstTy::Named(_, _) | spire::ast::AstTy::ImplTrait(_, _) => ty.clone(),
+        spire::ast::AstTy::Generic(span, name, args) => spire::ast::AstTy::Generic(
+            span.clone(),
+            name.clone(),
+            args.iter()
+                .map(|arg| rewrite_self_ast_ty(arg, self_ty))
+                .collect(),
+        ),
+        spire::ast::AstTy::Tuple(span, items) => spire::ast::AstTy::Tuple(
+            span.clone(),
+            items
+                .iter()
+                .map(|item| rewrite_self_ast_ty(item, self_ty))
+                .collect(),
+        ),
+        spire::ast::AstTy::Func(span, params, ret) => spire::ast::AstTy::Func(
+            span.clone(),
+            params
+                .iter()
+                .map(|param| rewrite_self_ast_ty(param, self_ty))
+                .collect(),
+            Box::new(rewrite_self_ast_ty(ret, self_ty)),
+        ),
+    }
+}
+
 fn format_type_params(type_params: &[spire::ast::TypeParam]) -> String {
     if type_params.is_empty() {
         String::new()
@@ -315,7 +347,27 @@ fn format_impl_method_signature(
     params: &[spire::ast::FunParam],
     ret_ty: &Option<spire::ast::AstTy>,
 ) -> String {
-    let signature = format_fun_signature(name, type_params, params, ret_ty);
+    let self_ty = spire::ast::AstTy::Named(
+        spire::ast::Span { start: 0, end: 0 },
+        target.to_string(),
+    );
+    let params = params
+        .iter()
+        .map(|param| format!(
+            "{}: {}",
+            param.name,
+            format_ast_ty(&rewrite_self_ast_ty(&param.ty, &self_ty))
+        ))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let type_params = format_type_params(type_params);
+    let signature = match ret_ty {
+        Some(ret) => format!(
+            "{name}{type_params}({params}) -> {}",
+            format_ast_ty(&rewrite_self_ast_ty(ret, &self_ty))
+        ),
+        None => format!("{name}{type_params}({params})"),
+    };
     if let Some(rest) = signature.strip_prefix(name) {
         format!("{}::{name}{rest}", surface_path_name(target))
     } else {
@@ -330,7 +382,23 @@ fn format_impl_extractor_signature(
     param: &spire::ast::ExtractorParam,
     ret_ty: &spire::ast::AstTy,
 ) -> String {
-    let signature = format_extractor_signature(name, type_params, param, ret_ty);
+    let self_ty = spire::ast::AstTy::Named(
+        spire::ast::Span { start: 0, end: 0 },
+        target.to_string(),
+    );
+    let type_params = format_type_params(type_params);
+    let param = match &param.ty {
+        Some(ty) => format!(
+            "{}: {}",
+            param.name,
+            format_ast_ty(&rewrite_self_ast_ty(ty, &self_ty))
+        ),
+        None => param.name.clone(),
+    };
+    let signature = format!(
+        "{name}{type_params}({param}) -> {}",
+        format_ast_ty(&rewrite_self_ast_ty(ret_ty, &self_ty))
+    );
     if let Some(rest) = signature.strip_prefix(name) {
         format!("{}::{name}{rest}", surface_path_name(target))
     } else {
@@ -378,7 +446,23 @@ fn format_trait_impl_method_signature(
     params: &[spire::ast::FunParam],
     ret_ty: &Option<spire::ast::AstTy>,
 ) -> String {
-    let method_sig = format_fun_signature(method_name, type_params, params, ret_ty);
+    let params = params
+        .iter()
+        .map(|param| format!(
+            "{}: {}",
+            param.name,
+            format_ast_ty(&rewrite_self_ast_ty(&param.ty, target_ty))
+        ))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let type_params = format_type_params(type_params);
+    let method_sig = match ret_ty {
+        Some(ret) => format!(
+            "{method_name}{type_params}({params}) -> {}",
+            format_ast_ty(&rewrite_self_ast_ty(ret, target_ty))
+        ),
+        None => format!("{method_name}{type_params}({params})"),
+    };
     let impl_sig = format_trait_impl_signature(trait_name, trait_args, target_ty);
     format!("{impl_sig}::{method_sig}")
 }
@@ -2640,21 +2724,21 @@ impl Show for Int {
         assert!(docs.iter().any(|entry| {
             entry.qualified_name == "User::new"
                 && entry.kind == DocKind::Function
-                && entry.signature.as_deref() == Some("User::new(name: String) -> Self")
+                && entry.signature.as_deref() == Some("User::new(name: String) -> User")
                 && entry.doc == "Construct a new user value."
         }));
         assert!(docs.iter().any(|entry| {
             entry.qualified_name == "User::deconstruct"
                 && entry.kind == DocKind::Function
                 && entry.signature.as_deref()
-                    == Some("User::deconstruct(self: Self) -> MatchResult<String, Error>")
+                    == Some("User::deconstruct(self: User) -> MatchResult<String, Error>")
                 && entry.doc == "Deconstruct a user value for pattern matching."
         }));
         assert!(docs.iter().any(|entry| {
             entry.qualified_name == "Sample::impl Show for Int::to_string"
                 && entry.kind == DocKind::Function
                 && entry.signature.as_deref()
-                    == Some("impl Show for Int::to_string(self: Self) -> String")
+                    == Some("impl Show for Int::to_string(self: Int) -> String")
                 && entry.doc == "Render `Int` through the standard display surface."
         }));
     }
