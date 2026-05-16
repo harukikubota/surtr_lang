@@ -31,7 +31,10 @@ def save_config(path: String, config: JsonSpecRwConfig) -> Result<Unit, Error> {
   File::write(path, text)
 }
 
-path = "surtr-json-config-rw.fixture.json"
+tmp_root =? FS::path("./tmp/sandbox")
+_ =? FS::mkdir_all(tmp_root)
+path = "./tmp/sandbox/surtr-json-config-rw.fixture.json"
 _ =? save_config(path, JsonSpecRwConfig("surtr", "boot"))
 cfg =? load_config(path)
+_ =? File::delete(path)
 print(cfg.name ++ ":" ++ cfg.entrypoint)

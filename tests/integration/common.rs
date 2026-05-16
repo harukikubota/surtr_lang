@@ -277,6 +277,25 @@ mod tests {
             "module fail fixtures should live under tests/fixtures/modules/fail"
         );
     }
+
+    #[test]
+    fn json_config_rw_fixture_uses_tmp_and_cleans_up() {
+        let fixture = spec_fixtures()
+            .into_iter()
+            .find(|fixture| {
+                fixture.source_path.ends_with("tests/fixtures/script/pass/json/config_file_rw.srt")
+            })
+            .expect("expected json config rw fixture");
+
+        assert!(
+            fixture.source.contains("./tmp/"),
+            "json config rw fixture should write under ./tmp"
+        );
+        assert!(
+            fixture.source.contains("File::delete(path)"),
+            "json config rw fixture should delete the temporary file"
+        );
+    }
 }
 
 pub fn spec_fixtures() -> Vec<SpecFixture> {
