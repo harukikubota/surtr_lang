@@ -1420,7 +1420,7 @@ impl ReplEngine {
         &self,
         context: &CompletionCallContext,
     ) -> Option<ReplSignatureHelp> {
-        let (qualified_name, signature) = self.find_signature(&context.callee)?;
+        let (qualified_name, signature) = self.callable_signature_for_completion(&context.callee)?;
         let rendered = Self::render_signature_with_qualified_name(&qualified_name, signature);
         Some(ReplSignatureHelp {
             lines: vec![highlight_signature_parameter(
@@ -1432,9 +1432,24 @@ impl ReplEngine {
     }
 
     fn expected_param_type_for_call(&self, context: &CompletionCallContext) -> Option<String> {
-        let (_qualified_name, signature) = self.find_signature(&context.callee)?;
+        let (_qualified_name, signature) =
+            self.callable_signature_for_completion(&context.callee)?;
         let types = Self::signature_param_types(&signature)?;
         types.get(context.active_parameter).cloned()
+    }
+
+    fn callable_signature_for_completion(&self, symbol: &str) -> Option<(String, String)> {
+        if let Some(decl) = self.visible_declaration(symbol) {
+            match decl.kind {
+                sigil::DeclarationKind::Struct | sigil::DeclarationKind::Record => {
+                    if let Some(signature) = self.constructor_signature_entry(decl) {
+                        return Some(signature);
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.find_signature(symbol)
     }
 
     pub fn prompt(&self) -> String {
@@ -4621,6 +4636,17 @@ impl ReplEngine {
     }
 
     fn constructor_signature_lines(&self, decl: &sigil::DeclarationEntry) -> Option<Vec<String>> {
+        if let Some((qualified_name, signature)) = self.constructor_signature_entry(decl) {
+            return Some(vec![Self::render_signature_with_qualified_name(
+                &qualified_name,
+                signature,
+            )]);
+        }
+
+        None
+    }
+
+    fn constructor_signature_entry(&self, decl: &sigil::DeclarationEntry) -> Option<(String, String)> {
         let qualified_name = format!("{}::new", decl.fq_name);
         let mut matches = self
             .docs
@@ -4631,14 +4657,14 @@ impl ReplEngine {
                     == crate::surface_path_name(&qualified_name)
             })
             .filter_map(|entry| {
-                entry.signature.clone().map(|signature| {
-                    Self::render_signature_with_qualified_name(&entry.qualified_name, signature)
-                })
+                entry.signature
+                    .clone()
+                    .map(|signature| (entry.qualified_name.clone(), signature))
             })
             .collect::<Vec<_>>();
-        matches.sort();
-        if !matches.is_empty() {
-            return Some(matches);
+        matches.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+        if let Some(first) = matches.into_iter().next() {
+            return Some(first);
         }
 
         if decl.kind == sigil::DeclarationKind::Record {
@@ -4653,10 +4679,13 @@ impl ReplEngine {
                         .map(|(name, ty)| format!("{name}: {}", Self::ty_to_string(ty)))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    vec![format!(
-                        "{}::new({params}) -> Self",
-                        crate::surface_path_name(&decl.fq_name)
-                    )]
+                    (
+                        qualified_name,
+                        format!(
+                            "{}::new({params}) -> Self",
+                            crate::surface_path_name(&decl.fq_name)
+                        ),
+                    )
                 });
         }
 

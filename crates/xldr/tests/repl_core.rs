@@ -394,14 +394,42 @@ fn core_completion_hides_global_noise_for_empty_constructor_call_arguments() {
         .expect("constructor call should still show signature help");
     assert_eq!(signature.active_parameter, Some(0));
     assert!(
-        signature.lines.join("\n").contains("Duration"),
+        signature.lines.join("\n").contains("Duration::new("),
         "constructor signature should remain visible: {:?}",
+        signature.lines
+    );
+    assert!(
+        signature.lines.join("\n").contains("[Int]"),
+        "active constructor parameter should be highlighted: {:?}",
         signature.lines
     );
     assert!(
         completion.candidates.is_empty(),
         "empty constructor argument position should not show unrelated global candidates: {:?}",
         completion.candidates
+    );
+}
+
+#[test]
+fn core_completion_filters_constructor_arguments_by_expected_parameter_type() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("n = 3")).contains("n: Int"));
+    assert!(rendered_text(&engine.handle_line(r#"s = "text""#)).contains("s: String"));
+
+    let completion = engine.completions("Duration(", "Duration(".len());
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(
+        labels.contains(&"n"),
+        "Int binding should be suggested for constructor argument: {labels:?}"
+    );
+    assert!(
+        !labels.contains(&"s"),
+        "String binding should not be suggested for Int constructor argument: {labels:?}"
     );
 }
 
