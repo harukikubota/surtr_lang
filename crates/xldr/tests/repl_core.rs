@@ -233,6 +233,42 @@ fn core_completion_returns_type_constructors_and_type_paths() {
 }
 
 #[test]
+fn core_completion_hides_trait_impl_members_from_qualified_type_paths() {
+    let engine = engine();
+    let labels = engine
+        .completions("Boolean::", "Boolean::".len())
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+
+    for expected in [
+        "Boolean::not",
+        "Boolean::xor",
+        "Boolean::eqv",
+        "Boolean::implies",
+    ] {
+        assert!(
+            labels.iter().any(|label| label == expected),
+            "owner method should be suggested: {expected}; labels={labels:?}"
+        );
+    }
+
+    for hidden in [
+        "Boolean::impl Show for Boolean::to_string",
+        "Boolean::impl Eq for Boolean::eq",
+        "Boolean::impl Neq for Boolean::neq",
+        "Boolean::impl From<String> for Boolean::from",
+        "Boolean::impl From<Boolean> for Boolean::from",
+    ] {
+        assert!(
+            labels.iter().all(|label| label != hidden),
+            "trait impl member should not be suggested: {hidden}; labels={labels:?}"
+        );
+    }
+}
+
+#[test]
 fn core_completion_uses_argument_position_for_variable_candidates_and_signature_help() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line("n = 3")).contains("n: Int"));

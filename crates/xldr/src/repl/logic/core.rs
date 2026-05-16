@@ -1329,7 +1329,7 @@ impl ReplEngine {
         }
         if Self::is_qualified_symbol(lookup) {
             self.qualified_declaration(lookup)
-                .is_none_or(Self::declaration_is_completion_surface)
+                .is_some_and(Self::declaration_is_completion_surface)
         } else {
             self.sigil_session.lookup_uid(lookup).is_some()
         }
