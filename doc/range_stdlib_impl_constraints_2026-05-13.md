@@ -9,9 +9,9 @@
 
 - `Range::new(min, max)`
 - `Range::normalized(a, b)`
-- `impl Compare for Range<Int>`
-- `impl Eq for Range<Int>`
-- `impl Neq for Range<Int>`
+- `impl Compare for Range<impl Compare>`
+- `impl Eq for Range<impl Eq>`
+- `impl Neq for Range<impl Neq>`
 - `Range::advance(range, steps)` / `Range::retreat(range, steps)` の Int 専用移動
 - `Range(min, max)` pattern を支える `deconstruct`
 
@@ -25,7 +25,7 @@
 - `Compare` は包含順序ではなく辞書順
   - まず `min`、同値なら `max`
 - `Eq` / `Neq` は構造的等値
-- ただし現行実装では比較 trait は `Range<Int>` に限定する
+- 比較 trait は endpoint 側の trait 実装に従う generic impl とする
 - 平行移動は `Range + Range` ではなく、`Range<Int>` の境界を同じだけ動かす helper として扱う
 
 ## 今回確認できた実装上の制約
@@ -95,18 +95,18 @@ generic `defstruct` が言語機能として使える必要がある。
 - `Range::advance(range: Range<Int>, rhs: Int) -> Range<Int>`
 - `Range::retreat(range: Range<Int>, rhs: Int) -> Range<Int>`
 
-### 4.5. generic な比較 trait 実装は現行コンパイラ制約に当たる
+### 4.5. generic な比較 trait 実装は specialization 対応を前提にする
 
-`impl Compare for Range<impl Compare>` のような surface は構文上は書けるが、
-現時点では runtime で `Call arity mismatch` に当たり安定しない。
+`impl Compare for Range<impl Compare>` のような surface は、
+specialization が struct/record の内部型まで辿れることを前提に成立する。
 
-そのため今回の着地では:
+この前提が満たされれば:
 
 - `Range` 自体は `Range<$A>` の generic struct として提供する
 - `Range::normalized` / `Range::deconstruct` は generic のまま提供する
-- `Compare` / `Eq` / `Neq` は `Range<Int>` に限定して実装する
+- `Compare` / `Eq` / `Neq` も generic のまま提供する
 
-完全な generic 比較は別タスクで compiler/runtime 側を詰めてから再拡張する。
+`advance` / `retreat` だけは `Int` 専用 helper のまま据え置く。
 
 ### 5. 標準型追加は preload 配線が複数箇所にまたがる
 
@@ -139,7 +139,7 @@ cargo nextest run --workspace
 1. `Range` の実体表現を確定する
    - `defstruct Range<$A>` を前提に進める
 2. `new` / `normalized` / `deconstruct` の surface を確定する
-3. `Compare` / `Eq` / `Neq` を `Range<Int>` で固定する
+3. `Compare` / `Eq` / `Neq` を generic impl で載せる
 4. `Int` 専用 `advance/retreat` を通常関数で載せる
 5. preload 配線を 3 箇所に追加する
 6. `lib/tests/range.srt` と必要最小限の aggregate 連携を足す
@@ -155,7 +155,7 @@ field は `readonly` にせず public のままにし、
 つまり、`Range` は `Duration` のような「常に内部不変条件を守らせる値」ではなく、
 「比較・変換 API を持つ plain data」として扱う。
 
-ただし比較 trait だけは現状の実装制約に合わせて `Range<Int>` 限定で提供する。
+比較 trait は endpoint 側の trait 実装に従う generic surface として提供する。
 
 追加後も `[start..stop]` literal は従来どおり `List` / `Result<List<String>, Error>` 側へ lower され、
 `Range` には下がらない。

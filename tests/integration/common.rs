@@ -283,7 +283,9 @@ mod tests {
         let fixture = spec_fixtures()
             .into_iter()
             .find(|fixture| {
-                fixture.source_path.ends_with("tests/fixtures/script/pass/json/config_file_rw.srt")
+                fixture
+                    .source_path
+                    .ends_with("tests/fixtures/script/pass/json/config_file_rw.srt")
             })
             .expect("expected json config rw fixture");
 

@@ -74,14 +74,20 @@ print(to_string(match value {
 
 ### 比較について
 
-現行実装では比較 trait は `Range<Int>` に限定されています。
+`Range` の比較は endpoint 側の trait 実装に従います。
+
+- `compare` には `Compare`
+- `==` には `Eq`
+- `!=` には `Neq`
+
+がそれぞれ必要です。
 
 ```surtr
-left = Range(1, 4)
-right = Range(2, 0)
+left = Range(10ms, 20ms)
+right = Range(10ms, 30ms)
 
 print(to_string(compare(left, right)))
-print(to_string(left == Range(1, 4)))
+print(to_string(left == Range(10ms, 20ms)))
 ```
 
 `compare` は包含判定ではなく辞書順です。

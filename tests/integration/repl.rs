@@ -275,6 +275,24 @@ fn repl_static_impl_methods_keep_declared_arity() {
 }
 
 #[test]
+fn repl_range_duration_comparisons_execute_without_arity_mismatch() {
+    let output = run_repl_session(
+        "print(to_string(compare(Range(10ms, 20ms), Range(10ms, 30ms))))\nprint(to_string(Range(10ms, 20ms) == Range(10ms, 20ms)))\nprint(to_string(Range(10ms, 20ms) != Range(10ms, 30ms)))\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("Ordering::Less"), "{stdout}");
+    assert!(stdout.contains("True"), "{stdout}");
+    assert!(!stdout.contains("Call arity mismatch"), "{stdout}");
+}
+
+#[test]
 fn repl_colorizes_sig_command_signature() {
     let output = run_repl_session_with_color(":sig print\n:quit\n");
     assert!(

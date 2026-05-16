@@ -2,6 +2,8 @@
 (1, 3)
 Ordering::Less
 (True, True)
+Ordering::Less
+(True, True)
 (5, 3)
 (1, -1)
 (4, 6)

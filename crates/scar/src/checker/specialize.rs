@@ -1064,6 +1064,13 @@ impl Checker {
             (Ty::List(left), Ty::List(right)) => {
                 self.match_specialization_ty(left, right, bound_tyvars, mapping)
             }
+            (Ty::TypeRef(left), Ty::TypeRef(right)) | (Ty::Lazy(left), Ty::Lazy(right)) => {
+                self.match_specialization_ty(left, right, bound_tyvars, mapping)
+            }
+            (Ty::Facet(left_source, left_focus), Ty::Facet(right_source, right_focus)) => {
+                self.match_specialization_ty(left_source, right_source, bound_tyvars, mapping);
+                self.match_specialization_ty(left_focus, right_focus, bound_tyvars, mapping);
+            }
             (Ty::Tuple(left), Ty::Tuple(right)) => {
                 for (left, right) in left.iter().zip(right.iter()) {
                     self.match_specialization_ty(left, right, bound_tyvars, mapping);
@@ -1088,6 +1095,38 @@ impl Checker {
             {
                 for (left, right) in left_args.iter().zip(right_args.iter()) {
                     self.match_specialization_ty(left, right, bound_tyvars, mapping);
+                }
+            }
+            (Ty::Struct(left_name, left_fields), Ty::Struct(right_name, right_fields))
+                if left_name == right_name =>
+            {
+                for ((left_field_name, left_field_ty), (right_field_name, right_field_ty)) in
+                    left_fields.iter().zip(right_fields.iter())
+                {
+                    if left_field_name == right_field_name {
+                        self.match_specialization_ty(
+                            left_field_ty,
+                            right_field_ty,
+                            bound_tyvars,
+                            mapping,
+                        );
+                    }
+                }
+            }
+            (Ty::Record(left_name, left_fields), Ty::Record(right_name, right_fields))
+                if left_name == right_name =>
+            {
+                for ((left_field_name, left_field_ty), (right_field_name, right_field_ty)) in
+                    left_fields.iter().zip(right_fields.iter())
+                {
+                    if left_field_name == right_field_name {
+                        self.match_specialization_ty(
+                            left_field_ty,
+                            right_field_ty,
+                            bound_tyvars,
+                            mapping,
+                        );
+                    }
                 }
             }
             _ => {}

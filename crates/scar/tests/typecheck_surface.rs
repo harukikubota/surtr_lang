@@ -836,6 +836,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         bounded_add_generics_specialize_without_pending_trait_calls as fn(),
     ),
     (
+        "range_duration_comparisons_specialize_without_pending_trait_calls",
+        range_duration_comparisons_specialize_without_pending_trait_calls as fn(),
+    ),
+    (
         "scar_session_preserves_trait_registry_across_chunks",
         scar_session_preserves_trait_registry_across_chunks as fn(),
     ),
@@ -5105,6 +5109,109 @@ b = double(1.5)"#,
 
     assert_eq!(double_defs.len(), 2);
     assert_ne!(double_defs[0], double_defs[1]);
+    assert!(!typed.iter().any(has_pending_trait_call));
+}
+
+fn range_duration_comparisons_specialize_without_pending_trait_calls() {
+    fn has_pending_trait_call(node: &TypedNode) -> bool {
+        match &node.node {
+            TypedInner::TraitCall { dispatch, args, .. } => {
+                matches!(dispatch, scar::typed::TraitDispatch::Pending)
+                    || args.iter().any(has_pending_trait_call)
+            }
+            TypedInner::App(func, args)
+            | TypedInner::InjectCall(func, args)
+            | TypedInner::Capture(func, args) => {
+                has_pending_trait_call(func) || args.iter().any(has_pending_trait_call)
+            }
+            TypedInner::Block(stmts) => stmts.iter().any(has_pending_trait_call),
+            TypedInner::Bind(_, rhs)
+            | TypedInner::SafeBind(_, rhs)
+            | TypedInner::Semi(rhs)
+            | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
+            TypedInner::ProcessContextHandler { .. } => false,
+            TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
+            TypedInner::SupervisorAdopt { pid, .. } => has_pending_trait_call(pid),
+            TypedInner::SupervisorStatus { .. } => false,
+            TypedInner::SupervisorWorkers { init, strategy, .. } => {
+                has_pending_trait_call(init) || has_pending_trait_call(strategy)
+            }
+            TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_) => false,
+            TypedInner::FacetView { source, .. } => has_pending_trait_call(source),
+            TypedInner::FacetSet { source, value, .. } => {
+                has_pending_trait_call(source) || has_pending_trait_call(value)
+            }
+            TypedInner::FacetOver {
+                source, update_fun, ..
+            } => has_pending_trait_call(source) || has_pending_trait_call(update_fun),
+            TypedInner::BinOp(_, left, right)
+            | TypedInner::Pipe(left, right)
+            | TypedInner::Compose(_, left, right)
+            | TypedInner::ListCons(left, right) => {
+                has_pending_trait_call(left) || has_pending_trait_call(right)
+            }
+            TypedInner::TupleLiteral(items)
+            | TypedInner::ListLiteral(items)
+            | TypedInner::ConstructorCall(_, items)
+            | TypedInner::StructLit(_, items) => items.iter().any(has_pending_trait_call),
+            TypedInner::If(cond, then_branch, else_branch) => {
+                has_pending_trait_call(cond)
+                    || has_pending_trait_call(then_branch)
+                    || else_branch.as_deref().is_some_and(has_pending_trait_call)
+            }
+            TypedInner::Assert(cond, err) => {
+                has_pending_trait_call(cond) || has_pending_trait_call(err)
+            }
+            TypedInner::Ensure(value, pred, err) => {
+                has_pending_trait_call(value)
+                    || has_pending_trait_call(pred)
+                    || has_pending_trait_call(err)
+            }
+            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
+                has_pending_trait_call(value) || has_pending_trait_call(err)
+            }
+            TypedInner::RecoverKind(value, marker, handler) => {
+                has_pending_trait_call(value)
+                    || has_pending_trait_call(marker)
+                    || has_pending_trait_call(handler)
+            }
+            TypedInner::Match(scrutinee, arms) => {
+                has_pending_trait_call(scrutinee)
+                    || arms.iter().any(|arm| {
+                        arm.guard.as_ref().is_some_and(has_pending_trait_call)
+                            || has_pending_trait_call(&arm.body)
+                    })
+            }
+            TypedInner::InterpolatedStr(parts) => parts.iter().any(|part| match part {
+                scar::typed::TypedInterpolatedPart::Text(_) => false,
+                scar::typed::TypedInterpolatedPart::Expr(expr) => has_pending_trait_call(expr),
+            }),
+            TypedInner::Dbg(args) => args.iter().any(|arg| has_pending_trait_call(&arg.expr)),
+            TypedInner::Def(_, _, _, _, _, body, _)
+            | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
+            | TypedInner::Closure(_, _, body) => has_pending_trait_call(body),
+            TypedInner::Lit(_)
+            | TypedInner::Var(_)
+            | TypedInner::ListNil
+            | TypedInner::DeferrorDef(..)
+            | TypedInner::EnumDef(..)
+            | TypedInner::TraitDef(..)
+            | TypedInner::TraitImplDef(..)
+            | TypedInner::BuiltinExtractorDecl(..)
+            | TypedInner::StructDef(..)
+            | TypedInner::RecordDef(..) => false,
+        }
+    }
+
+    let typed = typecheck_with_builtin_prelude(
+        r#"left = Range(10ms, 20ms)
+right = Range(10ms, 30ms)
+same = Range(10ms, 20ms)
+ordering = compare(left, right)
+eq = left == same
+neq = left != right"#,
+    );
+
     assert!(!typed.iter().any(has_pending_trait_call));
 }
 

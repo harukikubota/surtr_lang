@@ -25,6 +25,20 @@ test("Range") {
         ),
       )
     }
+
+    it("specializes generic ordering helpers for Range<Duration>") {
+      left = Range::normalized(10ms, 20ms)
+      right = Range::normalized(10ms, 30ms)
+      same = Range::normalized(10ms, 20ms)
+      assert_eq(
+        (Ordering::Less, True, True),
+        (
+          compare(left, right),
+          left == same,
+          left != right,
+        ),
+      )
+    }
   }
 
   describe("movement helpers") {

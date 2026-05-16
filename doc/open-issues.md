@@ -195,26 +195,6 @@
   - `lib/tests/file_system.srt` では `FS::*` を qualified call で使う形を維持する。
   - escape syntax や alias import を導入する場合は `compile_errors/modules` と `spec/modules` の両方に fixture を追加する。
 
-### OI-028 generic `Range` comparison impl runtime mismatch
-
-- 背景:
-  - `Range<$A>` 自体は標準ライブラリへ追加済みで、`Range::normalized` と `Range::deconstruct` も generic に動作している。
-  - 一方で `impl Compare for Range<impl Compare>`、`impl Eq for Range<impl Eq>`、`impl Neq for Range<impl Neq>` を実際の stdlib surface として有効化すると、runtime で `Call arity mismatch` に当たり安定しない。
-  - parser / resolver / typechecker の構文面では既存 stdlib パターンに沿って受理されるため、問題は generic impl specialization か runtime call shape の同期にある可能性が高い。
-- 未確定点:
-  - `Range<impl Trait>` target の trait impl を runtime まで正しく specialize する責務がどこにあるか
-  - tuple の `impl Compare for (impl Compare, ...)` と `Range<impl Compare>` で何が違うか
-  - generic target impl と monomorphic impl の共存を許可するか、禁止するか
-- 受け入れ条件:
-  - `impl Compare for Range<impl Compare>`、`impl Eq for Range<impl Eq>`、`impl Neq for Range<impl Neq>` が runtime mismatch なしに動作する。
-  - もしくは、generic impl target に現行制約があるなら docs / diagnostics / tests で明示される。
-- テスト方針:
-  - `lib/types/range.srt` を generic impl へ切り替える回帰ケースを `lib/tests/range.srt` に追加する。
-  - `unit/scar` / `unit/forge` / `unit/eldr` で impl specialization 後の arity と call target shape を固定する。
-  - `integration/repl` で `:sig Range`, `:doc Range(Int, Int)`, `Range("a", "c") == Range("a", "c")` の surface を最終形で固定する。
-
----
-
 ## Deferred Topics
 
 以下は現行 baseline に含めず、必要時に reopen する将来課題。

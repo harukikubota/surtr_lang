@@ -76,7 +76,7 @@ impl Range {
   }
 }
 
-impl Eq for Range<Int> {
+impl Eq for Range<impl Eq> {
   @doc """
   Return `True` when both boundaries are equal.
   """
@@ -85,7 +85,7 @@ impl Eq for Range<Int> {
   }
 }
 
-impl Neq for Range<Int> {
+impl Neq for Range<impl Neq> {
   @doc """
   Return `True` when either boundary differs.
   """
@@ -94,7 +94,7 @@ impl Neq for Range<Int> {
   }
 }
 
-impl Compare for Range<Int> {
+impl Compare for Range<impl Compare> {
   @doc """
   Return the lexicographic ordering between two ranges.
   """
