@@ -1,8 +1,6 @@
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use std::time::UNIX_EPOCH;
+use std::path::PathBuf;
 
 use forge::bytecode::{stable_hash_hex, Bytecode};
 
@@ -105,21 +103,9 @@ fn cache_root() -> PathBuf {
         }
     }
 
-    target_root_from_current_exe()
+    xldr::target_root_from_current_exe()
         .map(|root| root.join("run-cache").join("eldr"))
         .unwrap_or_else(|| env::temp_dir().join("surtr-run-cache").join("eldr"))
-}
-
-fn target_root_from_current_exe() -> Option<PathBuf> {
-    let exe = env::current_exe().ok()?;
-    let mut current = exe.parent()?;
-    while let Some(name) = current.file_name().and_then(|name| name.to_str()) {
-        if name == "debug" || name == "release" {
-            return current.parent().map(Path::to_path_buf);
-        }
-        current = current.parent()?;
-    }
-    None
 }
 
 fn cache_key(
@@ -139,7 +125,7 @@ fn cache_key(
     let mut key = String::new();
     key.push_str(CACHE_VERSION);
     key.push('\x1f');
-    key.push_str(&current_exe_fingerprint()?);
+    key.push_str(&xldr::current_exe_fingerprint().ok()?);
     key.push('\x1f');
     key.push_str(env.command_name());
     key.push('\x1f');
@@ -188,25 +174,6 @@ fn push_module_pipeline_key(key: &mut String, compile_sources: &xldr::CompileSou
             key.push('\x1e');
         }
     }
-}
-
-fn current_exe_fingerprint() -> Option<String> {
-    static FINGERPRINT: OnceLock<Option<String>> = OnceLock::new();
-    FINGERPRINT
-        .get_or_init(|| {
-            let exe = env::current_exe().ok()?;
-            let metadata = fs::metadata(&exe).ok()?;
-            let modified = metadata.modified().ok()?;
-            let modified = modified.duration_since(UNIX_EPOCH).ok()?;
-            Some(stable_hash_hex(&format!(
-                "{}\x1f{}\x1f{}\x1f{}",
-                exe.display(),
-                metadata.len(),
-                modified.as_secs(),
-                modified.subsec_nanos()
-            )))
-        })
-        .clone()
 }
 
 #[cfg(test)]

@@ -5,7 +5,6 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "line-editor")]
-#[cfg(feature = "line-editor")]
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 #[cfg(feature = "line-editor")]
 use crossterm::terminal::size;

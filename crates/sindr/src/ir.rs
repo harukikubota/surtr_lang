@@ -1478,33 +1478,16 @@ fn derive_imports(opcodes: &[Opcode], functions: &[FunctionEntry]) -> Vec<Import
             } => {
                 let entry = builtin_imports
                     .entry(*builtin_id)
-                    .or_insert_with(|| ImportEntry {
-                        symbol: builtin_meta_by_id(*builtin_id)
-                            .map(|meta| meta.name.to_string())
-                            .unwrap_or_else(|| format!("builtin#{}", builtin_id)),
-                        kind: ImportKind::Builtin,
-                        arity: *arity,
-                        builtin_id: Some(*builtin_id),
-                        function_id: None,
-                        call_pcs: Vec::new(),
-                    });
+                    .or_insert_with(|| builtin_import_entry(*builtin_id, *arity));
                 entry.call_pcs.push(pc as u32);
             }
             Opcode::LoadBuiltinRef(builtin_id) => {
+                let arity = builtin_meta_by_id(*builtin_id)
+                    .map(|meta| meta.arity)
+                    .unwrap_or(0);
                 let entry = builtin_imports
                     .entry(*builtin_id)
-                    .or_insert_with(|| ImportEntry {
-                        symbol: builtin_meta_by_id(*builtin_id)
-                            .map(|meta| meta.name.to_string())
-                            .unwrap_or_else(|| format!("builtin#{}", builtin_id)),
-                        kind: ImportKind::Builtin,
-                        arity: builtin_meta_by_id(*builtin_id)
-                            .map(|meta| meta.arity)
-                            .unwrap_or(0),
-                        builtin_id: Some(*builtin_id),
-                        function_id: None,
-                        call_pcs: Vec::new(),
-                    });
+                    .or_insert_with(|| builtin_import_entry(*builtin_id, arity));
                 entry.call_pcs.push(pc as u32);
             }
             Opcode::Call { fun_idx, .. } | Opcode::LoadFunctionRef(fun_idx) => {
@@ -1542,6 +1525,19 @@ fn derive_imports(opcodes: &[Opcode], functions: &[FunctionEntry]) -> Vec<Import
         .into_values()
         .chain(function_imports.into_values())
         .collect()
+}
+
+fn builtin_import_entry(builtin_id: u16, arity: u8) -> ImportEntry {
+    ImportEntry {
+        symbol: builtin_meta_by_id(builtin_id)
+            .map(|meta| meta.name.to_string())
+            .unwrap_or_else(|| format!("builtin#{}", builtin_id)),
+        kind: ImportKind::Builtin,
+        arity,
+        builtin_id: Some(builtin_id),
+        function_id: None,
+        call_pcs: Vec::new(),
+    }
 }
 
 fn derive_exports(functions: &[FunctionEntry], docs: &[DocEntry]) -> Vec<ExportEntry> {

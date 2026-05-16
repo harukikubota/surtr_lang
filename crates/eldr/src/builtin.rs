@@ -8,7 +8,7 @@ use sindr::names::surface_path_name;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
     quote_surtr_string_literal, Callable, FileHandleValue, HashMapHandle, ListHandle, Location,
-    RandomGeneratorHandle, RegexCapturesHandle, RegexHandle, RegexMatchHandle, RichError,
+    RandomGeneratorHandle, RegexCapturesHandle, RegexHandle, RegexMatchHandle, RichError, TypeEntry,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -823,6 +823,7 @@ pub(crate) fn call_builtin(
 ) -> Result<Value, RuntimeError> {
     let meta = builtin_meta_by_id(builtin_id)
         .ok_or_else(|| RuntimeError::new(format!("Unknown builtin id: {}", builtin_id)))?;
+    let expected_arity = expected_builtin_arity(meta.name, meta.arity);
     let arity_matches = if meta.name == "__supervisor_spawn" {
         matches!(args.len(), 2 | 3)
     } else if meta.name == "__supervisor_workers" {
@@ -834,7 +835,7 @@ pub(crate) fn call_builtin(
         return Err(RuntimeError::new(format!(
             "builtin {} arity mismatch: expected {}, got {}",
             meta.name,
-            meta.arity,
+            expected_arity,
             args.len()
         )));
     }
@@ -851,6 +852,14 @@ pub(crate) fn call_builtin(
     );
 
     (builtin.func)(vm, args)
+}
+
+fn expected_builtin_arity(name: &str, default_arity: u8) -> String {
+    match name {
+        "__supervisor_spawn" => "2 or 3".to_string(),
+        "__supervisor_workers" => "3 or 4".to_string(),
+        _ => default_arity.to_string(),
+    }
 }
 
 fn builtin_print(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -3189,7 +3198,7 @@ fn inspect_non_callable_value(vm: &VM, value: &Value) -> String {
 
 fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
     if let Some(entry) = vm.type_registry().lookup(tag) {
-        if entry.name == "Duration" || entry.name == "Global::Duration" {
+        if is_duration_type_name(&entry.name) {
             if let Some(Value::Int(ms)) = fields.first() {
                 return format!("{ms}ms");
             }
@@ -3793,17 +3802,12 @@ fn decode_file_mode(
             value
         )));
     };
-    let Some(entry) = vm.type_registry().lookup(*tag) else {
-        return Err(RuntimeError::new(format!(
-            "{builtin_name} observed unknown FileMode tag {tag}"
-        )));
-    };
-    match entry
-        .name
-        .rsplit("::")
-        .next()
-        .unwrap_or(entry.name.as_str())
-    {
+    let entry = lookup_tagged_type_entry(
+        vm,
+        *tag,
+        format!("{builtin_name} observed unknown FileMode tag {tag}"),
+    )?;
+    match type_name_leaf(&entry.name) {
         "Read" => Ok(VmFileMode::Read),
         "Write" => Ok(VmFileMode::Write),
         "Append" => Ok(VmFileMode::Append),
@@ -3849,18 +3853,9 @@ fn decode_string_encoding(vm: &VM, value: &Value) -> Result<StringEncodingMode, 
             "expected StringEncoding enum value for encoding argument",
         ));
     };
-    let Some(entry) = vm.type_registry().lookup(*tag) else {
-        return Err(RuntimeError::new(format!(
-            "unknown StringEncoding tag: {}",
-            tag
-        )));
-    };
-    match entry
-        .name
-        .rsplit("::")
-        .next()
-        .unwrap_or(entry.name.as_str())
-    {
+    let entry =
+        lookup_tagged_type_entry(vm, *tag, format!("unknown StringEncoding tag: {}", tag))?;
+    match type_name_leaf(&entry.name) {
         "Utf8" => Ok(StringEncodingMode::Utf8),
         "Ascii" => Ok(StringEncodingMode::Ascii),
         _other => Err(RuntimeError::new(format!(
@@ -3868,6 +3863,20 @@ fn decode_string_encoding(vm: &VM, value: &Value) -> Result<StringEncodingMode, 
             entry.name
         ))),
     }
+}
+
+fn type_name_leaf(name: &str) -> &str {
+    name.rsplit("::").next().unwrap_or(name)
+}
+
+fn lookup_tagged_type_entry<'a>(
+    vm: &'a VM,
+    tag: u32,
+    unknown_message: String,
+) -> Result<&'a TypeEntry, RuntimeError> {
+    vm.type_registry()
+        .lookup(tag)
+        .ok_or_else(|| RuntimeError::new(unknown_message))
 }
 
 fn bit_index_to_usize(vm: &VM, index: &SurtrInt) -> Result<Result<usize, Value>, RuntimeError> {
@@ -3894,7 +3903,7 @@ fn duration_payload<'a>(vm: &'a VM, value: &'a Value) -> Result<&'a SurtrInt, Ru
                     tag
                 )));
             };
-            if entry.name != "Duration" && entry.name != "Global::Duration" {
+            if !is_duration_type_name(&entry.name) {
                 return Err(RuntimeError::new(format!(
                     "expected Duration struct tag, got {}",
                     entry.name
@@ -3913,6 +3922,10 @@ fn duration_payload<'a>(vm: &'a VM, value: &'a Value) -> Result<&'a SurtrInt, Ru
             other
         ))),
     }
+}
+
+fn is_duration_type_name(name: &str) -> bool {
+    surface_path_name(name) == "Duration"
 }
 
 fn duration_to_u64(

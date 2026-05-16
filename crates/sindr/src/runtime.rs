@@ -80,10 +80,9 @@ impl TypeRegistry {
     }
 
     pub fn lookup_by_name(&self, qualified_name: &str) -> Option<&TypeEntry> {
+        let surface_query = surface_path_name(qualified_name);
         self.entries.iter().find(|entry| {
-            entry.name == qualified_name
-                || entry.name.strip_prefix("Global::") == Some(qualified_name)
-                || qualified_name.strip_prefix("Global::") == Some(entry.name.as_str())
+            entry.name == qualified_name || surface_path_name(&entry.name) == surface_query
         })
     }
 

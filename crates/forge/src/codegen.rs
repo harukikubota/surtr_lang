@@ -18,8 +18,8 @@ use sindr::names::{surface_path_name, surface_rendered_name};
 use sindr::primitives::{int, SurtrInt};
 use sindr::runtime::{quote_surtr_string_literal, CallableOrigin};
 use spire::ast::{
-    AstTy, BinOp, Lit, ProcessInstance, ProcessRuntimeHandlerKind, Span, SupervisorInitSpec,
-    Visibility,
+    AstTy, BinOp, Lit, ProcessInstance, ProcessKind, ProcessRuntimeHandlerKind, Span,
+    SupervisorInitSpec, Visibility,
 };
 
 use crate::bytecode::*;
@@ -27,6 +27,7 @@ use crate::error::CodegenError;
 use crate::opcode::Opcode;
 use crate::registry::{TypeEntry, TypeKind, TypeRegistry};
 
+const DYNAMIC_SUPERVISOR_PROCESS_NAME: &str = "DynamicSupervisor";
 /// Lower the typed AST to bytecode.
 pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
     codegen_typed_program(TypedProgram {
@@ -771,43 +772,41 @@ fn build_runtime_boot_plan(
     let default_timeout_ms = runtime.runtime_limits.default_init_timeout_ms;
 
     for entry in &boot_plan.entries {
-        let spec = match resolve_boot_process_spec(process_specs, &entry.process_name, &entry.span)
-        {
-            Ok(spec) => spec,
-            Err(err) if entry.process_name == "DynamicSupervisor" => {
-                if entry.timeout_ms.is_some() || !entry.handlers.is_empty() {
-                    return Err(CodegenError {
+        let spec =
+            match resolve_boot_process_spec(process_specs, &entry.process_name, &entry.span) {
+                Ok(spec) => spec,
+                Err(err) if entry.process_name == DYNAMIC_SUPERVISOR_PROCESS_NAME => {
+                    if entry.timeout_ms.is_some() || !entry.handlers.is_empty() {
+                        return Err(CodegenError {
                         message:
                             "supervisor_init supervisor entry does not accept timeout or handlers"
                                 .into(),
                         span: entry.span.clone(),
                     });
+                    }
+                    if runtime.supervisor_overrides.iter().any(|registered| {
+                        registered.process_name == DYNAMIC_SUPERVISOR_PROCESS_NAME
+                    }) {
+                        return Err(CodegenError {
+                            message: "supervisor_init entry is duplicated".into(),
+                            span: entry.span.clone(),
+                        });
+                    }
+                    let base_policy = default_dynamic_supervisor_policy();
+                    runtime
+                        .supervisor_overrides
+                        .push(RuntimeSupervisorOverrideEntry {
+                            process_name: DYNAMIC_SUPERVISOR_PROCESS_NAME.into(),
+                            policy: runtime_supervisor_policy_from_effective(
+                                &base_policy,
+                                &entry.overrides,
+                            ),
+                        });
+                    let _ = err;
+                    continue;
                 }
-                if runtime
-                    .supervisor_overrides
-                    .iter()
-                    .any(|registered| registered.process_name == "DynamicSupervisor")
-                {
-                    return Err(CodegenError {
-                        message: "supervisor_init entry is duplicated".into(),
-                        span: entry.span.clone(),
-                    });
-                }
-                let base_policy = default_dynamic_supervisor_policy();
-                runtime
-                    .supervisor_overrides
-                    .push(RuntimeSupervisorOverrideEntry {
-                        process_name: "DynamicSupervisor".into(),
-                        policy: runtime_supervisor_policy_from_effective(
-                            &base_policy,
-                            &entry.overrides,
-                        ),
-                    });
-                let _ = err;
-                continue;
-            }
-            Err(err) => return Err(err),
-        };
+                Err(err) => return Err(err),
+            };
         match spec.spec.instance {
             ProcessInstance::Worker => {
                 return Err(CodegenError {
@@ -932,11 +931,8 @@ fn build_runtime_boot_plan(
 }
 
 fn runtime_supervisor_process_name(spec: &TypedProcessSpec) -> String {
-    if spec.spec.kind == spire::ast::ProcessKind::DynamicSupervisor {
-        spec.process_name
-            .strip_prefix("Global::")
-            .unwrap_or(&spec.process_name)
-            .to_string()
+    if spec.spec.kind == ProcessKind::DynamicSupervisor {
+        surface_path_name(&spec.process_name).to_string()
     } else {
         spec.process_name.clone()
     }

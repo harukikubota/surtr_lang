@@ -6,6 +6,7 @@ use sindr::ir::{
     RuntimeProcessInstance, RuntimeProcessSpec, RuntimeProcessSpecTable, RuntimeSupervisorPolicy,
     SourceMap,
 };
+use sindr::names::IMPLICIT_ROOT_NAMESPACE_PREFIX;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
     Callable, CallableMetadata, CallableOrigin, CallableTarget, FileHandleValue, ListHandle,
@@ -4670,7 +4671,7 @@ impl VM {
                 Ok(Value::TaskHandle(completion_future))
             }
             TaskMode::Launch => {
-                if timeout_ms.is_none() {
+                let Some(timeout_ms) = timeout_ms else {
                     let outcome = self.invoke_callable_isolated_step(callable, Vec::new());
                     if let Some((awaiting_future, continuation)) =
                         self.detached_waiting_from_outcome(outcome, None)?
@@ -4682,18 +4683,16 @@ impl VM {
                         );
                     }
                     return Ok(ok_vm_result(Value::Unit));
-                }
-                let completion_future = self.process_runtime.allocate_future_after(
-                    None,
-                    timeout_ms.expect("checked is_some"),
-                    true,
-                );
+                };
+                let completion_future = self
+                    .process_runtime
+                    .allocate_future_after(None, timeout_ms, true);
                 let outcome = self.invoke_callable_step(callable, Vec::new());
                 let _ = self.await_task_completion(completion_future, outcome)?;
                 Ok(ok_vm_result(Value::Unit))
             }
             TaskMode::Cast => {
-                if timeout_ms.is_none() {
+                let Some(timeout_ms) = timeout_ms else {
                     let outcome = self.invoke_callable_isolated_step(callable, Vec::new());
                     if let Some((awaiting_future, continuation)) =
                         self.detached_waiting_from_outcome(outcome, None)?
@@ -4705,12 +4704,10 @@ impl VM {
                         );
                     }
                     return Ok(ok_vm_result(Value::Unit));
-                }
-                let completion_future = self.process_runtime.allocate_future_after(
-                    None,
-                    timeout_ms.expect("checked is_some"),
-                    true,
-                );
+                };
+                let completion_future = self
+                    .process_runtime
+                    .allocate_future_after(None, timeout_ms, true);
                 let outcome = self.invoke_callable_step(callable, Vec::new());
                 let _ = self.await_task_completion(completion_future, outcome)?;
                 Ok(ok_vm_result(Value::Unit))
@@ -6648,12 +6645,12 @@ impl ProcessRuntime {
         if self.specs_by_name.contains_key(process_name) {
             return Some(process_name);
         }
-        if let Some(surface_name) = process_name.strip_prefix("Global::") {
+        if let Some(surface_name) = process_name.strip_prefix(IMPLICIT_ROOT_NAMESPACE_PREFIX) {
             if self.specs_by_name.contains_key(surface_name) {
                 return Some(surface_name);
             }
         } else {
-            let canonical_name = format!("Global::{process_name}");
+            let canonical_name = format!("{IMPLICIT_ROOT_NAMESPACE_PREFIX}{process_name}");
             if self.specs_by_name.contains_key(&canonical_name) {
                 return self
                     .specs_by_name
@@ -6859,11 +6856,11 @@ impl ProcessRuntime {
             return;
         }
         future.cancel_on_timeout = future.cancel_on_timeout || cancel_on_timeout;
-        future.deadline_tick = match future.deadline_tick {
-            Some(current) => Some(current.min(deadline_tick)),
-            None => Some(deadline_tick),
+        let deadline_tick = match future.deadline_tick {
+            Some(current) => current.min(deadline_tick),
+            None => deadline_tick,
         };
-        let deadline_tick = future.deadline_tick.expect("set above");
+        future.deadline_tick = Some(deadline_tick);
         if !self
             .deadline_queue
             .iter()

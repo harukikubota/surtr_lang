@@ -1869,7 +1869,7 @@ fn stdlib_semantic_cache_path() -> PathBuf {
         })
 }
 
-fn target_root_from_current_exe() -> Option<PathBuf> {
+pub fn target_root_from_current_exe() -> Option<PathBuf> {
     let exe = env::current_exe().ok()?;
     let mut current = exe.parent()?;
     while let Some(name) = current.file_name().and_then(|name| name.to_str()) {

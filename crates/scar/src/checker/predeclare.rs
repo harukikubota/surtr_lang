@@ -1642,10 +1642,18 @@ impl Checker {
             }
 
             for (method_name, impl_method) in &method_map {
-                let trait_method = trait_info
-                    .methods
-                    .get(method_name)
-                    .expect("validated above");
+                let trait_method =
+                    trait_info
+                        .methods
+                        .get(method_name)
+                        .ok_or_else(|| TypeError {
+                            message: format!(
+                                "Trait impl {} for {} defines unknown method `{}`",
+                                trait_id.name, target_name, method_name
+                            ),
+                            span: impl_method.span.clone(),
+                            hint: None,
+                        })?;
                 if trait_method.type_params.len() != impl_method.type_params.len() {
                     return Err(TypeError {
                         message: format!(

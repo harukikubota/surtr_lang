@@ -426,7 +426,7 @@ fn function_view(
         Some(entry.end_pc)
     };
     let opcode_pcs = end_pc
-        .map(|end| (entry.entry_pc..=end).collect())
+        .map(|end| (entry.entry_pc..end).collect())
         .unwrap_or_default();
     let source_ref = bytecode
         .source_map
