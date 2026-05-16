@@ -1063,8 +1063,7 @@ impl Checker {
         {
             return &["Float", "Int"];
         }
-        if self.trait_matches_short_name(trait_name, "Numeric")
-            || self.trait_matches_short_name(trait_name, "Sub")
+        if self.trait_matches_short_name(trait_name, "Sub")
             || self.trait_matches_short_name(trait_name, "Mul")
         {
             return &["Float", "Int"];
@@ -1160,13 +1159,7 @@ impl Checker {
         }
     }
 
-    pub(super) fn tyvar_satisfies_compiler_trait(&self, var: u32, trait_name: &str) -> bool {
-        if self.trait_matches_short_name(trait_name, "Show") {
-            return self
-                .trait_key_by_short_name("Numeric")
-                .as_deref()
-                .is_some_and(|numeric_trait| self.tyvar_has_bound(var, numeric_trait));
-        }
+    pub(super) fn tyvar_satisfies_compiler_trait(&self, _var: u32, _trait_name: &str) -> bool {
         false
     }
 
@@ -1260,12 +1253,6 @@ impl Checker {
             if let Some(op) = op {
                 return Some(TraitDispatchTarget::BinOp(op));
             }
-        }
-        if self.trait_matches_short_name(trait_name, "Numeric")
-            && matches!(target_name, "Int" | "Float")
-            && method_name == "safe_div"
-        {
-            return Some(TraitDispatchTarget::Builtin("safe_div".into()));
         }
         if self.trait_matches_short_name(trait_name, "Show")
             && matches!(

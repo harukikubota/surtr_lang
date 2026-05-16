@@ -112,7 +112,7 @@ $T
 List<$T>
 Result<$T>
 ($T -> String)
-impl Numeric
+impl Show
 ```
 
 `Result<Int>` のようにすべての型パラメータが具象型で確定している型式は許可する。

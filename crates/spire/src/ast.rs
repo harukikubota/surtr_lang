@@ -244,7 +244,7 @@ pub enum BinOp {
 pub enum AstTy {
     /// `Int`, `String`, `Boolean`, `Unit`, `User`, ...
     Named(Span, Symbol),
-    /// `impl Numeric`
+    /// `impl Describable`
     ImplTrait(Span, Symbol),
     /// `List<T>`, `Result<T, E>`, user-defined generic types, ...
     Generic(Span, Symbol, Vec<AstTy>),
@@ -676,7 +676,7 @@ pub enum Ast {
     TraitDef(Span, Symbol, Vec<TypeParam>, Vec<TraitMethodSig>, DeclAttrs),
 
     /// Trait impl definition:
-    /// `impl Numeric for Int { ... }`
+    /// `impl Describable for Int { ... }`
     /// `impl From<String> for Int { ... }`
     TraitImplDef(Span, Symbol, Vec<AstTy>, AstTy, Vec<Ast>, DeclAttrs),
 

@@ -201,6 +201,25 @@
   - `unit/scar` / `unit/forge` で helper 生成契約を固定する。
   - `tests/fixtures/script/pass` と `tests/fixtures/script/fail` に valid / invalid ordinal 変換ケースを追加する。
 
+### OI-029 Xldr REPL Range generic helper function index drift
+
+- 背景:
+  - `Numeric` trait 削除後の `cargo nextest run --workspace` で、`xldr::repl_core core_range_bindings_keep_constructor_and_compare_fun_indices_in_sync` が失敗した。
+  - 単体の `cargo nextest run -p rune --test integration run_srt` は通っており、失敗は Xldr REPL の対話的 chunk 追加と generic / trait impl helper の function index 同期に局所化している。
+  - 観測された失敗は `RuntimeError: Call arity mismatch for function 495: expected 3, got 2` で、`Range(b,a) != Range(b, 100ms)` の評価時に `Range<impl Neq>` 系 helper が別 function slot を参照している疑いがある。
+- 未確定点:
+  - REPL runtime の materialized function table と Scar checkpoint 内の delayed specializable defs を、どのタイミングで同期するべきか。
+  - generic owner helper (`Range::new`, `Range::normalized`) と trait impl helper (`Range<impl Neq>::neq`, `Range<impl Compare>::compare`) の fun_idx 予約を同じ規則で扱うべきか。
+  - stdlib semantic cache / REPL chunk cache の schema key に、specialization index 形状の変更をどこまで含めるべきか。
+- 受け入れ条件:
+  - `cargo nextest run -p xldr core_range_bindings_keep_constructor_and_compare_fun_indices_in_sync` が安定して通る。
+  - `cargo nextest run --workspace` が、Numeric 削除後の標準ライブラリ形状でも通る。
+  - REPL の `Range(a,b)`, `Range::normalized(a,b)`, `Range(b,a) != Range(b, 100ms)` が連続入力でも function index drift を起こさない。
+- テスト方針:
+  - まず `cargo nextest run -p xldr core_range_bindings_keep_constructor_and_compare_fun_indices_in_sync --no-capture` で再現を固定する。
+  - 修正後に `cargo nextest run -p xldr` と `cargo nextest run --workspace` を通す。
+  - 必要なら `crates/scar` 側に delayed specializable defs の fun_idx reservation / reconciliation 単体テストを追加する。
+
 ---
 
 ## 更新ルール

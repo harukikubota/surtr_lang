@@ -824,8 +824,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         deferror_show_type_mismatch_points_to_show_expression_span as fn(),
     ),
     (
-        "operator_and_numeric_trait_calls_typecheck_with_static_dispatch",
-        operator_and_numeric_trait_calls_typecheck_with_static_dispatch as fn(),
+        "operator_traits_and_concrete_numeric_helpers_typecheck",
+        operator_traits_and_concrete_numeric_helpers_typecheck as fn(),
     ),
     (
         "duration_operator_traits_dispatch_to_surtr_impls",
@@ -2459,7 +2459,7 @@ fn slash_operator_rejects_numeric_division_and_points_to_safe_div() {
     assert!(err
         .hint
         .as_deref()
-        .is_some_and(|hint| hint.contains("safe_div")));
+        .is_some_and(|hint| hint.contains("Int::safe_div")));
 }
 
 fn facet_tuple_type_root_without_context_can_bind_as_deferred_path() {
@@ -4814,11 +4814,11 @@ fn deferror_show_type_mismatch_points_to_show_expression_span() {
     assert_eq!(err.span.start, literal_start);
 }
 
-fn operator_and_numeric_trait_calls_typecheck_with_static_dispatch() {
+fn operator_traits_and_concrete_numeric_helpers_typecheck() {
     let typed = typecheck_with_builtin_prelude(
         r#"sum = 1 + 2
-quot = Numeric::safe_div(8, 2)
-largest = Numeric::max(1.5, 2.5)"#,
+quot = Float::safe_div(8.0, 2.0)
+largest = Float::max(1.5, 2.5)"#,
     );
 
     let trait_calls = typed
@@ -4837,6 +4837,7 @@ largest = Numeric::max(1.5, 2.5)"#,
         })
         .collect::<Vec<_>>();
 
+    assert_eq!(trait_calls.len(), 1);
     assert!(trait_calls
         .iter()
         .any(|(trait_name, method_name, dispatch)| {
@@ -4847,30 +4848,6 @@ largest = Numeric::max(1.5, 2.5)"#,
                     scar::typed::TraitDispatch::Static(scar::typed::TraitDispatchTarget::BinOp(
                         spire::ast::BinOp::Add
                     ))
-                )
-        }));
-    assert!(trait_calls
-        .iter()
-        .any(|(trait_name, method_name, dispatch)| {
-            *trait_name == "Numeric"
-                && *method_name == "safe_div"
-                && matches!(
-                    dispatch,
-                    scar::typed::TraitDispatch::Static(
-                        scar::typed::TraitDispatchTarget::Builtin(name)
-                    ) if name == "safe_div"
-                )
-        }));
-    assert!(trait_calls
-        .iter()
-        .any(|(trait_name, method_name, dispatch)| {
-            *trait_name == "Numeric"
-                && *method_name == "max"
-                && matches!(
-                    dispatch,
-                    scar::typed::TraitDispatch::Static(
-                        scar::typed::TraitDispatchTarget::UserFunction { name, .. }
-                    ) if name == "Float::max"
                 )
         }));
 }

@@ -54,11 +54,6 @@ const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
         "Concat",
     ),
     (
-        "traits/numeric.srt",
-        include_str!("../../../lib/traits/numeric.srt"),
-        "Numeric",
-    ),
-    (
         "traits/show.srt",
         include_str!("../../../lib/traits/show.srt"),
         "Show",
@@ -1085,7 +1080,6 @@ mod tests {
                 "Neq",
                 "Compare",
                 "Concat",
-                "Numeric",
                 "Show",
                 "Ordering",
                 "Tuple",
@@ -1234,7 +1228,6 @@ mod tests {
                 "Neq",
                 "Compare",
                 "Concat",
-                "Numeric",
                 "Show",
                 "Ordering",
                 "Tuple",

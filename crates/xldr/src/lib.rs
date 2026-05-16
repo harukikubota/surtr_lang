@@ -1575,8 +1575,8 @@ pub struct DefaultStdlibSnapshot {
     pub default_stage_count: usize,
 }
 
-const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 6;
-const TEST_SEMANTIC_PREFIX_CACHE_SCHEMA: u32 = 1;
+const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 8;
+const TEST_SEMANTIC_PREFIX_CACHE_SCHEMA: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedStdlibSemanticEnvelope {
@@ -1642,8 +1642,10 @@ pub fn test_semantic_prefix_cache_key(
     compile_sources: &CompileSources,
 ) -> Result<String, String> {
     let fingerprint = current_exe_fingerprint()?;
+    let stdlib_fingerprint = default_stdlib_source_fingerprint()?;
     Ok(test_semantic_prefix_cache_key_with_fingerprint(
         &fingerprint,
+        &stdlib_fingerprint,
         compile_unit_kind,
         compile_sources,
     ))
@@ -1651,6 +1653,7 @@ pub fn test_semantic_prefix_cache_key(
 
 pub fn test_semantic_prefix_cache_key_with_fingerprint(
     current_exe_fingerprint: &str,
+    stdlib_fingerprint: &str,
     compile_unit_kind: CompileUnitKind,
     compile_sources: &CompileSources,
 ) -> String {
@@ -1668,6 +1671,8 @@ pub fn test_semantic_prefix_cache_key_with_fingerprint(
     key.push_str(&TEST_SEMANTIC_PREFIX_CACHE_SCHEMA.to_string());
     key.push('\x1f');
     key.push_str(current_exe_fingerprint);
+    key.push('\x1f');
+    key.push_str(stdlib_fingerprint);
     key.push('\x1f');
     key.push_str(&STDLIB_SEMANTIC_CACHE_SCHEMA.to_string());
     key.push('\x1f');
@@ -1707,6 +1712,12 @@ pub fn test_semantic_prefix_cache_key_with_fingerprint(
     }
 
     stable_hash_hex(&key)
+}
+
+fn default_stdlib_source_fingerprint() -> Result<String, String> {
+    let module_sources =
+        collect_module_sources_with_module_stages(&[]).map_err(|err| err.to_string())?;
+    Ok(stdlib_semantic_cache_key(&module_sources))
 }
 
 pub fn load_cached_test_semantic_prefix(
@@ -2587,7 +2598,7 @@ defmod Kernel {
     fn collect_doc_entries_includes_impl_and_trait_docs() {
         let ast = spire::parse_with_context(
             r#"@doc """Trait docs."""
-deftrait Numeric {
+deftrait Metric {
   def add(self: Self, rhs: Self) -> Self
 }
 
@@ -2595,8 +2606,8 @@ defstruct User {
   name: String,
 }
 
-@doc """Numeric Int docs."""
-impl Numeric for Int {
+@doc """Metric Int docs."""
+impl Metric for Int {
   def add(self: Self, rhs: Self) -> Self {
     self + rhs
   }
@@ -2620,21 +2631,21 @@ impl Numeric for Int {
 
         let docs = collect_doc_entries(&stages, &[], None);
         assert!(docs.iter().any(|entry| {
-            entry.qualified_name == "Sample::Numeric"
+            entry.qualified_name == "Sample::Metric"
                 && entry.kind == DocKind::Type
                 && entry.doc == "Trait docs."
         }));
         assert!(docs.iter().any(|entry| {
-            entry.qualified_name == "Sample::Numeric::add"
+            entry.qualified_name == "Sample::Metric::add"
                 && entry.kind == DocKind::Function
-                && entry.signature.as_deref() == Some("Numeric::add(self: Self, rhs: Self) -> Self")
+                && entry.signature.as_deref() == Some("Metric::add(self: Self, rhs: Self) -> Self")
                 && entry.doc == "Trait docs."
         }));
         assert!(docs.iter().any(|entry| {
-            entry.qualified_name == "Sample::impl Numeric for Int"
+            entry.qualified_name == "Sample::impl Metric for Int"
                 && entry.kind == DocKind::Type
-                && entry.signature.as_deref() == Some("impl Numeric for Int")
-                && entry.doc == "Numeric Int docs."
+                && entry.signature.as_deref() == Some("impl Metric for Int")
+                && entry.doc == "Metric Int docs."
         }));
     }
 

@@ -9,6 +9,14 @@ This top-level declaration exists so the rest of the pipeline can talk about
 
 impl Float {
   @doc """
+  Divide two float values and return `Err(ZeroDivisionError)` instead of trapping.
+  ## REPL
+  xldr(1)> Float::safe_div(3.0, 2.0)
+  Ok(1.5)
+  """
+  @builtin def safe_div(a: Float, b: Float) -> Result<Float, ZeroDivisionError>
+
+  @doc """
   Return the absolute value of `value`.
   ## REPL
   xldr(1)> Float::abs(-1.5)
@@ -115,48 +123,6 @@ impl Mul for Float {
   3.0
   """
   @builtin def mul(self: Self, rhs: Self) -> Self
-}
-
-impl Numeric for Float {
-  @doc """
-  Divide by `rhs`, returning `Err(ZeroDivisionError)` for zero divisors.
-  ## REPL
-  xldr(1)> safe_div(3.0, 2.0)
-  Ok(1.5)
-  """
-  def safe_div(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError> {
-    safe_div(self, rhs)
-  }
-
-  @doc """
-  Return the absolute value of the float.
-  ## REPL
-  xldr(1)> abs(-1.5)
-  1.5
-  """
-  def abs(self: Self) -> Self {
-    Float::abs(self)
-  }
-
-  @doc """
-  Return the smaller of the two float values.
-  ## REPL
-  xldr(1)> min(1.5, 2.0)
-  1.5
-  """
-  def min(self: Self, rhs: Self) -> Self {
-    Float::min(self, rhs)
-  }
-
-  @doc """
-  Return the larger of the two float values.
-  ## REPL
-  xldr(1)> max(1.5, 2.0)
-  2.0
-  """
-  def max(self: Self, rhs: Self) -> Self {
-    Float::max(self, rhs)
-  }
 }
 
 impl Show for Float {

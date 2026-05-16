@@ -5474,7 +5474,7 @@ impl ReplEngine {
                     ))
                 }
                 _ => Err(
-                    "`/` currently models Facet composition. Use `safe_div(...)` for division."
+                    "`/` currently models Facet composition. Use `Int::safe_div(...)` or `Float::safe_div(...)` for division."
                         .to_string(),
                 ),
             },

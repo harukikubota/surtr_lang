@@ -44,8 +44,8 @@ def id<$A>(value: $A) -> $A { value }
 trait bound を付けるときは次の形です。
 
 ```surtr
-def twice<$N: Numeric>(x: $N) -> $N {
-  x + x
+def twice<$N: Add>(x: $N) -> $N {
+  Add::add(x, x)
 }
 ```
 
@@ -70,8 +70,8 @@ def parse_bool(text: String) -> Result<Boolean> {
 parameter 位置では `impl Trait` が使えます。
 
 ```surtr
-def show_abs(x: impl Numeric) -> String {
-  inspect(Numeric::abs(x))
+def show_value(x: impl Show) -> String {
+  to_string(x)
 }
 ```
 

@@ -35,7 +35,6 @@ mod tests {
     const ADD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/add.srt");
     const SUB_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/sub.srt");
     const MUL_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/mul.srt");
-    const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/traits/numeric.srt");
     const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/traits/show.srt");
     const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/eq.srt");
     const NEQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/neq.srt");
@@ -201,7 +200,6 @@ mod tests {
                 ("Neq", NEQ_MODULE_SOURCE),
                 ("Compare", COMPARE_MODULE_SOURCE),
                 ("Concat", CONCAT_MODULE_SOURCE),
-                ("Numeric", NUMERIC_MODULE_SOURCE),
                 ("Show", SHOW_MODULE_SOURCE),
                 ("Ordering", ORDERING_MODULE_SOURCE),
                 ("From", FROM_MODULE_SOURCE),
@@ -1234,11 +1232,11 @@ print("ok")"#,
     }
 
     #[test]
-    fn numeric_trait_calls_lower_to_existing_targets() {
+    fn concrete_numeric_helpers_lower_to_existing_targets() {
         let bytecode = codegen_source(
             r#"sum = 1 + 2
-quot = Numeric::safe_div(8, 2)
-largest = Numeric::max(1.5, 2.5)"#,
+quot = Float::safe_div(8.0, 2.0)
+largest = Float::max(1.5, 2.5)"#,
         );
 
         let safe_div_id =

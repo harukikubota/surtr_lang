@@ -759,24 +759,24 @@ fn test_precollect_trait_methods_as_trait_namespace_members() {
 #[test]
 fn test_resolve_rejects_multiple_trait_impl_blocks_for_same_pair() {
     let module_stages = vec![vec![staged_module(
-        "Numeric",
+        "Metric",
         parse_module_ast(
-            r#"deftrait Numeric {
+            r#"deftrait Metric {
   def add(self: Self, rhs: Self) -> Self
 }
 
-impl Numeric for Int {
+impl Metric for Int {
   def add(self: Self, rhs: Self) -> Self {
     self + rhs
   }
 }
 
-impl Numeric for Int {
+impl Metric for Int {
   def add(self: Self, rhs: Self) -> Self {
     self
   }
 }"#,
-            "Numeric",
+            "Metric",
         ),
     )]];
 
@@ -790,7 +790,7 @@ impl Numeric for Int {
     )
     .expect_err("duplicate trait impl pair must fail");
     assert!(err.message.contains("Multiple trait impl blocks for `"));
-    assert!(err.message.contains("Numeric"));
+    assert!(err.message.contains("Metric"));
     assert!(err.message.contains("Int"));
     assert_eq!(err.related_labels.len(), 2);
     assert_eq!(err.related_labels[0].message, "first definition");
@@ -959,7 +959,7 @@ impl Add for Int {
 #[test]
 fn test_resolve_trait_default_method_body_can_reference_later_sibling() {
     let ast = parse_module_ast(
-        r#"deftrait Numeric {
+        r#"deftrait Metric {
   @doc """Delegates to abs."""
   def magnitude(self: Self) -> Self {
     abs(self)
@@ -967,14 +967,14 @@ fn test_resolve_trait_default_method_body_can_reference_later_sibling() {
 
   def abs(self: Self) -> Self
 }"#,
-        "Numeric",
+        "Metric",
     );
 
     let resolved = resolve(ast).expect("trait default bodies should resolve");
 
     match &resolved[0] {
         Resolved::TraitDef(_, id, _, methods, _) => {
-            assert_eq!(id.name, "Numeric");
+            assert_eq!(id.name, "Metric");
             assert_eq!(methods.len(), 2);
             assert_eq!(methods[0].attrs.doc.as_deref(), Some("Delegates to abs."));
             match methods[0].body.as_deref() {
@@ -984,7 +984,7 @@ fn test_resolve_trait_default_method_body_can_reference_later_sibling() {
                         match func.as_ref() {
                             Resolved::Var(_, rid) => {
                                 assert_eq!(rid.name, "abs");
-                                assert_eq!(rid.qualified_name.as_deref(), Some("Numeric::abs"));
+                                assert_eq!(rid.qualified_name.as_deref(), Some("Metric::abs"));
                             }
                             other => panic!("expected sibling trait method var, got {other:?}"),
                         }
@@ -1029,22 +1029,22 @@ impl Add for Int {
 #[test]
 fn test_trait_qualified_call_resolves_via_trait_namespace() {
     let module_stages = vec![vec![staged_module(
-        "Numeric",
+        "Metric",
         parse_module_ast(
-            r#"deftrait Numeric {
+            r#"deftrait Metric {
   def safe_div(self: Self, rhs: Self) -> Result<Self, Error>
 }"#,
-            "Numeric",
+            "Metric",
         ),
     )]];
 
-    let resolved = resolve_user_with_modules(r#"result = Numeric::safe_div(4, 2)"#, &module_stages)
+    let resolved = resolve_user_with_modules(r#"result = Metric::safe_div(4, 2)"#, &module_stages)
         .expect("trait-qualified path should resolve");
 
     match &resolved.last().expect("expected bind node") {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::App(_, func, _) => match func.as_ref() {
-                Resolved::Var(_, id) => assert_eq!(id.name, "Numeric::safe_div"),
+                Resolved::Var(_, id) => assert_eq!(id.name, "Metric::safe_div"),
                 _ => panic!("Expected resolved trait method path"),
             },
             _ => panic!("Expected app"),
@@ -3146,13 +3146,13 @@ value = greet()"#,
 #[test]
 fn test_std_trait_method_is_auto_imported_from_trait_attribute() {
     let module_stages = vec![vec![staged_module(
-        "Numeric",
+        "Metric",
         parse_module_ast(
             r#"@autoimport
-deftrait Numeric {
+deftrait Metric {
   def add(self: Self, rhs: Self) -> Self
 }"#,
-            "Numeric",
+            "Metric",
         ),
     )]];
 
@@ -3188,18 +3188,18 @@ deftrait Numeric {
 #[test]
 fn test_explicit_import_of_autoimport_trait_is_allowed() {
     let module_stages = vec![vec![staged_module(
-        "Numeric",
+        "Metric",
         parse_module_ast(
             r#"@autoimport
-deftrait Numeric {
+deftrait Metric {
   def add(self: Self, rhs: Self) -> Self
 }"#,
-            "Numeric",
+            "Metric",
         ),
     )]];
 
     let resolved = resolve_user_with_modules(
-        r#"import Numeric;
+        r#"import Metric;
 value = add(1, 2)"#,
         &module_stages,
     )

@@ -113,7 +113,7 @@ match expr {
 - `-> impl Trait` は未対応
 - `where` clause は未対応
 - `+`, `-`, `*` はそれぞれ `Add::add`, `Sub::sub`, `Mul::mul` へ resolve される
-- `Numeric` は演算子親ではなく helper capability
+- 数値 helper は `Int::abs` / `Float::safe_div` のような concrete type owner surface として提供する
 - `Compare` が三値比較の正本で、`< <= > >=` も `Compare` を前提に動く
 - `TypeRef<$T>` は compiler-reserved な target type witness
 - `TypeRef<$T>` は trait head で宣言された型引数に対応するときだけ、trait method parameter 型として使える
@@ -498,7 +498,7 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 現在の標準定義ソース層は次の順序でロードされます。
 
 ```text
-Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Numeric, Show, Ordering, From, TryFrom, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Option, Task, Facet, Float, Config, Project, Random, IO] -> ユーザ拡張
+Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Show, Ordering, From, TryFrom, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Option, Task, Facet, Float, Config, Project, Random, IO] -> ユーザ拡張
 ```
 
 ### auto import
@@ -563,7 +563,7 @@ Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Num
 ```
 
 `Unit`, `TypeRef<$T>`, `Hole` は `special_types.srt` に集約します。
-`Numeric` trait 宣言は `numeric.srt` のトップレベルに置きます。
+数値 helper は `int.srt` / `float.srt` の `impl Int` / `impl Float` に置きます。
 
 ### import の重複
 

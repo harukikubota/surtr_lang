@@ -983,7 +983,7 @@ impl Int {
 #[test]
 fn test_trait_def_parses_method_signatures() {
     let ast = parse_with_context(
-        r#"deftrait Numeric {
+        r#"deftrait Describable {
   def add(self: Self, rhs: Self) -> Self
   def abs(self: Self) -> Self
 }"#,
@@ -993,7 +993,7 @@ fn test_trait_def_parses_method_signatures() {
 
     match ast.as_slice() {
         [Ast::TraitDef(_, name, type_params, methods, attrs)] => {
-            assert_eq!(name, "Numeric");
+            assert_eq!(name, "Describable");
             assert_eq!(attrs, &DeclAttrs::default());
             assert!(type_params.is_empty());
             assert_eq!(methods.len(), 2);
@@ -1013,7 +1013,7 @@ fn test_trait_def_parses_method_signatures() {
 #[test]
 fn test_trait_def_parses_method_docs_and_optional_default_bodies() {
     let ast = parse_with_context(
-        r#"deftrait Numeric {
+        r#"deftrait Describable {
   @doc """Delegates to abs."""
   def magnitude(self: Self) -> Self {
     abs(self)
@@ -1027,7 +1027,7 @@ fn test_trait_def_parses_method_docs_and_optional_default_bodies() {
 
     match ast.as_slice() {
         [Ast::TraitDef(_, name, _, methods, _)] => {
-            assert_eq!(name, "Numeric");
+            assert_eq!(name, "Describable");
             assert_eq!(methods.len(), 2);
             assert_eq!(methods[0].name, "magnitude");
             assert_eq!(methods[0].attrs.doc.as_deref(), Some("Delegates to abs."));
@@ -1045,7 +1045,7 @@ fn test_trait_def_parses_method_docs_and_optional_default_bodies() {
 #[test]
 fn test_trait_impl_parses_and_keeps_methods() {
     let ast = parse_with_context(
-        r#"impl Numeric for Int {
+        r#"impl Describable for Int {
   def add(self: Self, rhs: Self) -> Self {
     self + rhs
   }
@@ -1060,7 +1060,7 @@ fn test_trait_impl_parses_and_keeps_methods() {
 
     match ast.as_slice() {
         [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods, attrs)] => {
-            assert_eq!(trait_name, "Numeric");
+            assert_eq!(trait_name, "Describable");
             assert!(trait_args.is_empty());
             assert_eq!(target, "Global::Int");
             assert_eq!(attrs, &DeclAttrs::default());
@@ -1122,7 +1122,7 @@ fn test_trait_impl_rejects_builtin_defp_method() {
 fn test_doc_attributes_parse_for_trait_and_trait_impl_decls() {
     let ast = parse_with_context(
         r#"@doc """Trait docs."""
-deftrait Numeric {
+deftrait Describable {
   def add(self: Self, rhs: Self) -> Self
 }
 
@@ -1138,7 +1138,7 @@ impl Show for User {
 
     match &ast[0] {
         Ast::TraitDef(_, name, _, _, attrs) => {
-            assert_eq!(name, "Numeric");
+            assert_eq!(name, "Describable");
             assert_eq!(attrs.doc.as_deref(), Some("Trait docs."));
         }
         _ => panic!("Expected TraitDef"),
@@ -1414,14 +1414,14 @@ fn test_doc_attributes_parse_for_trait_impl_methods() {
 
 #[test]
 fn test_function_def_parses_bounded_type_params() {
-    let ast = parse("def add<$N: Numeric>(x: $N, y: $N) -> $N { x }").unwrap();
+    let ast = parse("def add<$N: Describable>(x: $N, y: $N) -> $N { x }").unwrap();
 
     match ast.as_slice() {
         [Ast::Def(_, name, type_params, params, Some(AstTy::Named(_, ret_ty)), _, _)] => {
             assert_eq!(name, "add");
             assert_eq!(type_params.len(), 1);
             assert_eq!(type_params[0].name, "$N");
-            assert_eq!(type_params[0].bound.as_deref(), Some("Numeric"));
+            assert_eq!(type_params[0].bound.as_deref(), Some("Describable"));
             assert_eq!(params.len(), 2);
             assert!(matches!(params[0].ty, AstTy::Named(_, ref ty) if ty == "$N"));
             assert!(matches!(params[1].ty, AstTy::Named(_, ref ty) if ty == "$N"));
@@ -1484,7 +1484,7 @@ fn test_trait_impl_parses_trait_type_args() {
 
 #[test]
 fn test_function_def_parses_parameter_position_impl_trait() {
-    let ast = parse("def abs(x: impl Numeric) -> Int { 0 }").unwrap();
+    let ast = parse("def abs(x: impl Describable) -> Int { 0 }").unwrap();
 
     match ast.as_slice() {
         [Ast::Def(_, name, type_params, params, Some(AstTy::Named(_, ret_ty)), _, _)] => {
@@ -1492,7 +1492,7 @@ fn test_function_def_parses_parameter_position_impl_trait() {
             assert!(type_params.is_empty());
             assert_eq!(params.len(), 1);
             assert!(
-                matches!(params[0].ty, AstTy::ImplTrait(_, ref trait_name) if trait_name == "Numeric")
+                matches!(params[0].ty, AstTy::ImplTrait(_, ref trait_name) if trait_name == "Describable")
             );
             assert_eq!(ret_ty, "Int");
         }
@@ -1502,7 +1502,7 @@ fn test_function_def_parses_parameter_position_impl_trait() {
 
 #[test]
 fn test_return_position_impl_trait_is_rejected() {
-    let err = parse("def bad(x: Int) -> impl Numeric { x }")
+    let err = parse("def bad(x: Int) -> impl Describable { x }")
         .expect_err("return-position impl Trait should be rejected");
     assert!(err
         .message()
@@ -1511,7 +1511,7 @@ fn test_return_position_impl_trait_is_rejected() {
 
 #[test]
 fn test_where_clause_is_rejected() {
-    let err = parse("def add(x: Int) -> Int where Int: Numeric { x }")
+    let err = parse("def add(x: Int) -> Int where Int: Describable { x }")
         .expect_err("where clauses should be rejected");
     assert!(err
         .message()

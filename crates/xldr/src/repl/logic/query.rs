@@ -977,7 +977,7 @@ mod tests {
 
     #[test]
     fn reject_impl_trait_query_types() {
-        let err = parse_repl_query("show(impl Numeric)").expect_err("query should fail");
+        let err = parse_repl_query("show(impl Show)").expect_err("query should fail");
         assert!(err.message().contains("concrete type"), "{}", err.message());
     }
 

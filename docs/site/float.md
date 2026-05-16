@@ -8,7 +8,7 @@ language surface に持ち込むことではありません。
 ## 契約
 
 - `Float` literal は有限値だけを受け入れます
-- `safe_div(left, right)` は `right == 0.0` のとき `Err(ZeroDivisionError)` を返します
+- `Float::safe_div(left, right)` は `right == 0.0` のとき `Err(ZeroDivisionError)` を返します
 - builtin constant と runtime arithmetic も non-finite value を返しません
 - 表示は通常の `f64` 表示を基礎にし、整数値に見える場合は `.0` を補います
 
@@ -19,7 +19,7 @@ left = 1.5
 right = 2.0
 
 print(to_string(left + right))
-print(inspect(safe_div(3.0, 2.0)))
+print(inspect(Float::safe_div(3.0, 2.0)))
 ```
 
 ```text
@@ -32,6 +32,7 @@ Ok(1.5)
 `Float` には次の helper があります。
 
 - `Float::abs(value)`
+- `Float::safe_div(left, right)`
 - `Float::min(a, b)`
 - `Float::max(a, b)`
 - `Float::floor(value)`
@@ -61,7 +62,7 @@ print(to_string(Float::e()))
 
 ## 比較
 
-`Float` は `Eq`, `Neq`, `Compare`, `Numeric` を実装しています。
+`Float` は `Eq`, `Neq`, `Compare` を実装しています。
 
 ```surtr
 print(to_string(1.5 < 2.0))

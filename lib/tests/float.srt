@@ -29,10 +29,10 @@ test("Float") {
       assert_eq((3.5, 2.5, 3.0), (Add::add(1.5, 2.0), Sub::sub(3.5, 1.0), Mul::mul(1.5, 2.0)))
     }
 
-    it("supports safe division through Numeric") {
+    it("supports safe division through Float") {
       assert_eq(
         ("Ok(1.5)", "Err(ZeroDivisionError(\"division by zero\"))"),
-        (inspect(safe_div(3.0, 2.0)), inspect(safe_div(3.0, 0.0))),
+        (inspect(Float::safe_div(3.0, 2.0)), inspect(Float::safe_div(3.0, 0.0))),
       )
     }
   }
@@ -76,8 +76,8 @@ test("Float") {
     }
   }
 
-  describe("trait integration") {
-    it("uses generic numeric helpers with floats") {
+  describe("type-owner integration") {
+    it("uses concrete float helpers") {
       assert_eq(
         ("Ok(1.5)", "Err(ZeroDivisionError(\"division by zero\"))"),
         (inspect(safe_ratio(3.0, 2.0)), inspect(safe_ratio(3.0, 0.0))),

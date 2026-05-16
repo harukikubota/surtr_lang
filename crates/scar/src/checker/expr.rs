@@ -7257,7 +7257,7 @@ impl Checker {
                 || matches!(rhs_ty, Ty::Int | Ty::Float)
             {
                 Some(
-                    "Infix `/` is reserved for compose/join. Use `safe_div(...)` for division."
+                    "Infix `/` is reserved for compose/join. Use `Int::safe_div(...)` or `Float::safe_div(...)` for division."
                         .into(),
                 )
             } else {
