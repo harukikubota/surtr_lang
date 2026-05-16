@@ -4,10 +4,11 @@ use crate::vm::{TaskMode, VmFileError, VmFileMode, VM};
 use num_bigint::{BigInt, BigUint, Sign};
 use regex::Regex;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
+use sindr::names::surface_path_name;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
-    Callable, FileHandleValue, HashMapHandle, ListHandle, Location, RandomGeneratorHandle,
-    RegexCapturesHandle, RegexHandle, RegexMatchHandle, RichError,
+    quote_surtr_string_literal, Callable, FileHandleValue, HashMapHandle, ListHandle, Location,
+    RandomGeneratorHandle, RegexCapturesHandle, RegexHandle, RegexMatchHandle, RichError,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -871,12 +872,7 @@ fn builtin_inspect(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError>
 
 fn builtin_error_kind(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let rich = decode_error_arg(&args[0], "kind", "err")?;
-    Ok(Value::Str(
-        rich.kind
-            .strip_prefix("Global::")
-            .unwrap_or(&rich.kind)
-            .to_string(),
-    ))
+    Ok(Value::Str(surface_path_name(&rich.kind).to_string()))
 }
 
 fn builtin_error_message(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -3199,7 +3195,7 @@ fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
             }
         }
         let render_named_value = || {
-            let display_name = entry.name.strip_prefix("Global::").unwrap_or(&entry.name);
+            let display_name = surface_path_name(&entry.name);
             let hidden_field_count = entry.private_flags.iter().filter(|flag| **flag).count();
             let mut parts = entry
                 .field_names
@@ -3235,16 +3231,9 @@ fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
                     .collect::<Vec<_>>()
                     .join(", ");
                 if payload.is_empty() {
-                    entry
-                        .name
-                        .strip_prefix("Global::")
-                        .unwrap_or(&entry.name)
-                        .to_string()
+                    surface_path_name(&entry.name).to_string()
                 } else {
-                    format!(
-                        "{}({payload})",
-                        entry.name.strip_prefix("Global::").unwrap_or(&entry.name)
-                    )
+                    format!("{}({payload})", surface_path_name(&entry.name))
                 }
             }
         };
@@ -3270,22 +3259,6 @@ fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
         ),
         _ => format!("Tagged({}, {:?})", tag, fields),
     }
-}
-
-fn quote_surtr_string_literal(input: &str) -> String {
-    let mut out = String::with_capacity(input.len() + 2);
-    out.push('"');
-    for ch in input.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
 }
 
 fn inspect_callable(_vm: &VM, callable: &Callable) -> Option<String> {
@@ -3722,7 +3695,7 @@ fn decode_file_path_arg<'a>(
             "{builtin_name} observed unknown FilePath tag {tag}"
         )));
     };
-    if entry.name.strip_prefix("Global::").unwrap_or(&entry.name) != "FilePath" {
+    if surface_path_name(&entry.name) != "FilePath" {
         return Err(RuntimeError::new(format!(
             "{builtin_name} expects FilePath as {arg_name}, got {}",
             entry.name

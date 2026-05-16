@@ -45,6 +45,17 @@ fn surface_module_name(module_path: &str) -> String {
         .to_string()
 }
 
+fn global_surface_name(name: &str) -> &str {
+    name.strip_prefix("Global::").unwrap_or(name)
+}
+
+fn define_global_surface_alias(scope: &mut Scope, canonical_name: &str, uid: u32) {
+    let surface_name = global_surface_name(canonical_name);
+    if surface_name != canonical_name {
+        scope.define_with_id(surface_name, uid);
+    }
+}
+
 fn auto_import_module_names(module_stages: &[Vec<StagedModuleAst>]) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = HashSet::new();

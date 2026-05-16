@@ -1618,7 +1618,7 @@ pub fn test_semantic_prefix_cache_key_with_fingerprint(
             key.push('\x1e');
             key.push_str(&module.module_path);
             key.push('\x1e');
-            key.push_str(source_kind_key(module.source_kind));
+            key.push_str(source_kind_cache_key(module.source_kind));
             key.push('\x1e');
             key.push_str(&stable_hash_hex(source));
             key.push('\x1f');
@@ -1919,7 +1919,7 @@ fn stdlib_semantic_cache_key(module_sources: &ModuleSources) -> String {
             key.push('\x1e');
             key.push_str(&module.module_path);
             key.push('\x1e');
-            key.push_str(source_kind_key(module.source_kind));
+            key.push_str(source_kind_cache_key(module.source_kind));
             key.push('\x1e');
             key.push_str(&stable_hash_hex(source));
             key.push('\x1f');
@@ -1928,7 +1928,7 @@ fn stdlib_semantic_cache_key(module_sources: &ModuleSources) -> String {
     stable_hash_hex(&key)
 }
 
-fn source_kind_key(kind: SourceKind) -> &'static str {
+pub fn source_kind_cache_key(kind: SourceKind) -> &'static str {
     match kind {
         SourceKind::Script => "script",
         // Keep cache key strings stable for backward compatibility with existing cache entries.

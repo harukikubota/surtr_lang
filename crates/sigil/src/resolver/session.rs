@@ -54,17 +54,7 @@ impl SigilSession {
     }
 
     pub fn new() -> Self {
-        Self {
-            scope: initialize_scope(),
-            declaration_entries: HashMap::new(),
-            declaration_uids: HashMap::new(),
-            declaration_uid_kinds: HashMap::from([
-                (0, DeclarationKind::ResultCtor),
-                (1, DeclarationKind::ResultCtor),
-            ]),
-            declaration_hidden_by_uid: HashMap::new(),
-            current_module_path: None,
-        }
+        Self::with_module_path(None)
     }
 
     pub fn with_module_path(current_module_path: Option<String>) -> Self {

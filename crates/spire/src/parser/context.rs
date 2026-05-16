@@ -45,6 +45,10 @@ pub(crate) enum TopLevelDeclPolicy {
 }
 
 impl TopLevelDeclPolicy {
+    fn only(allowed: &[TopLevelDeclKind]) -> Self {
+        Self::Only(allowed.to_vec())
+    }
+
     pub(crate) fn allows(&self, kind: TopLevelDeclKind) -> bool {
         match self {
             Self::Any => true,
@@ -59,29 +63,112 @@ pub struct ParseRules {
     pub(crate) allowed_top_level_decl_kinds: TopLevelDeclPolicy,
 }
 
+const SCRIPT_TOP_LEVEL_DECLS: &[TopLevelDeclKind] = &[
+    TopLevelDeclKind::Def,
+    TopLevelDeclKind::Defagent,
+    TopLevelDeclKind::Defgenserver,
+    TopLevelDeclKind::Defsupervisor,
+    TopLevelDeclKind::DefdynamicSupervisor,
+    TopLevelDeclKind::Namespace,
+    TopLevelDeclKind::ImplDef,
+    TopLevelDeclKind::TraitDef,
+    TopLevelDeclKind::TraitImplDef,
+    TopLevelDeclKind::ConstDef,
+    TopLevelDeclKind::SupervisorInit,
+    TopLevelDeclKind::Import,
+    TopLevelDeclKind::Include,
+    TopLevelDeclKind::StructDef,
+    TopLevelDeclKind::RecordDef,
+    TopLevelDeclKind::DeferrorDef,
+    TopLevelDeclKind::EnumDef,
+];
+
+const MODULE_TOP_LEVEL_DECLS: &[TopLevelDeclKind] = &[
+    TopLevelDeclKind::Defmod,
+    TopLevelDeclKind::Defagent,
+    TopLevelDeclKind::Defgenserver,
+    TopLevelDeclKind::Defsupervisor,
+    TopLevelDeclKind::DefdynamicSupervisor,
+    TopLevelDeclKind::Namespace,
+    TopLevelDeclKind::ImplDef,
+    TopLevelDeclKind::TraitDef,
+    TopLevelDeclKind::TraitImplDef,
+    TopLevelDeclKind::Import,
+    TopLevelDeclKind::StructDef,
+    TopLevelDeclKind::RecordDef,
+    TopLevelDeclKind::DeferrorDef,
+    TopLevelDeclKind::EnumDef,
+    TopLevelDeclKind::ConstDef,
+    TopLevelDeclKind::SupervisorInit,
+];
+
+const PROJECT_TOP_LEVEL_DECLS: &[TopLevelDeclKind] = &[
+    TopLevelDeclKind::Def,
+    TopLevelDeclKind::Defmod,
+    TopLevelDeclKind::Defagent,
+    TopLevelDeclKind::Defgenserver,
+    TopLevelDeclKind::Defsupervisor,
+    TopLevelDeclKind::DefdynamicSupervisor,
+    TopLevelDeclKind::Namespace,
+    TopLevelDeclKind::ImplDef,
+    TopLevelDeclKind::TraitDef,
+    TopLevelDeclKind::TraitImplDef,
+    TopLevelDeclKind::Import,
+    TopLevelDeclKind::StructDef,
+    TopLevelDeclKind::RecordDef,
+    TopLevelDeclKind::DeferrorDef,
+    TopLevelDeclKind::EnumDef,
+    TopLevelDeclKind::ConstDef,
+    TopLevelDeclKind::SupervisorInit,
+];
+
+const STD_MODULE_TOP_LEVEL_DECLS: &[TopLevelDeclKind] = &[
+    TopLevelDeclKind::Defmod,
+    TopLevelDeclKind::Defagent,
+    TopLevelDeclKind::Defgenserver,
+    TopLevelDeclKind::Defsupervisor,
+    TopLevelDeclKind::DefdynamicSupervisor,
+    TopLevelDeclKind::Namespace,
+    TopLevelDeclKind::ImplDef,
+    TopLevelDeclKind::TraitDef,
+    TopLevelDeclKind::TraitImplDef,
+    TopLevelDeclKind::Import,
+    TopLevelDeclKind::StructDef,
+    TopLevelDeclKind::RecordDef,
+    TopLevelDeclKind::DeferrorDef,
+    TopLevelDeclKind::EnumDef,
+    TopLevelDeclKind::ConstDef,
+    TopLevelDeclKind::BuiltinDecl,
+    TopLevelDeclKind::BuiltinExtractorDecl,
+    TopLevelDeclKind::BuiltinTypeDecl,
+];
+
+const MODULE_MEMBER_DECLS: &[TopLevelDeclKind] = &[
+    TopLevelDeclKind::Import,
+    TopLevelDeclKind::Def,
+    TopLevelDeclKind::ExtractorDef,
+    TopLevelDeclKind::TraitDef,
+    TopLevelDeclKind::TraitImplDef,
+];
+
+const STD_MODULE_MEMBER_DECLS: &[TopLevelDeclKind] = &[
+    TopLevelDeclKind::Import,
+    TopLevelDeclKind::Def,
+    TopLevelDeclKind::ExtractorDef,
+    TopLevelDeclKind::TraitDef,
+    TopLevelDeclKind::TraitImplDef,
+    TopLevelDeclKind::BuiltinDecl,
+    TopLevelDeclKind::BuiltinExtractorDecl,
+    TopLevelDeclKind::BuiltinTypeDecl,
+];
+
+const REPL_CHUNK_DECLS: &[TopLevelDeclKind] = &[TopLevelDeclKind::Def, TopLevelDeclKind::Import];
+
 impl ParseRules {
     pub fn script() -> Self {
         Self {
             allow_top_level_expr: true,
-            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
-                TopLevelDeclKind::Def,
-                TopLevelDeclKind::Defagent,
-                TopLevelDeclKind::Defgenserver,
-                TopLevelDeclKind::Defsupervisor,
-                TopLevelDeclKind::DefdynamicSupervisor,
-                TopLevelDeclKind::Namespace,
-                TopLevelDeclKind::ImplDef,
-                TopLevelDeclKind::TraitDef,
-                TopLevelDeclKind::TraitImplDef,
-                TopLevelDeclKind::ConstDef,
-                TopLevelDeclKind::SupervisorInit,
-                TopLevelDeclKind::Import,
-                TopLevelDeclKind::Include,
-                TopLevelDeclKind::StructDef,
-                TopLevelDeclKind::RecordDef,
-                TopLevelDeclKind::DeferrorDef,
-                TopLevelDeclKind::EnumDef,
-            ]),
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::only(SCRIPT_TOP_LEVEL_DECLS),
         }
     }
 
@@ -96,113 +183,42 @@ impl ParseRules {
     pub fn module_source_without_builtin() -> Self {
         Self {
             allow_top_level_expr: false,
-            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
-                TopLevelDeclKind::Defmod,
-                TopLevelDeclKind::Defagent,
-                TopLevelDeclKind::Defgenserver,
-                TopLevelDeclKind::Defsupervisor,
-                TopLevelDeclKind::DefdynamicSupervisor,
-                TopLevelDeclKind::Namespace,
-                TopLevelDeclKind::ImplDef,
-                TopLevelDeclKind::TraitDef,
-                TopLevelDeclKind::TraitImplDef,
-                TopLevelDeclKind::Import,
-                TopLevelDeclKind::StructDef,
-                TopLevelDeclKind::RecordDef,
-                TopLevelDeclKind::DeferrorDef,
-                TopLevelDeclKind::EnumDef,
-                TopLevelDeclKind::ConstDef,
-                TopLevelDeclKind::SupervisorInit,
-            ]),
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::only(MODULE_TOP_LEVEL_DECLS),
         }
     }
 
     pub fn std_module() -> Self {
         Self {
             allow_top_level_expr: false,
-            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
-                TopLevelDeclKind::Defmod,
-                TopLevelDeclKind::Defagent,
-                TopLevelDeclKind::Defgenserver,
-                TopLevelDeclKind::Defsupervisor,
-                TopLevelDeclKind::DefdynamicSupervisor,
-                TopLevelDeclKind::Namespace,
-                TopLevelDeclKind::ImplDef,
-                TopLevelDeclKind::TraitDef,
-                TopLevelDeclKind::TraitImplDef,
-                TopLevelDeclKind::Import,
-                TopLevelDeclKind::StructDef,
-                TopLevelDeclKind::RecordDef,
-                TopLevelDeclKind::DeferrorDef,
-                TopLevelDeclKind::EnumDef,
-                TopLevelDeclKind::ConstDef,
-                TopLevelDeclKind::BuiltinDecl,
-                TopLevelDeclKind::BuiltinTypeDecl,
-            ]),
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::only(STD_MODULE_TOP_LEVEL_DECLS),
         }
     }
 
     pub fn module_member() -> Self {
         Self {
             allow_top_level_expr: false,
-            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
-                TopLevelDeclKind::Import,
-                TopLevelDeclKind::Def,
-                TopLevelDeclKind::ExtractorDef,
-                TopLevelDeclKind::TraitDef,
-                TopLevelDeclKind::TraitImplDef,
-            ]),
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::only(MODULE_MEMBER_DECLS),
         }
     }
 
     pub fn std_module_member() -> Self {
         Self {
             allow_top_level_expr: false,
-            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
-                TopLevelDeclKind::Import,
-                TopLevelDeclKind::Def,
-                TopLevelDeclKind::ExtractorDef,
-                TopLevelDeclKind::TraitDef,
-                TopLevelDeclKind::TraitImplDef,
-                TopLevelDeclKind::BuiltinDecl,
-                TopLevelDeclKind::BuiltinExtractorDecl,
-                TopLevelDeclKind::BuiltinTypeDecl,
-            ]),
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::only(STD_MODULE_MEMBER_DECLS),
         }
     }
 
     pub fn repl_chunk() -> Self {
         Self {
             allow_top_level_expr: true,
-            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
-                TopLevelDeclKind::Def,
-                TopLevelDeclKind::Import,
-            ]),
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::only(REPL_CHUNK_DECLS),
         }
     }
 
     pub fn project() -> Self {
         Self {
             allow_top_level_expr: true,
-            allowed_top_level_decl_kinds: TopLevelDeclPolicy::Only(vec![
-                TopLevelDeclKind::Def,
-                TopLevelDeclKind::Defmod,
-                TopLevelDeclKind::Defagent,
-                TopLevelDeclKind::Defgenserver,
-                TopLevelDeclKind::Defsupervisor,
-                TopLevelDeclKind::DefdynamicSupervisor,
-                TopLevelDeclKind::Namespace,
-                TopLevelDeclKind::ImplDef,
-                TopLevelDeclKind::TraitDef,
-                TopLevelDeclKind::TraitImplDef,
-                TopLevelDeclKind::Import,
-                TopLevelDeclKind::StructDef,
-                TopLevelDeclKind::RecordDef,
-                TopLevelDeclKind::DeferrorDef,
-                TopLevelDeclKind::EnumDef,
-                TopLevelDeclKind::ConstDef,
-                TopLevelDeclKind::SupervisorInit,
-            ]),
+            allowed_top_level_decl_kinds: TopLevelDeclPolicy::only(PROJECT_TOP_LEVEL_DECLS),
         }
     }
 

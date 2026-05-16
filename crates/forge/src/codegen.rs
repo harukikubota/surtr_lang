@@ -16,7 +16,7 @@ use sindr::ir::{
 };
 use sindr::names::{surface_path_name, surface_rendered_name};
 use sindr::primitives::{int, SurtrInt};
-use sindr::runtime::CallableOrigin;
+use sindr::runtime::{quote_surtr_string_literal, CallableOrigin};
 use spire::ast::{
     AstTy, BinOp, Lit, ProcessInstance, ProcessRuntimeHandlerKind, Span, SupervisorInitSpec,
     Visibility,
@@ -10383,22 +10383,6 @@ fn literal_pattern_display(pat: &TypedPattern) -> Option<String> {
         TypedPattern::DurationLit(_, value) => Some(format!("{value}ms")),
         _ => None,
     }
-}
-
-fn quote_surtr_string_literal(input: &str) -> String {
-    let mut out = String::with_capacity(input.len() + 2);
-    out.push('"');
-    for ch in input.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
 }
 
 #[cfg(test)]

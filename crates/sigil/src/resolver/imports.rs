@@ -19,10 +19,6 @@ fn auto_import_trait_names(declaration_index: &DeclarationIndex) -> HashSet<Stri
         .collect()
 }
 
-fn surface_name(name: &str) -> &str {
-    name.strip_prefix("Global::").unwrap_or(name)
-}
-
 fn is_result_facet_chain_conflict(
     existing_name: &str,
     incoming_name: &str,
@@ -31,12 +27,27 @@ fn is_result_facet_chain_conflict(
     if short_name != "chain" {
         return false;
     }
-    let existing = surface_name(existing_name);
-    let incoming = surface_name(incoming_name);
+    let existing = global_surface_name(existing_name);
+    let incoming = global_surface_name(incoming_name);
     matches!(
         (existing, incoming),
         ("Result::chain", "Facet::chain") | ("Facet::chain", "Result::chain")
     )
+}
+
+fn declaration_is_auto_imported(import_context: &ImportContext<'_>, fq_name: &str) -> bool {
+    import_context
+        .declaration_index
+        .get(fq_name)
+        .is_some_and(|entry| {
+            entry.auto_import
+                || import_context
+                    .auto_import_modules
+                    .contains(global_surface_name(&entry.module_path))
+                || import_context
+                    .auto_import_traits
+                    .contains(global_surface_name(&entry.module_path))
+        })
 }
 
 pub(super) fn build_global_scope(
@@ -69,11 +80,11 @@ pub(super) fn build_global_scope(
                 continue;
             }
             scope.define_with_id(fq_name, *uid);
-            if surface_name(fq_name) != fq_name {
-                scope.define_with_id(surface_name(fq_name), *uid);
+            if global_surface_name(fq_name) != fq_name {
+                scope.define_with_id(global_surface_name(fq_name), *uid);
             }
-            if surface_name(&entry.name) != entry.name {
-                scope.define_with_id(surface_name(&entry.name), *uid);
+            if global_surface_name(&entry.name) != entry.name {
+                scope.define_with_id(global_surface_name(&entry.name), *uid);
             }
             if matches!(
                 entry.kind,
@@ -153,11 +164,11 @@ pub(super) fn build_module_scope(
                 if let Some(uid) = declaration_uids.get(&entry.fq_name) {
                     scope.define_with_id(&entry.name, *uid);
                     scope.define_with_id(&entry.fq_name, *uid);
-                    if surface_name(&entry.name) != entry.name {
-                        scope.define_with_id(surface_name(&entry.name), *uid);
+                    if global_surface_name(&entry.name) != entry.name {
+                        scope.define_with_id(global_surface_name(&entry.name), *uid);
                     }
-                    if surface_name(&entry.fq_name) != entry.fq_name {
-                        scope.define_with_id(surface_name(&entry.fq_name), *uid);
+                    if global_surface_name(&entry.fq_name) != entry.fq_name {
+                        scope.define_with_id(global_surface_name(&entry.fq_name), *uid);
                     }
                 }
             }
@@ -291,7 +302,7 @@ fn import_list_into_scope(
     let module_exists = import_context
         .declaration_index
         .values()
-        .any(|entry| surface_name(&entry.module_path) == module_name);
+        .any(|entry| global_surface_name(&entry.module_path) == module_name);
     if !module_exists {
         return Err(ResolveError {
             message: format!("Unknown module import: {}", module_name),
@@ -308,7 +319,7 @@ fn import_list_into_scope(
 
         let fq_name = format!("{}::{}", module_name, name);
         let Some(entry) = import_context.declaration_index.values().find(|entry| {
-            surface_name(&entry.module_path) == module_name
+            global_surface_name(&entry.module_path) == module_name
                 && (entry.name == *name
                     || entry
                         .name
@@ -374,7 +385,7 @@ fn import_list_into_scope(
         if entry.kind == DeclarationKind::Trait {
             let trait_prefix = format!("{}::", name);
             for method_entry in import_context.declaration_index.values() {
-                if surface_name(&method_entry.module_path) != module_name
+                if global_surface_name(&method_entry.module_path) != module_name
                     || method_entry.kind != DeclarationKind::TraitMethod
                     || !method_entry.name.starts_with(&trait_prefix)
                 {
@@ -440,7 +451,7 @@ fn import_module_into_scope(
     let mut imported_any = false;
     let mut blocked_by_stage = false;
     for entry in import_context.declaration_index.values() {
-        if surface_name(&entry.module_path) != module_name {
+        if global_surface_name(&entry.module_path) != module_name {
             continue;
         }
         if !is_importable_declaration(&entry.kind) {
@@ -621,7 +632,7 @@ fn import_single_into_scope(
 
     let fq_name = format!("{}::{}", module_name, name);
     let Some(entry) = import_context.declaration_index.values().find(|entry| {
-        surface_name(&entry.module_path) == module_name
+        global_surface_name(&entry.module_path) == module_name
             && (entry.name == name
                 || entry
                     .name
@@ -639,7 +650,7 @@ fn import_single_into_scope(
         let module_exists = import_context
             .declaration_index
             .values()
-            .any(|entry| surface_name(&entry.module_path) == module_name);
+            .any(|entry| global_surface_name(&entry.module_path) == module_name);
         return Err(ResolveError {
             message: if module_exists {
                 format!("Unknown import member: {}", fq_name)
@@ -724,7 +735,7 @@ fn import_single_into_scope(
     if entry.kind == DeclarationKind::Trait {
         let trait_prefix = format!("{}::", name);
         for method_entry in import_context.declaration_index.values() {
-            if surface_name(&method_entry.module_path) != module_name
+            if global_surface_name(&method_entry.module_path) != module_name
                 || method_entry.kind != DeclarationKind::TraitMethod
                 || !method_entry.name.starts_with(&trait_prefix)
             {
@@ -814,18 +825,8 @@ fn bind_import_name(
                 .find_map(|(fq_name, known_uid)| (*known_uid == existing_uid).then_some(fq_name))
                 .cloned()
                 .unwrap_or_else(|| format!("<uid:{}>", existing_uid));
-            let existing_is_auto_imported = import_context
-                .declaration_index
-                .get(&existing_name)
-                .is_some_and(|entry| {
-                    entry.auto_import
-                        || import_context
-                            .auto_import_modules
-                            .contains(surface_name(&entry.module_path))
-                        || import_context
-                            .auto_import_traits
-                            .contains(surface_name(&entry.module_path))
-                });
+            let existing_is_auto_imported =
+                declaration_is_auto_imported(import_context, &existing_name);
             if !existing_is_auto_imported {
                 return Ok(());
             }
@@ -855,18 +856,8 @@ fn bind_import_name(
             .find_map(|(fq_name, known_uid)| (*known_uid == existing_uid).then_some(fq_name))
             .cloned()
             .unwrap_or_else(|| format!("<uid:{}>", existing_uid));
-        let existing_is_auto_imported = import_context
-            .declaration_index
-            .get(&existing_name)
-            .is_some_and(|entry| {
-                entry.auto_import
-                    || import_context
-                        .auto_import_modules
-                        .contains(surface_name(&entry.module_path))
-                    || import_context
-                        .auto_import_traits
-                        .contains(surface_name(&entry.module_path))
-            });
+        let existing_is_auto_imported =
+            declaration_is_auto_imported(import_context, &existing_name);
         if existing_is_auto_imported {
             scope.define_with_id(short_name, uid);
             return Ok(());

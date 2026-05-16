@@ -11,6 +11,7 @@ use crate::compile::{
     script_plan_error_as_rune_error,
 };
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
+use crate::util::surface_strip_global_prefixes;
 
 pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
     let mut format = "json";
@@ -85,23 +86,11 @@ pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
             ),
         ));
     }
-    if format == "viewer-json" && include_opcode_histogram {
-        return Err(RuneError::message(
-            1,
-            "dump: --opcode-histogram is only supported with --format json",
-        ));
-    }
-    if format == "viewer-json" && include_peephole_candidates {
-        return Err(RuneError::message(
-            1,
-            "dump: --peephole-candidates is only supported with --format json",
-        ));
-    }
-
     let options = DumpOptions {
         include_opcode_histogram,
         include_peephole_candidates,
     };
+    validate_dump_options(format, &options)?;
 
     if Path::new(file_path)
         .extension()
@@ -148,6 +137,25 @@ pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
 struct DumpOptions {
     include_opcode_histogram: bool,
     include_peephole_candidates: bool,
+}
+
+fn validate_dump_options(format: &str, options: &DumpOptions) -> RuneResult<()> {
+    if format != "viewer-json" {
+        return Ok(());
+    }
+    if options.include_opcode_histogram {
+        return Err(RuneError::message(
+            1,
+            "dump: --opcode-histogram is only supported with --format json",
+        ));
+    }
+    if options.include_peephole_candidates {
+        return Err(RuneError::message(
+            1,
+            "dump: --peephole-candidates is only supported with --format json",
+        ));
+    }
+    Ok(())
 }
 
 fn dump_entry_source(
@@ -828,37 +836,4 @@ fn opcode_source_for_pc(bytecode: &Bytecode, pc: usize) -> Option<OpcodeSource> 
                 .find(|entry| entry.opcode_index as usize == pc)
         })
         .cloned()
-}
-
-fn surface_strip_global_prefixes(value: &mut Value) {
-    match value {
-        Value::String(text) => {
-            if let Some(stripped) = text.strip_prefix("Global::") {
-                *text = stripped.to_string();
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                surface_strip_global_prefixes(item);
-            }
-        }
-        Value::Object(map) => {
-            let keys = map.keys().cloned().collect::<Vec<_>>();
-            for key in keys {
-                let mut item = map
-                    .remove(&key)
-                    .expect("json object key should still exist during surface rewrite");
-                surface_strip_global_prefixes(&mut item);
-                let surface_key = key
-                    .strip_prefix("Global::")
-                    .unwrap_or(key.as_str())
-                    .to_string();
-                map.insert(surface_key, item);
-            }
-            for item in map.values_mut() {
-                surface_strip_global_prefixes(item);
-            }
-        }
-        _ => {}
-    }
 }

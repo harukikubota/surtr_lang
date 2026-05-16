@@ -182,21 +182,11 @@ fn push_module_pipeline_key(key: &mut String, compile_sources: &xldr::CompileSou
             key.push('\x1f');
             key.push_str(&module.module_path);
             key.push('\x1f');
-            key.push_str(source_kind_key(module.source_kind));
+            key.push_str(xldr::source_kind_cache_key(module.source_kind));
             key.push('\x1f');
             key.push_str(&stable_hash_hex(source));
             key.push('\x1e');
         }
-    }
-}
-
-fn source_kind_key(kind: xldr::SourceKind) -> &'static str {
-    match kind {
-        xldr::SourceKind::Script => "script",
-        // Keep serialized key values stable for backward-compatible cache reuse.
-        xldr::SourceKind::DefinitionSource => "module",
-        xldr::SourceKind::StdDefinitionSource => "std",
-        xldr::SourceKind::ReplChunk => "repl",
     }
 }
 

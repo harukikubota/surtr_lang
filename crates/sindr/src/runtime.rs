@@ -2,6 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::names::surface_path_name;
 use crate::primitives::{BuiltinId, FunctionId, RuntimeTag, SurtrInt};
 
 /// Kind of user-defined type at runtime.
@@ -261,10 +262,6 @@ pub enum CallableOrigin {
 }
 
 impl Value {
-    fn surface_type_name(type_name: &str) -> &str {
-        type_name.strip_prefix("Global::").unwrap_or(type_name)
-    }
-
     fn render_named_value(
         type_name: &str,
         field_names: &[String],
@@ -291,11 +288,7 @@ impl Value {
             parts.push("..private".to_string());
         }
 
-        format!(
-            "{}({})",
-            Self::surface_type_name(type_name),
-            parts.join(", ")
-        )
+        format!("{}({})", surface_path_name(type_name), parts.join(", "))
     }
 
     /// Display string for `to_string` built-in.
@@ -356,7 +349,7 @@ impl Value {
             }
             Value::Tagged { tag, fields } => {
                 if let Some(entry) = registry.lookup(*tag) {
-                    if Self::surface_type_name(&entry.name) == "Duration" {
+                    if surface_path_name(&entry.name) == "Duration" {
                         if let Some(Value::Int(ms)) = fields.first() {
                             return format!("{ms}ms");
                         }
@@ -377,9 +370,9 @@ impl Value {
                                 .collect::<Vec<_>>()
                                 .join(", ");
                             if payload.is_empty() {
-                                Self::surface_type_name(&entry.name).to_string()
+                                surface_path_name(&entry.name).to_string()
                             } else {
-                                format!("{}({})", Self::surface_type_name(&entry.name), payload)
+                                format!("{}({})", surface_path_name(&entry.name), payload)
                             }
                         }
                     }
@@ -433,7 +426,7 @@ impl Value {
             Value::RandomGenerator(_) => "RandomGenerator(<opaque>)".to_string(),
             Value::Pid(handle) => format!(
                 "PID({}#{})",
-                Self::surface_type_name(&handle.process_name),
+                surface_path_name(&handle.process_name),
                 handle.id
             ),
             Value::FileHandle(handle) => format!("FileHandle#{}", handle.id),
@@ -447,7 +440,7 @@ impl Value {
     }
 }
 
-fn quote_surtr_string_literal(input: &str) -> String {
+pub fn quote_surtr_string_literal(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + 2);
     out.push('"');
     for ch in input.chars() {
@@ -679,7 +672,7 @@ impl RichError {
     }
 
     pub fn to_eprint_lines(&self) -> Vec<String> {
-        let display_kind = self.kind.strip_prefix("Global::").unwrap_or(&self.kind);
+        let display_kind = surface_path_name(&self.kind);
         let mut lines = vec![format!(
             "Error: {}: {}",
             display_kind,
@@ -687,7 +680,7 @@ impl RichError {
         )];
         let mut next = self.cause.as_deref();
         while let Some(cause) = next {
-            let cause_kind = cause.kind.strip_prefix("Global::").unwrap_or(&cause.kind);
+            let cause_kind = surface_path_name(&cause.kind);
             lines.push(format!(
                 "Caused by: {}: {}",
                 cause_kind,
@@ -715,7 +708,7 @@ impl RichError {
         lines.push(format!(
             "{}{}({:?})",
             first_prefix,
-            Value::surface_type_name(&self.kind),
+            surface_path_name(&self.kind),
             self.visible_message()
         ));
         if let Some(cause) = self.cause.as_deref() {

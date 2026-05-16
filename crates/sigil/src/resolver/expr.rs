@@ -106,10 +106,7 @@ enum CanonicalSpecialForm {
 
 impl Resolver {
     fn canonical_special_form_from_qname(qualified_name: &str) -> Option<CanonicalSpecialForm> {
-        match qualified_name
-            .strip_prefix("Global::")
-            .unwrap_or(qualified_name)
-        {
+        match global_surface_name(qualified_name) {
             "Kernel::if" => Some(CanonicalSpecialForm::If(IfKind::If3)),
             "Kernel::if_then" => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
             "Kernel::if_let" => Some(CanonicalSpecialForm::IfLet),
@@ -149,10 +146,7 @@ impl Resolver {
             ));
         }
         match (
-            entry
-                .module_path
-                .strip_prefix("Global::")
-                .unwrap_or(entry.module_path.as_str()),
+            global_surface_name(entry.module_path.as_str()),
             entry.name.as_str(),
         ) {
             ("Kernel", "if") => Some(CanonicalSpecialForm::If(IfKind::If3)),
@@ -1484,11 +1478,7 @@ impl Resolver {
                         .iter()
                         .find_map(|(fq_name, entry)| {
                             (entry.kind == DeclarationKind::TraitMethod
-                                && entry
-                                    .module_path
-                                    .strip_prefix("Global::")
-                                    .unwrap_or(&entry.module_path)
-                                    == spec.owner
+                                && global_surface_name(&entry.module_path) == spec.owner
                                 && entry.name == method_alias)
                                 .then(|| self.declaration_uids.get(fq_name).copied())
                                 .flatten()
@@ -2596,9 +2586,7 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
-                if let Some(surface_name) = name.strip_prefix("Global::") {
-                    self.scope.define_with_id(surface_name, uid);
-                }
+                define_global_surface_alias(&mut self.scope, &name, uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
@@ -2636,9 +2624,7 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
-                if let Some(surface_name) = name.strip_prefix("Global::") {
-                    self.scope.define_with_id(surface_name, uid);
-                }
+                define_global_surface_alias(&mut self.scope, &name, uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
@@ -2669,9 +2655,7 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
-                if let Some(surface_name) = name.strip_prefix("Global::") {
-                    self.scope.define_with_id(surface_name, uid);
-                }
+                define_global_surface_alias(&mut self.scope, &name, uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
@@ -2721,9 +2705,7 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
-                if let Some(surface_name) = name.strip_prefix("Global::") {
-                    self.scope.define_with_id(surface_name, uid);
-                }
+                define_global_surface_alias(&mut self.scope, &name, uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name: name.clone(),
@@ -2745,9 +2727,7 @@ impl Resolver {
                         .or_else(|| self.scope.lookup(&ctor_name))
                         .unwrap_or_else(|| self.scope.reserve_id());
                     self.scope.define_with_id(&ctor_name, ctor_uid);
-                    if let Some(surface_ctor_name) = ctor_name.strip_prefix("Global::") {
-                        self.scope.define_with_id(surface_ctor_name, ctor_uid);
-                    }
+                    define_global_surface_alias(&mut self.scope, &ctor_name, ctor_uid);
                     let qualified_ctor_name = self.qualify_current_declaration_name(&ctor_name);
                     resolved_variants.push(ResolvedEnumVariant {
                         id: ResolvedId {
@@ -2806,9 +2786,7 @@ impl Resolver {
                 self.scope.advance_next_id_to(body_resolver.scope.next_id());
                 self.scope.define_with_id(&name, fun_uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
-                if let Some(surface_name) = qualified_name.strip_prefix("Global::") {
-                    self.scope.define_with_id(surface_name, fun_uid);
-                }
+                define_global_surface_alias(&mut self.scope, &qualified_name, fun_uid);
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),
@@ -2841,11 +2819,8 @@ impl Resolver {
                 } else {
                     Some(self.qualify_current_declaration_name(&format!("__const__::{}", name)))
                 };
-                if let Some(surface_name) = qualified_name
-                    .as_deref()
-                    .and_then(|name| name.strip_prefix("Global::"))
-                {
-                    self.scope.define_with_id(surface_name, uid);
+                if let Some(qualified_name) = qualified_name.as_deref() {
+                    define_global_surface_alias(&mut self.scope, qualified_name, uid);
                 }
                 let rid = ResolvedId {
                     name,
@@ -2882,9 +2857,7 @@ impl Resolver {
                 self.scope.advance_next_id_to(body_resolver.scope.next_id());
                 self.scope.define_with_id(&name, fun_uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
-                if let Some(surface_name) = qualified_name.strip_prefix("Global::") {
-                    self.scope.define_with_id(surface_name, fun_uid);
-                }
+                define_global_surface_alias(&mut self.scope, &qualified_name, fun_uid);
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),
@@ -3215,9 +3188,7 @@ impl Resolver {
                     .take_predeclared_id(&head.name)
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&head.name, builtin_type_uid);
-                if let Some(surface_name) = head.name.strip_prefix("Global::") {
-                    self.scope.define_with_id(surface_name, builtin_type_uid);
-                }
+                define_global_surface_alias(&mut self.scope, &head.name, builtin_type_uid);
                 let qualified_name = self.qualify_current_declaration_name(&head.name);
                 let rid = ResolvedId {
                     name: head.name,
@@ -3239,9 +3210,7 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
-                if let Some(surface_name) = name.strip_prefix("Global::") {
-                    self.scope.define_with_id(surface_name, uid);
-                }
+                define_global_surface_alias(&mut self.scope, &name, uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
