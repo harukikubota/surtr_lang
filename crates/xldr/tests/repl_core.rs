@@ -454,6 +454,51 @@ def greet(name: String) -> String { name }
 }
 
 #[test]
+fn core_typed_sig_query_uses_impl_signatures_without_docs() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/no_doc_impl.srt",
+        r#"
+deftrait Pairwise {
+  def pair(self: Self, rhs: Self) -> Self
+}
+
+defstruct Duo {
+  value: Int,
+}
+
+impl Duo {
+  def new(value: Int) -> Self {
+    Duo { value }
+  }
+}
+
+impl Pairwise for Duo {
+  def pair(self: Self, rhs: Self) -> Self {
+    Duo { value: self.value + rhs.value }
+  }
+}
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let doc = rendered_text(&engine.handle_line(":doc pair(Duo, Duo)"));
+    assert!(
+        doc.contains("No docs found for pair(Duo, Duo)"),
+        "typed doc query should still require @doc: {doc}"
+    );
+
+    let sig = signature_text(&engine.handle_line(":sig pair(Duo, Duo)"));
+    assert!(
+        sig.contains("defined:\n  impl Pairwise for Duo::pair(self: Self, rhs: Self) -> Self"),
+        "{sig}"
+    );
+    assert!(
+        sig.contains("specialized:\n  pair(Duo, Duo) -> Duo"),
+        "{sig}"
+    );
+}
+
+#[test]
 fn core_live_repl_top_level_defs_are_signature_and_completion_surfaces() {
     let mut engine = engine();
     let def = engine.handle_line("def local(x: Int) -> Int { x + 1 }");
@@ -2622,6 +2667,39 @@ fn core_save_writes_decodable_eldr_snapshot() {
     let bytes = fs::read(&path).expect("saved .eldr should exist");
     let bytecode = sindr::ir::Bytecode::decode(&bytes).expect("saved .eldr should decode");
     assert!(!bytecode.opcodes.is_empty());
+}
+
+#[test]
+fn core_eldr_sig_queries_do_not_depend_on_docs_chunk() {
+    let mut engine = engine();
+    let dir = tempfile_dir("xldr-repl-core-eldr-sig-without-docs");
+    let path = dir.join("session.eldr");
+
+    let save = engine.handle_line(&format!(":save {}", path.display()));
+    assert!(rendered_text(&save).contains("saved to"));
+
+    let bytes = fs::read(&path).expect("saved .eldr should exist");
+    let mut bytecode = sindr::ir::Bytecode::decode(&bytes).expect("saved .eldr should decode");
+    bytecode.docs.clear();
+    let bytes = bytecode.encode().expect("modified .eldr should encode");
+
+    let mut restored = ReplEngine::from_eldr(&bytes).expect("restored engine should load");
+
+    let doc = rendered_text(&restored.handle_line(":doc compare(Int, Int)"));
+    assert!(
+        doc.contains("No docs found for compare(Int, Int)"),
+        "doc query should read only Docs chunk: {doc}"
+    );
+
+    let sig = signature_text(&restored.handle_line(":sig compare(Int, Int)"));
+    assert!(
+        sig.contains("impl Compare for Int::compare(self: Self, rhs: Self) -> Ordering"),
+        "{sig}"
+    );
+    assert!(
+        sig.contains("specialized:\n  compare(Int, Int) -> Ordering"),
+        "{sig}"
+    );
 }
 
 #[test]

@@ -55,6 +55,11 @@ pub(super) fn compile_sources_with_mode(
         &user_ast,
         Some(compile_sources.user_module_path.as_str()),
     );
+    let signatures = xldr::collect_signature_entries(
+        &module_asts,
+        &user_ast,
+        Some(compile_sources.user_module_path.as_str()),
+    );
     let resolved = sigil::resolve_staged_program_from_state(
         &module_asts,
         user_ast,
@@ -92,6 +97,7 @@ pub(super) fn compile_sources_with_mode(
         .unwrap_or("");
     populate_error_template_lines(&mut bytecode.error_templates, user_source);
     bytecode.docs = docs;
+    bytecode.signatures = signatures;
     store_cached_bytecode(compile_sources, mode, &bytecode)?;
     Ok(bytecode)
 }

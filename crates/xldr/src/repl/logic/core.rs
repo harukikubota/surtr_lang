@@ -14,7 +14,7 @@ use scar::typed::{
 use scar::types::Ty;
 use sigil::error::ResolveError;
 use sindr::builtin::BUILTIN_METAS;
-use sindr::ir::{DocEntry, DocKind};
+use sindr::ir::{DocEntry, DocKind, SignatureEntry};
 use sindr::policy::CompileUnitKind;
 use spire::ast::{Ast, AstTy, BinOp, ImportSpec, RecordLitArg, Span};
 
@@ -203,11 +203,13 @@ struct PreloadedChunkState {
     scar_checkpoint: scar::ScarCheckpoint,
     vm: eldr::InteractiveVm,
     docs: Vec<DocEntry>,
+    signatures: Vec<SignatureEntry>,
     process_metadata: BTreeMap<String, ReplProcessMetadata>,
     symbols: BTreeSet<String>,
     auto_import_modules: BTreeSet<String>,
     script_runtime_inputs: Vec<String>,
     script_preload_docs: Vec<DocEntry>,
+    script_preload_signatures: Vec<SignatureEntry>,
     import_records: Vec<ReplImportRecord>,
     def_records: Vec<ReplDefRecord>,
 }
@@ -333,6 +335,7 @@ pub struct ReplEngine {
     result_metas: Vec<Option<forge::ChunkMeta>>,
     symbols: BTreeSet<String>,
     docs: Vec<DocEntry>,
+    signatures: Vec<SignatureEntry>,
     process_metadata: BTreeMap<String, ReplProcessMetadata>,
     auto_import_modules: BTreeSet<String>,
     reload_seed: ReplReloadSeed,
@@ -383,6 +386,7 @@ impl ReplEngine {
                 .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
                 .collect(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
             reload_seed: ReplReloadSeed::Empty,
@@ -418,6 +422,7 @@ impl ReplEngine {
             .map_err(EldrLoadError::Load)?;
 
         let docs = bytecode.docs.clone();
+        let signatures = bytecode.signatures.clone();
         let forge_session = forge::ForgeSession::from_bytecode(&bytecode);
         let vm = session::bytecode_interactive_vm(bytecode);
 
@@ -463,6 +468,7 @@ impl ReplEngine {
             result_metas: Vec::new(),
             symbols,
             docs,
+            signatures,
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
             reload_seed: ReplReloadSeed::Empty,
@@ -578,6 +584,7 @@ impl ReplEngine {
             result_metas: Vec::new(),
             symbols: state.symbols,
             docs: state.docs,
+            signatures: state.signatures,
             process_metadata: state.process_metadata,
             auto_import_modules: state.auto_import_modules,
             reload_seed: ReplReloadSeed::Empty,
@@ -591,6 +598,7 @@ impl ReplEngine {
         })
         .map(|mut engine| {
             engine.append_docs(state.script_preload_docs.clone());
+            engine.append_signatures(state.script_preload_signatures.clone());
             engine.sync_scar_fun_index_with_vm();
             engine
         })
@@ -723,6 +731,7 @@ impl ReplEngine {
         };
 
         let docs = crate::collect_doc_entries(&module_stages, &[], None);
+        let signatures = crate::collect_signature_entries(&module_stages, &[], None);
         self.process_metadata = collect_process_metadata(&module_stages);
         let (mut chunk, mut meta) = match self.forge_session.codegen_chunk(typed) {
             Ok(c) => c,
@@ -785,6 +794,7 @@ impl ReplEngine {
             self.insert_surface_symbol(name);
         }
         self.append_docs(docs);
+        self.append_signatures(signatures);
         Ok(())
     }
 
@@ -801,7 +811,6 @@ impl ReplEngine {
                 self.declaration_index = snapshot.declaration_index.clone();
                 self.scar_session.rollback(snapshot.scar_checkpoint.clone());
                 self.sync_scar_fun_index_with_vm();
-                self.append_docs(snapshot.docs.clone());
                 self.process_metadata = collect_process_metadata(&snapshot.module_stages);
 
                 let scope = match sigil::build_scope_for_module(
@@ -905,7 +914,8 @@ impl ReplEngine {
         }
         self.sync_scar_fun_index_with_vm();
         self.process_metadata = collect_process_metadata(&module_stages);
-        self.append_docs(crate::collect_doc_entries(&module_stages, &[], None));
+        // `.eldr` sessions read docs/signatures from persisted chunks rather than
+        // recollecting them from source during scope-only bootstrap.
 
         let scope = match sigil::build_scope_for_module(
             &module_stages,
@@ -2842,6 +2852,20 @@ impl ReplEngine {
         rendered
     }
 
+    fn ambiguous_signature_lines(symbol: &str, entries: &[&SignatureEntry]) -> Vec<String> {
+        let mut rendered = vec![format!("{symbol} has multiple signatures:")];
+        rendered.extend(
+            entries
+                .iter()
+                .map(|entry| format!("  {}", crate::surface_path_name(&entry.qualified_name))),
+        );
+        rendered.push(
+            "Use a qualified name or add type annotations, for example `:sig compare(Int, Int)`."
+                .to_string(),
+        );
+        rendered
+    }
+
     fn handle_doc_typed_call(&self, source_query: &str, query: &TypedCallQuery) -> ReplResult {
         if let Some(message) = self.invalid_attached_extractor_query_message(query) {
             return Self::plain(vec![message]);
@@ -2932,6 +2956,71 @@ impl ReplEngine {
         matches
     }
 
+    fn match_typed_call_signatures<'a>(
+        &'a self,
+        query: &TypedCallQuery,
+    ) -> Vec<&'a SignatureEntry> {
+        if let Some(matches) = self.match_special_form_typed_call_signatures(query) {
+            return matches;
+        }
+        if let Some(matches) = self.match_owner_typed_call_signatures(query) {
+            return matches;
+        }
+
+        let Ok(arg_types) = self.query_arg_types(query.args.as_slice()) else {
+            return Vec::new();
+        };
+        let Some(receiver_ty) = arg_types.first() else {
+            return Vec::new();
+        };
+        let preferred_trait = METHOD_DOC_TRAIT_ALIASES
+            .iter()
+            .find_map(|(method, trait_name)| (*method == query.callee).then_some(*trait_name))
+            .or_else(|| {
+                OPERATOR_DOC_TRAIT_ALIASES
+                    .iter()
+                    .find_map(|(alias, trait_name)| (*alias == query.callee).then_some(*trait_name))
+            });
+        let callee_tail = Self::callee_tail(&query.callee);
+        let callee_is_qualified = Self::is_qualified_symbol(&query.callee);
+        let mut matches = self
+            .signatures
+            .iter()
+            .filter(|entry| entry.kind == DocKind::Function)
+            .filter(|entry| Self::doc_method_tail(&entry.qualified_name) == callee_tail)
+            .filter(|entry| {
+                if !callee_is_qualified {
+                    return true;
+                }
+                entry.qualified_name == query.callee
+                    || entry
+                        .signature
+                        .starts_with(&format!("{}(", query.callee))
+            })
+            .filter(|entry| {
+                let sig = entry.signature.as_str();
+                if sig.starts_with("impl ") {
+                    return sig.contains(&format!(" for {receiver_ty}::{callee_tail}"));
+                }
+                Self::signature_matches_callee(sig, &query.callee)
+            })
+            .filter(|entry| self.signature_accepts_arg_types(&entry.signature, &arg_types))
+            .collect::<Vec<_>>();
+        matches.sort_by_key(|entry| {
+            self.typed_call_signature_rank(entry, preferred_trait, receiver_ty, callee_tail)
+        });
+        if let Some(best_rank) = matches.first().map(|entry| {
+            self.typed_call_signature_rank(entry, preferred_trait, receiver_ty, callee_tail)
+        }) {
+            matches.retain(|entry| {
+                self.typed_call_signature_rank(entry, preferred_trait, receiver_ty, callee_tail)
+                    == best_rank
+            });
+        }
+        matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+        matches
+    }
+
     fn typed_call_doc_rank(
         &self,
         entry: &DocEntry,
@@ -2961,6 +3050,33 @@ impl ReplEngine {
         3
     }
 
+    fn typed_call_signature_rank(
+        &self,
+        entry: &SignatureEntry,
+        preferred_trait: Option<&str>,
+        receiver_ty: &str,
+        callee_tail: &str,
+    ) -> u8 {
+        let signature = entry.signature.as_str();
+        let Some(trait_name) = preferred_trait else {
+            return if signature.starts_with("impl ") { 0 } else { 1 };
+        };
+        if signature.starts_with(&format!(
+            "impl {trait_name} for {receiver_ty}::{callee_tail}"
+        )) {
+            return 0;
+        }
+        if crate::surface_path_name(&entry.qualified_name) == format!("{trait_name}::{callee_tail}")
+            || signature.starts_with(&format!("{trait_name}::{callee_tail}("))
+        {
+            return 1;
+        }
+        if signature.starts_with(&format!("impl {trait_name} for ")) {
+            return 2;
+        }
+        3
+    }
+
     fn match_special_form_typed_call_docs<'a>(
         &'a self,
         query: &TypedCallQuery,
@@ -2969,6 +3085,25 @@ impl ReplEngine {
             "dbg!" => {
                 let mut matches = self
                     .docs
+                    .iter()
+                    .filter(|entry| entry.kind == DocKind::Function)
+                    .filter(|entry| Self::doc_method_tail(&entry.qualified_name) == "dbg!")
+                    .collect::<Vec<_>>();
+                matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+                Some(matches)
+            }
+            _ => None,
+        }
+    }
+
+    fn match_special_form_typed_call_signatures<'a>(
+        &'a self,
+        query: &TypedCallQuery,
+    ) -> Option<Vec<&'a SignatureEntry>> {
+        match query.callee.as_str() {
+            "dbg!" => {
+                let mut matches = self
+                    .signatures
                     .iter()
                     .filter(|entry| entry.kind == DocKind::Function)
                     .filter(|entry| Self::doc_method_tail(&entry.qualified_name) == "dbg!")
@@ -3038,6 +3173,58 @@ impl ReplEngine {
         Some(matches)
     }
 
+    fn match_owner_typed_call_signatures<'a>(
+        &'a self,
+        query: &TypedCallQuery,
+    ) -> Option<Vec<&'a SignatureEntry>> {
+        if let Some(owner) = query.callee.strip_suffix('!') {
+            let decl = self.visible_declaration(owner)?;
+            if decl.kind != sigil::DeclarationKind::Struct {
+                return Some(Vec::new());
+            }
+            let qualified_name = format!("{}::deconstruct", decl.fq_name);
+            let Ok(arg_types) = self.query_arg_types(query.args.as_slice()) else {
+                return Some(Vec::new());
+            };
+            let mut matches = self
+                .signatures
+                .iter()
+                .filter(|entry| entry.kind == DocKind::Function)
+                .filter(|entry| {
+                    crate::surface_path_name(&entry.qualified_name)
+                        == crate::surface_path_name(&qualified_name)
+                })
+                .filter(|entry| {
+                    arg_types.is_empty()
+                        || self.signature_accepts_arg_types(&entry.signature, &arg_types)
+                })
+                .collect::<Vec<_>>();
+            matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+            return Some(matches);
+        }
+
+        let decl = self.visible_declaration(&query.callee)?;
+        if decl.kind != sigil::DeclarationKind::Struct {
+            return None;
+        }
+        let Ok(arg_types) = self.query_arg_types(query.args.as_slice()) else {
+            return Some(Vec::new());
+        };
+        let qualified_name = format!("{}::new", decl.fq_name);
+        let mut matches = self
+            .signatures
+            .iter()
+            .filter(|entry| entry.kind == DocKind::Function)
+            .filter(|entry| {
+                crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(&qualified_name)
+            })
+            .filter(|entry| self.signature_accepts_arg_types(&entry.signature, &arg_types))
+            .collect::<Vec<_>>();
+        matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+        Some(matches)
+    }
+
     fn invalid_attached_extractor_query_message(&self, query: &TypedCallQuery) -> Option<String> {
         query.callee.strip_suffix('!')?;
         None
@@ -3058,6 +3245,13 @@ impl ReplEngine {
         })
     }
 
+    fn special_form_signature_entry(&self, symbol: &str) -> Option<&SignatureEntry> {
+        self.signatures.iter().find(|entry| {
+            entry.kind == DocKind::Function
+                && entry.qualified_name == format!("Bootstrap::{symbol}")
+        })
+    }
+
     fn signature_matches_callee(signature: &str, callee: &str) -> bool {
         signature.starts_with(&format!("{callee}("))
             || signature.contains(&format!("::{callee}("))
@@ -3069,9 +3263,8 @@ impl ReplEngine {
         if symbol == "Tuple" {
             return None;
         }
-        if let Some(entry) = self.special_form_doc_entry(symbol) {
-            return Self::display_signature_for_doc_entry(entry)
-                .map(|signature| (entry.qualified_name.clone(), signature));
+        if let Some(entry) = self.special_form_signature_entry(symbol) {
+            return Some((entry.qualified_name.clone(), entry.signature.clone()));
         }
         let canonical = self
             .visible_helper_doc_alias(symbol)
@@ -3151,17 +3344,15 @@ impl ReplEngine {
             return Some(found);
         }
 
-        if let Some(entry) = self.docs.iter().rev().find(|entry| {
+        if let Some(entry) = self.signatures.iter().rev().find(|entry| {
             qualified_lookup
                 && crate::surface_path_name(&entry.qualified_name)
                     == crate::surface_path_name(&canonical)
         }) {
-            if let Some(signature) = entry.signature.clone() {
-                return Some((entry.qualified_name.clone(), signature));
-            }
+            return Some((entry.qualified_name.clone(), entry.signature.clone()));
         }
 
-        if let Some(entry) = self.docs.iter().rev().find(|entry| {
+        if let Some(entry) = self.signatures.iter().rev().find(|entry| {
             if !Self::symbol_matches(&entry.qualified_name, &canonical) {
                 return false;
             }
@@ -3174,9 +3365,7 @@ impl ReplEngine {
                 false
             }
         }) {
-            if let Some(signature) = entry.signature.clone() {
-                return Some((entry.qualified_name.clone(), signature));
-            }
+            return Some((entry.qualified_name.clone(), entry.signature.clone()));
         }
 
         None
@@ -4666,15 +4855,12 @@ impl ReplEngine {
                 return rendered;
             }
         }
-        let matches = self.match_typed_call_docs(query);
+        let matches = self.match_typed_call_signatures(query);
         match matches.as_slice() {
             [entry] => {
                 let defined = Self::render_signature_with_qualified_name(
                     &entry.qualified_name,
-                    entry
-                        .signature
-                        .clone()
-                        .unwrap_or_else(|| entry.qualified_name.clone()),
+                    entry.signature.clone(),
                 );
                 let arg_types = match self.query_arg_ast_types(query.args.as_slice()) {
                     Ok(arg_types) => arg_types,
@@ -4688,6 +4874,21 @@ impl ReplEngine {
                     let specialized_return = self
                         .specialize_signature_return(&defined, &arg_types)
                         .map(|ty| format_query_ty(&ty))
+                        .map(|ret| {
+                            if ret == "Self" {
+                                arg_types
+                                    .first()
+                                    .map(format_query_ty)
+                                    .unwrap_or(ret)
+                            } else {
+                                ret
+                            }
+                        })
+                        .or_else(|| {
+                            signature_return_type(&defined)
+                                .filter(|ret| *ret == "Self")
+                                .and_then(|_| arg_types.first().map(format_query_ty))
+                        })
                         .unwrap_or_else(|| {
                             signature_return_type(&defined).unwrap_or("_").to_string()
                         });
@@ -4710,7 +4911,7 @@ impl ReplEngine {
                 .unwrap_or_else(|| {
                     Self::plain(vec![format!("No signature found for {}", source_query)])
                 }),
-            entries => Self::plain(Self::ambiguous_doc_lines(source_query, entries)),
+            entries => Self::plain(Self::ambiguous_signature_lines(source_query, entries)),
         }
     }
 
@@ -4789,19 +4990,14 @@ impl ReplEngine {
         }
 
         let mut matches = self
-            .docs
+            .signatures
             .iter()
             .filter(|entry| entry.kind == DocKind::Function)
             .filter(|entry| {
                 crate::surface_path_name(&entry.qualified_name)
                     == crate::surface_path_name(&qualified_name)
             })
-            .filter_map(|entry| {
-                entry
-                    .signature
-                    .clone()
-                    .map(|signature| (entry.qualified_name.clone(), signature))
-            })
+            .map(|entry| (entry.qualified_name.clone(), entry.signature.clone()))
             .collect::<Vec<_>>();
         matches.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
         if let Some(first) = matches.into_iter().next() {
@@ -4834,23 +5030,21 @@ impl ReplEngine {
     }
 
     fn enum_variant_signature_lines(&self, decl: &sigil::DeclarationEntry) -> Option<Vec<String>> {
-        let entry = self.docs.iter().rev().find(|entry| {
+        let entry = self.signatures.iter().rev().find(|entry| {
             entry.kind == DocKind::Type
                 && crate::surface_path_name(&entry.qualified_name)
                     == crate::surface_path_name(&decl.fq_name)
         });
         if let Some(entry) = entry {
-            if let Some(signature) = entry.signature.as_deref() {
-                if let Some((_owner_surface, variants_src)) =
-                    Self::parse_defenum_signature(signature)
-                {
-                    let variants = Self::split_top_level_items(variants_src)
-                        .into_iter()
-                        .map(|variant| Self::render_enum_variant_listing(&decl.fq_name, &variant))
-                        .collect::<Vec<_>>();
-                    if !variants.is_empty() {
-                        return Some(variants);
-                    }
+            if let Some((_owner_surface, variants_src)) =
+                Self::parse_defenum_signature(&entry.signature)
+            {
+                let variants = Self::split_top_level_items(variants_src)
+                    .into_iter()
+                    .map(|variant| Self::render_enum_variant_listing(&decl.fq_name, &variant))
+                    .collect::<Vec<_>>();
+                if !variants.is_empty() {
+                    return Some(variants);
                 }
             }
         }
@@ -5493,8 +5687,14 @@ impl ReplEngine {
         let (param_types, return_ty) = Self::signature_param_asts_and_return(signature)?;
         let self_ty = Self::self_type_from_signature(signature)
             .or_else(|| Self::implicit_self_type_from_args(&param_types, arg_types));
-        let substitutions =
-            Self::build_type_substitutions(&param_types, arg_types, self_ty.as_ref())?;
+        let Some(substitutions) =
+            Self::build_type_substitutions(&param_types, arg_types, self_ty.as_ref())
+        else {
+            return match &return_ty {
+                AstTy::Named(_, name) if name == "Self" => self_ty,
+                _ => None,
+            };
+        };
         Some(Self::substitute_query_ty(
             &return_ty,
             &substitutions,
@@ -6156,6 +6356,15 @@ impl ReplEngine {
         }
     }
 
+    fn append_signatures(&mut self, signatures: Vec<SignatureEntry>) {
+        for signature in signatures {
+            let exists = self.signatures.iter().any(|existing| existing == &signature);
+            if !exists {
+                self.signatures.push(signature);
+            }
+        }
+    }
+
     /// Evaluate one line and return a structured `ReplResult`.
     ///
     /// The unified entry point used by both CLI and TUI.
@@ -6323,6 +6532,8 @@ impl ReplEngine {
         };
 
         let docs = crate::collect_doc_entries(&[], &ast, Some(self.repl_module_path.as_str()));
+        let signatures =
+            crate::collect_signature_entries(&[], &ast, Some(self.repl_module_path.as_str()));
         let resolved = match self.sigil_session.resolve(ast.clone()) {
             Ok(r) => r,
             Err(e) => {
@@ -6535,6 +6746,7 @@ impl ReplEngine {
                     self.insert_surface_symbol(name);
                 }
                 self.append_docs(docs);
+                self.append_signatures(signatures);
                 self.history_entries.push(ReplHistoryEntry {
                     line: committed_line,
                     source: committed_source.clone(),
@@ -6713,6 +6925,7 @@ impl ReplEngine {
 
         let mut bytecode = self.vm.snapshot_bytecode();
         bytecode.docs = self.docs.clone();
+        bytecode.signatures = self.signatures.clone();
         match bytecode.encode() {
             Err(e) => Self::plain(vec![format!("Error encoding bytecode: {}", e)]),
             Ok(bytes) => match fs::write(&path, bytes) {
@@ -6840,9 +7053,24 @@ fn compile_repl_preload_from_module_stages(
         &user_ast,
         Some(compile_sources.user_module_path.as_str()),
     );
+    let script_preload_signatures = crate::collect_signature_entries(
+        &[],
+        &user_ast,
+        Some(compile_sources.user_module_path.as_str()),
+    );
     let process_metadata = collect_process_metadata(&module_stage_asts);
     let docs = crate::collect_doc_entries_with_base(
         &snapshot.docs,
+        if module_stage_asts.len() > snapshot.default_stage_count {
+            &module_stage_asts[snapshot.default_stage_count..]
+        } else {
+            &[]
+        },
+        &user_ast,
+        Some(compile_sources.user_module_path.as_str()),
+    );
+    let signatures = crate::collect_signature_entries_with_base(
+        &snapshot.signatures,
         if module_stage_asts.len() > snapshot.default_stage_count {
             &module_stage_asts[snapshot.default_stage_count..]
         } else {
@@ -6969,6 +7197,7 @@ fn compile_repl_preload_from_module_stages(
             ),
         })?;
     chunk.docs = docs.clone();
+    chunk.signatures = signatures.clone();
     for stage in &raw_module_stages {
         for module in stage {
             if let Some(source) = compile_sources.sources.source(module.source_id) {
@@ -7051,11 +7280,13 @@ fn compile_repl_preload_from_module_stages(
         scar_checkpoint: scar_session.checkpoint(),
         vm,
         docs,
+        signatures,
         process_metadata,
         symbols,
         auto_import_modules,
         script_runtime_inputs,
         script_preload_docs,
+        script_preload_signatures,
         import_records,
         def_records,
     })
@@ -8145,6 +8376,7 @@ mod tests {
             callable_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         }
@@ -8185,6 +8417,7 @@ mod tests {
                 .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
                 .collect(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
             reload_seed: ReplReloadSeed::Empty,
@@ -8271,6 +8504,7 @@ mod tests {
                     callable_templates: Vec::new(),
                     functions: Vec::new(),
                     docs: Vec::new(),
+                    signatures: Vec::new(),
                     runtime_process_specs: Vec::new(),
                     runtime_boot_plan: Default::default(),
                 },

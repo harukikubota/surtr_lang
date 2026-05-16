@@ -3511,6 +3511,7 @@ impl VM {
             callable_templates,
             functions,
             docs,
+            signatures: _,
             runtime_process_specs,
             runtime_boot_plan,
         } = chunk;
@@ -7921,6 +7922,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -8782,6 +8784,7 @@ mod tests {
             callable_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: RuntimeBootPlan::default(),
         };
@@ -9177,6 +9180,7 @@ mod tests {
             callable_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         });
@@ -9842,6 +9846,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -9870,6 +9875,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -9920,6 +9926,7 @@ mod tests {
             }],
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -9970,6 +9977,7 @@ mod tests {
                 }],
                 functions: Vec::new(),
                 docs: Vec::new(),
+                signatures: Vec::new(),
                 runtime_process_specs: Vec::new(),
                 runtime_boot_plan: Default::default(),
             })
@@ -10037,6 +10045,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -10065,6 +10074,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -10097,6 +10107,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: vec![function_entry(0, 2, 1, 0, Some("new"))],
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -10139,6 +10150,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -10168,6 +10180,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -10205,6 +10218,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -10249,6 +10263,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -10378,6 +10393,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -10418,6 +10434,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };

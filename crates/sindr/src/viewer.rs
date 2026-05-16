@@ -878,6 +878,7 @@ mod tests {
                 signature: Some("def entry() -> Unit".into()),
                 doc: "sample".into(),
             }],
+            signatures: Vec::new(),
             compile_info: CompileInfo::default(),
             labels: vec![LabelEntry {
                 name: "entry".into(),

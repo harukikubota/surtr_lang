@@ -559,6 +559,12 @@ pub(crate) fn compile_source(
         &user_ast,
         Some(compile_sources.user_module_path.as_str()),
     );
+    let signatures = xldr::collect_signature_entries_with_base(
+        &std_snapshot.signatures,
+        suffix_module_stages,
+        &user_ast,
+        Some(compile_sources.user_module_path.as_str()),
+    );
 
     let mut cached_prefix: Option<SharedScriptCompilePrefix> = None;
     let rebuilt_declaration_index;
@@ -675,6 +681,7 @@ pub(crate) fn compile_source(
 
     populate_error_template_lines(&mut bytecode.error_templates, user_source);
     bytecode.docs = docs;
+    bytecode.signatures = signatures;
     bytecode.compile_info.bytecode_version = 1;
     bytecode.compile_info.debug_level = 2;
     bytecode.compile_info.num_locals = bytecode.num_locals;

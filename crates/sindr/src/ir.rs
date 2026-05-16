@@ -708,6 +708,9 @@ pub struct Bytecode {
     /// Symbol-level documentation carried from `@doc` through `.eldr`.
     #[serde(default)]
     pub docs: Vec<DocEntry>,
+    /// Signature-only surface metadata used by REPL `:sig`.
+    #[serde(default)]
+    pub signatures: Vec<SignatureEntry>,
     #[serde(default)]
     pub compile_info: CompileInfo,
     #[serde(default)]
@@ -745,6 +748,7 @@ impl Default for Bytecode {
             functions: Vec::new(),
             source_map: None,
             docs: Vec::new(),
+            signatures: Vec::new(),
             compile_info: CompileInfo::default(),
             labels: Vec::new(),
             imports: Vec::new(),
@@ -779,6 +783,7 @@ pub struct BytecodeChunk {
     pub callable_templates: Vec<CallableTemplate>,
     pub functions: Vec<FunctionEntry>,
     pub docs: Vec<DocEntry>,
+    pub signatures: Vec<SignatureEntry>,
     pub runtime_process_specs: Vec<RuntimeProcessSpec>,
     pub runtime_boot_plan: RuntimeBootPlan,
 }
@@ -881,6 +886,15 @@ pub struct DocEntry {
     pub module_path: String,
     pub signature: Option<String>,
     pub doc: String,
+}
+
+/// Persisted signature entry stored in `.eldr` `SigT` chunks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignatureEntry {
+    pub qualified_name: String,
+    pub kind: DocKind,
+    pub module_path: String,
+    pub signature: String,
 }
 
 /// Constant pool entry.
@@ -1096,6 +1110,7 @@ impl Bytecode {
     const CHUNK_SOURCES: [u8; 4] = *b"SrcP";
     const CHUNK_PC_SPANS: [u8; 4] = *b"PcSp";
     const CHUNK_DOCS: [u8; 4] = *b"Docs";
+    const CHUNK_SIGNATURES: [u8; 4] = *b"SigT";
     const CHUNK_PROCESS_SPECS: [u8; 4] = *b"Proc";
     const CHUNK_BOOT_PLAN: [u8; 4] = *b"Boot";
 
@@ -1160,6 +1175,12 @@ impl Bytecode {
 
         if !bytecode.docs.is_empty() {
             chunks.push((Self::CHUNK_DOCS, serialize_chunk(&bytecode.docs)?));
+        }
+        if !bytecode.signatures.is_empty() {
+            chunks.push((
+                Self::CHUNK_SIGNATURES,
+                serialize_chunk(&bytecode.signatures)?,
+            ));
         }
 
         let num_chunks = chunks.len() as u32;
@@ -1226,6 +1247,8 @@ fn decode_payloads(
     let sources = deserialize_required::<Vec<SourceFileEntry>>(payloads, "SrcP")?;
     let pc_spans = deserialize_required::<Vec<PcSpanEntry>>(payloads, "PcSp")?;
     let docs = deserialize_optional::<Vec<DocEntry>>(payloads, "Docs")?.unwrap_or_default();
+    let signatures =
+        deserialize_optional::<Vec<SignatureEntry>>(payloads, "SigT")?.unwrap_or_default();
     let runtime_process_specs =
         deserialize_optional::<RuntimeProcessSpecTable>(payloads, "Proc")?.unwrap_or_default();
     let runtime_boot_plan =
@@ -1242,6 +1265,7 @@ fn decode_payloads(
         functions,
         source_map: rebuild_source_map(&spans, &pc_spans),
         docs,
+        signatures,
         compile_info,
         labels,
         imports,
@@ -1406,6 +1430,7 @@ fn is_known_chunk_tag(tag: &str) -> bool {
             | "Proc"
             | "Boot"
             | "Docs"
+            | "SigT"
     )
 }
 
@@ -1841,6 +1866,7 @@ mod tests {
                 signature: Some("type Int".to_string()),
                 doc: "Builtin Int type.".to_string(),
             }],
+            signatures: Vec::new(),
             compile_info: CompileInfo {
                 num_locals: 1,
                 source_hash: Some(stable_hash_hex("let x = 42")),

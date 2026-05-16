@@ -28,7 +28,7 @@ pub use repl::logic::core::{EldrLoadError, ReplEngine, ReplLoadError};
 pub use repl::ui::cli::{cli_command, BannerMode, ReplOptions};
 use serde::{Deserialize, Serialize};
 use sindr::builtin::{BUILTIN_METAS, BUILTIN_TYPE_METAS};
-use sindr::ir::{stable_hash_hex, Bytecode, DocEntry, DocKind};
+use sindr::ir::{stable_hash_hex, Bytecode, DocEntry, DocKind, SignatureEntry};
 use sindr::policy::{CompileUnitKind, EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
 
 pub const MODULE_SPAN_STRIDE: usize = 1_000_000;
@@ -750,6 +750,282 @@ fn collect_doc_entries_for_ast(
     }
 }
 
+fn push_signature_entry(
+    out: &mut Vec<SignatureEntry>,
+    module_path: &str,
+    qualified_name: String,
+    kind: DocKind,
+    signature: String,
+) {
+    out.push(SignatureEntry {
+        qualified_name,
+        kind,
+        module_path: surface_path_name(module_path).to_string(),
+        signature,
+    });
+}
+
+fn collect_signature_entries_for_ast(
+    ast: &[spire::ast::Ast],
+    module_path: &str,
+    out: &mut Vec<SignatureEntry>,
+) {
+    for stmt in ast {
+        match stmt {
+            spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Function,
+                    format_fun_signature(name, type_params, params, ret_ty),
+                );
+            }
+            spire::ast::Ast::BuiltinDecl(_, name, params, ret_ty, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Function,
+                    format_fun_signature(name, &[], params, ret_ty),
+                );
+            }
+            spire::ast::Ast::IntrinsicDecl(_, name, signature, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Function,
+                    signature.clone(),
+                );
+            }
+            spire::ast::Ast::ExtractorDef(_, name, type_params, param, ret_ty, _, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Function,
+                    format_extractor_signature(name, type_params, param, ret_ty),
+                );
+            }
+            spire::ast::Ast::BuiltinExtractorDecl(_, name, param, ret_ty, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Function,
+                    format_extractor_signature(name, &[], param, ret_ty),
+                );
+            }
+            spire::ast::Ast::TraitDef(_, name, _type_params, methods, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Type,
+                    format!(
+                        "trait {} {{ {} }}",
+                        surface_path_name(name),
+                        methods
+                            .iter()
+                            .map(|method| format_fun_signature(
+                                &method.name,
+                                &method.type_params,
+                                &method.params,
+                                &Some(method.ret_ty.clone()),
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                );
+                for method in methods {
+                    push_signature_entry(
+                        out,
+                        module_path,
+                        qualified_name(module_path, &format!("{name}::{}", method.name)),
+                        DocKind::Function,
+                        format_trait_method_signature(name, method),
+                    );
+                }
+            }
+            spire::ast::Ast::StructDef(_, name, type_params, _fields, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Type,
+                    format_generic_struct_signature(name, type_params),
+                );
+            }
+            spire::ast::Ast::RecordDef(_, name, _, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Type,
+                    format_record_signature(name),
+                );
+            }
+            spire::ast::Ast::ImplDef(_, target, methods, _) => {
+                for method in methods {
+                    match method {
+                        spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, _) => {
+                            let qualified_method_name =
+                                if surface_path_name(module_path) == surface_path_name(target) {
+                                    format!("{}::{name}", surface_path_name(target))
+                                } else {
+                                    qualified_name(module_path, &format!("{target}::{name}"))
+                                };
+                            push_signature_entry(
+                                out,
+                                module_path,
+                                qualified_method_name,
+                                DocKind::Function,
+                                format_impl_method_signature(
+                                    target, name, type_params, params, ret_ty,
+                                ),
+                            );
+                        }
+                        spire::ast::Ast::BuiltinDecl(_, name, params, ret_ty, _) => {
+                            let qualified_method_name =
+                                if surface_path_name(module_path) == surface_path_name(target) {
+                                    format!("{}::{name}", surface_path_name(target))
+                                } else {
+                                    qualified_name(module_path, &format!("{target}::{name}"))
+                                };
+                            push_signature_entry(
+                                out,
+                                module_path,
+                                qualified_method_name,
+                                DocKind::Function,
+                                format_impl_method_signature(target, name, &[], params, ret_ty),
+                            );
+                        }
+                        spire::ast::Ast::ExtractorDef(
+                            _,
+                            name,
+                            type_params,
+                            param,
+                            ret_ty,
+                            _,
+                            _,
+                        ) => {
+                            let qualified_method_name =
+                                if surface_path_name(module_path) == surface_path_name(target) {
+                                    format!("{}::{name}", surface_path_name(target))
+                                } else {
+                                    qualified_name(module_path, &format!("{target}::{name}"))
+                                };
+                            push_signature_entry(
+                                out,
+                                module_path,
+                                qualified_method_name,
+                                DocKind::Function,
+                                format_impl_extractor_signature(
+                                    target, name, type_params, param, ret_ty,
+                                ),
+                            );
+                        }
+                        spire::ast::Ast::BuiltinExtractorDecl(_, name, param, ret_ty, _) => {
+                            let qualified_method_name =
+                                if surface_path_name(module_path) == surface_path_name(target) {
+                                    format!("{}::{name}", surface_path_name(target))
+                                } else {
+                                    qualified_name(module_path, &format!("{target}::{name}"))
+                                };
+                            push_signature_entry(
+                                out,
+                                module_path,
+                                qualified_method_name,
+                                DocKind::Function,
+                                format_impl_extractor_signature(target, name, &[], param, ret_ty),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            spire::ast::Ast::TraitImplDef(_, trait_name, trait_args, target_ty, methods, _) => {
+                let rendered = format_trait_impl_signature(trait_name, trait_args, target_ty);
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, &rendered),
+                    DocKind::Type,
+                    rendered.clone(),
+                );
+                for method in methods {
+                    let method_parts = match method {
+                        spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, _) => {
+                            Some((name, type_params.as_slice(), params.as_slice(), ret_ty))
+                        }
+                        spire::ast::Ast::BuiltinDecl(_, name, params, ret_ty, _) => {
+                            Some((name, [].as_slice(), params.as_slice(), ret_ty))
+                        }
+                        _ => None,
+                    };
+                    if let Some((name, type_params, params, ret_ty)) = method_parts {
+                        let rendered = format_trait_impl_method_signature(
+                            trait_name, trait_args, target_ty, name, type_params, params, ret_ty,
+                        );
+                        push_signature_entry(
+                            out,
+                            module_path,
+                            qualified_name(
+                                module_path,
+                                &format!(
+                                    "{}::{}",
+                                    format_trait_impl_signature(trait_name, trait_args, target_ty),
+                                    name
+                                ),
+                            ),
+                            DocKind::Function,
+                            rendered,
+                        );
+                    }
+                }
+            }
+            spire::ast::Ast::BuiltinTypeDecl(_, head, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, &head.name),
+                    DocKind::Type,
+                    format_builtin_type_signature(head),
+                );
+            }
+            spire::ast::Ast::ResultCtorDecl(_, name, param_ty, ret_ty, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Function,
+                    format_result_ctor_signature(name, param_ty, ret_ty),
+                );
+            }
+            spire::ast::Ast::DeferrorDef(_, name, fields, _, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Type,
+                    format_deferror_signature(name, fields),
+                );
+            }
+            spire::ast::Ast::EnumDef(_, name, _, variants, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Type,
+                    format_defenum_signature(name, variants),
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Collect doc metadata from lowered std/user modules so it can be attached to
 /// REPL chunks and serialized `.eldr` artifacts.
 pub fn collect_doc_entries(
@@ -760,6 +1036,21 @@ pub fn collect_doc_entries(
     let mut docs = Vec::new();
     collect_doc_entries_into(&mut docs, module_stages, user_ast, user_module_path);
     docs
+}
+
+pub fn collect_signature_entries(
+    module_stages: &[Vec<sigil::StagedModuleAst>],
+    user_ast: &[spire::ast::Ast],
+    user_module_path: Option<&str>,
+) -> Vec<SignatureEntry> {
+    let mut signatures = Vec::new();
+    collect_signature_entries_into(
+        &mut signatures,
+        module_stages,
+        user_ast,
+        user_module_path,
+    );
+    signatures
 }
 
 /// Collect doc metadata while reusing already-collected prefix docs, such as
@@ -773,6 +1064,22 @@ pub fn collect_doc_entries_with_base(
     let mut docs = base_docs.to_vec();
     collect_doc_entries_into(&mut docs, module_stages, user_ast, user_module_path);
     docs
+}
+
+pub fn collect_signature_entries_with_base(
+    base_signatures: &[SignatureEntry],
+    module_stages: &[Vec<sigil::StagedModuleAst>],
+    user_ast: &[spire::ast::Ast],
+    user_module_path: Option<&str>,
+) -> Vec<SignatureEntry> {
+    let mut signatures = base_signatures.to_vec();
+    collect_signature_entries_into(
+        &mut signatures,
+        module_stages,
+        user_ast,
+        user_module_path,
+    );
+    signatures
 }
 
 fn collect_doc_entries_into(
@@ -801,6 +1108,29 @@ fn collect_doc_entries_into(
     }
 
     collect_doc_entries_for_ast(user_ast, user_module_path.unwrap_or_default(), docs);
+}
+
+fn collect_signature_entries_into(
+    signatures: &mut Vec<SignatureEntry>,
+    module_stages: &[Vec<sigil::StagedModuleAst>],
+    user_ast: &[spire::ast::Ast],
+    user_module_path: Option<&str>,
+) {
+    for stage in module_stages {
+        for module in stage {
+            let doc_module_path = module
+                .doc_module_path
+                .as_deref()
+                .unwrap_or(module.module_path.as_str());
+            collect_signature_entries_for_ast(&module.ast, doc_module_path, signatures);
+        }
+    }
+
+    collect_signature_entries_for_ast(
+        user_ast,
+        user_module_path.unwrap_or_default(),
+        signatures,
+    );
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1159,11 +1489,12 @@ pub struct DefaultStdlibSnapshot {
     pub scar_checkpoint: scar::ScarCheckpoint,
     pub bytecode: forge::bytecode::Bytecode,
     pub docs: Vec<DocEntry>,
+    pub signatures: Vec<SignatureEntry>,
     pub auto_import_modules: BTreeSet<String>,
     pub default_stage_count: usize,
 }
 
-const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 5;
+const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 6;
 const TEST_SEMANTIC_PREFIX_CACHE_SCHEMA: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1180,6 +1511,7 @@ struct CachedStdlibSemanticPayload {
     scar_checkpoint: scar::ScarCheckpoint,
     bytecode: Bytecode,
     docs: Vec<DocEntry>,
+    signatures: Vec<SignatureEntry>,
     auto_import_modules: BTreeSet<String>,
     default_stage_count: usize,
 }
@@ -1366,6 +1698,7 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
         message: e.message(),
     })?;
     let docs = collect_doc_entries(&module_stages, &[], None);
+    let signatures = collect_signature_entries(&module_stages, &[], None);
     let auto_import_modules = module_stages
         .iter()
         .flat_map(|stage| stage.iter())
@@ -1385,6 +1718,7 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
                 scar_checkpoint: payload.scar_checkpoint,
                 bytecode: payload.bytecode,
                 docs: payload.docs,
+                signatures: payload.signatures,
                 auto_import_modules: payload.auto_import_modules,
                 default_stage_count: payload.default_stage_count,
             });
@@ -1438,6 +1772,7 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
             .map(|qualified_name| (qualified_name, entry.fun_idx))
     }));
     bytecode.docs = docs.clone();
+    bytecode.signatures = signatures.clone();
     let next_fun_idx = bytecode
         .functions
         .iter()
@@ -1455,6 +1790,7 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
         scar_checkpoint: scar_session.checkpoint(),
         bytecode,
         docs,
+        signatures,
         auto_import_modules,
         module_stages,
     };
@@ -1467,6 +1803,7 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
             scar_checkpoint: snapshot.scar_checkpoint.clone(),
             bytecode: snapshot.bytecode.clone(),
             docs: snapshot.docs.clone(),
+            signatures: snapshot.signatures.clone(),
             auto_import_modules: snapshot.auto_import_modules.clone(),
             default_stage_count: snapshot.default_stage_count,
         },
