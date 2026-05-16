@@ -124,6 +124,7 @@ impl Completer for ReplHelper {
             ":h",
             ":quit",
             ":exit",
+            ":q",
             ":doc",
             ":sig",
             ":info",

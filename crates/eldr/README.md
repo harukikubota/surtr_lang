@@ -20,6 +20,8 @@ Spire -> Sigil -> Scar -> Forge -> Eldr
 - Manage operand stack and local slots
 - Dispatch builtins by `builtin_id`
 - Use `TypeRegistry` for runtime display/metadata lookup
+- Manage process runtime tables, scheduler-backed waits, and PID capabilities
+- Provide interactive VM snapshots for Xldr/REPL use
 - Report `RuntimeError` for execution-time failures
 
 ## Non-responsibilities

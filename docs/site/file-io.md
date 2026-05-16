@@ -1,7 +1,7 @@
 # File I/O
 
 `File` は Surtr の UTF-8 テキスト専用ファイル I/O モジュールです。  
-source 上の正本は [../../lib/file.srt](/Users/haruca/work/rust/surtr/lib/file.srt) にあります。
+source 上の正本は [`../../lib/file.srt`](../../lib/file.srt) にあります。
 
 `File` は auto import されません。使うときは明示 `import File` するか、`File::read(...)` のように修飾して呼びます。
 

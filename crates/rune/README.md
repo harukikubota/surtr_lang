@@ -18,11 +18,17 @@ Spire -> Sigil -> Scar -> Forge -> Eldr
 
 ```bash
 surtr --version
-surtr run <file.srt|file.eldr> [--entry <name>] [--vm-dump <path>] [--vm-dump-on error|always]
+surtr check <file.srt> [--format json]
+surtr run <file.srt|file.eldr> [--entry <name>] [--vm-dump <path>] [--vm-dump-on error|always] [--vm-stats] [--vm-stats-json] [--trace-opcode] [--trace-call] [--trace-limit <n>] [--trace-filter <csv>] [--phase-times] [--error-context verbose] [-- <arg>...]
+surtr test [--quiet|-q] <lib-relative-name|--all>
 surtr repl [--quiet] [--banner] [--version] [--module <file.srt>] [--script <file.srt>]
 surtr build <file.srt> [output.eldr]
-surtr dump <file.eldr> [--format json]
+surtr dump <file.eldr|entry.srt> [--format json|viewer-json] [--entry <name>] [--opcode-histogram] [--peephole-candidates]
+surtr tui [file.eldr]
 ```
+
+`dump --opcode-histogram` and `dump --peephole-candidates` are available only with
+`--format json`; `viewer-json` is reserved for the UI viewer model.
 
 ## Responsibilities
 
@@ -31,7 +37,7 @@ surtr dump <file.eldr> [--format json]
 - Build `.eldr` bytecode files
 - Run compiled `.eldr` bytecode files
 - Dispatch `surtr repl` to `xldr`
-- Dump `.eldr` metadata/bytecode as JSON (`jq` friendly)
+- Dump `.eldr` metadata/bytecode or `.srt` entry-source bytecode as `json` / `viewer-json` (`jq` friendly)
 - Convert phase errors into human-readable diagnostics
 - Exit with non-zero status on failure
 
@@ -53,4 +59,6 @@ cargo run -p rune -- repl --script main.srt
 cargo run -p rune -- build main.srt main.eldr
 cargo run -p rune -- run main.eldr
 cargo run -p rune -- dump main.eldr --format json | jq .
+cargo run -p rune -- dump main.srt --format viewer-json > viewer.json
+cargo run -p rune -- test --all
 ```

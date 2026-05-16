@@ -2,6 +2,8 @@
 JSON abstract syntax tree used by the standard library.
 `Object` stores values in `HashMap<JsonValue>`, so keys are always `String`
 and visible ordering follows the `HashMap` deterministic key order.
+`Json::parse` / `Json::stringify` define the text boundary; `Encode` and
+`Decode` bridge typed Surtr values to this representation.
 """
 defenum JsonValue {
   Null,
@@ -13,14 +15,23 @@ defenum JsonValue {
   Object(HashMap<JsonValue>),
 }
 
+@doc """
+Error returned when JSON text cannot be parsed.
+"""
 deferror JsonParseError(line: Int, column: Int, detail: String) {
   "json parse error at #{line}:#{column}: #{detail}"
 }
 
+@doc """
+Error returned when a `JsonValue` does not match the expected shape.
+"""
 deferror JsonDecodeError(path: String, expected: String, got: String) {
   "json decode error at #{path}: expected #{expected}, got #{got}"
 }
 
+@doc """
+Error returned when a `JsonValue` cannot be serialized as JSON text.
+"""
 deferror JsonEncodeError(detail: String) {
   "json encode error: #{detail}"
 }
@@ -57,6 +68,11 @@ defmod Json {
     Json::stringify(value)
   }
 
+  @doc """
+  Read an object field by key.
+  Returns `Err(JsonDecodeError(...))` when the value is not an object or the
+  field is missing.
+  """
   def get(value: JsonValue, key: String) -> Result<JsonValue, JsonDecodeError> {
     match value {
       JsonValue::Object(map) => Result::map_err(HashMap::get(map, key), JsonDecodeError("$." ++ key, "field", "missing")),
@@ -64,6 +80,11 @@ defmod Json {
     }
   }
 
+  @doc """
+  Read an array element by index.
+  Returns `Err(JsonDecodeError(...))` when the value is not an array or the
+  index is missing.
+  """
   def at(value: JsonValue, index: Int) -> Result<JsonValue, JsonDecodeError> {
     match value {
       JsonValue::Array(values) => Result::map_err(List::at(values, index), JsonDecodeError("$[#{index}]", "array index", "missing")),
@@ -71,6 +92,9 @@ defmod Json {
     }
   }
 
+  @doc """
+  Return the JSON kind name used in decode error messages.
+  """
   def kind(value: JsonValue) -> String {
     match value {
       JsonValue::Null => "null",
@@ -83,6 +107,9 @@ defmod Json {
     }
   }
 
+  @doc """
+  Decode a JSON string value.
+  """
   def as_string(value: JsonValue) -> Result<String, JsonDecodeError> {
     match value {
       JsonValue::String(text) => Ok(text),
@@ -90,6 +117,9 @@ defmod Json {
     }
   }
 
+  @doc """
+  Decode a JSON integer value.
+  """
   def as_int(value: JsonValue) -> Result<Int, JsonDecodeError> {
     match value {
       JsonValue::Int(n) => Ok(n),
@@ -97,6 +127,9 @@ defmod Json {
     }
   }
 
+  @doc """
+  Decode a JSON floating-point value.
+  """
   def as_float(value: JsonValue) -> Result<Float, JsonDecodeError> {
     match value {
       JsonValue::Float(n) => Ok(n),
@@ -104,6 +137,9 @@ defmod Json {
     }
   }
 
+  @doc """
+  Decode a JSON boolean value.
+  """
   def as_bool(value: JsonValue) -> Result<Boolean, JsonDecodeError> {
     match value {
       JsonValue::Bool(value) => Ok(value),
@@ -111,6 +147,9 @@ defmod Json {
     }
   }
 
+  @doc """
+  Decode a JSON array value.
+  """
   def as_array(value: JsonValue) -> Result<List<JsonValue>, JsonDecodeError> {
     match value {
       JsonValue::Array(values) => Ok(values),
@@ -118,6 +157,9 @@ defmod Json {
     }
   }
 
+  @doc """
+  Decode a JSON object value.
+  """
   def as_object(value: JsonValue) -> Result<HashMap<JsonValue>, JsonDecodeError> {
     match value {
       JsonValue::Object(map) => Ok(map),
@@ -138,60 +180,90 @@ impl JsonValue {
 }
 
 impl Decode<JsonValue> for String {
+  @doc """
+  Parse a JSON text string into `JsonValue`.
+  """
   def decode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
     Json::decode(self)
   }
 }
 
 impl Decode<String> for JsonValue {
+  @doc """
+  Decode a `JsonValue::String` through the generic `Decode` trait.
+  """
   def decode(self: Self, to: TypeRef<String>) -> Result<String, Error> {
     Json::as_string(self)
   }
 }
 
 impl Decode<Int> for JsonValue {
+  @doc """
+  Decode a `JsonValue::Int` through the generic `Decode` trait.
+  """
   def decode(self: Self, to: TypeRef<Int>) -> Result<Int, Error> {
     Json::as_int(self)
   }
 }
 
 impl Decode<Float> for JsonValue {
+  @doc """
+  Decode a `JsonValue::Float` through the generic `Decode` trait.
+  """
   def decode(self: Self, to: TypeRef<Float>) -> Result<Float, Error> {
     Json::as_float(self)
   }
 }
 
 impl Decode<Boolean> for JsonValue {
+  @doc """
+  Decode a `JsonValue::Bool` through the generic `Decode` trait.
+  """
   def decode(self: Self, to: TypeRef<Boolean>) -> Result<Boolean, Error> {
     Json::as_bool(self)
   }
 }
 
 impl Encode<JsonValue> for JsonValue {
+  @doc """
+  Keep an existing `JsonValue` unchanged when encoding to JSON.
+  """
   def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
     Ok(self)
   }
 }
 
 impl Encode<JsonValue> for String {
+  @doc """
+  Encode a string as `JsonValue::String`.
+  """
   def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
     Ok(JsonValue::String(self))
   }
 }
 
 impl Encode<JsonValue> for Int {
+  @doc """
+  Encode an integer as `JsonValue::Int`.
+  """
   def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
     Ok(JsonValue::Int(self))
   }
 }
 
 impl Encode<JsonValue> for Float {
+  @doc """
+  Encode a floating-point value as `JsonValue::Float`.
+  """
   def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
     Ok(JsonValue::Float(self))
   }
 }
 
 impl Encode<JsonValue> for Boolean {
+  @doc """
+  Encode a boolean as `JsonValue::Bool`.
+  """
   def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
     Ok(JsonValue::Bool(self))
   }

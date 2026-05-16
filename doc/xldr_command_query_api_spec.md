@@ -53,14 +53,20 @@ query parser は Surtr 式 parser ではない。
 | Command | 目的 | 主な引数 |
 |---|---|---|
 | `:doc` | `@doc` を引く。定義 doc、impl doc、binding 起点 doc を表示する | `DocTarget` |
-| `:sig` | 関数、constructor、extractor、enum variant surface、impl specialization の signature を表示する | `SigTarget` |
+| `:sig` | 関数、constructor、extractor、enum 定義と variant constructor 一覧、impl specialization の signature を表示する | `SigTarget` |
 | `:info` | 定義、binding、dispatch、operator query の解決情報を表示する | `InfoTarget` |
 | `:type` | REPL binding の型と TypeIdentity を表示する | `TypeTarget` |
 | `:facet` | FacetPath の型遷移、停止点、fallible segment を表示する | `FacetTarget` |
-| `:v` | history value または binding value を表示する | `HistoryIndex` / `BindingKey` |
+| `:v` | history result を再表示する。binding value lookup は `$name` を使う別 surface として扱う | `HistoryIndex` |
 | `:help` | command help を表示する | `Topic?` |
 | `:error` | error 表示モードを確認・変更する | `full` / `summary` |
 | `:save` | REPL session を保存する | `Path` |
+| `:vars` | visible な top-level value binding の索引を表示する | なし |
+| `:imported` | 現在の REPL compile unit に効いている import 面を表示する | なし |
+| `:defs` | visible な top-level `def` の索引を表示する | なし |
+| `:history` | REPL 履歴を一覧表示する | `selector?` |
+| `:reload` | preload 条件と top-level `def` から session を再構築する | `all` / `defs` |
+| `:clear` | セッション状態を変えずに画面表示だけをクリアする | なし |
 | `:quit` | REPL を終了する | なし |
 
 この文書では、主に `:doc`, `:sig`, `:info`, `:type`, `:facet` を対象にする。

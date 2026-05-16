@@ -65,8 +65,14 @@ static GLOBAL_COMMANDS: &[(&str, &str)] = &[
         "type",
         ":type <binding>  — lookup binding type (annotate unresolved generics before persistence)",
     ),
-    ("facet", ":facet <binding|expr>  — inspect facet path"),
+    ("facet", ":facet <FacetPath|$binding>  — inspect facet path"),
     ("save", ":save <path>  — save session to .eldr"),
+    ("vars", ":vars  — list visible value bindings"),
+    ("imported", ":imported  — list active imports"),
+    ("defs", ":defs  — list visible top-level defs"),
+    ("history", ":history [selector]  — list input history"),
+    ("reload", ":reload [all|defs]  — rebuild session"),
+    ("clear", ":clear  — clear the screen"),
 ];
 
 static INPUT_COMMANDS: &[(&str, &str)] = &[("v", ":v <idx>  — recall result")];

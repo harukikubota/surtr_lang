@@ -23,6 +23,8 @@ Spire -> Sigil -> Scar -> Forge -> Eldr
 - Tokenizing source text into a stream of lexemes
 - Parsing the token stream into an `Ast`
 - Attaching `Span` information to every node for downstream error reporting
+- Applying `ParserContext` policy for script, module, std-module, and REPL inputs
+- Lowering namespace/module surface syntax into canonical AST names
 - Rejecting syntactically invalid programs with a `ParseError`
 
 ## Non-responsibilities

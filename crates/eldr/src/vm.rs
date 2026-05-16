@@ -855,7 +855,7 @@ pub struct VM {
     open_files: HashMap<u64, VmOpenFile>,
     next_file_handle_id: u64,
     cwd: PathBuf,
-    /// VM-owned process table for the initial actor/agent runtime.
+    /// VM-owned process table built from bytecode runtime process specs.
     process_runtime: ProcessRuntime,
 }
 
@@ -4821,6 +4821,47 @@ impl VM {
                     if *template_id as usize >= bytecode.error_templates.len() {
                         return Err(RuntimeError::new(format!(
                             "Unknown error template: {}",
+                            template_id
+                        )));
+                    }
+                }
+                Opcode::LoadBuiltinRef(builtin_id)
+                | Opcode::CallBuiltin { builtin_id, .. } => {
+                    if builtin_meta_by_id(*builtin_id).is_none() {
+                        return Err(RuntimeError::new(format!(
+                            "Bytecode verifier: unknown builtin ref {}",
+                            builtin_id
+                        )));
+                    }
+                }
+                Opcode::LoadFunctionRef(fun_idx) | Opcode::Call { fun_idx, .. } => {
+                    if bytecode.functions.get(*fun_idx as usize).is_none() {
+                        return Err(RuntimeError::new(format!(
+                            "Bytecode verifier: Unknown function index {} (unknown function ref)",
+                            fun_idx
+                        )));
+                    }
+                }
+                Opcode::LoadCallableTemplateRef(template_id) => {
+                    if !bytecode
+                        .callable_templates
+                        .iter()
+                        .any(|template| template.template_id == *template_id)
+                    {
+                        return Err(RuntimeError::new(format!(
+                            "Bytecode verifier: unknown callable template ref {}",
+                            template_id
+                        )));
+                    }
+                }
+                Opcode::Dbg { template_id, .. } => {
+                    if !bytecode
+                        .dbg_templates
+                        .iter()
+                        .any(|template| template.id == *template_id)
+                    {
+                        return Err(RuntimeError::new(format!(
+                            "Bytecode verifier: unknown dbg template ref {}",
                             template_id
                         )));
                     }

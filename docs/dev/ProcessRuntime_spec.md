@@ -249,7 +249,7 @@ struct literal / `new` 契約 / private field は process state でも一般 str
 
 ### 3.8.1 compiler-managed lower surface
 
-process runtime の lower surface は [lib/process.srt](/Users/haruca/work/rust/surtr/lib/process.srt) に置く。
+process runtime の lower surface は [`../../lib/process.srt`](../../lib/process.srt) に置く。
 
 - `Process` は通常 user code からそのまま呼べる runtime utility module とし、`Process::self` / `Process::sleep` など public API だけを置く
 - `Process::self()` は process handler / process-owned helper の内部だけで使える public API とし、通常 top-level code や一般関数からは使えない

@@ -17,7 +17,7 @@ Surtr 全体では、関数は常に何らかの namespace に属します。標
 標準定義ソースの初期ロード順は次で固定されています。
 
 ```text
-Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, Shell, IO, DynamicSupervisor] -> user source
+Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Numeric, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test] -> user source
 ```
 
 このうち auto import されるのは `Bootstrap`, `Kernel` と、`@autoimport` が付いた標準 `impl Type` owner helper surface および標準 trait です。  
@@ -57,7 +57,7 @@ ordered comparison は `compare(left, right)` または `< <= > >=` を使い、
 ### `SpecialTypes`
 
 - `special_types.srt` に compiler-special builtin type を集約する
-- 現在は `Unit`, `TypeRef<$T>`, `Hole` をここへ置く
+- 現在は `Unit`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>`, `BulkUpdateEntries<$State>`, `Lazy<$T>`, `ProcessInit<$T>`, `TypeRef<$T>`, `Hole` をここへ置く
 - `defmod` は持たず、top-level canonical type declaration だけを持つ
 - user-facing な振る舞いは各 trait / callable / module surface 側から現れる
 
@@ -192,14 +192,19 @@ head.
 @builtin type String
 
 @doc """
-String module.
-Groups string-oriented helpers.
+Concrete string-module error for `String::repeat`.
+Negative counts stay as recoverable values instead of becoming implicit
+runtime traps.
 """
-defmod String {
+deferror NegativeRepeatCount(count: Int) {
+  "repeat count must be non-negative: #{count}"
+}
+
+impl String {
   @doc """
-  Placeholder while the module API grows.
+  Return the number of Unicode scalar values in the string.
   """
-  def dummy() { () }
+  @builtin def len(value: String) -> Int
 }
 ```
 
@@ -621,7 +626,7 @@ facet = User.name
 name = Facet::view(facet, user)
 ```
 
-REPL では `:type` / `:info` に加えて `:facet <binding|expr>` が使えます。
+REPL では `:type` / `:info` に加えて `:facet <FacetPath|$binding>` が使えます。
 `type` と `full path` の確認に加えて、variant selector や `Result` source を含む
 path の停止点をまとめて見たいときに使います。
 

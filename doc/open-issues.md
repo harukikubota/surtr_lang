@@ -1,9 +1,9 @@
 # Surtr Open Issues
 
 > 目的: V9 正本でまだ固定していない未解決事項だけを追跡する。
-> 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md`、開発者向け spec は `docs/dev/` 配下を正本とする。`doc/` は draft / input / tmp 置き場として扱う。
+> 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md`、開発者向け spec は `docs/dev/` 配下を正本とする。`doc/` は draft / input / tmp 置き場として扱う。cleanup で解消済みの項目は本ファイルに残さない。
 
-最終更新日: 2026-05-13
+最終更新日: 2026-05-16
 
 ---
 
@@ -23,20 +23,6 @@
   - macro 導入時に `unit/spire` / `unit/sigil` で段階境界テストを追加する。
   - 展開後 IR の決定性比較を回帰基準にする。
 
-### OI-010 `RichError` 表示形式の仕様化
-
-- 背景:
-  - `RichError::to_display_string` は現在 message を quoted form で表示している。
-  - 実装上は安定しているが、user-facing display としてその形式を正本化するかは未確定のままである。
-- 未確定点:
-  - quoted form を正式仕様にするか、より自然な表示へ変えるか
-  - 仕様化する場合に `docs/dev/EldrVM_spec.md` と rustdoc のどちらを正本にするか
-- 受け入れ条件:
-  - 採用した表示形式が docs とテストで一致する。
-  - `Value::Error` の表示契約が将来ぶれない。
-- テスト方針:
-  - `unit/sindr` の `display_for_rich_error_*` 系テストで採用形式を固定する。
-
 ### OI-012 `.eldr` viewer follow-up
 
 - 背景:
@@ -53,50 +39,16 @@
   - `unit/sindr` で chunk 整合性と参照先妥当性を固定する。
   - `integration` で dump 出力が必要テーブルを欠かさないことを維持する。
 
-### OI-013 Tail Call Optimization の観測導線
-
-- 背景:
-  - TCO v1 は実装済みで、`tail_calls_optimized` も観測値として追加されている。
-  - ただし、その観測値を CLI / dump / viewer にどう露出するかはまだ統一されていない。
-- 未確定点:
-  - `surtr run` / `surtr dump` / viewer で何を見せるか
-  - tail-position call を bytecode 上で明示するか
-  - span 診断や call trace を保ったまま追加最適化する方針
-- 受け入れ条件:
-  - 利用者が「TCO が効いたかどうか」を観測できる。
-  - docs 間で TCO の適用範囲説明がぶれない。
-- テスト方針:
-  - tail recursion / mutual recursion / non-tail recursion の観測ケースを回帰基準にする。
-  - CLI / JSON 露出を増やす場合は integration で形状を固定する。
-
-### OI-015 test DSL I/O capture の `it` 単位分離
-
-- 背景:
-  - `Test::capture_stdout` / `Test::capture_stderr` は導入済みだが、現行は per-VM バッファ + drain cursor 方式である。
-  - そのため同一 script VM 内の隣接 `it` に未読出力が流入する可能性が残っている。
-- 未確定点:
-  - `it` 境界で cursor reset を自動化するか
-  - `test` / `describe` / `it` のどの粒度で capture scope を切るか
-  - drain API のまま維持するか、peek 系 API を追加するか
-- 受け入れ条件:
-  - `it` 単位で deterministic に capture できる。
-  - 後方互換方針が明確である。
-- テスト方針:
-  - `tests/integration/test_command.rs` に `it` 間混入防止ケースを追加する。
-  - `lib/tests/*.srt` に capture API の推奨パターン fixture を用意する。
-
 ### OI-016 HashMap v1 follow-up
 
 - 背景:
   - `HashMap<$V>`、`defmod HashMap`、表示契約は既に baseline として定着している。
-  - 一方で literal sugar、追加 surface、runtime 内部表現の最適化余地はまだ未確定である。
+  - 一方で literal sugar と runtime 内部表現の最適化余地はまだ未確定である。
 - 未確定点:
   - `hash![...]` literal sugar を導入するか
-  - `entries(map)` などの surface を v1.x で増やすか
   - runtime 内部表現を `Vec<(String, Value)>` のまま維持するか、補助 index を併設するか
 - 受け入れ条件:
   - 採用方針が `doc/要件定義v9.md` / `docs/dev/EldrVM_spec.md` / `docs/dev/テスト方針.md` の3点で矛盾しない。
-  - surface を増やす場合は std module と builtin metadata の整合が取れる。
 - テスト方針:
   - literal 導入時は `unit/spire` / `unit/forge` / `spec` を同時に固定する。
   - runtime 表現変更時は insertion-order と display 契約を回帰基準にする。
@@ -195,32 +147,59 @@
   - `lib/tests/file_system.srt` では `FS::*` を qualified call で使う形を維持する。
   - escape syntax や alias import を導入する場合は `compile_errors/modules` と `spec/modules` の両方に fixture を追加する。
 
-## Deferred Topics
+### OI-027 Cleanup handoff backlog after 2026-05-16 batches
 
-以下は現行 baseline に含めず、必要時に reopen する将来課題。
+- 背景:
+  - 2026-05-16 の cleanup batches で CLI validation、std JSON docs、parser policy、source map、VM verifier の一部は処理済み。
+  - ただし、process runtime / REPL 深部は今回の対象外とし、さらに大きめの panic-safe 化は個別設計が必要なため残す。
+  - この issue は実装方針が固まった機能仕様ではなく、次回 cleanup の入力台帳として扱う。
+- 残タスク:
+  - Spire:
+    - function-literal validation/operator table を lexer と parser で共有する。
+    - process-owner pattern rewriting を `Annotated` / `Pin` / `Or` / `As` へ拡張する。これは process surface に触れるため後回し。
+  - Sigil:
+    - declaration precollect の duplicate check / uid reservation / kind insert を helper 化する。
+    - hidden builtin guidance metadata を table 化する。process hidden surface と絡むため後回し。
+  - Scar:
+    - trait-call / user-function arg reordering / binop metadata / `recover_kind` の残り `unreachable!()` を `TypeError` へ寄せる。
+    - supervisor intrinsic、worker message template、singleton PID rewrite の positional extraction は process 周りのため後回し。
+  - Forge:
+    - tuple bind、match tuple、constructor match の stale `PatternDecomp` panic を `CodegenError` 化する。
+    - facet lowering の `segment_slots` direct indexing を malformed path に対する `CodegenError` へ寄せる。
+    - top-level failure path、error-result construction、variant payload extraction、result-error transform の重複 emission helper 化を検討する。
+  - Eldr:
+    - `FS::ls/tree` の `read_dir` error propagation、`Shell::cd` の canonicalize fallback の扱いを runtime error policy と同期する。
+  - Xldr / REPL:
+    - stage parser worker spawn の `expect` を diagnostic 化する。
+    - `:save .eldr` / directory-ish names の validation、`:help` topic coverage、`:history` header/row format、command query pipe duplicate placeholder validationを整理する。
+- 受け入れ条件:
+  - process / REPL 領域は仕様・表示・integration の影響範囲を分けてから着手する。
+  - panic / `unreachable!()` 除去は、既存の phase error 型 (`ParseError` / `ResolveError` / `TypeError` / `CodegenError` / `RuntimeError`) に寄せる。
+  - 各 cleanup は小さな regression test または既存 targeted test で検証し、最後に `cargo nextest run --workspace` を通す。
+- テスト方針:
+  - Spire: `cargo nextest run -p spire`
+  - Sigil: `cargo nextest run -p sigil`
+  - Scar: `cargo nextest run -p scar`
+  - Forge: `cargo nextest run -p forge`
+  - Eldr: `cargo nextest run -p eldr`
+  - REPL / Xldr: 再開時のみ `cargo nextest run -p xldr` と必要な `rune` integration を選ぶ。
+  - 横断的な完了判定は `cargo nextest run --workspace` とする。
 
-- Project runner
-  - source 操作 API、runner DSL、init command を別途仕様化する。
-  - compile unit / source rules との責務分離を崩さないことを前提にする。
-- REPL command 拡張
-  - `:doc` は実装済み前提とし、その先の `:browse`, file ingest UX、補完改善を整理対象にする。
-  - call-site signature help で `neq(1` のような片側引数から impl specialization を推論して表示する改善は未着手のまま deferred とし、trait surface を返す現行挙動を baseline にする。
-- closure の `expected=None` 推論強化
-  - 期待型なしクロージャをどこまで多相的に扱うかを、let-generalization なしの baseline と矛盾しない範囲で再検討する。
-  - 退避ケース:
-    - `id = {|value| value}` が最初の呼び出しで単相化され、後続の別型呼び出しで `Argument type mismatch` になるケース
-- runtime fuel budget surface
-  - VM 内部の step / reduction budget と process quantum は baseline 化済み。
-  - CLI / REPL / library execution から fuel budget を user-visible に設定する surface は未確定。
-  - 退避ケース:
-    - 再帰関数 `loop()` を CLI / REPL 設定の budget 超過として安定停止させる契約
-  - 現状の正本テストは `lib/tests/*.srt` 側へ分離している。
-- FuncLiteral surface の将来拡張
-  - backtick capture / qualified path / operator capture は実装済み前提とし、それを超える surface 追加だけを reopen 対象にする。
-- OOM / host failure policy
-  - allocation failure を `RuntimeError`、process failure、host abort のどれとして扱うかと、利用者向け報告文言を将来固定する。
-- Enum conversion helper
-  - `defenum` 本体や `.idx` 廃止は確定済み前提とし、`Enum::from(Int)` / `Enum::try_from(Int)` の自動生成だけを未実装課題として扱う。
+### OI-028 Enum conversion helper
+
+- 背景:
+  - `defenum` 本体や `.idx` 廃止は確定済み前提で進んでいる。
+  - 一方で `Enum::from(Int)` / `Enum::try_from(Int)` 相当の変換 helper 自動生成は未実装のまま残っている。
+- 未確定点:
+  - 暗黙生成するのが `from` だけか、`try_from` を含めた 2 系統か
+  - out-of-range を compile-time ではなく runtime `Result` として扱うか
+  - 生成先を enum owner module に置くか、共通 trait helper に寄せるか
+- 受け入れ条件:
+  - enum ordinal 変換 surface が `defenum` の public API と矛盾しない。
+  - invalid ordinal の失敗形が docs / diagnostics / runtime で一貫する。
+- テスト方針:
+  - `unit/scar` / `unit/forge` で helper 生成契約を固定する。
+  - `tests/fixtures/script/pass` と `tests/fixtures/script/fail` に valid / invalid ordinal 変換ケースを追加する。
 
 ---
 
@@ -229,4 +208,3 @@
 - 解決済み事項は本ファイルに残さず削除する。必要な履歴は正本仕様・関連 spec・コミット履歴で追跡する。
 - 新規 Issue を追加するときは、少なくとも `背景`、`未確定点`、`受け入れ条件`、`テスト方針` を埋める。
 - 実装先行で仕様が変わる場合は、先に本ファイルと正本仕様の整合を確認してからコード変更する。
-- 将来課題のうち、まだ open issue として具体化していないものは `Deferred Topics` に置き、実装着手時に個別 OI へ昇格させる。

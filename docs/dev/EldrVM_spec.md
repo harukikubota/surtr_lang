@@ -22,10 +22,10 @@ Eldr は次を担わない。
 - 型検査（Scar）
 - コード生成（Forge）
 
-File v1 の host filesystem surface は `lib/file.srt` の `File` module を正本とし、
-VM はその lower 先 builtin を実行する。path は実行時の current working directory
-基準で解決し、存在しない path や open/read/write failure は `RuntimeError` ではなく
-user-facing `Result` の domain error として返す。
+File / FS の host filesystem surface は `lib/File.srt` と `lib/FileSystem.srt` の
+標準 module を正本とし、VM はその lower 先 builtin を実行する。path は実行時の
+current working directory 基準で解決し、存在しない path や open/read/write failure は
+`RuntimeError` ではなく user-facing `Result` の domain error として返す。
 
 ---
 
@@ -255,7 +255,8 @@ Opcode は以下のカテゴリを持つ。
 - `JumpIfLocalTagEq` / `JumpIfLocalTagNe` の `tag_const_idx` は `Constant::Tag` を指し、`LoadConst` と同じ relocation / verifier 規則に従う。`target_pc` は `Jump*` と同じ jump-target verifier / relocation 規則に従う
 - `TailCallClosure { arity, span_start, span_end }` は tail position の `CallClosure { arity, span_start, span_end }; Return` と同じ意味の圧縮 opcode とする。callable / argument / lexical capture の評価規約は `CallClosure` と同じで、結果は現在フレームの呼び出し元へ直接返る。target が user function の場合だけ user-function TCO として `tail_calls_optimized` を増やす。builtin / template target は圧縮実行として現在 frame の caller へ返るが、user-function TCO 観測値には含めない
 
-実 opcode 一覧とオペランドは `crates/forge/src/opcode.rs` を正とする。
+実 opcode 一覧とオペランドは `crates/sindr/src/ir.rs` の `Opcode` を正とする。
+`crates/forge/src/opcode.rs` は Forge 側の再エクスポート層であり、定義の正本ではない。
 
 ---
 
@@ -321,7 +322,7 @@ Opcode は以下のカテゴリを持つ。
 - malformed JSON は `Err(JsonParseError(line, column, detail))` を返し、`RuntimeError` にしない
 - `JsonValue` 以外の値が `json_stringify` に渡った場合は `Err(JsonEncodeError(detail))` を返す。`TypeRegistry` 不整合や variant arity 不整合は VM 内部不整合として `RuntimeError` でよい
 
-組込み宣言の読み込み順序は compile 側で `Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Numeric, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Option, Generator, HashMap, Result, Duration, Process, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc] -> [Test] -> ユーザ拡張` に固定される。同一 stage 内の import は file 読み込み順に依存せず compile 側で解決され、later stage 参照は compile error になる。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
+組込み宣言の読み込み順序は compile 側で `Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Numeric, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test] -> ユーザ拡張` に固定される。同一 stage 内の import は file 読み込み順に依存せず compile 側で解決され、later stage 参照は compile error になる。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
 
 ### 7.2 TypeRegistry
 
@@ -337,8 +338,8 @@ Opcode は以下のカテゴリを持つ。
 
 - マジック: `ELDR`
 - ヘッダ: `magic/version/debug_level/num_chunks`
-- ヘッダ `version` は現行 `1` を維持する
-- 意味的 bytecode 版は `CInf.bytecode_version` に保持し、現行は `1`
+- ヘッダ `version` は現行 `2` とする
+- 意味的 bytecode 版は `CInf.bytecode_version` に保持し、現行は `2`
 - `.eldr` は単一バイナリ実行物であり、チャンク分割の主目的は実行時ロード都合ではなく viewer / disasm / 診断 / 比較の観測性にある
 - 必須チャンク:
   - `Code`
@@ -346,6 +347,8 @@ Opcode は以下のカテゴリを持つ。
   - `Func`
   - `Type`
   - `ErrT`
+  - `DbgT`
+  - `CalT`
   - `CInf`
   - `LblT`
   - `ImpT`
@@ -355,14 +358,19 @@ Opcode は以下のカテゴリを持つ。
   - `SpnT`
   - `SrcP`
   - `PcSp`
+  - `Proc`
+  - `Boot`
 - 任意チャンク:
   - `Docs`
+  - `SigT`
 - `Code` は opcode 列のみを持つ
 - `num_locals` は `CInf` に保持する
 - `Cnst` は実行用 constant pool の正本
 - `LitT` は viewer / 比較用の literal table
 - `Func` は関数境界と viewer 用 flag / span を持つ
 - `LblT` / `PcSp` / `Line` / `SpnT` / `SrcP` は viewer 向け索引・source 対応情報である
+- `DbgT` は `dbg!` 表示 template、`CalT` は callable template、`Proc` / `Boot` は process runtime metadata を持つ
+- `SigT` は REPL / docs 用 signature table であり、存在しない bytecode も受理する
 
 ### 8.1 `Func` と `LblT` の役割分離
 
@@ -397,7 +405,8 @@ call opcode / error template / function span を使って source 対応を補完
 - optional compiler / target / build profile
 - optional source hash / module hash
 
-詳細なエンコード/デコード仕様は `crates/forge/src/bytecode.rs` を正とする。
+詳細なエンコード/デコード仕様は `crates/sindr/src/ir.rs` を正とする。
+`crates/forge/src/bytecode.rs` は Forge から使うための re-export 層である。
 
 ---
 

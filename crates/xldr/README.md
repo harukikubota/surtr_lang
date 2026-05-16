@@ -10,10 +10,10 @@ Xldr owns REPL session state and user-facing interactive execution behavior.
 
 - Run the REPL loop
 - Keep incremental session state across inputs
-- Handle REPL commands like `:quit` and `:v`
+- Handle REPL commands like `:quit`, `:q`, `:help`, `:doc`, `:sig`, `:info`, `:type`, `:facet`, `:error`, `:save`, `:vars`, `:imported`, `:defs`, `:history`, `:reload`, `:clear`, and `:v`
 - Drive incremental parse/resolve/typecheck/codegen/execute for interactive input
 - Render the startup banner and version output for `surtr repl`
 
 ## Non-responsibilities
 
-Xldr does not parse CLI command-line arguments (`surtr run/build/dump/repl` dispatch belongs to Rune).
+Xldr does not parse CLI command-line arguments; `surtr` command dispatch belongs to Rune.

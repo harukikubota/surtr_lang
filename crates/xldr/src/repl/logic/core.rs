@@ -1601,14 +1601,14 @@ impl ReplEngine {
         vec![
             "REPL commands:".to_string(),
             ":help, :h [command]  Show REPL help".to_string(),
-            ":quit, :exit         Exit the REPL".to_string(),
+            ":quit, :exit, :q     Exit the REPL".to_string(),
             ":doc <symbol|query>  Show documentation for visible symbols, including process surfaces".to_string(),
             ":sig <function|query> Show the signature for visible functions, including process surfaces".to_string(),
             ":info <query>        Show derived information for visible symbols, queries, or process handles"
                 .to_string(),
             ":type <binding>      Show the type for a visible binding or singleton process owner".to_string(),
             "                      Unresolved generic bindings must be annotated before persistence.".to_string(),
-            ":facet <binding|expr> Inspect a FacetPath and its API boundaries".to_string(),
+            ":facet <FacetPath|$binding> Inspect a FacetPath and its API boundaries".to_string(),
             ":error [full|summary]  Show or change error display mode".to_string(),
             ":save <path.eldr>    Save the current session as .eldr".to_string(),
             ":vars                List visible value bindings".to_string(),
@@ -1659,7 +1659,7 @@ impl ReplEngine {
 
     fn facet_help_lines() -> Vec<String> {
         vec![
-            "Usage: :facet <binding|expr>".to_string(),
+            "Usage: :facet <FacetPath|$binding>".to_string(),
             "Examples: :facet path, :facet Tuple._1, :facet BitWidth.Any".to_string(),
             "Shows canonical path, API availability, segment details, and where the path may stop."
                 .to_string(),
@@ -2993,9 +2993,7 @@ impl ReplEngine {
                     return true;
                 }
                 entry.qualified_name == query.callee
-                    || entry
-                        .signature
-                        .starts_with(&format!("{}(", query.callee))
+                    || entry.signature.starts_with(&format!("{}(", query.callee))
             })
             .filter(|entry| {
                 let sig = entry.signature.as_str();
@@ -4876,10 +4874,7 @@ impl ReplEngine {
                         .map(|ty| format_query_ty(&ty))
                         .map(|ret| {
                             if ret == "Self" {
-                                arg_types
-                                    .first()
-                                    .map(format_query_ty)
-                                    .unwrap_or(ret)
+                                arg_types.first().map(format_query_ty).unwrap_or(ret)
                             } else {
                                 ret
                             }
@@ -6358,7 +6353,10 @@ impl ReplEngine {
 
     fn append_signatures(&mut self, signatures: Vec<SignatureEntry>) {
         for signature in signatures {
-            let exists = self.signatures.iter().any(|existing| existing == &signature);
+            let exists = self
+                .signatures
+                .iter()
+                .any(|existing| existing == &signature);
             if !exists {
                 self.signatures.push(signature);
             }
@@ -8462,6 +8460,16 @@ mod tests {
     #[test]
     fn bootstrap_std_modules_returns_parse_failure() {
         expect_bootstrap_failure("defmod Broken { def nope( }", "parse", "Expected");
+    }
+
+    #[test]
+    fn repl_help_lists_q_quit_alias() {
+        let mut engine = ReplEngine::new().expect("engine should initialize");
+
+        let help = engine.handle_line(":help");
+        let rendered = ReplEngine::repl_result_text(&help);
+
+        assert!(rendered.contains(":quit, :exit, :q"), "{rendered}");
     }
 
     #[test]
