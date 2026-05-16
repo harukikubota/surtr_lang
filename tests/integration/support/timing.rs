@@ -1,8 +1,34 @@
+use std::env;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 pub fn env_flag_enabled(value: Option<&str>) -> bool {
     matches!(value, Some("1" | "true" | "TRUE" | "yes" | "YES"))
+}
+
+pub fn test_timing_enabled() -> bool {
+    env_flag_enabled(env::var("SURTR_TEST_TIMING").ok().as_deref())
+}
+
+pub fn timing_report_lock() -> &'static Mutex<()> {
+    static TIMING_REPORT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    TIMING_REPORT_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+pub fn stable_bucket(key: &str, bucket_count: usize) -> usize {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    assert!(bucket_count > 0, "bucket_count must be positive");
+
+    let mut hash = FNV_OFFSET;
+    for byte in key.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+
+    (hash as usize) % bucket_count
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -96,6 +122,25 @@ pub fn format_timing_report(input: &TimingReportInput<'_>) -> String {
     output.trim_end().to_string()
 }
 
+pub fn print_timing_report(
+    group: &str,
+    fixture_count: usize,
+    total: Duration,
+    cache: CacheStatsSnapshot,
+    slowest: &[SlowFixtureTiming],
+) {
+    eprintln!(
+        "{}",
+        format_timing_report(&TimingReportInput {
+            group,
+            fixture_count,
+            total,
+            cache,
+            slowest,
+        })
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::{format_timing_report, CacheStatsSnapshot, SlowFixtureTiming, TimingReportInput};
@@ -183,5 +228,12 @@ mod tests {
         assert!(!super::env_flag_enabled(Some("0")));
         assert!(!super::env_flag_enabled(Some("false")));
         assert!(!super::env_flag_enabled(Some("")));
+    }
+
+    #[test]
+    fn stable_bucket_is_deterministic_and_bounded() {
+        assert_eq!(super::stable_bucket("tests/fixtures/a.srt", 4), 0);
+        assert_eq!(super::stable_bucket("tests/fixtures/a.srt", 4), 0);
+        assert!(super::stable_bucket("tests/fixtures/b.srt", 4) < 4);
     }
 }

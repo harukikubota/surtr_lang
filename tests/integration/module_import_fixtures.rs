@@ -1,29 +1,22 @@
 use serde_json::Value;
-use std::env;
 use std::fs;
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::common::{
-    extract_phase_tag, module_compile_error_fixtures, module_spec_fixtures, normalize_text,
-    parse_compile_error_expectation, repo_root, surtr_command, unique_temp_dir, ModuleFixtureCase,
+    assert_compile_error_matches, module_compile_error_fixtures, module_spec_fixtures,
+    normalize_text, parse_compile_error_expectation, repo_root, surtr_command, unique_temp_dir,
+    ModuleFixtureCase,
 };
 use crate::support;
 
 fn compile_multi_source_case(
     case: &ModuleFixtureCase,
 ) -> Result<forge::bytecode::Bytecode, String> {
-    let compile_sources = compile_sources_for_case(case)?;
-    support::compile_script_sources(&compile_sources)
+    support::compile_module_fixture_case(case)
 }
 
 fn compile_sources_for_case(case: &ModuleFixtureCase) -> Result<xldr::CompileSources, String> {
-    let module_sources = support::collect_module_sources(&case.module_stages)?;
-    Ok(support::compose_script_sources(
-        &case.entry_path.to_string_lossy(),
-        case.entry_source,
-        module_sources,
-    ))
+    support::compile_sources_for_module_fixture(case)
 }
 
 fn check_multi_source_case_phase(case: &ModuleFixtureCase, phase: &str) -> Result<(), String> {
@@ -32,47 +25,15 @@ fn check_multi_source_case_phase(case: &ModuleFixtureCase, phase: &str) -> Resul
 }
 
 fn run_multi_source_case(case: &ModuleFixtureCase) -> Result<Vec<String>, String> {
-    let bytecode = compile_multi_source_case(case)?;
-    let mut vm = eldr::VM::new(bytecode).with_output_capture();
-    vm.run()
-        .map_err(|e| format!("phase=runtime; message={}", e))?;
-    Ok(vm.output.unwrap_or_default())
-}
-
-fn timing_breakdown_enabled() -> bool {
-    support::env_flag_enabled(env::var("SURTR_TEST_TIMING").ok().as_deref())
-}
-
-fn timing_report_lock() -> &'static Mutex<()> {
-    static TIMING_REPORT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    TIMING_REPORT_LOCK.get_or_init(|| Mutex::new(()))
-}
-
-fn print_timing_report(
-    group: &str,
-    fixture_count: usize,
-    total: Duration,
-    cache: support::CacheStatsSnapshot,
-    slowest: Vec<support::SlowFixtureTiming>,
-) {
-    eprintln!(
-        "{}",
-        support::format_timing_report(&support::TimingReportInput {
-            group,
-            fixture_count,
-            total,
-            cache,
-            slowest: &slowest,
-        })
-    );
+    support::run_module_fixture_case(case)
 }
 
 fn run_module_spec_bucket(bucket: usize, bucket_count: usize) {
     let cases = module_spec_fixtures()
         .into_iter()
-        .enumerate()
-        .filter(|(index, _)| index % bucket_count == bucket)
-        .map(|(_, fixture)| fixture)
+        .filter(|fixture| {
+            support::stable_bucket(&fixture.case.case_dir.to_string_lossy(), bucket_count) == bucket
+        })
         .collect::<Vec<_>>();
     assert!(
         !cases.is_empty(),
@@ -81,9 +42,9 @@ fn run_module_spec_bucket(bucket: usize, bucket_count: usize) {
         bucket_count
     );
 
-    let timing_enabled = timing_breakdown_enabled();
+    let timing_enabled = support::test_timing_enabled();
     let _timing_guard = timing_enabled.then(|| {
-        timing_report_lock()
+        support::timing_report_lock()
             .lock()
             .expect("timing report lock poisoned")
     });
@@ -125,12 +86,12 @@ fn run_module_spec_bucket(bucket: usize, bucket_count: usize) {
                 .cmp(&a.duration)
                 .then_with(|| a.path.cmp(&b.path))
         });
-        print_timing_report(
+        support::print_timing_report(
             &format!("module pass bucket {bucket}"),
             fixture_count,
             timing_start.elapsed(),
             support::cache_stats_snapshot().saturating_delta_since(&cache_stats_start),
-            slowest,
+            &slowest,
         );
     }
 }
@@ -138,9 +99,9 @@ fn run_module_spec_bucket(bucket: usize, bucket_count: usize) {
 fn run_module_compile_error_bucket(bucket: usize, bucket_count: usize) {
     let cases = module_compile_error_fixtures()
         .into_iter()
-        .enumerate()
-        .filter(|(index, _)| index % bucket_count == bucket)
-        .map(|(_, fixture)| fixture)
+        .filter(|fixture| {
+            support::stable_bucket(&fixture.case.case_dir.to_string_lossy(), bucket_count) == bucket
+        })
         .collect::<Vec<_>>();
     assert!(
         !cases.is_empty(),
@@ -149,9 +110,9 @@ fn run_module_compile_error_bucket(bucket: usize, bucket_count: usize) {
         bucket_count
     );
 
-    let timing_enabled = timing_breakdown_enabled();
+    let timing_enabled = support::test_timing_enabled();
     let _timing_guard = timing_enabled.then(|| {
-        timing_report_lock()
+        support::timing_report_lock()
             .lock()
             .expect("timing report lock poisoned")
     });
@@ -182,26 +143,7 @@ fn run_module_compile_error_bucket(bucket: usize, bucket_count: usize) {
                 "expected compile failure but succeeded: {}",
                 fixture.case.case_dir.display()
             ),
-            Err(msg) => {
-                if let Some(expected_phase) = expected.phase.as_deref() {
-                    let actual_phase = extract_phase_tag(&msg).unwrap_or("unknown");
-                    assert_eq!(
-                        actual_phase,
-                        expected_phase,
-                        "phase mismatch for {}",
-                        fixture.case.case_dir.display()
-                    );
-                }
-                for needle in &expected.contains {
-                    assert!(
-                        msg.contains(needle),
-                        "expected '{}' in error for {}\nactual: {}",
-                        needle,
-                        fixture.case.case_dir.display(),
-                        msg
-                    );
-                }
-            }
+            Err(msg) => assert_compile_error_matches(&expected, &msg, &fixture.case.case_dir),
         }
     }
 
@@ -211,12 +153,12 @@ fn run_module_compile_error_bucket(bucket: usize, bucket_count: usize) {
                 .cmp(&a.duration)
                 .then_with(|| a.path.cmp(&b.path))
         });
-        print_timing_report(
+        support::print_timing_report(
             &format!("module fail bucket {bucket}"),
             fixture_count,
             timing_start.elapsed(),
             support::cache_stats_snapshot().saturating_delta_since(&cache_stats_start),
-            slowest,
+            &slowest,
         );
     }
 }

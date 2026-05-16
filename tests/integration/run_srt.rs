@@ -1,32 +1,18 @@
-use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use sindr::policy::CompileUnitKind;
 
 use crate::common::{
-    compile_error_fixtures, extract_phase_tag, normalize_text, parse_compile_error_expectation,
-    spec_fixtures, unique_temp_dir,
+    assert_compile_error_matches, compile_error_fixtures, extract_phase_tag, normalize_text,
+    parse_compile_error_expectation, spec_fixtures, unique_temp_dir,
 };
 use crate::support;
 
 const SPEC_FIXTURE_BUCKETS: usize = 4;
 const COMPILE_ERROR_FIXTURE_BUCKETS: usize = 4;
-
-fn stable_bucket(key: &str, bucket_count: usize) -> usize {
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
-
-    let mut hash = FNV_OFFSET;
-    for byte in key.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-
-    (hash as usize) % bucket_count
-}
 
 fn compile_surtr(source: &str) -> Result<forge::bytecode::Bytecode, String> {
     support::compile_script("fixture.srt", source)
@@ -41,34 +27,6 @@ fn check_compile_phase(source: &str, phase: Option<&str>) -> Result<(), String> 
 
 fn run_surtr(source: &str) -> Result<Vec<String>, String> {
     support::run_script("fixture.srt", source)
-}
-
-fn timing_breakdown_enabled() -> bool {
-    support::env_flag_enabled(env::var("SURTR_TEST_TIMING").ok().as_deref())
-}
-
-fn print_timing_report(
-    group: &str,
-    fixture_count: usize,
-    total: Duration,
-    cache: support::CacheStatsSnapshot,
-    slowest: Vec<support::SlowFixtureTiming>,
-) {
-    eprintln!(
-        "{}",
-        support::format_timing_report(&support::TimingReportInput {
-            group,
-            fixture_count,
-            total,
-            cache,
-            slowest: &slowest,
-        })
-    );
-}
-
-fn timing_report_lock() -> &'static Mutex<()> {
-    static TIMING_REPORT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    TIMING_REPORT_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn semantic_prefix_cache_lock() -> &'static Mutex<()> {
@@ -94,7 +52,7 @@ fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
     let sources = spec_fixtures()
         .into_iter()
         .filter(|fixture| {
-            stable_bucket(&fixture.source_path.to_string_lossy(), bucket_count) == bucket
+            support::stable_bucket(&fixture.source_path.to_string_lossy(), bucket_count) == bucket
         })
         .collect::<Vec<_>>();
     assert!(
@@ -104,9 +62,9 @@ fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
         bucket_count
     );
 
-    let timing_enabled = timing_breakdown_enabled();
+    let timing_enabled = support::test_timing_enabled();
     let _timing_guard = timing_enabled.then(|| {
-        timing_report_lock()
+        support::timing_report_lock()
             .lock()
             .expect("timing report lock poisoned")
     });
@@ -148,12 +106,12 @@ fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
                 .cmp(&a.duration)
                 .then_with(|| a.path.cmp(&b.path))
         });
-        print_timing_report(
+        support::print_timing_report(
             &format!("script pass bucket {bucket}"),
             fixture_count,
             timing_start.elapsed(),
             support::cache_stats_snapshot().saturating_delta_since(&cache_stats_start),
-            slowest,
+            &slowest,
         );
     }
 }
@@ -182,7 +140,7 @@ fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
     let sources = compile_error_fixtures()
         .into_iter()
         .filter(|fixture| {
-            stable_bucket(&fixture.source_path.to_string_lossy(), bucket_count) == bucket
+            support::stable_bucket(&fixture.source_path.to_string_lossy(), bucket_count) == bucket
         })
         .collect::<Vec<_>>();
     assert!(
@@ -192,9 +150,9 @@ fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
         bucket_count
     );
 
-    let timing_enabled = timing_breakdown_enabled();
+    let timing_enabled = support::test_timing_enabled();
     let _timing_guard = timing_enabled.then(|| {
-        timing_report_lock()
+        support::timing_report_lock()
             .lock()
             .expect("timing report lock poisoned")
     });
@@ -224,26 +182,7 @@ fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
                 "expected compile failure but succeeded: {}",
                 fixture.source_path.display()
             ),
-            Err(msg) => {
-                if let Some(expected_phase) = expected.phase.as_deref() {
-                    let actual_phase = extract_phase_tag(&msg).unwrap_or("unknown");
-                    assert_eq!(
-                        actual_phase,
-                        expected_phase,
-                        "phase mismatch for {}",
-                        fixture.source_path.display()
-                    );
-                }
-                for needle in &expected.contains {
-                    assert!(
-                        msg.contains(needle),
-                        "expected '{}' in error for {}\nactual: {}",
-                        needle,
-                        fixture.source_path.display(),
-                        msg
-                    );
-                }
-            }
+            Err(msg) => assert_compile_error_matches(&expected, &msg, &fixture.source_path),
         }
     }
 
@@ -253,12 +192,12 @@ fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
                 .cmp(&a.duration)
                 .then_with(|| a.path.cmp(&b.path))
         });
-        print_timing_report(
+        support::print_timing_report(
             &format!("script fail bucket {bucket}"),
             fixture_count,
             timing_start.elapsed(),
             support::cache_stats_snapshot().saturating_delta_since(&cache_stats_start),
-            slowest,
+            &slowest,
         );
     }
 }

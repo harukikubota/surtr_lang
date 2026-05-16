@@ -1,9 +1,12 @@
 use forge::bytecode::{populate_error_template_lines, Bytecode};
 use xldr::CompileSources;
 
+use crate::common::ModuleFixtureCase;
+
 use super::cache::{cached_compile_prefix, load_cached_bytecode, store_cached_bytecode};
 use super::sources::{
-    collect_script_compile_sources, compile_chunk_typecheck_context_for_mode, parse_user_program,
+    collect_module_sources, collect_script_compile_sources,
+    compile_chunk_typecheck_context_for_mode, parse_user_program,
 };
 use super::types::TestCompileMode;
 
@@ -16,6 +19,24 @@ pub fn compile_script(source_name: &str, source: &str) -> Result<Bytecode, Strin
 #[allow(dead_code)]
 pub fn compile_script_sources(compile_sources: &CompileSources) -> Result<Bytecode, String> {
     compile_sources_with_mode(compile_sources, TestCompileMode::Script)
+}
+
+#[allow(dead_code)]
+pub fn compile_sources_for_module_fixture(
+    case: &ModuleFixtureCase,
+) -> Result<CompileSources, String> {
+    let module_sources = collect_module_sources(&case.module_stages)?;
+    Ok(super::sources::compose_script_sources(
+        &case.entry_path.to_string_lossy(),
+        case.entry_source,
+        module_sources,
+    ))
+}
+
+#[allow(dead_code)]
+pub fn compile_module_fixture_case(case: &ModuleFixtureCase) -> Result<Bytecode, String> {
+    let compile_sources = compile_sources_for_module_fixture(case)?;
+    compile_script_sources(&compile_sources)
 }
 
 #[allow(dead_code)]
