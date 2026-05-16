@@ -2098,14 +2098,15 @@ fn localize_chunk_indices(
 #[cfg(test)]
 mod tests {
     use super::{
-        compose_bytecode_with_chunk, localize_chunk_indices, ty_to_string, Codegen, ForgeSession,
+        compose_bytecode_with_chunk, format_function_signature, localize_chunk_indices,
+        ty_to_string, Codegen, ForgeSession,
     };
     use crate::bytecode::{Bytecode, BytecodeChunk, CompileInfo, Constant, ErrTemplate};
     use crate::opcode::Opcode;
     use scar::typed::TypedProcessHandlerUid;
     use scar::typed::{
         ComposeFlavor, TypedDbgArg, TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern,
-        TypedNode, TypedPattern, TypedProcessSpec, TypedProgram,
+        TypedNode, TypedPattern, TypedProcessSpec, TypedProgram, TypedTypeParam,
     };
     use scar::types::Ty;
     use sigil::resolved::ResolvedId;
@@ -2162,6 +2163,28 @@ mod tests {
 
         let pid_ty = Ty::Pid("Global::Worker".into());
         assert_eq!(ty_to_string(&pid_ty), "PID<Worker>");
+    }
+
+    #[test]
+    fn format_function_signature_preserves_generic_surface_names() {
+        let type_params = vec![TypedTypeParam {
+            name: "$A".into(),
+            ty_var: 42,
+            bound: None,
+        }];
+        let range_ty = Ty::Struct(
+            "Global::Range".into(),
+            vec![("min".into(), Ty::Var(42)), ("max".into(), Ty::Var(42))],
+        );
+        let params = vec![
+            typed_fun_param("min", 1, Ty::Var(42)),
+            typed_fun_param("max", 2, Ty::Var(42)),
+        ];
+
+        assert_eq!(
+            format_function_signature("new", &type_params, &params, &range_ty),
+            "new<$A>(min: $A, max: $A) -> Range<$A>"
+        );
     }
 
     fn local_var(name: &str, unique_id: u32, ty: Ty) -> TypedNode {
@@ -4320,6 +4343,10 @@ fn trait_short_name(trait_name: &str) -> &str {
 }
 
 fn ty_to_string(ty: &Ty) -> String {
+    ty_to_string_with_type_params(ty, &[])
+}
+
+fn ty_to_string_with_type_params(ty: &Ty, type_params: &[TypedTypeParam]) -> String {
     match ty {
         Ty::Int => "Int".into(),
         Ty::Float => "Float".into(),
@@ -4327,23 +4354,56 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Bool => "Boolean".into(),
         Ty::Unit => "Unit".into(),
         Ty::Hole => "_".into(),
-        Ty::List(inner) => format!("List<{}>", ty_to_string(inner)),
-        Ty::Lazy(inner) => format!("Lazy<{}>", ty_to_string(inner)),
-        Ty::TypeRef(inner) => format!("TypeRef<{}>", ty_to_string(inner)),
+        Ty::List(inner) => format!(
+            "List<{}>",
+            ty_to_string_with_type_params(inner, type_params)
+        ),
+        Ty::Lazy(inner) => format!(
+            "Lazy<{}>",
+            ty_to_string_with_type_params(inner, type_params)
+        ),
+        Ty::TypeRef(inner) => format!(
+            "TypeRef<{}>",
+            ty_to_string_with_type_params(inner, type_params)
+        ),
         Ty::Pid(name) => format!("PID<{}>", surface_rendered_name(name)),
         Ty::Facet(source, focus) => {
-            format!("Facet<{}, {}>", ty_to_string(source), ty_to_string(focus))
+            format!(
+                "Facet<{}, {}>",
+                ty_to_string_with_type_params(source, type_params),
+                ty_to_string_with_type_params(focus, type_params)
+            )
         }
         Ty::Tuple(items) => format!(
             "({})",
             items
                 .iter()
-                .map(ty_to_string)
+                .map(|item| ty_to_string_with_type_params(item, type_params))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        Ty::Result(ok, err) => format!("Result<{}, {}>", ty_to_string(ok), ty_to_string(err)),
-        Ty::Struct(name, _) | Ty::Record(name, _) => surface_path_name(name).to_string(),
+        Ty::Result(ok, err) => format!(
+            "Result<{}, {}>",
+            ty_to_string_with_type_params(ok, type_params),
+            ty_to_string_with_type_params(err, type_params)
+        ),
+        Ty::Struct(name, fields) | Ty::Record(name, fields) => {
+            let name = surface_path_name(name);
+            let args = type_params
+                .iter()
+                .filter(|param| {
+                    fields
+                        .iter()
+                        .any(|(_, field_ty)| ty_contains_var(field_ty, param.ty_var))
+                })
+                .map(|param| param.name.clone())
+                .collect::<Vec<_>>();
+            if args.is_empty() {
+                name.to_string()
+            } else {
+                format!("{}<{}>", name, args.join(", "))
+            }
+        }
         Ty::Enum(name, args) => {
             let name = surface_path_name(name);
             if args.is_empty() {
@@ -4352,23 +4412,33 @@ fn ty_to_string(ty: &Ty) -> String {
                 format!(
                     "{}<{}>",
                     name,
-                    args.iter().map(ty_to_string).collect::<Vec<_>>().join(", ")
+                    args.iter()
+                        .map(|arg| ty_to_string_with_type_params(arg, type_params))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )
             }
         }
         Ty::Error => "Error".into(),
-        // Hide internal type-variable IDs from REPL output.
-        Ty::Var(_id) => "_".into(),
+        Ty::Var(id) => type_params
+            .iter()
+            .find(|param| param.ty_var == *id)
+            .map(|param| param.name.clone())
+            .unwrap_or_else(|| "_".into()),
         Ty::Func(params, ret) => {
             let param_str = params
                 .iter()
-                .map(ty_to_string)
+                .map(|param| ty_to_string_with_type_params(param, type_params))
                 .collect::<Vec<_>>()
                 .join(", ");
             if param_str.is_empty() {
-                format!("(-> {})", ty_to_string(ret))
+                format!("(-> {})", ty_to_string_with_type_params(ret, type_params))
             } else {
-                format!("({} -> {})", param_str, ty_to_string(ret))
+                format!(
+                    "({} -> {})",
+                    param_str,
+                    ty_to_string_with_type_params(ret, type_params)
+                )
             }
         }
         Ty::BuiltinFunc { name, .. } => format!("Builtin({})", name),
@@ -4376,13 +4446,69 @@ fn ty_to_string(ty: &Ty) -> String {
     }
 }
 
-fn format_function_signature(name: &str, params: &[TypedFunParam], ret_ty: &Ty) -> String {
+fn ty_contains_var(ty: &Ty, needle: u32) -> bool {
+    match ty {
+        Ty::Var(var) => *var == needle,
+        Ty::List(inner) | Ty::Lazy(inner) | Ty::TypeRef(inner) => ty_contains_var(inner, needle),
+        Ty::Tuple(items) => items.iter().any(|item| ty_contains_var(item, needle)),
+        Ty::Func(params, ret) => {
+            params.iter().any(|param| ty_contains_var(param, needle))
+                || ty_contains_var(ret, needle)
+        }
+        Ty::Facet(source, focus) => {
+            ty_contains_var(source, needle) || ty_contains_var(focus, needle)
+        }
+        Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
+            params.iter().any(|param| ty_contains_var(param, needle))
+                || ty_contains_var(ret, needle)
+        }
+        Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
+            .iter()
+            .any(|(_, field_ty)| ty_contains_var(field_ty, needle)),
+        Ty::Enum(_, args) => args.iter().any(|arg| ty_contains_var(arg, needle)),
+        Ty::Result(ok, err) => ty_contains_var(ok, needle) || ty_contains_var(err, needle),
+        Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Pid(_) | Ty::Hole | Ty::Error => {
+            false
+        }
+    }
+}
+
+fn format_function_signature(
+    name: &str,
+    type_params: &[TypedTypeParam],
+    params: &[TypedFunParam],
+    ret_ty: &Ty,
+) -> String {
+    let type_params_surface = if type_params.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<{}>",
+            type_params
+                .iter()
+                .map(|param| match &param.bound {
+                    Some(bound) => format!("{}: {}", param.name, bound),
+                    None => param.name.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
     let params = params
         .iter()
-        .map(|param| format!("{}: {}", param.id.name, ty_to_string(&param.ty)))
+        .map(|param| {
+            format!(
+                "{}: {}",
+                param.id.name,
+                ty_to_string_with_type_params(&param.ty, type_params)
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
-    format!("{name}({params}) -> {}", ty_to_string(ret_ty))
+    format!(
+        "{name}{type_params_surface}({params}) -> {}",
+        ty_to_string_with_type_params(ret_ty, type_params)
+    )
 }
 
 fn format_error_constructor_signature(name: &str, params: &[TypedFunParam]) -> String {
@@ -5727,9 +5853,9 @@ impl Codegen {
     }
 
     fn emit_function_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
-        let (fun_idx, id, params, ret_ty, body, visibility) = match &node.node {
-            TypedInner::Def(fun_idx, id, _type_params, params, ret_ty, body, visibility) => {
-                (fun_idx, id, params, ret_ty, body, visibility)
+        let (fun_idx, id, type_params, params, ret_ty, body, visibility) = match &node.node {
+            TypedInner::Def(fun_idx, id, type_params, params, ret_ty, body, visibility) => {
+                (fun_idx, id, type_params, params, ret_ty, body, visibility)
             }
             _ => {
                 return Err(CodegenError {
@@ -5763,7 +5889,12 @@ impl Codegen {
             num_locals,
             arity: params.len() as u8,
             qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
-            signature: Some(format_function_signature(&id.name, params, ret_ty)),
+            signature: Some(format_function_signature(
+                &id.name,
+                type_params,
+                params,
+                ret_ty,
+            )),
             end_pc: 0,
             span_start: node.span.start as u32,
             span_end: node.span.end as u32,

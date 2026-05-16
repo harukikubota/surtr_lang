@@ -523,7 +523,7 @@ defstruct User {
 }
 
 impl User {
-  def new(name: String, age: Int) -> Self {
+  def new(name: String, age: Int) -> User {
     User { name, age }
   }
 }
@@ -545,6 +545,48 @@ impl User {
     assert!(
         rendered.contains("name: [String]"),
         "first constructor parameter should be highlighted: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("-> User"),
+        "constructor signature should follow the actual new return type: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("-> Self"),
+        "constructor signature must not fall back to synthesized Self when new returns User: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_constructor_signature_follows_result_self_new_signature() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user_result.srt",
+        r#"
+defstruct User {
+  name: String,
+}
+
+impl User {
+  def new(name: String) -> Result<Self> {
+    Ok(User { name })
+  }
+}
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let completion = engine.completions("User(", "User(".len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("script preload constructor should show signature help");
+    let rendered = signature.lines.join("\n");
+    assert!(
+        rendered.contains("User::new(name: [String]) -> Result<User, Error>"),
+        "constructor signature should follow Result<Self> from new after type normalization: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("-> Self"),
+        "constructor signature must not use synthesized Self fallback when new returns Result<Self>: {rendered:?}"
     );
 }
 
@@ -1859,14 +1901,14 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let duration_sig = signature_text(&duration_sig);
     assert_eq!(
         duration_sig.trim(),
-        "Duration::new(value: Int) -> Result<Self, Error>"
+        "Duration::new(value: Int) -> Result<Duration, Error>"
     );
 
     let duration_empty_call_sig = engine.handle_line(":sig Duration()");
     let duration_empty_call_sig = signature_text(&duration_empty_call_sig);
     assert_eq!(
         duration_empty_call_sig.trim(),
-        "Duration::new(value: Int) -> Result<Self, Error>"
+        "Duration::new(value: Int) -> Result<Duration, Error>"
     );
 
     let unsupported = engine.handle_line(":doc compare(make_value(), Int)");

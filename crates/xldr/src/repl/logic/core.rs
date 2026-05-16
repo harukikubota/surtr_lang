@@ -3186,7 +3186,10 @@ impl ReplEngine {
         let qualified_name = crate::surface_path_name(qualified_name);
         let signature = crate::surface_rendered_name(&signature);
         if let Some((module, tail)) = qualified_name.rsplit_once("::") {
-            if signature == tail || signature.starts_with(&format!("{tail}(")) {
+            if signature == tail
+                || signature.starts_with(&format!("{tail}("))
+                || signature.starts_with(&format!("{tail}<"))
+            {
                 return format!("{module}::{signature}");
             }
         }
@@ -4781,6 +4784,10 @@ impl ReplEngine {
         decl: &sigil::DeclarationEntry,
     ) -> Option<(String, String)> {
         let qualified_name = format!("{}::new", decl.fq_name);
+        if let Some(signature) = self.find_signature(&qualified_name) {
+            return Some(signature);
+        }
+
         let mut matches = self
             .docs
             .iter()
