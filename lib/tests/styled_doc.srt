@@ -48,6 +48,40 @@ test("StyledDoc") {
       )
       assert_doc_plain_eq("  one\n  \n  two", doc)
     }
+
+    it("supports constructors and public field access") {
+      style = StyledDocStyle::new(
+        Option::Some(StyledDocColor::Blue),
+        Option::None,
+        True,
+        False,
+        False,
+        False,
+      )
+      segment = StyledDocSegment::new("sur", style)
+      line = StyledDocLine::new([segment])
+      doc = StyledDocDoc::new([line])
+      first_line =? doc.lines.[0]
+      first_segment =? first_line.segments.[0]
+      assert_eq(Option::Some(StyledDocColor::Blue), first_segment.style.fg)
+      assert_eq(True, first_segment.style.bold)
+      assert_doc_plain_eq("sur", doc)
+    }
+
+    it("supports facet updates through 0-based public paths") {
+      base = StyledDoc::text("surtr")
+      restyled =? Facet::set(StyledDocDoc.lines.[0].segments.[0].style.bold, base, True)
+      recolored =? Facet::set(
+        StyledDocDoc.lines.[0].segments.[0].style.fg,
+        restyled,
+        Option::Some(StyledDocColor::Green),
+      )
+      first_line =? recolored.lines.[0]
+      first_segment =? first_line.segments.[0]
+      assert_eq(True, first_segment.style.bold)
+      assert_eq(Option::Some(StyledDocColor::Green), first_segment.style.fg)
+      assert_doc_ansi_eq(esc() ++ "[1;32msurtr" ++ esc() ++ "[0m", recolored)
+    }
   }
 
   describe("ansi") {

@@ -1077,7 +1077,7 @@ def from_script() -> Int { inc(1) }
 #[test]
 fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     let output = run_repl_session(
-        ":doc Tuple\n:sig Tuple\n:doc Config\n:doc StyledDocStyle\n:doc add\nimport Add::add\n:doc add\npair = (\"alice\", 2)\nresult_pair = (Ok(2), \"ok\")\n:sig pair._1\n:sig Facet::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})\n:quit\n",
+        ":doc Tuple\n:sig Tuple\n:doc Config\n:doc StyledDocStyle\n:sig StyledDocStyle\n:doc add\nimport Add::add\n:doc add\npair = (\"alice\", 2)\nstyle = StyledDocStyle::new(Option::None, Option::None, True, False, False, False)\nresult_pair = (Ok(2), \"ok\")\n:sig pair._1\n:sig Facet::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -1092,7 +1092,10 @@ fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     assert!(stdout.contains("Tuple._1"), "{stdout}");
     assert!(stdout.contains("No signature found for Tuple"), "{stdout}");
     assert!(stdout.contains("defstruct Config"), "{stdout}");
-    assert!(stdout.contains("defrecord StyledDocStyle"), "{stdout}");
+    assert!(stdout.contains("defstruct StyledDocStyle"), "{stdout}");
+    assert!(stdout.contains("StyledDocStyle::new("), "{stdout}");
+    assert!(stdout.contains("italic: Boolean"), "{stdout}");
+    assert!(stdout.contains("StyledDocStyle.bold"), "{stdout}");
     assert!(stdout.contains("No docs found for add"), "{stdout}");
     assert!(stdout.contains("Imported Add::add"), "{stdout}");
     assert!(stdout.contains("Add::add"), "{stdout}");

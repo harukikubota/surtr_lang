@@ -1,7 +1,9 @@
 import String::repeat;
 
 @doc """
-Colors supported by the StyledDoc helper.
+Colors supported by the `StyledDoc` rendering helpers.
+Use these with `StyledDocStyle`, `StyledDoc::style`, or the color shortcuts such
+as `StyledDoc::red`.
 """
 defenum StyledDocColor {
   Black,
@@ -15,55 +17,137 @@ defenum StyledDocColor {
   Default,
 }
 
-defrecord StyledDocStyle(
+@doc """
+Inline style state for one rendered text fragment.
+
+Common 0-based edit paths include:
+
+- `StyledDocSegment.style`
+- `StyledDocStyle.bold`
+- `StyledDocDoc.lines.[0].segments.[0].style.fg`
+
+## REPL
+xldr(1)> StyledDocStyle(Option::None, Option::None, True, False, False, False)
+StyledDocStyle(fg: Option::None, bg: Option::None, bold: True, dim: False, underline: False, italic: False)
+"""
+defstruct StyledDocStyle {
   fg: Option<StyledDocColor>,
   bg: Option<StyledDocColor>,
   bold: Boolean,
   dim: Boolean,
   underline: Boolean,
   italic: Boolean,
-)
+}
 
-defrecord StyledDocSegment(text: String, style: StyledDocStyle)
+impl StyledDocStyle {
+  @doc """
+  Build one style value from explicit foreground, background, and emphasis flags.
+  ## REPL
+  xldr(1)> StyledDocStyle(Option::Some(StyledDocColor::Blue), Option::None, True, False, False, False)
+  StyledDocStyle(fg: Option::Some(Blue), bg: Option::None, bold: True, dim: False, underline: False, italic: False)
+  """
+  def new(
+    fg: Option<StyledDocColor>,
+    bg: Option<StyledDocColor>,
+    bold: Boolean,
+    dim: Boolean,
+    underline: Boolean,
+    italic: Boolean,
+  ) -> Self {
+    StyledDocStyle {
+      fg: fg,
+      bg: bg,
+      bold: bold,
+      dim: dim,
+      underline: underline,
+      italic: italic,
+    }
+  }
+}
 
-defrecord StyledDocLine(segments: List<StyledDocSegment>)
+@doc """
+One text fragment paired with one `StyledDocStyle`.
 
-defrecord StyledDocDoc(lines: List<StyledDocLine>)
+The `style` field stays public so deeply nested updates can target individual
+fragments directly.
+"""
+defstruct StyledDocSegment {
+  text: String,
+  style: StyledDocStyle,
+}
+
+impl StyledDocSegment {
+  @doc """
+  Build one styled text fragment.
+  ## REPL
+  xldr(1)> StyledDocSegment("sur", StyledDocStyle(Option::None, Option::None, False, False, False, False))
+  StyledDocSegment(text: "sur", style: StyledDocStyle(fg: Option::None, bg: Option::None, bold: False, dim: False, underline: False, italic: False))
+  """
+  def new(text: String, style: StyledDocStyle) -> Self {
+    StyledDocSegment { text: text, style: style }
+  }
+}
+
+@doc """
+One rendered line made from zero or more `StyledDocSegment` values.
+
+The `segments` field is public and 0-based so paths such as
+`StyledDocLine.segments.[0]` can be updated directly.
+"""
+defstruct StyledDocLine {
+  segments: List<StyledDocSegment>,
+}
+
+impl StyledDocLine {
+  @doc """
+  Build one line from a segment list.
+  ## REPL
+  xldr(1)> StyledDocLine([StyledDocSegment("sur", StyledDocStyle(Option::None, Option::None, False, False, False, False))])
+  StyledDocLine(segments: [StyledDocSegment(text: "sur", style: StyledDocStyle(fg: Option::None, bg: Option::None, bold: False, dim: False, underline: False, italic: False))])
+  """
+  def new(segments: List<StyledDocSegment>) -> Self {
+    StyledDocLine { segments: segments }
+  }
+}
+
+@doc """
+Structured document made from zero or more lines.
+
+This is the aggregate value that `StyledDoc` helpers construct and transform.
+The `lines` field stays public so 0-based paths such as
+`StyledDocDoc.lines.[0].segments.[0]` remain available for nested updates.
+"""
+defstruct StyledDocDoc {
+  lines: List<StyledDocLine>,
+}
+
+impl StyledDocDoc {
+  @doc """
+  Build a document from explicit lines.
+  ## REPL
+  xldr(1)> StyledDocDoc([StyledDocLine([])])
+  StyledDocDoc(lines: [StyledDocLine(segments: [])])
+  """
+  def new(lines: List<StyledDocLine>) -> Self {
+    StyledDocDoc { lines: lines }
+  }
+}
 
 @doc """
 Structured document helpers for plain and ANSI-styled rendering.
+
+The usual flow is:
+
+1. build a `StyledDocDoc` with `text`, `line`, `segment`, `append`, or `concat`
+2. restyle parts with `style` or the color/emphasis shortcuts
+3. render with `plain` or `to_ansi`
+
+All carrier types stay public, so deeply nested fields can be updated with
+ordinary 0-based paths and helper APIs.
 """
 defmod StyledDoc {
-  def default_style() -> StyledDocStyle {
-    StyledDocStyle(Option::None, Option::None, False, False, False, False)
-  }
-
-  def empty() -> StyledDocDoc {
-    StyledDocDoc([])
-  }
-
-  def segment(value: String, style: StyledDocStyle) -> StyledDocDoc {
-    StyledDocDoc([StyledDocLine([StyledDocSegment(value, style)])])
-  }
-
-  def text(value: String) -> StyledDocDoc {
-    segment(value, default_style())
-  }
-
-  def line(value: String) -> StyledDocDoc {
-    text(value)
-  }
-
-  def newline() -> StyledDocDoc {
-    StyledDocDoc([StyledDocLine([])])
-  }
-
-  def append(left: StyledDocDoc, right: StyledDocDoc) -> StyledDocDoc {
-    StyledDocDoc(List::append(left.lines, right.lines))
-  }
-
-  def concat(docs: List<StyledDocDoc>) -> StyledDocDoc {
-    List::reduce(docs, empty(), {|acc, doc| append(acc, doc)})
+  defp _single_line_doc(segments: List<StyledDocSegment>) -> StyledDocDoc {
+    StyledDocDoc([StyledDocLine(segments)])
   }
 
   defp _inline_segments(lines: List<StyledDocLine>) -> List<StyledDocSegment> {
@@ -73,10 +157,6 @@ defmod StyledDoc {
     }
   }
 
-  def inline_concat(docs: List<StyledDocDoc>) -> StyledDocDoc {
-    StyledDocDoc([StyledDocLine(_inline_segments(concat(docs).lines))])
-  }
-
   defp _spaces(width: Int) -> String {
     match repeat(" ", width) {
       Ok(value) => value,
@@ -84,8 +164,12 @@ defmod StyledDoc {
     }
   }
 
+  defp _prefix_segment(prefix: String) -> StyledDocSegment {
+    StyledDocSegment(prefix, default_style())
+  }
+
   defp _indent_line(line: StyledDocLine, prefix: String) -> StyledDocLine {
-    StyledDocLine([StyledDocSegment(prefix, default_style()), ..line.segments])
+    StyledDocLine([_prefix_segment(prefix), ..line.segments])
   }
 
   defp _indent_lines(lines: List<StyledDocLine>, prefix: String) -> List<StyledDocLine> {
@@ -93,10 +177,6 @@ defmod StyledDoc {
       [] => [],
       [head, ..tail] => [_indent_line(head, prefix), .._indent_lines(tail, prefix)],
     }
-  }
-
-  def indent(doc: StyledDocDoc, width: Int) -> StyledDocDoc {
-    StyledDocDoc(_indent_lines(doc.lines, _spaces(width)))
   }
 
   defp _merge_option_color(base: Option<StyledDocColor>, next: Option<StyledDocColor>) -> Option<StyledDocColor> {
@@ -117,16 +197,12 @@ defmod StyledDoc {
     )
   }
 
-  defp _style_segment(seg: StyledDocSegment, next: StyledDocStyle) -> StyledDocSegment {
-    StyledDocSegment(seg.text, _merge_style(seg.style, next))
+  defp _style_segment(segment: StyledDocSegment, next: StyledDocStyle) -> StyledDocSegment {
+    StyledDocSegment(segment.text, _merge_style(segment.style, next))
   }
 
   defp _style_line(line: StyledDocLine, next: StyledDocStyle) -> StyledDocLine {
-    StyledDocLine(List::map(line.segments, {|seg| _style_segment(seg, next)}))
-  }
-
-  def style(doc: StyledDocDoc, next: StyledDocStyle) -> StyledDocDoc {
-    StyledDocDoc(List::map(doc.lines, {|line| _style_line(line, next)}))
+    StyledDocLine(List::map(line.segments, {|segment| _style_segment(segment, next)}))
   }
 
   defp _style_with_fg(doc: StyledDocDoc, color: StyledDocColor) -> StyledDocDoc {
@@ -136,42 +212,6 @@ defmod StyledDoc {
   defp _style_with_bg(doc: StyledDocDoc, color: StyledDocColor) -> StyledDocDoc {
     style(doc, StyledDocStyle(Option::None, Option::Some(color), False, False, False, False))
   }
-
-  def bold(doc: StyledDocDoc) -> StyledDocDoc {
-    style(doc, StyledDocStyle(Option::None, Option::None, True, False, False, False))
-  }
-
-  def dim(doc: StyledDocDoc) -> StyledDocDoc {
-    style(doc, StyledDocStyle(Option::None, Option::None, False, True, False, False))
-  }
-
-  def underline(doc: StyledDocDoc) -> StyledDocDoc {
-    style(doc, StyledDocStyle(Option::None, Option::None, False, False, True, False))
-  }
-
-  def italic(doc: StyledDocDoc) -> StyledDocDoc {
-    style(doc, StyledDocStyle(Option::None, Option::None, False, False, False, True))
-  }
-
-  def black(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Black) }
-  def red(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Red) }
-  def green(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Green) }
-  def yellow(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Yellow) }
-  def blue(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Blue) }
-  def magenta(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Magenta) }
-  def cyan(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Cyan) }
-  def white(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::White) }
-  def default_color(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Default) }
-
-  def bg_black(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Black) }
-  def bg_red(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Red) }
-  def bg_green(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Green) }
-  def bg_yellow(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Yellow) }
-  def bg_blue(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Blue) }
-  def bg_magenta(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Magenta) }
-  def bg_cyan(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Cyan) }
-  def bg_white(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::White) }
-  def bg_default(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Default) }
 
   defp _plain_segments(segments: List<StyledDocSegment>) -> String {
     match segments {
@@ -186,10 +226,6 @@ defmod StyledDoc {
       [head] => _plain_segments(head.segments),
       [head, ..tail] => _plain_segments(head.segments) ++ "\n" ++ _plain_lines(tail),
     }
-  }
-
-  def plain(doc: StyledDocDoc) -> String {
-    _plain_lines(doc.lines)
   }
 
   defp _esc() -> String {
@@ -251,17 +287,17 @@ defmod StyledDoc {
     )
   }
 
+  defp _styled_ansi_segment(segment: StyledDocSegment) -> String {
+    codes = _style_codes(segment.style)
+    _esc() ++ "[" ++ String::join(codes, ";") ++ "m" ++ segment.text ++ _esc() ++ "[0m"
+  }
+
   defp _ansi_segment(segment: StyledDocSegment) -> String {
     if(
       or(segment.text == "", Boolean::not(_has_style(segment.style))),
       segment.text,
       _styled_ansi_segment(segment),
     )
-  }
-
-  defp _styled_ansi_segment(segment: StyledDocSegment) -> String {
-    codes = _style_codes(segment.style)
-    _esc() ++ "[" ++ String::join(codes, ";") ++ "m" ++ segment.text ++ _esc() ++ "[0m"
   }
 
   defp _ansi_segments(segments: List<StyledDocSegment>) -> String {
@@ -279,6 +315,194 @@ defmod StyledDoc {
     }
   }
 
+  @doc """
+  Build the default no-style state.
+  ## REPL
+  xldr(1)> StyledDoc::default_style()
+  StyledDocStyle(fg: Option::None, bg: Option::None, bold: False, dim: False, underline: False, italic: False)
+  """
+  def default_style() -> StyledDocStyle {
+    StyledDocStyle(Option::None, Option::None, False, False, False, False)
+  }
+
+  @doc """
+  Build an empty document with no lines.
+  ## REPL
+  xldr(1)> StyledDoc::plain(StyledDoc::empty())
+  ""
+  """
+  def empty() -> StyledDocDoc {
+    StyledDocDoc([])
+  }
+
+  @doc """
+  Build a one-line document from one text fragment and one style.
+  ## REPL
+  xldr(1)> StyledDoc::plain(StyledDoc::segment("sur", StyledDoc::default_style()))
+  "sur"
+  """
+  def segment(value: String, style: StyledDocStyle) -> StyledDocDoc {
+    _single_line_doc([StyledDocSegment(value, style)])
+  }
+
+  @doc """
+  Build a one-line plain-text document with the default style.
+  ## REPL
+  xldr(1)> StyledDoc::plain(StyledDoc::text("sur"))
+  "sur"
+  """
+  def text(value: String) -> StyledDocDoc {
+    segment(value, default_style())
+  }
+
+  @doc """
+  Build one output line from plain text.
+  `line` keeps the structured-document shape so it composes with `append`.
+  ## REPL
+  xldr(1)> StyledDoc::plain(StyledDoc::line("sur"))
+  "sur"
+  """
+  def line(value: String) -> StyledDocDoc {
+    text(value)
+  }
+
+  @doc """
+  Build one explicit blank line.
+  This is useful when a later `append` should preserve an empty visual row.
+  ## REPL
+  xldr(1)> StyledDoc::plain(StyledDoc::append(StyledDoc::line("a"), StyledDocline()))
+  "a\n"
+  """
+  def newline() -> StyledDocDoc {
+    _single_line_doc([])
+  }
+
+  @doc """
+  Append all lines from `right` after all lines from `left`.
+  ## REPL
+  xldr(1)> StyledDoc::plain(StyledDoc::append(StyledDoc::line("a"), StyledDoc::line("b")))
+  "a\nb"
+  """
+  def append(left: StyledDocDoc, right: StyledDocDoc) -> StyledDocDoc {
+    StyledDocDoc(List::append(left.lines, right.lines))
+  }
+
+  @doc """
+  Concatenate many documents in order.
+  This is the multi-value companion to `append`.
+  ## REPL
+  xldr(1)> StyledDoc::plain(StyledDoc::concat([StyledDoc::line("a"), StyledDoc::line("b")]))
+  "a\nb"
+  """
+  def concat(docs: List<StyledDocDoc>) -> StyledDocDoc {
+    List::reduce(docs, empty(), {|acc, doc| append(acc, doc)})
+  }
+
+  @doc """
+  Flatten all lines from every input document into one line.
+  This removes line boundaries and preserves segment order.
+  ## REPL
+  xldr(1)> StyledDoc::plain(StyledDoc::inline_concat([StyledDoc::line("a"), StyledDocline(), StyledDoc::text("b")]))
+  "ab"
+  """
+  def inline_concat(docs: List<StyledDocDoc>) -> StyledDocDoc {
+    _single_line_doc(_inline_segments(concat(docs).lines))
+  }
+
+  @doc """
+  Prefix every line, including blank ones, with `width` spaces.
+  Because the prefix is inserted as the first segment, paths such as
+  `StyledDocDoc.lines.[0].segments.[0]` remain valid and 0-based.
+  ## REPL
+  xldr(1)> StyledDoc::plain(StyledDoc::indent(StyledDoc::append(StyledDoc::line("a"), StyledDocline()), 2))
+  "  a\n  "
+  """
+  def indent(doc: StyledDocDoc, width: Int) -> StyledDocDoc {
+    StyledDocDoc(_indent_lines(doc.lines, _spaces(width)))
+  }
+
+  @doc """
+  Merge `next` into every segment style in `doc`.
+  Boolean emphasis flags stack with logical `or`, while foreground and
+  background colors are replaced only when `next` provides them.
+  ## REPL
+  xldr(1)> StyledDoc::to_ansi(StyledDoc::style(StyledDoc::text("sur"), StyledDocStyle(Option::Some(StyledDocColor::Cyan), Option::None, True, False, False, False)))
+  "\u{1b}[1;36msur\u{1b}[0m"
+  """
+  def style(doc: StyledDocDoc, next: StyledDocStyle) -> StyledDocDoc {
+    StyledDocDoc(List::map(doc.lines, {|line| _style_line(line, next)}))
+  }
+
+  @doc """
+  Set the bold flag on every segment in `doc`.
+  ## REPL
+  xldr(1)> StyledDoc::to_ansi(StyledDoc::bold(StyledDoc::text("sur")))
+  "\u{1b}[1msur\u{1b}[0m"
+  """
+  def bold(doc: StyledDocDoc) -> StyledDocDoc {
+    style(doc, StyledDocStyle(Option::None, Option::None, True, False, False, False))
+  }
+
+  @doc """
+  Set the dim flag on every segment in `doc`.
+  """
+  def dim(doc: StyledDocDoc) -> StyledDocDoc {
+    style(doc, StyledDocStyle(Option::None, Option::None, False, True, False, False))
+  }
+
+  @doc """
+  Set the underline flag on every segment in `doc`.
+  """
+  def underline(doc: StyledDocDoc) -> StyledDocDoc {
+    style(doc, StyledDocStyle(Option::None, Option::None, False, False, True, False))
+  }
+
+  @doc """
+  Set the italic flag on every segment in `doc`.
+  """
+  def italic(doc: StyledDocDoc) -> StyledDocDoc {
+    style(doc, StyledDocStyle(Option::None, Option::None, False, False, False, True))
+  }
+
+  @doc """Apply black foreground to every segment in `doc`.""" def black(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Black) }
+  @doc """Apply red foreground to every segment in `doc`.""" def red(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Red) }
+  @doc """Apply green foreground to every segment in `doc`.""" def green(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Green) }
+  @doc """Apply yellow foreground to every segment in `doc`.""" def yellow(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Yellow) }
+  @doc """Apply blue foreground to every segment in `doc`.""" def blue(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Blue) }
+  @doc """Apply magenta foreground to every segment in `doc`.""" def magenta(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Magenta) }
+  @doc """Apply cyan foreground to every segment in `doc`.""" def cyan(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Cyan) }
+  @doc """Apply white foreground to every segment in `doc`.""" def white(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::White) }
+  @doc """Apply the default terminal foreground to every segment in `doc`.""" def default_color(doc: StyledDocDoc) -> StyledDocDoc { _style_with_fg(doc, StyledDocColor::Default) }
+
+  @doc """Apply black background to every segment in `doc`.""" def bg_black(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Black) }
+  @doc """Apply red background to every segment in `doc`.""" def bg_red(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Red) }
+  @doc """Apply green background to every segment in `doc`.""" def bg_green(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Green) }
+  @doc """Apply yellow background to every segment in `doc`.""" def bg_yellow(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Yellow) }
+  @doc """Apply blue background to every segment in `doc`.""" def bg_blue(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Blue) }
+  @doc """Apply magenta background to every segment in `doc`.""" def bg_magenta(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Magenta) }
+  @doc """Apply cyan background to every segment in `doc`.""" def bg_cyan(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Cyan) }
+  @doc """Apply white background to every segment in `doc`.""" def bg_white(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::White) }
+  @doc """Apply the default terminal background to every segment in `doc`.""" def bg_default(doc: StyledDocDoc) -> StyledDocDoc { _style_with_bg(doc, StyledDocColor::Default) }
+
+  @doc """
+  Render `doc` as plain text with newline separators.
+  Styling is ignored and only segment text is preserved.
+  ## REPL
+  xldr(1)> StyledDoc::plain(StyledDoc::append(StyledDoc::line("sur"), StyledDoc::line("tr")))
+  "sur\ntr"
+  """
+  def plain(doc: StyledDocDoc) -> String {
+    _plain_lines(doc.lines)
+  }
+
+  @doc """
+  Render `doc` as an ANSI string.
+  The escape code order is preserved as attribute flags, then foreground color,
+  then background color.
+  ## REPL
+  xldr(1)> StyledDoc::to_ansi(StyledDoc::red(StyledDoc::text("sur")))
+  "\u{1b}[31msur\u{1b}[0m"
+  """
   def to_ansi(doc: StyledDocDoc) -> String {
     _ansi_lines(doc.lines)
   }

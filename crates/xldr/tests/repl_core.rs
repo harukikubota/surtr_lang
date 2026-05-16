@@ -2025,6 +2025,11 @@ fn core_sig_type_owner_falls_back_to_constructor_signatures() {
     assert!(point_sig.contains("fg: Option"), "{point_sig}");
     assert!(point_sig.contains("italic: Boolean"), "{point_sig}");
     assert!(point_sig.contains("-> StyledDocStyle"), "{point_sig}");
+
+    let style = rendered_text(&engine.handle_line(
+        "style = StyledDocStyle::new(Option::None, Option::None, True, False, False, False)",
+    ));
+    assert!(style.contains("style: StyledDocStyle"), "{style}");
 }
 
 #[test]
@@ -2779,10 +2784,11 @@ fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
     let style_doc = doc_text(&style_doc);
     assert!(style_doc.contains("StyledDocStyle"), "{style_doc}");
     assert!(
-        style_doc.contains("defrecord StyledDocStyle"),
+        style_doc.contains("defstruct StyledDocStyle"),
         "{style_doc}"
     );
-    assert!(style_doc.contains("undocumented"), "{style_doc}");
+    assert!(style_doc.contains("StyledDocStyle.bold"), "{style_doc}");
+    assert!(style_doc.contains("lines.[0]"), "{style_doc}");
 
     let helper_before_import = engine.handle_line(":doc add");
     let helper_before_import = rendered_text(&helper_before_import);
