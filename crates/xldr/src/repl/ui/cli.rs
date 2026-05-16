@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 #[cfg(feature = "line-editor")]
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 #[cfg(feature = "line-editor")]
+use crossterm::terminal::size;
+#[cfg(feature = "line-editor")]
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 #[cfg(feature = "line-editor")]
 use rustyline::completion::{Completer, Pair};
@@ -235,15 +237,17 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
         let elapsed = last_background_progress.elapsed();
         last_background_progress = Instant::now();
         let background = engine.advance_background_time(elapsed);
-        print_terminal_result(
-            &mut stdout,
-            engine,
-            &background,
-            color,
-            &buffer,
-            cursor_chars,
-        )
-        .map_err(|_| CommandError::message(1, "repl: failed to print terminal result"))?;
+        if repl_result_has_visible_output(&background, color) {
+            print_terminal_result(
+                &mut stdout,
+                engine,
+                &background,
+                color,
+                &buffer,
+                cursor_chars,
+            )
+            .map_err(|_| CommandError::message(1, "repl: failed to print terminal result"))?;
+        }
 
         let wait = engine
             .next_background_deadline_delay()
@@ -262,10 +266,14 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
             continue;
         };
 
+        let before_buffer = buffer.clone();
+        let before_cursor = cursor_chars;
         match handle_terminal_key(&mut history, &mut buffer, &mut cursor_chars, key) {
             TerminalAction::Continue => {
-                redraw_terminal_prompt(&mut stdout, engine, &buffer, cursor_chars)
-                    .map_err(|_| CommandError::message(1, "repl: failed to redraw prompt"))?;
+                if buffer != before_buffer || cursor_chars != before_cursor {
+                    redraw_terminal_prompt(&mut stdout, engine, &buffer, cursor_chars)
+                        .map_err(|_| CommandError::message(1, "repl: failed to redraw prompt"))?;
+                }
             }
             TerminalAction::Submit(line) => {
                 history.record(&line);
@@ -274,8 +282,13 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
                     .map_err(|_| CommandError::message(1, "repl: failed to write input line"))?;
                 let result = with_suspended_raw_mode(|| engine.handle_line(&line))
                     .map_err(|_| CommandError::message(1, "repl: failed to suspend raw mode"))?;
-                print_terminal_result(&mut stdout, engine, &result, color, &buffer, cursor_chars)
-                    .map_err(|_| CommandError::message(1, "repl: failed to print terminal result"))?;
+                if repl_result_has_visible_output(&result, color) {
+                    print_terminal_result(&mut stdout, engine, &result, color, &buffer, cursor_chars)
+                        .map_err(|_| CommandError::message(1, "repl: failed to print terminal result"))?;
+                } else {
+                    redraw_terminal_prompt(&mut stdout, engine, &buffer, cursor_chars)
+                        .map_err(|_| CommandError::message(1, "repl: failed to redraw prompt"))?;
+                }
                 last_background_progress = Instant::now();
                 if result.should_exit {
                     return Ok(());
@@ -583,18 +596,24 @@ fn print_terminal_result(
     buffer: &str,
     cursor_chars: usize,
 ) -> io::Result<()> {
-    let mut lines = present_for_cli(result, color);
-    lines.extend(result.stderr.iter().cloned());
-    if lines.is_empty() {
-        redraw_terminal_prompt(stdout, engine, buffer, cursor_chars)?;
-        return Ok(());
-    }
-
+    let lines = repl_result_lines(result, color);
     for line in lines {
         write!(stdout, "\r\x1b[L\r\x1b[2K{line}\r\n")?;
     }
     stdout.flush()?;
     redraw_terminal_prompt(stdout, engine, buffer, cursor_chars)
+}
+
+#[cfg(feature = "line-editor")]
+fn repl_result_has_visible_output(result: &ReplResult, color: bool) -> bool {
+    !repl_result_lines(result, color).is_empty()
+}
+
+#[cfg(feature = "line-editor")]
+fn repl_result_lines(result: &ReplResult, color: bool) -> Vec<String> {
+    let mut lines = present_for_cli(result, color);
+    lines.extend(result.stderr.iter().cloned());
+    lines
 }
 
 #[cfg(feature = "line-editor")]
@@ -609,18 +628,38 @@ fn redraw_terminal_prompt(
     let cursor_byte = byte_index_for_char_position(buffer, cursor_chars);
     let completion = engine.completions(buffer, cursor_byte);
     let completion_lines = render_completion_lines(&completion);
+    let completion_rows = completion_lines
+        .iter()
+        .map(|line| terminal_rows_for_line(line))
+        .sum::<usize>();
     write!(stdout, "\r\x1b[J{prompt}{buffer}")?;
     for line in &completion_lines {
         write!(stdout, "\r\n\x1b[2K{line}")?;
     }
-    if !completion_lines.is_empty() {
-        write!(stdout, "\x1b[{}A", completion_lines.len())?;
+    if completion_rows > 0 {
+        write!(stdout, "\x1b[{}A", completion_rows)?;
     }
     write!(stdout, "\r")?;
     if column > 0 {
         write!(stdout, "\x1b[{}C", column)?;
     }
     stdout.flush()
+}
+
+#[cfg(feature = "line-editor")]
+fn terminal_rows_for_line(line: &str) -> usize {
+    let width = terminal_width();
+    let columns = line.chars().count().max(1);
+    columns.div_ceil(width)
+}
+
+#[cfg(feature = "line-editor")]
+fn terminal_width() -> usize {
+    size()
+        .map(|(width, _)| width as usize)
+        .ok()
+        .filter(|width| *width > 0)
+        .unwrap_or(80)
 }
 
 #[cfg(feature = "line-editor")]
