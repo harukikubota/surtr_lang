@@ -27,11 +27,7 @@ impl Parser<'_> {
                 span,
             ));
         }
-        Ok(match assign_tok {
-            Token::Bind => Ast::Bind(span, pat, Box::new(rhs)),
-            Token::SafeBind => Ast::SafeBind(span, pat, Box::new(rhs)),
-            _ => unreachable!("validated assignment token"),
-        })
+        Self::assignment_ast(assign_tok, span, pat, rhs)
     }
 
     pub(super) fn is_pattern_bind_stmt_start(&self) -> bool {
@@ -119,11 +115,17 @@ impl Parser<'_> {
             self.skip_newlines();
             alts.push(self.parse_bind_pattern_atom()?);
         }
-        let mut pat = if alts.len() == 1 {
-            alts.pop().expect("one pattern alternative")
+        let mut pat = if let [single] = alts.as_slice() {
+            single.clone()
         } else {
-            let start = super::pattern_span(alts.first().expect("pattern alternative")).start;
-            let end = super::pattern_span(alts.last().expect("pattern alternative")).end;
+            let start = alts
+                .first()
+                .map(|pat| super::pattern_span(pat).start)
+                .unwrap_or_else(|| self.peek_span().start);
+            let end = alts
+                .last()
+                .map(|pat| super::pattern_span(pat).end)
+                .unwrap_or(start);
             AstPattern::Or(Span { start, end }, alts)
         };
         loop {

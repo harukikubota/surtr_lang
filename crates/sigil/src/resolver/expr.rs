@@ -411,7 +411,13 @@ impl Resolver {
             });
         }
 
-        let max_index = *used.iter().max().expect("used is not empty");
+        let Some(max_index) = used.iter().max().copied() else {
+            return Err(ResolveError {
+                message: "capture call is missing placeholder arguments".into(),
+                span: span.clone(),
+                related_labels: Vec::new(),
+            });
+        };
         for index in 1..=max_index {
             if !used.contains(&index) {
                 return Err(ResolveError {
@@ -1195,9 +1201,14 @@ impl Resolver {
                 .into_iter()
                 .map(|arg| self.rewrite_capture_placeholders(arg, &span, true, true))
                 .collect::<Result<Vec<_>, _>>()?;
-            let mut rewritten_args = rewritten_args.into_iter();
-            let left = rewritten_args.next().expect("checked len == 2");
-            let right = rewritten_args.next().expect("checked len == 2");
+            let [left, right]: [Ast; 2] = rewritten_args.try_into().map_err(|_| ResolveError {
+                message: format!(
+                    "operator capture `{}` expects exactly 2 argument expressions",
+                    func.body
+                ),
+                span: span.clone(),
+                related_labels: Vec::new(),
+            })?;
             let body = self.make_operator_capture_body(&span, &func.body, left, right)?;
             let params = (1..=max_index)
                 .map(|index| ClosureParam {
@@ -2160,9 +2171,13 @@ impl Resolver {
                     ],
                 ))
             }
-            BulkUpdatePath::Segments(_, _)
-            | BulkUpdatePath::StripLeft(_, _, _)
-            | BulkUpdatePath::StripRight(_, _, _) => unreachable!("static paths handled above"),
+            BulkUpdatePath::Segments(path_span, _)
+            | BulkUpdatePath::StripLeft(path_span, _, _)
+            | BulkUpdatePath::StripRight(path_span, _, _) => Err(ResolveError {
+                message: "bulk_update static path could not be lowered".into(),
+                span: path_span.clone(),
+                related_labels: Vec::new(),
+            }),
         }
     }
 
@@ -2250,7 +2265,14 @@ impl Resolver {
                     source_expr,
                     update_fun,
                 ),
-                BulkUpdateEntryKind::Nested(_) => unreachable!("nested entries must be flattened"),
+                BulkUpdateEntryKind::Nested(_) => {
+                    return Err(ResolveError {
+                        message: "nested bulk_update entries must be flattened before lowering"
+                            .into(),
+                        span: entry_span,
+                        related_labels: Vec::new(),
+                    });
+                }
             };
             let closure = Ast::Closure(
                 entry_span.clone(),

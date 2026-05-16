@@ -19,55 +19,27 @@ impl Resolver {
         args: Vec<RecordLitArg>,
         kind: IfKind,
     ) -> Result<Resolved, ResolveError> {
-        let (expected_arity, callee_name) = match kind {
-            IfKind::If3 => (3usize, "if"),
-            IfKind::IfThen2 => (2usize, "if_then"),
-        };
-        if args.len() != expected_arity {
-            return Err(ResolveError {
-                message: format!(
-                    "{} expects {} arguments, got {}",
-                    callee_name,
-                    expected_arity,
-                    args.len()
-                ),
-                span,
-                related_labels: Vec::new(),
-            });
-        }
-
-        let mut positional = Vec::with_capacity(args.len());
-        for arg in args {
-            match arg {
-                RecordLitArg::Positional(expr) => positional.push(expr),
-                RecordLitArg::Named(name, _) => {
-                    return Err(ResolveError {
-                        message: format!(
-                            "{} does not accept named argument '{}'",
-                            callee_name, name
-                        ),
-                        span,
-                        related_labels: Vec::new(),
-                    });
-                }
+        match kind {
+            IfKind::If3 => {
+                let [cond_expr, then_expr, else_expr] =
+                    collect_fixed_positional_args(span.clone(), args, "if", 3)?;
+                let cond = self.resolve_node(cond_expr)?;
+                let then = self.resolve_node(then_expr)?;
+                return Ok(Resolved::If(
+                    span,
+                    Box::new(cond),
+                    Box::new(then),
+                    Some(Box::new(self.resolve_node(else_expr)?)),
+                ));
+            }
+            IfKind::IfThen2 => {
+                let [cond_expr, then_expr] =
+                    collect_fixed_positional_args(span.clone(), args, "if_then", 2)?;
+                let cond = self.resolve_node(cond_expr)?;
+                let then = self.resolve_node(then_expr)?;
+                return Ok(Resolved::If(span, Box::new(cond), Box::new(then), None));
             }
         }
-
-        let mut iter = positional.into_iter();
-        let cond = self.resolve_node(iter.next().expect("checked arg length"))?;
-        let then = self.resolve_node(iter.next().expect("checked arg length"))?;
-        let else_branch = match kind {
-            IfKind::If3 => Some(Box::new(
-                self.resolve_node(iter.next().expect("checked arg length"))?,
-            )),
-            IfKind::IfThen2 => None,
-        };
-        Ok(Resolved::If(
-            span,
-            Box::new(cond),
-            Box::new(then),
-            else_branch,
-        ))
     }
 
     pub(super) fn resolve_assert(
@@ -75,31 +47,9 @@ impl Resolver {
         span: Span,
         args: Vec<RecordLitArg>,
     ) -> Result<Resolved, ResolveError> {
-        if args.len() != 2 {
-            return Err(ResolveError {
-                message: format!("assert expects 2 arguments, got {}", args.len()),
-                span,
-                related_labels: Vec::new(),
-            });
-        }
-
-        let mut positional = Vec::with_capacity(args.len());
-        for arg in args {
-            match arg {
-                RecordLitArg::Positional(expr) => positional.push(expr),
-                RecordLitArg::Named(name, _) => {
-                    return Err(ResolveError {
-                        message: format!("assert does not accept named argument '{}'", name),
-                        span,
-                        related_labels: Vec::new(),
-                    });
-                }
-            }
-        }
-
-        let mut iter = positional.into_iter();
-        let cond = self.resolve_node(iter.next().expect("checked arg length"))?;
-        let err = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let [cond_expr, err_expr] = collect_fixed_positional_args(span.clone(), args, "assert", 2)?;
+        let cond = self.resolve_node(cond_expr)?;
+        let err = self.resolve_node(err_expr)?;
         Ok(Resolved::Assert(span, Box::new(cond), Box::new(err)))
     }
 
@@ -108,32 +58,11 @@ impl Resolver {
         span: Span,
         args: Vec<RecordLitArg>,
     ) -> Result<Resolved, ResolveError> {
-        if args.len() != 3 {
-            return Err(ResolveError {
-                message: format!("ensure expects 3 arguments, got {}", args.len()),
-                span,
-                related_labels: Vec::new(),
-            });
-        }
-
-        let mut positional = Vec::with_capacity(args.len());
-        for arg in args {
-            match arg {
-                RecordLitArg::Positional(expr) => positional.push(expr),
-                RecordLitArg::Named(name, _) => {
-                    return Err(ResolveError {
-                        message: format!("ensure does not accept named argument '{}'", name),
-                        span,
-                        related_labels: Vec::new(),
-                    });
-                }
-            }
-        }
-
-        let mut iter = positional.into_iter();
-        let value = self.resolve_node(iter.next().expect("checked arg length"))?;
-        let pred = self.resolve_node(iter.next().expect("checked arg length"))?;
-        let err = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let [value_expr, pred_expr, err_expr] =
+            collect_fixed_positional_args(span.clone(), args, "ensure", 3)?;
+        let value = self.resolve_node(value_expr)?;
+        let pred = self.resolve_node(pred_expr)?;
+        let err = self.resolve_node(err_expr)?;
         Ok(Resolved::Ensure(
             span,
             Box::new(value),
@@ -147,11 +76,11 @@ impl Resolver {
         span: Span,
         args: Vec<RecordLitArg>,
     ) -> Result<Resolved, ResolveError> {
-        let positional = collect_positional_args(span.clone(), args, "map_err", 2)?;
-        let mut iter = positional.into_iter();
-        let value = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let [value_expr, err_expr] =
+            collect_fixed_positional_args(span.clone(), args, "map_err", 2)?;
+        let value = self.resolve_node(value_expr)?;
         let err = self.resolve_error_constructor_expr(
-            iter.next().expect("checked arg length"),
+            err_expr,
             "map_err",
             "error argument",
         )?;
@@ -163,11 +92,11 @@ impl Resolver {
         span: Span,
         args: Vec<RecordLitArg>,
     ) -> Result<Resolved, ResolveError> {
-        let positional = collect_positional_args(span.clone(), args, "cause", 2)?;
-        let mut iter = positional.into_iter();
-        let value = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let [value_expr, err_expr] =
+            collect_fixed_positional_args(span.clone(), args, "cause", 2)?;
+        let value = self.resolve_node(value_expr)?;
         let err = self.resolve_error_constructor_expr(
-            iter.next().expect("checked arg length"),
+            err_expr,
             "cause",
             "error argument",
         )?;
@@ -179,15 +108,15 @@ impl Resolver {
         span: Span,
         args: Vec<RecordLitArg>,
     ) -> Result<Resolved, ResolveError> {
-        let positional = collect_positional_args(span.clone(), args, "recover_kind", 3)?;
-        let mut iter = positional.into_iter();
-        let value = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let [value_expr, marker_expr, handler_expr] =
+            collect_fixed_positional_args(span.clone(), args, "recover_kind", 3)?;
+        let value = self.resolve_node(value_expr)?;
         let marker = self.resolve_error_constructor_expr(
-            iter.next().expect("checked arg length"),
+            marker_expr,
             "recover_kind",
             "marker",
         )?;
-        let handler = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let handler = self.resolve_node(handler_expr)?;
         Ok(Resolved::RecoverKind(
             span,
             Box::new(value),
@@ -245,12 +174,8 @@ impl Resolver {
         span: Span,
         args: Vec<RecordLitArg>,
     ) -> Result<Resolved, ResolveError> {
-        let positional = collect_positional_args(span.clone(), args, "if_let", 4)?;
-        let mut iter = positional.into_iter();
-        let term = iter.next().expect("checked arg length");
-        let pattern_expr = iter.next().expect("checked arg length");
-        let then_expr = iter.next().expect("checked arg length");
-        let else_expr = iter.next().expect("checked arg length");
+        let [term, pattern_expr, then_expr, else_expr] =
+            collect_fixed_positional_args(span.clone(), args, "if_let", 4)?;
 
         let pattern = self.ast_expr_to_pattern(pattern_expr, "if_let")?;
         let fallback = AstPattern::Wildcard(span.clone());
@@ -278,11 +203,8 @@ impl Resolver {
         span: Span,
         args: Vec<RecordLitArg>,
     ) -> Result<Resolved, ResolveError> {
-        let positional = collect_positional_args(span.clone(), args, "if_let_then", 3)?;
-        let mut iter = positional.into_iter();
-        let term = iter.next().expect("checked arg length");
-        let pattern_expr = iter.next().expect("checked arg length");
-        let then_expr = iter.next().expect("checked arg length");
+        let [term, pattern_expr, then_expr] =
+            collect_fixed_positional_args(span.clone(), args, "if_let_then", 3)?;
 
         let pattern = self.ast_expr_to_pattern(pattern_expr, "if_let_then")?;
         let unit_lit = Ast::Lit(span.clone(), Lit::Unit);
@@ -314,10 +236,8 @@ impl Resolver {
         span: Span,
         args: Vec<RecordLitArg>,
     ) -> Result<Resolved, ResolveError> {
-        let positional = collect_positional_args(span.clone(), args, "is_match", 2)?;
-        let mut iter = positional.into_iter();
-        let term = iter.next().expect("checked arg length");
-        let pattern_expr = iter.next().expect("checked arg length");
+        let [term, pattern_expr] =
+            collect_fixed_positional_args(span.clone(), args, "is_match", 2)?;
         let pattern = self.ast_expr_to_pattern(pattern_expr, "is_match")?;
 
         if pattern_has_binding_vars(&pattern) {
@@ -499,10 +419,10 @@ impl Resolver {
             LogicKind::And => "and",
             LogicKind::Or => "or",
         };
-        let positional = collect_positional_args(span.clone(), args, callee_name, 2)?;
-        let mut iter = positional.into_iter();
-        let left = self.resolve_node(iter.next().expect("checked arg length"))?;
-        let right = self.resolve_node(iter.next().expect("checked arg length"))?;
+        let [left_expr, right_expr] =
+            collect_fixed_positional_args(span.clone(), args, callee_name, 2)?;
+        let left = self.resolve_node(left_expr)?;
+        let right = self.resolve_node(right_expr)?;
         let bool_lit = |value| Resolved::Lit(span.clone(), Lit::Bool(value));
 
         let (then_branch, else_branch) = match kind {
@@ -552,6 +472,24 @@ fn collect_positional_args(
         }
     }
     Ok(positional)
+}
+
+fn collect_fixed_positional_args<const N: usize>(
+    span: Span,
+    args: Vec<RecordLitArg>,
+    callee_name: &str,
+    expected_arity: usize,
+) -> Result<[Ast; N], ResolveError> {
+    let positional = collect_positional_args(span.clone(), args, callee_name, expected_arity)?;
+    let actual_arity = positional.len();
+    positional.try_into().map_err(|_| ResolveError {
+        message: format!(
+            "{} expects {} arguments, got {}",
+            callee_name, expected_arity, actual_arity
+        ),
+        span,
+        related_labels: Vec::new(),
+    })
 }
 
 fn fixed_pattern_list(span: Span, items: Vec<AstPattern>) -> AstPattern {

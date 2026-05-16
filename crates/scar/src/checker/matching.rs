@@ -506,7 +506,7 @@ impl Checker {
                     }
                     return Ok(TypedMatchPattern::ErrorKind(ctor_id.name.clone()));
                 }
-                if matches!(expected_ty, Ty::Result(_, _)) {
+                if let Ty::Result(ok_ty, err_ty) = expected_ty {
                     let tag = match ctor_id.name.as_str() {
                         "Ok" => 0u32,
                         "Err" => 1u32,
@@ -528,10 +528,16 @@ impl Checker {
                             hint: None,
                         });
                     }
-                    let inner_ty = match (tag, expected_ty) {
-                        (0, Ty::Result(ok, _)) => ok.as_ref().clone(),
-                        (1, Ty::Result(_, err)) => err.as_ref().clone(),
-                        _ => unreachable!(),
+                    let inner_ty = match tag {
+                        0 => ok_ty.as_ref().clone(),
+                        1 => err_ty.as_ref().clone(),
+                        _ => {
+                            return Err(TypeError {
+                                message: format!("Unknown constructor: {}", ctor_id.name),
+                                span: ctor_id.span.clone(),
+                                hint: None,
+                            });
+                        }
                     };
                     let typed_inner = self.check_match_subpattern(&inner_pats[0], &inner_ty)?;
                     return Ok(TypedMatchPattern::Constructor {

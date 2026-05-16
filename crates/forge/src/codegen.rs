@@ -1303,21 +1303,27 @@ fn build_runtime_process_specs(
             span: Span { start: 0, end: 0 },
         })?;
         let mut set_entry = None;
+        let mut set_name = None;
         if let Some(set_uid) = spec.set_uid {
-            let set_name = qualified_names.get(&set_uid).ok_or_else(|| CodegenError {
+            let lowered_set_name = qualified_names.get(&set_uid).ok_or_else(|| CodegenError {
                 message: format!(
                     "missing lowered set handler metadata for process `{}`",
                     spec.process_name
                 ),
                 span: Span { start: 0, end: 0 },
             })?;
-            set_entry = Some(function_entries.get(set_name).ok_or_else(|| CodegenError {
-                message: format!(
-                    "missing bytecode set handler for process `{}`",
-                    spec.process_name
-                ),
-                span: Span { start: 0, end: 0 },
-            })?);
+            let bytecode_set_entry =
+                function_entries
+                    .get(lowered_set_name)
+                    .ok_or_else(|| CodegenError {
+                        message: format!(
+                            "missing bytecode set handler for process `{}`",
+                            spec.process_name
+                        ),
+                        span: Span { start: 0, end: 0 },
+                    })?;
+            set_name = Some(lowered_set_name.clone());
+            set_entry = Some(bytecode_set_entry);
         }
         if spec.spec.handler_specs.is_empty() {
             handler_specs.push(RuntimeHandlerSpec {
@@ -1339,12 +1345,16 @@ fn build_runtime_process_specs(
                 arity: get_entry.arity,
             });
             if let Some(set_entry) = set_entry {
+                let set_name = set_name.ok_or_else(|| CodegenError {
+                    message: format!(
+                        "missing lowered set handler metadata for process `{}`",
+                        spec.process_name
+                    ),
+                    span: Span { start: 0, end: 0 },
+                })?;
                 handler_specs.push(RuntimeHandlerSpec {
                     handler_id: 2,
-                    name: qualified_names
-                        .get(&spec.set_uid.expect("set entry exists"))
-                        .cloned()
-                        .unwrap_or_default(),
+                    name: set_name,
                     kind: if process_kind == RuntimeProcessKind::GenServer {
                         RuntimeHandlerKind::Cast
                     } else {
@@ -4074,11 +4084,8 @@ fn collect_stmt_meta(
     function_defs: &mut Vec<String>,
 ) {
     match &stmt.node {
-        TypedInner::Bind(pat, _) | TypedInner::SafeBind(pat, _) => {
-            let rhs = match &stmt.node {
-                TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs) => rhs.as_ref(),
-                _ => unreachable!(),
-            };
+        TypedInner::Bind(pat, rhs) | TypedInner::SafeBind(pat, rhs) => {
+            let rhs = rhs.as_ref();
             collect_pattern_binding_infos(
                 pat,
                 slot_map,
@@ -5299,10 +5306,10 @@ impl Codegen {
         self.state.slot_map = HashMap::new();
         let (lhs_slot, rhs_slot, input_slot, arity) = if direct_targets.is_some() {
             self.state.next_slot = 1;
-            (None, None, 0u32, 1u8)
+            (0u32, 0u32, 0u32, 1u8)
         } else {
             self.state.next_slot = 3;
-            (Some(0u32), Some(1u32), 2u32, 3u8)
+            (0u32, 1u32, 2u32, 3u8)
         };
         let entry_pc = self.current_pos() as u32;
         let prev_in_function = self.in_function;
@@ -5315,8 +5322,8 @@ impl Codegen {
                     self.emit_direct_call(lhs, 1, span);
                     self.emit_direct_call(rhs, 1, span);
                 } else {
-                    self.emit(Opcode::LoadLocal(rhs_slot.expect("captured rhs slot")));
-                    self.emit(Opcode::LoadLocal(lhs_slot.expect("captured lhs slot")));
+                    self.emit(Opcode::LoadLocal(rhs_slot));
+                    self.emit(Opcode::LoadLocal(lhs_slot));
                     self.emit(Opcode::LoadLocal(input_slot));
                     self.emit(Opcode::CallClosure {
                         arity: 1,
@@ -5336,7 +5343,7 @@ impl Codegen {
                 if let Some((lhs, _)) = direct_targets {
                     self.emit_direct_call(lhs, 1, span);
                 } else {
-                    self.emit(Opcode::LoadLocal(lhs_slot.expect("captured lhs slot")));
+                    self.emit(Opcode::LoadLocal(lhs_slot));
                     self.emit(Opcode::LoadLocal(input_slot));
                     self.emit(Opcode::CallClosure {
                         arity: 1,
@@ -5369,7 +5376,7 @@ impl Codegen {
                             self.emit(Opcode::GetField { field_index: 0 });
                             self.emit_direct_call(rhs, 1, span);
                         } else {
-                            self.emit(Opcode::LoadLocal(rhs_slot.expect("captured rhs slot")));
+                            self.emit(Opcode::LoadLocal(rhs_slot));
                             self.emit(Opcode::LoadLocal(result_slot));
                             self.emit(Opcode::GetField { field_index: 0 });
                             self.emit(Opcode::CallClosure {
@@ -5387,7 +5394,7 @@ impl Codegen {
                             self.emit(Opcode::GetField { field_index: 0 });
                             self.emit_direct_call(rhs, 1, span);
                         } else {
-                            self.emit(Opcode::LoadLocal(rhs_slot.expect("captured rhs slot")));
+                            self.emit(Opcode::LoadLocal(rhs_slot));
                             self.emit(Opcode::LoadLocal(result_slot));
                             self.emit(Opcode::GetField { field_index: 0 });
                             self.emit(Opcode::CallClosure {
@@ -5407,14 +5414,14 @@ impl Codegen {
                     self.emit_direct_call(lhs, 1, span);
                     self.emit_direct_callable_ref(rhs);
                 } else {
-                    self.emit(Opcode::LoadLocal(lhs_slot.expect("captured lhs slot")));
+                    self.emit(Opcode::LoadLocal(lhs_slot));
                     self.emit(Opcode::LoadLocal(input_slot));
                     self.emit(Opcode::CallClosure {
                         arity: 1,
                         span_start: span.start as u32,
                         span_end: span.end as u32,
                     });
-                    self.emit(Opcode::LoadLocal(rhs_slot.expect("captured rhs slot")));
+                    self.emit(Opcode::LoadLocal(rhs_slot));
                 }
                 match helper {
                     ListHelperRef::Builtin(builtin_id) => self.emit(Opcode::CallBuiltin {

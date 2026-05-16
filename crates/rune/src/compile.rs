@@ -578,10 +578,10 @@ pub(crate) fn compile_source(
             &module_stages,
             sources,
         )?);
-        &cached_prefix
-            .as_ref()
-            .expect("prefix cache should exist")
-            .declaration_index
+        let Some(prefix) = cached_prefix.as_ref() else {
+            return Err(RuneError::usage("test prefix cache was not built"));
+        };
+        &prefix.declaration_index
     } else {
         rebuilt_declaration_index =
             sigil::precollect_declaration_index(&module_stages).map_err(|e| {

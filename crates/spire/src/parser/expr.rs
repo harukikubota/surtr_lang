@@ -12,7 +12,33 @@ enum FuncLiteralBodyKind {
     Operator(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlowOpKind {
+    PipeApply,
+    PipeMap,
+    PipeBind,
+    Compose,
+    LiftCompose,
+    KleisliCompose,
+}
+
 impl Parser<'_> {
+    pub(super) fn assignment_ast(
+        assign_tok: Token,
+        span: Span,
+        pat: AstPattern,
+        rhs: Ast,
+    ) -> Result<Ast, ParseError> {
+        match assign_tok {
+            Token::Bind => Ok(Ast::Bind(span, pat, Box::new(rhs))),
+            Token::SafeBind => Ok(Ast::SafeBind(span, pat, Box::new(rhs))),
+            other => Err(ParseError::syntax(
+                format!("Expected assignment operator (= or =?), got {:?}", other),
+                span,
+            )),
+        }
+    }
+
     fn function_on_path(span: Span) -> Ast {
         Ast::Path(
             span.clone(),
@@ -27,9 +53,16 @@ impl Parser<'_> {
         matches!(path.segments.as_slice(), [module, name] if module == "Function" && name == "on")
     }
 
-    fn is_low_precedence_on_target(kind: &FuncLiteralBodyKind) -> bool {
-        matches!(kind, FuncLiteralBodyKind::Name(name) if name == "on")
-            || matches!(kind, FuncLiteralBodyKind::Path(path) if Self::is_function_on_path(path))
+    fn low_precedence_on_target_callee(kind: &FuncLiteralBodyKind, span: &Span) -> Option<Ast> {
+        match kind {
+            FuncLiteralBodyKind::Name(name) if name == "on" => {
+                Some(Self::function_on_path(span.clone()))
+            }
+            FuncLiteralBodyKind::Path(path) if Self::is_function_on_path(path) => {
+                Some(Ast::Path(path.span.clone(), path.clone()))
+            }
+            _ => None,
+        }
     }
 
     fn parse_func_literal_body(body: &str, span: Span) -> Result<FuncLiteralBodyKind, ParseError> {
@@ -59,14 +92,14 @@ impl Parser<'_> {
         Ok(FuncLiteralBodyKind::Name(body.to_string()))
     }
 
-    fn flow_op_kind(tok: &Token) -> Option<u8> {
+    fn flow_op_kind(tok: &Token) -> Option<FlowOpKind> {
         match tok {
-            Token::PipeApply => Some(0),
-            Token::PipeMap => Some(1),
-            Token::PipeBind => Some(2),
-            Token::Compose => Some(3),
-            Token::LiftCompose => Some(4),
-            Token::KleisliCompose => Some(5),
+            Token::PipeApply => Some(FlowOpKind::PipeApply),
+            Token::PipeMap => Some(FlowOpKind::PipeMap),
+            Token::PipeBind => Some(FlowOpKind::PipeBind),
+            Token::Compose => Some(FlowOpKind::Compose),
+            Token::LiftCompose => Some(FlowOpKind::LiftCompose),
+            Token::KleisliCompose => Some(FlowOpKind::KleisliCompose),
             _ => None,
         }
     }
@@ -96,17 +129,12 @@ impl Parser<'_> {
             };
             let func_span = self.peek_span();
             let func_kind = Self::parse_func_literal_body(&body, func_span.clone())?;
-            if !Self::is_low_precedence_on_target(&func_kind) {
+            let Some(func) = Self::low_precedence_on_target_callee(&func_kind, &func_span) else {
                 break;
-            }
+            };
 
             self.advance();
             let right = self.parse_flow_expr()?;
-            let func = match func_kind {
-                FuncLiteralBodyKind::Name(_) => Self::function_on_path(func_span),
-                FuncLiteralBodyKind::Path(path) => Ast::Path(path.span.clone(), path),
-                FuncLiteralBodyKind::Operator(_) => unreachable!("validated low-precedence target"),
-            };
             left = Self::lower_func_literal_call(left, func, right);
         }
 
@@ -130,13 +158,16 @@ impl Parser<'_> {
                 end: right.span().end,
             };
             left = match next {
-                0 => Ast::Pipe(span, Box::new(left), Box::new(right)),
-                1 => Ast::ContextMap(span, Box::new(left), Box::new(right)),
-                2 => Ast::ContextBind(span, Box::new(left), Box::new(right)),
-                3 => Ast::Compose(span, Box::new(left), Box::new(right)),
-                4 => Ast::LiftedCompose(span, Box::new(left), Box::new(right)),
-                5 => Ast::KleisliCompose(span, Box::new(left), Box::new(right)),
-                _ => unreachable!("validated flow token"),
+                FlowOpKind::PipeApply => Ast::Pipe(span, Box::new(left), Box::new(right)),
+                FlowOpKind::PipeMap => Ast::ContextMap(span, Box::new(left), Box::new(right)),
+                FlowOpKind::PipeBind => Ast::ContextBind(span, Box::new(left), Box::new(right)),
+                FlowOpKind::Compose => Ast::Compose(span, Box::new(left), Box::new(right)),
+                FlowOpKind::LiftCompose => {
+                    Ast::LiftedCompose(span, Box::new(left), Box::new(right))
+                }
+                FlowOpKind::KleisliCompose => {
+                    Ast::KleisliCompose(span, Box::new(left), Box::new(right))
+                }
             };
         }
         Ok(left)
@@ -307,7 +338,7 @@ impl Parser<'_> {
                 if Self::logical_binop_from_func_literal(op_body).is_some())
                 || matches!(func_kind, FuncLiteralBodyKind::Name(ref name)
                     if Self::logical_func_literal_name(name))
-                || Self::is_low_precedence_on_target(&func_kind)
+                || Self::low_precedence_on_target_callee(&func_kind, &func_span).is_some()
             {
                 break;
             }
@@ -316,8 +347,12 @@ impl Parser<'_> {
             let right = self.parse_postfix()?;
             match func_kind {
                 FuncLiteralBodyKind::Operator(op_body) => {
-                    let op = Self::expr_binop_from_func_literal(&op_body)
-                        .expect("expr operator classification checked above");
+                    let Some(op) = Self::expr_binop_from_func_literal(&op_body) else {
+                        return Err(ParseError::syntax(
+                            format!("Unsupported FuncLiteral body: `{}`", op_body),
+                            func_span,
+                        ));
+                    };
                     left = Self::lower_binop(left, op, right);
                 }
                 FuncLiteralBodyKind::Name(name) => {
@@ -947,9 +982,17 @@ impl Parser<'_> {
                             self.peek_span(),
                         ));
                     }
-                    let source = match args.into_iter().next().expect("checked arg length") {
-                        RecordLitArg::Positional(expr) => expr,
-                        RecordLitArg::Named(_, _) => unreachable!("validated positional args"),
+                    let source = match <[RecordLitArg; 1]>::try_from(args) {
+                        Ok([RecordLitArg::Positional(expr)]) => expr,
+                        _ => {
+                            return Err(ParseError::syntax(
+                                "Facet::bulk_update expects exactly 1 positional argument before its update block",
+                                Span {
+                                    start: name_span.start,
+                                    end: end_span.end,
+                                },
+                            ));
+                        }
                     };
                     return self.parse_bulk_update_expr(name_span.start, source);
                 }
@@ -1171,11 +1214,7 @@ impl Parser<'_> {
                 end: rhs.span().end,
             };
             let pat = AstPattern::Annotated(name_span, name, ty);
-            return Ok(match assign_tok {
-                Token::Bind => Ast::Bind(span, pat, Box::new(rhs)),
-                Token::SafeBind => Ast::SafeBind(span, pat, Box::new(rhs)),
-                _ => unreachable!("validated assignment token"),
-            });
+            return Self::assignment_ast(assign_tok, span, pat, rhs);
         }
 
         // Simple binding: name = expr / name =? expr
@@ -1189,11 +1228,7 @@ impl Parser<'_> {
                 end: rhs.span().end,
             };
             let pat = AstPattern::Var(name_span, name);
-            return Ok(match assign_tok {
-                Token::Bind => Ast::Bind(span, pat, Box::new(rhs)),
-                Token::SafeBind => Ast::SafeBind(span, pat, Box::new(rhs)),
-                _ => unreachable!("validated assignment token"),
-            });
+            return Self::assignment_ast(assign_tok, span, pat, rhs);
         }
 
         // Just a variable
@@ -1351,14 +1386,32 @@ impl Parser<'_> {
                 Span { start, end },
             ));
         }
-        let mut iter = args.into_iter();
-        let term = match iter.next().expect("checked arg length") {
+        let [term_arg, pattern_arg] = <[RecordLitArg; 2]>::try_from(args).map_err(|args| {
+            ParseError::syntax(
+                format!(
+                    "{name} expects exactly 2 positional arguments, got {}",
+                    args.len()
+                ),
+                Span { start, end },
+            )
+        })?;
+        let term = match term_arg {
             RecordLitArg::Positional(expr) => expr,
-            RecordLitArg::Named(_, _) => unreachable!("validated positional args"),
+            RecordLitArg::Named(_, _) => {
+                return Err(ParseError::syntax(
+                    format!("{name} expects positional arguments"),
+                    Span { start, end },
+                ));
+            }
         };
-        let pattern_expr = match iter.next().expect("checked arg length") {
+        let pattern_expr = match pattern_arg {
             RecordLitArg::Positional(expr) => expr,
-            RecordLitArg::Named(_, _) => unreachable!("validated positional args"),
+            RecordLitArg::Named(_, _) => {
+                return Err(ParseError::syntax(
+                    format!("{name} expects positional arguments"),
+                    Span { start, end },
+                ));
+            }
         };
         let Ast::Match(_, _, mut arms) = pattern_expr else {
             return Ok(Ast::App(
@@ -1413,17 +1466,7 @@ impl Parser<'_> {
                 return Err(ParseError::incomplete("expression", parser.peek_span()));
             }
             let end = parser.expect(&Token::RBrace)?;
-            let body = if body_stmts.len() == 1 {
-                body_stmts.into_iter().next().expect("checked non-empty")
-            } else {
-                Ast::Block(
-                    Span {
-                        start: body_stmts[0].span().start,
-                        end: body_stmts[body_stmts.len() - 1].span().end,
-                    },
-                    body_stmts,
-                )
-            };
+            let body = block_stmts_to_expr(body_stmts);
             Ok(Ast::Closure(
                 Span {
                     start: sp.start,
@@ -1656,17 +1699,7 @@ impl Parser<'_> {
         if body_stmts.is_empty() {
             return Err(ParseError::incomplete("expression", self.peek_span()));
         }
-        let body = if body_stmts.len() == 1 {
-            body_stmts.into_iter().next().expect("checked non-empty")
-        } else {
-            Ast::Block(
-                Span {
-                    start: body_stmts[0].span().start,
-                    end: body_stmts[body_stmts.len() - 1].span().end,
-                },
-                body_stmts,
-            )
-        };
+        let body = block_stmts_to_expr(body_stmts);
         let end = self.expect(&Token::RBrace)?;
         Ok(Ast::Closure(
             Span {
@@ -1993,15 +2026,7 @@ impl Parser<'_> {
         }
 
         self.expect(&Token::LeftArrow)?;
-        let kind = self.parse_bulk_update_leaf()?;
-        let end = match &kind {
-            BulkUpdateEntryKind::Set(expr)
-            | BulkUpdateEntryKind::Over(expr)
-            | BulkUpdateEntryKind::OverResult(expr)
-            | BulkUpdateEntryKind::CaseSet(expr)
-            | BulkUpdateEntryKind::CaseOver(expr) => expr.span().end,
-            BulkUpdateEntryKind::Nested(_) => unreachable!("leaf classifier cannot produce nested"),
-        };
+        let (kind, end) = self.parse_bulk_update_leaf()?;
         Ok(BulkUpdateEntry {
             span: Span { start, end },
             path,
@@ -2157,19 +2182,22 @@ impl Parser<'_> {
         }
     }
 
-    fn parse_bulk_update_leaf(&mut self) -> Result<BulkUpdateEntryKind, ParseError> {
+    fn parse_bulk_update_leaf(&mut self) -> Result<(BulkUpdateEntryKind, usize), ParseError> {
         self.skip_newlines();
         let (name, name_span) = self.expect_ident()?;
-        let allowed = matches!(
-            name.as_str(),
-            "set" | "over" | "over_result" | "case_set" | "case_over"
-        );
-        if !allowed {
-            return Err(ParseError::syntax(
-                "Bulk update entries must use set(value), over(update_fun), over_result(update_fun), case_set(payload), or case_over(update_fun)",
-                name_span,
-            ));
-        }
+        let entry_kind = match name.as_str() {
+            "set" => BulkUpdateEntryKind::Set,
+            "over" => BulkUpdateEntryKind::Over,
+            "over_result" => BulkUpdateEntryKind::OverResult,
+            "case_set" => BulkUpdateEntryKind::CaseSet,
+            "case_over" => BulkUpdateEntryKind::CaseOver,
+            _ => {
+                return Err(ParseError::syntax(
+                    "Bulk update entries must use set(value), over(update_fun), over_result(update_fun), case_set(payload), or case_over(update_fun)",
+                    name_span,
+                ));
+            }
+        };
         self.skip_newlines();
         self.expect(&Token::LParen)?;
         let args = self.with_trailing_call_block_disabled(|parser| parser.parse_call_args())?;
@@ -2189,9 +2217,17 @@ impl Parser<'_> {
             ));
         }
 
-        let inner = match args.into_iter().next().expect("checked arg length") {
-            RecordLitArg::Positional(expr) => expr,
-            RecordLitArg::Named(_, _) => unreachable!("validated positional args"),
+        let inner = match <[RecordLitArg; 1]>::try_from(args) {
+            Ok([RecordLitArg::Positional(expr)]) => expr,
+            _ => {
+                return Err(ParseError::syntax(
+                    "Bulk update entries must use set(value), over(update_fun), over_result(update_fun), case_set(payload), or case_over(update_fun)",
+                    Span {
+                        start: name_span.start,
+                        end: call_end.end,
+                    },
+                ));
+            }
         };
         if bulk_update_proc_contains_operation_call(&inner) {
             return Err(ParseError::syntax(
@@ -2200,14 +2236,8 @@ impl Parser<'_> {
             ));
         }
 
-        match name.as_str() {
-            "set" => Ok(BulkUpdateEntryKind::Set(inner)),
-            "over" => Ok(BulkUpdateEntryKind::Over(inner)),
-            "over_result" => Ok(BulkUpdateEntryKind::OverResult(inner)),
-            "case_set" => Ok(BulkUpdateEntryKind::CaseSet(inner)),
-            "case_over" => Ok(BulkUpdateEntryKind::CaseOver(inner)),
-            _ => unreachable!("validated bulk update whitelist"),
-        }
+        let end = inner.span().end;
+        Ok((entry_kind(inner), end))
     }
 
     /// `cond { cond1 => expr1, ..., True => exprN }`
@@ -2253,7 +2283,10 @@ impl Parser<'_> {
         }
 
         let Some((last_cond, last_body)) = clauses.pop() else {
-            unreachable!("checked non-empty clauses");
+            return Err(ParseError::syntax(
+                "Cond expression must contain at least one clause",
+                lbrace,
+            ));
         };
         if !Self::is_true_literal(&last_cond) {
             return Err(ParseError::syntax(
@@ -2428,6 +2461,19 @@ fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
         | Ast::DefdynamicSupervisor(..)
         | Ast::Namespace(..) => false,
     }
+}
+
+fn block_stmts_to_expr(mut body_stmts: Vec<Ast>) -> Ast {
+    if body_stmts.len() == 1 {
+        return body_stmts.remove(0);
+    }
+    Ast::Block(
+        Span {
+            start: body_stmts[0].span().start,
+            end: body_stmts[body_stmts.len() - 1].span().end,
+        },
+        body_stmts,
+    )
 }
 
 fn bulk_update_entry_contains_operation_call(entry: &BulkUpdateEntry) -> bool {

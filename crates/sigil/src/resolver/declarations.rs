@@ -11,6 +11,15 @@ fn is_reserved_builtin_type_redefinition(name: &str) -> bool {
     builtin_type_meta_by_name(surface_name).is_some() && surface_name != "ProcessInit"
 }
 
+fn type_declaration_kind(stmt: &Ast) -> Option<DeclarationKind> {
+    match stmt {
+        Ast::StructDef(..) => Some(DeclarationKind::Struct),
+        Ast::RecordDef(..) => Some(DeclarationKind::Record),
+        Ast::DeferrorDef(..) => Some(DeclarationKind::Deferror),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StagedModuleAst {
     pub module_path: String,
@@ -91,7 +100,7 @@ fn normalize_impl_method_name(target: &str, method_name: &str) -> String {
     format!("{}::{}", target, method_name)
 }
 
-fn impl_method_module_path(_module_path: &str, target: &str) -> String {
+fn impl_owner_module_path(target: &str) -> String {
     target.to_string()
 }
 
@@ -107,9 +116,7 @@ fn lower_impl_member_name(
     }
 }
 
-fn type_decl_entry_module_path() -> String {
-    String::new()
-}
+const TYPE_DECL_ENTRY_MODULE_PATH: &str = "";
 
 fn surface_name(name: &str) -> &str {
     name.strip_prefix("Global::").unwrap_or(name)
@@ -693,7 +700,7 @@ pub fn precollect_declaration_index(
                         seen_impl_targets.insert(target_fq.clone(), span.clone());
                     }
 
-                    let method_module_path = impl_method_module_path(&module.module_path, target);
+                    let method_module_path = impl_owner_module_path(target);
                     for method in methods {
                         let (method_span, method_name, kind, attrs) = match method {
                             Ast::Def(method_span, method_name, _, _, _, _, attrs) => {
@@ -921,7 +928,7 @@ pub fn precollect_declaration_index(
                     index.insert(
                         fq_name.clone(),
                         DeclarationEntry {
-                            module_path: type_decl_entry_module_path(),
+                            module_path: TYPE_DECL_ENTRY_MODULE_PATH.to_string(),
                             name: name.clone(),
                             fq_name,
                             kind: DeclarationKind::Enum,
@@ -950,7 +957,7 @@ pub fn precollect_declaration_index(
                         index.insert(
                             variant_fq_name.clone(),
                             DeclarationEntry {
-                                module_path: type_decl_entry_module_path(),
+                                module_path: TYPE_DECL_ENTRY_MODULE_PATH.to_string(),
                                 name: variant_name,
                                 fq_name: variant_fq_name,
                                 kind: DeclarationKind::EnumVariant,
@@ -1148,7 +1155,7 @@ pub fn precollect_declaration_index(
                                 | DeclarationKind::Record
                                 | DeclarationKind::Deferror
                         ) {
-                            type_decl_entry_module_path()
+                            TYPE_DECL_ENTRY_MODULE_PATH.to_string()
                         } else {
                             module.module_path.clone()
                         },
@@ -1172,7 +1179,10 @@ pub fn precollect_declaration_index(
 
 impl Resolver {
     pub(super) fn lower_impl_defs(&self, stmts: Vec<Ast>) -> Result<Vec<Ast>, ResolveError> {
-        let local_impl_targets = if self.current_stage_impl_targets.is_none() {
+        let local_impl_targets;
+        let impl_targets = if let Some(stage_targets) = self.current_stage_impl_targets.as_ref() {
+            stage_targets
+        } else {
             let mut local_targets = HashMap::new();
             for stmt in &stmts {
                 let (name, kind) = match stmt {
@@ -1192,15 +1202,9 @@ impl Resolver {
                     }
                 }
             }
-            Some(local_targets)
-        } else {
-            None
+            local_impl_targets = local_targets;
+            &local_impl_targets
         };
-        let impl_targets = self
-            .current_stage_impl_targets
-            .as_ref()
-            .or(local_impl_targets.as_ref())
-            .expect("impl target resolutions must exist");
 
         let mut lowered = Vec::new();
         let mut seen_impl_targets: HashMap<String, Span> = HashMap::new();
@@ -1770,11 +1774,8 @@ impl Resolver {
                         .entry(name.clone())
                         .or_default()
                         .push_back(uid);
-                    let kind = match stmt {
-                        Ast::StructDef(..) => DeclarationKind::Struct,
-                        Ast::RecordDef(..) => DeclarationKind::Record,
-                        Ast::DeferrorDef(_, _, _, _, _) => DeclarationKind::Deferror,
-                        _ => unreachable!(),
+                    let Some(kind) = type_declaration_kind(stmt) else {
+                        continue;
                     };
                     self.declaration_uid_kinds.insert(uid, kind);
                     self.scope.define_with_id(name, uid);

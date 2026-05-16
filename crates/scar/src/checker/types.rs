@@ -200,7 +200,7 @@ impl Checker {
     fn ast_ty_is_none_error_marker(ast_ty: &AstTy) -> bool {
         match ast_ty {
             AstTy::Named(_, name) | AstTy::Generic(_, name, _) => {
-                Self::surface_type_name(name) == "NoneError"
+                Self::surface_name(name) == "NoneError"
             }
             _ => false,
         }
@@ -407,10 +407,6 @@ impl Checker {
         }
     }
 
-    fn surface_type_name<'a>(name: &'a str) -> &'a str {
-        Self::surface_name(name)
-    }
-
     fn require_type_arg_count<'a>(
         &self,
         span: &Span,
@@ -439,7 +435,7 @@ impl Checker {
 
         match ast_ty {
             AstTy::Named(span, name) => {
-                match Self::surface_type_name(name) {
+                match Self::surface_name(name) {
                     generic_name if generic_name.starts_with('$') => self
                         .local_annotation_tyvars
                         .get(generic_name)
@@ -454,7 +450,7 @@ impl Checker {
                         }),
                     "_" | "Hole" => self.resolve_hole_surface_ty(span, context),
                     "MatchArms" | "CondClauses" | "BulkUpdateEntries" => Err(self
-                        .clause_block_type_not_allowed_error(span, Self::surface_type_name(name))),
+                        .clause_block_type_not_allowed_error(span, Self::surface_name(name))),
                     "Seq" => Err(self.seq_not_allowed_error(span)),
                     builtin_name => {
                         if let Some(def) = self.env.lookup_type_def(name) {
@@ -547,21 +543,21 @@ impl Checker {
                     }
                 }
             }
-            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
+            AstTy::Generic(span, name, _) if Self::surface_name(name) == "TypeRef" => {
                 Err(self.type_ref_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _)
-                if matches!(Self::surface_type_name(name), "MatchArms" | "CondClauses" | "BulkUpdateEntries") =>
+                if matches!(Self::surface_name(name), "MatchArms" | "CondClauses" | "BulkUpdateEntries") =>
             {
-                Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
+                Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
             }
-            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Lazy" => {
+            AstTy::Generic(span, name, _) if Self::surface_name(name) == "Lazy" => {
                 Err(self.lazy_type_not_allowed_error(span))
             }
-            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
+            AstTy::Generic(span, name, _) if Self::surface_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
             }
-            AstTy::Generic(span, name, args) => match Self::surface_type_name(name) {
+            AstTy::Generic(span, name, args) => match Self::surface_name(name) {
                 "MatchResult" => {
                     if !self.match_result_type_allowed(context) {
                         return Err(self.match_result_not_allowed_error(span));
@@ -691,13 +687,13 @@ impl Checker {
                     Ok(Ty::Result(Box::new(ok), Box::new(err)))
                 }
                 _ => {
-                    if Self::surface_type_name(name) == "Workers" {
+                    if Self::surface_name(name) == "Workers" {
                         return self.resolve_worker_handle_surface_ty(span, args, "Workers");
                     }
-                    if Self::surface_type_name(name) == "WorkerLease" {
+                    if Self::surface_name(name) == "WorkerLease" {
                         return self.resolve_worker_handle_surface_ty(span, args, "WorkerLease");
                     }
-                    if Self::surface_type_name(name) == "TaskHandle" {
+                    if Self::surface_name(name) == "TaskHandle" {
                         return self.resolve_task_handle_surface_ty(span, args);
                     }
                     let def = self.env.lookup_type_def(name).ok_or_else(|| TypeError {
@@ -891,18 +887,18 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
-            AstTy::Named(span, name) if matches!(Self::surface_type_name(name), "_" | "Hole") => {
+            AstTy::Named(span, name) if matches!(Self::surface_name(name), "_" | "Hole") => {
                 self.resolve_hole_surface_ty(span, context)
             }
             AstTy::Named(span, name)
                 if matches!(
-                    Self::surface_type_name(name),
+                    Self::surface_name(name),
                     "MatchArms" | "CondClauses" | "BulkUpdateEntries"
                 ) =>
             {
-                Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
+                Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
             }
-            AstTy::Named(span, name) if Self::surface_type_name(name) == "Seq" => {
+            AstTy::Named(span, name) if Self::surface_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
             }
             AstTy::ImplTrait(_, trait_name) => {
@@ -926,19 +922,19 @@ impl Checker {
                 }
                 Ok(fresh)
             }
-            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "TypeRef" => {
+            AstTy::Generic(span, name, _) if Self::surface_name(name) == "TypeRef" => {
                 Err(self.type_ref_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _)
                 if matches!(
-                    Self::surface_type_name(name),
+                    Self::surface_name(name),
                     "MatchArms" | "CondClauses" | "BulkUpdateEntries"
                 ) =>
             {
-                Err(self.clause_block_type_not_allowed_error(span, Self::surface_type_name(name)))
+                Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
             }
             AstTy::Generic(span, name, args)
-                if Self::surface_type_name(name) == "Lazy" && mode.allows_lazy() =>
+                if Self::surface_name(name) == "Lazy" && mode.allows_lazy() =>
             {
                 let args = self.require_type_arg_count(
                     span,
@@ -954,10 +950,10 @@ impl Checker {
                 )?;
                 Ok(Ty::Lazy(Box::new(inner)))
             }
-            AstTy::Generic(span, name, _) if Self::surface_type_name(name) == "Seq" => {
+            AstTy::Generic(span, name, _) if Self::surface_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
             }
-            AstTy::Generic(span, name, args) => match Self::surface_type_name(name) {
+            AstTy::Generic(span, name, args) => match Self::surface_name(name) {
                 "MatchResult" => {
                     if !self.match_result_type_allowed(context) {
                         return Err(self.match_result_not_allowed_error(span));
@@ -1236,7 +1232,7 @@ impl Checker {
             });
         };
 
-        if Self::surface_type_name(name) == "Error" {
+        if Self::surface_name(name) == "Error" {
             return Ok(Ty::Error);
         }
 
@@ -1744,7 +1740,7 @@ impl Checker {
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
             Ty::Lazy(inner) => format!("Lazy<{}>", self.ty_name(inner)),
             Ty::TypeRef(inner) => format!("TypeRef<{}>", self.ty_name(inner)),
-            Ty::Pid(name) => format!("PID<{}>", Self::surface_type_name(name)),
+            Ty::Pid(name) => format!("PID<{}>", Self::surface_name(name)),
             Ty::Facet(source, focus) => {
                 format!("Facet<{}, {}>", self.ty_name(source), self.ty_name(focus))
             }
@@ -1758,14 +1754,14 @@ impl Checker {
             ),
             Ty::Result(ok, _) => format!("Result<{}>", self.ty_name(ok)),
             Ty::Var(n) => format!("${}", n),
-            Ty::Struct(name, _) | Ty::Record(name, _) => Self::surface_type_name(name).to_string(),
+            Ty::Struct(name, _) | Ty::Record(name, _) => Self::surface_name(name).to_string(),
             Ty::Enum(name, args) => {
                 if args.is_empty() {
-                    Self::surface_type_name(name).to_string()
+                    Self::surface_name(name).to_string()
                 } else {
                     format!(
                         "{}<{}>",
-                        Self::surface_type_name(name),
+                        Self::surface_name(name),
                         args.iter()
                             .map(|arg| self.ty_name(arg))
                             .collect::<Vec<_>>()

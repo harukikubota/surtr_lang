@@ -46,7 +46,7 @@ impl Parser<'_> {
         let stmt = match self.peek() {
             Token::Annotator(_) => self.parse_annotated_decl()?,
             Token::Def | Token::Defp => self.parse_def()?,
-            Token::Defagent => self.parse_defagent_without_legacy_meta()?,
+            Token::Defagent => self.parse_defagent_default_attrs()?,
             Token::Defgenserver => self.parse_defgenserver()?,
             Token::Defsupervisor => self.parse_defsupervisor(false)?,
             Token::DefdynamicSupervisor => self.parse_defsupervisor(true)?,
@@ -82,16 +82,19 @@ impl Parser<'_> {
                             return Ok(stmt);
                         }
                         Err(err) => {
-                            let looks_like_bind = matches!(
+                            let has_top_level_assignment =
+                                self.stmt_has_top_level_assignment_from(save);
+                            let starts_structural_bind = matches!(
                                 self.tokens.get(save).map(|sp| &sp.token),
                                 Some(Token::LParen | Token::LBrack | Token::Caret)
-                            ) && self
-                                .stmt_has_top_level_assignment_from(save)
-                                || matches!(
-                                    self.tokens.get(save).map(|sp| &sp.token),
-                                    Some(Token::Ident(_))
-                                ) && self.stmt_has_top_level_assignment_from(save)
-                                    && self.stmt_has_top_level_at_from(save);
+                            ) && has_top_level_assignment;
+                            let starts_annotated_ident_bind = matches!(
+                                self.tokens.get(save).map(|sp| &sp.token),
+                                Some(Token::Ident(_))
+                            ) && has_top_level_assignment
+                                && self.stmt_has_top_level_at_from(save);
+                            let looks_like_bind =
+                                starts_structural_bind || starts_annotated_ident_bind;
                             self.pos = save;
                             if looks_like_bind {
                                 return Err(err);

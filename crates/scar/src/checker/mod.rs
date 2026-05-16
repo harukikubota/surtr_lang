@@ -671,10 +671,9 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
                     Ty::Func(items, Box::new(ret))
                 } else {
                     self.expect(")")?;
-                    if items.len() == 1 {
-                        items.pop().expect("single grouped type")
-                    } else {
-                        Ty::Tuple(items)
+                    match items.as_slice() {
+                        [single] => single.clone(),
+                        _ => Ty::Tuple(items),
                     }
                 }
             }

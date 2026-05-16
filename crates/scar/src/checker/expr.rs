@@ -55,16 +55,8 @@ impl Checker {
         }
     }
 
-    fn parse_standalone_tuple_root_index(name: &str) -> Option<usize> {
+    fn parse_tuple_index_name(name: &str) -> Option<usize> {
         let suffix = name.strip_prefix('_')?;
-        if suffix.is_empty() || !suffix.chars().all(|ch| ch.is_ascii_digit()) {
-            return None;
-        }
-        suffix.parse::<usize>().ok()
-    }
-
-    fn parse_tuple_segment_index(field: &str) -> Option<usize> {
-        let suffix = field.strip_prefix('_')?;
         if suffix.is_empty() || !suffix.chars().all(|ch| ch.is_ascii_digit()) {
             return None;
         }
@@ -624,7 +616,7 @@ impl Checker {
                     });
                 }
 
-                if let Some(index) = Self::parse_standalone_tuple_root_index(id.name.as_str()) {
+                if let Some(index) = Self::parse_tuple_index_name(id.name.as_str()) {
                     return Err(TypeError {
                         message: format!(
                             "Standalone tuple root _{} is not allowed; use tuple access with ._{}",
@@ -1529,19 +1521,10 @@ impl Checker {
         if params.len() != 2 || !self.types_compatible(&params[0], &params[1]) {
             return self.check_app(span, func, args);
         }
-        if args.len() != 2
-            || args
-                .iter()
-                .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
-        {
+        let [ResolvedRecordLitArg::Positional(compare_expr), ResolvedRecordLitArg::Positional(key_expr)] =
+            args
+        else {
             return self.check_app(span, func, args);
-        }
-
-        let ResolvedRecordLitArg::Positional(compare_expr) = &args[0] else {
-            unreachable!("named arguments rejected above")
-        };
-        let ResolvedRecordLitArg::Positional(key_expr) = &args[1] else {
-            unreachable!("named arguments rejected above")
         };
 
         let source_ty = self.resolve_ty(&params[0]);
@@ -8348,7 +8331,7 @@ impl Checker {
         if id.name != "Tuple" {
             return Ok(None);
         }
-        let Some(index) = Self::parse_tuple_segment_index(field) else {
+        let Some(index) = Self::parse_tuple_index_name(field) else {
             return Ok(None);
         };
 

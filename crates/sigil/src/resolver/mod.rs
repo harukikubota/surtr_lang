@@ -292,47 +292,50 @@ fn resolve_stage_modules_parallel(
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(stage.len());
         for module in stage {
-            handles.push(
-                std::thread::Builder::new()
-                    .stack_size(STAGE_WORKER_STACK_SIZE)
-                    .spawn_scoped(scope, move || {
-                        let mut module_scope = build_module_scope(
-                            global_scope,
-                            auto_import_modules,
-                            declaration_index,
-                            declaration_uids,
-                            declaration_uid_kinds,
-                            &module.ast,
-                            Some(module.module_path.as_str()),
-                            stage_index,
-                        )?;
-                        module_scope.advance_next_id_to(stage_local_base);
-                        let mut resolver = Resolver::with_scope(module_scope);
-                        resolver.current_module_path = Some(module.module_path.clone());
-                        resolver.declaration_entries =
-                            declaration_index.clone().into_iter().collect();
-                        resolver.declaration_uids = declaration_uids.clone();
-                        resolver.declaration_uid_kinds = declaration_uid_kinds.clone();
-                        resolver.declaration_hidden_by_uid = declaration_hidden_by_uid.clone();
-                        resolver.current_stage_impl_targets = Some(stage_impl_targets.clone());
-                        resolver.allow_top_level_shadowing = true;
-                        let resolved = resolver.resolve_program(module.ast.clone())?;
-                        let local_id_count =
-                            resolver.scope.next_id().saturating_sub(stage_local_base);
-                        Ok(StageModuleResolveResult {
-                            resolved,
-                            local_id_count,
-                        })
+            let handle = std::thread::Builder::new()
+                .stack_size(STAGE_WORKER_STACK_SIZE)
+                .spawn_scoped(scope, move || {
+                    let mut module_scope = build_module_scope(
+                        global_scope,
+                        auto_import_modules,
+                        declaration_index,
+                        declaration_uids,
+                        declaration_uid_kinds,
+                        &module.ast,
+                        Some(module.module_path.as_str()),
+                        stage_index,
+                    )?;
+                    module_scope.advance_next_id_to(stage_local_base);
+                    let mut resolver = Resolver::with_scope(module_scope);
+                    resolver.current_module_path = Some(module.module_path.clone());
+                    resolver.declaration_entries = declaration_index.clone().into_iter().collect();
+                    resolver.declaration_uids = declaration_uids.clone();
+                    resolver.declaration_uid_kinds = declaration_uid_kinds.clone();
+                    resolver.declaration_hidden_by_uid = declaration_hidden_by_uid.clone();
+                    resolver.current_stage_impl_targets = Some(stage_impl_targets.clone());
+                    resolver.allow_top_level_shadowing = true;
+                    let resolved = resolver.resolve_program(module.ast.clone())?;
+                    let local_id_count = resolver.scope.next_id().saturating_sub(stage_local_base);
+                    Ok(StageModuleResolveResult {
+                        resolved,
+                        local_id_count,
                     })
-                    .expect("stage resolver worker thread should spawn"),
-            );
+                });
+            handles.push(handle.map_err(|err| ResolveError {
+                message: format!("failed to spawn stage resolver worker: {}", err),
+                span: Span { start: 0, end: 0 },
+                related_labels: Vec::new(),
+            }));
         }
 
         handles
             .into_iter()
-            .map(|handle| match handle.join() {
-                Ok(result) => result,
-                Err(payload) => panic::resume_unwind(payload),
+            .map(|handle| match handle {
+                Ok(handle) => match handle.join() {
+                    Ok(result) => result,
+                    Err(payload) => panic::resume_unwind(payload),
+                },
+                Err(err) => Err(err),
             })
             .collect()
     })
