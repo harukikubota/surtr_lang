@@ -41,17 +41,15 @@
 
 ### OI-016 HashMap v1 follow-up
 
-- 背景:
-  - `HashMap<$V>`、`defmod HashMap`、表示契約は既に baseline として定着している。
-  - 一方で literal sugar と runtime 内部表現の最適化余地はまだ未確定である。
-- 未確定点:
-  - `hash![...]` literal sugar を導入するか
-  - runtime 内部表現を `Vec<(String, Value)>` のまま維持するか、補助 index を併設するか
-- 受け入れ条件:
-  - 採用方針が `doc/要件定義v9.md` / `docs/dev/EldrVM_spec.md` / `docs/dev/テスト方針.md` の3点で矛盾しない。
+- 解決済み:
+  - `hash![key => value, ...]` / `hash![]` literal sugar を採用する。
+  - key は `String` 型を得られる任意の式、value は同一型の式とする。
+  - runtime 内部表現は `HashMap<String, Value>` とし、duplicate key は既存どおり後勝ちで上書きする。
+  - `inspect(HashMap)` / `to_string(HashMap)` は生成可能な literal 形式 `hash!["key" => value, ...]` を返し、表示順はキー昇順 deterministic order とする。
+- 固定先:
+  - `doc/要件定義v9.md` / `docs/dev/EldrVM_spec.md` / `docs/dev/テスト方針.md` / `lib/types/hash_map.srt` に同期済み。
 - テスト方針:
-  - literal 導入時は `unit/spire` / `unit/forge` / `spec` を同時に固定する。
-  - runtime 表現変更時は insertion-order と display 契約を回帰基準にする。
+  - `unit/spire` / `unit/scar` / `unit/forge` / `unit/eldr` / `unit/sindr` / script fixture で literal、型検査、lowering、表示、duplicate key、key order を固定する。
 
 ### OI-017 Worker API 最終形
 

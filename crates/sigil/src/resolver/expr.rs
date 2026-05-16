@@ -8,7 +8,7 @@ use super::special_forms::{IfKind, LogicKind};
 use super::*;
 use spire::ast::{
     AstPath, BinOp, BulkUpdateEntry, BulkUpdateEntryKind, BulkUpdatePath, DbgArg, FacetPathSegment,
-    InterpolatedPart,
+    HashMapLiteralEntry, InterpolatedPart,
 };
 
 const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
@@ -509,6 +509,23 @@ impl Resolver {
                 }
                 Ok(())
             }
+            Ast::HashMapLiteral(_, entries) => {
+                for entry in entries {
+                    self.collect_capture_placeholders(
+                        &entry.key,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                        used,
+                    )?;
+                    self.collect_capture_placeholders(
+                        &entry.value,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                        used,
+                    )?;
+                }
+                Ok(())
+            }
             Ast::RangeLiteral(_, start, stop) => {
                 self.collect_capture_placeholders(
                     start,
@@ -930,6 +947,28 @@ impl Resolver {
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             )),
+            Ast::HashMapLiteral(span, entries) => Ok(Ast::HashMapLiteral(
+                span,
+                entries
+                    .into_iter()
+                    .map(|entry| {
+                        Ok(HashMapLiteralEntry {
+                            key: self.rewrite_capture_placeholders(
+                                entry.key,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                            value: self.rewrite_capture_placeholders(
+                                entry.value,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, ResolveError>>()?,
+            )),
             Ast::RangeLiteral(span, start, stop) => Ok(Ast::RangeLiteral(
                 span,
                 Box::new(self.rewrite_capture_placeholders(
@@ -1299,6 +1338,9 @@ impl Resolver {
             Ast::Block(_, stmts) | Ast::ListLiteral(_, stmts) | Ast::TupleLiteral(_, stmts) => {
                 stmts.iter().find_map(Self::pipe_slot_span)
             }
+            Ast::HashMapLiteral(_, entries) => entries.iter().find_map(|entry| {
+                Self::pipe_slot_span(&entry.key).or_else(|| Self::pipe_slot_span(&entry.value))
+            }),
             Ast::RangeLiteral(_, start, stop) => {
                 Self::pipe_slot_span(start).or_else(|| Self::pipe_slot_span(stop))
             }
@@ -2478,6 +2520,19 @@ impl Resolver {
                     .map(|e| self.resolve_node(e))
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(Resolved::ListLiteral(span, resolved))
+            }
+
+            Ast::HashMapLiteral(span, entries) => {
+                let resolved = entries
+                    .into_iter()
+                    .map(|entry| {
+                        Ok(crate::resolved::ResolvedHashMapLiteralEntry {
+                            key: self.resolve_node(entry.key)?,
+                            value: self.resolve_node(entry.value)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, ResolveError>>()?;
+                Ok(Resolved::HashMapLiteral(span, resolved))
             }
 
             Ast::RangeLiteral(span, start, stop) => {

@@ -70,6 +70,12 @@ pub enum ResolvedStructLitField {
     Shorthand(Symbol, Resolved),
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedHashMapLiteralEntry {
+    pub key: Resolved,
+    pub value: Resolved,
+}
+
 /// Resolved AST — every identifier carries a unique_id.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Resolved {
@@ -295,6 +301,9 @@ pub enum Resolved {
 
     /// Semicolon — explicit Unit coercion
     Semi(Span, Box<Resolved>),
+
+    /// String-keyed HashMap literal
+    HashMapLiteral(Span, Vec<ResolvedHashMapLiteralEntry>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

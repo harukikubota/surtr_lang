@@ -94,6 +94,18 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         string_range_literal_typechecks_to_result_list_string as fn(),
     ),
     (
+        "hash_map_literal_typechecks_string_key_expressions",
+        hash_map_literal_typechecks_string_key_expressions as fn(),
+    ),
+    (
+        "hash_map_literal_rejects_non_string_keys",
+        hash_map_literal_rejects_non_string_keys as fn(),
+    ),
+    (
+        "hash_map_literal_rejects_mixed_value_types",
+        hash_map_literal_rejects_mixed_value_types as fn(),
+    ),
+    (
         "match_string_requires_empty_and_uncons_arms_for_exhaustiveness",
         match_string_requires_empty_and_uncons_arms_for_exhaustiveness as fn(),
     ),
@@ -1448,6 +1460,29 @@ fn string_range_literal_typechecks_to_result_list_string() {
         rhs.ty,
         Ty::Result(Box::new(Ty::List(Box::new(Ty::Str))), Box::new(Ty::Error))
     );
+}
+
+fn hash_map_literal_typechecks_string_key_expressions() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"raw = " talk "
+scores = hash!["talk" => 80, String::trim(raw) => 90]"#,
+    );
+    let typed = typecheck(resolved).expect("typecheck should succeed");
+    let rhs = typed_bind_rhs(&typed, "scores");
+    assert_eq!(rhs.ty, Ty::Enum("HashMap".into(), vec![Ty::Int]));
+    assert!(matches!(rhs.node, TypedInner::HashMapLiteral(_)));
+}
+
+fn hash_map_literal_rejects_non_string_keys() {
+    let resolved = resolve_with_builtin_prelude(r#"scores = hash![1 => "bad"]"#);
+    let err = typecheck(resolved).expect_err("typecheck should fail");
+    assert!(err.message.contains("HashMap literal key must be String"));
+}
+
+fn hash_map_literal_rejects_mixed_value_types() {
+    let resolved = resolve_with_builtin_prelude(r#"scores = hash!["ok" => 1, "bad" => "two"]"#);
+    let err = typecheck(resolved).expect_err("typecheck should fail");
+    assert!(err.message.contains("expected Int, got String"));
 }
 
 fn match_string_requires_empty_and_uncons_arms_for_exhaustiveness() {
@@ -5029,6 +5064,9 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             | TypedInner::ListLiteral(items)
             | TypedInner::ConstructorCall(_, items)
             | TypedInner::StructLit(_, items) => items.iter().any(has_pending_trait_call),
+            TypedInner::HashMapLiteral(entries) => entries
+                .iter()
+                .any(|(key, value)| has_pending_trait_call(key) || has_pending_trait_call(value)),
             TypedInner::If(cond, then_branch, else_branch) => {
                 has_pending_trait_call(cond)
                     || has_pending_trait_call(then_branch)
@@ -5139,6 +5177,9 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             | TypedInner::ListLiteral(items)
             | TypedInner::ConstructorCall(_, items)
             | TypedInner::StructLit(_, items) => items.iter().any(has_pending_trait_call),
+            TypedInner::HashMapLiteral(entries) => entries
+                .iter()
+                .any(|(key, value)| has_pending_trait_call(key) || has_pending_trait_call(value)),
             TypedInner::If(cond, then_branch, else_branch) => {
                 has_pending_trait_call(cond)
                     || has_pending_trait_call(then_branch)

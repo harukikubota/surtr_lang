@@ -1,0 +1,2 @@
+phase: typecheck
+contains: HashMap literal key must be String

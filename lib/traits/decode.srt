@@ -9,7 +9,7 @@ surface, for example `JsonValue::decode(value, Target)`.
 ## REPL
 xldr(1)> json =? Json::decode("{\"name\":\"surtr\"}")
 xldr(2)> JsonValue::decode(json, String)
-Ok(Object(HashMap("name" => String("surtr"))))
+Ok(Object(hash!["name" => String("surtr")]))
 """
 deftrait Decode<$To> {
   # Convert the value into the requested target type.

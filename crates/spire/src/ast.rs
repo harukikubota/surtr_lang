@@ -452,6 +452,12 @@ pub struct DbgArg {
     pub expr: Ast,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct HashMapLiteralEntry {
+    pub key: Ast,
+    pub value: Ast,
+}
+
 /// Record literal argument — positional or named.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RecordLitArg {
@@ -697,6 +703,9 @@ pub enum Ast {
 
     /// Semicolon — explicit Unit coercion marker (wraps the discarded expr)
     Semi(Span, Box<Ast>),
+
+    /// String-keyed HashMap literal: `hash!["key" => value]`
+    HashMapLiteral(Span, Vec<HashMapLiteralEntry>),
 }
 
 #[cfg(test)]

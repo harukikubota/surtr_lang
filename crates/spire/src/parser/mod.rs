@@ -1658,6 +1658,16 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|e| shift_ast_span(e, delta))
                 .collect(),
         ),
+        Ast::HashMapLiteral(span, entries) => Ast::HashMapLiteral(
+            shift_span(span, delta),
+            entries
+                .into_iter()
+                .map(|entry| HashMapLiteralEntry {
+                    key: shift_ast_span(entry.key, delta),
+                    value: shift_ast_span(entry.value, delta),
+                })
+                .collect(),
+        ),
         Ast::RangeLiteral(span, start, stop) => Ast::RangeLiteral(
             shift_span(span, delta),
             Box::new(shift_ast_span(*start, delta)),
@@ -2163,6 +2173,7 @@ impl Ast {
             | Ast::ListNil(s)
             | Ast::ListCons(s, _, _)
             | Ast::ListLiteral(s, _)
+            | Ast::HashMapLiteral(s, _)
             | Ast::RangeLiteral(s, _, _)
             | Ast::TupleLiteral(s, _)
             | Ast::Grouped(s, _)

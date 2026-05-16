@@ -230,9 +230,10 @@ impl String {
   - homogeneous sequence 型
   - `[]` を Nil とし、トップレベルの `cons`, `first`, `len` と `List` module helper を持つ
 - `HashMap`
-  - immutable な insertion-order map（key は常に `String`）
+  - immutable な key-sorted map（key は常に `String`）
+  - `hash![key => value, ...]` literal を持ち、key は `String` 型を得られる式
   - `HashMap::empty` / `from_entries` / `insert` / `remove` / `get` / `keys` / `values` を持つ
-  - `inspect` / `to_string` は `HashMap("key" => value, ...)` 形式
+  - `inspect` / `to_string` は `hash!["key" => value, ...]` 形式
 - `Result`
   - `Ok` / `Err` を中心にした Either 指向の失敗表現
 - `Facet`
@@ -351,12 +352,12 @@ ret = List::reverse(acc)
 
 意味論の要点:
 
-- `insert` で duplicate key を更新すると、値のみ差し替え、最初の挿入順を維持する
+- `insert` で duplicate key を更新すると、値のみ差し替える
 - `remove` は key が存在しない場合 no-op
-- `keys` / `values` は insertion order を保つ
-- `inspect` / `to_string` は key を quoted string で表示し、空 map は `HashMap()` と表示する
+- `keys` / `values` はキー昇順 deterministic order を保つ
+- `inspect` / `to_string` は key を quoted string で表示し、空 map は `hash![]` と表示する
 
-将来 `hash![...]` の literal sugar を入れる余地はあるが、現時点の正本 surface は `HashMap::from_entries` / `HashMap::insert` を基準にする。
+`hash![key => value, ...]` は `HashMap::from_entries` へ lower される生成 literal で、key は `String` 型を得られる任意の式です。
 
 ## 10. `Result` module の位置づけ
 

@@ -300,6 +300,24 @@ fn collect_missing_singleton_calls(
                 );
             }
         }
+        TypedInner::HashMapLiteral(entries) => {
+            for (key, value) in entries {
+                collect_missing_singleton_calls(
+                    key,
+                    surface_to_process,
+                    available_singletons,
+                    available_supervisors,
+                    first_missing,
+                );
+                collect_missing_singleton_calls(
+                    value,
+                    surface_to_process,
+                    available_singletons,
+                    available_supervisors,
+                    first_missing,
+                );
+            }
+        }
         TypedInner::Bind(_, rhs)
         | TypedInner::SafeBind(_, rhs)
         | TypedInner::FieldAccess(rhs, _)
@@ -6428,6 +6446,27 @@ impl Codegen {
                 }
                 self.emit(Opcode::ListFromItems {
                     len: elems.len() as u32,
+                });
+            }
+            TypedInner::HashMapLiteral(entries) => {
+                for (key, value) in entries {
+                    self.emit_node(key)?;
+                    self.emit_node(value)?;
+                    self.emit(Opcode::TupleNew { len: 2 });
+                }
+                self.emit(Opcode::ListFromItems {
+                    len: entries.len() as u32,
+                });
+                let builtin_id =
+                    Self::builtin_id("map_from_entries").ok_or_else(|| CodegenError {
+                        message: "Unknown builtin: map_from_entries".into(),
+                        span: node.span.clone(),
+                    })?;
+                self.emit(Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: 1,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
                 });
             }
             TypedInner::TupleLiteral(elems) => {

@@ -1056,6 +1056,9 @@ impl ScarSession {
         I: IntoIterator<Item = (&'a str, u32)>,
     {
         let function_indices = functions.into_iter().collect::<HashMap<_, _>>();
+        let mut function_id_entries = self.state.function_ids_by_name.iter().collect::<Vec<_>>();
+        function_id_entries.sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
+        let specializable_by_name = self.specializable_fun_idxs_by_name();
         let mut next_fun_idx = function_indices
             .values()
             .copied()
@@ -1064,17 +1067,18 @@ impl ScarSession {
             .unwrap_or(self.state.env.next_fun_idx);
         let mut specializable_rekeys = Vec::new();
         let mut fun_idx_rewrites = HashMap::new();
-        for (qualified_name, id) in &self.state.function_ids_by_name {
+        for (qualified_name, id) in function_id_entries {
             let old_fun_idx = match self.state.env.vars.get(&id.unique_id) {
                 Some(Ty::UserFunc { fun_idx, .. }) => Some(*fun_idx),
                 _ => None,
             };
             let fun_idx = if let Some(fun_idx) = function_indices.get(qualified_name.as_str()) {
                 *fun_idx
-            } else if let Some(old_fun_idx) = self.specializable_fun_idx_for_name(qualified_name) {
+            } else if let Some(old_fun_idx) = specializable_by_name.get(qualified_name.as_str()) {
                 let new_fun_idx = next_fun_idx;
                 next_fun_idx += 1;
-                specializable_rekeys.push((old_fun_idx, new_fun_idx));
+                specializable_rekeys.push((*old_fun_idx, new_fun_idx));
+                fun_idx_rewrites.insert(*old_fun_idx, new_fun_idx);
                 new_fun_idx
             } else {
                 continue;
@@ -1141,14 +1145,24 @@ impl ScarSession {
         self.state.env.next_fun_idx = self.state.env.next_fun_idx.max(next_fun_idx);
     }
 
-    fn specializable_fun_idx_for_name(&self, qualified_name: &str) -> Option<u32> {
-        self.state
+    fn specializable_fun_idxs_by_name(&self) -> HashMap<String, u32> {
+        let mut entries: Vec<(String, u32)> = self
+            .state
             .specializable_defs
             .iter()
-            .find_map(|(fun_idx, def)| {
-                (Self::def_qualified_name(def).as_deref() == Some(qualified_name))
-                    .then_some(*fun_idx)
-            })
+            .filter_map(|(fun_idx, def)| Self::def_qualified_name(def).map(|name| (name, *fun_idx)))
+            .collect::<Vec<_>>();
+        entries.sort_by(|(left_name, left_idx), (right_name, right_idx)| {
+            left_name
+                .cmp(right_name)
+                .then_with(|| left_idx.cmp(right_idx))
+        });
+
+        let mut by_name = HashMap::new();
+        for (name, fun_idx) in entries {
+            by_name.entry(name).or_insert(fun_idx);
+        }
+        by_name
     }
 
     fn def_qualified_name(def: &TypedNode) -> Option<String> {
@@ -1306,6 +1320,12 @@ impl ScarSession {
             | TypedInner::TupleLiteral(stmts) => {
                 for stmt in stmts {
                     Self::rewrite_fun_indices_in_node(stmt, rewrites);
+                }
+            }
+            TypedInner::HashMapLiteral(entries) => {
+                for (key, value) in entries {
+                    Self::rewrite_fun_indices_in_node(key, rewrites);
+                    Self::rewrite_fun_indices_in_node(value, rewrites);
                 }
             }
             TypedInner::Bind(pattern, rhs) | TypedInner::SafeBind(pattern, rhs) => {

@@ -1,0 +1,1 @@
+scores = hash![1 => "bad"]

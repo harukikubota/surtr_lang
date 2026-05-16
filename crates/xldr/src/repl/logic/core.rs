@@ -7446,6 +7446,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::ListNil(span)
         | Ast::ListCons(span, _, _)
         | Ast::ListLiteral(span, _)
+        | Ast::HashMapLiteral(span, _)
         | Ast::RangeLiteral(span, _, _)
         | Ast::TupleLiteral(span, _)
         | Ast::Grouped(span, _)

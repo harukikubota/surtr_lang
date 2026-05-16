@@ -2515,6 +2515,42 @@ fn test_single_item_list_literal_accepts_trailing_comma() {
 }
 
 #[test]
+fn test_hash_map_literal_accepts_string_and_expression_keys() {
+    let ast = parse(r#"scores = hash!["talk" => 80, String::trim(raw) => 90,]"#).unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::HashMapLiteral(_, entries) => {
+                assert_eq!(entries.len(), 2);
+                assert!(matches!(entries[0].key, Ast::Lit(_, Lit::Str(ref key)) if key == "talk"));
+                assert!(matches!(entries[0].value, Ast::Lit(_, Lit::Int(ref n)) if *n == int(80)));
+                assert!(matches!(entries[1].key, Ast::App(_, _, _)));
+                assert!(matches!(entries[1].value, Ast::Lit(_, Lit::Int(ref n)) if *n == int(90)));
+            }
+            other => panic!("Expected HashMapLiteral, got {other:?}"),
+        },
+        other => panic!("Expected Bind, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_empty_hash_map_literal() {
+    let ast = parse("scores = hash![]").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::HashMapLiteral(_, entries) => assert!(entries.is_empty()),
+            other => panic!("Expected HashMapLiteral, got {other:?}"),
+        },
+        other => panic!("Expected Bind, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_hash_map_literal_requires_fat_arrow() {
+    let err = parse(r#"scores = hash!["talk", 80]"#).expect_err("expected parse error");
+    assert!(err.message().contains("expected `=>` in hash! literal"));
+}
+
+#[test]
 fn test_range_literal_expr() {
     let ast = parse("nums = [1..3]").unwrap();
     match &ast[0] {

@@ -903,6 +903,9 @@ impl Parser<'_> {
         if name == "dbg" && matches!(self.peek(), Token::Bang) {
             return self.parse_dbg_special_form(name_span);
         }
+        if name == "hash" && matches!(self.peek(), Token::Bang) {
+            return self.parse_hash_map_literal(name_span);
+        }
 
         if name == "self" && self.impl_target_stack.is_empty() {
             return Err(ParseError::syntax(
@@ -1671,6 +1674,62 @@ impl Parser<'_> {
         })
     }
 
+    fn parse_hash_map_literal(&mut self, name_span: Span) -> Result<Ast, ParseError> {
+        self.advance();
+        let bracket_start = self.expect(&Token::LBrack)?;
+        self.with_parse_nesting(bracket_start.clone(), |parser| {
+            parser.skip_newlines();
+            if matches!(parser.peek(), Token::RBrack) {
+                let end = parser.expect(&Token::RBrack)?;
+                return Ok(Ast::HashMapLiteral(
+                    Span {
+                        start: name_span.start,
+                        end: end.end,
+                    },
+                    Vec::new(),
+                ));
+            }
+
+            let mut entries = Vec::new();
+            loop {
+                parser.skip_newlines();
+                let key = parser.parse_non_assignment_expr()?;
+                parser.skip_newlines();
+                if !matches!(parser.peek(), Token::FatArrow) {
+                    return Err(ParseError::syntax(
+                        "expected `=>` in hash! literal",
+                        parser.peek_span(),
+                    ));
+                }
+                parser.advance();
+                parser.skip_newlines();
+                let value = parser.parse_non_assignment_expr()?;
+                entries.push(HashMapLiteralEntry { key, value });
+                parser.skip_newlines();
+
+                if matches!(parser.peek(), Token::Comma) {
+                    parser.advance();
+                    parser.skip_newlines();
+                    if matches!(parser.peek(), Token::RBrack) {
+                        break;
+                    }
+                    continue;
+                }
+                break;
+            }
+
+            parser.skip_newlines();
+            let end = parser.expect(&Token::RBrack)?;
+            Ok(Ast::HashMapLiteral(
+                Span {
+                    start: name_span.start,
+                    end: end.end,
+                },
+                entries,
+            ))
+        })
+    }
+
     // ── Type annotation parsing ──
 
     pub(super) fn parse_closure_literal(&mut self, sp: Span) -> Result<Ast, ParseError> {
@@ -2372,6 +2431,10 @@ fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
         Ast::Block(_, stmts) | Ast::ListLiteral(_, stmts) | Ast::TupleLiteral(_, stmts) => {
             stmts.iter().any(bulk_update_proc_contains_operation_call)
         }
+        Ast::HashMapLiteral(_, entries) => entries.iter().any(|entry| {
+            bulk_update_proc_contains_operation_call(&entry.key)
+                || bulk_update_proc_contains_operation_call(&entry.value)
+        }),
         Ast::Bind(_, _, rhs)
         | Ast::SafeBind(_, _, rhs)
         | Ast::Grouped(_, rhs)

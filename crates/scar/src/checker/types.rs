@@ -2078,6 +2078,14 @@ impl Checker {
                     .map(|elem| self.resolve_typed_node(elem))
                     .collect(),
             ),
+            TypedInner::HashMapLiteral(entries) => TypedInner::HashMapLiteral(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| {
+                        (self.resolve_typed_node(key), self.resolve_typed_node(value))
+                    })
+                    .collect(),
+            ),
             TypedInner::TupleLiteral(elems) => TypedInner::TupleLiteral(
                 elems
                     .into_iter()

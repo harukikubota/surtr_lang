@@ -365,6 +365,16 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 .map(|elem| rewrite_self_ast(elem, target))
                 .collect(),
         ),
+        Ast::HashMapLiteral(span, entries) => Ast::HashMapLiteral(
+            span,
+            entries
+                .into_iter()
+                .map(|entry| spire::ast::HashMapLiteralEntry {
+                    key: rewrite_self_ast(entry.key, target),
+                    value: rewrite_self_ast(entry.value, target),
+                })
+                .collect(),
+        ),
         Ast::RangeLiteral(span, start, stop) => Ast::RangeLiteral(
             span,
             Box::new(rewrite_self_ast(*start, target)),

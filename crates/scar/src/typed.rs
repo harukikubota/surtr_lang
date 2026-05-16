@@ -450,6 +450,8 @@ pub enum TypedInner {
 
     /// Semicolon — explicit Unit coercion
     Semi(Box<TypedNode>),
+
+    HashMapLiteral(Vec<(TypedNode, TypedNode)>),
 }
 
 /// Interpolated string fragment (typed).

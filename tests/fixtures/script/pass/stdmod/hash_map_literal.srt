@@ -1,0 +1,6 @@
+raw = " talk "
+scores = hash!["k1" => 1, "k2" => 2, String::trim(raw) => 3]
+
+print(inspect(scores))
+print(inspect(HashMap::get(scores, "talk")))
+print(inspect(HashMap::keys(scores)))

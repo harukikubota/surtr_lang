@@ -17,7 +17,7 @@ impl Checker {
         let mut bound_tyvars_by_fun_idx = HashMap::new();
         for (fun_idx, def) in &defs_by_fun_idx {
             let bound_tyvars = self.collect_bound_tyvars_for_def(def);
-            let needs = Self::typed_node_has_pending_trait_call(def);
+            let needs = Self::typed_node_has_pending_trait_call(def) || !bound_tyvars.is_empty();
             if needs {
                 needs_specialization.insert(*fun_idx);
             }
@@ -456,6 +456,31 @@ impl Checker {
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?,
+            ),
+            TypedInner::HashMapLiteral(entries) => TypedInner::HashMapLiteral(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| {
+                        Ok((
+                            self.rewrite_specializations_in_node(
+                                key,
+                                defs_by_fun_idx,
+                                bound_tyvars_by_fun_idx,
+                                needs_specialization,
+                                specialization_fun_idxs,
+                                generated_defs,
+                            )?,
+                            self.rewrite_specializations_in_node(
+                                value,
+                                defs_by_fun_idx,
+                                bound_tyvars_by_fun_idx,
+                                needs_specialization,
+                                specialization_fun_idxs,
+                                generated_defs,
+                            )?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, TypeError>>()?,
             ),
             TypedInner::TupleLiteral(items) => TypedInner::TupleLiteral(
                 items
@@ -1208,6 +1233,12 @@ impl Checker {
                     self.collect_bound_tyvars_in_node(item, ordered, seen);
                 }
             }
+            TypedInner::HashMapLiteral(entries) => {
+                for (key, value) in entries {
+                    self.collect_bound_tyvars_in_node(key, ordered, seen);
+                    self.collect_bound_tyvars_in_node(value, ordered, seen);
+                }
+            }
             TypedInner::InterpolatedStr(parts) => {
                 for part in parts {
                     if let TypedInterpolatedPart::Expr(expr) = part {
@@ -1495,6 +1526,17 @@ impl Checker {
                 items
                     .into_iter()
                     .map(|item| self.substitute_typed_node_with_mapping(item, mapping))
+                    .collect(),
+            ),
+            TypedInner::HashMapLiteral(entries) => TypedInner::HashMapLiteral(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| {
+                        (
+                            self.substitute_typed_node_with_mapping(key, mapping),
+                            self.substitute_typed_node_with_mapping(value, mapping),
+                        )
+                    })
                     .collect(),
             ),
             TypedInner::TupleLiteral(items) => TypedInner::TupleLiteral(
@@ -2022,8 +2064,14 @@ impl Checker {
 
     fn typed_node_has_pending_trait_call(node: &TypedNode) -> bool {
         match &node.node {
-            TypedInner::TraitCall { dispatch, args, .. } => {
+            TypedInner::TraitCall {
+                dispatch,
+                receiver_ty,
+                args,
+                ..
+            } => {
                 matches!(dispatch, TraitDispatch::Pending)
+                    || matches!(receiver_ty, Ty::Var(_))
                     || args.iter().any(Self::typed_node_has_pending_trait_call)
             }
             TypedInner::App(func, args)
@@ -2049,6 +2097,10 @@ impl Checker {
             TypedInner::ListLiteral(items) | TypedInner::TupleLiteral(items) => {
                 items.iter().any(Self::typed_node_has_pending_trait_call)
             }
+            TypedInner::HashMapLiteral(entries) => entries.iter().any(|(key, value)| {
+                Self::typed_node_has_pending_trait_call(key)
+                    || Self::typed_node_has_pending_trait_call(value)
+            }),
             TypedInner::InterpolatedStr(parts) => parts.iter().any(|part| match part {
                 TypedInterpolatedPart::Text(_) => false,
                 TypedInterpolatedPart::Expr(expr) => Self::typed_node_has_pending_trait_call(expr),

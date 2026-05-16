@@ -107,6 +107,10 @@ impl Checker {
             | TypedInner::StructLit(_, stmts) => stmts
                 .iter()
                 .find_map(|stmt| self.first_pending_trait_helper(stmt)),
+            TypedInner::HashMapLiteral(entries) => entries.iter().find_map(|(key, value)| {
+                self.first_pending_trait_helper(key)
+                    .or_else(|| self.first_pending_trait_helper(value))
+            }),
             TypedInner::Bind(_, rhs)
             | TypedInner::SafeBind(_, rhs)
             | TypedInner::Semi(rhs)
@@ -290,6 +294,17 @@ impl Checker {
                     .into_iter()
                     .map(|item| self.concretize_pending_trait_calls(item))
                     .collect::<Result<Vec<_>, _>>()?,
+            ),
+            TypedInner::HashMapLiteral(entries) => TypedInner::HashMapLiteral(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| {
+                        Ok((
+                            self.concretize_pending_trait_calls(key)?,
+                            self.concretize_pending_trait_calls(value)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, TypeError>>()?,
             ),
             TypedInner::InterpolatedStr(parts) => TypedInner::InterpolatedStr(
                 parts
@@ -737,6 +752,7 @@ impl Checker {
             Resolved::ListNil(span) => self.check_list_nil(span),
             Resolved::ListCons(span, head, tail) => self.check_list_cons(span, head, tail),
             Resolved::ListLiteral(span, elems) => self.check_list_literal(span, elems),
+            Resolved::HashMapLiteral(span, entries) => self.check_hash_map_literal(span, entries),
             Resolved::RangeLiteral(span, start, stop) => {
                 self.check_range_literal(span, start, stop)
             }
@@ -1773,6 +1789,7 @@ impl Checker {
             | Resolved::ListNil(span)
             | Resolved::ListCons(span, _, _)
             | Resolved::ListLiteral(span, _)
+            | Resolved::HashMapLiteral(span, _)
             | Resolved::RangeLiteral(span, _, _)
             | Resolved::TupleLiteral(span, _)
             | Resolved::Grouped(span, _)
@@ -2088,11 +2105,16 @@ impl Checker {
                             .qualified_name
                             .as_ref()
                             .unwrap_or(&method.function_id.name);
-                        let function_id = self.function_ids_by_name.get(function_key)?;
-                        let function_ty = self.env.lookup_var(function_id.unique_id)?;
-                        let Ty::UserFunc { fun_idx, .. } = function_ty else {
-                            return None;
-                        };
+                        let fun_idx = self
+                            .specializable_fun_idx_for_function_key(function_key)
+                            .or_else(|| {
+                                let function_id = self.function_ids_by_name.get(function_key)?;
+                                let function_ty = self.env.lookup_var(function_id.unique_id)?;
+                                let Ty::UserFunc { fun_idx, .. } = function_ty else {
+                                    return None;
+                                };
+                                Some(*fun_idx)
+                            })?;
                         let display_name =
                             method
                                 .display_name_override
@@ -2112,7 +2134,7 @@ impl Checker {
                                 });
                         return Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
                             name: display_name,
-                            fun_idx: *fun_idx,
+                            fun_idx,
                         }));
                     }
                 }
@@ -2179,11 +2201,16 @@ impl Checker {
                     .qualified_name
                     .as_ref()
                     .unwrap_or(&method.function_id.name);
-                let function_id = self.function_ids_by_name.get(function_key)?;
-                let function_ty = self.env.lookup_var(function_id.unique_id)?;
-                let Ty::UserFunc { fun_idx, .. } = function_ty else {
-                    return None;
-                };
+                let fun_idx = self
+                    .specializable_fun_idx_for_function_key(function_key)
+                    .or_else(|| {
+                        let function_id = self.function_ids_by_name.get(function_key)?;
+                        let function_ty = self.env.lookup_var(function_id.unique_id)?;
+                        let Ty::UserFunc { fun_idx, .. } = function_ty else {
+                            return None;
+                        };
+                        Some(*fun_idx)
+                    })?;
                 let display_name = method
                     .display_name_override
                     .clone()
@@ -2202,7 +2229,7 @@ impl Checker {
                     .unwrap_or_else(|| Checker::surface_name(&method.function_id.name).into());
                 return Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
                     name: display_name,
-                    fun_idx: *fun_idx,
+                    fun_idx,
                 }));
             }
             None
@@ -2210,6 +2237,18 @@ impl Checker {
         self.profiler
             .finish(ProfileEvent::GenericTraitCandidateScan, profile);
         result
+    }
+
+    fn specializable_fun_idx_for_function_key(&self, function_key: &str) -> Option<u32> {
+        self.specializable_defs.iter().find_map(|(fun_idx, def)| {
+            let name = match &def.node {
+                TypedInner::Def(_, id, ..) | TypedInner::ExtractorDef(_, id, ..) => {
+                    id.qualified_name.as_ref().unwrap_or(&id.name)
+                }
+                _ => return None,
+            };
+            (name == function_key).then_some(*fun_idx)
+        })
     }
 
     fn operator_trait_dispatch_for_args(
@@ -7382,6 +7421,64 @@ impl Checker {
             ty: Ty::List(Box::new(elem_ty)),
             span: span.clone(),
             node: TypedInner::ListLiteral(typed_elems),
+        })
+    }
+
+    pub(super) fn check_hash_map_literal(
+        &mut self,
+        span: &Span,
+        entries: &[sigil::resolved::ResolvedHashMapLiteralEntry],
+    ) -> Result<TypedNode, TypeError> {
+        if entries.is_empty() {
+            return Ok(TypedNode {
+                ty: Ty::Enum("HashMap".into(), vec![self.env.fresh_tyvar()]),
+                span: span.clone(),
+                node: TypedInner::HashMapLiteral(Vec::new()),
+            });
+        }
+
+        let mut typed_entries = Vec::new();
+        for entry in entries {
+            let typed_key = self.check_node(&entry.key)?;
+            self.ensure_no_runtime_facet_value(&typed_key, "HashMap literal key")?;
+            if !self.types_compatible(&Ty::Str, &typed_key.ty) {
+                return Err(TypeError {
+                    message: format!(
+                        "HashMap literal key must be String, got {}",
+                        self.ty_name(&typed_key.ty)
+                    ),
+                    span: typed_key.span.clone(),
+                    hint: Some(
+                        "Use `hash![key_expr => value]` with a key expression that returns String."
+                            .into(),
+                    ),
+                });
+            }
+
+            let typed_value = self.check_node(&entry.value)?;
+            self.ensure_no_runtime_facet_value(&typed_value, "HashMap literal value")?;
+            typed_entries.push((typed_key, typed_value));
+        }
+
+        let value_ty = typed_entries[0].1.ty.clone();
+        for (_, value) in typed_entries.iter().skip(1) {
+            if !self.types_compatible(&value_ty, &value.ty) {
+                return Err(TypeError {
+                    message: format!(
+                        "expected {}, got {}",
+                        self.ty_name(&value_ty),
+                        self.ty_name(&value.ty)
+                    ),
+                    span: value.span.clone(),
+                    hint: Some("All HashMap literal values must have the same type".into()),
+                });
+            }
+        }
+
+        Ok(TypedNode {
+            ty: Ty::Enum("HashMap".into(), vec![value_ty]),
+            span: span.clone(),
+            node: TypedInner::HashMapLiteral(typed_entries),
         })
     }
 

@@ -3,6 +3,9 @@ Standard `HashMap` type declaration.
 `HashMap<$V>` is an immutable map with `String` keys and
 value-only generics.
 The canonical builtin head is fixed to this shape.
+Use `hash![key => value, ...]` for generated literals. Literal keys may be
+any expression whose type is `String`, and inspect/to_string render the same
+literal form in deterministic key-sorted order.
 
 Facet path note:
 
@@ -39,7 +42,7 @@ impl HashMap {
   Return the empty map.
   ## REPL
   xldr(1)> HashMap::empty_map()
-  HashMap()
+  hash![]
   """
   @builtin def empty_map() -> HashMap<$V>
 
@@ -48,7 +51,7 @@ impl HashMap {
   This is the user-facing alias for the builtin constructor helper.
   ## REPL
   xldr(1)> HashMap::empty()
-  HashMap()
+  hash![]
   """
   def empty() -> HashMap<$V> {
     empty_map()
@@ -59,7 +62,7 @@ impl HashMap {
   Later duplicates overwrite values.
   ## REPL
   xldr(1)> HashMap::map_from_entries([("a", 1)])
-  HashMap("a" => 1)
+  hash!["a" => 1]
   """
   @builtin def map_from_entries(entries: List<(String, $V)>) -> HashMap<$V>
 
@@ -68,7 +71,7 @@ impl HashMap {
   Later duplicates overwrite values.
   ## REPL
   xldr(1)> HashMap::from_entries([("a", 1)])
-  HashMap("a" => 1)
+  hash!["a" => 1]
   """
   def from_entries(entries: List<(String, $V)>) -> HashMap<$V> {
     map_from_entries(entries)
@@ -132,7 +135,7 @@ impl HashMap {
   Return a new map with `key` set to `value`.
   ## REPL
   xldr(1)> HashMap::map_insert(HashMap::empty(), "a", 1)
-  HashMap("a" => 1)
+  hash!["a" => 1]
   """
   @builtin def map_insert(map: HashMap<$V>, key: String, value: $V) -> HashMap<$V>
 
@@ -140,7 +143,7 @@ impl HashMap {
   Return a new map with `key` set to `value`.
   ## REPL
   xldr(1)> HashMap::insert(HashMap::empty(), "a", 1)
-  HashMap("a" => 1)
+  hash!["a" => 1]
   """
   def insert(map: HashMap<$V>, key: String, value: $V) -> HashMap<$V> {
     map_insert(map, key, value)
@@ -151,7 +154,7 @@ impl HashMap {
   Missing keys are no-op.
   ## REPL
   xldr(1)> HashMap::map_remove(HashMap::from_entries([("a", 1)]), "a")
-  HashMap()
+  hash![]
   """
   @builtin def map_remove(map: HashMap<$V>, key: String) -> HashMap<$V>
 
@@ -160,7 +163,7 @@ impl HashMap {
   Missing keys are no-op.
   ## REPL
   xldr(1)> HashMap::remove(HashMap::from_entries([("a", 1)]), "a")
-  HashMap()
+  hash![]
   """
   def remove(map: HashMap<$V>, key: String) -> HashMap<$V> {
     map_remove(map, key)
@@ -217,7 +220,7 @@ impl HashMap {
   The visible order remains deterministic and sorted by key.
   ## REPL
   xldr(1)> HashMap::map_values(HashMap::from_entries([("a", 1), ("b", 2)]), {|n| n + 1})
-  HashMap("a" => 2, "b" => 3)
+  hash!["a" => 2, "b" => 3]
   """
   def map_values(map: HashMap<$A>, f: ($A -> $B)) -> HashMap<$B> {
     _map_values_go(map, keys(map), f, empty())

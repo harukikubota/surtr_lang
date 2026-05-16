@@ -524,6 +524,19 @@ mod tests {
         }
     }
 
+    fn hash_map_lit_int(entries: impl IntoIterator<Item = (&'static str, i64)>) -> TypedNode {
+        TypedNode {
+            ty: Ty::Enum("HashMap".into(), vec![Ty::Int]),
+            span: test_span(),
+            node: TypedInner::HashMapLiteral(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (str_lit(key), int_lit(value)))
+                    .collect(),
+            ),
+        }
+    }
+
     fn assert_no_call_builtin(bytecode: &sindr::ir::Bytecode, builtin_name: &str) {
         let builtin_id = builtin_id_by_name(builtin_name)
             .unwrap_or_else(|| panic!("{builtin_name} builtin metadata must exist"));
@@ -900,6 +913,31 @@ print(to_string(add(1, 2)))"#,
         assert!(!top_level
             .iter()
             .any(|op| matches!(op, Opcode::CallClosure { .. })));
+    }
+
+    #[test]
+    fn hash_map_literal_lowers_to_map_from_entries_builtin() {
+        let bytecode = codegen_typed(vec![hash_map_lit_int([("b", 2), ("a", 1)])]);
+        let map_from_entries_id =
+            builtin_id_by_name("map_from_entries").expect("map_from_entries builtin exists");
+        let top_level = top_level_opcodes(&bytecode);
+
+        assert!(top_level.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: 1,
+                    ..
+                } if *builtin_id == map_from_entries_id
+            )
+        }));
+        assert!(top_level
+            .iter()
+            .any(|op| matches!(op, Opcode::TupleNew { len: 2 })));
+        assert!(top_level
+            .iter()
+            .any(|op| matches!(op, Opcode::ListFromItems { len: 2 })));
     }
 
     #[test]

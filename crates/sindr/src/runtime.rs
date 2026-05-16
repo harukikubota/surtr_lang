@@ -322,7 +322,7 @@ impl Value {
             }
             Value::HashMap(handle) => {
                 if handle.entries.is_empty() {
-                    return "HashMap()".to_string();
+                    return "hash![]".to_string();
                 }
                 let inner = handle
                     .sorted_entries()
@@ -336,7 +336,7 @@ impl Value {
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("HashMap({inner})")
+                format!("hash![{inner}]")
             }
             Value::Tuple(items) => {
                 let inner = items
@@ -922,7 +922,7 @@ mod tests {
         ]));
         assert_eq!(
             value.to_display_string(&registry),
-            "HashMap(\"line\\nfeed\" => 1, \"path\\\\to\" => 2, \"say\\\"hi\" => 3, \"tab\\tchar\" => 4)"
+            "hash![\"line\\nfeed\" => 1, \"path\\\\to\" => 2, \"say\\\"hi\" => 3, \"tab\\tchar\" => 4]"
         );
     }
 

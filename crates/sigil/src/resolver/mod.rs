@@ -382,6 +382,12 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         | Resolved::TupleLiteral(_, nodes) => {
             rebase_resolved_nodes(nodes, base, offset);
         }
+        Resolved::HashMapLiteral(_, entries) => {
+            for entry in entries {
+                rebase_resolved_node(&mut entry.key, base, offset);
+                rebase_resolved_node(&mut entry.value, base, offset);
+            }
+        }
         Resolved::RangeLiteral(_, start, stop) => {
             rebase_resolved_node(start, base, offset);
             rebase_resolved_node(stop, base, offset);
