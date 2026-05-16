@@ -286,7 +286,7 @@ fn run_source_file(
         env,
         file_path,
         &compile_plan.source_for_parse,
-        &compile_plan.include_directives,
+        &compile_plan.include_modules,
     )?;
     let bytecode = match run_cache::load(env, &compile_sources, &compile_plan) {
         Some(bytecode) => bytecode,

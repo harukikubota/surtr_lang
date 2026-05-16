@@ -9,7 +9,7 @@ use spire::ast::Span;
 
 use crate::compile::{
     collect_default_script_compile_sources, compile_source, prepare_script_compile_plan,
-    script_plan_error_as_rune_error, IncludeDirective,
+    script_plan_error_as_rune_error,
 };
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
 
@@ -360,7 +360,7 @@ fn compile_test_script(script: &TestScript, env: ExecutionEnv) -> RuneResult<Byt
         env,
         &script.file_path,
         &compile_plan.source_for_parse,
-        &compile_plan.include_directives,
+        &compile_plan.include_modules,
     )?;
     let bytecode = compile_source(env, &compile_sources, &compile_plan)?;
     store_cached_bytecode(&cache_path, &bytecode)?;
@@ -399,7 +399,7 @@ fn library_sources_fingerprint() -> Result<String, RuneError> {
 
 fn cached_eldr_path(
     script: &TestScript,
-    include_directives: &[IncludeDirective],
+    include_directives: &[xldr::ScriptIncludeDirective],
 ) -> Result<PathBuf, RuneError> {
     let mut key = String::new();
     key.push_str(TEST_CACHE_VERSION);
@@ -421,7 +421,7 @@ fn cached_eldr_path(
 
 fn include_sources_fingerprint(
     script_file_path: &str,
-    include_directives: &[IncludeDirective],
+    include_directives: &[xldr::ScriptIncludeDirective],
 ) -> Result<String, RuneError> {
     let mut payload = String::new();
     for directive in include_directives {

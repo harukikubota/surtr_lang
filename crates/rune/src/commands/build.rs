@@ -28,7 +28,7 @@ fn build_command(input_srt: &str, output_eldr: Option<&str>, env: ExecutionEnv) 
         env,
         input_srt,
         &compile_plan.source_for_parse,
-        &compile_plan.include_directives,
+        &compile_plan.include_modules,
     )?;
     let bytecode = compile_source(env, &compile_sources, &compile_plan)?;
     let bytes = bytecode

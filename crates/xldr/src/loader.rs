@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use diagnostics::{SourceId, SourceRegistry};
+use spire::ast::{Ast, Span};
 
 const BUILTIN_PRELUDE_FILE: &str = "bootstrap.srt";
 const BUILTIN_PRELUDE_MODULE_PATH: &str = "Bootstrap";
@@ -467,8 +468,139 @@ pub struct ModuleInput {
     pub module_path: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScriptIncludeDirective {
+    pub file_path: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScriptSourcePrepareError {
+    Parse { message: String, span: Span },
+    IncludeRead { message: String, span: Span },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedScriptSources {
+    pub source_for_parse: String,
+    pub include_directives: Vec<ScriptIncludeDirective>,
+    pub include_modules: Vec<ModuleInput>,
+}
+
 fn display_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+pub fn module_path_from_source_or_file_name(file_name: &str, source: &str) -> String {
+    derive_primary_module_path(source)
+        .filter(|module_path| !module_path.is_empty())
+        .unwrap_or_else(|| module_path_from_file_name_lossy(file_name))
+}
+
+fn module_path_from_file_name_lossy(file_name: &str) -> String {
+    let normalized = file_name.replace('\\', "/");
+    let mut body = normalized.trim().trim_start_matches("./").to_string();
+    if let Some(stripped) = body.strip_suffix(".srt") {
+        body = stripped.to_string();
+    }
+    let segments = body
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.is_empty() {
+        "Main".to_string()
+    } else {
+        segments.join("::")
+    }
+}
+
+pub fn collect_script_include_directives(
+    source: &str,
+    source_kind: SourceKind,
+) -> Result<(String, Vec<ScriptIncludeDirective>), ScriptSourcePrepareError> {
+    let ast = spire::parse_with_context(
+        source,
+        spire::ParserContext::script(0).with_rules(crate::derive_parse_rules(source_kind)),
+    )
+    .map_err(|e| ScriptSourcePrepareError::Parse {
+        message: e.message().to_string(),
+        span: e.span().clone(),
+    })?;
+
+    let mut chars = source.chars().collect::<Vec<_>>();
+    let mut directives = Vec::new();
+    for stmt in &ast {
+        if let Ast::Include(span, file_path) = stmt {
+            directives.push(ScriptIncludeDirective {
+                file_path: file_path.clone(),
+                span: span.clone(),
+            });
+            for ch in chars.iter_mut().take(span.end).skip(span.start) {
+                if *ch != '\n' {
+                    *ch = ' ';
+                }
+            }
+        }
+    }
+
+    Ok((chars.into_iter().collect::<String>(), directives))
+}
+
+pub fn prepare_script_sources(
+    file_name: &str,
+    source: &str,
+    source_kind: SourceKind,
+) -> Result<PreparedScriptSources, ScriptSourcePrepareError> {
+    let (source_for_parse, include_directives) =
+        collect_script_include_directives(source, source_kind)?;
+    let include_modules = include_directives
+        .iter()
+        .map(|directive| resolve_script_include_module_input(file_name, source, directive))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(PreparedScriptSources {
+        source_for_parse,
+        include_directives,
+        include_modules,
+    })
+}
+
+fn resolve_script_include_module_input(
+    script_file_path: &str,
+    _script_source: &str,
+    directive: &ScriptIncludeDirective,
+) -> Result<ModuleInput, ScriptSourcePrepareError> {
+    let resolved_path = resolve_script_include_file_path(script_file_path, &directive.file_path);
+    let display_path = display_path(&resolved_path);
+    let module_source =
+        fs::read_to_string(&resolved_path).map_err(|e| ScriptSourcePrepareError::IncludeRead {
+            span: directive.span.clone(),
+            message: format!(
+                "include failed to read `{}`: {}",
+                resolved_path.display(),
+                e
+            ),
+        })?;
+    let module_path = module_path_from_source_or_file_name(&display_path, &module_source);
+
+    Ok(ModuleInput {
+        file_name: display_path,
+        source: module_source,
+        module_path,
+    })
+}
+
+fn resolve_script_include_file_path(script_file_path: &str, raw_path: &str) -> PathBuf {
+    let candidate = Path::new(raw_path);
+    if candidate.is_absolute() {
+        return candidate.to_path_buf();
+    }
+
+    let base_dir = Path::new(script_file_path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    base_dir.join(candidate)
 }
 
 fn lib_relative_path(path: &Path) -> String {

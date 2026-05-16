@@ -842,6 +842,40 @@ answer = one()
 }
 
 #[test]
+fn repl_script_preload_top_level_sig_has_surface_name_without_docs() {
+    let temp = unique_temp_dir("repl-script-top-level-sig");
+    let script_path = temp.join("top_level.srt");
+    fs::write(
+        &script_path,
+        r#"
+def greet(name: String) -> String { name }
+"#,
+    )
+    .expect("failed to write preload script");
+
+    let output = run_repl_session_with_args(
+        &[
+            "--script",
+            script_path.to_str().expect("script path must be utf-8"),
+        ],
+        ":sig greet\n:doc greet\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("greet(name: String) -> String"), "{stdout}");
+    assert!(stdout.contains("No docs found for greet"), "{stdout}");
+    assert!(!stdout.contains("Global::"), "{stdout}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn repl_process_script_preload_survives_live_repl_process_declaration_rejection() {
     let temp = unique_temp_dir("repl-process-script-preload");
     let script_path = temp.join("process_preload.srt");
@@ -1005,7 +1039,7 @@ def from_script() -> Int { inc(1) }
             "--script",
             script_path.to_str().expect("script path must be utf-8"),
         ],
-        "from_script()\n:quit\n",
+        ":sig Helper::inc\n:sig from_script\nfrom_script()\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -1015,7 +1049,10 @@ def from_script() -> Int { inc(1) }
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("Helper::inc(x: Int) -> Int"), "{stdout}");
+    assert!(stdout.contains("from_script() -> Int"), "{stdout}");
     assert!(stdout.contains("2"), "{stdout}");
+    assert!(!stdout.contains("Global::"), "{stdout}");
 
     let _ = fs::remove_dir_all(temp);
 }

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use diagnostics::{SourceId, SourceRegistry};
@@ -29,13 +28,8 @@ pub(crate) struct ScriptCompilePlan {
     pub(crate) source_for_parse: String,
     pub(crate) selected_entry_name: Option<String>,
     pub(crate) normalized_entrypoint: Option<EntryPoint>,
-    pub(crate) include_directives: Vec<IncludeDirective>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct IncludeDirective {
-    pub(crate) file_path: String,
-    pub(crate) span: Span,
+    pub(crate) include_directives: Vec<xldr::ScriptIncludeDirective>,
+    pub(crate) include_modules: Vec<xldr::ModuleInput>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -244,7 +238,7 @@ pub(crate) fn collect_default_script_compile_sources(
     env: ExecutionEnv,
     file_path: &str,
     source: &str,
-    include_directives: &[IncludeDirective],
+    include_modules: &[xldr::ModuleInput],
 ) -> RuneResult<xldr::CompileSources> {
     let module_inputs = xldr::cached_additional_default_std_module_inputs().map_err(|e| {
         module_source_collection_error_as_rune_error(
@@ -259,9 +253,8 @@ pub(crate) fn collect_default_script_compile_sources(
     })?;
 
     let mut module_input_stages = vec![module_inputs];
-    for directive in include_directives {
-        let module_input = resolve_include_module_input(file_path, source, directive)?;
-        module_input_stages.push(vec![module_input]);
+    for module_input in include_modules {
+        module_input_stages.push(vec![module_input.clone()]);
     }
 
     let module_sources = xldr::collect_module_sources_with_module_stages(&module_input_stages)
@@ -281,94 +274,6 @@ pub(crate) fn collect_default_script_compile_sources(
         source,
         module_sources,
     ))
-}
-
-fn resolve_include_module_input(
-    script_file_path: &str,
-    script_source: &str,
-    directive: &IncludeDirective,
-) -> RuneResult<xldr::ModuleInput> {
-    let resolved_path = resolve_include_file_path(script_file_path, &directive.file_path);
-    let display_path = normalize_display_path(&resolved_path);
-    let module_source = fs::read_to_string(&resolved_path).map_err(|e| {
-        include_runtime_error(
-            script_file_path,
-            script_source,
-            directive.span.clone(),
-            format!(
-                "include failed to read `{}`: {}",
-                resolved_path.display(),
-                e
-            ),
-        )
-    })?;
-
-    let module_path = xldr::derive_primary_module_path(&module_source)
-        .or_else(|| module_path_from_file_name(&display_path))
-        .ok_or_else(|| {
-            include_runtime_error(
-                script_file_path,
-                script_source,
-                directive.span.clone(),
-                format!(
-                    "include could not derive module path from `{}`",
-                    display_path
-                ),
-            )
-        })?;
-
-    Ok(xldr::ModuleInput {
-        file_name: display_path,
-        source: module_source,
-        module_path,
-    })
-}
-
-fn resolve_include_file_path(script_file_path: &str, raw_path: &str) -> PathBuf {
-    let candidate = Path::new(raw_path);
-    if candidate.is_absolute() {
-        return candidate.to_path_buf();
-    }
-
-    let base_dir = Path::new(script_file_path)
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    base_dir.join(candidate)
-}
-
-fn normalize_display_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
-fn module_path_from_file_name(file_name: &str) -> Option<String> {
-    let normalized = file_name.replace('\\', "/");
-    let mut body = normalized.trim().trim_start_matches("./").to_string();
-    if let Some(stripped) = body.strip_suffix(".srt") {
-        body = stripped.to_string();
-    }
-
-    let segments = body
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    if segments.is_empty() {
-        return None;
-    }
-
-    Some(segments.join("::"))
-}
-
-fn include_runtime_error(file_path: &str, source: &str, span: Span, message: String) -> RuneError {
-    let mut sources = SourceRegistry::new();
-    let source_id = sources.register(file_path, source.to_string());
-    RuneError::diagnostic(
-        1,
-        &sources,
-        source_id,
-        "runtime",
-        diagnostics::simple_error("RuntimeError", &message, span, None),
-    )
 }
 
 fn load_default_stdlib_snapshot(
@@ -822,10 +727,8 @@ pub(crate) fn prepare_script_compile_plan(
     source: &str,
     cli_entry: Option<&str>,
 ) -> Result<ScriptCompilePlan, ScriptPlanError> {
-    let (source_for_parse, include_directives) = match collect_include_directives(source) {
-        Ok(collected) => collected,
-        Err(err) => return Err(err),
-    };
+    let prepared = xldr::prepare_script_sources(file_path, source, xldr::SourceKind::Script)
+        .map_err(script_source_prepare_error_to_plan_error)?;
 
     let selected_entry_name = match cli_entry {
         Some(name) => Some(name.to_string()),
@@ -837,36 +740,23 @@ pub(crate) fn prepare_script_compile_plan(
     });
 
     Ok(ScriptCompilePlan {
-        source_for_parse,
+        source_for_parse: prepared.source_for_parse,
         selected_entry_name,
         normalized_entrypoint,
-        include_directives,
+        include_directives: prepared.include_directives,
+        include_modules: prepared.include_modules,
     })
 }
 
-fn collect_include_directives(
-    source: &str,
-) -> Result<(String, Vec<IncludeDirective>), ScriptPlanError> {
-    let ast = spire::parse_with_context(source, spire::ParserContext::script(0))
-        .map_err(|e: ParseError| ScriptPlanError::new(e.message().to_string(), e.span().clone()))?;
-
-    let mut chars = source.chars().collect::<Vec<_>>();
-    let mut directives = Vec::new();
-    for stmt in &ast {
-        if let Ast::Include(span, file_path) = stmt {
-            directives.push(IncludeDirective {
-                file_path: file_path.clone(),
-                span: span.clone(),
-            });
-            for ch in chars.iter_mut().take(span.end).skip(span.start) {
-                if *ch != '\n' {
-                    *ch = ' ';
-                }
-            }
+fn script_source_prepare_error_to_plan_error(
+    error: xldr::ScriptSourcePrepareError,
+) -> ScriptPlanError {
+    match error {
+        xldr::ScriptSourcePrepareError::Parse { message, span }
+        | xldr::ScriptSourcePrepareError::IncludeRead { message, span } => {
+            ScriptPlanError::new(message, span)
         }
     }
-
-    Ok((chars.into_iter().collect::<String>(), directives))
 }
 fn parse_script_ast_for_compile(
     source: &str,
@@ -910,6 +800,8 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::{
         collect_default_script_compile_sources, compile_source, diagnostic_location_for_span,
         load_error_span, module_source_collection_error_as_rune_error,
@@ -922,21 +814,43 @@ mod tests {
 
     #[test]
     fn script_compile_plan_extracts_include_directives() {
+        let temp =
+            std::env::temp_dir().join(format!("surtr_script_compile_plan_{}", std::process::id()));
+        let fixtures = temp.join("fixtures");
+        fs::create_dir_all(&fixtures).expect("test fixture dir should be created");
+        fs::write(
+            fixtures.join("Helper.srt"),
+            r#"
+defmod Helper {
+  def add(a: Int, b: Int) -> Int { a + b }
+}
+"#,
+        )
+        .expect("test include fixture should be written");
+        let script_path = temp.join("sample.srt");
         let source = r#"include 'fixtures/Helper.srt'
 import Helper::add
 print(to_string(add(1, 2)))
 "#;
 
-        let plan = prepare_script_compile_plan("sample.srt", source, None)
-            .expect("compile plan must succeed");
+        let plan = prepare_script_compile_plan(
+            script_path.to_str().expect("script path must be utf-8"),
+            source,
+            None,
+        )
+        .expect("compile plan must succeed");
 
         assert_eq!(plan.include_directives.len(), 1);
         assert_eq!(plan.include_directives[0].file_path, "fixtures/Helper.srt");
+        assert_eq!(plan.include_modules.len(), 1);
+        assert_eq!(plan.include_modules[0].module_path, "Global::Helper");
         assert_eq!(plan.source_for_parse.len(), source.len());
         assert!(!plan
             .source_for_parse
             .contains("include 'fixtures/Helper.srt'"));
         assert!(plan.source_for_parse.contains("import Helper::add"));
+
+        let _ = fs::remove_dir_all(temp);
     }
 
     #[test]
@@ -1126,8 +1040,8 @@ pid: PID<MyWorker> =? MySup::spawn(MyWorker::init(1))
         let compile_sources = collect_default_script_compile_sources(
             ExecutionEnv::Check,
             "process_pid_annotation.srt",
-            source,
-            &plan.include_directives,
+            &plan.source_for_parse,
+            &plan.include_modules,
         )
         .unwrap();
 

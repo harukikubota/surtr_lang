@@ -333,6 +333,11 @@ defmod Demo {
         .find(|candidate| candidate.label == "Demo::hello")
         .expect("user-defined module member should be suggested");
     assert_eq!(hello.kind, ReplCompletionKind::TypePath);
+
+    let mut engine = engine;
+    let sig = signature_text(&engine.handle_line(":sig Demo::hello"));
+    assert!(sig.contains("Demo::hello() -> String"), "{sig}");
+    assert!(!sig.contains("Global::"), "{sig}");
 }
 
 #[test]
@@ -381,6 +386,77 @@ impl User {
         .find(|candidate| candidate.label == "User::birthday")
         .expect("undocumented impl method should be suggested");
     assert_eq!(method.kind, ReplCompletionKind::TypePath);
+}
+
+#[test]
+fn core_script_top_level_defs_are_signature_and_completion_surfaces_without_docs() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/top_level.srt",
+        r#"
+def greet(name: String) -> String { name }
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let sig = signature_text(&engine.handle_line(":sig greet"));
+    assert!(
+        sig.contains("greet(name: String) -> String"),
+        "script top-level def should have a signature surface: {sig}"
+    );
+    assert!(!sig.contains("Global::"), "{sig}");
+
+    let completion = engine.completions("gre", "gre".len());
+    let greet = completion
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "greet")
+        .expect("script top-level def should be suggested by bare name");
+    assert_eq!(greet.kind, ReplCompletionKind::FunctionCall);
+    assert!(
+        greet
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("greet(name: String) -> String")),
+        "completion detail should mirror :sig: {greet:?}"
+    );
+
+    let docs = rendered_text(&engine.handle_line(":doc greet"));
+    assert!(
+        docs.contains("No docs found for greet"),
+        "top-level script defs do not get doc support in this change: {docs}"
+    );
+}
+
+#[test]
+fn core_live_repl_top_level_defs_are_signature_and_completion_surfaces() {
+    let mut engine = engine();
+    let def = engine.handle_line("def local(x: Int) -> Int { x + 1 }");
+    assert!(
+        !matches!(def.output, ReplOutput::EvalError { .. }),
+        "live top-level def should compile: {}",
+        rendered_text(&def)
+    );
+
+    let sig = signature_text(&engine.handle_line(":sig local"));
+    assert!(
+        sig.contains("local(x: Int) -> Int"),
+        "live REPL top-level def should have a signature surface: {sig}"
+    );
+
+    let completion = engine.completions("loc", "loc".len());
+    let local = completion
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "local")
+        .expect("live REPL top-level def should be suggested by bare name");
+    assert_eq!(local.kind, ReplCompletionKind::FunctionCall);
+    assert!(
+        local
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("local(x: Int) -> Int")),
+        "completion detail should mirror :sig: {local:?}"
+    );
 }
 
 #[test]

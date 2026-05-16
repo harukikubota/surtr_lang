@@ -14,6 +14,7 @@ use sindr::ir::{
     RuntimeSupervisionSpec, RuntimeSupervisorOverrideEntry, RuntimeSupervisorPolicy,
     RuntimeTypeRef, SingletonBootEntry,
 };
+use sindr::names::{surface_path_name, surface_rendered_name};
 use sindr::primitives::{int, SurtrInt};
 use sindr::runtime::CallableOrigin;
 use spire::ast::{
@@ -2096,7 +2097,9 @@ fn localize_chunk_indices(
 
 #[cfg(test)]
 mod tests {
-    use super::{compose_bytecode_with_chunk, localize_chunk_indices, Codegen, ForgeSession};
+    use super::{
+        compose_bytecode_with_chunk, localize_chunk_indices, ty_to_string, Codegen, ForgeSession,
+    };
     use crate::bytecode::{Bytecode, BytecodeChunk, CompileInfo, Constant, ErrTemplate};
     use crate::opcode::Opcode;
     use scar::typed::TypedProcessHandlerUid;
@@ -2147,6 +2150,18 @@ mod tests {
             id: resolved_id(name, None, unique_id),
             ty,
         }
+    }
+
+    #[test]
+    fn ty_to_string_uses_surface_names_for_runtime_display_types() {
+        let user_ty = Ty::Struct("Global::User".into(), Vec::new());
+        assert_eq!(ty_to_string(&user_ty), "User");
+
+        let option_ty = Ty::Enum("Global::Option".into(), vec![user_ty.clone()]);
+        assert_eq!(ty_to_string(&option_ty), "Option<User>");
+
+        let pid_ty = Ty::Pid("Global::Worker".into());
+        assert_eq!(ty_to_string(&pid_ty), "PID<Worker>");
     }
 
     fn local_var(name: &str, unique_id: u32, ty: Ty) -> TypedNode {
@@ -4315,7 +4330,7 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::List(inner) => format!("List<{}>", ty_to_string(inner)),
         Ty::Lazy(inner) => format!("Lazy<{}>", ty_to_string(inner)),
         Ty::TypeRef(inner) => format!("TypeRef<{}>", ty_to_string(inner)),
-        Ty::Pid(name) => format!("PID<{}>", name),
+        Ty::Pid(name) => format!("PID<{}>", surface_rendered_name(name)),
         Ty::Facet(source, focus) => {
             format!("Facet<{}, {}>", ty_to_string(source), ty_to_string(focus))
         }
@@ -4328,10 +4343,11 @@ fn ty_to_string(ty: &Ty) -> String {
                 .join(", ")
         ),
         Ty::Result(ok, err) => format!("Result<{}, {}>", ty_to_string(ok), ty_to_string(err)),
-        Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
+        Ty::Struct(name, _) | Ty::Record(name, _) => surface_path_name(name).to_string(),
         Ty::Enum(name, args) => {
+            let name = surface_path_name(name);
             if args.is_empty() {
-                name.clone()
+                name.to_string()
             } else {
                 format!(
                     "{}<{}>",

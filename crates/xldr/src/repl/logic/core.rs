@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::panic;
-use std::path::{Path, PathBuf};
 
 use diagnostics::{DiagnosticSpec, SourceId, SourceRegistry};
 use eldr::builtin::inspect_value;
@@ -183,12 +182,6 @@ impl std::fmt::Display for ReplLoadError {
             }
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct PreloadIncludeDirective {
-    file_path: String,
-    span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -436,11 +429,19 @@ impl ReplEngine {
             .collect();
         for entry in vm.bytecode().functions.iter() {
             if let Some(name) = &entry.qualified_name {
-                symbols.insert(name.clone());
+                let surface_name = crate::surface_rendered_name(name);
+                symbols.insert(surface_name.clone());
+                if let Some(short) = surface_name.rsplit("::").next() {
+                    symbols.insert(short.to_string());
+                }
             }
         }
         for entry in vm.bytecode().type_registry.entries().iter() {
-            symbols.insert(entry.name.clone());
+            let surface_name = crate::surface_rendered_name(&entry.name);
+            symbols.insert(surface_name.clone());
+            if let Some(short) = surface_name.rsplit("::").next() {
+                symbols.insert(short.to_string());
+            }
         }
 
         let mut engine = Self {
@@ -781,7 +782,7 @@ impl ReplEngine {
             .replace_scope_with_declarations(scope, &declaration_index);
 
         for name in &meta.function_defs {
-            self.symbols.insert(name.clone());
+            self.insert_surface_symbol(name);
         }
         self.append_docs(docs);
         Ok(())
@@ -1125,6 +1126,14 @@ impl ReplEngine {
         self.symbols.iter().cloned().collect()
     }
 
+    fn insert_surface_symbol(&mut self, name: &str) {
+        let surface_name = crate::surface_rendered_name(name);
+        self.symbols.insert(surface_name.clone());
+        if let Some(short) = surface_name.rsplit("::").next() {
+            self.symbols.insert(short.to_string());
+        }
+    }
+
     pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
         let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
         let (replace_start, replace_end, prefix) = completion_token(input, cursor);
@@ -1374,7 +1383,76 @@ impl ReplEngine {
             if !seen.insert(label.clone()) {
                 continue;
             }
-            let detail = self.declaration_signature(decl);
+            let detail = self.declaration_signature(decl).or_else(|| {
+                self.find_signature(&label)
+                    .map(|(qualified_name, signature)| {
+                        Self::render_signature_with_qualified_name(&qualified_name, signature)
+                    })
+            });
+            push_completion_candidate(
+                candidates,
+                ReplCompletionCandidate {
+                    label: label.clone(),
+                    replacement: label,
+                    kind,
+                    detail,
+                    replace_start,
+                    replace_end,
+                },
+            );
+        }
+
+        self.push_function_entry_completion_candidates(
+            candidates,
+            prefix,
+            qualified_prefix,
+            replace_start,
+            replace_end,
+            &mut seen,
+        );
+    }
+
+    fn push_function_entry_completion_candidates(
+        &self,
+        candidates: &mut Vec<ReplCompletionCandidate>,
+        prefix: &str,
+        qualified_prefix: bool,
+        replace_start: usize,
+        replace_end: usize,
+        seen: &mut BTreeSet<String>,
+    ) {
+        for entry in self.vm.function_entries().iter().rev() {
+            if entry.flags.generated {
+                continue;
+            }
+            let Some(qualified_name) = entry.qualified_name.as_deref() else {
+                continue;
+            };
+            if !self.function_entry_is_top_level_repl_surface(qualified_name) {
+                continue;
+            }
+            let qualified_label = crate::surface_path_name(qualified_name).to_string();
+            let tail = qualified_label
+                .rsplit("::")
+                .next()
+                .unwrap_or(qualified_label.as_str());
+            let (label, kind) = if qualified_prefix {
+                if !qualified_label.starts_with(prefix) {
+                    continue;
+                }
+                (qualified_label, ReplCompletionKind::TypePath)
+            } else {
+                if !tail.starts_with(prefix) {
+                    continue;
+                }
+                (tail.to_string(), ReplCompletionKind::FunctionCall)
+            };
+            if !seen.insert(label.clone()) {
+                continue;
+            }
+            let detail = entry.signature.clone().map(|signature| {
+                Self::render_signature_with_qualified_name(qualified_name, signature)
+            });
             push_completion_candidate(
                 candidates,
                 ReplCompletionCandidate {
@@ -1420,7 +1498,8 @@ impl ReplEngine {
         &self,
         context: &CompletionCallContext,
     ) -> Option<ReplSignatureHelp> {
-        let (qualified_name, signature) = self.callable_signature_for_completion(&context.callee)?;
+        let (qualified_name, signature) =
+            self.callable_signature_for_completion(&context.callee)?;
         let rendered = Self::render_signature_with_qualified_name(&qualified_name, signature);
         Some(ReplSignatureHelp {
             lines: vec![highlight_signature_parameter(
@@ -1905,6 +1984,17 @@ impl ReplEngine {
         symbol.contains("::")
     }
 
+    fn function_entry_is_top_level_repl_surface(&self, qualified_name: &str) -> bool {
+        let qualified_name = crate::surface_path_name(qualified_name);
+        qualified_name.starts_with("__Script::")
+            || qualified_name.starts_with("REPL::")
+            || qualified_name.starts_with("__Repl::Session::")
+            || qualified_name.starts_with(&format!(
+                "{}::",
+                crate::surface_path_name(&self.repl_module_path)
+            ))
+    }
+
     fn visible_doc_entries<'a>(&'a self, symbol: &str, kind: Option<DocKind>) -> Vec<&'a DocEntry> {
         let mut matches = self
             .docs
@@ -2003,6 +2093,14 @@ impl ReplEngine {
 
     fn undocumented_doc_output(&self, symbol: &str) -> Option<ReplOutput> {
         let decl = self.visible_declaration(symbol)?;
+        if self.function_entry_is_top_level_repl_surface(&decl.fq_name)
+            && matches!(
+                decl.kind,
+                sigil::DeclarationKind::Def | sigil::DeclarationKind::Extractor
+            )
+        {
+            return None;
+        }
         let signature = self.declaration_signature(decl);
         let display_fq_name = crate::surface_path_name(&decl.fq_name);
         let display_name = crate::surface_path_name(&decl.name);
@@ -3019,6 +3117,36 @@ impl ReplEngine {
             {
                 return Some(found);
             }
+        }
+
+        if let Some(found) = self
+            .vm
+            .function_entries()
+            .iter()
+            .rev()
+            .filter(|entry| !entry.flags.generated)
+            .find_map(|entry| {
+                let qualified_name = entry.qualified_name.as_ref()?;
+                if !self.function_entry_is_top_level_repl_surface(qualified_name) {
+                    return None;
+                }
+                let surface_qualified = crate::surface_path_name(qualified_name);
+                if qualified_lookup {
+                    if surface_qualified != crate::surface_path_name(&canonical) {
+                        return None;
+                    }
+                } else if surface_qualified
+                    .rsplit("::")
+                    .next()
+                    .is_none_or(|tail| tail != crate::surface_path_name(&canonical))
+                {
+                    return None;
+                }
+                let signature = entry.signature.clone()?;
+                Some((qualified_name.clone(), signature))
+            })
+        {
+            return Some(found);
         }
 
         if let Some(entry) = self.docs.iter().rev().find(|entry| {
@@ -4646,7 +4774,10 @@ impl ReplEngine {
         None
     }
 
-    fn constructor_signature_entry(&self, decl: &sigil::DeclarationEntry) -> Option<(String, String)> {
+    fn constructor_signature_entry(
+        &self,
+        decl: &sigil::DeclarationEntry,
+    ) -> Option<(String, String)> {
         let qualified_name = format!("{}::new", decl.fq_name);
         let mut matches = self
             .docs
@@ -4657,7 +4788,8 @@ impl ReplEngine {
                     == crate::surface_path_name(&qualified_name)
             })
             .filter_map(|entry| {
-                entry.signature
+                entry
+                    .signature
                     .clone()
                     .map(|signature| (entry.qualified_name.clone(), signature))
             })
@@ -6391,7 +6523,7 @@ impl ReplEngine {
                     self.symbols.insert(b.name.clone());
                 }
                 for name in &meta.function_defs {
-                    self.symbols.insert(name.clone());
+                    self.insert_surface_symbol(name);
                 }
                 self.append_docs(docs);
                 self.history_entries.push(ReplHistoryEntry {
@@ -6635,7 +6767,7 @@ fn compile_preloaded_repl_chunk(
         module_input_stages.push(vec![crate::ModuleInput {
             file_name: file_name.to_string(),
             source: source.to_string(),
-            module_path: preload_module_path(file_name, source),
+            module_path: crate::module_path_from_source_or_file_name(file_name, source),
         }]);
     }
     if let Some(script) = prepared_script.as_ref() {
@@ -6869,15 +7001,17 @@ fn compile_repl_preload_from_module_stages(
         .collect();
     for entry in vm.bytecode().functions.iter() {
         if let Some(name) = &entry.qualified_name {
-            symbols.insert(name.clone());
-            if let Some(short) = name.rsplit("::").next() {
+            let surface_name = crate::surface_rendered_name(name);
+            symbols.insert(surface_name.clone());
+            if let Some(short) = surface_name.rsplit("::").next() {
                 symbols.insert(short.to_string());
             }
         }
     }
     for entry in vm.bytecode().type_registry.entries().iter() {
-        symbols.insert(entry.name.clone());
-        if let Some(short) = entry.name.rsplit("::").next() {
+        let surface_name = crate::surface_rendered_name(&entry.name);
+        symbols.insert(surface_name.clone());
+        if let Some(short) = surface_name.rsplit("::").next() {
             symbols.insert(short.to_string());
         }
     }
@@ -6979,27 +7113,6 @@ fn parse_preload_sources(
         preload_ast,
         script_runtime_inputs,
     ))
-}
-
-fn preload_module_path(file_name: &str, source: &str) -> String {
-    crate::derive_primary_module_path(source)
-        .filter(|module_path| !module_path.is_empty())
-        .unwrap_or_else(|| {
-            let normalized = file_name.replace('\\', "/");
-            let mut body = normalized.trim().trim_start_matches("./").to_string();
-            if let Some(stripped) = body.strip_suffix(".srt") {
-                body = stripped.to_string();
-            }
-            let segments = body
-                .split('/')
-                .filter(|segment| !segment.is_empty())
-                .collect::<Vec<_>>();
-            if segments.is_empty() {
-                "Main".to_string()
-            } else {
-                segments.join("::")
-            }
-        })
 }
 
 fn collect_process_metadata(
@@ -7145,18 +7258,13 @@ fn prepare_script_preload(
         return Ok(None);
     };
 
-    let (source_for_parse, directives) = collect_preload_include_directives(file_name, source)?;
-    let mut include_modules = Vec::with_capacity(directives.len());
-    for directive in directives {
-        include_modules.push(resolve_preload_include_module_input(
-            file_name, source, &directive,
-        )?);
-    }
+    let prepared = crate::prepare_script_sources(file_name, source, SourceKind::Script)
+        .map_err(|e| preload_script_prepare_error(file_name, source, e))?;
 
     Ok(Some(PreparedScriptPreload {
         file_name: file_name.to_string(),
-        source_for_parse,
-        include_modules,
+        source_for_parse: prepared.source_for_parse,
+        include_modules: prepared.include_modules,
     }))
 }
 
@@ -7197,92 +7305,21 @@ fn merge_user_preload_declarations(
     Ok(())
 }
 
-fn collect_preload_include_directives(
+fn preload_script_prepare_error(
     file_name: &str,
     source: &str,
-) -> Result<(String, Vec<PreloadIncludeDirective>), ReplLoadError> {
-    let ast = spire::parse_with_context(
-        source,
-        spire::ParserContext::script(0).with_rules(derive_parse_rules(SourceKind::Script)),
-    )
-    .map_err(|e| preload_script_parse_error(file_name, source, &e))?;
-
-    let mut chars = source.chars().collect::<Vec<_>>();
-    let mut directives = Vec::new();
-    for stmt in &ast {
-        if let Ast::Include(span, file_path) = stmt {
-            directives.push(PreloadIncludeDirective {
-                file_path: file_path.clone(),
-                span: span.clone(),
-            });
-            for ch in chars.iter_mut().take(span.end).skip(span.start) {
-                if *ch != '\n' {
-                    *ch = ' ';
-                }
-            }
+    error: crate::ScriptSourcePrepareError,
+) -> ReplLoadError {
+    match error {
+        crate::ScriptSourcePrepareError::Parse { message, span } => preload_script_diagnostic(
+            file_name,
+            source,
+            diagnostics::parse_error_spec(source, &message, span),
+        ),
+        crate::ScriptSourcePrepareError::IncludeRead { message, span } => {
+            preload_script_load_error(file_name, source, span, message)
         }
     }
-
-    Ok((chars.into_iter().collect(), directives))
-}
-
-fn resolve_preload_include_module_input(
-    script_file_path: &str,
-    script_source: &str,
-    directive: &PreloadIncludeDirective,
-) -> Result<crate::ModuleInput, ReplLoadError> {
-    let resolved_path = resolve_preload_include_file_path(script_file_path, &directive.file_path);
-    let display_path = normalize_preload_display_path(&resolved_path);
-    let module_source = fs::read_to_string(&resolved_path).map_err(|e| {
-        preload_script_load_error(
-            script_file_path,
-            script_source,
-            directive.span.clone(),
-            format!(
-                "include failed to read `{}`: {}",
-                resolved_path.display(),
-                e
-            ),
-        )
-    })?;
-    let module_path = crate::derive_primary_module_path(&module_source)
-        .filter(|module_path| !module_path.is_empty())
-        .unwrap_or_else(|| preload_module_path(&display_path, &module_source));
-
-    Ok(crate::ModuleInput {
-        file_name: display_path,
-        source: module_source,
-        module_path,
-    })
-}
-
-fn resolve_preload_include_file_path(script_file_path: &str, raw_path: &str) -> PathBuf {
-    let candidate = Path::new(raw_path);
-    if candidate.is_absolute() {
-        return candidate.to_path_buf();
-    }
-
-    let base_dir = Path::new(script_file_path)
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    base_dir.join(candidate)
-}
-
-fn normalize_preload_display_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
-fn preload_script_parse_error(
-    file_name: &str,
-    source: &str,
-    error: &spire::error::ParseError,
-) -> ReplLoadError {
-    preload_script_diagnostic(
-        file_name,
-        source,
-        diagnostics::parse_error_spec(source, error.message(), error.span().clone()),
-    )
 }
 
 fn preload_script_load_error(

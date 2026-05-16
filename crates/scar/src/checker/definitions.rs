@@ -1860,7 +1860,9 @@ impl Checker {
                     hint: None,
                 })?;
             let new_ty = match new_ty {
-                Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => self.instantiate_builtin_ty(&new_ty),
+                Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => {
+                    self.instantiate_builtin_ty(&new_ty)
+                }
                 other => other,
             };
             let (params, ret_ty) = match new_ty.clone() {

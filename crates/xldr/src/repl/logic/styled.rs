@@ -115,12 +115,12 @@ pub fn completion_candidate_line(kind: &str, label: &str, detail: Option<&str>) 
         styled(&padded_label, label_style),
     ];
     if let Some(detail) = detail {
-        let detail_rendered = if detail.contains("->") || detail.contains('(') || detail.contains(": ")
-        {
-            signature_doc(detail)
-        } else {
-            type_doc(detail)
-        };
+        let detail_rendered =
+            if detail.contains("->") || detail.contains('(') || detail.contains(": ") {
+                signature_doc(detail)
+            } else {
+                type_doc(detail)
+            };
         parts.push(" ".to_string());
         parts.push(detail_rendered);
     }
@@ -952,11 +952,8 @@ mod tests {
         assert!(variable.contains("\x1b[36mname"), "{variable:?}");
         assert!(variable.contains("\x1b[96mString\x1b[0m"), "{variable:?}");
 
-        let callable = completion_candidate_line(
-            "call",
-            "print",
-            Some("Kernel::print(a: [String]) -> Unit"),
-        );
+        let callable =
+            completion_candidate_line("call", "print", Some("Kernel::print(a: [String]) -> Unit"));
         assert!(callable.contains("\x1b[1;90mcall\x1b[0m"), "{callable:?}");
         assert!(callable.contains("\x1b[1;35mprint"), "{callable:?}");
         assert!(callable.contains("\x1b[36ma\x1b[0m"), "{callable:?}");

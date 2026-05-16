@@ -283,8 +283,17 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
                 let result = with_suspended_raw_mode(|| engine.handle_line(&line))
                     .map_err(|_| CommandError::message(1, "repl: failed to suspend raw mode"))?;
                 if repl_result_has_visible_output(&result, color) {
-                    print_terminal_result(&mut stdout, engine, &result, color, &buffer, cursor_chars)
-                        .map_err(|_| CommandError::message(1, "repl: failed to print terminal result"))?;
+                    print_terminal_result(
+                        &mut stdout,
+                        engine,
+                        &result,
+                        color,
+                        &buffer,
+                        cursor_chars,
+                    )
+                    .map_err(|_| {
+                        CommandError::message(1, "repl: failed to print terminal result")
+                    })?;
                 } else {
                     redraw_terminal_prompt(&mut stdout, engine, &buffer, cursor_chars)
                         .map_err(|_| CommandError::message(1, "repl: failed to redraw prompt"))?;
@@ -1062,9 +1071,15 @@ mod tests {
 
         let rendered = super::render_completion_lines(&completion, true);
         assert!(rendered[0].contains("\x1b["), "{rendered:?}");
-        assert!(rendered[1].contains("\x1b[1;90mvar \x1b[0m"), "{rendered:?}");
+        assert!(
+            rendered[1].contains("\x1b[1;90mvar \x1b[0m"),
+            "{rendered:?}"
+        );
         assert!(rendered[1].contains("\x1b[36mname"), "{rendered:?}");
-        assert!(rendered[2].contains("\x1b[1;90mcall\x1b[0m"), "{rendered:?}");
+        assert!(
+            rendered[2].contains("\x1b[1;90mcall\x1b[0m"),
+            "{rendered:?}"
+        );
         assert!(rendered[2].contains("\x1b[1;35mprint"), "{rendered:?}");
     }
 }

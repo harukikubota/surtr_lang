@@ -16,9 +16,11 @@ pub use loader::{
     collect_additional_default_std_module_inputs, collect_lib_module_inputs,
     collect_module_sources_with_extra_std_sources, collect_module_sources_with_module_file_stages,
     collect_module_sources_with_module_stages, collect_module_sources_with_modules,
-    compose_script_compile_sources, derive_primary_module_path, is_default_std_module_file_name,
-    is_default_std_module_path, script_pseudo_module_path, CompileSources, LoadError, ModuleInput,
-    ModuleSources, SourceDescriptor, SourceKind, StagedModule,
+    collect_script_include_directives, compose_script_compile_sources, derive_primary_module_path,
+    is_default_std_module_file_name, is_default_std_module_path,
+    module_path_from_source_or_file_name, prepare_script_sources, script_pseudo_module_path,
+    CompileSources, LoadError, ModuleInput, ModuleSources, PreparedScriptSources,
+    ScriptIncludeDirective, ScriptSourcePrepareError, SourceDescriptor, SourceKind, StagedModule,
 };
 
 use diagnostics::SourceId;
@@ -30,15 +32,13 @@ use sindr::ir::{stable_hash_hex, Bytecode, DocEntry, DocKind};
 use sindr::policy::{CompileUnitKind, EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
 
 pub const MODULE_SPAN_STRIDE: usize = 1_000_000;
-const IMPLICIT_ROOT_NAMESPACE_PREFIX: &str = "Global::";
 
 pub(crate) fn surface_path_name(name: &str) -> &str {
-    name.strip_prefix(IMPLICIT_ROOT_NAMESPACE_PREFIX)
-        .unwrap_or(name)
+    sindr::names::surface_path_name(name)
 }
 
 pub(crate) fn surface_rendered_name(name: &str) -> String {
-    name.replace(IMPLICIT_ROOT_NAMESPACE_PREFIX, "")
+    sindr::names::surface_rendered_name(name)
 }
 
 fn stable_hash_bytes(bytes: &[u8]) -> String {

@@ -134,7 +134,7 @@ fn dump_entry_source(
         env,
         file_path,
         &compile_plan.source_for_parse,
-        &compile_plan.include_directives,
+        &compile_plan.include_modules,
     )?;
     let bytecode = compile_source(env, &compile_sources, &compile_plan)?;
     let bytes = bytecode

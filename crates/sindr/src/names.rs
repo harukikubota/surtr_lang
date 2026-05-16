@@ -1,5 +1,26 @@
 use serde::{Deserialize, Serialize};
 
+/// Internal canonical namespace used for implicit top-level definitions.
+///
+/// The compiler keeps this namespace in canonical identities, but user-facing
+/// surfaces should hide it to keep signatures and diagnostics stable.
+pub const IMPLICIT_ROOT_NAMESPACE_PREFIX: &str = "Global::";
+
+/// Return a path name with the implicit root namespace hidden when it appears at
+/// the beginning of a canonical name.
+pub fn surface_path_name(name: &str) -> &str {
+    name.strip_prefix(IMPLICIT_ROOT_NAMESPACE_PREFIX)
+        .unwrap_or(name)
+}
+
+/// Render a canonical name for user-facing display.
+///
+/// This hides a leading `Global::` and nested `::Global::` segments that can
+/// appear in generated trait/helper paths, without changing runtime identity.
+pub fn surface_rendered_name(name: &str) -> String {
+    surface_path_name(name).replace("::Global::", "::")
+}
+
 /// Surface-level type identity defined by the language spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeIdentity {
@@ -134,5 +155,20 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "WorkerLease" => Some(TypeName::WorkerLease),
         "TaskHandle" => Some(TypeName::TaskHandle),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn surface_name_rendering_hides_implicit_global_namespace() {
+        assert_eq!(surface_path_name("Global::User"), "User");
+        assert_eq!(surface_rendered_name("Global::User::new"), "User::new");
+        assert_eq!(
+            surface_rendered_name("Trait::Global::User::method"),
+            "Trait::User::method"
+        );
     }
 }
