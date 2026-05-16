@@ -4667,29 +4667,29 @@ impl ReplEngine {
             return Some(first);
         }
 
-        if decl.kind == sigil::DeclarationKind::Record {
-            return self
-                .scar_session
-                .lookup_type_def(&decl.fq_name)
-                .filter(|def| def.kind == scar::env::TypeKind::Record)
-                .map(|def| {
-                    let params = def
-                        .fields
-                        .iter()
-                        .map(|(name, ty)| format!("{name}: {}", Self::ty_to_string(ty)))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    (
-                        qualified_name,
-                        format!(
-                            "{}::new({params}) -> Self",
-                            crate::surface_path_name(&decl.fq_name)
-                        ),
-                    )
-                });
-        }
-
-        None
+        self.scar_session
+            .lookup_type_def(&decl.fq_name)
+            .filter(|def| {
+                matches!(
+                    def.kind,
+                    scar::env::TypeKind::Struct | scar::env::TypeKind::Record
+                )
+            })
+            .map(|def| {
+                let params = def
+                    .fields
+                    .iter()
+                    .map(|(name, ty)| format!("{name}: {}", Self::ty_to_string(ty)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (
+                    qualified_name,
+                    format!(
+                        "{}::new({params}) -> Self",
+                        crate::surface_path_name(&decl.fq_name)
+                    ),
+                )
+            })
     }
 
     fn enum_variant_signature_lines(&self, decl: &sigil::DeclarationEntry) -> Option<Vec<String>> {

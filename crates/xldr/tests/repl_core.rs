@@ -411,6 +411,42 @@ fn core_completion_hides_global_noise_for_empty_constructor_call_arguments() {
 }
 
 #[test]
+fn core_completion_shows_script_preload_constructor_signature_without_docs() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name, age }
+  }
+}
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let completion = engine.completions("User(", "User(".len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("script preload constructor should show signature help");
+    assert_eq!(signature.active_parameter, Some(0));
+    let rendered = signature.lines.join("\n");
+    assert!(
+        rendered.contains("User::new("),
+        "constructor signature should use owner surface: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("name: [String]"),
+        "first constructor parameter should be highlighted: {rendered:?}"
+    );
+}
+
+#[test]
 fn core_completion_filters_constructor_arguments_by_expected_parameter_type() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line("n = 3")).contains("n: Int"));
