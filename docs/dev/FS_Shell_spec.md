@@ -263,6 +263,8 @@ defmod Shell {
 
 `Shell::cd` は Surtr VM / 実行コンテキストの working directory を変更する。
 host parent process の cwd を変更する契約ではない。
+directory として受理した path の canonicalize に失敗した場合は
+`Err(ShellIoError)` を返し、VM context cwd は変更しない。
 
 `Shell::exec(command, args)` は shell parser を通さず、`command` と `args` を
 分離して実行する。起動できた場合、process の終了 code が非ゼロでも
@@ -334,6 +336,8 @@ VM は `Shell::pwd` / `Shell::cd` 用に execution context cwd を持つ。
 `Shell::cd` は並列 test や複数 VM 実行に干渉しないよう、process-wide
 `std::env::set_current_dir` へ直接寄せない。実装上どうしても host cwd を使う場合でも、
 公開契約は VM context cwd とし、テストで漏れを検出する。
+directory 判定後の canonicalize が失敗した場合、`Shell::cd` は
+`Err(ShellIoError)` を返して現在の VM context cwd を保持する。
 
 ### 3.4 Shell execution
 

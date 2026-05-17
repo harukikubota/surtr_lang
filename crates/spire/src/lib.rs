@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod error;
+mod func_literal;
 mod lexer;
 mod parser;
 mod token;

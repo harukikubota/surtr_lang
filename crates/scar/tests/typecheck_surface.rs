@@ -824,6 +824,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         user_function_call_rejects_mixed_named_and_positional_args as fn(),
     ),
     (
+        "user_function_call_rejects_duplicate_named_arg",
+        user_function_call_rejects_duplicate_named_arg as fn(),
+    ),
+    (
         "impl_self_rebinding_allows_self_type",
         impl_self_rebinding_allows_self_type as fn(),
     ),
@@ -866,6 +870,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     (
         "add_trait_mismatch_lists_available_implementations",
         add_trait_mismatch_lists_available_implementations as fn(),
+    ),
+    (
+        "trait_method_call_rejects_named_arguments_without_panic",
+        trait_method_call_rejects_named_arguments_without_panic as fn(),
     ),
     (
         "add_trait_missing_receiver_lists_available_implementations",
@@ -4792,6 +4800,15 @@ value = add3(1, y: 2, z: 3)"#,
         .contains("Cannot mix positional and named arguments"));
 }
 
+fn user_function_call_rejects_duplicate_named_arg() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"def add2(x: Int, y: Int) -> Int { x + y }
+value = add2(x: 1, x: 2)"#,
+    );
+    let err = typecheck(resolved).expect_err("duplicate named arg should fail");
+    assert!(err.message.contains("Duplicate argument 'x'"));
+}
+
 fn impl_self_rebinding_allows_self_type() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct User {
@@ -5413,6 +5430,14 @@ fn add_trait_mismatch_lists_available_implementations() {
     let hint = err.hint.as_deref().expect("trait summary hint");
     assert!(hint.contains("Call target signature: Add::add"));
     assert!(hint.contains("Add is implemented for: Duration, Float, Int"));
+}
+
+fn trait_method_call_rejects_named_arguments_without_panic() {
+    let resolved = resolve_with_builtin_prelude("value = Add::add(self: 1, rhs: 2)");
+    let err = typecheck(resolved).expect_err("named trait method args should fail");
+    assert!(err
+        .message
+        .contains("Add::add does not accept named arguments"));
 }
 
 fn add_trait_missing_receiver_lists_available_implementations() {

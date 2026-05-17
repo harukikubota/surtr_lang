@@ -2176,14 +2176,16 @@ fn localize_chunk_indices(
 mod tests {
     use super::{
         compose_bytecode_with_chunk, format_function_signature, localize_chunk_indices,
-        ty_to_string, Codegen, ForgeSession,
+        ty_to_string, Codegen, ForgeSession, MatchPatternDecomp, MatchPatternDecompChild,
+        PatternDecomp, PatternDecompChild,
     };
     use crate::bytecode::{Bytecode, BytecodeChunk, CompileInfo, Constant, ErrTemplate};
     use crate::opcode::Opcode;
     use scar::typed::TypedProcessHandlerUid;
     use scar::typed::{
-        ComposeFlavor, TypedDbgArg, TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern,
-        TypedNode, TypedPattern, TypedProcessSpec, TypedProgram, TypedTypeParam,
+        ComposeFlavor, TypedDbgArg, TypedFacetPath, TypedFacetPathKind, TypedFacetSegment,
+        TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode, TypedPattern,
+        TypedProcessSpec, TypedProgram, TypedTypeParam,
     };
     use scar::types::Ty;
     use sigil::resolved::ResolvedId;
@@ -2863,6 +2865,28 @@ mod tests {
     }
 
     #[test]
+    fn stale_tuple_bind_decomp_returns_codegen_error() {
+        let mut gene = Codegen::new();
+        let tuple_ty = Ty::Tuple(vec![Ty::Int, Ty::Int]);
+        let pat = TypedPattern::Tuple(
+            tuple_ty,
+            vec![
+                TypedPattern::Var(Ty::Int, resolved_id("left", None, 183)),
+                TypedPattern::Var(Ty::Int, resolved_id("right", None, 184)),
+            ],
+        );
+        let decomp = PatternDecomp::Tuple(vec![PatternDecompChild {
+            slot: 4,
+            decomp: PatternDecomp::None,
+        }]);
+
+        let err = gene
+            .emit_pattern_bind_from_local(&pat, 0, Some(decomp), &span(1, 10))
+            .expect_err("stale tuple decomp should become CodegenError");
+        assert!(err.message.contains("tuple pattern decomp arity mismatch"));
+    }
+
+    #[test]
     fn emit_list_cons_bind_reuses_test_head_tail_slots() {
         let mut gene = Codegen::new();
         let list_ty = Ty::List(Box::new(Ty::Int));
@@ -2983,6 +3007,76 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn stale_match_tuple_decomp_returns_codegen_error() {
+        let mut gene = Codegen::new();
+        let pat = TypedMatchPattern::Tuple(vec![
+            TypedMatchPattern::Binding(resolved_id("left", None, 192)),
+            TypedMatchPattern::Binding(resolved_id("right", None, 193)),
+        ]);
+        let decomp = MatchPatternDecomp::Tuple(vec![MatchPatternDecompChild {
+            slot: 4,
+            decomp: MatchPatternDecomp::None,
+        }]);
+
+        let err = gene
+            .emit_match_pattern_bind(&pat, 0, Some(decomp), &span(1, 10))
+            .expect_err("stale tuple match decomp should become CodegenError");
+        assert!(err.message.contains("tuple match decomp arity mismatch"));
+    }
+
+    #[test]
+    fn stale_constructor_match_decomp_returns_codegen_error() {
+        let mut gene = Codegen::new();
+        let pat = TypedMatchPattern::Constructor {
+            tag: 9,
+            field_offset: 0,
+            fields: vec![
+                TypedMatchPattern::Binding(resolved_id("left", None, 194)),
+                TypedMatchPattern::Binding(resolved_id("right", None, 195)),
+            ],
+        };
+        let decomp = MatchPatternDecomp::Constructor(vec![MatchPatternDecompChild {
+            slot: 4,
+            decomp: MatchPatternDecomp::None,
+        }]);
+
+        let err = gene
+            .emit_match_pattern_bind(&pat, 0, Some(decomp), &span(1, 10))
+            .expect_err("stale constructor match decomp should become CodegenError");
+        assert!(err
+            .message
+            .contains("constructor match decomp arity mismatch"));
+    }
+
+    #[test]
+    fn malformed_facet_segment_slots_returns_codegen_error() {
+        let mut gene = Codegen::new();
+        let index = lit_node(Ty::Int, Lit::Int(0.into()), span(5, 6));
+        let path = TypedFacetPath {
+            source_ty: Ty::List(Box::new(Ty::Int)),
+            focus_ty: Ty::Int,
+            path_kind: TypedFacetPathKind::Structural,
+            may_fail: false,
+            source_readonly_root: false,
+            segments: vec![TypedFacetSegment::ListIndex {
+                index: Box::new(index),
+                display: "0".into(),
+                literal_index: Some(0.into()),
+                focus_readonly_root: false,
+                focus_type_name: None,
+            }],
+        };
+        let mismatch_end = gene.fresh_label();
+
+        let err = gene
+            .emit_facet_segments_from_local(0, &path, &[], &span(1, 6), Some(mismatch_end))
+            .expect_err("missing facet segment slots should become CodegenError");
+        assert!(err
+            .message
+            .contains("missing precomputed slot metadata for segment 1"));
     }
 
     #[test]
@@ -6179,7 +6273,7 @@ impl Codegen {
                     fail_label,
                     &rhs.span,
                 )?;
-                self.emit_pattern_bind_from_local(pat, payload_slot, Some(decomp))?;
+                self.emit_pattern_bind_from_local(pat, payload_slot, Some(decomp), &rhs.span)?;
 
                 let success_label = self.fresh_label();
                 self.emit_jump(success_label);
@@ -7310,12 +7404,13 @@ impl Codegen {
                 self.emit(Opcode::StoreLocal(current_slot));
             }
             TypedFacetSegment::ListIndex { literal_index, .. } => {
+                let slots = Self::facet_segment_slots(path, segment_slots, segment_idx, span)?;
                 let focus_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(current_slot));
                 self.emit_facet_segment_argument(
                     &path.segments[segment_idx],
-                    segment_slots[segment_idx][0],
+                    slots[0],
                     literal_index.as_ref(),
                     None,
                 )?;
@@ -7338,7 +7433,7 @@ impl Codegen {
                 self.emit(Opcode::LoadLocal(current_slot));
                 self.emit_facet_segment_argument(
                     &path.segments[segment_idx],
-                    segment_slots[segment_idx][0],
+                    slots[0],
                     literal_index.as_ref(),
                     None,
                 )?;
@@ -7358,12 +7453,13 @@ impl Codegen {
                 literal_end,
                 ..
             } => {
+                let slots = Self::facet_segment_slots(path, segment_slots, segment_idx, span)?;
                 let focus_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(current_slot));
                 self.emit_facet_list_range_arguments(
                     &path.segments[segment_idx],
-                    segment_slots[segment_idx],
+                    slots,
                     literal_start.as_ref(),
                     literal_end.as_ref(),
                 )?;
@@ -7386,7 +7482,7 @@ impl Codegen {
                 self.emit(Opcode::LoadLocal(current_slot));
                 self.emit_facet_list_range_arguments(
                     &path.segments[segment_idx],
-                    segment_slots[segment_idx],
+                    slots,
                     literal_start.as_ref(),
                     literal_end.as_ref(),
                 )?;
@@ -7402,12 +7498,13 @@ impl Codegen {
                 );
             }
             TypedFacetSegment::MapKey { literal_key, .. } => {
+                let slots = Self::facet_segment_slots(path, segment_slots, segment_idx, span)?;
                 let focus_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(current_slot));
                 self.emit_facet_segment_argument(
                     &path.segments[segment_idx],
-                    segment_slots[segment_idx][0],
+                    slots[0],
                     None,
                     literal_key.as_ref(),
                 )?;
@@ -7430,7 +7527,7 @@ impl Codegen {
                 self.emit(Opcode::LoadLocal(current_slot));
                 self.emit_facet_segment_argument(
                     &path.segments[segment_idx],
-                    segment_slots[segment_idx][0],
+                    slots[0],
                     None,
                     literal_key.as_ref(),
                 )?;
@@ -7714,10 +7811,11 @@ impl Codegen {
                             span: span.clone(),
                         });
                     };
+                    let slots = Self::facet_segment_slots(path, segment_slots, segment_idx, span)?;
                     self.emit(Opcode::LoadLocal(current_slot));
                     self.emit_facet_segment_argument(
                         segment,
-                        segment_slots[segment_idx][0],
+                        slots[0],
                         literal_index.as_ref(),
                         None,
                     )?;
@@ -7740,10 +7838,11 @@ impl Codegen {
                             span: span.clone(),
                         });
                     };
+                    let slots = Self::facet_segment_slots(path, segment_slots, segment_idx, span)?;
                     self.emit(Opcode::LoadLocal(current_slot));
                     self.emit_facet_list_range_arguments(
                         segment,
-                        segment_slots[segment_idx],
+                        slots,
                         literal_start.as_ref(),
                         literal_end.as_ref(),
                     )?;
@@ -7762,10 +7861,11 @@ impl Codegen {
                             span: span.clone(),
                         });
                     };
+                    let slots = Self::facet_segment_slots(path, segment_slots, segment_idx, span)?;
                     self.emit(Opcode::LoadLocal(current_slot));
                     self.emit_facet_segment_argument(
                         segment,
-                        segment_slots[segment_idx][0],
+                        slots[0],
                         None,
                         literal_key.as_ref(),
                     )?;
@@ -7858,6 +7958,29 @@ impl Codegen {
         }
     }
 
+    fn facet_segment_slots(
+        path: &TypedFacetPath,
+        segment_slots: &[[Option<u32>; 2]],
+        segment_idx: usize,
+        span: &Span,
+    ) -> Result<[Option<u32>; 2], CodegenError> {
+        segment_slots.get(segment_idx).copied().ok_or_else(|| {
+            let display = path
+                .segments
+                .get(segment_idx)
+                .map(Self::facet_segment_display)
+                .unwrap_or_else(|| "<missing>".into());
+            CodegenError {
+                message: format!(
+                    "Malformed facet path: missing precomputed slot metadata for segment {} ({})",
+                    segment_idx + 1,
+                    display
+                ),
+                span: span.clone(),
+            }
+        })
+    }
+
     fn emit_variant_mismatch_result(&mut self, detail: &str, span: &Span) {
         let err_tag = self.add_constant(Constant::Tag(1));
         self.emit(Opcode::LoadConst(err_tag));
@@ -7879,7 +8002,7 @@ impl Codegen {
             let pattern_fail = self.fresh_label();
             let decomp =
                 self.emit_pattern_test_from_local(pat, payload_slot, pattern_fail, &rhs.span)?;
-            self.emit_pattern_bind_from_local(pat, payload_slot, Some(decomp))?;
+            self.emit_pattern_bind_from_local(pat, payload_slot, Some(decomp), &rhs.span)?;
             let success_label = self.fresh_label();
             self.emit_jump(success_label);
 
@@ -7931,7 +8054,7 @@ impl Codegen {
                 fail_mismatch,
                 &rhs.span,
             )?;
-            self.emit_pattern_bind_from_local(pat, payload_slot, Some(outcome.decomp))?;
+            self.emit_pattern_bind_from_local(pat, payload_slot, Some(outcome.decomp), &rhs.span)?;
             let success_label = self.fresh_label();
             self.emit_jump(success_label);
 
@@ -7964,7 +8087,7 @@ impl Codegen {
         let pattern_fail = self.fresh_label();
         let decomp =
             self.emit_pattern_test_from_local(pat, payload_slot, pattern_fail, &rhs.span)?;
-        self.emit_pattern_bind_from_local(pat, payload_slot, Some(decomp))?;
+        self.emit_pattern_bind_from_local(pat, payload_slot, Some(decomp), &rhs.span)?;
         let success_label = self.fresh_label();
         self.emit_jump(success_label);
 
@@ -8004,7 +8127,7 @@ impl Codegen {
                 fail_mismatch,
                 &rhs.span,
             )?;
-            self.emit_pattern_bind_from_local(pat, list_slot, Some(outcome.decomp))?;
+            self.emit_pattern_bind_from_local(pat, list_slot, Some(outcome.decomp), &rhs.span)?;
             let success_label = self.fresh_label();
             self.emit_jump(success_label);
 
@@ -8036,7 +8159,7 @@ impl Codegen {
 
         let pattern_fail = self.fresh_label();
         let decomp = self.emit_pattern_test_from_local(pat, list_slot, pattern_fail, &rhs.span)?;
-        self.emit_pattern_bind_from_local(pat, list_slot, Some(decomp))?;
+        self.emit_pattern_bind_from_local(pat, list_slot, Some(decomp), &rhs.span)?;
         let success_label = self.fresh_label();
         self.emit_jump(success_label);
 
@@ -8613,6 +8736,7 @@ impl Codegen {
         pat: &TypedPattern,
         slot: u32,
         decomp: Option<PatternDecomp>,
+        err_span: &Span,
     ) -> Result<(), CodegenError> {
         match pat {
             TypedPattern::Var(_, id) => {
@@ -8624,7 +8748,7 @@ impl Codegen {
                 let bind_slot = self.alloc_slot(id.unique_id);
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::StoreLocal(bind_slot));
-                self.emit_pattern_bind_from_local(inner, slot, decomp)?;
+                self.emit_pattern_bind_from_local(inner, slot, decomp, err_span)?;
             }
             TypedPattern::Wildcard(_)
             | TypedPattern::Pin(_, _, _)
@@ -8641,7 +8765,12 @@ impl Codegen {
                 for (index, item) in items.iter().enumerate() {
                     let (item_slot, item_decomp) = if let Some(children) = cached_children.as_mut()
                     {
-                        let child = children.next().expect("tuple decomp arity mismatch");
+                        let child = children.next().ok_or_else(|| CodegenError {
+                            message:
+                                "Internal invariant broken: tuple pattern decomp arity mismatch"
+                                    .into(),
+                            span: err_span.clone(),
+                        })?;
                         (child.slot, Some(child.decomp))
                     } else {
                         let item_slot = self.state.next_slot;
@@ -8653,11 +8782,11 @@ impl Codegen {
                         self.emit(Opcode::StoreLocal(item_slot));
                         (item_slot, None)
                     };
-                    self.emit_pattern_bind_from_local(item, item_slot, item_decomp)?;
+                    self.emit_pattern_bind_from_local(item, item_slot, item_decomp, err_span)?;
                 }
             }
             TypedPattern::ListCons(_, _, _) => {
-                self.emit_list_cons_pattern_bind_from_local(pat, slot, decomp)?;
+                self.emit_list_cons_pattern_bind_from_local(pat, slot, decomp, err_span)?;
             }
             TypedPattern::ResultOk(_, inner) => {
                 let (inner_slot, inner_decomp) = match decomp {
@@ -8671,7 +8800,7 @@ impl Codegen {
                         (inner_slot, None)
                     }
                 };
-                self.emit_pattern_bind_from_local(inner, inner_slot, inner_decomp)?;
+                self.emit_pattern_bind_from_local(inner, inner_slot, inner_decomp, err_span)?;
             }
             TypedPattern::Extractor {
                 input_ty,
@@ -8690,7 +8819,12 @@ impl Codegen {
                 };
                 if let Some(children) = cached_children {
                     for (item, child) in items.iter().zip(children.into_iter()) {
-                        self.emit_pattern_bind_from_local(item, child.slot, Some(child.decomp))?;
+                        self.emit_pattern_bind_from_local(
+                            item,
+                            child.slot,
+                            Some(child.decomp),
+                            err_span,
+                        )?;
                     }
                 } else {
                     let impossible_no_match = self.fresh_label();
@@ -8708,7 +8842,7 @@ impl Codegen {
                         &extractor.span,
                     )?;
                     for (item, item_slot) in items.iter().zip(item_slots.iter()) {
-                        self.emit_pattern_bind_from_local(item, *item_slot, None)?;
+                        self.emit_pattern_bind_from_local(item, *item_slot, None, err_span)?;
                     }
                     self.emit_jump(done);
                     self.patch_label(impossible_no_match);
@@ -8789,6 +8923,7 @@ impl Codegen {
         pat: &TypedPattern,
         slot: u32,
         decomp: Option<PatternDecomp>,
+        err_span: &Span,
     ) -> Result<(), CodegenError> {
         let mut current_pat = pat;
         let mut current_slot = slot;
@@ -8814,14 +8949,14 @@ impl Codegen {
                     (head_slot, None, tail_slot, None)
                 }
             };
-            self.emit_pattern_bind_from_local(head, head_slot, head_decomp)?;
+            self.emit_pattern_bind_from_local(head, head_slot, head_decomp, err_span)?;
 
             current_pat = tail;
             current_slot = tail_slot;
             current_decomp = tail_decomp;
         }
 
-        self.emit_pattern_bind_from_local(current_pat, current_slot, current_decomp)
+        self.emit_pattern_bind_from_local(current_pat, current_slot, current_decomp, err_span)
     }
 
     fn reserve_pattern_slots_for_facet_bind(&mut self, pat: &TypedPattern) {
@@ -9347,7 +9482,7 @@ impl Codegen {
                     let pat = &arm.pattern;
                     let decomp =
                         self.emit_match_pattern_test(pat, scrut_slot, next_arm, &scrutinee.span)?;
-                    self.emit_match_pattern_bind(pat, scrut_slot, Some(decomp))?;
+                    self.emit_match_pattern_bind(pat, scrut_slot, Some(decomp), &scrutinee.span)?;
                     if let Some(guard) = &arm.guard {
                         self.emit_node(guard)?;
                         self.emit_jump_if_false(next_arm);
@@ -9710,7 +9845,7 @@ impl Codegen {
             let pat = &arm.pattern;
             let decomp =
                 self.emit_match_pattern_test(pat, scrut_slot, next_arm, &scrutinee.span)?;
-            self.emit_match_pattern_bind(pat, scrut_slot, Some(decomp))?;
+            self.emit_match_pattern_bind(pat, scrut_slot, Some(decomp), &scrutinee.span)?;
             if let Some(guard) = &arm.guard {
                 self.emit_node(guard)?;
                 self.emit_jump_if_false(next_arm);
@@ -9894,6 +10029,7 @@ impl Codegen {
         pat: &TypedMatchPattern,
         slot: u32,
         decomp: Option<MatchPatternDecomp>,
+        err_span: &Span,
     ) -> Result<(), CodegenError> {
         match pat {
             TypedMatchPattern::Binding(id) => {
@@ -9905,7 +10041,7 @@ impl Codegen {
                 let bind_slot = self.alloc_slot(alias.unique_id);
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::StoreLocal(bind_slot));
-                self.emit_match_pattern_bind(inner, slot, decomp)?;
+                self.emit_match_pattern_bind(inner, slot, decomp, err_span)?;
             }
             TypedMatchPattern::Wildcard
             | TypedMatchPattern::Pin { .. }
@@ -9924,7 +10060,11 @@ impl Codegen {
                 for (index, item) in items.iter().enumerate() {
                     let (item_slot, item_decomp) = if let Some(children) = cached_children.as_mut()
                     {
-                        let child = children.next().expect("tuple match decomp arity mismatch");
+                        let child = children.next().ok_or_else(|| CodegenError {
+                            message: "Internal invariant broken: tuple match decomp arity mismatch"
+                                .into(),
+                            span: err_span.clone(),
+                        })?;
                         (child.slot, Some(child.decomp))
                     } else {
                         let item_slot = self.state.next_slot;
@@ -9936,7 +10076,7 @@ impl Codegen {
                         self.emit(Opcode::StoreLocal(item_slot));
                         (item_slot, None)
                     };
-                    self.emit_match_pattern_bind(item, item_slot, item_decomp)?;
+                    self.emit_match_pattern_bind(item, item_slot, item_decomp, err_span)?;
                 }
             }
             TypedMatchPattern::Constructor {
@@ -9949,27 +10089,31 @@ impl Codegen {
                     _ => None,
                 };
                 for (idx, field_pat) in fields.iter().enumerate() {
-                    let (inner_slot, inner_decomp) =
-                        if let Some(children) = cached_children.as_mut() {
-                            let child = children
-                                .next()
-                                .expect("constructor match decomp arity mismatch");
-                            (child.slot, Some(child.decomp))
-                        } else {
-                            let inner_slot = self.state.next_slot;
-                            self.state.next_slot += 1;
-                            self.emit(Opcode::LoadLocal(slot));
-                            self.emit(Opcode::GetField {
-                                field_index: *field_offset + idx as u32,
-                            });
-                            self.emit(Opcode::StoreLocal(inner_slot));
-                            (inner_slot, None)
-                        };
-                    self.emit_match_pattern_bind(field_pat, inner_slot, inner_decomp)?;
+                    let (inner_slot, inner_decomp) = if let Some(children) =
+                        cached_children.as_mut()
+                    {
+                        let child = children.next().ok_or_else(|| CodegenError {
+                            message:
+                                "Internal invariant broken: constructor match decomp arity mismatch"
+                                    .into(),
+                            span: err_span.clone(),
+                        })?;
+                        (child.slot, Some(child.decomp))
+                    } else {
+                        let inner_slot = self.state.next_slot;
+                        self.state.next_slot += 1;
+                        self.emit(Opcode::LoadLocal(slot));
+                        self.emit(Opcode::GetField {
+                            field_index: *field_offset + idx as u32,
+                        });
+                        self.emit(Opcode::StoreLocal(inner_slot));
+                        (inner_slot, None)
+                    };
+                    self.emit_match_pattern_bind(field_pat, inner_slot, inner_decomp, err_span)?;
                 }
             }
             TypedMatchPattern::ListCons(_, _) => {
-                self.emit_list_cons_match_pattern_bind(pat, slot, decomp)?;
+                self.emit_list_cons_match_pattern_bind(pat, slot, decomp, err_span)?;
             }
             TypedMatchPattern::Extractor {
                 input_ty,
@@ -9987,7 +10131,12 @@ impl Codegen {
                 };
                 if let Some(children) = cached_children {
                     for (item, child) in items.iter().zip(children.into_iter()) {
-                        self.emit_match_pattern_bind(item, child.slot, Some(child.decomp))?;
+                        self.emit_match_pattern_bind(
+                            item,
+                            child.slot,
+                            Some(child.decomp),
+                            err_span,
+                        )?;
                     }
                 } else {
                     let impossible_no_match = self.fresh_label();
@@ -10005,7 +10154,7 @@ impl Codegen {
                         &extractor.span,
                     )?;
                     for (item, item_slot) in items.iter().zip(item_slots.iter()) {
-                        self.emit_match_pattern_bind(item, *item_slot, None)?;
+                        self.emit_match_pattern_bind(item, *item_slot, None, err_span)?;
                     }
                     self.emit_jump(done);
                     self.patch_label(impossible_no_match);
@@ -10082,6 +10231,7 @@ impl Codegen {
         pat: &TypedMatchPattern,
         slot: u32,
         decomp: Option<MatchPatternDecomp>,
+        err_span: &Span,
     ) -> Result<(), CodegenError> {
         let mut current_pat = pat;
         let mut current_slot = slot;
@@ -10107,14 +10257,14 @@ impl Codegen {
                     (head_slot, None, tail_slot, None)
                 }
             };
-            self.emit_match_pattern_bind(head, head_slot, head_decomp)?;
+            self.emit_match_pattern_bind(head, head_slot, head_decomp, err_span)?;
 
             current_pat = tail;
             current_slot = tail_slot;
             current_decomp = tail_decomp;
         }
 
-        self.emit_match_pattern_bind(current_pat, current_slot, current_decomp)
+        self.emit_match_pattern_bind(current_pat, current_slot, current_decomp, err_span)
     }
 
     // ── Label resolution ──
