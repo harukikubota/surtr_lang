@@ -29,6 +29,7 @@ Project::config({|config|
         project_file: root.join("project.srt"),
         selected_profile: "main".to_string(),
         normalized_args: vec![("profile".to_string(), "main".to_string())],
+        active_file: None,
         source: source.to_string(),
     })
     .expect("project source should extract runner input");
@@ -58,6 +59,7 @@ fn project_runner_extracts_paths_from_repository_project_example() {
         project_file: root.join("project.srt"),
         selected_profile: "main".to_string(),
         normalized_args: Vec::new(),
+        active_file: None,
         source,
     })
     .expect("repository project example should extract runner input");
@@ -66,6 +68,49 @@ fn project_runner_extracts_paths_from_repository_project_example() {
     assert_eq!(input.declared_paths.len(), 11);
     assert_eq!(input.declared_paths[0].literal_or_glob, "./main.srt");
     assert_eq!(input.declared_paths[10].literal_or_glob, "./src/6_cli.srt");
+}
+
+#[test]
+fn project_runner_active_file_profiles_match_expanded_project_paths() {
+    let root = temp_root("active-profile");
+    fs::create_dir_all(root.join("src")).expect("create src");
+    fs::write(root.join("src/shared.srt"), "shared = 1").expect("write shared");
+    fs::write(root.join("src/dev_only.srt"), "dev_only = 1").expect("write dev");
+    let source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/*.srt")
+  })
+
+  Project::entrypoint(config, "test", {|c|
+    Config::add_path(c, "./src/shared.srt")
+  })
+})
+"#;
+
+    let input = extract_project_runner_input(ProjectRunnerSourceInput {
+        project_file: root.join("project.srt"),
+        selected_profile: "dev".to_string(),
+        normalized_args: Vec::new(),
+        active_file: Some(root.join("src/shared.srt")),
+        source: source.to_string(),
+    })
+    .expect("project source should extract runner input");
+
+    assert_eq!(input.active_file_profiles, vec!["dev", "test"]);
+
+    let input = extract_project_runner_input(ProjectRunnerSourceInput {
+        project_file: root.join("project.srt"),
+        selected_profile: "dev".to_string(),
+        normalized_args: Vec::new(),
+        active_file: Some(root.join("src/dev_only.srt")),
+        source: source.to_string(),
+    })
+    .expect("project source should extract runner input");
+
+    assert_eq!(input.active_file_profiles, vec!["dev"]);
+
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -83,6 +128,7 @@ Project::config({|config|
         project_file: root.join("project.srt"),
         selected_profile: "test".to_string(),
         normalized_args: Vec::new(),
+        active_file: None,
         source: source.to_string(),
     })
     .expect_err("unknown profile should be reported as runner diagnostic");

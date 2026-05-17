@@ -281,6 +281,7 @@ fn resolve_project_context(
     project_file: PathBuf,
     profile: String,
 ) -> ResolvedAnalysisContext {
+    let active_file = request.active_file.clone();
     let base_context = AnalysisContext {
         workspace_root: request.workspace_root,
         mode: AnalysisMode::Project,
@@ -342,7 +343,10 @@ fn resolve_project_context(
         });
     }
 
-    let mut runner = if let Some(source_input) = selection.source.clone() {
+    let mut runner = if let Some(mut source_input) = selection.source.clone() {
+        if source_input.active_file.is_none() {
+            source_input.active_file = Some(active_file.clone());
+        }
         match extract_project_runner_input(source_input) {
             Ok(input) => resolve_project_runner(input),
             Err(source_diagnostics) => {

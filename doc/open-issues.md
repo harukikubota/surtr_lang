@@ -193,6 +193,8 @@
   - `resolve_context`、`RunnerContext`、context / runner diagnostics DTO、`AnalysisService` の最小 snapshot / diagnostics / completion API を追加し、LSP adapter が active file 単体ではなく context 経由で呼べる境界を作った。
   - 正規化済み runner 入力から literal / glob path を deterministic に展開して `RunnerContext` へ変換する `resolve_project_runner` を追加した。
   - `project.srt` の AST から現行 `Project::entrypoint(..., "profile", {|c| ...})` / `Config::add_path(...)` surface を抽出し、`resolve_context` から `RunnerContext` へ接続する最小経路を追加した。
+  - active file が project profile の `Config::add_path` literal / glob 展開結果に含まれるかを `active_file_profiles` として固定し、複数 profile membership を保持する。
+  - `crates/surtr-lsp` を追加し、file URI / UTF-16 position / diagnostics / completion text edit を `surtr-analysis` DTO へ写像する protocol adapter 境界を置いた。
   - `SourceKind` は `sindr::policy`、parse rule 導出は `spire` に置き、`surtr-analysis` は Xldr に依存しない構成にした。
   - REPL command query parser は `surtr-analysis::query` に移し、Xldr は同じ parser 実装を呼ぶ。
 - 未確定点:
@@ -200,6 +202,7 @@
   - `RunnerArgs` の最終構造、`selected_profile` を top-level field に置くか runner args 内に置くか。
   - project runner source を Surtr VM で実行して抽出するか、restricted project config evaluator を用意するか。
   - `Project::entrypoint` / `Config::add_path` 以外の runner facts を、`project.srt` の AST / evaluator からどう生成するか。
+  - LSP hover / signatureHelp / definition / documentSymbol を、現在の snapshot からどの順で実体化するか。
   - typed boot builder API の正本名と、LSP が boot / supervisor config をどこまで semantic に理解するか。
   - external file missing / schema mismatch / handler override conflict を runner diagnostics と compile diagnostics のどちらへ所属させるか。
   - project context 付き script の `supervisor_init` merge 規則。
@@ -212,16 +215,16 @@
   - command query parser は `spire` へ入れず、REPL / LSP editor command から使える tooling query wrapper として配置される。
   - script entry を選択すると、script include 先 definition source が同じ compile unit 文脈で解析される。
   - project mode では selected profile、normalized runner args、module stage、project path 展開、boot / external input summary が cache key と diagnostics に反映される。
-  - `AnalysisService` は parse diagnostics と completion の protocol 非依存 DTO を返し、hover / signatureHelp / definition / documentSymbol は同じ snapshot から段階的に実装できる。
+  - `AnalysisService` は parse / resolve / typecheck diagnostics と completion の protocol 非依存 DTO を返し、hover / signatureHelp / definition / documentSymbol は同じ snapshot から段階的に実装できる。
   - REPL は内部で LSP JSON-RPC と通信せず、Xldr と `surtr-lsp` が同じ semantic service を別 adapter として利用できる。
   - LSP / analysis core は single-thread wasm host でも動作でき、multi-thread availability に意味論を依存させない。
 - テスト方針:
   - `surtr-analysis` 導入時は context resolver、include graph、cache key、LineIndex の byte / character / UTF-16 変換を unit test で固定する。
   - `AnalysisService` の snapshot / parse diagnostics / completion と、project runner literal / glob 展開は `surtr-analysis` unit test で固定する。
   - command query parser は `surtr-analysis::query` の unit test と `cargo nextest run -p xldr` の既存 REPL command tests で固定する。
-  - `surtr-lsp` 導入時は diagnostics / completion / hover / signatureHelp / definition の protocol DTO 変換を unit test で固定する。
+  - `surtr-lsp` 導入時は diagnostics / completion の protocol DTO 変換を unit test で固定する。hover / signatureHelp / definition は `AnalysisService` 側の実装時に追加で固定する。
   - `tests/fixtures/script/**`、`tests/fixtures/modules/**`、`lib/**/*.srt` を LSP analysis context の integration fixture として流用する。
-  - project runner 実装後は profile 切り替え、glob 展開、external input diagnostics、active file profile membership の fixture を追加する。
+  - project runner 実装後は profile 切り替え、glob 展開、active file profile membership の fixture を追加する。external input diagnostics は boot / external summary 実装時に追加する。
   - REPL 共有化時は `cargo nextest run -p xldr` で既存 REPL completion / command query 表示を回帰基準にする。
 
 ## 更新ルール

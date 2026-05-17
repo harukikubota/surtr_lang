@@ -32,6 +32,7 @@ pub struct ProjectRunnerSourceInput {
     pub project_file: PathBuf,
     pub selected_profile: String,
     pub normalized_args: Vec<(String, String)>,
+    pub active_file: Option<PathBuf>,
     pub source: String,
 }
 
@@ -59,6 +60,7 @@ pub fn extract_project_runner_input(
         project_file: input.project_file.clone(),
         selected_profile: input.selected_profile.clone(),
         profiles: Vec::new(),
+        profile_declared_paths: Vec::new(),
         selected_declared_paths: Vec::new(),
     };
     extractor.visit_many(&ast);
@@ -80,12 +82,18 @@ pub fn extract_project_runner_input(
         }]);
     }
 
+    let active_file_profiles = input
+        .active_file
+        .as_ref()
+        .map(|active_file| extractor.active_file_profiles(active_file))
+        .unwrap_or_else(|| extractor.profiles.clone());
+
     Ok(ProjectRunnerInput {
         project_file: input.project_file,
         selected_profile: input.selected_profile,
         normalized_args: input.normalized_args,
         declared_paths: extractor.selected_declared_paths,
-        active_file_profiles: extractor.profiles,
+        active_file_profiles,
         boot_summary: ProjectBootSummary::default(),
         external_inputs: Vec::new(),
     })
@@ -144,10 +152,31 @@ struct ProjectRunnerExtractor {
     project_file: PathBuf,
     selected_profile: String,
     profiles: Vec<String>,
+    profile_declared_paths: Vec<ProfileDeclaredPaths>,
     selected_declared_paths: Vec<DeclaredProjectPath>,
 }
 
 impl ProjectRunnerExtractor {
+    fn active_file_profiles(&self, active_file: &Path) -> Vec<String> {
+        let active_file = normalized_path_value(active_file);
+        let mut profiles = Vec::new();
+        for profile in &self.profile_declared_paths {
+            let mut ignored_diagnostics = Vec::new();
+            let contains_active_file = profile.declared_paths.iter().any(|declared_path| {
+                if declared_path_matches_active_file(declared_path, &active_file) {
+                    return true;
+                }
+                expand_declared_path(declared_path, &mut ignored_diagnostics)
+                    .iter()
+                    .any(|path| normalized_path_value(path) == active_file)
+            });
+            if contains_active_file {
+                profiles.push(profile.profile.clone());
+            }
+        }
+        profiles
+    }
+
     fn visit_many(&mut self, ast: &[Ast]) {
         for node in ast {
             self.visit(node);
@@ -159,12 +188,14 @@ impl ProjectRunnerExtractor {
             if !self.profiles.iter().any(|known| known == profile) {
                 self.profiles.push(profile.to_string());
             }
+            let mut declared_paths = Vec::new();
+            collect_add_paths(builder, &self.project_file, &mut declared_paths);
+            self.profile_declared_paths.push(ProfileDeclaredPaths {
+                profile: profile.to_string(),
+                declared_paths: declared_paths.clone(),
+            });
             if profile == self.selected_profile {
-                collect_add_paths(
-                    builder,
-                    &self.project_file,
-                    &mut self.selected_declared_paths,
-                );
+                self.selected_declared_paths.extend(declared_paths);
             }
         }
 
@@ -197,6 +228,25 @@ impl ProjectRunnerExtractor {
             _ => {}
         }
     }
+}
+
+fn declared_path_matches_active_file(
+    declared_path: &DeclaredProjectPath,
+    active_file: &str,
+) -> bool {
+    if has_wildcard(&declared_path.literal_or_glob) {
+        return false;
+    }
+    let base_dir = declared_path
+        .declared_by
+        .parent()
+        .unwrap_or_else(|| Path::new(""));
+    normalized_path_value(&base_dir.join(&declared_path.literal_or_glob)) == active_file
+}
+
+struct ProfileDeclaredPaths {
+    profile: String,
+    declared_paths: Vec<DeclaredProjectPath>,
 }
 
 fn entrypoint_builder(node: &Ast) -> Option<(&str, &Ast)> {
@@ -421,6 +471,14 @@ fn stable_hash_text(text: &str) -> String {
 
 fn path_value(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn normalized_path_value(path: &Path) -> String {
+    let mut value = path_value(path);
+    while value.contains("/./") {
+        value = value.replace("/./", "/");
+    }
+    value
 }
 
 fn analysis_span(span: &Span) -> AnalysisSpan {

@@ -180,6 +180,7 @@ fn resolve_context_extracts_project_runner_source_when_available() {
                 project_file: PathBuf::from("/repo/project.srt"),
                 selected_profile: "dev".to_string(),
                 normalized_args: Vec::new(),
+                active_file: None,
                 source: r#"
 Project::config({|config|
   Project::entrypoint(config, "dev", {|c|

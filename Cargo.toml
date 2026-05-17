@@ -11,6 +11,7 @@ members = [
     "crates/eldr",
     "crates/xldr",
     "crates/surtr-analysis",
+    "crates/surtr-lsp",
     "crates/rune",
 ]
 
