@@ -163,6 +163,66 @@
   - project runner 実装後は profile 切り替え、glob 展開、external input diagnostics、active file profile membership の fixture を追加する。
   - REPL 共有化時は `cargo nextest run -p xldr` で既存 REPL completion / command query 表示を回帰基準にする。
 
+### OI-030 Process runtime scheduler / Lazy init convergence
+
+- 背景:
+  - Process Runtime v2 の public surface は `docs/dev/ProcessRuntime_spec.md` へ整理済みだが、Lazy init、Ready 前 call、`Pending` / resume、init timeout、runtime status 表現はまだ VM 内部契約として完全に畳み切れていない。
+  - `Process::sleep`、Task timeout、ReplyLater timeout、worker call timeout は deadline / future / waiting table を共有し始めており、今後の cleanup は surface 追加ではなく scheduler 内部契約の収束として扱う。
+  - Worker wait API、generic receive、Task supervision は v2 public surface ではないため、この issue の対象外とする。
+- 未確定点:
+  - Lazy `@init` の `Pending` / `PendingAfter` retry と `init_waiters` を、通常の future / deadline queue とどこまで共通化するか
+  - Ready 前 call を FIFO 待機にする場合の caller timeout、init timeout、init failure の優先順位
+  - runtime process status を `Allocated` / `Initializing` / `Ready` / `Waiting` / `Failed` のどこまで VM snapshot / diagnostics に出すか
+  - heavy process の fairness を step budget / scheduler quantum で扱うか、現行の pending point だけで十分とするか
+- 受け入れ条件:
+  - Lazy init、sleep、Task、ReplyLater、runtime-managed call timeout が同じ deadline / waiting cleanup 規則で説明できる。
+  - Ready 前 call、init failure、timeout 後 reply、process down の競合で stale waiter / deadline / reply mapping が残らない。
+  - process status と VM dump / Rune observability の表示が `docs/dev/ProcessRuntime_spec.md` と `docs/dev/Rune_observability.md` で矛盾しない。
+- テスト方針:
+  - `unit/eldr` で Lazy init retry、Ready 前 call FIFO、init timeout、timeout vs reply/down の cleanup を固定する。
+  - `integration/run_srt` で singleton boot、worker call、ReplyLater timeout、Task timeout の成功・失敗 fixture を追加する。
+  - VM dump / snapshot 形状を変更する場合は `cargo nextest run -p rune --test integration run_eldr` と関連 snapshot test を回帰基準にする。
+
+### OI-031 Runtime Logger / handler target boundary
+
+- 背景:
+  - Process runtime の handler dependency は `StdIn` / `StdOut` / `StdErr`、`OutHandler` / `InHandler`、`FileOutHandler` override までを baseline としている。
+  - Logger を public API として追加するか、handler target の差し替えだけで十分かは未確定である。
+  - File v2 / FileOutHandler / runtime standard singleton の責務境界と衝突しやすいため、process runtime の標準 handler 拡張として別 issue で扱う。
+- 未確定点:
+  - Logger を singleton process として持つか、`OutHandler` target 群の一種として扱うか
+  - 複数 producer から同一 sink へ出力する場合、sink 内 FIFO だけを保証するか、VM 全体の完全順序を保証するか
+  - durability / flush / crash 時の扱いを best-effort に留めるか、明示 API を持つか
+  - file sink と一般 `File` API の lifecycle / permission / error boundary をどう分けるか
+- 受け入れ条件:
+  - Logger を導入しても `Process`, `Task`, `Workers`, generated owner helper の public surface が増えすぎない。
+  - handler override と VM dump / Rune observability から、どの sink に出ているか追跡できる。
+  - FileOutHandler と一般 File API の責務境界が `docs/dev/ProcessRuntime_spec.md`、`docs/dev/EldrVM_spec.md`、`lib/*.srt` で一致する。
+- テスト方針:
+  - handler target を増やす場合は `unit/sigil` / `unit/scar` / `unit/forge` で capability と init args を固定する。
+  - runtime sink を増やす場合は `unit/eldr` で ordering、flush、error result、resource cleanup を固定する。
+  - public Logger surface を追加する場合は `tests/fixtures/script/pass` と `tests/fixtures/script/fail` に最小 fixture を置く。
+
+### OI-032 Mass process benchmark harness
+
+- 背景:
+  - Process runtime の correctness fixture は増えているが、大量 process、worker set、message dispatch、deadline queue、reply future の負荷傾向を比較する標準 benchmark はまだない。
+  - 旧ドラフトでは単一 manager と大量 worker の採取シナリオで、process 数、message 量、waiting / timeout / reply 処理、最大 RSS を測る案を整理していた。
+  - これは言語仕様ではなく開発用 benchmark harness であり、正本仕様には測定対象と基準シナリオだけを残す。
+- 未確定点:
+  - benchmark を Rust integration / standalone CLI / Surtr script fixture のどこに置くか
+  - RSS / CPU / frame count / message count / deadline queue count をどの形式で記録するか
+  - 乱数 seed、worker 数、終了条件、timeout policy を CLI option と fixture のどちらで固定するか
+  - 単一 manager 集中モデルに加えて、manager shard モデルをいつ追加するか
+- 受け入れ条件:
+  - 同一 seed / 同一 worker 数で比較可能な benchmark 結果を得られる。
+  - 少なくとも worker count、total messages、waiting max、future/deadline count、elapsed time、max RSS を記録できる。
+  - benchmark は通常の correctness suite から分離し、`cargo nextest run --workspace` の安定性を悪化させない。
+- テスト方針:
+  - harness 自体は小規模設定で deterministic に終了する smoke test を持つ。
+  - 大規模設定は手動または専用 profile で実行し、CI の通常 profile には入れない。
+  - VM stats / dump の field を増やす場合は `docs/dev/Rune_observability.md` と snapshot test を同期する。
+
 ## 更新ルール
 
 - 解決済み事項は本ファイルに残さず削除する。必要な履歴は正本仕様・関連 spec・コミット履歴で追跡する。
