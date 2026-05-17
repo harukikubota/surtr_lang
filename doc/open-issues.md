@@ -3,7 +3,7 @@
 > 目的: V9 正本でまだ固定していない未解決事項だけを追跡する。
 > 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md`、開発者向け spec は `docs/dev/` 配下を正本とする。`doc/` は draft / input / tmp 置き場として扱う。cleanup で解消済みの項目は本ファイルに残さない。
 
-最終更新日: 2026-05-16
+最終更新日: 2026-05-17
 
 ---
 
@@ -186,6 +186,38 @@
 - テスト方針:
   - `unit/scar` / `unit/forge` で helper 生成契約を固定する。
   - `tests/fixtures/script/pass` と `tests/fixtures/script/fail` に valid / invalid ordinal 変換ケースを追加する。
+
+### OI-029 `surtr-lsp` 実装ドラフト
+
+- 背景:
+  - editor 用 LSP、REPL command query parser、REPL 補完は大きな未解決領域として残っている。
+  - `doc/lsp_analysis_context_spec_v0.md` では、active file を単体ではなく script / project / stdlib の `AnalysisContext` で解析する方針を整理した。
+  - `doc/project_runner_pseudo_di_draft.md` では、project runner の profile selection、pseudo DI、operational script、REPL preload、LSP cache key を同じ runner context へ寄せる方針を整理した。
+  - `docs/dev/Surtr_LSP_spec.md` では、`surtr-lsp` を protocol adapter とし、REPL と LSP が shared semantic service を直接使う実装方針を draft として固定した。
+- 未確定点:
+  - `surtr-analysis` 相当の shared analysis crate を新設するか、既存 `xldr` helper を先に分割して段階移行するか。
+  - project runner 専用 `SourceKind` / `ProjectConfigSource` が必要か。
+  - `RunnerArgs` の最終構造、`selected_profile` を top-level field に置くか runner args 内に置くか。
+  - project runner source を Surtr VM で実行して抽出するか、restricted project config evaluator を用意するか。
+  - typed boot builder API の正本名と、LSP が boot / supervisor config をどこまで semantic に理解するか。
+  - external file missing / schema mismatch / handler override conflict を runner diagnostics と compile diagnostics のどちらへ所属させるか。
+  - project context 付き script の `supervisor_init` merge 規則。
+  - active file が複数 profile に属する場合の UI / diagnostics 優先順位。
+  - REPL virtual document をどこまで LSP 対象に含めるか。
+  - completion の型文脈利用を候補除外にするか、順位付けに留めるか。
+  - iOS / wasm adapter が JSON-RPC LSP を使うか、editor UI から direct API を呼ぶか。
+- 受け入れ条件:
+  - `surtr-lsp` は active file を単体推測せず、必ず `AnalysisContext` 経由で parse / resolve / typecheck / completion / diagnostics を行う。
+  - script entry を選択すると、script include 先 definition source が同じ compile unit 文脈で解析される。
+  - project mode では selected profile、normalized runner args、module stage、project path 展開、boot / external input summary が cache key と diagnostics に反映される。
+  - REPL は内部で LSP JSON-RPC と通信せず、Xldr と `surtr-lsp` が同じ semantic service を別 adapter として利用できる。
+  - LSP / analysis core は single-thread wasm host でも動作でき、multi-thread availability に意味論を依存させない。
+- テスト方針:
+  - `surtr-analysis` 導入時は context resolver、include graph、cache key、LineIndex の byte / character / UTF-16 変換を unit test で固定する。
+  - `surtr-lsp` 導入時は diagnostics / completion / hover / signatureHelp / definition の protocol DTO 変換を unit test で固定する。
+  - `tests/fixtures/script/**`、`tests/fixtures/modules/**`、`lib/**/*.srt` を LSP analysis context の integration fixture として流用する。
+  - project runner 実装後は profile 切り替え、glob 展開、external input diagnostics、active file profile membership の fixture を追加する。
+  - REPL 共有化時は `cargo nextest run -p xldr` で既存 REPL completion / command query 表示を回帰基準にする。
 
 ## 更新ルール
 
