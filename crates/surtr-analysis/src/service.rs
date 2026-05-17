@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use sindr::policy::{CompileUnitKind, SourceKind};
-use spire::ast::Ast;
+use spire::ast::{Ast, Span};
 
 use crate::{
     complete_prefix, parse_document, AnalysisContextStatus, AnalysisMode, CompletionRequest,
@@ -237,11 +237,141 @@ impl AnalysisService {
 
     pub fn document_symbols(
         &self,
-        _snapshot: &AnalysisSnapshot,
-        _active_file: &Path,
+        snapshot: &AnalysisSnapshot,
+        active_file: &Path,
     ) -> Vec<DocumentSymbol> {
-        Vec::new()
+        let Some(document) = snapshot.active_document.as_ref() else {
+            return Vec::new();
+        };
+        if document.path != active_file {
+            return Vec::new();
+        }
+        let Some(ast) = snapshot.ast.as_ref() else {
+            return Vec::new();
+        };
+
+        let mut symbols = Vec::new();
+        collect_document_symbols(ast, None, &document.line_index, &mut symbols);
+        symbols
     }
+}
+
+fn collect_document_symbols(
+    ast: &[Ast],
+    owner: Option<&str>,
+    line_index: &LineIndex,
+    out: &mut Vec<DocumentSymbol>,
+) {
+    for node in ast {
+        if let Some(symbol) = document_symbol_for_ast(node, owner, line_index) {
+            let nested_owner = nested_owner_for_ast(node, owner);
+            out.push(symbol);
+            if let Some((body, owner_name)) = module_body_for_ast(node).zip(nested_owner.as_deref())
+            {
+                collect_document_symbols(body, Some(owner_name), line_index, out);
+            }
+        }
+    }
+}
+
+fn document_symbol_for_ast(
+    node: &Ast,
+    owner: Option<&str>,
+    line_index: &LineIndex,
+) -> Option<DocumentSymbol> {
+    let (name, detail, span) = match node {
+        Ast::Def(span, name, ..) => (
+            qualify_symbol(owner, name),
+            Some("function".to_string()),
+            span,
+        ),
+        Ast::ExtractorDef(span, name, ..) => (
+            qualify_symbol(owner, name),
+            Some("extractor".to_string()),
+            span,
+        ),
+        Ast::ConstDef(span, name, ..) => {
+            (qualify_symbol(owner, name), Some("const".to_string()), span)
+        }
+        Ast::StructDef(span, name, ..) => (
+            qualify_symbol(owner, name),
+            Some("struct".to_string()),
+            span,
+        ),
+        Ast::RecordDef(span, name, ..) => (
+            qualify_symbol(owner, name),
+            Some("record".to_string()),
+            span,
+        ),
+        Ast::DeferrorDef(span, name, ..) => {
+            (qualify_symbol(owner, name), Some("error".to_string()), span)
+        }
+        Ast::EnumDef(span, name, ..) => {
+            (qualify_symbol(owner, name), Some("enum".to_string()), span)
+        }
+        Ast::Defmod(span, name, ..)
+        | Ast::Defagent(span, name, ..)
+        | Ast::Defgenserver(span, name, ..)
+        | Ast::Defsupervisor(span, name, ..)
+        | Ast::DefdynamicSupervisor(span, name, ..) => (
+            qualify_symbol(owner, name),
+            Some("module".to_string()),
+            span,
+        ),
+        Ast::ImplDef(span, target, ..) => (
+            qualify_symbol(owner, target),
+            Some("impl".to_string()),
+            span,
+        ),
+        Ast::TraitDef(span, name, ..) => {
+            (qualify_symbol(owner, name), Some("trait".to_string()), span)
+        }
+        Ast::TraitImplDef(span, trait_name, _, target, ..) => (
+            qualify_symbol(owner, &format!("impl {trait_name} for {target:?}")),
+            Some("trait impl".to_string()),
+            span,
+        ),
+        _ => return None,
+    };
+    let range = analysis_range_for_span(line_index, span);
+    Some(DocumentSymbol {
+        name,
+        detail,
+        range,
+        selection_range: range,
+    })
+}
+
+fn nested_owner_for_ast(node: &Ast, owner: Option<&str>) -> Option<String> {
+    match node {
+        Ast::Defmod(_, name, ..)
+        | Ast::Defagent(_, name, ..)
+        | Ast::Defgenserver(_, name, ..)
+        | Ast::Defsupervisor(_, name, ..)
+        | Ast::DefdynamicSupervisor(_, name, ..)
+        | Ast::ImplDef(_, name, ..) => Some(qualify_symbol(owner, name)),
+        _ => None,
+    }
+}
+
+fn module_body_for_ast(node: &Ast) -> Option<&[Ast]> {
+    match node {
+        Ast::Defmod(_, _, body, _)
+        | Ast::Defagent(_, _, body, ..)
+        | Ast::Defgenserver(_, _, body, ..)
+        | Ast::Defsupervisor(_, _, body, ..)
+        | Ast::DefdynamicSupervisor(_, _, body, ..)
+        | Ast::ImplDef(_, _, body, _) => Some(body),
+        _ => None,
+    }
+}
+
+fn qualify_symbol(owner: Option<&str>, name: &str) -> String {
+    let qualified = owner
+        .filter(|owner| !owner.is_empty() && !name.contains("::"))
+        .map(|owner| format!("{owner}::{name}"))
+        .unwrap_or_else(|| name.to_string());
+    sindr::names::surface_rendered_name(&qualified)
 }
 
 fn analyze_single_document(
@@ -516,6 +646,13 @@ fn diagnostic_from_span(
         end,
         message,
     )
+}
+
+fn analysis_range_for_span(line_index: &LineIndex, span: &Span) -> AnalysisRange {
+    AnalysisRange {
+        start: line_index.byte_to_utf16_position(span.start),
+        end: line_index.byte_to_utf16_position(span.end),
+    }
 }
 
 fn diagnostic_from_line_index(

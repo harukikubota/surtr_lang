@@ -276,6 +276,62 @@ fn analysis_service_completions_use_snapshot_semantic_index_and_utf16_position()
     assert_eq!(completion.replace_end, 3);
 }
 
+#[test]
+fn analysis_service_document_symbols_flatten_active_declarations() {
+    let root = temp_root("document-symbols");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let main_path = src.join("main.srt");
+    let project_file = root.join("project.srt");
+    let source = "defmod Main { def helper() -> Int { 1 } }";
+    std::fs::write(&main_path, source).expect("write main");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/main.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.update_document(main_path.clone(), Some(1), source.to_string());
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: main_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(main_path.clone()),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let symbols = service.document_symbols(&snapshot, &main_path);
+    let names = symbols
+        .iter()
+        .map(|symbol| symbol.name.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(names, vec!["Main", "Main::helper"]);
+    assert!(symbols
+        .iter()
+        .all(|symbol| symbol.range.end.character > symbol.range.start.character));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
 fn temp_root(name: &str) -> PathBuf {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

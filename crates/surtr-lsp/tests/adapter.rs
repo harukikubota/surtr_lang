@@ -4,8 +4,8 @@ use surtr_analysis::{
     CompletionKind, CompletionSymbol, RunnerSelection, SelectedContext, SemanticIndex,
 };
 use surtr_lsp::{
-    completion_items, diagnostics, file_uri_to_path, path_to_file_uri, CompletionItemKind,
-    DiagnosticSeverity, LspAnalysisHost, LspPosition, LspRange,
+    completion_items, diagnostics, document_symbols, file_uri_to_path, path_to_file_uri,
+    CompletionItemKind, DiagnosticSeverity, LspAnalysisHost, LspPosition, LspRange,
 };
 
 #[test]
@@ -188,6 +188,53 @@ fn project_runner_diagnostics_are_published_as_lsp_diagnostics() {
                 && diagnostic.message.contains("did not match")),
         "project runner diagnostics should be mapped separately: {diagnostics:?}"
     );
+
+    std::fs::remove_dir_all(workspace).expect("temporary workspace must be removable");
+}
+
+#[test]
+fn document_symbols_map_analysis_ranges_to_lsp_dto() {
+    let workspace = temp_workspace("document-symbols");
+    let src = workspace.join("src");
+    std::fs::create_dir_all(&src).expect("temporary src dir must be writable");
+    let path = src.join("main.srt");
+    let project_file = workspace.join("project.srt");
+    let uri = path_to_file_uri(&path);
+    let source = "defmod Main { def helper() -> Int { 1 } }";
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/main.srt")
+  })
+})
+"#;
+
+    let mut host = LspAnalysisHost::new(workspace.clone());
+    host.did_open(uri.clone(), Some(1), source.to_string());
+    host.set_selected_context(Some(SelectedContext::ProjectProfile {
+        project_file: project_file.clone(),
+        profile: "dev".to_string(),
+    }));
+    host.set_runner_selection(Some(RunnerSelection {
+        project_file: project_file.clone(),
+        selected_profile: "dev".to_string(),
+        normalized_args: vec![("profile".to_string(), "dev".to_string())],
+        source: Some(surtr_analysis::ProjectRunnerSourceInput {
+            project_file,
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            active_file: Some(path),
+            source: project_source.to_string(),
+        }),
+    }));
+
+    let symbols = document_symbols(&host, &uri);
+
+    assert!(symbols.iter().any(|symbol| symbol.name == "Main"));
+    assert!(symbols.iter().any(|symbol| symbol.name == "Main::helper"));
+    assert!(symbols
+        .iter()
+        .all(|symbol| symbol.range.end.character > symbol.range.start.character));
 
     std::fs::remove_dir_all(workspace).expect("temporary workspace must be removable");
 }

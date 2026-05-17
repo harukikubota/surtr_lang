@@ -55,6 +55,14 @@ pub struct LspCompletionItem {
     pub text_edit: LspTextEdit,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspDocumentSymbol {
+    pub name: String,
+    pub detail: Option<String>,
+    pub range: LspRange,
+    pub selection_range: LspRange,
+}
+
 #[derive(Debug, Clone)]
 pub struct LspAnalysisHost {
     workspace_root: PathBuf,
@@ -175,6 +183,26 @@ pub fn completion_items(
                     new_text: candidate.replacement,
                 },
             }
+        })
+        .collect()
+}
+
+pub fn document_symbols(host: &LspAnalysisHost, uri: &str) -> Vec<LspDocumentSymbol> {
+    let Some(snapshot) = host.snapshot_for_uri(uri) else {
+        return Vec::new();
+    };
+    let Some(path) = file_uri_to_path(uri) else {
+        return Vec::new();
+    };
+
+    host.service
+        .document_symbols(&snapshot, &path)
+        .into_iter()
+        .map(|symbol| LspDocumentSymbol {
+            name: symbol.name,
+            detail: symbol.detail,
+            range: lsp_range(symbol.range),
+            selection_range: lsp_range(symbol.selection_range),
         })
         .collect()
 }
