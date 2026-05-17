@@ -63,6 +63,14 @@ impl LineIndex {
         }
     }
 
+    pub fn char_to_text_position(&self, char_offset: usize) -> TextPosition {
+        self.byte_to_text_position(self.char_to_byte_offset(char_offset))
+    }
+
+    pub fn char_to_utf16_position(&self, char_offset: usize) -> Utf16Position {
+        self.byte_to_utf16_position(self.char_to_byte_offset(char_offset))
+    }
+
     pub fn utf16_position_to_byte(&self, position: Utf16Position) -> Option<usize> {
         let line_idx = position.line as usize;
         let line_start = *self.line_starts.get(line_idx)?;
@@ -99,6 +107,17 @@ impl LineIndex {
             byte_offset -= 1;
         }
         byte_offset
+    }
+
+    fn char_to_byte_offset(&self, char_offset: usize) -> usize {
+        if char_offset == 0 {
+            return 0;
+        }
+        self.source
+            .char_indices()
+            .map(|(idx, _)| idx)
+            .nth(char_offset)
+            .unwrap_or(self.source.len())
     }
 
     fn line_index_for_byte(&self, byte_offset: usize) -> usize {

@@ -15,6 +15,7 @@ mod interpolate;
 mod pattern;
 mod stmt;
 mod syntax_token;
+mod tolerant;
 mod ty;
 mod validate;
 
@@ -25,6 +26,10 @@ pub use context::{ParseRules, ParserContext};
 pub use diagnostic::{
     LspDiagnostic, LspDiagnosticSeverity, LspPosition, LspRange, LspRelatedInformation,
     ParseDiagnostic,
+};
+pub use tolerant::{
+    parse_tolerant_with_context, CursorSyntaxContext, SyntaxOutlineItem, SyntaxOutlineKind,
+    SyntaxToken, SyntaxTokenKind, TolerantParseResult,
 };
 
 pub const MAX_PARSE_NESTING: usize = 32;

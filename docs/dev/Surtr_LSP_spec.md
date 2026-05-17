@@ -434,6 +434,17 @@ AnalysisService
 `AnalysisSnapshot` は parse / resolve / typecheck の結果、doc metadata、visible scope、
 type environment、declaration index、import surface、source map を保持する。
 
+strict parse が成功した場合だけ、Sigil / Scar による resolve / typecheck を実行する。
+parse diagnostics が存在する document は compiler pipeline へ流さず、diagnostics は
+parse phase で止める。editor 表示用の document symbols、syntax highlighting、
+cursor syntax context は Spire の tolerant parse result を使ってよい。
+
+`surtr-analysis::parse_document_tolerant(...)` は protocol 非依存の editor-only API である。
+戻り値は Spire の `TolerantParseResult` で、部分 AST、複数 parse diagnostics、
+syntax tokens、declaration outline、cursor syntax context を含む。ここで得られる
+AST は有効に parse できた `Ast` だけで構成し、compile / run / REPL evaluation の
+strict path には使わない。
+
 REPL と共有する semantic resolver は次を担う。
 
 - public / private / hidden / user-callable 判定
@@ -510,14 +521,25 @@ REPL に残すものは次である。
 LSP の position は UTF-16 code unit である。analysis core は parser が返す span と
 Surtr diagnostics の user-facing span を扱うため、document store は必ず `LineIndex` を持つ。
 
+Spire の `Span` は character offset を正本とする。これは byte offset でも LSP UTF-16
+position でもない。Spire から来た parse diagnostics、AST spans、syntax tokens、outline
+items は `LineIndex::char_to_text_position` または `LineIndex::char_to_utf16_position` で
+変換する。
+
 `LineIndex` は次を相互変換できること。
 
 - byte offset
 - Unicode scalar / character column
 - LSP UTF-16 position
 
-diagnostics JSON や ariadne 表示の契約を LSP position に引きずらない。
-protocol 境界でだけ変換する。
+既存の byte offset API は LSP cursor 入力、completion prefix、hover lookup など editor
+host が持つ UTF-16 cursor を source byte position へ戻すために残す。diagnostics JSON や
+ariadne 表示の契約を LSP position に引きずらない。protocol 境界でだけ変換する。
+
+Spire の tolerant token surface は syntax highlighting と cursor context の基盤である。
+コメントと改行は token として返し、空白と tab は返さない。`::` は `PathSep` として返し、
+source 上の `>>` は editor surface では `Compose` のまま保持する。formatter 用の full
+trivia surface は本仕様の対象外である。
 
 ---
 

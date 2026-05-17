@@ -40,6 +40,30 @@ fn diagnostics_maps_analysis_ranges_and_sources_to_lsp_dto() {
 }
 
 #[test]
+fn diagnostics_publish_parse_ranges_from_tolerant_parse() {
+    let workspace = PathBuf::from("/repo");
+    let path = workspace.join("main.srt");
+    let uri = path_to_file_uri(&path);
+    let mut host = LspAnalysisHost::new(workspace);
+    let source = "value = \"😀\" )";
+    host.did_open(uri.clone(), Some(1), source.to_string());
+    host.set_selected_context(Some(SelectedContext::ScriptEntry(path)));
+
+    let diagnostics = diagnostics(&host, &uri);
+
+    let parse = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.source == "surtr:parse")
+        .expect("broken source should publish a parse diagnostic");
+    assert_eq!(parse.severity, DiagnosticSeverity::Error);
+    assert_eq!(parse.range.start.line, 0);
+    let paren_byte = source.find(')').expect("broken token should exist");
+    let expected_utf16_character = source[..paren_byte].encode_utf16().count() as u32;
+    assert_eq!(parse.range.start.character, expected_utf16_character);
+    assert!(parse.range.end.character > parse.range.start.character);
+}
+
+#[test]
 fn completion_maps_utf16_position_to_lsp_text_edits() {
     let workspace = PathBuf::from("/repo");
     let path = workspace.join("main.srt");
@@ -478,6 +502,35 @@ Project::config({|config|
         .all(|symbol| symbol.range.end.character > symbol.range.start.character));
 
     std::fs::remove_dir_all(workspace).expect("temporary workspace must be removable");
+}
+
+#[test]
+fn document_symbols_use_tolerant_outline_when_parse_fails() {
+    let workspace = PathBuf::from("/repo");
+    let path = workspace.join("main.srt");
+    let uri = path_to_file_uri(&path);
+    let source = "def ok() -> Int { 1 }\nbroken = )\ndef next() -> Int { 2 }";
+    let mut host = LspAnalysisHost::new(workspace);
+    host.did_open(uri.clone(), Some(1), source.to_string());
+    host.set_selected_context(Some(SelectedContext::ScriptEntry(path)));
+
+    let diagnostics = diagnostics(&host, &uri);
+    let symbols = document_symbols(&host, &uri);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.source == "surtr:parse"),
+        "broken source should still publish parse diagnostics: {diagnostics:?}"
+    );
+    assert!(
+        symbols.iter().any(|symbol| symbol.name == "ok")
+            && symbols.iter().any(|symbol| symbol.name == "next"),
+        "tolerant outline should keep declaration symbols after parse errors: {symbols:?}"
+    );
+    assert!(symbols
+        .iter()
+        .all(|symbol| symbol.range.end.character > symbol.range.start.character));
 }
 
 fn temp_workspace(name: &str) -> PathBuf {

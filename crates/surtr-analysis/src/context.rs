@@ -659,6 +659,30 @@ pub fn parse_document(
     compile_unit_kind: CompileUnitKind,
     module_path: Option<String>,
 ) -> Result<Vec<spire::ast::Ast>, spire::error::ParseError> {
+    let context =
+        parser_context_for_document(source_id, source_kind, compile_unit_kind, module_path);
+    spire::parse_with_context(source, context)
+}
+
+pub fn parse_document_tolerant(
+    source: &str,
+    source_id: u32,
+    source_kind: SourceKind,
+    compile_unit_kind: CompileUnitKind,
+    module_path: Option<String>,
+    cursor_char_offset: Option<usize>,
+) -> spire::TolerantParseResult {
+    let context =
+        parser_context_for_document(source_id, source_kind, compile_unit_kind, module_path);
+    spire::parse_tolerant_with_context(source, context, cursor_char_offset)
+}
+
+fn parser_context_for_document(
+    source_id: u32,
+    source_kind: SourceKind,
+    compile_unit_kind: CompileUnitKind,
+    module_path: Option<String>,
+) -> spire::ParserContext {
     let context = match (compile_unit_kind, source_kind, module_path) {
         (CompileUnitKind::Project, SourceKind::ProjectConfigSource, None) => {
             spire::ParserContext::project(source_id)
@@ -675,5 +699,5 @@ pub fn parse_document(
             .with_rules(spire::parse_rules_for_source_kind(source_kind)),
     };
 
-    spire::parse_with_context(source, context)
+    context
 }

@@ -58,6 +58,96 @@ fn analysis_service_maps_parse_diagnostics_to_utf16_ranges() {
 }
 
 #[test]
+fn analysis_service_maps_spire_character_spans_to_utf16_ranges() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    let source = "value = \"😀\" )";
+    service.update_document(path.clone(), Some(1), source.to_string());
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(path)),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let diagnostics = service.diagnostics(&snapshot);
+
+    let parse = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.kind == AnalysisDiagnosticKind::Parse)
+        .expect("parse error should be reported");
+    let range = parse.range.expect("parse diagnostic should have a range");
+    let paren_byte = source.find(')').expect("broken token should exist");
+    let expected_utf16_character = source[..paren_byte].encode_utf16().count() as u32;
+    assert_eq!(range.start.line, 0);
+    assert_eq!(range.start.character, expected_utf16_character);
+}
+
+#[test]
+fn analysis_service_does_not_resolve_or_typecheck_tolerant_parse_results() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    service.update_document(
+        path.clone(),
+        Some(1),
+        "bad = )\nmissing = missing_name".to_string(),
+    );
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(path)),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let diagnostics = service.diagnostics(&snapshot);
+
+    assert!(diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.kind == AnalysisDiagnosticKind::Parse));
+    assert!(!diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.kind == AnalysisDiagnosticKind::Resolve));
+    assert!(!diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.kind == AnalysisDiagnosticKind::Typecheck));
+}
+
+#[test]
+fn analysis_service_document_symbols_use_tolerant_outline_when_parse_fails() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/lib/user.srt");
+    service.update_document(
+        path.clone(),
+        Some(1),
+        r#"def ok() -> Int { 1 }
+broken = )
+def next() -> Int { 2 }"#
+            .to_string(),
+    );
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::DefinitionStandalone),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let symbols = service.document_symbols(&snapshot, &path);
+
+    assert!(service
+        .diagnostics(&snapshot)
+        .iter()
+        .any(|diagnostic| diagnostic.kind == AnalysisDiagnosticKind::Parse));
+    assert!(symbols.iter().any(|symbol| symbol.name.ends_with("ok")));
+    assert!(symbols.iter().any(|symbol| symbol.name.ends_with("next")));
+}
+
+#[test]
 fn analysis_service_maps_resolve_diagnostics_to_utf16_ranges() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");

@@ -6,12 +6,13 @@ pub mod semantic;
 pub mod service;
 
 pub use context::{
-    parse_document, resolve_context, AnalysisCacheInput, AnalysisCacheKey, AnalysisContext,
-    AnalysisContextRequest, AnalysisContextStatus, AnalysisMode, AnalysisSourceKind, AnalysisSpan,
-    CacheKeyField, ContextDiagnostic, ContextDiagnosticKind, DocumentVersion, ExternalInputState,
-    ExternalInputStatus, ModuleFileFingerprint, ModuleStage, ProjectBootSummary,
-    ReplAnalysisContext, ResolvedAnalysisContext, ResolvedProjectPath, RunnerContext,
-    RunnerDiagnostic, RunnerDiagnosticKind, RunnerSelection, ScriptProjectContext, SelectedContext,
+    parse_document, parse_document_tolerant, resolve_context, AnalysisCacheInput, AnalysisCacheKey,
+    AnalysisContext, AnalysisContextRequest, AnalysisContextStatus, AnalysisMode,
+    AnalysisSourceKind, AnalysisSpan, CacheKeyField, ContextDiagnostic, ContextDiagnosticKind,
+    DocumentVersion, ExternalInputState, ExternalInputStatus, ModuleFileFingerprint, ModuleStage,
+    ProjectBootSummary, ReplAnalysisContext, ResolvedAnalysisContext, ResolvedProjectPath,
+    RunnerContext, RunnerDiagnostic, RunnerDiagnosticKind, RunnerSelection, ScriptProjectContext,
+    SelectedContext,
 };
 pub use document::{DocumentSnapshot, DocumentStore, LineIndex, TextPosition, Utf16Position};
 pub use project_runner::{

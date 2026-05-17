@@ -70,3 +70,25 @@ fn line_index_clamps_byte_offsets_inside_codepoints_to_the_previous_boundary() {
         }
     );
 }
+
+#[test]
+fn line_index_maps_character_offsets_to_text_and_utf16_positions() {
+    let source = "a😀)";
+    let index = LineIndex::new(source);
+    let paren_char_offset = source.chars().position(|ch| ch == ')').unwrap();
+
+    assert_eq!(
+        index.char_to_text_position(paren_char_offset),
+        TextPosition {
+            line: 0,
+            character: 2
+        }
+    );
+    assert_eq!(
+        index.char_to_utf16_position(paren_char_offset),
+        Utf16Position {
+            line: 0,
+            character: 3
+        }
+    );
+}

@@ -3,15 +3,16 @@ use std::path::{Component, Path, PathBuf};
 
 use sindr::policy::{CompileUnitKind, SourceKind};
 use spire::ast::{Ast, Lit, RecordLitArg, Span};
+use spire::{SyntaxOutlineItem, SyntaxOutlineKind};
 
 use crate::{
     complete_prefix, extract_project_runner_input, lookup_symbol_at_cursor, parse_document,
-    resolve_context, resolve_project_runner, signature_help_at_cursor, AnalysisContextRequest,
-    AnalysisContextStatus, AnalysisMode, AnalysisSpan, CompletionKind, CompletionRequest,
-    CompletionResponse, CompletionSymbol, DocumentSnapshot, DocumentStore, LineIndex,
-    ProjectRunnerSourceInput, ResolvedAnalysisContext, RunnerDiagnostic, RunnerDiagnosticKind,
-    ScriptProjectContext, SelectedContext, SemanticIndex, SourceLocation, TextPosition,
-    Utf16Position,
+    parse_document_tolerant, resolve_context, resolve_project_runner, signature_help_at_cursor,
+    AnalysisContextRequest, AnalysisContextStatus, AnalysisMode, AnalysisSpan, CompletionKind,
+    CompletionRequest, CompletionResponse, CompletionSymbol, DocumentSnapshot, DocumentStore,
+    LineIndex, ProjectRunnerSourceInput, ResolvedAnalysisContext, RunnerDiagnostic,
+    RunnerDiagnosticKind, ScriptProjectContext, SelectedContext, SemanticIndex, SourceLocation,
+    TextPosition, Utf16Position,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +52,8 @@ pub struct AnalysisSnapshot {
     pub context: ResolvedAnalysisContext,
     pub active_document: Option<DocumentSnapshot>,
     pub ast: Option<Vec<Ast>>,
+    pub editor_ast: Option<Vec<Ast>>,
+    pub syntax_outline: Vec<SyntaxOutlineItem>,
     pub resolved: Option<Vec<sigil::resolved::Resolved>>,
     pub typed: Option<Vec<scar::typed::TypedNode>>,
     pub semantic_index: SemanticIndex,
@@ -133,17 +136,32 @@ impl AnalysisService {
         let mut resolved = None;
         let mut typed = None;
         let mut semantic_index = self.semantic_index.clone();
+        let mut editor_ast = None;
+        let mut syntax_outline = Vec::new();
 
         let ast = if let Some(document) = active_document.as_ref() {
+            let module_path = module_path_for_document(
+                context.context.mode.clone(),
+                &context.context.active_file,
+            );
+            let compile_unit_kind = compile_unit_kind_for_active_context(&context);
+            let tolerant = parse_document_tolerant(
+                &document.text,
+                0,
+                context.context.source_kind,
+                compile_unit_kind,
+                module_path.clone(),
+                None,
+            );
+            editor_ast = Some(tolerant.ast.clone());
+            syntax_outline = tolerant.outline.clone();
+
             match parse_document(
                 &document.text,
                 0,
                 context.context.source_kind,
-                compile_unit_kind_for_active_context(&context),
-                module_path_for_document(
-                    context.context.mode.clone(),
-                    &context.context.active_file,
-                ),
+                compile_unit_kind,
+                module_path,
             ) {
                 Ok(ast) => {
                     semantic_index =
@@ -172,15 +190,29 @@ impl AnalysisService {
                     Some(ast)
                 }
                 Err(error) => {
-                    let span = error.span();
-                    diagnostics.push(diagnostic_from_span(
-                        AnalysisDiagnosticKind::Parse,
-                        AnalysisSeverity::Error,
-                        document,
-                        span.start,
-                        span.end,
-                        error.message(),
-                    ));
+                    if tolerant.diagnostics.is_empty() {
+                        let span = error.span();
+                        diagnostics.push(diagnostic_from_span(
+                            AnalysisDiagnosticKind::Parse,
+                            AnalysisSeverity::Error,
+                            document,
+                            span.start,
+                            span.end,
+                            error.message(),
+                        ));
+                    } else {
+                        diagnostics.extend(tolerant.diagnostics.into_iter().map(|diagnostic| {
+                            let span = diagnostic.error.span();
+                            diagnostic_from_span(
+                                AnalysisDiagnosticKind::Parse,
+                                AnalysisSeverity::Error,
+                                document,
+                                span.start,
+                                span.end,
+                                diagnostic.error.message(),
+                            )
+                        }));
+                    }
                     if should_analyze_project_stages(&context) {
                         analyze_project_stages(
                             self,
@@ -211,6 +243,8 @@ impl AnalysisService {
             context,
             active_document,
             ast,
+            editor_ast,
+            syntax_outline,
             resolved,
             typed,
             semantic_index,
@@ -313,12 +347,28 @@ impl AnalysisService {
         if document.path != active_file {
             return Vec::new();
         }
-        let Some(ast) = snapshot.ast.as_ref() else {
-            return Vec::new();
-        };
-
         let mut symbols = Vec::new();
-        collect_document_symbols(ast, None, &document.line_index, &mut symbols);
+        if let Some(ast) = snapshot.ast.as_ref().or(snapshot.editor_ast.as_ref()) {
+            collect_document_symbols(ast, None, &document.line_index, &mut symbols);
+        }
+        collect_outline_document_symbols(
+            &snapshot.syntax_outline,
+            None,
+            &document.line_index,
+            &mut symbols,
+        );
+        symbols.sort_by_key(|symbol| {
+            (
+                symbol.range.start.line,
+                symbol.range.start.character,
+                symbol.name.clone(),
+            )
+        });
+        symbols.dedup_by(|left, right| {
+            left.name == right.name
+                && left.detail == right.detail
+                && analysis_ranges_overlap(&left.range, &right.range)
+        });
         symbols
     }
 }
@@ -512,8 +562,8 @@ fn location_from_source_location(
     Some(Location {
         path: location.path,
         range: AnalysisRange {
-            start: line_index.byte_to_utf16_position(location.start),
-            end: line_index.byte_to_utf16_position(location.end),
+            start: line_index.char_to_utf16_position(location.start),
+            end: line_index.char_to_utf16_position(location.end),
         },
     })
 }
@@ -534,6 +584,69 @@ fn collect_document_symbols(
             }
         }
     }
+}
+
+fn collect_outline_document_symbols(
+    outline: &[SyntaxOutlineItem],
+    owner: Option<&str>,
+    line_index: &LineIndex,
+    out: &mut Vec<DocumentSymbol>,
+) {
+    for item in outline {
+        let Some(symbol) = document_symbol_for_outline(item, owner, line_index) else {
+            continue;
+        };
+        let nested_owner = item
+            .name
+            .as_deref()
+            .filter(|_| {
+                matches!(
+                    item.kind,
+                    SyntaxOutlineKind::Module | SyntaxOutlineKind::Impl
+                )
+            })
+            .map(|name| qualify_symbol(owner, name));
+        out.push(symbol);
+        collect_outline_document_symbols(
+            &item.children,
+            nested_owner.as_deref().or(owner),
+            line_index,
+            out,
+        );
+    }
+}
+
+fn document_symbol_for_outline(
+    item: &SyntaxOutlineItem,
+    owner: Option<&str>,
+    line_index: &LineIndex,
+) -> Option<DocumentSymbol> {
+    let name = item
+        .name
+        .as_deref()
+        .map(|name| qualify_symbol(owner, name))
+        .unwrap_or_else(|| "<anonymous>".to_string());
+    let detail = match item.kind {
+        SyntaxOutlineKind::Function => Some("function".to_string()),
+        SyntaxOutlineKind::Extractor => Some("extractor".to_string()),
+        SyntaxOutlineKind::Const => Some("const".to_string()),
+        SyntaxOutlineKind::Struct => Some("struct".to_string()),
+        SyntaxOutlineKind::Record => Some("record".to_string()),
+        SyntaxOutlineKind::Error => Some("error".to_string()),
+        SyntaxOutlineKind::Enum => Some("enum".to_string()),
+        SyntaxOutlineKind::Module => Some("module".to_string()),
+        SyntaxOutlineKind::Impl => Some("impl".to_string()),
+        SyntaxOutlineKind::Trait => Some("trait".to_string()),
+        SyntaxOutlineKind::TraitImpl => Some("trait impl".to_string()),
+        SyntaxOutlineKind::Import => Some("import".to_string()),
+        SyntaxOutlineKind::Include => Some("include".to_string()),
+    };
+    Some(DocumentSymbol {
+        name,
+        detail,
+        range: analysis_range_for_span(line_index, &item.span),
+        selection_range: analysis_range_for_span(line_index, &item.selection_span),
+    })
 }
 
 fn document_symbol_for_ast(
@@ -1047,9 +1160,17 @@ fn diagnostic_from_span(
 
 fn analysis_range_for_span(line_index: &LineIndex, span: &Span) -> AnalysisRange {
     AnalysisRange {
-        start: line_index.byte_to_utf16_position(span.start),
-        end: line_index.byte_to_utf16_position(span.end),
+        start: line_index.char_to_utf16_position(span.start),
+        end: line_index.char_to_utf16_position(span.end),
     }
+}
+
+fn analysis_ranges_overlap(left: &AnalysisRange, right: &AnalysisRange) -> bool {
+    !position_leq(left.end, right.start) && !position_leq(right.end, left.start)
+}
+
+fn position_leq(left: Utf16Position, right: Utf16Position) -> bool {
+    left.line < right.line || (left.line == right.line && left.character <= right.character)
 }
 
 fn diagnostic_from_line_index(
@@ -1066,8 +1187,8 @@ fn diagnostic_from_line_index(
         severity,
         path,
         range: Some(AnalysisRange {
-            start: line_index.byte_to_utf16_position(start),
-            end: line_index.byte_to_utf16_position(end),
+            start: line_index.char_to_utf16_position(start),
+            end: line_index.char_to_utf16_position(end),
         }),
         message,
     }
