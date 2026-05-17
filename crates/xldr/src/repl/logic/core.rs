@@ -1170,16 +1170,86 @@ impl ReplEngine {
     }
 
     pub fn semantic_index(&self) -> surtr_analysis::SemanticIndex {
-        let mut symbols =
-            surtr_analysis::SemanticIndex::from_metadata(&self.docs, &self.signatures)
-                .symbols()
-                .to_vec();
-        symbols.extend(
-            surtr_analysis::SemanticIndex::from_declaration_index(&self.declaration_index)
-                .symbols()
-                .iter()
-                .cloned(),
-        );
+        let mut symbols = Vec::new();
+
+        for entry in self.docs.iter().rev() {
+            if entry.kind != DocKind::Function {
+                continue;
+            }
+            let label = crate::surface_path_name(&entry.qualified_name).to_string();
+            if !self.doc_entry_is_completion_surface(entry, &label) {
+                continue;
+            }
+            let tail = label.rsplit("::").next().unwrap_or(label.as_str());
+            let detail = self
+                .find_signature(tail)
+                .map(|(qualified_name, signature)| {
+                    Self::render_signature_with_qualified_name(&qualified_name, signature)
+                })
+                .or_else(|| {
+                    Self::display_signature_for_doc_entry(entry).map(|signature| {
+                        Self::render_signature_with_qualified_name(&entry.qualified_name, signature)
+                    })
+                });
+            symbols.push(surtr_analysis::CompletionSymbol {
+                label: label.clone(),
+                replacement: label,
+                kind: surtr_analysis::CompletionKind::FunctionCall,
+                detail,
+                documentation: Some(entry.doc.clone()),
+                sort_text: None,
+                origin: None,
+                definition: None,
+            });
+        }
+
+        for decl in self.declaration_index.values() {
+            if let Some(label) = self.completion_visible_owner_label(decl) {
+                symbols.push(surtr_analysis::CompletionSymbol {
+                    label: label.clone(),
+                    replacement: label,
+                    kind: surtr_analysis::CompletionKind::TypeConstructor,
+                    detail: self.declaration_signature(decl),
+                    documentation: None,
+                    sort_text: None,
+                    origin: None,
+                    definition: None,
+                });
+            }
+
+            if Self::declaration_is_function_completion_surface(decl) {
+                let label = crate::surface_path_name(&decl.fq_name).to_string();
+                let detail = self.declaration_signature(decl).or_else(|| {
+                    self.find_signature(&label)
+                        .map(|(qualified_name, signature)| {
+                            Self::render_signature_with_qualified_name(&qualified_name, signature)
+                        })
+                });
+                symbols.push(surtr_analysis::CompletionSymbol {
+                    label: label.clone(),
+                    replacement: label,
+                    kind: surtr_analysis::CompletionKind::FunctionCall,
+                    detail,
+                    documentation: None,
+                    sort_text: None,
+                    origin: None,
+                    definition: None,
+                });
+            }
+        }
+
+        for label in self.completion_visible_module_labels() {
+            symbols.push(surtr_analysis::CompletionSymbol {
+                label: label.clone(),
+                replacement: label,
+                kind: surtr_analysis::CompletionKind::TypeConstructor,
+                detail: None,
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+            });
+        }
 
         let mut seen_bindings = BTreeSet::new();
         for binding in self.binding_records.iter().rev() {
@@ -1236,53 +1306,58 @@ impl ReplEngine {
 
     pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
         let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
-        let (replace_start, replace_end, prefix) = completion_token(input, cursor);
+        let (_replace_start, _replace_end, prefix) = completion_token(input, cursor);
         let call_context = completion_call_context(input, cursor);
         let signature = call_context
             .as_ref()
             .and_then(|context| self.signature_help_for_call(context));
 
-        let mut candidates = Vec::new();
         if call_context.is_none() && prefix.is_empty() {
             return ReplCompletion {
-                candidates,
+                candidates: Vec::new(),
                 signature,
             };
         }
-        if let Some(context) = call_context.as_ref() {
+
+        let index = self.semantic_index();
+        let completion_request = surtr_analysis::CompletionRequest {
+            index: &index,
+            source: input,
+            cursor,
+        };
+        let completion = if let Some(context) = call_context.as_ref() {
             let expected_ty = signature
                 .as_ref()
                 .and_then(|_| self.expected_param_type_for_call(context));
-            self.push_variable_completion_candidates(
-                &mut candidates,
-                &prefix,
-                replace_start,
-                replace_end,
-                expected_ty.as_deref(),
+            let mut completion = surtr_analysis::complete_repl_prefix(
+                completion_request,
+                surtr_analysis::CompletionScope::VariablesOnly,
             );
-            if candidates.is_empty() && expected_ty.is_none() && !prefix.is_empty() {
-                self.push_global_completion_candidates(
-                    &mut candidates,
-                    &prefix,
-                    replace_start,
-                    replace_end,
-                );
+            completion.candidates = surtr_analysis::rank_completion_candidates_by_expected_type(
+                completion.candidates,
+                expected_ty.as_deref(),
+                Self::parameter_type_accepts_arg_type,
+            );
+            if completion.candidates.is_empty() && expected_ty.is_none() && !prefix.is_empty() {
+                surtr_analysis::complete_repl_prefix(
+                    completion_request,
+                    surtr_analysis::CompletionScope::All,
+                )
+            } else {
+                completion
             }
         } else {
-            self.push_global_completion_candidates(
-                &mut candidates,
-                &prefix,
-                replace_start,
-                replace_end,
-            );
-            self.enrich_global_completion_candidates_from_analysis(
-                &mut candidates,
-                input,
-                cursor,
-                &prefix,
-            );
-        }
+            surtr_analysis::complete_repl_prefix(
+                completion_request,
+                surtr_analysis::CompletionScope::All,
+            )
+        };
 
+        let mut candidates = completion
+            .candidates
+            .into_iter()
+            .map(Self::repl_completion_candidate_from_analysis)
+            .collect::<Vec<_>>();
         candidates.truncate(COMPLETION_DEFAULT_LIMIT);
         ReplCompletion {
             candidates,
@@ -1290,370 +1365,24 @@ impl ReplEngine {
         }
     }
 
-    fn enrich_global_completion_candidates_from_analysis(
-        &self,
-        candidates: &mut [ReplCompletionCandidate],
-        input: &str,
-        cursor: usize,
-        prefix: &str,
-    ) {
-        let index = self.semantic_index();
-        let completion = surtr_analysis::complete_prefix(surtr_analysis::CompletionRequest {
-            index: &index,
-            source: input,
-            cursor,
-        });
-        for shared in completion.candidates {
-            let shared = Self::repl_completion_candidate_from_analysis(shared, prefix);
-            if let Some(candidate) = candidates
-                .iter_mut()
-                .find(|candidate| candidate.label == shared.label && candidate.kind == shared.kind)
-            {
-                if candidate.detail.is_none() {
-                    candidate.detail = shared.detail;
-                }
-                if candidate.documentation.is_none() {
-                    candidate.documentation = shared.documentation;
-                }
-            }
-        }
-    }
-
     fn repl_completion_candidate_from_analysis(
         candidate: surtr_analysis::CompletionCandidate,
-        prefix: &str,
     ) -> ReplCompletionCandidate {
-        let unqualified_prefix = !prefix.contains("::");
-        let tail = candidate.label.rsplit_once("::").map(|(_, tail)| tail);
-        let use_tail = unqualified_prefix && tail.is_some_and(|tail| tail.starts_with(prefix));
-        let label = if use_tail {
-            tail.unwrap_or(candidate.label.as_str()).to_string()
-        } else {
-            candidate.label.clone()
-        };
-
-        let mut kind = match candidate.kind {
+        let kind = match candidate.kind {
             surtr_analysis::CompletionKind::Variable => ReplCompletionKind::Variable,
             surtr_analysis::CompletionKind::TypeConstructor => ReplCompletionKind::TypeConstructor,
             surtr_analysis::CompletionKind::TypePath => ReplCompletionKind::TypePath,
             surtr_analysis::CompletionKind::FunctionCall => ReplCompletionKind::FunctionCall,
         };
-        if prefix.contains("::") && kind == ReplCompletionKind::FunctionCall {
-            kind = ReplCompletionKind::TypePath;
-        }
 
         ReplCompletionCandidate {
-            replacement: label.clone(),
-            label,
+            label: candidate.label,
+            replacement: candidate.replacement,
             kind,
             detail: candidate.detail,
             documentation: candidate.documentation,
             replace_start: candidate.replace_start,
             replace_end: candidate.replace_end,
-        }
-    }
-
-    fn push_global_completion_candidates(
-        &self,
-        candidates: &mut Vec<ReplCompletionCandidate>,
-        prefix: &str,
-        replace_start: usize,
-        replace_end: usize,
-    ) {
-        self.push_variable_completion_candidates(
-            candidates,
-            prefix,
-            replace_start,
-            replace_end,
-            None,
-        );
-        self.push_type_constructor_completion_candidates(
-            candidates,
-            prefix,
-            replace_start,
-            replace_end,
-        );
-        self.push_function_completion_candidates(candidates, prefix, replace_start, replace_end);
-    }
-
-    fn push_variable_completion_candidates(
-        &self,
-        candidates: &mut Vec<ReplCompletionCandidate>,
-        prefix: &str,
-        replace_start: usize,
-        replace_end: usize,
-        expected_ty: Option<&str>,
-    ) {
-        let mut seen = BTreeSet::new();
-        let mut variable_candidates = Vec::new();
-        for binding in self.binding_records.iter().rev() {
-            if !seen.insert(binding.name.as_str()) {
-                continue;
-            }
-            if !binding.name.starts_with(prefix) {
-                continue;
-            }
-            variable_candidates.push(surtr_analysis::CompletionCandidate {
-                label: binding.name.clone(),
-                replacement: binding.name.clone(),
-                kind: surtr_analysis::CompletionKind::Variable,
-                detail: Some(binding.ty.clone()),
-                documentation: None,
-                sort_text: None,
-                origin: None,
-                replace_start,
-                replace_end,
-            });
-        }
-
-        let ranked_candidates = surtr_analysis::rank_completion_candidates_by_expected_type(
-            variable_candidates,
-            expected_ty,
-            Self::parameter_type_accepts_arg_type,
-        );
-        for candidate in ranked_candidates {
-            push_completion_candidate(
-                candidates,
-                ReplCompletionCandidate {
-                    label: candidate.label,
-                    replacement: candidate.replacement,
-                    kind: ReplCompletionKind::Variable,
-                    detail: candidate.detail,
-                    documentation: candidate.documentation,
-                    replace_start: candidate.replace_start,
-                    replace_end: candidate.replace_end,
-                },
-            );
-        }
-    }
-
-    fn push_type_constructor_completion_candidates(
-        &self,
-        candidates: &mut Vec<ReplCompletionCandidate>,
-        prefix: &str,
-        replace_start: usize,
-        replace_end: usize,
-    ) {
-        let mut seen = BTreeSet::new();
-        for decl in self.declaration_index.values() {
-            let Some(label) = self.completion_visible_owner_label(decl) else {
-                continue;
-            };
-            if !seen.insert(label.clone()) {
-                continue;
-            }
-            if !label.starts_with(prefix) {
-                continue;
-            }
-            push_completion_candidate(
-                candidates,
-                ReplCompletionCandidate {
-                    label: label.clone(),
-                    replacement: label,
-                    kind: ReplCompletionKind::TypeConstructor,
-                    detail: self.declaration_signature(decl),
-                    documentation: None,
-                    replace_start,
-                    replace_end,
-                },
-            );
-        }
-
-        for label in self.completion_visible_module_labels() {
-            if !seen.insert(label.clone()) {
-                continue;
-            }
-            if !label.starts_with(prefix) {
-                continue;
-            }
-            push_completion_candidate(
-                candidates,
-                ReplCompletionCandidate {
-                    label: label.clone(),
-                    replacement: label,
-                    kind: ReplCompletionKind::TypeConstructor,
-                    detail: None,
-                    documentation: None,
-                    replace_start,
-                    replace_end,
-                },
-            );
-        }
-    }
-
-    fn push_function_completion_candidates(
-        &self,
-        candidates: &mut Vec<ReplCompletionCandidate>,
-        prefix: &str,
-        replace_start: usize,
-        replace_end: usize,
-    ) {
-        let qualified_prefix = prefix.contains("::");
-        let mut seen = BTreeSet::new();
-        for entry in self.docs.iter().rev() {
-            if entry.kind != DocKind::Function {
-                continue;
-            }
-            let qualified_label = crate::surface_path_name(&entry.qualified_name).to_string();
-            let tail = qualified_label
-                .rsplit("::")
-                .next()
-                .unwrap_or(qualified_label.as_str())
-                .to_string();
-            let (label, kind) = if qualified_prefix {
-                if !qualified_label.starts_with(prefix) {
-                    continue;
-                }
-                if !self.doc_entry_is_completion_surface(entry, &qualified_label) {
-                    continue;
-                }
-                (qualified_label, ReplCompletionKind::TypePath)
-            } else {
-                if !tail.starts_with(prefix) {
-                    continue;
-                }
-                if self.sigil_session.lookup_uid(&tail).is_none()
-                    && self.visible_helper_doc_alias(&tail).is_none()
-                {
-                    continue;
-                }
-                if !self.doc_entry_is_completion_surface(entry, &tail) {
-                    continue;
-                }
-                (tail.clone(), ReplCompletionKind::FunctionCall)
-            };
-            if !seen.insert(label.clone()) {
-                continue;
-            }
-            let detail = if qualified_prefix {
-                Self::display_signature_for_doc_entry(entry).map(|signature| {
-                    Self::render_signature_with_qualified_name(&entry.qualified_name, signature)
-                })
-            } else {
-                self.find_signature(&tail)
-                    .map(|(qualified_name, signature)| {
-                        Self::render_signature_with_qualified_name(&qualified_name, signature)
-                    })
-            };
-            push_completion_candidate(
-                candidates,
-                ReplCompletionCandidate {
-                    label: label.clone(),
-                    replacement: label,
-                    kind,
-                    detail,
-                    documentation: None,
-                    replace_start,
-                    replace_end,
-                },
-            );
-        }
-
-        for decl in self.declaration_index.values() {
-            if !Self::declaration_is_function_completion_surface(decl) {
-                continue;
-            }
-            let (label, kind) = if qualified_prefix {
-                let qualified_label = crate::surface_path_name(&decl.fq_name).to_string();
-                if !qualified_label.starts_with(prefix) {
-                    continue;
-                }
-                (qualified_label, ReplCompletionKind::TypePath)
-            } else {
-                let Some(visible_label) = self.visible_completion_label(decl) else {
-                    continue;
-                };
-                if !visible_label.starts_with(prefix) {
-                    continue;
-                }
-                (visible_label, ReplCompletionKind::FunctionCall)
-            };
-            if !seen.insert(label.clone()) {
-                continue;
-            }
-            let detail = self.declaration_signature(decl).or_else(|| {
-                self.find_signature(&label)
-                    .map(|(qualified_name, signature)| {
-                        Self::render_signature_with_qualified_name(&qualified_name, signature)
-                    })
-            });
-            push_completion_candidate(
-                candidates,
-                ReplCompletionCandidate {
-                    label: label.clone(),
-                    replacement: label,
-                    kind,
-                    detail,
-                    documentation: None,
-                    replace_start,
-                    replace_end,
-                },
-            );
-        }
-
-        self.push_function_entry_completion_candidates(
-            candidates,
-            prefix,
-            qualified_prefix,
-            replace_start,
-            replace_end,
-            &mut seen,
-        );
-    }
-
-    fn push_function_entry_completion_candidates(
-        &self,
-        candidates: &mut Vec<ReplCompletionCandidate>,
-        prefix: &str,
-        qualified_prefix: bool,
-        replace_start: usize,
-        replace_end: usize,
-        seen: &mut BTreeSet<String>,
-    ) {
-        for entry in self.vm.function_entries().iter().rev() {
-            if entry.flags.generated {
-                continue;
-            }
-            let Some(qualified_name) = entry.qualified_name.as_deref() else {
-                continue;
-            };
-            if !self.function_entry_is_top_level_repl_surface(qualified_name) {
-                continue;
-            }
-            let qualified_label = crate::surface_path_name(qualified_name).to_string();
-            let tail = qualified_label
-                .rsplit("::")
-                .next()
-                .unwrap_or(qualified_label.as_str());
-            let (label, kind) = if qualified_prefix {
-                if !qualified_label.starts_with(prefix) {
-                    continue;
-                }
-                (qualified_label, ReplCompletionKind::TypePath)
-            } else {
-                if !tail.starts_with(prefix) {
-                    continue;
-                }
-                (tail.to_string(), ReplCompletionKind::FunctionCall)
-            };
-            if !seen.insert(label.clone()) {
-                continue;
-            }
-            let detail = entry.signature.clone().map(|signature| {
-                Self::render_signature_with_qualified_name(qualified_name, signature)
-            });
-            push_completion_candidate(
-                candidates,
-                ReplCompletionCandidate {
-                    label: label.clone(),
-                    replacement: label,
-                    kind,
-                    detail,
-                    documentation: None,
-                    replace_start,
-                    replace_end,
-                },
-            );
         }
     }
 
@@ -8474,19 +8203,6 @@ fn highlight_signature_parameter(signature: &str, active_parameter: usize) -> St
         }
     }
     format!("{head}({}){tail}", params.join(", "))
-}
-
-fn push_completion_candidate(
-    candidates: &mut Vec<ReplCompletionCandidate>,
-    candidate: ReplCompletionCandidate,
-) {
-    if candidates
-        .iter()
-        .any(|existing| existing.label == candidate.label && existing.kind == candidate.kind)
-    {
-        return;
-    }
-    candidates.push(candidate);
 }
 
 fn split_top_level_commas(input: &str) -> Vec<&str> {

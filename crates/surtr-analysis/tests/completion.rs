@@ -4,7 +4,7 @@ use spire::ast::Visibility;
 use surtr_analysis::{
     complete_prefix, lookup_symbol_at_cursor, rank_completion_candidates_by_expected_type,
     signature_help_at_cursor, CompletionCandidate, CompletionKind, CompletionOrigin,
-    CompletionRequest, CompletionSymbol, SemanticIndex,
+    CompletionRequest, CompletionScope, CompletionSymbol, SemanticIndex,
 };
 
 #[test]
@@ -149,6 +149,124 @@ fn completion_request_matches_qualified_symbol_tail_for_unqualified_prefix() {
 
     assert_eq!(completion.candidates.len(), 1);
     assert_eq!(completion.candidates[0].label, "Helper::helper");
+}
+
+#[test]
+fn repl_completion_presents_visible_tail_for_unqualified_prefix_and_paths_for_qualified_prefix() {
+    let index = SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "String::repeat".to_string(),
+        replacement: "String::repeat".to_string(),
+        kind: CompletionKind::FunctionCall,
+        detail: Some("String::repeat(self: String, times: Int) -> String".to_string()),
+        documentation: Some("Repeat text.".to_string()),
+        sort_text: None,
+        origin: None,
+        definition: None,
+    }]);
+
+    let unqualified = surtr_analysis::complete_repl_prefix(
+        CompletionRequest {
+            index: &index,
+            source: "re",
+            cursor: 2,
+        },
+        CompletionScope::All,
+    );
+
+    assert_eq!(unqualified.candidates.len(), 1);
+    assert_eq!(unqualified.candidates[0].label, "repeat");
+    assert_eq!(unqualified.candidates[0].replacement, "repeat");
+    assert_eq!(unqualified.candidates[0].kind, CompletionKind::FunctionCall);
+    assert_eq!(
+        unqualified.candidates[0].documentation.as_deref(),
+        Some("Repeat text.")
+    );
+
+    let qualified = surtr_analysis::complete_repl_prefix(
+        CompletionRequest {
+            index: &index,
+            source: "String::re",
+            cursor: "String::re".len(),
+        },
+        CompletionScope::All,
+    );
+
+    assert_eq!(qualified.candidates.len(), 1);
+    assert_eq!(qualified.candidates[0].label, "String::repeat");
+    assert_eq!(qualified.candidates[0].replacement, "String::repeat");
+    assert_eq!(qualified.candidates[0].kind, CompletionKind::TypePath);
+}
+
+#[test]
+fn repl_completion_scope_can_limit_candidates_to_variables() {
+    let index = SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "name".to_string(),
+            replacement: "name".to_string(),
+            kind: CompletionKind::Variable,
+            detail: Some("String".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "normalize".to_string(),
+            replacement: "normalize".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("normalize(value: String) -> String".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+    ]);
+
+    let completion = surtr_analysis::complete_repl_prefix(
+        CompletionRequest {
+            index: &index,
+            source: "n",
+            cursor: 1,
+        },
+        CompletionScope::VariablesOnly,
+    );
+
+    assert_eq!(
+        completion
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["name"]
+    );
+}
+
+#[test]
+fn repl_variable_scope_allows_empty_prefix_for_call_argument_completion() {
+    let index = SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "name".to_string(),
+        replacement: "name".to_string(),
+        kind: CompletionKind::Variable,
+        detail: Some("String".to_string()),
+        documentation: None,
+        sort_text: None,
+        origin: None,
+        definition: None,
+    }]);
+
+    let completion = surtr_analysis::complete_repl_prefix(
+        CompletionRequest {
+            index: &index,
+            source: "print(",
+            cursor: "print(".len(),
+        },
+        CompletionScope::VariablesOnly,
+    );
+
+    assert_eq!(completion.candidates.len(), 1);
+    assert_eq!(completion.candidates[0].label, "name");
+    assert_eq!(completion.replace_start, "print(".len());
+    assert_eq!(completion.replace_end, "print(".len());
 }
 
 #[test]

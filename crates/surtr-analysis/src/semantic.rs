@@ -13,6 +13,12 @@ pub enum CompletionKind {
     FunctionCall,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionScope {
+    All,
+    VariablesOnly,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletionSymbol {
     pub label: String,
@@ -244,9 +250,32 @@ pub struct SignatureLookup {
 }
 
 pub fn complete_prefix(request: CompletionRequest<'_>) -> CompletionResponse {
+    complete_prefix_with_options(request, CompletionScope::All, CompletionPresentation::Full)
+}
+
+pub fn complete_repl_prefix(
+    request: CompletionRequest<'_>,
+    scope: CompletionScope,
+) -> CompletionResponse {
+    complete_prefix_with_options(request, scope, CompletionPresentation::Repl)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompletionPresentation {
+    Full,
+    Repl,
+}
+
+fn complete_prefix_with_options(
+    request: CompletionRequest<'_>,
+    scope: CompletionScope,
+    presentation: CompletionPresentation,
+) -> CompletionResponse {
     let cursor = clamp_to_char_boundary(request.source, request.cursor);
     let (replace_start, replace_end, prefix) = completion_token(request.source, cursor);
-    if prefix.is_empty() {
+    let allow_empty_prefix =
+        presentation == CompletionPresentation::Repl && scope == CompletionScope::VariablesOnly;
+    if prefix.is_empty() && !allow_empty_prefix {
         return CompletionResponse {
             candidates: Vec::new(),
             replace_start,
@@ -254,32 +283,108 @@ pub fn complete_prefix(request: CompletionRequest<'_>) -> CompletionResponse {
         };
     }
 
-    let candidates = request
+    let mut candidates = Vec::new();
+    for symbol in request
         .index
         .symbols()
         .iter()
-        .filter(|symbol| completion_symbol_matches_prefix(symbol, &prefix))
-        .map(|symbol| CompletionCandidate {
+        .filter(|symbol| completion_scope_accepts(scope, symbol))
+        .filter(|symbol| prefix.is_empty() || completion_symbol_matches_prefix(symbol, &prefix))
+    {
+        let mut candidate = CompletionCandidate {
             label: symbol.label.clone(),
             replacement: symbol.replacement.clone(),
             kind: symbol.kind.clone(),
             detail: symbol.detail.clone(),
             documentation: symbol.documentation.clone(),
-            sort_text: symbol
-                .sort_text
-                .clone()
-                .or_else(|| Some(default_sort_text(symbol))),
+            sort_text: symbol.sort_text.clone(),
             origin: symbol.origin.clone(),
             replace_start,
             replace_end,
-        })
-        .collect();
+        };
+        apply_completion_presentation(&mut candidate, presentation, &prefix);
+        if candidate.sort_text.is_none() {
+            candidate.sort_text = Some(default_sort_text_for_candidate(&candidate));
+        }
+        push_completion_candidate(&mut candidates, candidate);
+    }
+    if presentation == CompletionPresentation::Repl {
+        sort_repl_completion_candidates(&mut candidates);
+    }
 
     CompletionResponse {
         candidates,
         replace_start,
         replace_end,
     }
+}
+
+fn completion_scope_accepts(scope: CompletionScope, symbol: &CompletionSymbol) -> bool {
+    match scope {
+        CompletionScope::All => true,
+        CompletionScope::VariablesOnly => symbol.kind == CompletionKind::Variable,
+    }
+}
+
+fn apply_completion_presentation(
+    candidate: &mut CompletionCandidate,
+    presentation: CompletionPresentation,
+    prefix: &str,
+) {
+    if presentation != CompletionPresentation::Repl {
+        return;
+    }
+
+    if !prefix.contains("::") {
+        if let Some(tail) = candidate
+            .label
+            .rsplit_once("::")
+            .map(|(_, tail)| tail.to_string())
+        {
+            if tail.starts_with(prefix) {
+                candidate.label = tail.clone();
+                candidate.replacement = tail;
+            }
+        }
+    } else if candidate.kind == CompletionKind::FunctionCall {
+        candidate.kind = CompletionKind::TypePath;
+    }
+}
+
+fn push_completion_candidate(
+    candidates: &mut Vec<CompletionCandidate>,
+    candidate: CompletionCandidate,
+) {
+    if let Some(existing) = candidates
+        .iter_mut()
+        .find(|existing| existing.label == candidate.label && existing.kind == candidate.kind)
+    {
+        if existing.detail.is_none() {
+            existing.detail = candidate.detail;
+        }
+        if existing.documentation.is_none() {
+            existing.documentation = candidate.documentation;
+        }
+        if existing.sort_text.is_none() {
+            existing.sort_text = candidate.sort_text;
+        }
+        if existing.origin.is_none() {
+            existing.origin = candidate.origin;
+        }
+        return;
+    }
+    candidates.push(candidate);
+}
+
+fn sort_repl_completion_candidates(candidates: &mut [CompletionCandidate]) {
+    candidates.sort_by(|left, right| {
+        left.label
+            .cmp(&right.label)
+            .then_with(|| {
+                repl_completion_kind_rank(&left.kind).cmp(&repl_completion_kind_rank(&right.kind))
+            })
+            .then_with(|| left.replacement.cmp(&right.replacement))
+    });
 }
 
 pub fn rank_completion_candidates_by_expected_type<F>(
@@ -490,8 +595,21 @@ fn completion_kind_rank(kind: &CompletionKind) -> u8 {
     }
 }
 
-fn default_sort_text(symbol: &CompletionSymbol) -> String {
-    format!("{}:{}", completion_kind_rank(&symbol.kind), symbol.label)
+fn repl_completion_kind_rank(kind: &CompletionKind) -> u8 {
+    match kind {
+        CompletionKind::Variable => 0,
+        CompletionKind::TypeConstructor => 1,
+        CompletionKind::TypePath => 2,
+        CompletionKind::FunctionCall => 3,
+    }
+}
+
+fn default_sort_text_for_candidate(candidate: &CompletionCandidate) -> String {
+    format!(
+        "{}:{}",
+        completion_kind_rank(&candidate.kind),
+        candidate.label
+    )
 }
 
 fn surface_name(name: &str) -> String {

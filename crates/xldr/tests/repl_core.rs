@@ -231,6 +231,48 @@ fn core_exposes_shared_semantic_index_for_repl_and_lsp_lookup() {
 }
 
 #[test]
+fn core_shared_repl_completion_helper_preserves_repl_visibility_and_presentation() {
+    let engine = engine();
+    let index = engine.semantic_index();
+
+    let string_repeat = surtr_analysis::complete_repl_prefix(
+        surtr_analysis::CompletionRequest {
+            index: &index,
+            source: "String::re",
+            cursor: "String::re".len(),
+        },
+        surtr_analysis::CompletionScope::All,
+    );
+    let repeat = string_repeat
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "String::repeat")
+        .expect("shared REPL completion should expose qualified String helpers");
+    assert_eq!(repeat.kind, surtr_analysis::CompletionKind::TypePath);
+    assert!(
+        repeat
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("String::repeat(")),
+        "shared completion should retain signature detail: {repeat:?}"
+    );
+
+    let process_init = surtr_analysis::complete_repl_prefix(
+        surtr_analysis::CompletionRequest {
+            index: &index,
+            source: "ProcessInit",
+            cursor: "ProcessInit".len(),
+        },
+        surtr_analysis::CompletionScope::All,
+    );
+    assert!(
+        process_init.candidates.is_empty(),
+        "shared REPL completion must preserve xldr hidden-owner filtering: {:?}",
+        process_init.candidates
+    );
+}
+
+#[test]
 fn core_completion_returns_type_constructors_and_type_paths() {
     let engine = engine();
 
