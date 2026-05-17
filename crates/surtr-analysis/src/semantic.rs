@@ -282,6 +282,27 @@ pub fn complete_prefix(request: CompletionRequest<'_>) -> CompletionResponse {
     }
 }
 
+pub fn rank_completion_candidates_by_expected_type<F>(
+    mut candidates: Vec<CompletionCandidate>,
+    expected_type: Option<&str>,
+    mut accepts: F,
+) -> Vec<CompletionCandidate>
+where
+    F: FnMut(&str, &str) -> bool,
+{
+    let Some(expected_type) = expected_type else {
+        return candidates;
+    };
+
+    candidates.sort_by_key(|candidate| {
+        candidate
+            .detail
+            .as_deref()
+            .is_none_or(|actual_type| !accepts(expected_type, actual_type))
+    });
+    candidates
+}
+
 pub fn lookup_symbol_at_cursor(
     index: &SemanticIndex,
     source: &str,

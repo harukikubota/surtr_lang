@@ -115,6 +115,7 @@ pub struct RunnerDiagnostic {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScriptProjectContext {
+    pub directive_span: Option<AnalysisSpan>,
     pub project_file: Option<PathBuf>,
     pub profile: Option<String>,
     pub diagnostics: Vec<RunnerDiagnostic>,
@@ -222,13 +223,38 @@ pub fn resolve_context(request: AnalysisContextRequest) -> ResolvedAnalysisConte
             } else {
                 SourceKind::DefinitionSource
             };
-            ready_context(
+            let mut resolved = ready_context(
                 request.workspace_root,
                 AnalysisMode::Script,
-                Some(entry_file),
+                Some(entry_file.clone()),
                 request.active_file,
                 source_kind,
-            )
+            );
+            if let Some(selection) = request.runner_selection {
+                let project_file = selection.project_file.clone();
+                let profile = selection.selected_profile.clone();
+                let runner = if let Some(source_input) = selection.source.clone() {
+                    match extract_project_runner_input(source_input) {
+                        Ok(input) => resolve_project_runner(input),
+                        Err(source_diagnostics) => {
+                            let mut runner = empty_runner_context(project_file.clone(), selection);
+                            runner.diagnostics = source_diagnostics;
+                            runner
+                        }
+                    }
+                } else {
+                    empty_runner_context(project_file.clone(), selection)
+                };
+                let diagnostics = runner.diagnostics.clone();
+                resolved.runner = Some(runner);
+                resolved.script_project = Some(ScriptProjectContext {
+                    directive_span: None,
+                    project_file: Some(project_file),
+                    profile: Some(profile),
+                    diagnostics,
+                });
+            }
+            resolved
         }
         SelectedContext::ProjectProfile {
             project_file,

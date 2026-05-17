@@ -2,8 +2,9 @@ use sigil::{DeclarationEntry, DeclarationIndex, DeclarationKind};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
 use spire::ast::Visibility;
 use surtr_analysis::{
-    complete_prefix, lookup_symbol_at_cursor, signature_help_at_cursor, CompletionKind,
-    CompletionOrigin, CompletionRequest, CompletionSymbol, SemanticIndex,
+    complete_prefix, lookup_symbol_at_cursor, rank_completion_candidates_by_expected_type,
+    signature_help_at_cursor, CompletionCandidate, CompletionKind, CompletionOrigin,
+    CompletionRequest, CompletionSymbol, SemanticIndex,
 };
 
 #[test]
@@ -81,6 +82,49 @@ fn completion_request_filters_symbols_by_token_prefix() {
     assert_eq!(completion.replace_end, 3);
     assert_eq!(completion.candidates.len(), 1);
     assert_eq!(completion.candidates[0].label, "print");
+}
+
+#[test]
+fn rank_completion_candidates_by_expected_type_keeps_nonmatching_candidates_after_matches() {
+    let candidates = vec![
+        completion_candidate("text", "String"),
+        completion_candidate("count", "Int"),
+        completion_candidate("other", "String"),
+    ];
+
+    let ranked =
+        rank_completion_candidates_by_expected_type(candidates, Some("Int"), |expected, actual| {
+            expected == actual
+        });
+
+    assert_eq!(
+        ranked
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["count", "text", "other"]
+    );
+}
+
+#[test]
+fn rank_completion_candidates_by_expected_type_preserves_order_without_expected_type() {
+    let candidates = vec![
+        completion_candidate("text", "String"),
+        completion_candidate("count", "Int"),
+    ];
+
+    let ranked =
+        rank_completion_candidates_by_expected_type(candidates, None, |expected, actual| {
+            expected == actual
+        });
+
+    assert_eq!(
+        ranked
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["text", "count"]
+    );
 }
 
 #[test]
@@ -368,4 +412,18 @@ fn completion_candidates_are_sorted_by_label_for_stable_lsp_output() {
 
     assert_eq!(completion.candidates[0].label, "alpha");
     assert_eq!(completion.candidates[1].label, "atom");
+}
+
+fn completion_candidate(label: &str, ty: &str) -> CompletionCandidate {
+    CompletionCandidate {
+        label: label.to_string(),
+        replacement: label.to_string(),
+        kind: CompletionKind::Variable,
+        detail: Some(ty.to_string()),
+        documentation: None,
+        sort_text: None,
+        origin: None,
+        replace_start: 0,
+        replace_end: 0,
+    }
 }

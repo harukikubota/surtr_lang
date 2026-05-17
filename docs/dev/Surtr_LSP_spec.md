@@ -260,6 +260,12 @@ ScriptProjectContext {
 
 `load_project` は literal-only directive として扱う。変数、関数呼び出し、文字列結合は
 context resolution では受けない。
+profile 指定は `load_project("./project.srt", profile: "dev")` を正本形とする。
+互換入力として第 2 positional string も受ける。profile を省略した場合は `"main"` を
+選択する。
+analysis service は open document または filesystem から project runner source を読み、
+`RunnerContext` を script context に添付する。これにより operational script の completion /
+diagnostics は project profile の module stages を参照できる。
 
 project context 付き script の `supervisor_init` merge 規則は次の優先順位で固定する。
 
@@ -550,6 +556,9 @@ v2 では型文脈を使う。
 順位だけ下げる。型が合わない候補も visibility / scope 上候補である限り残し、`sortText`
 または ranking score で後方へ送る。これにより未完成コードや inference 未確定時でも
 発見可能性を落とさない。
+REPL adapter は binding table などの session-local 候補を持つが、型文脈による順位付けは
+`surtr-analysis` の shared ranking helper を通す。これにより LSP / REPL / wasm adapter で
+同じ「除外しない順位付け」規則を共有する。
 
 ---
 
@@ -723,6 +732,9 @@ keyword、local、scope、import、member、signature、type context の順で�
 - `Project::add_path` / glob / active file profile membership を diagnostics と status に反映する
 - boot / supervisor config summary と external input state を cache key と diagnostics に反映する
 - `load_project` 付き operational script を解析する
+  - v0 では `AnalysisService::resolve_context` が literal-only `load_project` を読み、
+    project runner source を `RunnerContext` へ解決し、LSP completion が project stage
+    declarations を参照できるところまでを固定する
 
 ### Phase 4: REPL and advanced tooling
 

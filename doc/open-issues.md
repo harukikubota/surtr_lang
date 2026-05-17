@@ -210,6 +210,8 @@
   - active document の documentSymbol は `AnalysisService` snapshot から生成し、LSP DTO へ写像する最小経路を追加した。
   - Xldr `ReplEngine` から `surtr-analysis::SemanticIndex` を取り出せる API を追加し、REPL binding / stdlib doc / signature / declaration を shared semantic lookup へ渡せる入口を作った。
   - REPL completion の call argument 文脈では、expected type と合わない binding を除外せず、合う binding を先に出す順位付けへ変更した。
+  - REPL completion の expected type 順位付けを `surtr-analysis` の shared ranking helper へ移し、Xldr は session-local binding 候補を同 helper へ渡す形にした。
+  - `load_project("./project.srt", profile: "dev")` を `AnalysisService` 側で literal-only operational script directive として読み、project runner source から `RunnerContext` を script context へ添付し、LSP completion が project stage declaration を参照できるようにした。
 - 固定済み仕様:
   - shared analysis は `crates/surtr-analysis` として crate 新設で進める。既存 Xldr helper の段階移行は、この crate へ利用側を寄せる形で行う。
   - command query parser は `surtr-analysis::query` に留め、現時点では `surtr-query` crate へ分離しない。
@@ -217,6 +219,7 @@
   - project runner source の抽出は、標準定義拡張を取り込めるよう最終的に Surtr VM 実行で行う。restricted evaluator は採用しない。
   - project context 付き script の `supervisor_init` merge は `process 定義 default < project runner boot config < script-local supervisor_init` の優先順位とする。
   - completion の型文脈利用は候補除外ではなく順位付けに留める。
+  - script の `load_project` は `load_project("./project.srt", profile: "dev")` を正本形とし、第 2 positional string も互換入力として受ける。profile 省略時は `"main"` を選択する。
 - 未確定点:
   - `RunnerArgs` の最終構造、`selected_profile` を top-level field に置くか runner args 内に置くか。
   - VM 実行で抽出する project runner result DTO は `ProjectRunnerResult` / `ProjectRunnerProfile` / `ProjectRunnerPath` を baseline とするが、boot config / external input facts の詳細 field は追加設計が必要。

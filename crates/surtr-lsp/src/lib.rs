@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use surtr_analysis::{
-    resolve_context, AnalysisContextRequest, AnalysisDiagnosticKind, AnalysisRange,
-    AnalysisService, AnalysisSeverity, CompletionKind, DocumentVersion, RunnerSelection,
-    SelectedContext, SemanticIndex, Utf16Position,
+    AnalysisContextRequest, AnalysisDiagnosticKind, AnalysisRange, AnalysisService,
+    AnalysisSeverity, CompletionKind, DocumentVersion, RunnerSelection, SelectedContext,
+    SemanticIndex, Utf16Position,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,7 +134,7 @@ impl LspAnalysisHost {
 
     fn snapshot_for_uri(&self, uri: &str) -> Option<surtr_analysis::AnalysisSnapshot> {
         let active_file = file_uri_to_path(uri)?;
-        let context = resolve_context(AnalysisContextRequest {
+        let context = self.service.resolve_context(AnalysisContextRequest {
             workspace_root: self.workspace_root.clone(),
             active_file,
             selected_context: self.selected_context.clone(),

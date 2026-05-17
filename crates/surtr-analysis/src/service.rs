@@ -1,14 +1,17 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use sindr::policy::{CompileUnitKind, SourceKind};
-use spire::ast::{Ast, Span};
+use spire::ast::{Ast, Lit, RecordLitArg, Span};
 
 use crate::{
-    complete_prefix, lookup_symbol_at_cursor, parse_document, signature_help_at_cursor,
-    AnalysisContextStatus, AnalysisMode, CompletionKind, CompletionRequest, CompletionResponse,
-    CompletionSymbol, DocumentSnapshot, DocumentStore, LineIndex, ResolvedAnalysisContext,
-    SemanticIndex, SourceLocation, TextPosition, Utf16Position,
+    complete_prefix, extract_project_runner_input, lookup_symbol_at_cursor, parse_document,
+    resolve_context, resolve_project_runner, signature_help_at_cursor, AnalysisContextRequest,
+    AnalysisContextStatus, AnalysisMode, AnalysisSpan, CompletionKind, CompletionRequest,
+    CompletionResponse, CompletionSymbol, DocumentSnapshot, DocumentStore, LineIndex,
+    ProjectRunnerSourceInput, ResolvedAnalysisContext, RunnerDiagnostic, RunnerDiagnosticKind,
+    ScriptProjectContext, SelectedContext, SemanticIndex, SourceLocation, TextPosition,
+    Utf16Position,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +116,17 @@ impl AnalysisService {
         &self.documents
     }
 
+    pub fn resolve_context(&self, request: AnalysisContextRequest) -> ResolvedAnalysisContext {
+        let mut context = resolve_context(request.clone());
+        if let Some((script_project, runner)) =
+            self.resolve_load_project_script_context(&request, &context)
+        {
+            context.script_project = Some(script_project);
+            context.runner = runner;
+        }
+        context
+    }
+
     pub fn analyze(&self, context: ResolvedAnalysisContext) -> AnalysisSnapshot {
         let mut diagnostics = diagnostics_from_context(&context);
         let active_document = self.documents.get(&context.context.active_file).cloned();
@@ -166,6 +180,17 @@ impl AnalysisService {
                         span.end,
                         error.message(),
                     ));
+                    if should_analyze_project_stages(&context) {
+                        analyze_project_stages(
+                            self,
+                            &context,
+                            document,
+                            &mut diagnostics,
+                            &mut resolved,
+                            &mut typed,
+                            &mut semantic_index,
+                        );
+                    }
                     None
                 }
             }
@@ -293,6 +318,167 @@ impl AnalysisService {
         let mut symbols = Vec::new();
         collect_document_symbols(ast, None, &document.line_index, &mut symbols);
         symbols
+    }
+}
+
+impl AnalysisService {
+    fn resolve_load_project_script_context(
+        &self,
+        request: &AnalysisContextRequest,
+        context: &ResolvedAnalysisContext,
+    ) -> Option<(ScriptProjectContext, Option<crate::RunnerContext>)> {
+        if !matches!(context.context.mode, AnalysisMode::Script) {
+            return None;
+        }
+        let script_file = match request.selected_context.as_ref() {
+            Some(SelectedContext::ScriptEntry(path)) => path.clone(),
+            Some(SelectedContext::DefinitionUnderEntry { entry_file }) => entry_file.clone(),
+            _ => context.context.entry_file.clone()?,
+        };
+
+        let script_source = self.source_for_path(&script_file)?;
+        let directive = match extract_load_project_directive(&script_source) {
+            Ok(Some(directive)) => directive,
+            Ok(None) => return None,
+            Err(diagnostic) => {
+                return Some((
+                    ScriptProjectContext {
+                        directive_span: diagnostic.span,
+                        project_file: None,
+                        profile: None,
+                        diagnostics: vec![diagnostic],
+                    },
+                    None,
+                ));
+            }
+        };
+
+        let project_file = resolve_relative_path(&script_file, &directive.project_literal);
+        let mut diagnostics = Vec::new();
+        let project_source = match self.source_for_path(&project_file) {
+            Some(source) => source,
+            None => {
+                diagnostics.push(RunnerDiagnostic {
+                    kind: RunnerDiagnosticKind::UnreadablePath,
+                    path: Some(project_file.clone()),
+                    span: directive.span,
+                    message: format!(
+                        "load_project could not read project file {}",
+                        path_value(&project_file)
+                    ),
+                });
+                return Some((
+                    ScriptProjectContext {
+                        directive_span: directive.span,
+                        project_file: Some(project_file),
+                        profile: Some(directive.profile),
+                        diagnostics,
+                    },
+                    None,
+                ));
+            }
+        };
+
+        let selected_profile = directive.profile.clone();
+        let runner_input = ProjectRunnerSourceInput {
+            project_file: project_file.clone(),
+            selected_profile: selected_profile.clone(),
+            normalized_args: vec![("profile".to_string(), selected_profile.clone())],
+            active_file: Some(request.active_file.clone()),
+            source: project_source,
+        };
+
+        let runner = match extract_project_runner_input(runner_input) {
+            Ok(input) => Some(resolve_project_runner(input)),
+            Err(mut runner_diagnostics) => {
+                diagnostics.append(&mut runner_diagnostics);
+                None
+            }
+        };
+
+        Some((
+            ScriptProjectContext {
+                directive_span: directive.span,
+                project_file: Some(project_file),
+                profile: Some(selected_profile),
+                diagnostics,
+            },
+            runner,
+        ))
+    }
+
+    fn source_for_path(&self, path: &Path) -> Option<String> {
+        self.documents
+            .get(path)
+            .map(|document| document.text.clone())
+            .or_else(|| fs::read_to_string(path).ok())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoadProjectDirective {
+    project_literal: String,
+    profile: String,
+    span: Option<AnalysisSpan>,
+}
+
+fn extract_load_project_directive(
+    source: &str,
+) -> Result<Option<LoadProjectDirective>, RunnerDiagnostic> {
+    let ast = parse_document(source, 0, SourceKind::Script, CompileUnitKind::Script, None)
+        .map_err(|error| {
+            let span = error.span();
+            RunnerDiagnostic {
+                kind: RunnerDiagnosticKind::LoadProjectUnsupported,
+                path: None,
+                span: Some(analysis_span(span)),
+                message: error.message(),
+            }
+        })?;
+
+    let Some(first_non_include) = ast.iter().find(|node| !matches!(node, Ast::Include(_, _)))
+    else {
+        return Ok(None);
+    };
+    let Ast::App(span, callee, args) = first_non_include else {
+        return Ok(None);
+    };
+    if !is_path(callee, &["load_project"]) {
+        return Ok(None);
+    }
+
+    let positional = positional_args(args);
+    let Some((project_literal, _)) = positional.first().and_then(|arg| string_lit_with_span(arg))
+    else {
+        return Err(load_project_error(
+            span,
+            "load_project expects a literal project path as the first argument",
+        ));
+    };
+    let profile = named_arg(args, "profile")
+        .and_then(string_lit_with_span)
+        .map(|(profile, _)| profile.to_string())
+        .or_else(|| {
+            positional
+                .get(1)
+                .and_then(|arg| string_lit_with_span(arg))
+                .map(|(profile, _)| profile.to_string())
+        })
+        .unwrap_or_else(|| "main".to_string());
+
+    Ok(Some(LoadProjectDirective {
+        project_literal: project_literal.to_string(),
+        profile,
+        span: Some(analysis_span(span)),
+    }))
+}
+
+fn load_project_error(span: &Span, message: impl Into<String>) -> RunnerDiagnostic {
+    RunnerDiagnostic {
+        kind: RunnerDiagnosticKind::LoadProjectUnsupported,
+        path: None,
+        span: Some(analysis_span(span)),
+        message: message.into(),
     }
 }
 
@@ -850,6 +1036,75 @@ fn diagnostic_from_line_index(
     }
 }
 
+fn positional_args(args: &[RecordLitArg]) -> Vec<&Ast> {
+    args.iter()
+        .filter_map(|arg| match arg {
+            RecordLitArg::Positional(ast) => Some(ast),
+            RecordLitArg::Named(_, _) => None,
+        })
+        .collect()
+}
+
+fn named_arg<'a>(args: &'a [RecordLitArg], expected: &str) -> Option<&'a Ast> {
+    args.iter().find_map(|arg| match arg {
+        RecordLitArg::Named(name, ast) if name == expected => Some(ast),
+        _ => None,
+    })
+}
+
+fn string_lit_with_span(node: &Ast) -> Option<(&str, &Span)> {
+    match node {
+        Ast::Lit(span, Lit::Str(value)) => Some((value.as_str(), span)),
+        _ => None,
+    }
+}
+
+fn is_path(node: &Ast, expected: &[&str]) -> bool {
+    match node {
+        Ast::Var(_, symbol) => expected == [symbol.as_str()],
+        Ast::Path(_, path) => path
+            .segments
+            .iter()
+            .map(String::as_str)
+            .eq(expected.iter().copied()),
+        _ => false,
+    }
+}
+
+fn analysis_span(span: &Span) -> AnalysisSpan {
+    AnalysisSpan {
+        start: span.start.min(u32::MAX as usize) as u32,
+        end: span.end.min(u32::MAX as usize) as u32,
+    }
+}
+
+fn resolve_relative_path(base_file: &Path, raw_path: &str) -> PathBuf {
+    let raw = PathBuf::from(raw_path);
+    let path = if raw.is_absolute() {
+        raw
+    } else {
+        base_file
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join(raw)
+    };
+    path.components()
+        .fold(PathBuf::new(), |mut normalized, component| {
+            match component {
+                Component::CurDir => {}
+                Component::ParentDir => {
+                    normalized.pop();
+                }
+                other => normalized.push(other.as_os_str()),
+            }
+            normalized
+        })
+}
+
+fn path_value(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 fn diagnostics_from_context(context: &ResolvedAnalysisContext) -> Vec<AnalysisDiagnostic> {
     let mut diagnostics = Vec::new();
 
@@ -924,8 +1179,13 @@ fn compile_unit_kind_for_active_context(context: &ResolvedAnalysisContext) -> Co
 }
 
 fn should_analyze_project_stages(context: &ResolvedAnalysisContext) -> bool {
+    if context.runner.is_none() {
+        return false;
+    }
+    if matches!(context.context.mode, AnalysisMode::Script) && context.script_project.is_some() {
+        return true;
+    }
     matches!(context.context.mode, AnalysisMode::Project)
-        && context.runner.is_some()
         && !context
             .context
             .entry_file

@@ -266,6 +266,57 @@ Project::config({|config|
 }
 
 #[test]
+fn completion_uses_load_project_context_for_operational_script() {
+    let workspace = temp_workspace("load-project-completion");
+    let src = workspace.join("src");
+    let scripts = workspace.join("scripts");
+    std::fs::create_dir_all(&src).expect("temporary src dir must be writable");
+    std::fs::create_dir_all(&scripts).expect("temporary scripts dir must be writable");
+    let helper_path = src.join("helper.srt");
+    let script_path = scripts.join("seed.srt");
+    let project_file = workspace.join("project.srt");
+    std::fs::write(&helper_path, "defmod Helper { def helper() -> Int { 1 } }")
+        .expect("write helper source");
+    std::fs::write(
+        &project_file,
+        r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/helper.srt")
+  })
+})
+"#,
+    )
+    .expect("write project source");
+
+    let uri = path_to_file_uri(&script_path);
+    let source = r#"load_project("../project.srt", profile: "dev")
+
+he
+"#;
+    let mut host = LspAnalysisHost::new(workspace.clone());
+    host.did_open(uri.clone(), Some(1), source.to_string());
+    host.set_selected_context(Some(SelectedContext::ScriptEntry(script_path)));
+
+    let items = completion_items(
+        &host,
+        &uri,
+        LspPosition {
+            line: 2,
+            character: 2,
+        },
+    );
+
+    assert!(
+        items.iter().any(|item| item.label == "Helper::helper"
+            && item.kind == CompletionItemKind::Function),
+        "load_project project declarations should flow through LSP completion: {items:?}"
+    );
+
+    std::fs::remove_dir_all(workspace).expect("temporary workspace must be removable");
+}
+
+#[test]
 fn project_runner_diagnostics_are_published_as_lsp_diagnostics() {
     let workspace = std::env::temp_dir().join(format!(
         "surtr-lsp-project-runner-{}-{}",

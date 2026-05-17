@@ -20,9 +20,10 @@ pub use project_runner::{
     ProjectRunnerPath, ProjectRunnerProfile, ProjectRunnerResult, ProjectRunnerSourceInput,
 };
 pub use semantic::{
-    complete_prefix, lookup_symbol_at_cursor, signature_help_at_cursor, CompletionCandidate,
-    CompletionKind, CompletionOrigin, CompletionRequest, CompletionResponse, CompletionSymbol,
-    SemanticIndex, SignatureLookup, SourceLocation, SymbolLookup,
+    complete_prefix, lookup_symbol_at_cursor, rank_completion_candidates_by_expected_type,
+    signature_help_at_cursor, CompletionCandidate, CompletionKind, CompletionOrigin,
+    CompletionRequest, CompletionResponse, CompletionSymbol, SemanticIndex, SignatureLookup,
+    SourceLocation, SymbolLookup,
 };
 pub use service::{
     AnalysisDiagnostic, AnalysisDiagnosticKind, AnalysisRange, AnalysisService, AnalysisSeverity,
