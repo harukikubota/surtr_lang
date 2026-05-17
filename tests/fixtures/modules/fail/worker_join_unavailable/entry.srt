@@ -1,0 +1,3 @@
+import MyWorker::join
+
+print(to_string(join))

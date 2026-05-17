@@ -6293,13 +6293,11 @@ impl Codegen {
 
             TypedInner::SupervisorSpawn {
                 supervisor_process,
-                worker_process,
                 init,
+                ..
             } => {
                 let supervisor_idx = self.add_constant(Constant::Str(supervisor_process.clone()));
                 self.emit(Opcode::LoadConst(supervisor_idx));
-                let worker_idx = self.add_constant(Constant::Str(worker_process.clone()));
-                self.emit(Opcode::LoadConst(worker_idx));
                 self.emit_node(init)?;
                 let builtin_id =
                     Self::builtin_id("__supervisor_spawn").ok_or_else(|| CodegenError {
@@ -6308,7 +6306,7 @@ impl Codegen {
                     })?;
                 self.emit(Opcode::CallBuiltin {
                     builtin_id,
-                    arity: 3,
+                    arity: 2,
                     span_start: node.span.start as u32,
                     span_end: node.span.end as u32,
                 });
@@ -6353,14 +6351,12 @@ impl Codegen {
 
             TypedInner::SupervisorWorkers {
                 supervisor_process,
-                worker_process,
                 init,
                 strategy,
+                ..
             } => {
                 let supervisor_idx = self.add_constant(Constant::Str(supervisor_process.clone()));
                 self.emit(Opcode::LoadConst(supervisor_idx));
-                let worker_idx = self.add_constant(Constant::Str(worker_process.clone()));
-                self.emit(Opcode::LoadConst(worker_idx));
                 self.emit_node(init)?;
                 self.emit_node(strategy)?;
                 let builtin_id =
@@ -6370,7 +6366,7 @@ impl Codegen {
                     })?;
                 self.emit(Opcode::CallBuiltin {
                     builtin_id,
-                    arity: 4,
+                    arity: 3,
                     span_start: node.span.start as u32,
                     span_end: node.span.end as u32,
                 });
@@ -10789,6 +10785,57 @@ mod process_runtime_v2_tests {
         }
     }
 
+    fn result_int_ty() -> Ty {
+        Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))
+    }
+
+    fn worker_init_callable() -> TypedNode {
+        let ret_ty = result_int_ty();
+        let fun = TypedNode {
+            ty: Ty::UserFunc {
+                fun_idx: 7,
+                type_params: Vec::new(),
+                params: Vec::new(),
+                ret: Box::new(ret_ty.clone()),
+            },
+            span: span(30, 42),
+            node: TypedInner::Var(ResolvedId {
+                name: "init".into(),
+                qualified_name: Some("MyWorker::init".into()),
+                unique_id: 701,
+                compiler_generated: true,
+                span: span(30, 42),
+            }),
+        };
+        TypedNode {
+            ty: Ty::Func(Vec::new(), Box::new(ret_ty.clone())),
+            span: span(30, 42),
+            node: TypedInner::Closure(
+                Vec::new(),
+                Vec::new(),
+                Box::new(TypedNode {
+                    ty: ret_ty,
+                    span: span(30, 42),
+                    node: TypedInner::App(Box::new(fun), Vec::new()),
+                }),
+            ),
+        }
+    }
+
+    fn worker_strategy_value() -> TypedNode {
+        TypedNode {
+            ty: Ty::Struct("WorkerStrategy".into(), Vec::new()),
+            span: span(50, 58),
+            node: TypedInner::Var(ResolvedId {
+                name: "strategy".into(),
+                qualified_name: None,
+                unique_id: 702,
+                compiler_generated: false,
+                span: span(50, 58),
+            }),
+        }
+    }
+
     #[test]
     fn validate_required_singletons_rejects_direct_call_when_absent_from_boot_plan() {
         let err = validate_required_singletons(
@@ -10872,5 +10919,83 @@ mod process_runtime_v2_tests {
             &RuntimeBootPlan::default(),
         )
         .expect("DynamicSupervisor is implicitly registered");
+    }
+
+    #[test]
+    fn supervisor_spawn_lowers_to_metadata_arity_shape() {
+        let mut gene = Codegen::new();
+        let node = TypedNode {
+            ty: Ty::Result(Box::new(Ty::Pid("MyWorker".into())), Box::new(Ty::Error)),
+            span: span(1, 48),
+            node: TypedInner::SupervisorSpawn {
+                supervisor_process: "MySup".into(),
+                worker_process: "MyWorker".into(),
+                init: Box::new(worker_init_callable()),
+            },
+        };
+
+        gene.emit_node(&node)
+            .expect("supervisor spawn emission should succeed");
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+        let builtin_id =
+            Codegen::builtin_id("__supervisor_spawn").expect("__supervisor_spawn exists");
+
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::CallBuiltin {
+                builtin_id: actual,
+                arity: 2,
+                ..
+            } if *actual == builtin_id
+        )));
+        assert!(!opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::CallBuiltin {
+                builtin_id: actual,
+                arity: 3,
+                ..
+            } if *actual == builtin_id
+        )));
+    }
+
+    #[test]
+    fn supervisor_workers_lowers_to_metadata_arity_shape() {
+        let mut gene = Codegen::new();
+        let node = TypedNode {
+            ty: Ty::Result(
+                Box::new(Ty::Enum("Workers".into(), vec![Ty::Pid("MyWorker".into())])),
+                Box::new(Ty::Error),
+            ),
+            span: span(1, 64),
+            node: TypedInner::SupervisorWorkers {
+                supervisor_process: "MySup".into(),
+                worker_process: "MyWorker".into(),
+                init: Box::new(worker_init_callable()),
+                strategy: Box::new(worker_strategy_value()),
+            },
+        };
+
+        gene.emit_node(&node)
+            .expect("supervisor workers emission should succeed");
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+        let builtin_id =
+            Codegen::builtin_id("__supervisor_workers").expect("__supervisor_workers exists");
+
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::CallBuiltin {
+                builtin_id: actual,
+                arity: 3,
+                ..
+            } if *actual == builtin_id
+        )));
+        assert!(!opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::CallBuiltin {
+                builtin_id: actual,
+                arity: 4,
+                ..
+            } if *actual == builtin_id
+        )));
     }
 }

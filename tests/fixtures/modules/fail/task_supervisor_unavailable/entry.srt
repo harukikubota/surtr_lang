@@ -1,0 +1,3 @@
+import Task::Supervisor
+
+print(to_string(Supervisor))

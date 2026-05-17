@@ -1086,6 +1086,104 @@ impl VM {
         }
     }
 
+    fn invoke_direct_template_target_step(
+        &mut self,
+        target: &CallableTemplateDirectTarget,
+        args: Vec<Value>,
+    ) -> StepOutcome {
+        match target {
+            CallableTemplateDirectTarget::Builtin(builtin_id) => {
+                match call_builtin(self, *builtin_id, args) {
+                    Ok(Value::PendingFuture(future_id)) => {
+                        StepOutcome::Halt(Value::PendingFuture(future_id))
+                    }
+                    Ok(value) => StepOutcome::Halt(value),
+                    Err(err) => StepOutcome::RuntimeError(err),
+                }
+            }
+            CallableTemplateDirectTarget::Function(fun_idx) => {
+                self.invoke_callable_step(self.callable_for_function(*fun_idx), args)
+            }
+        }
+    }
+
+    fn invoke_callable_template_step(
+        &mut self,
+        template_id: u32,
+        lexical_captures: Vec<Value>,
+        runtime_args: Vec<Value>,
+    ) -> StepOutcome {
+        let template = match self.callable_template(template_id) {
+            Ok(template) => template.clone(),
+            Err(err) => return StepOutcome::RuntimeError(err),
+        };
+        match template.kind {
+            CallableTemplateKind::PartialDirectCall {
+                target,
+                arg_sources,
+            } => {
+                let mut final_args = Vec::with_capacity(arg_sources.len());
+                for source in arg_sources {
+                    let value = match source {
+                        CallableTemplateArg::Bound(idx) => {
+                            lexical_captures.get(idx as usize).cloned().ok_or_else(|| {
+                                RuntimeError::new(format!(
+                                    "Callable template {} bound arg out of bounds: {}",
+                                    template_id, idx
+                                ))
+                            })
+                        }
+                        CallableTemplateArg::Runtime(idx) => {
+                            runtime_args.get(idx as usize).cloned().ok_or_else(|| {
+                                RuntimeError::new(format!(
+                                    "Callable template {} runtime arg out of bounds: {}",
+                                    template_id, idx
+                                ))
+                            })
+                        }
+                    };
+                    match value {
+                        Ok(value) => final_args.push(value),
+                        Err(err) => return StepOutcome::RuntimeError(err),
+                    }
+                }
+                self.invoke_direct_template_target_step(&target, final_args)
+            }
+            CallableTemplateKind::InjectDirectCall {
+                target,
+                bound_arg_count,
+            } => {
+                let Some((first_arg, rest_args)) = runtime_args.split_first() else {
+                    return StepOutcome::RuntimeError(RuntimeError::new(format!(
+                        "Callable template {} requires at least one runtime argument",
+                        template_id
+                    )));
+                };
+                let mut final_args =
+                    Vec::with_capacity(1 + lexical_captures.len() + rest_args.len());
+                final_args.push(first_arg.clone());
+                final_args.extend(
+                    lexical_captures
+                        .iter()
+                        .take(bound_arg_count as usize)
+                        .cloned(),
+                );
+                final_args.extend(rest_args.iter().cloned());
+                self.invoke_direct_template_target_step(&target, final_args)
+            }
+            CallableTemplateKind::ComposeDirect { .. } => {
+                match self.invoke_callable_template_sync(
+                    template_id,
+                    lexical_captures,
+                    runtime_args,
+                ) {
+                    Ok(value) => StepOutcome::Halt(value),
+                    Err(err) => StepOutcome::RuntimeError(err),
+                }
+            }
+        }
+    }
+
     fn invoke_callable_template_sync(
         &mut self,
         template_id: u32,
@@ -2784,6 +2882,34 @@ impl VM {
                 })
             }
             StepOutcome::Pending { future_id, resume } => {
+                if self
+                    .process_runtime
+                    .futures
+                    .get(&future_id)
+                    .is_some_and(|future| future.correlation_id.is_some())
+                {
+                    self.process_runtime.attach_future_deadline(
+                        future_id,
+                        self.process_runtime.current_tick_ms,
+                        timeout_ms,
+                        true,
+                    );
+                    self.wait_for_any_future(&[future_id])?;
+                    return match self.resume_execution(resume) {
+                        StepOutcome::Halt(value) => Ok(value),
+                        pending @ StepOutcome::Pending { .. } => {
+                            match self.drive_pending_to_halt(pending)? {
+                                StepOutcome::Halt(value) => Ok(value),
+                                StepOutcome::RuntimeError(err) => Err(err),
+                                _ => Err(RuntimeError::new("callable execution did not finish")),
+                            }
+                        }
+                        StepOutcome::RuntimeError(err) => Err(err),
+                        StepOutcome::Continue => {
+                            Err(RuntimeError::new("callable execution did not finish"))
+                        }
+                    };
+                }
                 let completion_future = self
                     .process_runtime
                     .allocate_future_after(None, timeout_ms, true);
@@ -4433,14 +4559,7 @@ impl VM {
                 let runtime_arity = full_args.len().saturating_sub(lexical_captures.len());
                 let runtime_args = full_args.split_off(lexical_captures.len());
                 debug_assert_eq!(runtime_args.len(), runtime_arity);
-                match self.invoke_callable_template_sync(
-                    template_id,
-                    lexical_captures,
-                    runtime_args,
-                ) {
-                    Ok(value) => StepOutcome::Halt(value),
-                    Err(err) => StepOutcome::RuntimeError(err),
-                }
+                self.invoke_callable_template_step(template_id, lexical_captures, runtime_args)
             }
         }
     }
@@ -6790,17 +6909,23 @@ impl ProcessRuntime {
     }
 
     fn resolve_future(&mut self, future_id: FutureId, value: Value) -> Vec<u64> {
-        let Some(future) = self.futures.get_mut(&future_id) else {
-            return Vec::new();
+        let waiters = {
+            let Some(future) = self.futures.get_mut(&future_id) else {
+                return Vec::new();
+            };
+            if !matches!(future.state, FutureState::Running) {
+                return Vec::new();
+            }
+            future.state = FutureState::Ready(value);
+            future.deadline_tick = None;
+            future.cancel_on_timeout = false;
+            if let Some(correlation_id) = future.correlation_id.take() {
+                self.reply_table.remove(&correlation_id);
+            }
+            std::mem::take(&mut future.waiters)
         };
-        if !matches!(future.state, FutureState::Running) {
-            return Vec::new();
-        }
-        future.state = FutureState::Ready(value);
-        if let Some(correlation_id) = future.correlation_id.take() {
-            self.reply_table.remove(&correlation_id);
-        }
-        let waiters = std::mem::take(&mut future.waiters);
+        self.deadline_queue
+            .retain(|entry| entry.future_id != future_id);
         for waiter in &waiters {
             self.waiting_table.remove(waiter);
             let should_enqueue = if let Some(process) = self.processes.get_mut(waiter) {
@@ -9197,13 +9322,20 @@ mod tests {
         let expired = vm.expire_process_deadlines(3);
         assert_eq!(expired, vec![future_id]);
         assert!(!vm.process_runtime.reply_table.contains_key(&correlation_id));
+        assert!(vm
+            .process_runtime
+            .deadline_queue
+            .iter()
+            .all(|entry| entry.future_id != future_id));
         assert_eq!(vm.process_runtime.waiting_table.get(&pid), None);
+        let future = vm
+            .process_runtime
+            .futures
+            .get(&future_id)
+            .expect("future should exist");
+        assert_eq!(future.deadline_tick, None);
         assert!(matches!(
-            vm.process_runtime
-                .futures
-                .get(&future_id)
-                .expect("future should exist")
-                .state,
+            future.state,
             super::FutureState::Ready(Value::Tagged { tag: 1, .. })
         ));
     }
@@ -11437,6 +11569,95 @@ mod tests {
             vm.ready_future_value(future_id),
             Some(Value::Tagged { tag: 0, fields }) if matches!(fields.first(), Some(Value::Int(value)) if *value == int(99))
         ));
+    }
+
+    #[test]
+    fn genserver_reply_later_outer_timeout_wins_before_callback_sleep_completion() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry.register(TypeEntry {
+            tag: 2,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: vec![true],
+        });
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![test_runtime_process_spec(
+                0,
+                "Worker",
+                RuntimeProcessKind::GenServer,
+                RuntimeProcessInstance::Worker,
+                false,
+                0,
+                0,
+                None,
+            )],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = PidHandle {
+            id: vm
+                .allocate_supervised_worker(
+                    "Worker".into(),
+                    Some(Value::Int(int(41))),
+                    "DynamicSupervisor".into(),
+                )
+                .expect("worker allocation should succeed"),
+            process_name: "Worker".into(),
+        };
+        let callback = Callable {
+            target: CallableTarget::Builtin(builtin_id("__process_sleep")),
+            lexical_captures: vec![Value::Tagged {
+                tag: 2,
+                fields: vec![Value::Int(int(100))],
+            }],
+            metadata: CallableMetadata::default(),
+        };
+
+        let value = vm
+            .genserver_call_reply_later(&pid, Value::Int(int(42)), callback)
+            .expect("reply later should create a reply future");
+        let Value::PendingFuture(reply_future) = value else {
+            panic!("reply later should return a pending reply future");
+        };
+        vm.process_runtime.attach_future_deadline(
+            reply_future,
+            vm.process_runtime.current_tick_ms,
+            1,
+            true,
+        );
+
+        vm.wait_for_any_future(&[reply_future])
+            .expect("outer timeout should resolve the reply future");
+
+        assert!(matches!(
+            vm.ready_future_value(reply_future),
+            Some(Value::Tagged { tag: 1, fields }) if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Timeout")
+        ));
+        assert!(vm.process_runtime.reply_table.is_empty());
+        assert!(vm
+            .process_runtime
+            .deadline_queue
+            .iter()
+            .all(|entry| entry.future_id != reply_future));
+        assert_eq!(
+            vm.process_runtime
+                .futures
+                .get(&reply_future)
+                .expect("reply future should remain tracked")
+                .deadline_tick,
+            None
+        );
+
+        vm.process_runtime.current_tick_ms = 100;
+        vm.expire_process_deadlines(100);
+        vm.drive_ready_detached_tasks()
+            .expect("sleeping callback completion should not overwrite timed-out reply");
+
+        assert!(matches!(
+            vm.ready_future_value(reply_future),
+            Some(Value::Tagged { tag: 1, fields }) if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Timeout")
+        ));
+        assert!(vm.process_runtime.detached_tasks.is_empty());
     }
 
     #[test]

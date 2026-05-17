@@ -1,0 +1,17 @@
+defagent MyWorker {
+  meta {
+    instance: Worker
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init(seed: Int) -> Result<Int> {
+    Ok(seed)
+  }
+
+  @get
+  def value(state: Int) -> Result<Int> {
+    Ok(state)
+  }
+}

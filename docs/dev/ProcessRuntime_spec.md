@@ -573,7 +573,9 @@ ImageWorkerSupervisor::workers(MyWorker::init(args), WorkerStrategy::fixed(4))
 定義または `supervisor_init` override で指定された場合は
 `Option::Some(duration)` を返す。
 
-`adopt / handoff` は runtime が原子的に処理する。PID は維持する。
+`adopt` は generated supervisor owner helper (`MySupervisor::adopt(pid)`) として public surface に残す。
+`handoff` は runtime-internal 操作であり、user-facing API としては公開しない。
+`adopt / handoff` は runtime が原子的に処理し、PID は維持する。
 
 ### 3.11.1 Workers surface
 
@@ -723,6 +725,8 @@ link は `owner` / `lifecycle_sink` / supervisor tree / restart policy の runti
 monitor は generic receive を公開しない方針と相性が悪いため、必要になった場合は
 typed `on_down` など用途別 API として検討する。join は Task では `Task::call` / `Task::async`
 と `@timeout` に寄せ、Worker 終了待ちは後続の Worker 専用 API として検討する。
+Worker 向けの `join` / `await` / `on_down` は v2 public surface ではない。
+`Task::await` は `TaskHandle` 専用であり、worker PID の待機 API としては使わない。
 
 Exit reason 候補:
 
@@ -750,6 +754,7 @@ result = Task::await(task) @timeout(100ms)
 `@timeout` は直前の runtime-managed call に timeout policy を付与する。timeout した場合、結果値は `Err(TimeOutError)` になる。
 
 初期フェーズでは、Task.Supervisor / DynamicSupervisor link は扱わない。
+Task の `link` / `cancel` / `restart` も v2 public surface には含めない。
 
 ### 3.14 Process::sleep
 
@@ -779,6 +784,9 @@ result = Task::await(task) @timeout(1s)
 | sleep | sleep 開始 | timer wake | error ではない |
 
 Ready 前に call した場合、call timeout は Ready 待ち時間を含む。
+`CallResult::ReplyLater(next_state, callback)` の場合も、外側の call timeout は call entry から開始し、callback の待機・`Process::sleep` 時間を含む。
+外側 timeout が先に到達した場合は reply future を `Err(TimeOutError)` として解決し、reply mapping / deadline を消す。
+callback completion が先に解決した場合だけ callback の reply が勝ち、timeout 後に callback が完了しても timed-out reply を上書きしない。
 
 ### 3.16 singleton PID API
 
@@ -1558,8 +1566,9 @@ runtime global state であり、process-local `ExecutionContext` には入れ�
 | 項目 | 扱い |
 |---|---|
 | boundary layer | process 基盤安定後に domain/runtime/boot error の変換層として設計 |
-| Worker async init | 非同期 call API と合わせて検討 |
-| Task.Supervisor | Task を使い捨て process として安定させた後に検討 |
+| Worker async / lazy init | 非同期 call API と合わせて検討。v2 では public surface にしない |
+| Task.Supervisor / Task link / cancel / restart | Task を使い捨て process として安定させた後に検討 |
+| Task-DynamicSupervisor link | 初期フェーズでは扱わず、Task supervision 設計時に再検討 |
 | DynamicSupervisor restart details | 初期は OneForOne 最小。`max_restarts`, `max_seconds` は後続 |
 | REPL / tooling 表示 | `:info` に process spec / singleton slot / supervisor tree を表示する方向で後続 |
 | BootPolicy enum | `Required / ExplicitOnly / StandardDefault / OnReference` は使わない。起動対象は Boot 設定に現れた entry と builtin standard I/O から決める |

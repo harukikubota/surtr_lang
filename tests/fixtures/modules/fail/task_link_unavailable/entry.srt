@@ -1,0 +1,3 @@
+import Task::link
+
+print(to_string(link))

@@ -1,0 +1,3 @@
+import Task::cancel
+
+print(to_string(cancel))
