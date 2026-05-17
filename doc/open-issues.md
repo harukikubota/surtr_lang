@@ -198,6 +198,9 @@
   - `SourceKind` は `sindr::policy`、parse rule 導出は `spire` に置き、`surtr-analysis` は Xldr に依存しない構成にした。
   - project runner source は `SourceKind::ProjectConfigSource` として専用化し、CLI / host が project context として選択した場合だけ runner として機能する方針を固定した。
   - REPL command query parser は `surtr-analysis::query` に移し、Xldr は同じ parser 実装を呼ぶ。
+  - VM 実行 runner result へ差し替えられる受け口として `ProjectRunnerResult` / `ProjectRunnerProfile` / `ProjectRunnerPath` DTO を追加し、現行 AST extractor は `Project::entrypoint` / `Config::entry_fun` / `Config::add_path` からこの形を生成する。
+  - Eldr の `last_value()` / `TypeRegistry` から標準 `Project` / `Config` runtime value を `ProjectRunnerResult` へ decode する入口を追加した。
+  - project runner の `Config::add_path` glob は deterministic order で展開し、`./src/**/*.srt` の recursive glob を `** = 0 個以上の directory segment` として扱う。
   - `AnalysisService` project mode は `RunnerContext.module_stages` を使い、active file 単体ではなく project profile の module stage として parse / resolve / typecheck できるようにした。
   - project stage の `DeclarationIndex` から補完候補を生成し、別 module の public declaration を LSP/analysis completion の初期候補へ流せるようにした。
   - completion item の `detail` / `documentation` / `sortText` と、metadata / declaration 由来情報を `surtr-analysis` の `SemanticIndex` で保持するようにした。
@@ -216,8 +219,8 @@
   - completion の型文脈利用は候補除外ではなく順位付けに留める。
 - 未確定点:
   - `RunnerArgs` の最終構造、`selected_profile` を top-level field に置くか runner args 内に置くか。
-  - VM 実行で抽出する project runner result DTO の最終構造。
-  - `Project::entrypoint` / `Config::add_path` 以外の runner facts を、VM 実行結果からどう生成するか。
+  - VM 実行で抽出する project runner result DTO は `ProjectRunnerResult` / `ProjectRunnerProfile` / `ProjectRunnerPath` を baseline とするが、boot config / external input facts の詳細 field は追加設計が必要。
+  - `Project::entrypoint` / `Config::entry_fun` / `Config::add_path` 以外の runner facts を、VM 実行結果からどう生成するか。
   - project mode の stdlib stage injection を `xldr` と同じ semantic snapshot から共有するか、`surtr-analysis` 側に明示入力として渡すか。
   - staged project diagnostics を active file へ仮所属させず、module stage 内の source path / span へ正確に所属させる方法。
   - LSP definition の ambiguous tail match を診断化するか、qualified path 優先の解決へ寄せるか。

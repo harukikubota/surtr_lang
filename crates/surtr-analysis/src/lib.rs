@@ -15,8 +15,9 @@ pub use context::{
 };
 pub use document::{DocumentSnapshot, DocumentStore, LineIndex, TextPosition, Utf16Position};
 pub use project_runner::{
-    extract_project_runner_input, resolve_project_runner, DeclaredProjectPath, ProjectRunnerInput,
-    ProjectRunnerSourceInput,
+    decode_project_runner_value, extract_project_runner_input, extract_project_runner_result,
+    resolve_project_runner, DeclaredProjectPath, ProjectRunnerDecodeError, ProjectRunnerInput,
+    ProjectRunnerPath, ProjectRunnerProfile, ProjectRunnerResult, ProjectRunnerSourceInput,
 };
 pub use semantic::{
     complete_prefix, lookup_symbol_at_cursor, signature_help_at_cursor, CompletionCandidate,

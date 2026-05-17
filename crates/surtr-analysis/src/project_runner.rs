@@ -1,7 +1,9 @@
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use sindr::policy::{CompileUnitKind, SourceKind};
+use sindr::runtime::{TypeEntry, TypeRegistry, Value};
 use spire::ast::{Ast, Lit, RecordLitArg, Span};
 
 use crate::{
@@ -36,9 +38,80 @@ pub struct ProjectRunnerSourceInput {
     pub source: String,
 }
 
-pub fn extract_project_runner_input(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRunnerResult {
+    pub profiles: Vec<ProjectRunnerProfile>,
+    pub boot_summary: ProjectBootSummary,
+    pub external_inputs: Vec<ExternalInputState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRunnerProfile {
+    pub name: String,
+    pub entrypoint: String,
+    pub paths: Vec<ProjectRunnerPath>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRunnerPath {
+    pub declared_by: PathBuf,
+    pub literal_or_glob: String,
+    pub declaration_span: Option<AnalysisSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectRunnerDecodeError {
+    message: String,
+}
+
+impl ProjectRunnerDecodeError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for ProjectRunnerDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ProjectRunnerDecodeError {}
+
+const DEFAULT_PROJECT_ENTRYPOINT: &str = "Main::main";
+
+pub fn decode_project_runner_value(
+    project_file: &Path,
+    value: &Value,
+    registry: &TypeRegistry,
+) -> Result<ProjectRunnerResult, ProjectRunnerDecodeError> {
+    let project_fields = tagged_fields(value, registry, "Project")?;
+    let entries = list_field(&project_fields, "entries", "Project.entries")?;
+    let profiles = entries
+        .iter()
+        .enumerate()
+        .map(|(idx, value)| decode_config_value(project_file, &value, registry, idx))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(ProjectRunnerResult {
+        boot_summary: ProjectBootSummary {
+            content_hash: None,
+            fields: project_boot_summary_fields(&profiles),
+        },
+        profiles,
+        external_inputs: Vec::new(),
+    })
+}
+
+pub fn extract_project_runner_result(
     input: ProjectRunnerSourceInput,
-) -> Result<ProjectRunnerInput, Vec<RunnerDiagnostic>> {
+) -> Result<ProjectRunnerResult, Vec<RunnerDiagnostic>> {
     let ast = parse_document(
         &input.source,
         0,
@@ -58,17 +131,29 @@ pub fn extract_project_runner_input(
 
     let mut extractor = ProjectRunnerExtractor {
         project_file: input.project_file.clone(),
-        selected_profile: input.selected_profile.clone(),
         profiles: Vec::new(),
-        profile_declared_paths: Vec::new(),
-        selected_declared_paths: Vec::new(),
     };
     extractor.visit_many(&ast);
 
-    if !extractor
+    Ok(ProjectRunnerResult {
+        boot_summary: ProjectBootSummary {
+            content_hash: Some(stable_hash_text(&input.source)),
+            fields: project_boot_summary_fields(&extractor.profiles),
+        },
+        profiles: extractor.profiles,
+        external_inputs: Vec::new(),
+    })
+}
+
+pub fn extract_project_runner_input(
+    input: ProjectRunnerSourceInput,
+) -> Result<ProjectRunnerInput, Vec<RunnerDiagnostic>> {
+    let result = extract_project_runner_result(input.clone())?;
+
+    if !result
         .profiles
         .iter()
-        .any(|profile| profile == &input.selected_profile)
+        .any(|profile| profile.name == input.selected_profile)
     {
         return Err(vec![RunnerDiagnostic {
             kind: RunnerDiagnosticKind::ProjectProfileUnknown,
@@ -85,17 +170,31 @@ pub fn extract_project_runner_input(
     let active_file_profiles = input
         .active_file
         .as_ref()
-        .map(|active_file| extractor.active_file_profiles(active_file))
-        .unwrap_or_else(|| extractor.profiles.clone());
+        .map(|active_file| active_file_profiles(&result.profiles, active_file))
+        .unwrap_or_else(|| {
+            result
+                .profiles
+                .iter()
+                .map(|profile| profile.name.clone())
+                .collect()
+        });
+
+    let declared_paths = result
+        .profiles
+        .iter()
+        .filter(|profile| profile.name == input.selected_profile)
+        .flat_map(|profile| profile.paths.iter())
+        .map(declared_project_path)
+        .collect();
 
     Ok(ProjectRunnerInput {
         project_file: input.project_file,
         selected_profile: input.selected_profile,
         normalized_args: input.normalized_args,
-        declared_paths: extractor.selected_declared_paths,
+        declared_paths,
         active_file_profiles,
-        boot_summary: ProjectBootSummary::default(),
-        external_inputs: Vec::new(),
+        boot_summary: result.boot_summary,
+        external_inputs: result.external_inputs,
     })
 }
 
@@ -150,33 +249,10 @@ pub fn resolve_project_runner(input: ProjectRunnerInput) -> RunnerContext {
 
 struct ProjectRunnerExtractor {
     project_file: PathBuf,
-    selected_profile: String,
-    profiles: Vec<String>,
-    profile_declared_paths: Vec<ProfileDeclaredPaths>,
-    selected_declared_paths: Vec<DeclaredProjectPath>,
+    profiles: Vec<ProjectRunnerProfile>,
 }
 
 impl ProjectRunnerExtractor {
-    fn active_file_profiles(&self, active_file: &Path) -> Vec<String> {
-        let active_file = normalized_path_value(active_file);
-        let mut profiles = Vec::new();
-        for profile in &self.profile_declared_paths {
-            let mut ignored_diagnostics = Vec::new();
-            let contains_active_file = profile.declared_paths.iter().any(|declared_path| {
-                if declared_path_matches_active_file(declared_path, &active_file) {
-                    return true;
-                }
-                expand_declared_path(declared_path, &mut ignored_diagnostics)
-                    .iter()
-                    .any(|path| normalized_path_value(path) == active_file)
-            });
-            if contains_active_file {
-                profiles.push(profile.profile.clone());
-            }
-        }
-        profiles
-    }
-
     fn visit_many(&mut self, ast: &[Ast]) {
         for node in ast {
             self.visit(node);
@@ -185,17 +261,28 @@ impl ProjectRunnerExtractor {
 
     fn visit(&mut self, node: &Ast) {
         if let Some((profile, builder)) = entrypoint_builder(node) {
-            if !self.profiles.iter().any(|known| known == profile) {
-                self.profiles.push(profile.to_string());
-            }
-            let mut declared_paths = Vec::new();
-            collect_add_paths(builder, &self.project_file, &mut declared_paths);
-            self.profile_declared_paths.push(ProfileDeclaredPaths {
-                profile: profile.to_string(),
-                declared_paths: declared_paths.clone(),
-            });
-            if profile == self.selected_profile {
-                self.selected_declared_paths.extend(declared_paths);
+            let mut facts = ConfigBuilderFacts::default();
+            collect_config_builder_facts(builder, &self.project_file, &mut facts);
+
+            let entrypoint = facts
+                .entrypoint_updates
+                .last()
+                .cloned()
+                .unwrap_or_else(|| DEFAULT_PROJECT_ENTRYPOINT.to_string());
+
+            if let Some(existing_profile) = self
+                .profiles
+                .iter_mut()
+                .find(|known| known.name.as_str() == profile)
+            {
+                existing_profile.entrypoint = entrypoint;
+                existing_profile.paths.extend(facts.paths);
+            } else {
+                self.profiles.push(ProjectRunnerProfile {
+                    name: profile.to_string(),
+                    entrypoint,
+                    paths: facts.paths,
+                });
             }
         }
 
@@ -230,6 +317,27 @@ impl ProjectRunnerExtractor {
     }
 }
 
+fn active_file_profiles(profiles: &[ProjectRunnerProfile], active_file: &Path) -> Vec<String> {
+    let active_file = normalized_path_value(active_file);
+    let mut matching_profiles = Vec::new();
+    for profile in profiles {
+        let mut ignored_diagnostics = Vec::new();
+        let contains_active_file = profile.paths.iter().any(|path| {
+            let declared_path = declared_project_path(path);
+            if declared_path_matches_active_file(&declared_path, &active_file) {
+                return true;
+            }
+            expand_declared_path(&declared_path, &mut ignored_diagnostics)
+                .iter()
+                .any(|path| normalized_path_value(path) == active_file)
+        });
+        if contains_active_file {
+            matching_profiles.push(profile.name.clone());
+        }
+    }
+    matching_profiles
+}
+
 fn declared_path_matches_active_file(
     declared_path: &DeclaredProjectPath,
     active_file: &str,
@@ -244,9 +352,141 @@ fn declared_path_matches_active_file(
     normalized_path_value(&base_dir.join(&declared_path.literal_or_glob)) == active_file
 }
 
-struct ProfileDeclaredPaths {
-    profile: String,
-    declared_paths: Vec<DeclaredProjectPath>,
+fn declared_project_path(path: &ProjectRunnerPath) -> DeclaredProjectPath {
+    DeclaredProjectPath {
+        declared_by: path.declared_by.clone(),
+        literal_or_glob: path.literal_or_glob.clone(),
+        declaration_span: path.declaration_span,
+    }
+}
+
+fn project_boot_summary_fields(profiles: &[ProjectRunnerProfile]) -> Vec<(String, String)> {
+    profiles
+        .iter()
+        .map(|profile| {
+            (
+                format!("profile.{}.entrypoint", profile.name),
+                profile.entrypoint.clone(),
+            )
+        })
+        .collect()
+}
+
+struct TaggedFields<'a> {
+    entry: &'a TypeEntry,
+    fields: &'a [Value],
+}
+
+fn decode_config_value(
+    project_file: &Path,
+    value: &Value,
+    registry: &TypeRegistry,
+    index: usize,
+) -> Result<ProjectRunnerProfile, ProjectRunnerDecodeError> {
+    let config_fields = tagged_fields(value, registry, "Config").map_err(|error| {
+        ProjectRunnerDecodeError::new(format!("Project.entries[{index}]: {}", error.message()))
+    })?;
+    let name = string_field(&config_fields, "name", "Config.name")?.to_string();
+    let entrypoint = string_field(&config_fields, "entrypoint", "Config.entrypoint")?.to_string();
+    let path_values = list_field(&config_fields, "paths", "Config.paths")?;
+    let paths = path_values
+        .iter()
+        .enumerate()
+        .map(|(path_idx, value)| {
+            let Value::Str(path) = value else {
+                return Err(ProjectRunnerDecodeError::new(format!(
+                    "Config.paths[{path_idx}] must be String"
+                )));
+            };
+            Ok(ProjectRunnerPath {
+                declared_by: project_file.to_path_buf(),
+                literal_or_glob: path.clone(),
+                declaration_span: None,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(ProjectRunnerProfile {
+        name,
+        entrypoint,
+        paths,
+    })
+}
+
+fn tagged_fields<'a>(
+    value: &'a Value,
+    registry: &'a TypeRegistry,
+    expected_name: &str,
+) -> Result<TaggedFields<'a>, ProjectRunnerDecodeError> {
+    let Value::Tagged { tag, fields } = value else {
+        return Err(ProjectRunnerDecodeError::new(format!(
+            "expected {expected_name} tagged value"
+        )));
+    };
+    let entry = registry.lookup(*tag).ok_or_else(|| {
+        ProjectRunnerDecodeError::new(format!("unknown runtime tag {tag} for {expected_name}"))
+    })?;
+    let expected = registry.lookup_by_name(expected_name).ok_or_else(|| {
+        ProjectRunnerDecodeError::new(format!("runtime type {expected_name} is not registered"))
+    })?;
+    if entry.tag != expected.tag {
+        return Err(ProjectRunnerDecodeError::new(format!(
+            "expected {expected_name}, got {}",
+            entry.name
+        )));
+    }
+    if fields.len() != entry.field_names.len() {
+        return Err(ProjectRunnerDecodeError::new(format!(
+            "{} field count mismatch: expected {}, got {}",
+            expected_name,
+            entry.field_names.len(),
+            fields.len()
+        )));
+    }
+    Ok(TaggedFields { entry, fields })
+}
+
+fn field<'a>(
+    fields: &'a TaggedFields<'a>,
+    name: &str,
+    display_name: &str,
+) -> Result<&'a Value, ProjectRunnerDecodeError> {
+    let idx = fields
+        .entry
+        .field_names
+        .iter()
+        .position(|field_name| field_name == name)
+        .ok_or_else(|| ProjectRunnerDecodeError::new(format!("{display_name} field is missing")))?;
+    fields
+        .fields
+        .get(idx)
+        .ok_or_else(|| ProjectRunnerDecodeError::new(format!("{display_name} field is missing")))
+}
+
+fn string_field<'a>(
+    fields: &'a TaggedFields<'a>,
+    name: &str,
+    display_name: &str,
+) -> Result<&'a str, ProjectRunnerDecodeError> {
+    match field(fields, name, display_name)? {
+        Value::Str(value) => Ok(value),
+        _ => Err(ProjectRunnerDecodeError::new(format!(
+            "{display_name} must be String"
+        ))),
+    }
+}
+
+fn list_field(
+    fields: &TaggedFields<'_>,
+    name: &str,
+    display_name: &str,
+) -> Result<Vec<Value>, ProjectRunnerDecodeError> {
+    match field(fields, name, display_name)? {
+        Value::List(list) => Ok(list.iter().collect()),
+        _ => Err(ProjectRunnerDecodeError::new(format!(
+            "{display_name} must be List"
+        ))),
+    }
 }
 
 fn entrypoint_builder(node: &Ast) -> Option<(&str, &Ast)> {
@@ -262,13 +502,18 @@ fn entrypoint_builder(node: &Ast) -> Option<(&str, &Ast)> {
     Some((profile, builder))
 }
 
-fn collect_add_paths(
-    node: &Ast,
-    project_file: &Path,
-    declared_paths: &mut Vec<DeclaredProjectPath>,
-) {
+#[derive(Default)]
+struct ConfigBuilderFacts {
+    entrypoint_updates: Vec<String>,
+    paths: Vec<ProjectRunnerPath>,
+}
+
+fn collect_config_builder_facts(node: &Ast, project_file: &Path, facts: &mut ConfigBuilderFacts) {
+    if let Some((entrypoint, _span)) = entry_fun_literal(node) {
+        facts.entrypoint_updates.push(entrypoint.to_string());
+    }
     if let Some((literal_or_glob, span)) = add_path_literal(node) {
-        declared_paths.push(DeclaredProjectPath {
+        facts.paths.push(ProjectRunnerPath {
             declared_by: project_file.to_path_buf(),
             literal_or_glob: literal_or_glob.to_string(),
             declaration_span: Some(analysis_span(span)),
@@ -277,14 +522,14 @@ fn collect_add_paths(
 
     match node {
         Ast::App(_, callee, args) => {
-            collect_add_paths(callee, project_file, declared_paths);
+            collect_config_builder_facts(callee, project_file, facts);
             for arg in positional_args(args) {
-                collect_add_paths(arg, project_file, declared_paths);
+                collect_config_builder_facts(arg, project_file, facts);
             }
         }
         Ast::Block(_, nodes) => {
             for node in nodes {
-                collect_add_paths(node, project_file, declared_paths);
+                collect_config_builder_facts(node, project_file, facts);
             }
         }
         Ast::Pipe(_, left, right)
@@ -294,8 +539,8 @@ fn collect_add_paths(
         | Ast::LiftedCompose(_, left, right)
         | Ast::KleisliCompose(_, left, right)
         | Ast::BinOp(_, _, left, right) => {
-            collect_add_paths(left, project_file, declared_paths);
-            collect_add_paths(right, project_file, declared_paths);
+            collect_config_builder_facts(left, project_file, facts);
+            collect_config_builder_facts(right, project_file, facts);
         }
         Ast::Grouped(_, inner)
         | Ast::Closure(_, _, inner)
@@ -303,12 +548,25 @@ fn collect_add_paths(
         | Ast::Semi(_, inner)
         | Ast::FieldAccess(_, inner, _)
         | Ast::FacetSegmentAccess(_, inner, _)
-        | Ast::FacetCapture(_, inner) => collect_add_paths(inner, project_file, declared_paths),
+        | Ast::FacetCapture(_, inner) => collect_config_builder_facts(inner, project_file, facts),
         Ast::Bind(_, _, expr) | Ast::SafeBind(_, _, expr) => {
-            collect_add_paths(expr, project_file, declared_paths);
+            collect_config_builder_facts(expr, project_file, facts);
         }
         _ => {}
     }
+}
+
+fn entry_fun_literal(node: &Ast) -> Option<(&str, &Span)> {
+    let Ast::App(_, callee, args) = node else {
+        return None;
+    };
+    if !is_path(callee, &["Config", "entry_fun"]) {
+        return None;
+    }
+    positional_args(args)
+        .into_iter()
+        .rev()
+        .find_map(string_lit_with_span)
 }
 
 fn add_path_literal(node: &Ast) -> Option<(&str, &Span)> {
@@ -378,7 +636,23 @@ fn expand_declared_path(
         return Vec::new();
     }
 
-    let Some(pattern_name) = path.file_name().and_then(|name| name.to_str()) else {
+    let matches = match expand_wildcard_path(base_dir, &declared_path.literal_or_glob) {
+        Ok(matches) => matches,
+        Err(unreadable_path) => {
+            diagnostics.push(RunnerDiagnostic {
+                kind: RunnerDiagnosticKind::UnreadablePath,
+                path: Some(unreadable_path.clone()),
+                span: declared_path.declaration_span,
+                message: format!(
+                    "project glob directory {} is not readable",
+                    path_value(&unreadable_path)
+                ),
+            });
+            return Vec::new();
+        }
+    };
+
+    if matches.is_empty() {
         diagnostics.push(RunnerDiagnostic {
             kind: RunnerDiagnosticKind::GlobNoMatch,
             path: Some(path.clone()),
@@ -388,47 +662,78 @@ fn expand_declared_path(
                 declared_path.literal_or_glob
             ),
         });
-        return Vec::new();
-    };
-    let parent = path.parent().unwrap_or_else(|| Path::new(""));
-    let Ok(entries) = fs::read_dir(parent) else {
-        diagnostics.push(RunnerDiagnostic {
-            kind: RunnerDiagnosticKind::UnreadablePath,
-            path: Some(parent.to_path_buf()),
-            span: declared_path.declaration_span,
-            message: format!(
-                "project glob directory {} is not readable",
-                path_value(parent)
-            ),
-        });
-        return Vec::new();
-    };
-
-    let mut matches = entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| wildcard_match(pattern_name, name))
-        })
-        .collect::<Vec<_>>();
-    matches.sort_by_key(|path| path_value(path));
-
-    if matches.is_empty() {
-        diagnostics.push(RunnerDiagnostic {
-            kind: RunnerDiagnosticKind::GlobNoMatch,
-            path: Some(path),
-            span: declared_path.declaration_span,
-            message: format!(
-                "project glob {} did not match any files",
-                declared_path.literal_or_glob
-            ),
-        });
     }
 
     matches
+}
+
+fn expand_wildcard_path(base_dir: &Path, pattern: &str) -> Result<Vec<PathBuf>, PathBuf> {
+    let normalized_pattern = pattern.replace('\\', "/");
+    let segments = normalized_pattern
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect::<Vec<_>>();
+
+    let mut matches = Vec::new();
+    expand_wildcard_segments(base_dir.to_path_buf(), &segments, &mut matches)?;
+    matches.sort_by_key(|path| path_value(path));
+    matches.dedup();
+    Ok(matches)
+}
+
+fn expand_wildcard_segments(
+    current: PathBuf,
+    segments: &[&str],
+    matches: &mut Vec<PathBuf>,
+) -> Result<(), PathBuf> {
+    let Some((segment, remaining)) = segments.split_first() else {
+        if current.is_file() {
+            matches.push(current);
+        }
+        return Ok(());
+    };
+
+    if *segment == "**" {
+        expand_wildcard_segments(current.clone(), remaining, matches)?;
+        for child in sorted_directory_entries(&current)? {
+            if child.is_dir() {
+                expand_wildcard_segments(child, segments, matches)?;
+            }
+        }
+        return Ok(());
+    }
+
+    if has_wildcard(segment) {
+        for child in sorted_directory_entries(&current)? {
+            let child_name_matches = child
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| wildcard_match(segment, name));
+            if !child_name_matches {
+                continue;
+            }
+            if remaining.is_empty() {
+                if child.is_file() {
+                    matches.push(child);
+                }
+            } else if child.is_dir() {
+                expand_wildcard_segments(child, remaining, matches)?;
+            }
+        }
+        return Ok(());
+    }
+
+    expand_wildcard_segments(current.join(segment), remaining, matches)
+}
+
+fn sorted_directory_entries(path: &Path) -> Result<Vec<PathBuf>, PathBuf> {
+    let entries = fs::read_dir(path).map_err(|_| path.to_path_buf())?;
+    let mut paths = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    paths.sort_by_key(|path| path_value(path));
+    Ok(paths)
 }
 
 fn has_wildcard(pattern: &str) -> bool {

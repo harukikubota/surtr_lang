@@ -193,6 +193,36 @@ RunnerContext {
 }
 ```
 
+project runner source の VM 実行結果は、host-side resolver が次の形へ正規化してから
+`RunnerContext` へ落とす。
+
+```text
+ProjectRunnerResult {
+  profiles: Vec<ProjectRunnerProfile>
+  boot_summary: ProjectBootSummary
+  external_inputs: Vec<ExternalInputState>
+}
+
+ProjectRunnerProfile {
+  name: String
+  entrypoint: String
+  paths: Vec<ProjectRunnerPath>
+}
+
+ProjectRunnerPath {
+  declared_by: Path
+  literal_or_glob: String
+  declaration_span: Span
+}
+```
+
+現行実装では VM 実行への置き換え前段として、`Project::entrypoint` /
+`Config::entry_fun` / `Config::add_path` の AST 抽出結果をこの DTO に寄せる。
+VM 実行へ移行した後も、`RunnerContext` 以降の LSP / cache / diagnostics 境界は
+この DTO から生成する。
+VM 実行結果は、Eldr の `last_value()` と `TypeRegistry` から標準 `Project` /
+`Config` runtime value を decode し、同じ `ProjectRunnerResult` DTO へ正規化する。
+
 `ENV=TEST` のような入力は、profile default selection に使ってよい。
 ただし analysis cache key と diagnostics の正本入力は `selected_profile = "test"` のような
 正規化済み field とする。
@@ -209,8 +239,9 @@ ResolvedProjectPath {
 }
 ```
 
-glob を許可する場合、展開順は deterministic に固定する。cache key には glob pattern、
-展開後 file list、各 content hash を含める。
+glob を許可する場合、展開順は deterministic に固定する。`./src/**/*.srt` は
+recursive glob として扱い、`**` は 0 個以上の directory segment に一致する。
+cache key には glob pattern、展開後 file list、各 content hash を含める。
 
 ### 5.3 ScriptProjectContext
 
