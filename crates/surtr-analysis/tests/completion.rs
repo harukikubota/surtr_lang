@@ -2,7 +2,8 @@ use sigil::{DeclarationEntry, DeclarationIndex, DeclarationKind};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
 use spire::ast::Visibility;
 use surtr_analysis::{
-    complete_prefix, CompletionKind, CompletionRequest, CompletionSymbol, SemanticIndex,
+    complete_prefix, lookup_symbol_at_cursor, CompletionKind, CompletionOrigin, CompletionRequest,
+    CompletionSymbol, SemanticIndex,
 };
 
 #[test]
@@ -14,6 +15,7 @@ fn completion_request_clamps_cursor_to_char_boundary_and_returns_byte_replacemen
         detail: Some("print(a: String) -> Unit".to_string()),
         documentation: None,
         sort_text: None,
+        origin: None,
     }]);
     let source = "値.pr";
     let cursor_inside_multibyte = 1;
@@ -39,6 +41,7 @@ fn completion_request_filters_symbols_by_token_prefix() {
             detail: Some("print(a: String) -> Unit".to_string()),
             documentation: None,
             sort_text: None,
+            origin: None,
         },
         CompletionSymbol {
             label: "Process::sleep".to_string(),
@@ -47,6 +50,7 @@ fn completion_request_filters_symbols_by_token_prefix() {
             detail: None,
             documentation: None,
             sort_text: None,
+            origin: None,
         },
         CompletionSymbol {
             label: "String".to_string(),
@@ -55,6 +59,7 @@ fn completion_request_filters_symbols_by_token_prefix() {
             detail: None,
             documentation: None,
             sort_text: None,
+            origin: None,
         },
     ]);
 
@@ -79,6 +84,7 @@ fn completion_request_matches_qualified_symbol_tail_for_unqualified_prefix() {
         detail: None,
         documentation: None,
         sort_text: None,
+        origin: None,
     }]);
 
     let completion = complete_prefix(CompletionRequest {
@@ -89,6 +95,31 @@ fn completion_request_matches_qualified_symbol_tail_for_unqualified_prefix() {
 
     assert_eq!(completion.candidates.len(), 1);
     assert_eq!(completion.candidates[0].label, "Helper::helper");
+}
+
+#[test]
+fn semantic_index_finds_symbol_at_cursor_for_shared_hover_and_completion_detail() {
+    let index = SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "Helper::helper".to_string(),
+        replacement: "Helper::helper".to_string(),
+        kind: CompletionKind::FunctionCall,
+        detail: Some("helper() -> Int".to_string()),
+        documentation: Some("Returns the helper value.".to_string()),
+        sort_text: None,
+        origin: None,
+    }]);
+
+    let lookup = lookup_symbol_at_cursor(&index, "value = helper()", "value = hel".len())
+        .expect("unique qualified tail should resolve from token under cursor");
+
+    assert_eq!(lookup.start, "value = ".len());
+    assert_eq!(lookup.end, "value = helper".len());
+    assert_eq!(lookup.symbol.label, "Helper::helper");
+    assert_eq!(lookup.symbol.detail.as_deref(), Some("helper() -> Int"));
+    assert_eq!(
+        lookup.symbol.documentation.as_deref(),
+        Some("Returns the helper value.")
+    );
 }
 
 #[test]
@@ -120,6 +151,24 @@ fn semantic_index_adds_module_owner_symbols_from_declarations() {
 
     assert!(labels.contains(&"Helper"), "labels: {labels:?}");
     assert!(labels.contains(&"Helper::helper"), "labels: {labels:?}");
+    let helper = completion
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "Helper::helper")
+        .expect("helper completion should exist");
+    assert_eq!(
+        helper.origin,
+        Some(CompletionOrigin::Declaration {
+            qualified_name: "Helper::helper".to_string(),
+            module_path: "Helper".to_string(),
+            name: "helper".to_string(),
+            stage_index: 0,
+            auto_import: false,
+            visibility: Visibility::Public,
+            user_importable: true,
+            user_callable: true,
+        })
+    );
 }
 
 #[test]
@@ -132,6 +181,7 @@ fn semantic_index_deduplicates_completion_symbols() {
             detail: None,
             documentation: None,
             sort_text: None,
+            origin: None,
         },
         CompletionSymbol {
             label: "print".to_string(),
@@ -140,6 +190,7 @@ fn semantic_index_deduplicates_completion_symbols() {
             detail: Some("duplicate".to_string()),
             documentation: None,
             sort_text: None,
+            origin: None,
         },
     ]);
 
@@ -215,6 +266,13 @@ fn semantic_index_builds_completion_symbols_from_doc_and_signature_metadata() {
         completion.candidates[0].sort_text.as_deref(),
         Some("1:print")
     );
+    assert_eq!(
+        completion.candidates[0].origin,
+        Some(CompletionOrigin::Metadata {
+            qualified_name: "Global::print".to_string(),
+            module_path: "Global".to_string(),
+        })
+    );
 
     let type_completion = complete_prefix(CompletionRequest {
         index: &index,
@@ -243,6 +301,7 @@ fn completion_candidates_are_sorted_by_label_for_stable_lsp_output() {
             detail: None,
             documentation: None,
             sort_text: None,
+            origin: None,
         },
         CompletionSymbol {
             label: "alpha".to_string(),
@@ -251,6 +310,7 @@ fn completion_candidates_are_sorted_by_label_for_stable_lsp_output() {
             detail: None,
             documentation: None,
             sort_text: None,
+            origin: None,
         },
     ]);
 

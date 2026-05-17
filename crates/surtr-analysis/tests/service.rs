@@ -254,6 +254,7 @@ fn analysis_service_completions_use_snapshot_semantic_index_and_utf16_position()
         detail: Some("print(a: String) -> Unit".to_string()),
         documentation: None,
         sort_text: None,
+        origin: None,
     }]));
 
     let context = resolve_context(AnalysisContextRequest {
@@ -276,6 +277,45 @@ fn analysis_service_completions_use_snapshot_semantic_index_and_utf16_position()
     assert_eq!(completion.candidates[0].label, "print");
     assert_eq!(completion.replace_start, 0);
     assert_eq!(completion.replace_end, 3);
+}
+
+#[test]
+fn analysis_service_hover_uses_snapshot_semantic_index_and_token_range() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    service.update_document(path.clone(), Some(1), "value = print".to_string());
+    service.set_semantic_index(SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "print".to_string(),
+        replacement: "print".to_string(),
+        kind: CompletionKind::FunctionCall,
+        detail: Some("print(a: String) -> Unit".to_string()),
+        documentation: Some("Writes a line.".to_string()),
+        sort_text: None,
+        origin: None,
+    }]));
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(path)),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let hover = service
+        .hover(
+            &snapshot,
+            Utf16Position {
+                line: 0,
+                character: "value = pr".len() as u32,
+            },
+        )
+        .expect("semantic symbol should produce hover");
+
+    assert_eq!(hover.contents, "print(a: String) -> Unit\n\nWrites a line.");
+    let range = hover.range.expect("hover should include token range");
+    assert_eq!(range.start.character, "value = ".len() as u32);
+    assert_eq!(range.end.character, "value = print".len() as u32);
 }
 
 #[test]

@@ -65,6 +65,12 @@ pub struct LspDocumentSymbol {
     pub selection_range: LspRange,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspHover {
+    pub range: Option<LspRange>,
+    pub contents: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct LspAnalysisHost {
     workspace_root: PathBuf,
@@ -209,6 +215,16 @@ pub fn document_symbols(host: &LspAnalysisHost, uri: &str) -> Vec<LspDocumentSym
             selection_range: lsp_range(symbol.selection_range),
         })
         .collect()
+}
+
+pub fn hover(host: &LspAnalysisHost, uri: &str, position: LspPosition) -> Option<LspHover> {
+    let snapshot = host.snapshot_for_uri(uri)?;
+    host.service
+        .hover(&snapshot, utf16_position(position))
+        .map(|hover| LspHover {
+            range: hover.range.map(lsp_range),
+            contents: hover.contents,
+        })
 }
 
 pub fn path_to_file_uri(path: &Path) -> String {

@@ -5,9 +5,9 @@ use sindr::policy::{CompileUnitKind, SourceKind};
 use spire::ast::{Ast, Span};
 
 use crate::{
-    complete_prefix, parse_document, AnalysisContextStatus, AnalysisMode, CompletionRequest,
-    CompletionResponse, DocumentSnapshot, DocumentStore, LineIndex, ResolvedAnalysisContext,
-    SemanticIndex, TextPosition, Utf16Position,
+    complete_prefix, lookup_symbol_at_cursor, parse_document, AnalysisContextStatus, AnalysisMode,
+    CompletionRequest, CompletionResponse, DocumentSnapshot, DocumentStore, LineIndex,
+    ResolvedAnalysisContext, SemanticIndex, TextPosition, Utf16Position,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,10 +213,23 @@ impl AnalysisService {
 
     pub fn hover(
         &self,
-        _snapshot: &AnalysisSnapshot,
-        _position: Utf16Position,
+        snapshot: &AnalysisSnapshot,
+        position: Utf16Position,
     ) -> Option<HoverResult> {
-        None
+        let document = snapshot.active_document.as_ref()?;
+        let cursor = document.line_index.utf16_position_to_byte(position)?;
+        let lookup = lookup_symbol_at_cursor(&snapshot.semantic_index, &document.text, cursor)?;
+        let contents = hover_contents(
+            lookup.symbol.detail.as_deref(),
+            lookup.symbol.documentation.as_deref(),
+        )?;
+        Some(HoverResult {
+            range: Some(AnalysisRange {
+                start: document.line_index.byte_to_utf16_position(lookup.start),
+                end: document.line_index.byte_to_utf16_position(lookup.end),
+            }),
+            contents,
+        })
     }
 
     pub fn signature_help(
@@ -340,6 +353,17 @@ fn document_symbol_for_ast(
         range,
         selection_range: range,
     })
+}
+
+fn hover_contents(detail: Option<&str>, documentation: Option<&str>) -> Option<String> {
+    match (detail, documentation) {
+        (Some(detail), Some(documentation)) if !documentation.is_empty() => {
+            Some(format!("{detail}\n\n{documentation}"))
+        }
+        (Some(detail), _) => Some(detail.to_string()),
+        (None, Some(documentation)) if !documentation.is_empty() => Some(documentation.to_string()),
+        _ => None,
+    }
 }
 
 fn nested_owner_for_ast(node: &Ast, owner: Option<&str>) -> Option<String> {

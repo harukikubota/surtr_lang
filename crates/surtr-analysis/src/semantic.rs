@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use sigil::{DeclarationIndex, DeclarationKind};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
+use spire::ast::Visibility;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompletionKind {
@@ -19,6 +20,25 @@ pub struct CompletionSymbol {
     pub detail: Option<String>,
     pub documentation: Option<String>,
     pub sort_text: Option<String>,
+    pub origin: Option<CompletionOrigin>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompletionOrigin {
+    Metadata {
+        qualified_name: String,
+        module_path: String,
+    },
+    Declaration {
+        qualified_name: String,
+        module_path: String,
+        name: String,
+        stage_index: usize,
+        auto_import: bool,
+        visibility: Visibility,
+        user_importable: bool,
+        user_callable: bool,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -41,6 +61,9 @@ impl SemanticIndex {
                 }
                 if existing.sort_text.is_none() {
                     existing.sort_text = symbol.sort_text;
+                }
+                if existing.origin.is_none() {
+                    existing.origin = symbol.origin;
                 }
                 continue;
             }
@@ -72,6 +95,10 @@ impl SemanticIndex {
                 detail: Some(entry.signature.clone()),
                 documentation: None,
                 sort_text: None,
+                origin: Some(CompletionOrigin::Metadata {
+                    qualified_name: entry.qualified_name.clone(),
+                    module_path: entry.module_path.clone(),
+                }),
             });
         }
         for entry in docs {
@@ -86,6 +113,10 @@ impl SemanticIndex {
                 detail,
                 documentation: Some(entry.doc.clone()),
                 sort_text: None,
+                origin: Some(CompletionOrigin::Metadata {
+                    qualified_name: entry.qualified_name.clone(),
+                    module_path: entry.module_path.clone(),
+                }),
             });
         }
 
@@ -106,6 +137,7 @@ impl SemanticIndex {
                     detail: None,
                     documentation: None,
                     sort_text: None,
+                    origin: None,
                 });
             }
 
@@ -117,6 +149,16 @@ impl SemanticIndex {
                     detail: None,
                     documentation: None,
                     sort_text: None,
+                    origin: Some(CompletionOrigin::Declaration {
+                        qualified_name: entry.fq_name.clone(),
+                        module_path: entry.module_path.clone(),
+                        name: entry.name.clone(),
+                        stage_index: entry.stage_index,
+                        auto_import: entry.auto_import,
+                        visibility: entry.visibility,
+                        user_importable: entry.user_importable,
+                        user_callable: entry.user_callable,
+                    }),
                 });
             }
         }
@@ -125,6 +167,21 @@ impl SemanticIndex {
 
     pub fn symbols(&self) -> &[CompletionSymbol] {
         &self.symbols
+    }
+
+    pub fn find_symbol(&self, name: &str) -> Option<&CompletionSymbol> {
+        if let Some(symbol) = self.symbols.iter().find(|symbol| symbol.label == name) {
+            return Some(symbol);
+        }
+
+        let mut tail_matches = self.symbols.iter().filter(|symbol| {
+            symbol
+                .label
+                .rsplit_once("::")
+                .is_some_and(|(_, tail)| tail == name)
+        });
+        let first = tail_matches.next()?;
+        tail_matches.next().is_none().then_some(first)
     }
 }
 
@@ -143,6 +200,7 @@ pub struct CompletionCandidate {
     pub detail: Option<String>,
     pub documentation: Option<String>,
     pub sort_text: Option<String>,
+    pub origin: Option<CompletionOrigin>,
     pub replace_start: usize,
     pub replace_end: usize,
 }
@@ -152,6 +210,13 @@ pub struct CompletionResponse {
     pub candidates: Vec<CompletionCandidate>,
     pub replace_start: usize,
     pub replace_end: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolLookup {
+    pub symbol: CompletionSymbol,
+    pub start: usize,
+    pub end: usize,
 }
 
 pub fn complete_prefix(request: CompletionRequest<'_>) -> CompletionResponse {
@@ -180,6 +245,7 @@ pub fn complete_prefix(request: CompletionRequest<'_>) -> CompletionResponse {
                 .sort_text
                 .clone()
                 .or_else(|| Some(default_sort_text(symbol))),
+            origin: symbol.origin.clone(),
             replace_start,
             replace_end,
         })
@@ -190,6 +256,17 @@ pub fn complete_prefix(request: CompletionRequest<'_>) -> CompletionResponse {
         replace_start,
         replace_end,
     }
+}
+
+pub fn lookup_symbol_at_cursor(
+    index: &SemanticIndex,
+    source: &str,
+    cursor: usize,
+) -> Option<SymbolLookup> {
+    let cursor = clamp_to_char_boundary(source, cursor);
+    let (start, end, token) = symbol_token(source, cursor)?;
+    let symbol = index.find_symbol(&token)?.clone();
+    Some(SymbolLookup { symbol, start, end })
 }
 
 fn clamp_to_char_boundary(input: &str, mut cursor: usize) -> usize {
@@ -208,6 +285,21 @@ fn completion_token(input: &str, cursor: usize) -> (usize, usize, String) {
         .find_map(|(idx, ch)| (!completion_token_char(ch)).then_some(idx + ch.len_utf8()))
         .unwrap_or(0);
     (start, cursor, input[start..cursor].to_string())
+}
+
+fn symbol_token(input: &str, cursor: usize) -> Option<(usize, usize, String)> {
+    let cursor = cursor.min(input.len());
+    let start = input[..cursor]
+        .char_indices()
+        .rev()
+        .find_map(|(idx, ch)| (!completion_token_char(ch)).then_some(idx + ch.len_utf8()))
+        .unwrap_or(0);
+    let end = input[cursor..]
+        .char_indices()
+        .find_map(|(idx, ch)| (!completion_token_char(ch)).then_some(cursor + idx))
+        .unwrap_or(input.len());
+
+    (start < end).then(|| (start, end, input[start..end].to_string()))
 }
 
 fn completion_token_char(ch: char) -> bool {

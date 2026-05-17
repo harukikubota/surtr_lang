@@ -4,7 +4,7 @@ use surtr_analysis::{
     CompletionKind, CompletionSymbol, RunnerSelection, SelectedContext, SemanticIndex,
 };
 use surtr_lsp::{
-    completion_items, diagnostics, document_symbols, file_uri_to_path, path_to_file_uri,
+    completion_items, diagnostics, document_symbols, file_uri_to_path, hover, path_to_file_uri,
     CompletionItemKind, DiagnosticSeverity, LspAnalysisHost, LspPosition, LspRange,
 };
 
@@ -53,6 +53,7 @@ fn completion_maps_utf16_position_to_lsp_text_edits() {
         detail: Some("print(a: String) -> Unit".to_string()),
         documentation: None,
         sort_text: None,
+        origin: None,
     }]));
 
     let items = completion_items(
@@ -84,6 +85,50 @@ fn completion_maps_utf16_position_to_lsp_text_edits() {
         }
     );
     assert_eq!(items[0].text_edit.new_text, "print");
+}
+
+#[test]
+fn hover_maps_semantic_detail_and_documentation_to_lsp_dto() {
+    let workspace = PathBuf::from("/repo");
+    let path = workspace.join("main.srt");
+    let uri = path_to_file_uri(&path);
+    let mut host = LspAnalysisHost::new(workspace);
+    host.did_open(uri.clone(), Some(1), "value = print".to_string());
+    host.set_selected_context(Some(SelectedContext::ScriptEntry(path)));
+    host.set_semantic_index(SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "print".to_string(),
+        replacement: "print".to_string(),
+        kind: CompletionKind::FunctionCall,
+        detail: Some("print(a: String) -> Unit".to_string()),
+        documentation: Some("Writes a line.".to_string()),
+        sort_text: None,
+        origin: None,
+    }]));
+
+    let hover = hover(
+        &host,
+        &uri,
+        LspPosition {
+            line: 0,
+            character: "value = pr".len() as u32,
+        },
+    )
+    .expect("semantic hover should be available");
+
+    assert_eq!(hover.contents, "print(a: String) -> Unit\n\nWrites a line.");
+    assert_eq!(
+        hover.range,
+        Some(LspRange {
+            start: LspPosition {
+                line: 0,
+                character: "value = ".len() as u32,
+            },
+            end: LspPosition {
+                line: 0,
+                character: "value = print".len() as u32,
+            },
+        })
+    );
 }
 
 #[test]

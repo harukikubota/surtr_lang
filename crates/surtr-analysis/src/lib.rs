@@ -19,8 +19,9 @@ pub use project_runner::{
     ProjectRunnerSourceInput,
 };
 pub use semantic::{
-    complete_prefix, CompletionCandidate, CompletionKind, CompletionRequest, CompletionResponse,
-    CompletionSymbol, SemanticIndex,
+    complete_prefix, lookup_symbol_at_cursor, CompletionCandidate, CompletionKind,
+    CompletionOrigin, CompletionRequest, CompletionResponse, CompletionSymbol, SemanticIndex,
+    SymbolLookup,
 };
 pub use service::{
     AnalysisDiagnostic, AnalysisDiagnosticKind, AnalysisRange, AnalysisService, AnalysisSeverity,
