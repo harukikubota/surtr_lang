@@ -193,10 +193,10 @@
   - editor 用 LSP、REPL command query parser、REPL 補完は大きな未解決領域として残っている。
   - `doc/lsp_analysis_context_spec_v0.md` では、active file を単体ではなく script / project / stdlib の `AnalysisContext` で解析する方針を整理した。
   - `doc/project_runner_pseudo_di_draft.md` では、project runner の profile selection、pseudo DI、operational script、REPL preload、LSP cache key を同じ runner context へ寄せる方針を整理した。
-  - `docs/dev/Surtr_LSP_spec.md` では、`surtr-lsp` を protocol adapter とし、REPL と LSP が shared semantic service を直接使う実装方針を draft として固定した。
+  - `docs/dev/Surtr_LSP_spec.md` では、`surtr-lsp` を protocol adapter とし、REPL と LSP が shared semantic service を直接使う実装方針を開発者向け正本として固定した。
+  - `crates/surtr-analysis` を追加し、`LineIndex`、source-kind aware parse entry、`AnalysisContextRequest`、deterministic `AnalysisCacheKey` の初期実装を置いた。
   - REPL command query parser は `spire` の source parser ではなく、仕様にロックインした小さい tooling query wrapper として整理する。
 - 未確定点:
-  - `surtr-analysis` 相当の shared analysis crate を新設するか、既存 `xldr` helper を先に分割して段階移行するか。
   - command query parser を `surtr-analysis::query` に留めるか、`surtr-query` crate として分離するか。
   - project runner 専用 `SourceKind` / `ProjectConfigSource` が必要か。
   - `RunnerArgs` の最終構造、`selected_profile` を top-level field に置くか runner args 内に置くか。
@@ -222,6 +222,27 @@
   - `tests/fixtures/script/**`、`tests/fixtures/modules/**`、`lib/**/*.srt` を LSP analysis context の integration fixture として流用する。
   - project runner 実装後は profile 切り替え、glob 展開、external input diagnostics、active file profile membership の fixture を追加する。
   - REPL 共有化時は `cargo nextest run -p xldr` で既存 REPL completion / command query 表示を回帰基準にする。
+
+### OI-030 command query parser 共有化
+
+- 背景:
+  - `docs/dev/Surtr_LSP_spec.md` は、REPL と LSP / editor command が同じ tooling query wrapper と semantic resolver を使う方針を正本化している。
+  - 現状の query AST / validation parser は `crates/xldr/src/repl/logic/query.rs` にあり、`:doc` / `:sig` / `:info` / `:type` / `:facet` の REPL 表示から使われている。
+  - `crates/surtr-analysis` は `xldr::SourceKind` と parser policy helper を再利用しているため、単純に `xldr` から `surtr-analysis` を参照すると crate cycle になる。
+- 未確定点:
+  - query parser を `surtr-analysis::query` へ移すために `SourceKind` / loader policy を `sindr` へ寄せるか。
+  - cycle を避けるため、先に `surtr-query` crate を作り、`xldr` と `surtr-analysis` の両方が依存する形にするか。
+  - `xldr` 既存 parser の public API 名を `ReplQuery` のまま維持するか、editor 共通名の `CommandQuery` へ rename するか。
+  - parser が返す diagnostics を `diagnostics::repl_query_parse_error_spec` に直結させるか、protocol 非依存 DTO から adapter で変換するか。
+- 受け入れ条件:
+  - command query parser は `spire` の Surtr source parser へ入らない。
+  - `:doc` / `:sig` / `:info` / `:type` / `:facet` の query AST と validation diagnostics が `xldr` と editor-facing analysis から同じ実装で使える。
+  - typed call、typed operator、forced binding、capture query、pipe placeholder の既存 REPL behavior が維持される。
+  - nested capture application、literal、任意式、generic type variable、`impl Trait` の拒否規則が regression test で固定される。
+- テスト方針:
+  - 共有 parser crate / module に unit test を移し、既存 `xldr` query parser test と同じ accepted / rejected surface を固定する。
+  - `cargo nextest run -p xldr` で REPL command query 表示の既存 behavior を回帰確認する。
+  - `cargo nextest run -p surtr-analysis` で editor-facing query boundary の DTO / diagnostics 変換を固定する。
 
 ## 更新ルール
 

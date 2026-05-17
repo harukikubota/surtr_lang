@@ -3,6 +3,9 @@
 > 本書は Surtr の editor tooling と `surtr-lsp` 実装の開発者向け契約を定義する。
 > 入力 draft は [../../doc/lsp_analysis_context_spec_v0.md](../../doc/lsp_analysis_context_spec_v0.md) と
 > [../../doc/project_runner_pseudo_di_draft.md](../../doc/project_runner_pseudo_di_draft.md) である。
+> `docs/dev/` 配下に置く本書を現在の開発者向け正本とし、`doc/` 配下の draft は
+> 本書へ反映済みの入力資料として扱う。未確定点は本書の「未確定事項」と
+> [../../doc/open-issues.md](../../doc/open-issues.md) の `surtr-lsp` issue で追跡する。
 
 ---
 
@@ -158,11 +161,14 @@ AnalysisContext {
 | script entry file | `Script` |
 | script `include` 先 | `DefinitionSource` |
 | project runner が追加した user module | `DefinitionSource` |
+| project runner source | 未確定。既存 `SourceKind` で扱うか `ProjectConfigSource` 相当を追加するかは未決 |
 | stdlib source | `StdDefinitionSource` |
 | REPL virtual input | `ReplChunk` |
 
 `Project::add_path(...)`、script `include`、project runner 由来 file は token sniffing で
 script に切り替えない。
+project runner source 自体の `SourceKind` は確定していないため、runner API の補完 /
+diagnostics は通常 source diagnostics と host-side runner diagnostics を分けて扱う。
 
 ### 5.2 RunnerContext
 
@@ -222,8 +228,10 @@ ScriptProjectContext {
 context resolution では受けない。
 
 script-local `supervisor_init` と project profile boot config の merge 規則は未確定である。
-LSP は確定までは、重複 singleton / handler / supervisor policy を runner diagnostics として
-報告できるようにする。
+暫定方針では project profile の boot config を base とし、script-local `supervisor_init` は
+operational script 専用の追加 boot input とする。同じ singleton / handler /
+supervisor policy を二重指定した場合は暗黙上書きせず、runner diagnostics として報告する。
+明示 override API を用意するかどうかは未確定事項として残す。
 
 ### 5.4 ReplAnalysisContext
 
@@ -245,7 +253,109 @@ REPL command query grammar を通常 source の parser として使わない。
 
 ---
 
-## 6. Semantic Service
+## 6. Context Resolution
+
+LSP adapter は file URI から直接 parse / resolve / typecheck を呼ばない。
+まず context request を作り、`surtr-analysis` の context resolver へ渡す。
+
+```text
+AnalysisContextRequest {
+  workspace_root: Path
+  active_file: Path
+  selected_context: Option<SelectedContext>
+  runner_selection: Option<RunnerSelection>
+  open_documents: Vec<DocumentVersion>
+}
+```
+
+`SelectedContext` は client UI や CLI 起動引数から明示された解析起点である。
+自動探索より常に優先する。
+
+```text
+SelectedContext
+  = ScriptEntry(Path)
+  | ProjectProfile { project_file: Path, profile: String }
+  | DefinitionStandalone
+  | DefinitionUnderEntry { entry_file: Path }
+  | StdlibDevelopment
+  | ReplPreview { session_id: String }
+```
+
+### 6.1 自動探索
+
+`selected_context` がない場合、resolver は次の順に context を選ぶ。
+
+1. `active_file` が現在保持している script / project / repl preview context に含まれるなら、その context を使う
+2. `active_file` が repository の `lib/**/*.srt` で、`lib/tests/**` ではないなら `StdlibDevelopment` として扱う
+3. `active_file` が `tests/fixtures/script/{pass,fail}/**/*.srt` なら script entry 候補として扱う
+4. `active_file` が `tests/fixtures/modules/{pass,fail}/**/entry.srt` なら module fixture entry 候補として扱う
+5. project runner が `active_file` を含む profile を 1 つだけ返すなら、その `ProjectProfile` を使う
+6. 複数 profile / 複数 entry 候補がある場合は勝手に 1 つへ固定せず、context selection diagnostics と status を返す
+7. どの候補にも入らない definition source は `DefinitionStandalone` として扱う
+
+fixture path の特別扱いは Surtr repository 開発時の利便性であり、言語意味論を追加しない。
+外部 project では user / client が明示した script entry、project profile、standalone
+definition の選択を正本にする。
+
+### 6.2 script context
+
+script entry が選択された場合、resolver は script 先頭の include block を既存 loader と
+同じ規則で読む。include 先は script file からの相対 path として解決し、
+`SourceKind::DefinitionSource` として扱う。include 先 file を token sniffing で
+`SourceKind::Script` に切り替えない。
+
+script context の compile unit は次の順を持つ。
+
+```text
+StdlibStageSet
+  -> include graph 由来 ModuleStage
+  -> script entry SourceKind::Script
+```
+
+include directive が source 先頭 block の外に出た場合や、literal path として読めない場合は、
+parser / loader diagnostics として返す。
+
+### 6.3 project context
+
+project context は `RunnerContext` を正本にする。resolver は `project_file`、明示 profile、
+host default、ENV などを読んでよいが、analysis cache key と diagnostics に残す入力は
+`selected_profile` と `normalized_args` に正規化する。
+
+`Project::add_path(...)` 由来 file は `ResolvedProjectPath` に残す。glob を使う場合は
+展開順を deterministic に固定し、no match / unreadable / schema mismatch は
+`RunnerDiagnostic` として保持する。
+
+project source 自体を通常 script として扱うか、将来 `ProjectConfigSource` 相当の
+`SourceKind` を追加するかは未確定である。確定までは、project runner source の
+surface は標準 `Project` / `Config` API に対する通常の definition / script diagnostics と、
+host-side resolver diagnostics の組み合わせとして扱う。
+このため project runner source 内の補完 / hover は標準 `Project` / `Config` API と
+`@doc` metadata を使い、runner resolver が検出した profile unknown、glob no match、
+external input failure などは `ProjectRunner` diagnostics として返す。
+
+### 6.4 standalone definition context
+
+standalone definition は `CompileUnitKind::DefinitionCheck` と
+`SourceKind::DefinitionSource` を使う。file 単体で確定できる parse / declaration /
+duplicate / builtin misuse error は通常 diagnostics として表示する。
+
+外部 entry context があれば解決できる可能性のある unresolved symbol は、
+通常の unresolved symbol と区別して `ContextSelection` diagnostics にできる。
+client はこの diagnostics に対して「script entry / project profile を選ぶ」action を
+提示してよい。
+
+### 6.5 stdlib development context
+
+`lib/**/*.srt` は `SourceKind::StdDefinitionSource` として扱う。
+`@builtin def` / `@builtin type` / `@autoimport` は標準定義 source の宣言層として許可するが、
+builtin 追加・変更の正本は `crates/sindr/src/builtin.rs` の `BUILTIN_METAS` である。
+
+`lib/tests/**` は default stdlib stage へ含めない。stdlib fixture や test DSL として
+解析する場合は、script / project / test context を明示的に選ぶ。
+
+---
+
+## 7. Semantic Service
 
 `surtr-analysis` は protocol 非依存 API を提供する。
 
@@ -275,7 +385,7 @@ REPL と共有する semantic resolver は次を担う。
 - call context から active parameter と expected type を出す signature help
 - typed call / typed operator query の意味解決
 
-### 6.1 Command Query Parser
+### 7.1 Command Query Parser
 
 command query parser は Surtr source parser ではない。`spire` の責務は `.srt` source の
 正本 grammar と CST / AST 生成であり、REPL query surface はその外側に置く。
@@ -325,7 +435,7 @@ REPL に残すものは次である。
 
 ---
 
-## 7. LSP Adapter
+## 8. LSP Adapter
 
 `surtr-lsp` は LSP protocol 境界だけを担う。
 
@@ -354,11 +464,11 @@ protocol 境界でだけ変換する。
 
 ---
 
-## 8. Completion Policy
+## 9. Completion Policy
 
 completion は `AnalysisContext` の可視性を超えない。
 
-### 8.1 v0
+### 9.1 v0
 
 v0 completion は低リスクな候補に限定する。
 
@@ -374,7 +484,7 @@ v0 completion は低リスクな候補に限定する。
 REPL 補完は現状の初期段階を維持してよい。LSP 側の設計は、他言語と大きく離れない
 一般的な進化を前提にする。
 
-### 8.2 v1
+### 9.2 v1
 
 v1 では context-aware candidate を増やす。
 
@@ -389,7 +499,7 @@ v1 では context-aware candidate を増やす。
 later stage の symbol は候補にしない。explicit import / auto-import の shadowing と衝突は
 Sigil 規則に従う。
 
-### 8.3 v2
+### 9.3 v2
 
 v2 では型文脈を使う。
 
@@ -403,7 +513,7 @@ UI 実験後に固定する。
 
 ---
 
-## 9. Diagnostics Policy
+## 10. Diagnostics Policy
 
 diagnostics は `AnalysisContext` と `source_kind` に従う。
 
@@ -414,6 +524,7 @@ diagnostics は `AnalysisContext` と `source_kind` に従う。
 | standalone `DefinitionCheck` | file 単体で確定できる error は通常表示し、外部 symbol 未確定は context 未選択 diagnostics として扱う |
 | `StdDefinitionSource` | `@builtin` / `@autoimport` を標準定義 source として許可する |
 | `Project` | runner diagnostics と compile diagnostics を同じ context status に紐づける |
+| project runner source | 標準 `Project` / `Config` API の通常 diagnostics と host-side `ProjectRunner` diagnostics を分けて表示する |
 
 project runner の失敗は compile diagnostics に混ぜてよいが、kind は区別する。
 
@@ -431,7 +542,7 @@ DiagnosticSource
 
 ---
 
-## 10. Cache / Invalidation
+## 11. Cache / Invalidation
 
 cache は `AnalysisContext` 単位で持つ。
 
@@ -474,7 +585,7 @@ cooperative に扱い、長い再解析を小さな単位へ分ける。
 
 ---
 
-## 11. Project Runner との接続
+## 12. Project Runner との接続
 
 project runner は LSP context selection の中心になる。
 
@@ -504,9 +615,14 @@ Surtr: repl examples/mahjong/project.srt profile=test
 active file が複数 profile に含まれる場合、LSP は現在選択中の context を優先する。
 未選択時は diagnostics を 1 つの profile に勝手に固定せず、context selection action を返す。
 
+`project.srt` 自体も editor surface の対象である。runner API の補完 / hover /
+diagnostics は通常の semantic service から出し、host-side resolver が profile、
+`Project::add_path(...)`、glob、boot summary、external input を解釈した結果は
+`RunnerContext` と `ProjectRunner` diagnostics として重ねる。
+
 ---
 
-## 12. REPL との接続
+## 13. REPL との接続
 
 Xldr は REPL session の正本であり続ける。
 
@@ -534,14 +650,14 @@ keyword、local、scope、import、member、signature、type context の順で�
 
 ---
 
-## 13. 実装フェーズ
+## 14. 実装フェーズ
 
 ### Phase 0: Analysis boundary
 
-- `surtr-analysis` 相当の crate を作る
+- `surtr-analysis` 相当の protocol 非依存境界を作る。crate 分割するか既存 helper 分割から始めるかは実装時に選ぶ
 - document store と `LineIndex` を実装する
 - `AnalysisContext` / `RunnerContext` / cache key 型を置く
-- command query parser の移設先を `surtr-analysis::query` として固定する
+- command query parser の初期配置を `surtr-analysis::query` 相当として置き、`surtr-query` 分離条件を残す
 - 既存 loader helper から source composition を切り出す方針を固定する
 
 ### Phase 1: Diagnostics MVP
@@ -558,13 +674,14 @@ keyword、local、scope、import、member、signature、type context の順で�
 - signature help
 - go to definition
 - import path / qualified path の基本補完
-- `:doc` / `:sig` / `:info` 用 query AST と semantic resolver の境界を固定する
+- `:doc` / `:sig` / `:info` / `:type` / `:facet` 用 query AST と semantic resolver の境界を固定する
 
 ### Phase 3: Project context
 
 - project runner resolver の出力を `RunnerContext` として受け取る
 - selected profile と normalized runner args を cache key に入れる
 - `Project::add_path` / glob / active file profile membership を diagnostics と status に反映する
+- boot / supervisor config summary と external input state を cache key と diagnostics に反映する
 - `load_project` 付き operational script を解析する
 
 ### Phase 4: REPL and advanced tooling
@@ -576,7 +693,7 @@ keyword、local、scope、import、member、signature、type context の順で�
 
 ---
 
-## 14. テスト方針
+## 15. テスト方針
 
 ### unit
 
@@ -606,6 +723,9 @@ keyword、local、scope、import、member、signature、type context の順で�
 - `tests/fixtures/modules/pass/**/entry.srt` を module context として解析する
 - `lib/**/*.srt` を stdlib development context として解析する
 - project runner profile 切り替えで diagnostics / completion / cache key が変わることを固定する
+- glob 展開順、glob no match、unreadable path を runner diagnostics と cache key fixture で固定する
+- external input missing / schema mismatch と boot / external summary hash の変化を fixture で固定する
+- active file が複数 profile に含まれる場合、明示 selection が優先されることを固定する
 
 ### manual / client
 
@@ -613,18 +733,26 @@ keyword、local、scope、import、member、signature、type context の順で�
 - active file が複数 context に属する場合、明示選択が優先される
 - iOS / wasm build で single-thread analysis が動く
 
+### implementation DoD
+
+- docs / code を変更した実装 PR は、影響範囲に応じた targeted test に加えて
+  `cargo nextest run --workspace` を完走させる
+- `surtr-analysis` 追加時は context resolver、include graph、cache key、`LineIndex` の unit test を含める
+- `surtr-lsp` 追加時は diagnostics / completion / hover / signatureHelp / definition の DTO 変換 unit test を含める
+- REPL 共有化時は `cargo nextest run -p xldr` で既存 REPL completion / command query 表示を回帰確認する
+
 ---
 
-## 15. 未確定事項
+## 16. 未確定事項
 
 次は [../../doc/open-issues.md](../../doc/open-issues.md) の `surtr-lsp` issue で追跡する。
 
-- project runner 専用 `SourceKind` が必要か
-- `RunnerArgs` の最終構造
+- project runner 専用 `SourceKind` / `ProjectConfigSource` 相当が必要か
+- `RunnerArgs` の最終構造と、`selected_profile` を top-level field に置くか runner args 内に置くか
 - project runner を VM 実行で抽出するか、restricted evaluator で抽出するか
 - command query parser を `surtr-analysis::query` の module に留めるか、`surtr-query` crate へ分けるか
 - external input diagnostics の所属
-- project context 付き script の boot merge 規則
+- project context 付き script の boot merge 規則と明示 override API の有無
 - active file が複数 profile に属する場合の UI / diagnostics 優先順位
 - REPL virtual document の範囲
 - completion の型文脈フィルタを候補除外にするか、順位付けに留めるか
@@ -632,13 +760,13 @@ keyword、local、scope、import、member、signature、type context の順で�
 
 ---
 
-## 16. v0 Acceptance
+## 17. v0 Acceptance
 
-- `surtr-lsp` は active file を単体推測せず、必ず `AnalysisContext` 経由で解析する
+- `surtr-lsp` は active file を単体推測せず、必ず `AnalysisContext` 経由で parse / resolve / typecheck / completion / diagnostics を行う
 - script entry を選択すると、include 先 definition source が同じ compile unit 文脈で解析される
 - standalone definition source では、context 未選択由来の unresolved symbol を区別できる
 - stdlib source は `StdDefinitionSource` として解析される
-- project mode は selected profile と normalized runner args を保持できる
+- project mode は selected profile、normalized runner args、module stage、project path 展開、boot / external input summary を cache key と diagnostics に反映できる
 - command query parser は `spire` ではなく tooling query wrapper として置かれている
 - REPL は LSP JSON-RPC ではなく shared semantic service を直接使う方針になっている
 - wasm / iOS 向けに single-thread analysis を正規 target として扱える

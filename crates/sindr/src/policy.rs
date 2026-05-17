@@ -6,6 +6,15 @@ pub enum CompileUnitKind {
     Repl,
 }
 
+/// Logical source categories that drive parser/typechecker policy selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    Script,
+    DefinitionSource,
+    StdDefinitionSource,
+    ReplChunk,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryPoint {
     pub qualified_symbol: String,

@@ -1094,6 +1094,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "surtr-analysis"
+version = "0.1.0"
+dependencies = [
+ "diagnostics",
+ "sindr",
+ "spire",
+]
+
+[[package]]
 name = "syn"
 version = "2.0.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1362,6 +1371,7 @@ dependencies = [
  "sigil",
  "sindr",
  "spire",
+ "surtr-analysis",
 ]
 
 [[package]]

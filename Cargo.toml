@@ -10,6 +10,7 @@ members = [
     "crates/forge",
     "crates/eldr",
     "crates/xldr",
+    "crates/surtr-analysis",
     "crates/rune",
 ]
 

@@ -20,7 +20,7 @@ pub use loader::{
     is_default_std_module_file_name, is_default_std_module_path,
     module_path_from_source_or_file_name, prepare_script_sources, script_pseudo_module_path,
     CompileSources, LoadError, ModuleInput, ModuleSources, PreparedScriptSources,
-    ScriptIncludeDirective, ScriptSourcePrepareError, SourceDescriptor, SourceKind, StagedModule,
+    ScriptIncludeDirective, ScriptSourcePrepareError, SourceDescriptor, StagedModule,
 };
 
 use diagnostics::SourceId;
@@ -29,6 +29,7 @@ pub use repl::ui::cli::{cli_command, BannerMode, ReplOptions};
 use serde::{Deserialize, Serialize};
 use sindr::builtin::{BUILTIN_METAS, BUILTIN_TYPE_METAS};
 use sindr::ir::{stable_hash_hex, Bytecode, DocEntry, DocKind, SignatureEntry};
+pub use sindr::policy::SourceKind;
 use sindr::policy::{CompileUnitKind, EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
 
 pub const MODULE_SPAN_STRIDE: usize = 1_000_000;
@@ -1259,12 +1260,7 @@ impl ModuleStageParseError {
 }
 
 pub fn derive_parse_rules(source_kind: SourceKind) -> spire::ParseRules {
-    match source_kind {
-        SourceKind::Script => spire::ParseRules::script(),
-        SourceKind::DefinitionSource => spire::ParseRules::module(),
-        SourceKind::StdDefinitionSource => spire::ParseRules::std_module(),
-        SourceKind::ReplChunk => spire::ParseRules::repl_chunk(),
-    }
+    spire::parse_rules_for_source_kind(source_kind)
 }
 
 pub fn derive_runtime_policy(

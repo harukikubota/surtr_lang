@@ -12,6 +12,7 @@ bench = ["dep:criterion"]
 
 [dependencies]
 diagnostics = { path = "../diagnostics" }
+surtr-analysis = { path = "../surtr-analysis" }
 spire = { path = "../spire" }
 sigil = { path = "../sigil" }
 scar = { path = "../scar" }
