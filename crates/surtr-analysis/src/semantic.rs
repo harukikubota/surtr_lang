@@ -17,6 +17,8 @@ pub struct CompletionSymbol {
     pub replacement: String,
     pub kind: CompletionKind,
     pub detail: Option<String>,
+    pub documentation: Option<String>,
+    pub sort_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -33,6 +35,12 @@ impl SemanticIndex {
             }) {
                 if existing.detail.is_none() {
                     existing.detail = symbol.detail;
+                }
+                if existing.documentation.is_none() {
+                    existing.documentation = symbol.documentation;
+                }
+                if existing.sort_text.is_none() {
+                    existing.sort_text = symbol.sort_text;
                 }
                 continue;
             }
@@ -62,6 +70,8 @@ impl SemanticIndex {
                 replacement: surface_name(&entry.qualified_name),
                 kind: completion_kind_for_doc_kind(&entry.kind),
                 detail: Some(entry.signature.clone()),
+                documentation: None,
+                sort_text: None,
             });
         }
         for entry in docs {
@@ -74,6 +84,8 @@ impl SemanticIndex {
                 replacement: surface_name(&entry.qualified_name),
                 kind: completion_kind_for_doc_kind(&entry.kind),
                 detail,
+                documentation: Some(entry.doc.clone()),
+                sort_text: None,
             });
         }
 
@@ -92,6 +104,8 @@ impl SemanticIndex {
                     replacement: surface_name(&entry.module_path),
                     kind: CompletionKind::TypePath,
                     detail: None,
+                    documentation: None,
+                    sort_text: None,
                 });
             }
 
@@ -101,6 +115,8 @@ impl SemanticIndex {
                     replacement: surface_name(&entry.fq_name),
                     kind,
                     detail: None,
+                    documentation: None,
+                    sort_text: None,
                 });
             }
         }
@@ -125,6 +141,8 @@ pub struct CompletionCandidate {
     pub replacement: String,
     pub kind: CompletionKind,
     pub detail: Option<String>,
+    pub documentation: Option<String>,
+    pub sort_text: Option<String>,
     pub replace_start: usize,
     pub replace_end: usize,
 }
@@ -157,6 +175,11 @@ pub fn complete_prefix(request: CompletionRequest<'_>) -> CompletionResponse {
             replacement: symbol.replacement.clone(),
             kind: symbol.kind.clone(),
             detail: symbol.detail.clone(),
+            documentation: symbol.documentation.clone(),
+            sort_text: symbol
+                .sort_text
+                .clone()
+                .or_else(|| Some(default_sort_text(symbol))),
             replace_start,
             replace_end,
         })
@@ -233,6 +256,10 @@ fn completion_kind_rank(kind: &CompletionKind) -> u8 {
         CompletionKind::TypeConstructor => 2,
         CompletionKind::TypePath => 3,
     }
+}
+
+fn default_sort_text(symbol: &CompletionSymbol) -> String {
+    format!("{}:{}", completion_kind_rank(&symbol.kind), symbol.label)
 }
 
 fn surface_name(name: &str) -> String {

@@ -12,6 +12,8 @@ fn completion_request_clamps_cursor_to_char_boundary_and_returns_byte_replacemen
         replacement: "print".to_string(),
         kind: CompletionKind::FunctionCall,
         detail: Some("print(a: String) -> Unit".to_string()),
+        documentation: None,
+        sort_text: None,
     }]);
     let source = "値.pr";
     let cursor_inside_multibyte = 1;
@@ -35,18 +37,24 @@ fn completion_request_filters_symbols_by_token_prefix() {
             replacement: "print".to_string(),
             kind: CompletionKind::FunctionCall,
             detail: Some("print(a: String) -> Unit".to_string()),
+            documentation: None,
+            sort_text: None,
         },
         CompletionSymbol {
             label: "Process::sleep".to_string(),
             replacement: "Process::sleep".to_string(),
             kind: CompletionKind::FunctionCall,
             detail: None,
+            documentation: None,
+            sort_text: None,
         },
         CompletionSymbol {
             label: "String".to_string(),
             replacement: "String".to_string(),
             kind: CompletionKind::TypeConstructor,
             detail: None,
+            documentation: None,
+            sort_text: None,
         },
     ]);
 
@@ -69,6 +77,8 @@ fn completion_request_matches_qualified_symbol_tail_for_unqualified_prefix() {
         replacement: "Helper::helper".to_string(),
         kind: CompletionKind::FunctionCall,
         detail: None,
+        documentation: None,
+        sort_text: None,
     }]);
 
     let completion = complete_prefix(CompletionRequest {
@@ -120,12 +130,16 @@ fn semantic_index_deduplicates_completion_symbols() {
             replacement: "print".to_string(),
             kind: CompletionKind::FunctionCall,
             detail: None,
+            documentation: None,
+            sort_text: None,
         },
         CompletionSymbol {
             label: "print".to_string(),
             replacement: "print".to_string(),
             kind: CompletionKind::FunctionCall,
             detail: Some("duplicate".to_string()),
+            documentation: None,
+            sort_text: None,
         },
     ]);
 
@@ -193,6 +207,14 @@ fn semantic_index_builds_completion_symbols_from_doc_and_signature_metadata() {
         completion.candidates[0].detail.as_deref(),
         Some("print(a: String) -> Unit")
     );
+    assert_eq!(
+        completion.candidates[0].documentation.as_deref(),
+        Some("Writes a line.")
+    );
+    assert_eq!(
+        completion.candidates[0].sort_text.as_deref(),
+        Some("1:print")
+    );
 
     let type_completion = complete_prefix(CompletionRequest {
         index: &index,
@@ -205,6 +227,10 @@ fn semantic_index_builds_completion_symbols_from_doc_and_signature_metadata() {
         type_completion.candidates[0].kind,
         CompletionKind::TypeConstructor
     );
+    assert_eq!(
+        type_completion.candidates[0].documentation.as_deref(),
+        Some("UTF-8 text.")
+    );
 }
 
 #[test]
@@ -215,12 +241,16 @@ fn completion_candidates_are_sorted_by_label_for_stable_lsp_output() {
             replacement: "atom".to_string(),
             kind: CompletionKind::FunctionCall,
             detail: None,
+            documentation: None,
+            sort_text: None,
         },
         CompletionSymbol {
             label: "alpha".to_string(),
             replacement: "alpha".to_string(),
             kind: CompletionKind::FunctionCall,
             detail: None,
+            documentation: None,
+            sort_text: None,
         },
     ]);
 

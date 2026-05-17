@@ -252,6 +252,8 @@ fn analysis_service_completions_use_snapshot_semantic_index_and_utf16_position()
         replacement: "print".to_string(),
         kind: CompletionKind::FunctionCall,
         detail: Some("print(a: String) -> Unit".to_string()),
+        documentation: None,
+        sort_text: None,
     }]));
 
     let context = resolve_context(AnalysisContextRequest {

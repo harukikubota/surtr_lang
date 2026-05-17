@@ -51,6 +51,8 @@ fn completion_maps_utf16_position_to_lsp_text_edits() {
         replacement: "print".to_string(),
         kind: CompletionKind::FunctionCall,
         detail: Some("print(a: String) -> Unit".to_string()),
+        documentation: None,
+        sort_text: None,
     }]));
 
     let items = completion_items(
@@ -66,6 +68,8 @@ fn completion_maps_utf16_position_to_lsp_text_edits() {
     assert_eq!(items[0].label, "print");
     assert_eq!(items[0].kind, CompletionItemKind::Function);
     assert_eq!(items[0].detail.as_deref(), Some("print(a: String) -> Unit"));
+    assert_eq!(items[0].documentation.as_deref(), None);
+    assert_eq!(items[0].sort_text.as_deref(), Some("1:print"));
     assert_eq!(
         items[0].text_edit.range,
         LspRange {

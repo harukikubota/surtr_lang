@@ -52,6 +52,8 @@ pub struct LspCompletionItem {
     pub label: String,
     pub kind: CompletionItemKind,
     pub detail: Option<String>,
+    pub documentation: Option<String>,
+    pub sort_text: Option<String>,
     pub text_edit: LspTextEdit,
 }
 
@@ -178,6 +180,8 @@ pub fn completion_items(
                 label: candidate.label,
                 kind: completion_item_kind(candidate.kind),
                 detail: candidate.detail,
+                documentation: candidate.documentation,
+                sort_text: candidate.sort_text,
                 text_edit: LspTextEdit {
                     range,
                     new_text: candidate.replacement,
