@@ -33,7 +33,6 @@ LSP 実装の主目的は次のとおり。
 - VSCode extension の package name、command name、settings schema
 - LSP transport 実装ライブラリ
 - project runner DSL の最終 surface
-- project runner source を VM 実行で抽出するか、restricted evaluator で抽出するか
 - REPL live chunk の実行意味論
 - rename / code action / formatter の完全仕様
 
@@ -155,21 +154,24 @@ AnalysisContext {
 | `Project` | `CompileUnitKind::Project` | project runner が解決した profile / module stage で解析する |
 | `ReplPreview` | `CompileUnitKind::Repl` | 将来の REPL virtual document / preload context 表示用 |
 
-`source_kind` は既存 `SourceKind` を使う。
+`source_kind` は `sindr::policy::SourceKind` を使う。project runner source は
+CLI / host が `SelectedContext::ProjectProfile` として選択した場合だけ
+`ProjectConfigSource` として扱う。通常 script として実行された同じ source は
+単なる Surtr 値を作るだけであり、project runner としては機能しない。
 
 | 対象 | `source_kind` |
 |---|---|
 | script entry file | `Script` |
 | script `include` 先 | `DefinitionSource` |
 | project runner が追加した user module | `DefinitionSource` |
-| project runner source | 未確定。既存 `SourceKind` で扱うか `ProjectConfigSource` 相当を追加するかは未決 |
+| project runner source | `ProjectConfigSource` |
 | stdlib source | `StdDefinitionSource` |
 | REPL virtual input | `ReplChunk` |
 
 `Project::add_path(...)`、script `include`、project runner 由来 file は token sniffing で
 script に切り替えない。
-project runner source 自体の `SourceKind` は確定していないため、runner API の補完 /
-diagnostics は通常 source diagnostics と host-side runner diagnostics を分けて扱う。
+project runner source の補完 / diagnostics は `ProjectConfigSource` の通常 source
+diagnostics と host-side runner diagnostics を分けて扱う。
 
 ### 5.2 RunnerContext
 
@@ -228,11 +230,15 @@ ScriptProjectContext {
 `load_project` は literal-only directive として扱う。変数、関数呼び出し、文字列結合は
 context resolution では受けない。
 
-script-local `supervisor_init` と project profile boot config の merge 規則は未確定である。
-暫定方針では project profile の boot config を base とし、script-local `supervisor_init` は
-operational script 専用の追加 boot input とする。同じ singleton / handler /
-supervisor policy を二重指定した場合は暗黙上書きせず、runner diagnostics として報告する。
-明示 override API を用意するかどうかは未確定事項として残す。
+project context 付き script の `supervisor_init` merge 規則は次の優先順位で固定する。
+
+```text
+process 定義 default < project runner boot config < script-local supervisor_init
+```
+
+同じ singleton / handler / supervisor policy を二重指定した場合は、この優先順位に従って
+後段が前段を上書きする。上書きされた事実を diagnostics / trace に出すかどうかは
+実装判断でよいが、意味論上は暗黙の競合エラーにはしない。
 
 ### 5.4 ReplAnalysisContext
 
@@ -326,13 +332,15 @@ host default、ENV などを読んでよいが、analysis cache key と diagnost
 展開順を deterministic に固定し、no match / unreadable / schema mismatch は
 `RunnerDiagnostic` として保持する。
 
-project source 自体を通常 script として扱うか、将来 `ProjectConfigSource` 相当の
-`SourceKind` を追加するかは未確定である。確定までは、project runner source の
-surface は標準 `Project` / `Config` API に対する通常の definition / script diagnostics と、
-host-side resolver diagnostics の組み合わせとして扱う。
-このため project runner source 内の補完 / hover は標準 `Project` / `Config` API と
-`@doc` metadata を使い、runner resolver が検出した profile unknown、glob no match、
-external input failure などは `ProjectRunner` diagnostics として返す。
+project source 自体は `SourceKind::ProjectConfigSource` として扱う。project runner として
+機能するのは CLI / host が project context として起動した場合だけである。同じ file を
+script として実行した場合は、標準 `Project` / `Config` API が値を作るだけであり、
+module stage / boot / external input は host へ反映されない。
+
+project runner source は標準定義の拡張を素直に取り込めるよう、最終的には Surtr VM 実行で
+抽出する。restricted evaluator は採用しない。LSP / analysis は VM 実行結果から正規化された
+`RunnerContext` を受け取り、profile unknown、glob no match、external input failure などは
+`ProjectRunner` diagnostics として返す。
 
 ### 6.4 standalone definition context
 
@@ -508,7 +516,9 @@ v2 では型文脈を使う。
 - completion item の `detail` / `documentation` / `sortText` を安定化する
 
 型文脈つき候補は便利だが、候補から不一致 symbol を完全に消すか、順位だけ下げるかは
-UI 実験後に固定する。
+順位だけ下げる。型が合わない候補も visibility / scope 上候補である限り残し、`sortText`
+または ranking score で後方へ送る。これにより未完成コードや inference 未確定時でも
+発見可能性を落とさない。
 
 ---
 
@@ -746,14 +756,12 @@ keyword、local、scope、import、member、signature、type context の順で�
 
 次は [../../doc/open-issues.md](../../doc/open-issues.md) の `surtr-lsp` issue で追跡する。
 
-- project runner 専用 `SourceKind` / `ProjectConfigSource` 相当が必要か
 - `RunnerArgs` の最終構造と、`selected_profile` を top-level field に置くか runner args 内に置くか
-- project runner を VM 実行で抽出するか、restricted evaluator で抽出するか
+- VM 実行で抽出した project runner result の最終 DTO 形状
 - external input diagnostics の所属
-- project context 付き script の boot merge 規則と明示 override API の有無
 - active file が複数 profile に属する場合の UI / diagnostics 優先順位
 - REPL virtual document の範囲
-- completion の型文脈フィルタを候補除外にするか、順位付けに留めるか
+- completion の型文脈順位付けで使う score / sortText 規則
 - wasm adapter が JSON-RPC を使うか、direct API を使うか
 
 ---

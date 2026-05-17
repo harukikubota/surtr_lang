@@ -196,6 +196,7 @@
   - active file が project profile の `Config::add_path` literal / glob 展開結果に含まれるかを `active_file_profiles` として固定し、複数 profile membership を保持する。
   - `crates/surtr-lsp` を追加し、file URI / UTF-16 position / diagnostics / completion text edit を `surtr-analysis` DTO へ写像する protocol adapter 境界を置いた。
   - `SourceKind` は `sindr::policy`、parse rule 導出は `spire` に置き、`surtr-analysis` は Xldr に依存しない構成にした。
+  - project runner source は `SourceKind::ProjectConfigSource` として専用化し、CLI / host が project context として選択した場合だけ runner として機能する方針を固定した。
   - REPL command query parser は `surtr-analysis::query` に移し、Xldr は同じ parser 実装を呼ぶ。
   - `AnalysisService` project mode は `RunnerContext.module_stages` を使い、active file 単体ではなく project profile の module stage として parse / resolve / typecheck できるようにした。
   - project stage の `DeclarationIndex` から補完候補を生成し、別 module の public declaration を LSP/analysis completion の初期候補へ流せるようにした。
@@ -205,21 +206,26 @@
   - active document / project stage source の declaration span を `SemanticIndex` に保持し、LSP definition DTO へ写像する最小経路を追加した。
   - active document の documentSymbol は `AnalysisService` snapshot から生成し、LSP DTO へ写像する最小経路を追加した。
   - Xldr `ReplEngine` から `surtr-analysis::SemanticIndex` を取り出せる API を追加し、REPL binding / stdlib doc / signature / declaration を shared semantic lookup へ渡せる入口を作った。
+- 固定済み仕様:
+  - shared analysis は `crates/surtr-analysis` として crate 新設で進める。既存 Xldr helper の段階移行は、この crate へ利用側を寄せる形で行う。
+  - command query parser は `surtr-analysis::query` に留め、現時点では `surtr-query` crate へ分離しない。
+  - project runner source は `SourceKind::ProjectConfigSource` として扱う。script として実行された場合は値を作るだけで、runner としては機能しない。
+  - project runner source の抽出は、標準定義拡張を取り込めるよう最終的に Surtr VM 実行で行う。restricted evaluator は採用しない。
+  - project context 付き script の `supervisor_init` merge は `process 定義 default < project runner boot config < script-local supervisor_init` の優先順位とする。
+  - completion の型文脈利用は候補除外ではなく順位付けに留める。
 - 未確定点:
-  - project runner 専用 `SourceKind` / `ProjectConfigSource` が必要か。
   - `RunnerArgs` の最終構造、`selected_profile` を top-level field に置くか runner args 内に置くか。
-  - project runner source を Surtr VM で実行して抽出するか、restricted project config evaluator を用意するか。
-  - `Project::entrypoint` / `Config::add_path` 以外の runner facts を、`project.srt` の AST / evaluator からどう生成するか。
+  - VM 実行で抽出する project runner result DTO の最終構造。
+  - `Project::entrypoint` / `Config::add_path` 以外の runner facts を、VM 実行結果からどう生成するか。
   - project mode の stdlib stage injection を `xldr` と同じ semantic snapshot から共有するか、`surtr-analysis` 側に明示入力として渡すか。
   - staged project diagnostics を active file へ仮所属させず、module stage 内の source path / span へ正確に所属させる方法。
   - LSP definition の ambiguous tail match を診断化するか、qualified path 優先の解決へ寄せるか。
   - typed boot builder API の正本名と、LSP が boot / supervisor config をどこまで semantic に理解するか。
   - external file missing / schema mismatch / handler override conflict を runner diagnostics と compile diagnostics のどちらへ所属させるか。
-  - project context 付き script の `supervisor_init` merge 規則。
   - active file が複数 profile に属する場合の UI / diagnostics 優先順位。
   - REPL virtual document をどこまで LSP 対象に含めるか。
   - 既存 REPL 補完 UI を、どの順序で `ReplEngine::semantic_index` ベースの候補生成へ置き換えるか。
-  - completion の型文脈利用を候補除外にするか、順位付けに留めるか。
+  - completion の型文脈順位付けで使う score / sortText 規則。
   - iOS / wasm adapter が JSON-RPC LSP を使うか、editor UI から direct API を呼ぶか。
 - 受け入れ条件:
   - `surtr-lsp` は active file を単体推測せず、必ず `AnalysisContext` 経由で parse / resolve / typecheck / completion / diagnostics を行う。

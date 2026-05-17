@@ -1272,18 +1272,23 @@ pub fn derive_runtime_policy(
         SourceKind::Script => RuntimeSourcePolicy::script(),
         SourceKind::DefinitionSource => RuntimeSourcePolicy::module(),
         SourceKind::StdDefinitionSource => RuntimeSourcePolicy::std_module(),
+        SourceKind::ProjectConfigSource => RuntimeSourcePolicy::module(),
         SourceKind::ReplChunk => RuntimeSourcePolicy::repl_chunk(),
     };
 
     let policy = match source_kind {
         SourceKind::Script => ExitCodePolicy::Anywhere,
         SourceKind::ReplChunk => ExitCodePolicy::Forbidden,
-        SourceKind::DefinitionSource | SourceKind::StdDefinitionSource
+        SourceKind::DefinitionSource
+        | SourceKind::StdDefinitionSource
+        | SourceKind::ProjectConfigSource
             if compile_unit_kind == CompileUnitKind::Project =>
         {
             ExitCodePolicy::EntryOnly
         }
-        SourceKind::DefinitionSource | SourceKind::StdDefinitionSource => ExitCodePolicy::Forbidden,
+        SourceKind::DefinitionSource
+        | SourceKind::StdDefinitionSource
+        | SourceKind::ProjectConfigSource => ExitCodePolicy::Forbidden,
     };
 
     base.with_exit_code_policy(policy, entrypoint)
@@ -2022,6 +2027,7 @@ pub fn source_kind_cache_key(kind: SourceKind) -> &'static str {
         // Keep cache key strings stable for backward compatibility with existing cache entries.
         SourceKind::DefinitionSource => "module",
         SourceKind::StdDefinitionSource => "std",
+        SourceKind::ProjectConfigSource => "project-config",
         SourceKind::ReplChunk => "repl",
     }
 }

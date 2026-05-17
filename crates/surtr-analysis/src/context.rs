@@ -282,12 +282,17 @@ fn resolve_project_context(
     profile: String,
 ) -> ResolvedAnalysisContext {
     let active_file = request.active_file.clone();
+    let source_kind = if same_path(&active_file, &project_file) {
+        SourceKind::ProjectConfigSource
+    } else {
+        SourceKind::DefinitionSource
+    };
     let base_context = AnalysisContext {
         workspace_root: request.workspace_root,
         mode: AnalysisMode::Project,
         entry_file: Some(project_file.clone()),
         active_file: request.active_file,
-        source_kind: SourceKind::DefinitionSource,
+        source_kind,
     };
 
     let Some(selection) = request.runner_selection else {
@@ -592,15 +597,19 @@ pub fn parse_document(
     module_path: Option<String>,
 ) -> Result<Vec<spire::ast::Ast>, spire::error::ParseError> {
     let context = match (compile_unit_kind, source_kind, module_path) {
-        (CompileUnitKind::Project, SourceKind::DefinitionSource, None) => {
+        (CompileUnitKind::Project, SourceKind::ProjectConfigSource, None) => {
             spire::ParserContext::project(source_id)
         }
         (_, SourceKind::Script, _) => spire::ParserContext::script(source_id),
         (_, SourceKind::ReplChunk, _) => spire::ParserContext::repl(source_id),
-        (_, SourceKind::DefinitionSource | SourceKind::StdDefinitionSource, module_path) => {
-            spire::ParserContext::module(source_id, module_path)
-                .with_rules(spire::parse_rules_for_source_kind(source_kind))
-        }
+        (
+            _,
+            SourceKind::DefinitionSource
+            | SourceKind::StdDefinitionSource
+            | SourceKind::ProjectConfigSource,
+            module_path,
+        ) => spire::ParserContext::module(source_id, module_path)
+            .with_rules(spire::parse_rules_for_source_kind(source_kind)),
     };
 
     spire::parse_with_context(source, context)

@@ -18,6 +18,7 @@ pub fn parse_rules_for_source_kind(source_kind: sindr::policy::SourceKind) -> Pa
         sindr::policy::SourceKind::Script => ParseRules::script(),
         sindr::policy::SourceKind::DefinitionSource => ParseRules::module(),
         sindr::policy::SourceKind::StdDefinitionSource => ParseRules::std_module(),
+        sindr::policy::SourceKind::ProjectConfigSource => ParseRules::project(),
         sindr::policy::SourceKind::ReplChunk => ParseRules::repl_chunk(),
     }
 }

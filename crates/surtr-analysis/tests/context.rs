@@ -40,13 +40,27 @@ fn parse_document_uses_project_context_for_project_sources() {
     let ast = parse_document(
         "Project::config()",
         0,
-        SourceKind::DefinitionSource,
+        SourceKind::ProjectConfigSource,
         CompileUnitKind::Project,
         None,
     )
     .expect("project context should accept top-level project expressions");
 
     assert_eq!(ast.len(), 1);
+}
+
+#[test]
+fn project_config_source_is_not_a_std_definition_source() {
+    let err = parse_document(
+        "@builtin def print(a: String) -> Unit",
+        0,
+        SourceKind::ProjectConfigSource,
+        CompileUnitKind::Project,
+        None,
+    )
+    .expect_err("project config source must not accept std builtin declarations");
+
+    assert!(!err.message().is_empty());
 }
 
 #[test]
@@ -160,6 +174,32 @@ fn resolve_context_builds_runner_context_from_selected_project_profile() {
     assert_eq!(
         runner.normalized_args,
         vec![("env".to_string(), "ci".to_string())]
+    );
+}
+
+#[test]
+fn resolve_context_marks_selected_project_file_as_project_config_source() {
+    let resolved = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: PathBuf::from("/repo/project.srt"),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: PathBuf::from("/repo/project.srt"),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: PathBuf::from("/repo/project.srt"),
+            selected_profile: "dev".to_string(),
+            normalized_args: Vec::new(),
+            source: None,
+        }),
+        open_documents: Vec::new(),
+    });
+
+    assert_eq!(resolved.status, AnalysisContextStatus::Ready);
+    assert_eq!(resolved.context.mode, AnalysisMode::Project);
+    assert_eq!(
+        resolved.context.source_kind,
+        SourceKind::ProjectConfigSource
     );
 }
 

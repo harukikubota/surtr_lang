@@ -42,7 +42,7 @@ pub fn extract_project_runner_input(
     let ast = parse_document(
         &input.source,
         0,
-        SourceKind::DefinitionSource,
+        SourceKind::ProjectConfigSource,
         CompileUnitKind::Project,
         None,
     )

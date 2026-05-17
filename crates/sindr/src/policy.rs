@@ -12,6 +12,7 @@ pub enum SourceKind {
     Script,
     DefinitionSource,
     StdDefinitionSource,
+    ProjectConfigSource,
     ReplChunk,
 }
 
