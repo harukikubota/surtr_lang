@@ -1283,6 +1283,8 @@ impl ReplEngine {
         expected_ty: Option<&str>,
     ) {
         let mut seen = BTreeSet::new();
+        let mut matching = Vec::new();
+        let mut fallback = Vec::new();
         for binding in self.binding_records.iter().rev() {
             if !seen.insert(binding.name.as_str()) {
                 continue;
@@ -1290,22 +1292,31 @@ impl ReplEngine {
             if !binding.name.starts_with(prefix) {
                 continue;
             }
-            if let Some(expected_ty) = expected_ty {
-                if !Self::parameter_type_accepts_arg_type(expected_ty, &binding.ty) {
-                    continue;
-                }
+            let candidate = ReplCompletionCandidate {
+                label: binding.name.clone(),
+                replacement: binding.name.clone(),
+                kind: ReplCompletionKind::Variable,
+                detail: Some(binding.ty.clone()),
+                replace_start,
+                replace_end,
+            };
+            if expected_ty.is_some_and(|expected_ty| {
+                Self::parameter_type_accepts_arg_type(expected_ty, &binding.ty)
+            }) {
+                matching.push(candidate);
+            } else {
+                fallback.push(candidate);
             }
-            push_completion_candidate(
-                candidates,
-                ReplCompletionCandidate {
-                    label: binding.name.clone(),
-                    replacement: binding.name.clone(),
-                    kind: ReplCompletionKind::Variable,
-                    detail: Some(binding.ty.clone()),
-                    replace_start,
-                    replace_end,
-                },
-            );
+        }
+
+        if expected_ty.is_some() {
+            for candidate in matching.into_iter().chain(fallback) {
+                push_completion_candidate(candidates, candidate);
+            }
+        } else {
+            for candidate in fallback {
+                push_completion_candidate(candidates, candidate);
+            }
         }
     }
 

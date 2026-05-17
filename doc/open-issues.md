@@ -206,6 +206,7 @@
   - active document / project stage source の declaration span を `SemanticIndex` に保持し、LSP definition DTO へ写像する最小経路を追加した。
   - active document の documentSymbol は `AnalysisService` snapshot から生成し、LSP DTO へ写像する最小経路を追加した。
   - Xldr `ReplEngine` から `surtr-analysis::SemanticIndex` を取り出せる API を追加し、REPL binding / stdlib doc / signature / declaration を shared semantic lookup へ渡せる入口を作った。
+  - REPL completion の call argument 文脈では、expected type と合わない binding を除外せず、合う binding を先に出す順位付けへ変更した。
 - 固定済み仕様:
   - shared analysis は `crates/surtr-analysis` として crate 新設で進める。既存 Xldr helper の段階移行は、この crate へ利用側を寄せる形で行う。
   - command query parser は `surtr-analysis::query` に留め、現時点では `surtr-query` crate へ分離しない。

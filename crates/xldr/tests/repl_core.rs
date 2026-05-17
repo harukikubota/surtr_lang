@@ -659,7 +659,7 @@ impl User {
 }
 
 #[test]
-fn core_completion_filters_constructor_arguments_by_expected_parameter_type() {
+fn core_completion_ranks_constructor_arguments_by_expected_parameter_type() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line("n = 3")).contains("n: Int"));
     assert!(rendered_text(&engine.handle_line(r#"s = "text""#)).contains("s: String"));
@@ -676,8 +676,13 @@ fn core_completion_filters_constructor_arguments_by_expected_parameter_type() {
         "Int binding should be suggested for constructor argument: {labels:?}"
     );
     assert!(
-        !labels.contains(&"s"),
-        "String binding should not be suggested for Int constructor argument: {labels:?}"
+        labels.contains(&"s"),
+        "String binding should remain available but ranked lower: {labels:?}"
+    );
+    assert!(
+        labels.iter().position(|label| label == &"n")
+            < labels.iter().position(|label| label == &"s"),
+        "Int binding should rank before String binding for Int constructor argument: {labels:?}"
     );
 }
 
@@ -747,8 +752,13 @@ fn core_completion_uses_argument_position_for_variable_candidates_and_signature_
         "Int binding should be suggested: {labels:?}"
     );
     assert!(
-        !labels.contains(&"s"),
-        "String binding should not be suggested for Int argument: {labels:?}"
+        labels.contains(&"s"),
+        "String binding should remain available but ranked lower: {labels:?}"
+    );
+    assert!(
+        labels.iter().position(|label| label == &"n")
+            < labels.iter().position(|label| label == &"s"),
+        "Int binding should rank before String binding for Int argument: {labels:?}"
     );
 }
 
