@@ -197,11 +197,15 @@
   - `crates/surtr-lsp` を追加し、file URI / UTF-16 position / diagnostics / completion text edit を `surtr-analysis` DTO へ写像する protocol adapter 境界を置いた。
   - `SourceKind` は `sindr::policy`、parse rule 導出は `spire` に置き、`surtr-analysis` は Xldr に依存しない構成にした。
   - REPL command query parser は `surtr-analysis::query` に移し、Xldr は同じ parser 実装を呼ぶ。
+  - `AnalysisService` project mode は `RunnerContext.module_stages` を使い、active file 単体ではなく project profile の module stage として parse / resolve / typecheck できるようにした。
+  - project stage の `DeclarationIndex` から補完候補を生成し、別 module の public declaration を LSP/analysis completion の初期候補へ流せるようにした。
 - 未確定点:
   - project runner 専用 `SourceKind` / `ProjectConfigSource` が必要か。
   - `RunnerArgs` の最終構造、`selected_profile` を top-level field に置くか runner args 内に置くか。
   - project runner source を Surtr VM で実行して抽出するか、restricted project config evaluator を用意するか。
   - `Project::entrypoint` / `Config::add_path` 以外の runner facts を、`project.srt` の AST / evaluator からどう生成するか。
+  - project mode の stdlib stage injection を `xldr` と同じ semantic snapshot から共有するか、`surtr-analysis` 側に明示入力として渡すか。
+  - staged project diagnostics を active file へ仮所属させず、module stage 内の source path / span へ正確に所属させる方法。
   - LSP hover / signatureHelp / definition / documentSymbol を、現在の snapshot からどの順で実体化するか。
   - typed boot builder API の正本名と、LSP が boot / supervisor config をどこまで semantic に理解するか。
   - external file missing / schema mismatch / handler override conflict を runner diagnostics と compile diagnostics のどちらへ所属させるか。
