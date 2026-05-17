@@ -5,7 +5,7 @@ use surtr_analysis::{
 };
 use surtr_lsp::{
     completion_items, diagnostics, document_symbols, file_uri_to_path, hover, path_to_file_uri,
-    CompletionItemKind, DiagnosticSeverity, LspAnalysisHost, LspPosition, LspRange,
+    signature_help, CompletionItemKind, DiagnosticSeverity, LspAnalysisHost, LspPosition, LspRange,
 };
 
 #[test]
@@ -129,6 +129,43 @@ fn hover_maps_semantic_detail_and_documentation_to_lsp_dto() {
             },
         })
     );
+}
+
+#[test]
+fn signature_help_maps_semantic_call_context_to_lsp_dto() {
+    let workspace = PathBuf::from("/repo");
+    let path = workspace.join("main.srt");
+    let uri = path_to_file_uri(&path);
+    let source = "value = print(\"hello\", Tr";
+    let mut host = LspAnalysisHost::new(workspace);
+    host.did_open(uri.clone(), Some(1), source.to_string());
+    host.set_selected_context(Some(SelectedContext::ScriptEntry(path)));
+    host.set_semantic_index(SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "print".to_string(),
+        replacement: "print".to_string(),
+        kind: CompletionKind::FunctionCall,
+        detail: Some("print(value: String, newline: Bool) -> Unit".to_string()),
+        documentation: Some("Writes a line.".to_string()),
+        sort_text: None,
+        origin: None,
+    }]));
+
+    let help = signature_help(
+        &host,
+        &uri,
+        LspPosition {
+            line: 0,
+            character: source.len() as u32,
+        },
+    )
+    .expect("semantic signature help should be available");
+
+    assert_eq!(
+        help.signatures,
+        vec!["print(value: String, newline: Bool) -> Unit".to_string()]
+    );
+    assert_eq!(help.active_signature, Some(0));
+    assert_eq!(help.active_parameter, Some(1));
 }
 
 #[test]

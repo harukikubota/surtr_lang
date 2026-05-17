@@ -2,8 +2,8 @@ use sigil::{DeclarationEntry, DeclarationIndex, DeclarationKind};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
 use spire::ast::Visibility;
 use surtr_analysis::{
-    complete_prefix, lookup_symbol_at_cursor, CompletionKind, CompletionOrigin, CompletionRequest,
-    CompletionSymbol, SemanticIndex,
+    complete_prefix, lookup_symbol_at_cursor, signature_help_at_cursor, CompletionKind,
+    CompletionOrigin, CompletionRequest, CompletionSymbol, SemanticIndex,
 };
 
 #[test]
@@ -120,6 +120,30 @@ fn semantic_index_finds_symbol_at_cursor_for_shared_hover_and_completion_detail(
         lookup.symbol.documentation.as_deref(),
         Some("Returns the helper value.")
     );
+}
+
+#[test]
+fn semantic_index_returns_signature_help_from_call_context() {
+    let index = SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "print".to_string(),
+        replacement: "print".to_string(),
+        kind: CompletionKind::FunctionCall,
+        detail: Some("print(value: String, newline: Bool) -> Unit".to_string()),
+        documentation: Some("Writes a line.".to_string()),
+        sort_text: None,
+        origin: None,
+    }]);
+
+    let help = signature_help_at_cursor(&index, "print(\"hello\", Tr", "print(\"hello\", Tr".len())
+        .expect("call context should resolve signature help");
+
+    assert_eq!(
+        help.signature,
+        "print(value: String, newline: Bool) -> Unit"
+    );
+    assert_eq!(help.active_parameter, 1);
+    assert_eq!(help.callee_start, 0);
+    assert_eq!(help.callee_end, "print".len());
 }
 
 #[test]

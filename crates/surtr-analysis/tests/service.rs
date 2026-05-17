@@ -319,6 +319,48 @@ fn analysis_service_hover_uses_snapshot_semantic_index_and_token_range() {
 }
 
 #[test]
+fn analysis_service_signature_help_uses_snapshot_semantic_index() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    let source = "value = print(\"hello\", Tr";
+    service.update_document(path.clone(), Some(1), source.to_string());
+    service.set_semantic_index(SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "print".to_string(),
+        replacement: "print".to_string(),
+        kind: CompletionKind::FunctionCall,
+        detail: Some("print(value: String, newline: Bool) -> Unit".to_string()),
+        documentation: Some("Writes a line.".to_string()),
+        sort_text: None,
+        origin: None,
+    }]));
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(path)),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let help = service
+        .signature_help(
+            &snapshot,
+            Utf16Position {
+                line: 0,
+                character: source.len() as u32,
+            },
+        )
+        .expect("semantic symbol should produce signature help");
+
+    assert_eq!(
+        help.signatures,
+        vec!["print(value: String, newline: Bool) -> Unit".to_string()]
+    );
+    assert_eq!(help.active_signature, Some(0));
+    assert_eq!(help.active_parameter, Some(1));
+}
+
+#[test]
 fn analysis_service_document_symbols_flatten_active_declarations() {
     let root = temp_root("document-symbols");
     let src = root.join("src");

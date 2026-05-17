@@ -5,9 +5,9 @@ use sindr::policy::{CompileUnitKind, SourceKind};
 use spire::ast::{Ast, Span};
 
 use crate::{
-    complete_prefix, lookup_symbol_at_cursor, parse_document, AnalysisContextStatus, AnalysisMode,
-    CompletionRequest, CompletionResponse, DocumentSnapshot, DocumentStore, LineIndex,
-    ResolvedAnalysisContext, SemanticIndex, TextPosition, Utf16Position,
+    complete_prefix, lookup_symbol_at_cursor, parse_document, signature_help_at_cursor,
+    AnalysisContextStatus, AnalysisMode, CompletionRequest, CompletionResponse, DocumentSnapshot,
+    DocumentStore, LineIndex, ResolvedAnalysisContext, SemanticIndex, TextPosition, Utf16Position,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,10 +234,17 @@ impl AnalysisService {
 
     pub fn signature_help(
         &self,
-        _snapshot: &AnalysisSnapshot,
-        _position: Utf16Position,
+        snapshot: &AnalysisSnapshot,
+        position: Utf16Position,
     ) -> Option<SignatureHelpResult> {
-        None
+        let document = snapshot.active_document.as_ref()?;
+        let cursor = document.line_index.utf16_position_to_byte(position)?;
+        let lookup = signature_help_at_cursor(&snapshot.semantic_index, &document.text, cursor)?;
+        Some(SignatureHelpResult {
+            signatures: vec![lookup.signature],
+            active_signature: Some(0),
+            active_parameter: Some(lookup.active_parameter),
+        })
     }
 
     pub fn definition(

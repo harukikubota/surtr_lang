@@ -71,6 +71,13 @@ pub struct LspHover {
     pub contents: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspSignatureHelp {
+    pub signatures: Vec<String>,
+    pub active_signature: Option<usize>,
+    pub active_parameter: Option<usize>,
+}
+
 #[derive(Debug, Clone)]
 pub struct LspAnalysisHost {
     workspace_root: PathBuf,
@@ -224,6 +231,21 @@ pub fn hover(host: &LspAnalysisHost, uri: &str, position: LspPosition) -> Option
         .map(|hover| LspHover {
             range: hover.range.map(lsp_range),
             contents: hover.contents,
+        })
+}
+
+pub fn signature_help(
+    host: &LspAnalysisHost,
+    uri: &str,
+    position: LspPosition,
+) -> Option<LspSignatureHelp> {
+    let snapshot = host.snapshot_for_uri(uri)?;
+    host.service
+        .signature_help(&snapshot, utf16_position(position))
+        .map(|help| LspSignatureHelp {
+            signatures: help.signatures,
+            active_signature: help.active_signature,
+            active_parameter: help.active_parameter,
         })
 }
 

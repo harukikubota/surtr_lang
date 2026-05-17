@@ -219,6 +219,14 @@ pub struct SymbolLookup {
     pub end: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignatureLookup {
+    pub signature: String,
+    pub active_parameter: usize,
+    pub callee_start: usize,
+    pub callee_end: usize,
+}
+
 pub fn complete_prefix(request: CompletionRequest<'_>) -> CompletionResponse {
     let cursor = clamp_to_char_boundary(request.source, request.cursor);
     let (replace_start, replace_end, prefix) = completion_token(request.source, cursor);
@@ -269,6 +277,35 @@ pub fn lookup_symbol_at_cursor(
     Some(SymbolLookup { symbol, start, end })
 }
 
+pub fn signature_help_at_cursor(
+    index: &SemanticIndex,
+    source: &str,
+    cursor: usize,
+) -> Option<SignatureLookup> {
+    let cursor = clamp_to_char_boundary(source, cursor);
+    let before = &source[..cursor];
+    let open = innermost_unclosed_lparen(before)?;
+    let callee_end = before[..open].trim_end().len();
+    let callee_start = before[..callee_end]
+        .char_indices()
+        .rev()
+        .find_map(|(idx, ch)| (!completion_token_char(ch)).then_some(idx + ch.len_utf8()))
+        .unwrap_or(0);
+    let callee = before[callee_start..callee_end].trim();
+    if callee.is_empty() {
+        return None;
+    }
+
+    let symbol = index.find_symbol(callee)?;
+    let signature = symbol.detail.clone()?;
+    Some(SignatureLookup {
+        signature,
+        active_parameter: active_call_parameter(&before[open + 1..]),
+        callee_start,
+        callee_end,
+    })
+}
+
 fn clamp_to_char_boundary(input: &str, mut cursor: usize) -> usize {
     cursor = cursor.min(input.len());
     while cursor > 0 && !input.is_char_boundary(cursor) {
@@ -304,6 +341,72 @@ fn symbol_token(input: &str, cursor: usize) -> Option<(usize, usize, String)> {
 
 fn completion_token_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':')
+}
+
+fn innermost_unclosed_lparen(input: &str) -> Option<usize> {
+    let mut stack = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (idx, ch) in input.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '(' => stack.push(idx),
+            ')' => {
+                stack.pop();
+            }
+            _ => {}
+        }
+    }
+
+    stack.pop()
+}
+
+fn active_call_parameter(args: &str) -> usize {
+    let mut active = 0usize;
+    let mut paren_depth = 0usize;
+    let mut angle_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for ch in args.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '<' => angle_depth += 1,
+            '>' => angle_depth = angle_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            ',' if paren_depth == 0 && angle_depth == 0 && bracket_depth == 0 => active += 1,
+            _ => {}
+        }
+    }
+
+    active
 }
 
 fn completion_symbol_matches_prefix(symbol: &CompletionSymbol, prefix: &str) -> bool {
