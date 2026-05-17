@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use sigil::{DeclarationIndex, DeclarationKind};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
@@ -21,6 +22,14 @@ pub struct CompletionSymbol {
     pub documentation: Option<String>,
     pub sort_text: Option<String>,
     pub origin: Option<CompletionOrigin>,
+    pub definition: Option<SourceLocation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceLocation {
+    pub path: PathBuf,
+    pub start: usize,
+    pub end: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +74,9 @@ impl SemanticIndex {
                 if existing.origin.is_none() {
                     existing.origin = symbol.origin;
                 }
+                if existing.definition.is_none() {
+                    existing.definition = symbol.definition;
+                }
                 continue;
             }
             deduped.push(symbol);
@@ -99,6 +111,7 @@ impl SemanticIndex {
                     qualified_name: entry.qualified_name.clone(),
                     module_path: entry.module_path.clone(),
                 }),
+                definition: None,
             });
         }
         for entry in docs {
@@ -117,6 +130,7 @@ impl SemanticIndex {
                     qualified_name: entry.qualified_name.clone(),
                     module_path: entry.module_path.clone(),
                 }),
+                definition: None,
             });
         }
 
@@ -138,6 +152,7 @@ impl SemanticIndex {
                     documentation: None,
                     sort_text: None,
                     origin: None,
+                    definition: None,
                 });
             }
 
@@ -159,6 +174,7 @@ impl SemanticIndex {
                         user_importable: entry.user_importable,
                         user_callable: entry.user_callable,
                     }),
+                    definition: None,
                 });
             }
         }

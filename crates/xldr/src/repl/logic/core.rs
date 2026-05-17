@@ -1161,6 +1161,7 @@ impl ReplEngine {
                 documentation: None,
                 sort_text: None,
                 origin: None,
+                definition: None,
             });
         }
 
@@ -1185,6 +1186,7 @@ impl ReplEngine {
                 documentation: None,
                 sort_text: None,
                 origin: None,
+                definition: None,
             });
         }
 

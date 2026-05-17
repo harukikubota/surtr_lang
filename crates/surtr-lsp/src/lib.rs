@@ -78,6 +78,12 @@ pub struct LspSignatureHelp {
     pub active_parameter: Option<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LspLocation {
+    pub uri: String,
+    pub range: LspRange,
+}
+
 #[derive(Debug, Clone)]
 pub struct LspAnalysisHost {
     workspace_root: PathBuf,
@@ -247,6 +253,21 @@ pub fn signature_help(
             active_signature: help.active_signature,
             active_parameter: help.active_parameter,
         })
+}
+
+pub fn definition(host: &LspAnalysisHost, uri: &str, position: LspPosition) -> Vec<LspLocation> {
+    let Some(snapshot) = host.snapshot_for_uri(uri) else {
+        return Vec::new();
+    };
+
+    host.service
+        .definition(&snapshot, utf16_position(position))
+        .into_iter()
+        .map(|location| LspLocation {
+            uri: path_to_file_uri(&location.path),
+            range: lsp_range(location.range),
+        })
+        .collect()
 }
 
 pub fn path_to_file_uri(path: &Path) -> String {

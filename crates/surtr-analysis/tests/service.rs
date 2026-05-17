@@ -255,6 +255,8 @@ fn analysis_service_completions_use_snapshot_semantic_index_and_utf16_position()
         documentation: None,
         sort_text: None,
         origin: None,
+
+        definition: None,
     }]));
 
     let context = resolve_context(AnalysisContextRequest {
@@ -292,6 +294,8 @@ fn analysis_service_hover_uses_snapshot_semantic_index_and_token_range() {
         documentation: Some("Writes a line.".to_string()),
         sort_text: None,
         origin: None,
+
+        definition: None,
     }]));
 
     let context = resolve_context(AnalysisContextRequest {
@@ -332,6 +336,8 @@ fn analysis_service_signature_help_uses_snapshot_semantic_index() {
         documentation: Some("Writes a line.".to_string()),
         sort_text: None,
         origin: None,
+
+        definition: None,
     }]));
 
     let context = resolve_context(AnalysisContextRequest {
@@ -358,6 +364,107 @@ fn analysis_service_signature_help_uses_snapshot_semantic_index() {
     );
     assert_eq!(help.active_signature, Some(0));
     assert_eq!(help.active_parameter, Some(1));
+}
+
+#[test]
+fn analysis_service_definition_uses_active_document_semantic_locations() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    let source = "def helper() -> Int { 1 }\nvalue = helper()";
+    service.update_document(path.clone(), Some(1), source.to_string());
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(path.clone())),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let locations = service.definition(
+        &snapshot,
+        Utf16Position {
+            line: 1,
+            character: "value = help".len() as u32,
+        },
+    );
+
+    assert_eq!(locations.len(), 1);
+    assert_eq!(locations[0].path, path);
+    assert_eq!(locations[0].range.start.line, 0);
+    assert_eq!(locations[0].range.start.character, 0);
+    assert!(locations[0].range.end.character > locations[0].range.start.character);
+}
+
+#[test]
+fn analysis_service_definition_resolves_project_stage_source_locations() {
+    let root = temp_root("project-definition");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let helper_path = src.join("helper.srt");
+    let main_path = src.join("main.srt");
+    let project_file = root.join("project.srt");
+    let helper_source = "defmod Helper { def helper() -> Int { 1 } }";
+    let main_source = "import Helper::helper\ndefmod Main { def main() -> Int { helper() } }";
+    std::fs::write(&helper_path, helper_source).expect("write helper");
+    std::fs::write(&main_path, main_source).expect("write main");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/helper.srt")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.update_document(main_path.clone(), Some(1), main_source.to_string());
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: main_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(main_path),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let call_column = main_source
+        .lines()
+        .nth(1)
+        .and_then(|line| line.find("helper()"))
+        .expect("helper call exists") as u32
+        + 3;
+    let locations = service.definition(
+        &snapshot,
+        Utf16Position {
+            line: 1,
+            character: call_column,
+        },
+    );
+
+    assert_eq!(locations.len(), 1);
+    assert_eq!(locations[0].path, helper_path);
+    assert_eq!(locations[0].range.start.line, 0);
+    assert_eq!(
+        locations[0].range.start.character,
+        helper_source.find("def helper").expect("helper def exists") as u32
+    );
+    assert!(locations[0].range.end.character > locations[0].range.start.character);
+
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

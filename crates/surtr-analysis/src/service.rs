@@ -6,8 +6,9 @@ use spire::ast::{Ast, Span};
 
 use crate::{
     complete_prefix, lookup_symbol_at_cursor, parse_document, signature_help_at_cursor,
-    AnalysisContextStatus, AnalysisMode, CompletionRequest, CompletionResponse, DocumentSnapshot,
-    DocumentStore, LineIndex, ResolvedAnalysisContext, SemanticIndex, TextPosition, Utf16Position,
+    AnalysisContextStatus, AnalysisMode, CompletionKind, CompletionRequest, CompletionResponse,
+    CompletionSymbol, DocumentSnapshot, DocumentStore, LineIndex, ResolvedAnalysisContext,
+    SemanticIndex, SourceLocation, TextPosition, Utf16Position,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,6 +132,8 @@ impl AnalysisService {
                 ),
             ) {
                 Ok(ast) => {
+                    semantic_index =
+                        semantic_index_with_source_locations(&semantic_index, &document.path, &ast);
                     if should_analyze_project_stages(&context) {
                         analyze_project_stages(
                             self,
@@ -249,10 +252,27 @@ impl AnalysisService {
 
     pub fn definition(
         &self,
-        _snapshot: &AnalysisSnapshot,
-        _position: Utf16Position,
+        snapshot: &AnalysisSnapshot,
+        position: Utf16Position,
     ) -> Vec<Location> {
-        Vec::new()
+        let Some(document) = snapshot.active_document.as_ref() else {
+            return Vec::new();
+        };
+        let Some(cursor) = document.line_index.utf16_position_to_byte(position) else {
+            return Vec::new();
+        };
+        let Some(lookup) =
+            lookup_symbol_at_cursor(&snapshot.semantic_index, &document.text, cursor)
+        else {
+            return Vec::new();
+        };
+        let Some(location) = lookup.symbol.definition else {
+            return Vec::new();
+        };
+
+        location_from_source_location(self, snapshot, location)
+            .into_iter()
+            .collect()
     }
 
     pub fn document_symbols(
@@ -274,6 +294,37 @@ impl AnalysisService {
         collect_document_symbols(ast, None, &document.line_index, &mut symbols);
         symbols
     }
+}
+
+fn location_from_source_location(
+    service: &AnalysisService,
+    snapshot: &AnalysisSnapshot,
+    location: SourceLocation,
+) -> Option<Location> {
+    let line_index = snapshot
+        .active_document
+        .as_ref()
+        .filter(|document| document.path == location.path)
+        .map(|document| document.line_index.clone())
+        .or_else(|| {
+            service
+                .documents
+                .get(&location.path)
+                .map(|document| document.line_index.clone())
+        })
+        .or_else(|| {
+            fs::read_to_string(&location.path)
+                .ok()
+                .map(|source| LineIndex::new(&source))
+        })?;
+
+    Some(Location {
+        path: location.path,
+        range: AnalysisRange {
+            start: line_index.byte_to_utf16_position(location.start),
+            end: line_index.byte_to_utf16_position(location.end),
+        },
+    })
 }
 
 fn collect_document_symbols(
@@ -359,6 +410,88 @@ fn document_symbol_for_ast(
         detail,
         range,
         selection_range: range,
+    })
+}
+
+fn semantic_index_with_source_locations(
+    existing: &SemanticIndex,
+    path: &Path,
+    ast: &[Ast],
+) -> SemanticIndex {
+    let mut symbols = existing.symbols().to_vec();
+    collect_source_location_symbols(ast, None, path, &mut symbols);
+    SemanticIndex::from_symbols(symbols)
+}
+
+fn collect_source_location_symbols(
+    ast: &[Ast],
+    owner: Option<&str>,
+    path: &Path,
+    out: &mut Vec<CompletionSymbol>,
+) {
+    for node in ast {
+        if let Some(symbol) = source_location_symbol_for_ast(node, owner, path) {
+            let nested_owner = nested_owner_for_ast(node, owner);
+            out.push(symbol);
+            if let Some((body, owner_name)) = module_body_for_ast(node).zip(nested_owner.as_deref())
+            {
+                collect_source_location_symbols(body, Some(owner_name), path, out);
+            }
+        }
+    }
+}
+
+fn source_location_symbol_for_ast(
+    node: &Ast,
+    owner: Option<&str>,
+    path: &Path,
+) -> Option<CompletionSymbol> {
+    let (name, kind, span) = match node {
+        Ast::Def(span, name, ..) | Ast::ExtractorDef(span, name, ..) => (
+            qualify_symbol(owner, name),
+            CompletionKind::FunctionCall,
+            span,
+        ),
+        Ast::ConstDef(span, name, ..) => {
+            (qualify_symbol(owner, name), CompletionKind::Variable, span)
+        }
+        Ast::StructDef(span, name, ..)
+        | Ast::RecordDef(span, name, ..)
+        | Ast::DeferrorDef(span, name, ..)
+        | Ast::EnumDef(span, name, ..) => (
+            qualify_symbol(owner, name),
+            CompletionKind::TypeConstructor,
+            span,
+        ),
+        Ast::Defmod(span, name, ..)
+        | Ast::Defagent(span, name, ..)
+        | Ast::Defgenserver(span, name, ..)
+        | Ast::Defsupervisor(span, name, ..)
+        | Ast::DefdynamicSupervisor(span, name, ..)
+        | Ast::TraitDef(span, name, ..) => {
+            (qualify_symbol(owner, name), CompletionKind::TypePath, span)
+        }
+        Ast::ImplDef(span, target, ..) => (
+            qualify_symbol(owner, target),
+            CompletionKind::TypePath,
+            span,
+        ),
+        _ => return None,
+    };
+
+    Some(CompletionSymbol {
+        replacement: name.clone(),
+        label: name,
+        kind,
+        detail: None,
+        documentation: None,
+        sort_text: None,
+        origin: None,
+        definition: Some(SourceLocation {
+            path: path.to_path_buf(),
+            start: span.start,
+            end: span.end,
+        }),
     })
 }
 
@@ -454,8 +587,13 @@ fn analyze_project_stages(
     let Some(runner) = context.runner.as_ref() else {
         return;
     };
-    let Some(module_stages) = build_staged_modules(service, runner, active_document, diagnostics)
-    else {
+    let Some(module_stages) = build_staged_modules(
+        service,
+        runner,
+        active_document,
+        diagnostics,
+        semantic_index,
+    ) else {
         return;
     };
 
@@ -526,6 +664,7 @@ fn build_staged_modules(
     runner: &crate::RunnerContext,
     active_document: &DocumentSnapshot,
     diagnostics: &mut Vec<AnalysisDiagnostic>,
+    semantic_index: &mut SemanticIndex,
 ) -> Option<Vec<Vec<sigil::StagedModuleAst>>> {
     let mut module_stages = Vec::new();
     for stage in &runner.module_stages {
@@ -552,7 +691,11 @@ fn build_staged_modules(
                 )
             };
             match ast {
-                Ok(ast) => staged_modules.extend(lower_module_ast(ast, None)),
+                Ok(ast) => {
+                    *semantic_index =
+                        semantic_index_with_source_locations(semantic_index, &file.path, &ast);
+                    staged_modules.extend(lower_module_ast(ast, None));
+                }
                 Err(error) => {
                     let span = error.span();
                     let line_index = LineIndex::new(&source);

@@ -16,6 +16,8 @@ fn completion_request_clamps_cursor_to_char_boundary_and_returns_byte_replacemen
         documentation: None,
         sort_text: None,
         origin: None,
+
+        definition: None,
     }]);
     let source = "値.pr";
     let cursor_inside_multibyte = 1;
@@ -42,6 +44,8 @@ fn completion_request_filters_symbols_by_token_prefix() {
             documentation: None,
             sort_text: None,
             origin: None,
+
+            definition: None,
         },
         CompletionSymbol {
             label: "Process::sleep".to_string(),
@@ -51,6 +55,8 @@ fn completion_request_filters_symbols_by_token_prefix() {
             documentation: None,
             sort_text: None,
             origin: None,
+
+            definition: None,
         },
         CompletionSymbol {
             label: "String".to_string(),
@@ -60,6 +66,8 @@ fn completion_request_filters_symbols_by_token_prefix() {
             documentation: None,
             sort_text: None,
             origin: None,
+
+            definition: None,
         },
     ]);
 
@@ -85,6 +93,8 @@ fn completion_request_matches_qualified_symbol_tail_for_unqualified_prefix() {
         documentation: None,
         sort_text: None,
         origin: None,
+
+        definition: None,
     }]);
 
     let completion = complete_prefix(CompletionRequest {
@@ -107,6 +117,8 @@ fn semantic_index_finds_symbol_at_cursor_for_shared_hover_and_completion_detail(
         documentation: Some("Returns the helper value.".to_string()),
         sort_text: None,
         origin: None,
+
+        definition: None,
     }]);
 
     let lookup = lookup_symbol_at_cursor(&index, "value = helper()", "value = hel".len())
@@ -132,6 +144,8 @@ fn semantic_index_returns_signature_help_from_call_context() {
         documentation: Some("Writes a line.".to_string()),
         sort_text: None,
         origin: None,
+
+        definition: None,
     }]);
 
     let help = signature_help_at_cursor(&index, "print(\"hello\", Tr", "print(\"hello\", Tr".len())
@@ -206,6 +220,8 @@ fn semantic_index_deduplicates_completion_symbols() {
             documentation: None,
             sort_text: None,
             origin: None,
+
+            definition: None,
         },
         CompletionSymbol {
             label: "print".to_string(),
@@ -215,6 +231,8 @@ fn semantic_index_deduplicates_completion_symbols() {
             documentation: None,
             sort_text: None,
             origin: None,
+
+            definition: None,
         },
     ]);
 
@@ -326,6 +344,8 @@ fn completion_candidates_are_sorted_by_label_for_stable_lsp_output() {
             documentation: None,
             sort_text: None,
             origin: None,
+
+            definition: None,
         },
         CompletionSymbol {
             label: "alpha".to_string(),
@@ -335,6 +355,8 @@ fn completion_candidates_are_sorted_by_label_for_stable_lsp_output() {
             documentation: None,
             sort_text: None,
             origin: None,
+
+            definition: None,
         },
     ]);
 

@@ -4,8 +4,9 @@ use surtr_analysis::{
     CompletionKind, CompletionSymbol, RunnerSelection, SelectedContext, SemanticIndex,
 };
 use surtr_lsp::{
-    completion_items, diagnostics, document_symbols, file_uri_to_path, hover, path_to_file_uri,
-    signature_help, CompletionItemKind, DiagnosticSeverity, LspAnalysisHost, LspPosition, LspRange,
+    completion_items, definition, diagnostics, document_symbols, file_uri_to_path, hover,
+    path_to_file_uri, signature_help, CompletionItemKind, DiagnosticSeverity, LspAnalysisHost,
+    LspPosition, LspRange,
 };
 
 #[test]
@@ -54,6 +55,8 @@ fn completion_maps_utf16_position_to_lsp_text_edits() {
         documentation: None,
         sort_text: None,
         origin: None,
+
+        definition: None,
     }]));
 
     let items = completion_items(
@@ -103,6 +106,8 @@ fn hover_maps_semantic_detail_and_documentation_to_lsp_dto() {
         documentation: Some("Writes a line.".to_string()),
         sort_text: None,
         origin: None,
+
+        definition: None,
     }]));
 
     let hover = hover(
@@ -148,6 +153,8 @@ fn signature_help_maps_semantic_call_context_to_lsp_dto() {
         documentation: Some("Writes a line.".to_string()),
         sort_text: None,
         origin: None,
+
+        definition: None,
     }]));
 
     let help = signature_help(
@@ -166,6 +173,37 @@ fn signature_help_maps_semantic_call_context_to_lsp_dto() {
     );
     assert_eq!(help.active_signature, Some(0));
     assert_eq!(help.active_parameter, Some(1));
+}
+
+#[test]
+fn definition_maps_analysis_location_to_lsp_dto() {
+    let workspace = PathBuf::from("/repo");
+    let path = workspace.join("main.srt");
+    let uri = path_to_file_uri(&path);
+    let source = "def helper() -> Int { 1 }\nvalue = helper()";
+    let mut host = LspAnalysisHost::new(workspace);
+    host.did_open(uri.clone(), Some(1), source.to_string());
+    host.set_selected_context(Some(SelectedContext::ScriptEntry(path)));
+
+    let locations = definition(
+        &host,
+        &uri,
+        LspPosition {
+            line: 1,
+            character: "value = help".len() as u32,
+        },
+    );
+
+    assert_eq!(locations.len(), 1);
+    assert_eq!(locations[0].uri, uri);
+    assert_eq!(
+        locations[0].range.start,
+        LspPosition {
+            line: 0,
+            character: 0,
+        }
+    );
+    assert!(locations[0].range.end.character > locations[0].range.start.character);
 }
 
 #[test]
