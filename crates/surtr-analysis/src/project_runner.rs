@@ -214,6 +214,16 @@ pub fn project_runner_input_from_result(
 }
 
 pub fn resolve_project_runner(input: ProjectRunnerInput) -> RunnerContext {
+    resolve_project_runner_with(input, |path| fs::read_to_string(path).ok())
+}
+
+pub fn resolve_project_runner_with<F>(
+    input: ProjectRunnerInput,
+    mut read_to_string: F,
+) -> RunnerContext
+where
+    F: FnMut(&Path) -> Option<String>,
+{
     let mut resolved_paths = Vec::new();
     let mut diagnostics = Vec::new();
     let mut fingerprints = Vec::new();
@@ -221,13 +231,13 @@ pub fn resolve_project_runner(input: ProjectRunnerInput) -> RunnerContext {
     for declared_path in input.declared_paths {
         let expanded_files = expand_declared_path(&declared_path, &mut diagnostics);
         for path in &expanded_files {
-            match fs::read_to_string(path) {
-                Ok(source) => fingerprints.push(ModuleFileFingerprint {
+            match read_to_string(path) {
+                Some(source) => fingerprints.push(ModuleFileFingerprint {
                     path: path.clone(),
                     source_kind: SourceKind::DefinitionSource,
                     content_hash: stable_hash_text(&source),
                 }),
-                Err(_) => diagnostics.push(RunnerDiagnostic {
+                None => diagnostics.push(RunnerDiagnostic {
                     kind: RunnerDiagnosticKind::UnreadablePath,
                     path: Some(path.clone()),
                     span: declared_path.declaration_span,

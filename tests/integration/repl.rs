@@ -3,6 +3,8 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 
 struct ChildGuard {
     child: Option<Child>,
@@ -105,6 +107,107 @@ fn strip_ansi(input: &str) -> String {
     }
 
     out
+}
+
+#[cfg(unix)]
+struct PtyGuard {
+    child: Option<Child>,
+    master_fd: i32,
+}
+
+#[cfg(unix)]
+impl PtyGuard {
+    fn spawn(command: &mut Command) -> Self {
+        use std::fs::File;
+        use std::os::fd::FromRawFd;
+
+        let mut master_fd = -1;
+        let mut slave_fd = -1;
+        let rc = unsafe {
+            libc::openpty(
+                &mut master_fd,
+                &mut slave_fd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, 0, "openpty should succeed");
+
+        let stdin_fd = unsafe { libc::dup(slave_fd) };
+        let stdout_fd = unsafe { libc::dup(slave_fd) };
+        let stderr_fd = unsafe { libc::dup(slave_fd) };
+        assert!(
+            stdin_fd >= 0 && stdout_fd >= 0 && stderr_fd >= 0,
+            "dup should succeed"
+        );
+
+        let slave = unsafe { File::from_raw_fd(slave_fd) };
+        command
+            .stdin(Stdio::from(unsafe { File::from_raw_fd(stdin_fd) }))
+            .stdout(Stdio::from(unsafe { File::from_raw_fd(stdout_fd) }))
+            .stderr(Stdio::from(unsafe { File::from_raw_fd(stderr_fd) }));
+        let child = command
+            .spawn()
+            .expect("failed to spawn surtr repl with pty");
+        drop(slave);
+
+        let flags = unsafe { libc::fcntl(master_fd, libc::F_GETFL) };
+        assert!(flags >= 0, "fcntl F_GETFL should succeed");
+        let rc = unsafe { libc::fcntl(master_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+        assert_eq!(rc, 0, "fcntl F_SETFL should succeed");
+
+        Self {
+            child: Some(child),
+            master_fd,
+        }
+    }
+
+    fn write_all(&self, bytes: &[u8]) {
+        let written = unsafe { libc::write(self.master_fd, bytes.as_ptr().cast(), bytes.len()) };
+        assert_eq!(
+            written,
+            bytes.len() as isize,
+            "pty write should write all bytes"
+        );
+    }
+
+    fn read_available(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let read = unsafe { libc::read(self.master_fd, buf.as_mut_ptr().cast(), buf.len()) };
+            if read > 0 {
+                out.extend_from_slice(&buf[..read as usize]);
+                continue;
+            }
+            if read == 0 {
+                break;
+            }
+            let err = std::io::Error::last_os_error();
+            if matches!(
+                err.raw_os_error(),
+                Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK
+            ) {
+                break;
+            }
+            panic!("pty read failed: {err}");
+        }
+        out
+    }
+}
+
+#[cfg(unix)]
+impl Drop for PtyGuard {
+    fn drop(&mut self) {
+        unsafe {
+            libc::close(self.master_fd);
+        }
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 #[test]
@@ -270,6 +373,91 @@ fn repl_accepts_single_item_list_literal_with_trailing_comma() {
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
     assert!(stdout.contains("xldr(1)> [1]"), "{stdout}");
     assert!(!stderr.contains("ParseError"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_completion_latency_smoke_reports_positive_samples_over_pty() {
+    fn pump_until(session: &PtyGuard, buffer: &mut Vec<u8>, needle: &[u8], timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            buffer.extend(session.read_available());
+            if buffer.windows(needle.len()).any(|window| window == needle) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "did not observe {:?} in PTY output:\n{}",
+            String::from_utf8_lossy(needle),
+            String::from_utf8_lossy(buffer)
+        );
+    }
+
+    let mut command = surtr_command();
+    command.arg("repl").arg("--quiet");
+    let session = PtyGuard::spawn(&mut command);
+    let mut buffer = Vec::new();
+    pump_until(&session, &mut buffer, b"xldr(1)> ", Duration::from_secs(30));
+
+    session.write_all(b"St");
+    let warmup_deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < warmup_deadline {
+        buffer.extend(session.read_available());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let mut samples_ms = Vec::new();
+    for _ in 0..5 {
+        let start = Instant::now();
+        let baseline_len = buffer.len();
+        session.write_all(b"r");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            buffer.extend(session.read_available());
+            if buffer[baseline_len..]
+                .windows(b"String".len())
+                .any(|window| window == b"String")
+            {
+                samples_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "completion did not appear over PTY"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        session.write_all(&[0x7f]);
+        let settle_deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < settle_deadline {
+            buffer.extend(session.read_available());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    samples_ms.sort_by(|left, right| left.partial_cmp(right).expect("values should be finite"));
+    let median_ms = samples_ms[samples_ms.len() / 2];
+    let p95_index = ((samples_ms.len() - 1) * 95) / 100;
+    let p95_ms = samples_ms[p95_index];
+
+    assert!(
+        median_ms > 0.0,
+        "median latency should be positive: {samples_ms:?}"
+    );
+    assert!(
+        p95_ms >= median_ms,
+        "p95 should not be below median: {samples_ms:?}"
+    );
+    assert!(
+        buffer
+            .windows(b"type String".len())
+            .any(|window| window == b"type String"),
+        "PTY output should contain completion candidates:\n{}",
+        String::from_utf8_lossy(&buffer)
+    );
+
+    session.write_all(b":q\r");
 }
 
 #[test]

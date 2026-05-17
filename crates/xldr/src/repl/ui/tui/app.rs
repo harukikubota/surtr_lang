@@ -1,7 +1,9 @@
 //! TUI application state types.
 use std::collections::VecDeque;
 
+use crate::repl::logic::core::CompletionTelemetry;
 use crate::repl::logic::{PresentedDoc, PresentedResultKind};
+use crate::repl::ui::completion::ReplCompletionController;
 
 // ── Enums ─────────────────────────────────────────────────────────────────────
 
@@ -169,6 +171,9 @@ pub(super) struct App {
     pub(super) docs: VecDeque<DocEntry>,
     pub(super) selected_doc: Option<usize>,
     pub(super) completion: Completion,
+    pub(super) completion_controller: ReplCompletionController,
+    pub(super) tab_completion_mode: bool,
+    pub(super) last_completion_telemetry: Option<CompletionTelemetry>,
     pub(super) status: String,
     pub(super) mode: ReplMode,
 }
@@ -187,6 +192,9 @@ impl App {
             docs: VecDeque::new(),
             selected_doc: None,
             completion: Completion::default(),
+            completion_controller: ReplCompletionController::default(),
+            tab_completion_mode: false,
+            last_completion_telemetry: None,
             status: "INSERT | Tab Focus | Ctrl-C Quit".to_string(),
             mode: ReplMode::Repl,
         }
@@ -272,6 +280,11 @@ impl App {
             FocusPane::Results => "Results",
             FocusPane::Docs => "Docs",
         };
-        self.status = format!("{mode} | Focus: {focus} | Tab Focus | Ctrl-C Quit");
+        let completion = if self.tab_completion_mode {
+            "Tab Complete: On"
+        } else {
+            "Tab Complete: Off"
+        };
+        self.status = format!("{mode} | Focus: {focus} | {completion} | Ctrl-C Quit");
     }
 }

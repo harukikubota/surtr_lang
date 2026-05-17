@@ -205,6 +205,19 @@ fn core_completion_returns_limited_global_candidates_with_details() {
         .documentation
         .as_deref()
         .is_some_and(|doc| doc.contains("Print a string to stdout")));
+    assert!(
+        completion.telemetry.completion_compute_ns.is_some(),
+        "completion telemetry should record compute time: {:?}",
+        completion.telemetry
+    );
+    assert!(
+        completion
+            .telemetry
+            .completion_compute_ns
+            .is_some_and(|value| value > 0),
+        "completion telemetry should be positive: {:?}",
+        completion.telemetry
+    );
 }
 
 #[test]

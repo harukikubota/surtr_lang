@@ -12,7 +12,7 @@ pub mod update;
 pub mod widgets;
 
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::{
     event::{self, Event as CrosstermEvent},
@@ -23,6 +23,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 
 use crate::repl::logic::core::ReplEngine;
 use crate::repl::logic::PresentedResultKind;
+use crate::repl::ui::completion::BackgroundReplCompletionProvider;
 use crate::{CommandError, CommandResult};
 
 use app::App;
@@ -91,7 +92,10 @@ fn run_loop(
     app: &mut App,
     engine: &mut ReplEngine,
 ) -> CommandResult<()> {
+    let mut completion_provider =
+        BackgroundReplCompletionProvider::new(engine.completion_context());
     while !app.should_quit {
+        update::poll_completion(app, &mut completion_provider);
         terminal
             .draw(|f| widgets::draw(f, app))
             .map_err(|e| CommandError::message(1, format!("tui: draw error: {}", e)))?;
@@ -99,7 +103,16 @@ fn run_loop(
         let timeout = Duration::from_millis(100);
         if event::poll(timeout).unwrap_or(false) {
             match event::read() {
-                Ok(CrosstermEvent::Key(key)) => update::handle_key(app, engine, key),
+                Ok(CrosstermEvent::Key(key)) => {
+                    let event_received_at = Instant::now();
+                    update::handle_key(
+                        app,
+                        engine,
+                        &mut completion_provider,
+                        key,
+                        Some(event_received_at),
+                    );
+                }
                 Ok(_) => {}
                 Err(e) => {
                     return Err(CommandError::message(1, format!("tui: event error: {}", e)));

@@ -1,15 +1,19 @@
 //! TUI key handling and event processing.
 
+use std::time::Instant;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::repl::logic::core::ReplEngine;
+use crate::repl::logic::core::{ReplCompletionContext, ReplEngine};
 use crate::repl::logic::{present_for_interaction, PresentedEvent, PresentedResultKind};
+use crate::repl::ui::completion::{ReplCompletionProvider, ReplCompletionResult};
 
-use super::app::{App, Completion, CompletionItem, FocusPane, InputBuffer, InputMode};
+use super::app::{App, Completion, CompletionItem, FocusPane, InputMode};
 
 // ── Completion helpers ────────────────────────────────────────────────────────
 
-pub(super) fn current_token_prefix(buf: &InputBuffer) -> String {
+#[cfg(test)]
+pub(super) fn current_token_prefix(buf: &super::app::InputBuffer) -> String {
     let before = &buf.text[..buf.cursor_byte];
     before
         .split(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '{' | '}' | ','))
@@ -18,7 +22,11 @@ pub(super) fn current_token_prefix(buf: &InputBuffer) -> String {
         .to_string()
 }
 
-pub(super) fn refresh_completion(app: &mut App, engine: &ReplEngine) {
+pub(super) fn refresh_completion(
+    app: &mut App,
+    provider: &mut dyn ReplCompletionProvider,
+    event_received_at: Option<Instant>,
+) {
     match app.input_mode {
         InputMode::Command => {
             let prefix = app.command.text.trim().to_string();
@@ -28,29 +36,74 @@ pub(super) fn refresh_completion(app: &mut App, engine: &ReplEngine) {
                 selected: 0,
                 items,
             };
+            app.last_completion_telemetry = None;
         }
         InputMode::Insert => {
-            let completion = engine.completions(&app.input.text, app.input.cursor_byte);
-            if completion.candidates.is_empty() {
+            if !app.tab_completion_mode {
                 app.completion.clear();
+                app.last_completion_telemetry = None;
+                return;
+            }
+            if ReplCompletionContext::should_request(&app.input.text, app.input.cursor_byte) {
+                app.completion_controller.submit_if_changed(
+                    provider,
+                    &app.input.text,
+                    app.input.cursor_byte,
+                    event_received_at,
+                );
             } else {
-                let items: Vec<CompletionItem> = completion
-                    .candidates
-                    .into_iter()
-                    .map(|candidate| CompletionItem {
-                        label: candidate.replacement,
-                        detail: candidate.detail,
-                        replace_start: candidate.replace_start,
-                        replace_end: candidate.replace_end,
-                    })
-                    .collect();
-                app.completion = Completion {
-                    visible: !items.is_empty(),
-                    selected: 0,
-                    items,
-                };
+                app.completion_controller.cancel_pending();
+                app.completion.clear();
+                app.last_completion_telemetry = None;
             }
         }
+    }
+}
+
+pub(super) fn poll_completion(app: &mut App, provider: &mut dyn ReplCompletionProvider) {
+    while let Some(result) = provider.poll_ready() {
+        if let Some(result) = app.completion_controller.accept_ready(result) {
+            apply_completion_result(app, result);
+        }
+    }
+}
+
+fn apply_completion_result(app: &mut App, result: ReplCompletionResult) {
+    let apply_started = Instant::now();
+    let mut completion = result.completion;
+    let items: Vec<CompletionItem> = completion
+        .candidates
+        .iter()
+        .map(|candidate| CompletionItem {
+            label: candidate.replacement.clone(),
+            detail: candidate.detail.clone(),
+            replace_start: candidate.replace_start,
+            replace_end: candidate.replace_end,
+        })
+        .collect();
+    completion
+        .telemetry
+        .record_completion_apply(apply_started.elapsed());
+    completion
+        .telemetry
+        .record_completion_render(apply_started.elapsed());
+    if let Some(event_received_at) = result.event_received_at {
+        completion
+            .telemetry
+            .record_input_event_to_ui_handler(event_received_at.elapsed());
+        completion
+            .telemetry
+            .record_total_key_to_visible_response(event_received_at.elapsed());
+    }
+    app.last_completion_telemetry = Some(completion.telemetry.clone());
+    if items.is_empty() && completion.signature.is_none() {
+        app.completion.clear();
+    } else {
+        app.completion = Completion {
+            visible: true,
+            selected: 0,
+            items,
+        };
     }
 }
 
@@ -104,20 +157,32 @@ fn command_completions(prefix: &str, focus: FocusPane) -> Vec<CompletionItem> {
 
 // ── Key handling ──────────────────────────────────────────────────────────────
 
-pub(super) fn handle_key(app: &mut App, engine: &mut ReplEngine, key: KeyEvent) {
+pub(super) fn handle_key(
+    app: &mut App,
+    engine: &mut ReplEngine,
+    provider: &mut dyn ReplCompletionProvider,
+    key: KeyEvent,
+    event_received_at: Option<Instant>,
+) {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         app.should_quit = true;
         return;
     }
 
     match app.focus {
-        FocusPane::Input => handle_input_pane(app, engine, key),
+        FocusPane::Input => handle_input_pane(app, engine, provider, key, event_received_at),
         FocusPane::Results => handle_results_pane(app, key),
         FocusPane::Docs => handle_docs_pane(app, key),
     }
 }
 
-fn handle_input_pane(app: &mut App, engine: &mut ReplEngine, key: KeyEvent) {
+fn handle_input_pane(
+    app: &mut App,
+    engine: &mut ReplEngine,
+    provider: &mut dyn ReplCompletionProvider,
+    key: KeyEvent,
+    event_received_at: Option<Instant>,
+) {
     match key.code {
         KeyCode::Tab => {
             if app.completion.visible {
@@ -125,6 +190,10 @@ fn handle_input_pane(app: &mut App, engine: &mut ReplEngine, key: KeyEvent) {
                 app.completion.apply(&mut buf);
                 *app.active_buf_mut() = buf;
                 app.completion.clear();
+            } else if app.input_mode == InputMode::Insert {
+                app.tab_completion_mode = true;
+                app.update_status();
+                refresh_completion(app, provider, event_received_at);
             } else {
                 app.next_focus();
             }
@@ -132,49 +201,61 @@ fn handle_input_pane(app: &mut App, engine: &mut ReplEngine, key: KeyEvent) {
         KeyCode::BackTab => app.prev_focus(),
         KeyCode::Left => {
             app.active_buf_mut().move_left();
-            refresh_completion(app, engine);
+            refresh_completion(app, provider, event_received_at);
         }
         KeyCode::Right => {
             app.active_buf_mut().move_right();
-            refresh_completion(app, engine);
+            refresh_completion(app, provider, event_received_at);
         }
         KeyCode::Up => app.completion.select_prev(),
         KeyCode::Down => app.completion.select_next(),
         KeyCode::Backspace => {
             app.active_buf_mut().backspace();
-            refresh_completion(app, engine);
+            refresh_completion(app, provider, event_received_at);
         }
         KeyCode::Esc => {
             if app.input_mode == InputMode::Command {
                 app.input_mode = InputMode::Insert;
                 app.command.clear();
                 app.completion.clear();
+                app.completion_controller.cancel_pending();
+                app.tab_completion_mode = false;
+                app.update_status();
+            } else if app.tab_completion_mode || app.completion.visible {
+                app.tab_completion_mode = false;
+                app.completion.clear();
+                app.completion_controller.cancel_pending();
+                app.last_completion_telemetry = None;
                 app.update_status();
             }
         }
         KeyCode::Enter => match app.input_mode {
-            InputMode::Insert => submit_input(app, engine),
-            InputMode::Command => submit_command(app, engine),
+            InputMode::Insert => submit_input(app, engine, provider),
+            InputMode::Command => submit_command(app, engine, provider),
         },
         KeyCode::Char(':') => {
             if app.input_mode == InputMode::Insert && app.input.cursor_byte == 0 {
                 app.input_mode = InputMode::Command;
                 app.command.clear();
+                app.tab_completion_mode = false;
                 app.update_status();
-                refresh_completion(app, engine);
+                app.completion_controller.cancel_pending();
+                refresh_completion(app, provider, event_received_at);
             } else if app.input_mode == InputMode::Command {
                 app.input_mode = InputMode::Insert;
                 app.command.clear();
                 app.completion.clear();
+                app.completion_controller.cancel_pending();
+                app.tab_completion_mode = false;
                 app.update_status();
             } else {
                 app.input.insert_char(':');
-                refresh_completion(app, engine);
+                refresh_completion(app, provider, event_received_at);
             }
         }
         KeyCode::Char(ch) => {
             app.active_buf_mut().insert_char(ch);
-            refresh_completion(app, engine);
+            refresh_completion(app, provider, event_received_at);
         }
         _ => {}
     }
@@ -215,7 +296,52 @@ fn handle_docs_pane(app: &mut App, key: KeyEvent) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+
     use super::*;
+    use crate::repl::ui::completion::{
+        ReplCompletionProvider, ReplCompletionRequest, ReplCompletionResult,
+    };
+    use crate::repl::ui::tui::app::InputBuffer;
+
+    struct ImmediateProvider {
+        context: ReplCompletionContext,
+        ready: VecDeque<ReplCompletionResult>,
+    }
+
+    impl ImmediateProvider {
+        fn new(engine: &ReplEngine) -> Self {
+            Self {
+                context: engine.completion_context(),
+                ready: VecDeque::new(),
+            }
+        }
+    }
+
+    impl ReplCompletionProvider for ImmediateProvider {
+        fn submit(&mut self, request: ReplCompletionRequest) {
+            let mut completion = self.context.completions(&request.input, request.cursor);
+            completion
+                .telemetry
+                .record_completion_queue(std::time::Duration::from_nanos(1));
+            self.ready.push_back(ReplCompletionResult {
+                input: request.input,
+                cursor: request.cursor,
+                generation: request.generation,
+                completion,
+                enqueued_at: request.enqueued_at,
+                event_received_at: request.event_received_at,
+            });
+        }
+
+        fn poll_ready(&mut self) -> Option<ReplCompletionResult> {
+            self.ready.pop_front()
+        }
+
+        fn replace_context(&mut self, context: ReplCompletionContext) {
+            self.context = context;
+        }
+    }
 
     #[test]
     fn current_token_prefix_keeps_qualified_type_paths() {
@@ -228,9 +354,12 @@ mod tests {
     fn refresh_completion_uses_engine_candidates_for_qualified_paths() {
         let engine = ReplEngine::new().expect("REPL engine should bootstrap");
         let mut app = App::new();
+        let mut provider = ImmediateProvider::new(&engine);
+        app.tab_completion_mode = true;
         app.input.set("String::re".to_string());
 
-        refresh_completion(&mut app, &engine);
+        refresh_completion(&mut app, &mut provider, Some(Instant::now()));
+        poll_completion(&mut app, &mut provider);
 
         let labels = app
             .completion
@@ -242,15 +371,48 @@ mod tests {
             labels.contains(&"String::repeat"),
             "qualified TUI completion should use engine candidates: {labels:?}"
         );
+        let telemetry = app
+            .last_completion_telemetry
+            .as_ref()
+            .expect("completion telemetry should be recorded");
+        assert!(
+            telemetry.completion_queue_ns.is_some_and(|value| value > 0),
+            "completion telemetry should include queue timing: {telemetry:?}"
+        );
+        assert!(
+            telemetry
+                .completion_compute_ns
+                .is_some_and(|value| value > 0),
+            "completion telemetry should include compute timing: {telemetry:?}"
+        );
+        assert!(
+            telemetry.completion_apply_ns.is_some_and(|value| value > 0),
+            "completion telemetry should include apply timing: {telemetry:?}"
+        );
+        assert!(
+            telemetry
+                .completion_render_ns
+                .is_some_and(|value| value > 0),
+            "completion telemetry should include render timing: {telemetry:?}"
+        );
+        assert!(
+            telemetry
+                .total_key_to_visible_response_ns
+                .is_some_and(|value| value > 0),
+            "completion telemetry should include total timing: {telemetry:?}"
+        );
     }
 
     #[test]
     fn completion_apply_replaces_only_engine_reported_range() {
         let engine = ReplEngine::new().expect("REPL engine should bootstrap");
         let mut app = App::new();
+        let mut provider = ImmediateProvider::new(&engine);
+        app.tab_completion_mode = true;
         app.input.set("foo=Str".to_string());
 
-        refresh_completion(&mut app, &engine);
+        refresh_completion(&mut app, &mut provider, None);
+        poll_completion(&mut app, &mut provider);
         assert!(app.completion.visible, "completion should be visible");
         app.completion.selected = app
             .completion
@@ -263,11 +425,92 @@ mod tests {
         app.completion.apply(&mut buf);
         assert_eq!(buf.text, "foo=String");
     }
+
+    #[test]
+    fn poll_completion_discards_stale_generation_results() {
+        let engine = ReplEngine::new().expect("REPL engine should bootstrap");
+        let mut app = App::new();
+        let mut provider = ImmediateProvider::new(&engine);
+        app.tab_completion_mode = true;
+
+        app.input.set("St".to_string());
+        refresh_completion(&mut app, &mut provider, None);
+        app.input.set("String::re".to_string());
+        refresh_completion(&mut app, &mut provider, None);
+        poll_completion(&mut app, &mut provider);
+
+        let labels = app
+            .completion
+            .items
+            .iter()
+            .map(|item| item.label.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            labels.contains(&"String::repeat"),
+            "latest generation should win over stale completions: {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"String"),
+            "stale short-prefix completions should not overwrite newer input: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn typing_does_not_show_completion_until_tab_mode_is_enabled() {
+        let mut engine = ReplEngine::new().expect("REPL engine should bootstrap");
+        let mut app = App::new();
+        let mut provider = ImmediateProvider::new(&engine);
+
+        handle_key(
+            &mut app,
+            &mut engine,
+            &mut provider,
+            KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE),
+            None,
+        );
+        poll_completion(&mut app, &mut provider);
+
+        assert!(
+            !app.completion.visible,
+            "completion should stay hidden until tab mode is enabled"
+        );
+        assert!(
+            !app.tab_completion_mode,
+            "plain typing should not enable tab mode"
+        );
+    }
+
+    #[test]
+    fn tab_enters_completion_mode_and_requests_candidates() {
+        let mut engine = ReplEngine::new().expect("REPL engine should bootstrap");
+        let mut app = App::new();
+        let mut provider = ImmediateProvider::new(&engine);
+        app.input.set("String::re".to_string());
+
+        handle_key(
+            &mut app,
+            &mut engine,
+            &mut provider,
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            None,
+        );
+        poll_completion(&mut app, &mut provider);
+
+        assert!(app.tab_completion_mode, "tab should enable completion mode");
+        assert!(
+            app.completion.visible,
+            "tab completion mode should show candidates"
+        );
+    }
 }
 
 // ── Submission ────────────────────────────────────────────────────────────────
 
-pub(super) fn submit_input(app: &mut App, engine: &mut ReplEngine) {
+pub(super) fn submit_input(
+    app: &mut App,
+    engine: &mut ReplEngine,
+    provider: &mut dyn ReplCompletionProvider,
+) {
     let source = app.input.text.trim().to_string();
     if source.is_empty() {
         return;
@@ -275,8 +518,12 @@ pub(super) fn submit_input(app: &mut App, engine: &mut ReplEngine) {
 
     app.input.clear();
     app.completion.clear();
+    app.completion_controller.cancel_pending();
+    app.tab_completion_mode = false;
+    app.last_completion_telemetry = None;
 
     let presented = present_for_interaction(engine.handle_line(&source));
+    provider.replace_context(engine.completion_context());
     match presented.event {
         PresentedEvent::None => {}
         PresentedEvent::Result(result) => app.push_result(
@@ -294,11 +541,17 @@ pub(super) fn submit_input(app: &mut App, engine: &mut ReplEngine) {
     app.update_status();
 }
 
-pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
+pub(super) fn submit_command(
+    app: &mut App,
+    engine: &mut ReplEngine,
+    provider: &mut dyn ReplCompletionProvider,
+) {
     let raw = app.command.text.trim().to_string();
     app.command.clear();
     app.input_mode = InputMode::Insert;
     app.completion.clear();
+    app.completion_controller.cancel_pending();
+    app.tab_completion_mode = false;
     app.update_status();
 
     if raw.is_empty() {
@@ -318,6 +571,7 @@ pub(super) fn submit_command(app: &mut App, engine: &mut ReplEngine) {
                 format!(":{cmd} {arg}")
             };
             let presented = present_for_interaction(engine.handle_line(&line));
+            provider.replace_context(engine.completion_context());
             match presented.event {
                 PresentedEvent::Result(result) => {
                     app.push_result(

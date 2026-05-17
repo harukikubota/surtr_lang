@@ -24,6 +24,9 @@ sindr = { path = "../sindr" }
 xldr  = { path = "../xldr" }
 serde_json = "1.0"
 
+[dev-dependencies]
+libc = "0.2"
+
 [[test]]
 name = "integration"
 path = "../../tests/integration/all.rs"

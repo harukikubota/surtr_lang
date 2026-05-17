@@ -31,3 +31,8 @@ criterion = { version = "0.5", optional = true }
 name = "tco"
 harness = false
 required-features = ["bench"]
+
+[[bench]]
+name = "completion"
+harness = false
+required-features = ["bench"]

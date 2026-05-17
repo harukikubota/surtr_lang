@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::panic;
+use std::time::{Duration, Instant};
 
 use diagnostics::{DiagnosticSpec, SourceId, SourceRegistry};
 use eldr::builtin::inspect_value;
@@ -12,6 +13,7 @@ use scar::typed::{
     TypedInner, TypedNode, TypedPattern,
 };
 use scar::types::Ty;
+use serde::{Deserialize, Serialize};
 use sigil::error::ResolveError;
 use sindr::builtin::BUILTIN_METAS;
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
@@ -103,6 +105,10 @@ const REPL_UNRESOLVED_TYPE_HINT: &str =
 const COMPLETION_DEFAULT_LIMIT: usize = 5;
 
 const STAGE_PARSE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+fn duration_to_nanos(elapsed: Duration) -> u64 {
+    elapsed.as_nanos().min(u128::from(u64::MAX)) as u64
+}
 
 /// Error returned when loading a `.eldr` file into a REPL engine.
 #[derive(Debug)]
@@ -307,10 +313,167 @@ pub struct ReplSignatureHelp {
     pub active_parameter: Option<usize>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompletionTelemetry {
+    pub input_event_to_ui_handler_ns: Option<u64>,
+    pub completion_queue_ns: Option<u64>,
+    pub completion_compute_ns: Option<u64>,
+    pub completion_apply_ns: Option<u64>,
+    pub completion_render_ns: Option<u64>,
+    pub total_key_to_visible_response_ns: Option<u64>,
+}
+
+impl CompletionTelemetry {
+    pub fn record_input_event_to_ui_handler(&mut self, elapsed: Duration) {
+        self.input_event_to_ui_handler_ns = Some(duration_to_nanos(elapsed));
+    }
+
+    pub fn record_completion_compute(&mut self, elapsed: Duration) {
+        self.completion_compute_ns = Some(duration_to_nanos(elapsed));
+    }
+
+    pub fn record_completion_queue(&mut self, elapsed: Duration) {
+        self.completion_queue_ns = Some(duration_to_nanos(elapsed));
+    }
+
+    pub fn record_completion_apply(&mut self, elapsed: Duration) {
+        self.completion_apply_ns = Some(duration_to_nanos(elapsed));
+    }
+
+    pub fn record_completion_render(&mut self, elapsed: Duration) {
+        self.completion_render_ns = Some(duration_to_nanos(elapsed));
+    }
+
+    pub fn record_total_key_to_visible_response(&mut self, elapsed: Duration) {
+        self.total_key_to_visible_response_ns = Some(duration_to_nanos(elapsed));
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReplCompletion {
     pub candidates: Vec<ReplCompletionCandidate>,
     pub signature: Option<ReplSignatureHelp>,
+    pub telemetry: CompletionTelemetry,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReplCompletionContext {
+    index: surtr_analysis::SemanticIndex,
+    callable_signatures: BTreeMap<String, (String, String)>,
+}
+
+impl ReplCompletionContext {
+    pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
+        let started = Instant::now();
+        let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
+        let (_replace_start, _replace_end, prefix) = completion_token(input, cursor);
+        let call_context = completion_call_context(input, cursor);
+        let signature = call_context
+            .as_ref()
+            .and_then(|context| self.signature_help_for_call(context));
+
+        if call_context.is_none() && prefix.is_empty() {
+            let mut telemetry = CompletionTelemetry::default();
+            telemetry.record_completion_compute(started.elapsed());
+            return ReplCompletion {
+                candidates: Vec::new(),
+                signature,
+                telemetry,
+            };
+        }
+
+        let completion_request = surtr_analysis::CompletionRequest {
+            index: &self.index,
+            source: input,
+            cursor,
+        };
+        let completion = if let Some(context) = call_context.as_ref() {
+            let expected_ty = signature
+                .as_ref()
+                .and_then(|_| self.expected_param_type_for_call(context));
+            let mut completion = surtr_analysis::complete_repl_prefix(
+                completion_request,
+                surtr_analysis::CompletionScope::VariablesOnly,
+            );
+            completion.candidates = surtr_analysis::rank_completion_candidates_by_expected_type(
+                completion.candidates,
+                expected_ty.as_deref(),
+                ReplEngine::parameter_type_accepts_arg_type,
+            );
+            if completion.candidates.is_empty() && expected_ty.is_none() && !prefix.is_empty() {
+                surtr_analysis::complete_repl_prefix(
+                    completion_request,
+                    surtr_analysis::CompletionScope::All,
+                )
+            } else {
+                completion
+            }
+        } else {
+            surtr_analysis::complete_repl_prefix(
+                completion_request,
+                surtr_analysis::CompletionScope::All,
+            )
+        };
+
+        let mut candidates = completion
+            .candidates
+            .into_iter()
+            .map(ReplEngine::repl_completion_candidate_from_analysis)
+            .collect::<Vec<_>>();
+        candidates.truncate(COMPLETION_DEFAULT_LIMIT);
+        let mut telemetry = CompletionTelemetry::default();
+        telemetry.record_completion_compute(started.elapsed());
+        ReplCompletion {
+            candidates,
+            signature,
+            telemetry,
+        }
+    }
+
+    pub fn should_request(input: &str, cursor: usize) -> bool {
+        let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
+        let (_, _, prefix) = completion_token(input, cursor);
+        completion_call_context(input, cursor).is_some() || !prefix.is_empty()
+    }
+
+    fn signature_help_for_call(
+        &self,
+        context: &CompletionCallContext,
+    ) -> Option<ReplSignatureHelp> {
+        let (qualified_name, signature) =
+            self.callable_signature_for_completion(&context.callee)?;
+        let rendered =
+            ReplEngine::render_signature_with_qualified_name(&qualified_name, signature.clone());
+        Some(ReplSignatureHelp {
+            lines: vec![highlight_signature_parameter(
+                &rendered,
+                context.active_parameter,
+            )],
+            active_parameter: Some(context.active_parameter),
+        })
+    }
+
+    fn expected_param_type_for_call(&self, context: &CompletionCallContext) -> Option<String> {
+        let (_qualified_name, signature) =
+            self.callable_signature_for_completion(&context.callee)?;
+        let types = ReplEngine::signature_param_types(signature)?;
+        types.get(context.active_parameter).cloned()
+    }
+
+    fn callable_signature_for_completion(&self, symbol: &str) -> Option<&(String, String)> {
+        self.callable_signatures
+            .get(symbol)
+            .or_else(|| {
+                self.callable_signatures
+                    .get(ReplEngine::canonical_symbol(symbol))
+            })
+            .or_else(|| {
+                symbol
+                    .rsplit("::")
+                    .next()
+                    .and_then(|tail| self.callable_signatures.get(tail))
+            })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1296,6 +1459,81 @@ impl ReplEngine {
         surtr_analysis::SemanticIndex::from_symbols(symbols)
     }
 
+    pub fn completion_context(&self) -> ReplCompletionContext {
+        let mut callable_signatures = BTreeMap::new();
+        let mut insert_signature = |label: &str, qualified_name: String, signature: String| {
+            callable_signatures
+                .entry(label.to_string())
+                .or_insert((qualified_name.clone(), signature.clone()));
+            if let Some(tail) = label.rsplit("::").next() {
+                callable_signatures
+                    .entry(tail.to_string())
+                    .or_insert((qualified_name, signature));
+            }
+        };
+
+        for entry in self.docs.iter().rev() {
+            if entry.kind != DocKind::Function {
+                continue;
+            }
+            let label = crate::surface_path_name(&entry.qualified_name).to_string();
+            if !self.doc_entry_is_completion_surface(entry, &label) {
+                continue;
+            }
+            if let Some((qualified_name, signature)) = self
+                .find_signature(label.rsplit("::").next().unwrap_or(label.as_str()))
+                .or_else(|| {
+                    Self::display_signature_for_doc_entry(entry)
+                        .map(|signature| (entry.qualified_name.clone(), signature))
+                })
+            {
+                insert_signature(&label, qualified_name, signature);
+            }
+        }
+
+        for decl in self.declaration_index.values() {
+            if let Some(label) = self.completion_visible_owner_label(decl) {
+                if let Some((qualified_name, signature)) = self.constructor_signature_entry(decl) {
+                    insert_signature(&label, qualified_name.clone(), signature.clone());
+                    insert_signature(
+                        crate::surface_path_name(&decl.fq_name),
+                        qualified_name,
+                        signature,
+                    );
+                }
+            }
+
+            if Self::declaration_is_function_completion_surface(decl) {
+                let label = crate::surface_path_name(&decl.fq_name).to_string();
+                if let Some((qualified_name, signature)) = self.find_signature(&label) {
+                    insert_signature(&label, qualified_name, signature);
+                }
+            }
+        }
+
+        for entry in self.vm.function_entries().iter().rev() {
+            if entry.flags.generated {
+                continue;
+            }
+            let Some(qualified_name) = entry.qualified_name.as_deref() else {
+                continue;
+            };
+            if !self.function_entry_is_top_level_repl_surface(qualified_name) {
+                continue;
+            }
+            let Some(signature) = entry.signature.as_ref() else {
+                continue;
+            };
+            let label = crate::surface_path_name(qualified_name).to_string();
+            insert_signature(&label, qualified_name.to_string(), signature.clone());
+        }
+
+        ReplCompletionContext {
+            index: self.semantic_index(),
+            callable_signatures,
+        }
+    }
+
     fn insert_surface_symbol(&mut self, name: &str) {
         let surface_name = crate::surface_rendered_name(name);
         self.symbols.insert(surface_name.clone());
@@ -1305,64 +1543,7 @@ impl ReplEngine {
     }
 
     pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
-        let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
-        let (_replace_start, _replace_end, prefix) = completion_token(input, cursor);
-        let call_context = completion_call_context(input, cursor);
-        let signature = call_context
-            .as_ref()
-            .and_then(|context| self.signature_help_for_call(context));
-
-        if call_context.is_none() && prefix.is_empty() {
-            return ReplCompletion {
-                candidates: Vec::new(),
-                signature,
-            };
-        }
-
-        let index = self.semantic_index();
-        let completion_request = surtr_analysis::CompletionRequest {
-            index: &index,
-            source: input,
-            cursor,
-        };
-        let completion = if let Some(context) = call_context.as_ref() {
-            let expected_ty = signature
-                .as_ref()
-                .and_then(|_| self.expected_param_type_for_call(context));
-            let mut completion = surtr_analysis::complete_repl_prefix(
-                completion_request,
-                surtr_analysis::CompletionScope::VariablesOnly,
-            );
-            completion.candidates = surtr_analysis::rank_completion_candidates_by_expected_type(
-                completion.candidates,
-                expected_ty.as_deref(),
-                Self::parameter_type_accepts_arg_type,
-            );
-            if completion.candidates.is_empty() && expected_ty.is_none() && !prefix.is_empty() {
-                surtr_analysis::complete_repl_prefix(
-                    completion_request,
-                    surtr_analysis::CompletionScope::All,
-                )
-            } else {
-                completion
-            }
-        } else {
-            surtr_analysis::complete_repl_prefix(
-                completion_request,
-                surtr_analysis::CompletionScope::All,
-            )
-        };
-
-        let mut candidates = completion
-            .candidates
-            .into_iter()
-            .map(Self::repl_completion_candidate_from_analysis)
-            .collect::<Vec<_>>();
-        candidates.truncate(COMPLETION_DEFAULT_LIMIT);
-        ReplCompletion {
-            candidates,
-            signature,
-        }
+        self.completion_context().completions(input, cursor)
     }
 
     fn repl_completion_candidate_from_analysis(
@@ -1411,43 +1592,6 @@ impl ReplEngine {
             self.sigil_session.lookup_uid(lookup).is_some()
                 || self.visible_helper_doc_alias(lookup).is_some()
         }
-    }
-
-    fn signature_help_for_call(
-        &self,
-        context: &CompletionCallContext,
-    ) -> Option<ReplSignatureHelp> {
-        let (qualified_name, signature) =
-            self.callable_signature_for_completion(&context.callee)?;
-        let rendered = Self::render_signature_with_qualified_name(&qualified_name, signature);
-        Some(ReplSignatureHelp {
-            lines: vec![highlight_signature_parameter(
-                &rendered,
-                context.active_parameter,
-            )],
-            active_parameter: Some(context.active_parameter),
-        })
-    }
-
-    fn expected_param_type_for_call(&self, context: &CompletionCallContext) -> Option<String> {
-        let (_qualified_name, signature) =
-            self.callable_signature_for_completion(&context.callee)?;
-        let types = Self::signature_param_types(&signature)?;
-        types.get(context.active_parameter).cloned()
-    }
-
-    fn callable_signature_for_completion(&self, symbol: &str) -> Option<(String, String)> {
-        if let Some(decl) = self.visible_declaration(symbol) {
-            match decl.kind {
-                sigil::DeclarationKind::Struct | sigil::DeclarationKind::Record => {
-                    if let Some(signature) = self.constructor_signature_entry(decl) {
-                        return Some(signature);
-                    }
-                }
-                _ => {}
-            }
-        }
-        self.find_signature(symbol)
     }
 
     pub fn prompt(&self) -> String {

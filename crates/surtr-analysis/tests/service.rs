@@ -1,10 +1,36 @@
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use surtr_analysis::{
-    resolve_context, AnalysisContextRequest, AnalysisDiagnosticKind, AnalysisMode, AnalysisService,
-    CompletionKind, CompletionSymbol, ProjectRunnerSourceInput, RunnerSelection, SelectedContext,
-    SemanticIndex, Utf16Position,
+    resolve_context, AnalysisContextRequest, AnalysisDiagnosticKind, AnalysisHost, AnalysisMode,
+    AnalysisService, CompletionKind, CompletionSymbol, ProjectRunnerInput,
+    ProjectRunnerSourceInput, RunnerContext, RunnerSelection, SelectedContext, SemanticIndex,
+    Utf16Position,
 };
+
+#[derive(Debug)]
+struct MemoryHost {
+    files: HashMap<PathBuf, String>,
+}
+
+impl MemoryHost {
+    fn new(files: impl IntoIterator<Item = (PathBuf, String)>) -> Self {
+        Self {
+            files: files.into_iter().collect(),
+        }
+    }
+}
+
+impl AnalysisHost for MemoryHost {
+    fn read_to_string(&self, path: &Path) -> Option<String> {
+        self.files.get(path).cloned()
+    }
+
+    fn resolve_project_runner(&self, input: ProjectRunnerInput) -> RunnerContext {
+        surtr_analysis::resolve_project_runner_with(input, |path| self.read_to_string(path))
+    }
+}
 
 #[test]
 fn analysis_service_updates_documents_and_parses_active_context() {
@@ -259,6 +285,109 @@ Seeder::run()
     assert_eq!(runner.resolved_paths[0].expanded_files, vec![module_path]);
 
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn analysis_service_load_project_uses_injected_host_sources() {
+    let script_path = PathBuf::from("/repo/scripts/seed.srt");
+    let project_path = PathBuf::from("/repo/project.srt");
+    let module_path = PathBuf::from("/repo/src/main.srt");
+    let mut service = AnalysisService::with_host(Arc::new(MemoryHost::new([
+        (
+            project_path.clone(),
+            r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::entry_fun(c, "Main::main")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#
+            .to_string(),
+        ),
+        (
+            module_path.clone(),
+            "defmod Main { def main() -> Int { 1 } }".to_string(),
+        ),
+    ])));
+    service.update_document(
+        script_path.clone(),
+        Some(1),
+        r#"load_project("../project.srt", profile: "dev")
+Main::ma"#
+            .to_string(),
+    );
+
+    let context = service.resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: script_path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(script_path)),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+
+    let project_context = snapshot
+        .context
+        .script_project
+        .as_ref()
+        .and_then(|project| project.project_context.as_ref())
+        .expect("load_project should resolve project context through injected host");
+    assert!(
+        !project_context.resolved_paths.is_empty(),
+        "project context should include resolved paths through injected host"
+    );
+}
+
+#[test]
+fn analysis_service_definition_uses_injected_host_sources_for_line_index() {
+    let target_path = PathBuf::from("/repo/lib/helper.srt");
+    let mut service = AnalysisService::with_host(Arc::new(MemoryHost::new([(
+        target_path.clone(),
+        "def helper() -> Int { 1 }\n".to_string(),
+    )])));
+    let active_path = PathBuf::from("/repo/main.srt");
+    service.update_document(active_path.clone(), Some(1), "helper".to_string());
+
+    let index = SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "helper".to_string(),
+        replacement: "helper".to_string(),
+        kind: CompletionKind::FunctionCall,
+        detail: Some("helper() -> Int".to_string()),
+        documentation: None,
+        sort_text: None,
+        origin: None,
+        definition: Some(surtr_analysis::SourceLocation {
+            path: target_path.clone(),
+            start: 4,
+            end: 10,
+        }),
+    }]);
+    service.set_semantic_index(index);
+
+    let context = service.resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: active_path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(active_path)),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let definitions = service.definition(
+        &snapshot,
+        Utf16Position {
+            line: 0,
+            character: "helper".encode_utf16().count() as u32,
+        },
+    );
+
+    let definition = definitions
+        .into_iter()
+        .find(|location| location.path == target_path)
+        .expect("definition should resolve through injected host source");
+    assert_eq!(definition.range.start.line, 0);
+    assert_eq!(definition.range.start.character, 4);
+    assert_eq!(definition.range.end.character, 10);
 }
 
 #[test]

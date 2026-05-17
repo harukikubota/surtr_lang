@@ -821,6 +821,7 @@ dependencies = [
  "diagnostics",
  "eldr",
  "forge",
+ "libc",
  "scar",
  "serde_json",
  "sigil",

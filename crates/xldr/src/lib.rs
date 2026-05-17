@@ -28,8 +28,13 @@ pub use project_runner::{
 };
 
 use diagnostics::SourceId;
-pub use repl::logic::core::{EldrLoadError, ReplEngine, ReplLoadError};
+pub use repl::logic::core::{
+    CompletionTelemetry, EldrLoadError, ReplCompletionContext, ReplEngine, ReplLoadError,
+};
 pub use repl::ui::cli::{cli_command, BannerMode, ReplOptions};
+pub use repl::ui::completion::{
+    ReplCompletionProvider, ReplCompletionRequest, ReplCompletionResult,
+};
 use serde::{Deserialize, Serialize};
 use sindr::builtin::{BUILTIN_METAS, BUILTIN_TYPE_METAS};
 use sindr::ir::{stable_hash_hex, Bytecode, DocEntry, DocKind, SignatureEntry};

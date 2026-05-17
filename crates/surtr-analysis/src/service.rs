@@ -1,5 +1,5 @@
-use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use sindr::policy::{CompileUnitKind, SourceKind};
 use spire::ast::{Ast, Lit, RecordLitArg, Span};
@@ -7,13 +7,31 @@ use spire::{SyntaxOutlineItem, SyntaxOutlineKind};
 
 use crate::{
     complete_prefix, extract_project_runner_input, lookup_symbol_at_cursor, parse_document,
-    parse_document_tolerant, resolve_context, resolve_project_runner, signature_help_at_cursor,
-    AnalysisContextRequest, AnalysisContextStatus, AnalysisMode, AnalysisSpan, CompletionKind,
-    CompletionRequest, CompletionResponse, CompletionSymbol, DocumentSnapshot, DocumentStore,
-    LineIndex, ProjectRunnerSourceInput, ResolvedAnalysisContext, RunnerDiagnostic,
-    RunnerDiagnosticKind, ScriptProjectContext, SelectedContext, SemanticIndex, SourceLocation,
-    TextPosition, Utf16Position,
+    parse_document_tolerant, resolve_context, resolve_project_runner_with,
+    signature_help_at_cursor, AnalysisContextRequest, AnalysisContextStatus, AnalysisMode,
+    AnalysisSpan, CompletionKind, CompletionRequest, CompletionResponse, CompletionSymbol,
+    DocumentSnapshot, DocumentStore, LineIndex, ProjectRunnerInput, ProjectRunnerSourceInput,
+    ResolvedAnalysisContext, RunnerContext, RunnerDiagnostic, RunnerDiagnosticKind,
+    ScriptProjectContext, SelectedContext, SemanticIndex, SourceLocation, TextPosition,
+    Utf16Position,
 };
+
+pub trait AnalysisHost: std::fmt::Debug + Send + Sync {
+    fn read_to_string(&self, path: &Path) -> Option<String>;
+
+    fn resolve_project_runner(&self, input: ProjectRunnerInput) -> RunnerContext {
+        resolve_project_runner_with(input, |path| self.read_to_string(path))
+    }
+}
+
+#[derive(Debug, Default)]
+struct FsAnalysisHost;
+
+impl AnalysisHost for FsAnalysisHost {
+    fn read_to_string(&self, path: &Path) -> Option<String> {
+        std::fs::read_to_string(path).ok()
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnalysisDiagnosticKind {
@@ -87,15 +105,24 @@ pub struct DocumentSymbol {
     pub selection_range: AnalysisRange,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AnalysisService {
     documents: DocumentStore,
     semantic_index: SemanticIndex,
+    host: Arc<dyn AnalysisHost>,
 }
 
 impl AnalysisService {
     pub fn new() -> Self {
-        Self::default()
+        Self::with_host(Arc::new(FsAnalysisHost))
+    }
+
+    pub fn with_host(host: Arc<dyn AnalysisHost>) -> Self {
+        Self {
+            documents: DocumentStore::default(),
+            semantic_index: SemanticIndex::default(),
+            host,
+        }
     }
 
     pub fn update_document(
@@ -373,6 +400,12 @@ impl AnalysisService {
     }
 }
 
+impl Default for AnalysisService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AnalysisService {
     fn resolve_load_project_script_context(
         &self,
@@ -443,7 +476,7 @@ impl AnalysisService {
         };
 
         let runner = match extract_project_runner_input(runner_input) {
-            Ok(input) => Some(resolve_project_runner(input)),
+            Ok(input) => Some(self.host.resolve_project_runner(input)),
             Err(mut runner_diagnostics) => {
                 diagnostics.append(&mut runner_diagnostics);
                 None
@@ -466,7 +499,7 @@ impl AnalysisService {
         self.documents
             .get(path)
             .map(|document| document.text.clone())
-            .or_else(|| fs::read_to_string(path).ok())
+            .or_else(|| self.host.read_to_string(path))
     }
 }
 
@@ -554,8 +587,9 @@ fn location_from_source_location(
                 .map(|document| document.line_index.clone())
         })
         .or_else(|| {
-            fs::read_to_string(&location.path)
-                .ok()
+            service
+                .host
+                .read_to_string(&location.path)
                 .map(|source| LineIndex::new(&source))
         })?;
 
@@ -1060,7 +1094,7 @@ fn source_for_module_file(service: &AnalysisService, path: &Path) -> Option<Stri
         .documents
         .get(path)
         .map(|document| document.text.clone())
-        .or_else(|| fs::read_to_string(path).ok())
+        .or_else(|| service.host.read_to_string(path))
 }
 
 fn lower_module_ast(
