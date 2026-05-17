@@ -194,8 +194,10 @@
   - `doc/lsp_analysis_context_spec_v0.md` では、active file を単体ではなく script / project / stdlib の `AnalysisContext` で解析する方針を整理した。
   - `doc/project_runner_pseudo_di_draft.md` では、project runner の profile selection、pseudo DI、operational script、REPL preload、LSP cache key を同じ runner context へ寄せる方針を整理した。
   - `docs/dev/Surtr_LSP_spec.md` では、`surtr-lsp` を protocol adapter とし、REPL と LSP が shared semantic service を直接使う実装方針を draft として固定した。
+  - REPL command query parser は `spire` の source parser ではなく、仕様にロックインした小さい tooling query wrapper として整理する。
 - 未確定点:
   - `surtr-analysis` 相当の shared analysis crate を新設するか、既存 `xldr` helper を先に分割して段階移行するか。
+  - command query parser を `surtr-analysis::query` に留めるか、`surtr-query` crate として分離するか。
   - project runner 専用 `SourceKind` / `ProjectConfigSource` が必要か。
   - `RunnerArgs` の最終構造、`selected_profile` を top-level field に置くか runner args 内に置くか。
   - project runner source を Surtr VM で実行して抽出するか、restricted project config evaluator を用意するか。
@@ -208,12 +210,14 @@
   - iOS / wasm adapter が JSON-RPC LSP を使うか、editor UI から direct API を呼ぶか。
 - 受け入れ条件:
   - `surtr-lsp` は active file を単体推測せず、必ず `AnalysisContext` 経由で parse / resolve / typecheck / completion / diagnostics を行う。
+  - command query parser は `spire` へ入れず、REPL / LSP editor command から使える tooling query wrapper として配置される。
   - script entry を選択すると、script include 先 definition source が同じ compile unit 文脈で解析される。
   - project mode では selected profile、normalized runner args、module stage、project path 展開、boot / external input summary が cache key と diagnostics に反映される。
   - REPL は内部で LSP JSON-RPC と通信せず、Xldr と `surtr-lsp` が同じ semantic service を別 adapter として利用できる。
   - LSP / analysis core は single-thread wasm host でも動作でき、multi-thread availability に意味論を依存させない。
 - テスト方針:
   - `surtr-analysis` 導入時は context resolver、include graph、cache key、LineIndex の byte / character / UTF-16 変換を unit test で固定する。
+  - command query parser 導入時は `:doc` / `:sig` / `:info` / `:type` / `:facet` の query AST と validation diagnostics を unit test で固定する。
   - `surtr-lsp` 導入時は diagnostics / completion / hover / signatureHelp / definition の protocol DTO 変換を unit test で固定する。
   - `tests/fixtures/script/**`、`tests/fixtures/modules/**`、`lib/**/*.srt` を LSP analysis context の integration fixture として流用する。
   - project runner 実装後は profile 切り替え、glob 展開、external input diagnostics、active file profile membership の fixture を追加する。

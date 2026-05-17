@@ -92,8 +92,9 @@ wasm + webview では次の形を許す。
 | crate | 役割 |
 |---|---|
 | `surtr-analysis` | protocol 非依存の context resolver、document store、semantic index、completion / hover / diagnostics service |
+| `surtr-query` または `surtr-analysis::query` | REPL command query surface を parse する小さい仕様ロック済み wrapper |
 | `surtr-lsp` | LSP JSON-RPC adapter。URI / UTF-16 position / capability negotiation を `surtr-analysis` の DTO へ写像する |
-| `xldr` | REPL session と UI adapter。REPL command parser と session state を持ち、semantic service を直接使う |
+| `xldr` | REPL session と UI adapter。`:` command routing と session state を持ち、query parser と semantic service を直接使う |
 | `rune` | CLI dispatch。`surtr lsp` を追加する場合は process 起動のみ担う |
 
 初期実装では、既存 loader / doc metadata 収集の都合で `xldr` の一部 helper を参照してよい。
@@ -109,6 +110,12 @@ wasm + webview では次の形を許す。
 
 通常の editor diagnostics では `forge` / `eldr` に依存しない。REPL adapter は Xldr 経由で
 VM 状態を持つため、REPL binding completion だけは Xldr session state を入力として渡す。
+
+REPL command query parser は `spire` に置かない。Surtr source grammar ではなく、
+[../../doc/xldr_command_query_api_spec.md](../../doc/xldr_command_query_api_spec.md) に
+ロックインした tooling query surface であるため、`surtr-analysis::query` の小さい module
+として始める。LSP adapter からも同じ query AST / validation を使う必要が出た時点で、
+`surtr-query` crate へ分離してよい。
 
 ---
 
@@ -268,12 +275,52 @@ REPL と共有する semantic resolver は次を担う。
 - call context から active parameter と expected type を出す signature help
 - typed call / typed operator query の意味解決
 
+### 6.1 Command Query Parser
+
+command query parser は Surtr source parser ではない。`spire` の責務は `.srt` source の
+正本 grammar と CST / AST 生成であり、REPL query surface はその外側に置く。
+
+query parser は次の入力だけを扱う。
+
+- `:doc <target>`
+- `:sig <target>`
+- `:info <target>`
+- `:type <binding>`
+- `:facet <facet-target>`
+
+parser の出力は、評価可能な式ではなく query AST である。
+
+```text
+CommandQuery
+  = DefinitionLookup(...)
+  | BindingLookup(...)
+  | ConstructorLookup(...)
+  | ExtractorLookup(...)
+  | TypedCallDispatch(...)
+  | TypedOperatorDispatch(...)
+  | FacetLookup(...)
+```
+
+この parser は、`literal`、任意式、generic type variable、nested function call as value、
+pipe placeholder の式利用を受けない。受けないものを明確にすることで、LSP / REPL の
+doc / signature / info query が Surtr 本体 grammar と独立して安定する。
+
+置き場は段階的に扱う。
+
+1. 初期は `surtr-analysis::query` に置き、Xldr の `:doc` / `:sig` / `:info` が使う
+2. LSP command palette、hover 補助、REPL virtual document から同じ query parse が必要になったら `surtr-query` crate に分ける
+3. どちらの場合も semantic resolver は `surtr-analysis` に置き、query parser は query AST と validation diagnostics だけを返す
+
+LSP は通常 source の completion / hover に command query parser を使わない。
+ただし editor command として `Surtr: Query Signature` のような入口を持つ場合は、
+LSP adapter が query text を parse し、同じ semantic resolver に渡してよい。
+
 REPL に残すものは次である。
 
 - `:` command head と command routing
 - `:v`, `:vars`, `:history`, `:reload`, `:save`, `:clear`
 - 行番号、履歴、last result、append-only binding
-- `$name` forced binding や `_1` / `&1` を含む command query surface
+- `$name` forced binding や `_1` / `&1` を含む command query surface の UX
 - TTY / TUI の表示制限や pane state
 
 ---
@@ -469,12 +516,18 @@ LSP 実装は次を行わない。
 - REPL session state を LSP server 側で再構築する
 - live chunk を通常 file と同じ `SourceKind::Script` として解析する
 
+REPL command query は、Xldr session UX から切り離せる小さい parser / validator として扱う。
+Xldr は `:` command head、履歴、binding table、session state を付与し、query parser は
+payload を query AST へ分類する。doc / sig / info / facet の意味解決は shared semantic
+resolver へ渡す。
+
 共有化の順序は次を推奨する。
 
 1. Xldr の completion / doc / signature の semantic lookup を UI 非依存 API へ切り出す
-2. LSP adapter が file URI + position + `AnalysisContext` を入力として同じ API を呼ぶ
-3. REPL virtual document を追加し、preload context と live binding を mirror として表示する
-4. command query resolver を hover / signature help の補助に使う。ただし user-facing syntax は REPL command と LSP request で分ける
+2. command query parser を `surtr-analysis::query` の小さい wrapper へ移し、Xldr がそれを呼ぶ
+3. LSP adapter が file URI + position + `AnalysisContext` を入力として同じ semantic API を呼ぶ
+4. REPL virtual document を追加し、preload context と live binding を mirror として表示する
+5. command query parser を editor command の補助に使う。ただし通常 source の hover / signature help は source position から解決し、REPL query syntax と混ぜない
 
 REPL 補完は今後も改善する。進化方向は他言語の editor experience と同じく、
 keyword、local、scope、import、member、signature、type context の順で厚くする。
@@ -488,6 +541,7 @@ keyword、local、scope、import、member、signature、type context の順で�
 - `surtr-analysis` 相当の crate を作る
 - document store と `LineIndex` を実装する
 - `AnalysisContext` / `RunnerContext` / cache key 型を置く
+- command query parser の移設先を `surtr-analysis::query` として固定する
 - 既存 loader helper から source composition を切り出す方針を固定する
 
 ### Phase 1: Diagnostics MVP
@@ -504,6 +558,7 @@ keyword、local、scope、import、member、signature、type context の順で�
 - signature help
 - go to definition
 - import path / qualified path の基本補完
+- `:doc` / `:sig` / `:info` 用 query AST と semantic resolver の境界を固定する
 
 ### Phase 3: Project context
 
@@ -532,6 +587,7 @@ keyword、local、scope、import、member、signature、type context の順で�
   - standalone definition diagnostics の severity / hint
   - cache key determinism
   - completion candidate の可視性
+  - command query parser の AST / validation diagnostics
 
 - `surtr-lsp`
   - LSP position / range 変換
@@ -541,7 +597,7 @@ keyword、local、scope、import、member、signature、type context の順で�
 
 - `xldr`
   - REPL completion が shared semantic service の候補を使う
-  - REPL command query parser は REPL 固有 surface を保つ
+  - REPL command routing が query parser の AST を使い、REPL 固有 UX を保つ
 
 ### integration
 
@@ -566,6 +622,7 @@ keyword、local、scope、import、member、signature、type context の順で�
 - project runner 専用 `SourceKind` が必要か
 - `RunnerArgs` の最終構造
 - project runner を VM 実行で抽出するか、restricted evaluator で抽出するか
+- command query parser を `surtr-analysis::query` の module に留めるか、`surtr-query` crate へ分けるか
 - external input diagnostics の所属
 - project context 付き script の boot merge 規則
 - active file が複数 profile に属する場合の UI / diagnostics 優先順位
@@ -582,5 +639,6 @@ keyword、local、scope、import、member、signature、type context の順で�
 - standalone definition source では、context 未選択由来の unresolved symbol を区別できる
 - stdlib source は `StdDefinitionSource` として解析される
 - project mode は selected profile と normalized runner args を保持できる
+- command query parser は `spire` ではなく tooling query wrapper として置かれている
 - REPL は LSP JSON-RPC ではなく shared semantic service を直接使う方針になっている
 - wasm / iOS 向けに single-thread analysis を正規 target として扱える
