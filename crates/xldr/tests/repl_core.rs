@@ -204,6 +204,29 @@ fn core_completion_returns_limited_global_candidates_with_details() {
 }
 
 #[test]
+fn core_exposes_shared_semantic_index_for_repl_and_lsp_lookup() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("answer = 42")).contains("answer: Int"));
+
+    let index = engine.semantic_index();
+    let answer = surtr_analysis::lookup_symbol_at_cursor(&index, "answer", 3)
+        .expect("REPL binding should be visible through shared semantic lookup");
+    assert_eq!(answer.symbol.label, "answer");
+    assert_eq!(answer.symbol.kind, surtr_analysis::CompletionKind::Variable);
+    assert_eq!(answer.symbol.detail.as_deref(), Some("Int"));
+
+    let print = index
+        .find_symbol("print")
+        .expect("stdlib function should be visible through shared semantic index");
+    assert_eq!(print.kind, surtr_analysis::CompletionKind::FunctionCall);
+    assert!(print
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("print(")));
+    assert!(print.documentation.is_some());
+}
+
+#[test]
 fn core_completion_returns_type_constructors_and_type_paths() {
     let engine = engine();
 

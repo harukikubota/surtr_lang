@@ -202,6 +202,7 @@
   - completion item の `detail` / `documentation` / `sortText` と、metadata / declaration 由来情報を `surtr-analysis` の `SemanticIndex` で保持するようにした。
   - token 位置から semantic symbol を引く `lookup_symbol_at_cursor` を追加し、LSP hover は completion と同じ semantic index から detail / documentation を返す。
   - active document の documentSymbol は `AnalysisService` snapshot から生成し、LSP DTO へ写像する最小経路を追加した。
+  - Xldr `ReplEngine` から `surtr-analysis::SemanticIndex` を取り出せる API を追加し、REPL binding / stdlib doc / signature / declaration を shared semantic lookup へ渡せる入口を作った。
 - 未確定点:
   - project runner 専用 `SourceKind` / `ProjectConfigSource` が必要か。
   - `RunnerArgs` の最終構造、`selected_profile` を top-level field に置くか runner args 内に置くか。
@@ -215,6 +216,7 @@
   - project context 付き script の `supervisor_init` merge 規則。
   - active file が複数 profile に属する場合の UI / diagnostics 優先順位。
   - REPL virtual document をどこまで LSP 対象に含めるか。
+  - 既存 REPL 補完 UI を、どの順序で `ReplEngine::semantic_index` ベースの候補生成へ置き換えるか。
   - completion の型文脈利用を候補除外にするか、順位付けに留めるか。
   - iOS / wasm adapter が JSON-RPC LSP を使うか、editor UI から direct API を呼ぶか。
 - 受け入れ条件:

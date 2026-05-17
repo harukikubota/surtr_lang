@@ -1136,6 +1136,61 @@ impl ReplEngine {
         self.symbols.iter().cloned().collect()
     }
 
+    pub fn semantic_index(&self) -> surtr_analysis::SemanticIndex {
+        let mut symbols =
+            surtr_analysis::SemanticIndex::from_metadata(&self.docs, &self.signatures)
+                .symbols()
+                .to_vec();
+        symbols.extend(
+            surtr_analysis::SemanticIndex::from_declaration_index(&self.declaration_index)
+                .symbols()
+                .iter()
+                .cloned(),
+        );
+
+        let mut seen_bindings = BTreeSet::new();
+        for binding in self.binding_records.iter().rev() {
+            if !seen_bindings.insert(binding.name.as_str()) {
+                continue;
+            }
+            symbols.push(surtr_analysis::CompletionSymbol {
+                label: binding.name.clone(),
+                replacement: binding.name.clone(),
+                kind: surtr_analysis::CompletionKind::Variable,
+                detail: Some(binding.ty.clone()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+            });
+        }
+
+        for entry in self.vm.function_entries().iter().rev() {
+            if entry.flags.generated {
+                continue;
+            }
+            let Some(qualified_name) = entry.qualified_name.as_deref() else {
+                continue;
+            };
+            if !self.function_entry_is_top_level_repl_surface(qualified_name) {
+                continue;
+            }
+            let label = crate::surface_path_name(qualified_name).to_string();
+            symbols.push(surtr_analysis::CompletionSymbol {
+                label: label.clone(),
+                replacement: label,
+                kind: surtr_analysis::CompletionKind::FunctionCall,
+                detail: entry.signature.clone().map(|signature| {
+                    Self::render_signature_with_qualified_name(qualified_name, signature)
+                }),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+            });
+        }
+
+        surtr_analysis::SemanticIndex::from_symbols(symbols)
+    }
+
     fn insert_surface_symbol(&mut self, name: &str) {
         let surface_name = crate::surface_rendered_name(name);
         self.symbols.insert(surface_name.clone());
