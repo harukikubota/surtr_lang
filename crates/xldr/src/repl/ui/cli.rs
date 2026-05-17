@@ -48,6 +48,8 @@ pub struct ReplOptions {
     pub version: bool,
     pub script_path: Option<String>,
     pub module_path: Option<String>,
+    pub project_path: Option<String>,
+    pub project_profile: Option<String>,
 }
 
 impl Default for ReplOptions {
@@ -58,6 +60,8 @@ impl Default for ReplOptions {
             version: false,
             script_path: None,
             module_path: None,
+            project_path: None,
+            project_profile: None,
         }
     }
 }
@@ -181,20 +185,45 @@ pub fn cli_command(options: ReplOptions) -> CommandResult<()> {
         print_banner(options.banner);
     }
 
-    let mut engine =
-        match (&options.module_path, &options.script_path) {
-            (Some(module_path), Some(script_path)) => {
-                ReplEngine::from_preload_files(Some(module_path), Some(script_path))
-                    .map_err(CommandError::from)?
-            }
-            (Some(module_path), None) => ReplEngine::from_preload_files(Some(module_path), None)
-                .map_err(CommandError::from)?,
-            (None, Some(script_path)) => ReplEngine::from_preload_files(None, Some(script_path))
-                .map_err(CommandError::from)?,
-            (None, None) => ReplEngine::new().map_err(|e| {
-                CommandError::message(1, format!("Error initializing source loader: {}", e))
-            })?,
-        };
+    if options.project_path.is_some()
+        && (options.module_path.is_some() || options.script_path.is_some())
+    {
+        return Err(CommandError::message(
+            1,
+            "repl: --project cannot be combined with --module or --script",
+        ));
+    }
+    if options.project_profile.is_some() && options.project_path.is_none() {
+        return Err(CommandError::message(
+            1,
+            "repl: --profile requires --project",
+        ));
+    }
+
+    let mut engine = match (
+        &options.project_path,
+        &options.module_path,
+        &options.script_path,
+    ) {
+        (Some(project_path), None, None) => {
+            ReplEngine::from_project_runner_file(project_path, options.project_profile.as_deref())
+                .map_err(CommandError::from)?
+        }
+        (None, Some(module_path), Some(script_path)) => {
+            ReplEngine::from_preload_files(Some(module_path), Some(script_path))
+                .map_err(CommandError::from)?
+        }
+        (None, Some(module_path), None) => {
+            ReplEngine::from_preload_files(Some(module_path), None).map_err(CommandError::from)?
+        }
+        (None, None, Some(script_path)) => {
+            ReplEngine::from_preload_files(None, Some(script_path)).map_err(CommandError::from)?
+        }
+        (None, None, None) => ReplEngine::new().map_err(|e| {
+            CommandError::message(1, format!("Error initializing source loader: {}", e))
+        })?,
+        _ => unreachable!("project/script/module combinations are validated above"),
+    };
 
     let color = styled::color_enabled_from_env();
     for result in engine.take_startup_results() {
@@ -811,6 +840,8 @@ mod command_error_tests {
             version: false,
             script_path: Some("/definitely/missing-script.srt".to_string()),
             module_path: None,
+            project_path: None,
+            project_profile: None,
         })
         .expect_err("missing preload script must fail");
 
@@ -1028,6 +1059,7 @@ mod tests {
                 replacement: "print".to_string(),
                 kind: ReplCompletionKind::FunctionCall,
                 detail: Some("Kernel::print(a: [String]) -> Unit".to_string()),
+                documentation: None,
                 replace_start: 0,
                 replace_end: 0,
             }],
@@ -1056,6 +1088,7 @@ mod tests {
                     replacement: "name".to_string(),
                     kind: ReplCompletionKind::Variable,
                     detail: Some("String".to_string()),
+                    documentation: None,
                     replace_start: 0,
                     replace_end: 0,
                 },
@@ -1064,6 +1097,7 @@ mod tests {
                     replacement: "print".to_string(),
                     kind: ReplCompletionKind::FunctionCall,
                     detail: Some("Kernel::print(a: [String]) -> Unit".to_string()),
+                    documentation: None,
                     replace_start: 0,
                     replace_end: 0,
                 },

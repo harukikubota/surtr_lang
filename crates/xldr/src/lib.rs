@@ -23,7 +23,9 @@ pub use loader::{
     CompileSources, LoadError, ModuleInput, ModuleSources, PreparedScriptSources,
     ScriptIncludeDirective, ScriptSourcePrepareError, SourceDescriptor, StagedModule,
 };
-pub use project_runner::{execute_project_runner_source, ProjectRunnerVmError};
+pub use project_runner::{
+    execute_project_runner_source, project_runner_module_input_stages, ProjectRunnerVmError,
+};
 
 use diagnostics::SourceId;
 pub use repl::logic::core::{EldrLoadError, ReplEngine, ReplLoadError};

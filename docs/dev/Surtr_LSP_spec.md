@@ -759,6 +759,14 @@ keyword、local、scope、import、member、signature、type context の順で�
 ### Phase 4: REPL and advanced tooling
 
 - Xldr semantic lookup を共有 service へ寄せる
+  - non-call completion は Xldr の REPL 固有 presentation / visibility を保ちながら、
+    `surtr-analysis::complete_prefix` の shared semantic metadata を候補に合流する。
+    command query の semantic resolver は別スライスで `surtr-analysis` へ移す。
+- project runner source から Xldr REPL preload 用 module stages を構築し、CLI / host 入口で
+  project profile 付き REPL context を作れるようにする
+  - CLI 入口は `surtr repl --project <project.srt> --profile <name>` とする。
+    `--profile` 省略時は `"main"` を選択する。`--project` は `--script` / `--module` と
+    同時指定できない。
 - REPL virtual document / preload context 表示を追加する
 - semantic tokens / code actions / references / rename を段階的に追加する
 - wasm adapter を用意し、iOS / webview で single-thread analysis を検証する
@@ -787,6 +795,10 @@ keyword、local、scope、import、member、signature、type context の順で�
 - `xldr`
   - REPL completion が shared semantic service の候補を使う
   - REPL command routing が query parser の AST を使い、REPL 固有 UX を保つ
+  - project runner source の VM 実行結果から REPL preload 用 module stages を構築し、
+    selected profile の定義を REPL session で参照できる
+- `rune`
+  - `surtr repl --project <project.srt> --profile <name>` の CLI option parsing を固定する
 
 ### integration
 

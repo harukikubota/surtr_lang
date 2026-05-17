@@ -215,6 +215,9 @@
   - `load_project` 付き operational script の body は directive を除外した上で project module stages の user program として resolve/typecheck し、script diagnostics も project context に載せるようにした。
   - `xldr::execute_project_runner_source` を追加し、Project/Config 標準定義を含む project runner source を VM 実行して runtime value から `ProjectRunnerResult` を decode できる境界を作った。
   - `RunnerSelection` は VM 実行済みの `ProjectRunnerResult` を保持できるようにし、`surtr-lsp` は source 付き選択を受けた場合に `xldr` 実行器で result を詰めてから analysis へ渡す。
+  - Xldr REPL は project runner source から module input stages を作れるようにし、project runner profile の定義を preload した REPL context を構築できるようにした。
+  - `surtr repl --project <project.srt> --profile <name>` を CLI 入口として追加し、project runner profile を preload した REPL session を起動できるようにした。`--profile` 省略時は `"main"` を使い、`--project` は `--script` / `--module` と同時指定しない。
+  - REPL non-call completion は既存の REPL presentation / visibility を保ったまま、`surtr-analysis::complete_prefix` の shared semantic metadata を合流し、stdlib `@doc` を completion candidate API へ載せるようにした。
 - 固定済み仕様:
   - shared analysis は `crates/surtr-analysis` として crate 新設で進める。既存 Xldr helper の段階移行は、この crate へ利用側を寄せる形で行う。
   - command query parser は `surtr-analysis::query` に留め、現時点では `surtr-query` crate へ分離しない。
@@ -223,6 +226,7 @@
   - project context 付き script の `supervisor_init` merge は `process 定義 default < project runner boot config < script-local supervisor_init` の優先順位とする。
   - completion の型文脈利用は候補除外ではなく順位付けに留める。
   - script の `load_project` は `load_project("./project.srt", profile: "dev")` を正本形とし、第 2 positional string も互換入力として受ける。profile 省略時は `"main"` を選択する。
+  - REPL の project context は `surtr repl --project <project.srt> --profile <name>` で明示し、`--profile` 省略時は `"main"` を選択する。project preload と standalone `--script` / `--module` preload は同時指定しない。
 - 未確定点:
   - `RunnerArgs` の最終構造、`selected_profile` を top-level field に置くか runner args 内に置くか。
   - VM 実行で抽出する project runner result DTO は `ProjectRunnerResult` / `ProjectRunnerProfile` / `ProjectRunnerPath` を baseline とするが、boot config / external input facts の詳細 field は追加設計が必要。
@@ -235,6 +239,7 @@
   - active file が複数 profile に属する場合の UI / diagnostics 優先順位。
   - REPL virtual document をどこまで LSP 対象に含めるか。
   - 既存 REPL 補完 UI を、どの順序で `ReplEngine::semantic_index` ベースの候補生成へ置き換えるか。
+  - `:doc` / `:sig` / `:info` の semantic resolver を `surtr-analysis` に置く境界。metadata-only symbol lookup から始め、typed call / typed operator / process metadata は段階移行する。
   - completion の型文脈順位付けで使う score / sortText 規則。
   - iOS / wasm adapter が JSON-RPC LSP を使うか、editor UI から direct API を呼ぶか。
 - 受け入れ条件:
@@ -253,6 +258,7 @@
   - `tests/fixtures/script/**`、`tests/fixtures/modules/**`、`lib/**/*.srt` を LSP analysis context の integration fixture として流用する。
   - project runner 実装後は profile 切り替え、glob 展開、active file profile membership の fixture を追加する。external input diagnostics は boot / external summary 実装時に追加する。
   - REPL 共有化時は `cargo nextest run -p xldr` で既存 REPL completion / command query 表示を回帰基準にする。
+  - REPL project preload は `cargo nextest run -p xldr core_from_project_runner_source_exposes_selected_profile_definitions` と `cargo nextest run -p rune parse_repl_options` で CLI option と preload context を固定する。
 
 ## 更新ルール
 
