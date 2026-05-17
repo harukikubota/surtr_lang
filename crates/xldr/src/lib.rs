@@ -1,6 +1,7 @@
 mod command_error;
 pub mod error_display;
 mod loader;
+mod project_runner;
 pub mod repl;
 pub mod tui;
 
@@ -20,7 +21,10 @@ pub use loader::{
     is_default_std_module_file_name, is_default_std_module_path,
     module_path_from_source_or_file_name, prepare_script_sources, script_pseudo_module_path,
     CompileSources, LoadError, ModuleInput, ModuleSources, PreparedScriptSources,
-    ScriptIncludeDirective, ScriptSourcePrepareError, SourceDescriptor, SourceKind, StagedModule,
+    ScriptIncludeDirective, ScriptSourcePrepareError, SourceDescriptor, StagedModule,
+};
+pub use project_runner::{
+    execute_project_runner_source, project_runner_module_input_stages, ProjectRunnerVmError,
 };
 
 use diagnostics::SourceId;
@@ -29,6 +33,7 @@ pub use repl::ui::cli::{cli_command, BannerMode, ReplOptions};
 use serde::{Deserialize, Serialize};
 use sindr::builtin::{BUILTIN_METAS, BUILTIN_TYPE_METAS};
 use sindr::ir::{stable_hash_hex, Bytecode, DocEntry, DocKind, SignatureEntry};
+pub use sindr::policy::SourceKind;
 use sindr::policy::{CompileUnitKind, EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
 
 pub const MODULE_SPAN_STRIDE: usize = 1_000_000;
@@ -1259,12 +1264,7 @@ impl ModuleStageParseError {
 }
 
 pub fn derive_parse_rules(source_kind: SourceKind) -> spire::ParseRules {
-    match source_kind {
-        SourceKind::Script => spire::ParseRules::script(),
-        SourceKind::DefinitionSource => spire::ParseRules::module(),
-        SourceKind::StdDefinitionSource => spire::ParseRules::std_module(),
-        SourceKind::ReplChunk => spire::ParseRules::repl_chunk(),
-    }
+    spire::parse_rules_for_source_kind(source_kind)
 }
 
 pub fn derive_runtime_policy(
@@ -1276,18 +1276,23 @@ pub fn derive_runtime_policy(
         SourceKind::Script => RuntimeSourcePolicy::script(),
         SourceKind::DefinitionSource => RuntimeSourcePolicy::module(),
         SourceKind::StdDefinitionSource => RuntimeSourcePolicy::std_module(),
+        SourceKind::ProjectConfigSource => RuntimeSourcePolicy::module(),
         SourceKind::ReplChunk => RuntimeSourcePolicy::repl_chunk(),
     };
 
     let policy = match source_kind {
         SourceKind::Script => ExitCodePolicy::Anywhere,
         SourceKind::ReplChunk => ExitCodePolicy::Forbidden,
-        SourceKind::DefinitionSource | SourceKind::StdDefinitionSource
+        SourceKind::DefinitionSource
+        | SourceKind::StdDefinitionSource
+        | SourceKind::ProjectConfigSource
             if compile_unit_kind == CompileUnitKind::Project =>
         {
             ExitCodePolicy::EntryOnly
         }
-        SourceKind::DefinitionSource | SourceKind::StdDefinitionSource => ExitCodePolicy::Forbidden,
+        SourceKind::DefinitionSource
+        | SourceKind::StdDefinitionSource
+        | SourceKind::ProjectConfigSource => ExitCodePolicy::Forbidden,
     };
 
     base.with_exit_code_policy(policy, entrypoint)
@@ -2026,6 +2031,7 @@ pub fn source_kind_cache_key(kind: SourceKind) -> &'static str {
         // Keep cache key strings stable for backward compatibility with existing cache entries.
         SourceKind::DefinitionSource => "module",
         SourceKind::StdDefinitionSource => "std",
+        SourceKind::ProjectConfigSource => "project-config",
         SourceKind::ReplChunk => "repl",
     }
 }

@@ -1,0 +1,9 @@
+[package]
+name = "surtr-lsp"
+version = "0.1.0"
+edition = "2021"
+description = "Protocol boundary adapter for Surtr editor tooling"
+
+[dependencies]
+surtr-analysis = { path = "../surtr-analysis" }
+xldr = { path = "../xldr", default-features = false }

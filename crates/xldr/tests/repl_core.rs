@@ -201,6 +201,33 @@ fn core_completion_returns_limited_global_candidates_with_details() {
         .detail
         .as_deref()
         .is_some_and(|detail| detail.contains("print(")));
+    assert!(print
+        .documentation
+        .as_deref()
+        .is_some_and(|doc| doc.contains("Print a string to stdout")));
+}
+
+#[test]
+fn core_exposes_shared_semantic_index_for_repl_and_lsp_lookup() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("answer = 42")).contains("answer: Int"));
+
+    let index = engine.semantic_index();
+    let answer = surtr_analysis::lookup_symbol_at_cursor(&index, "answer", 3)
+        .expect("REPL binding should be visible through shared semantic lookup");
+    assert_eq!(answer.symbol.label, "answer");
+    assert_eq!(answer.symbol.kind, surtr_analysis::CompletionKind::Variable);
+    assert_eq!(answer.symbol.detail.as_deref(), Some("Int"));
+
+    let print = index
+        .find_symbol("print")
+        .expect("stdlib function should be visible through shared semantic index");
+    assert_eq!(print.kind, surtr_analysis::CompletionKind::FunctionCall);
+    assert!(print
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("print(")));
+    assert!(print.documentation.is_some());
 }
 
 #[test]
@@ -636,7 +663,7 @@ impl User {
 }
 
 #[test]
-fn core_completion_filters_constructor_arguments_by_expected_parameter_type() {
+fn core_completion_ranks_constructor_arguments_by_expected_parameter_type() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line("n = 3")).contains("n: Int"));
     assert!(rendered_text(&engine.handle_line(r#"s = "text""#)).contains("s: String"));
@@ -653,8 +680,13 @@ fn core_completion_filters_constructor_arguments_by_expected_parameter_type() {
         "Int binding should be suggested for constructor argument: {labels:?}"
     );
     assert!(
-        !labels.contains(&"s"),
-        "String binding should not be suggested for Int constructor argument: {labels:?}"
+        labels.contains(&"s"),
+        "String binding should remain available but ranked lower: {labels:?}"
+    );
+    assert!(
+        labels.iter().position(|label| label == &"n")
+            < labels.iter().position(|label| label == &"s"),
+        "Int binding should rank before String binding for Int constructor argument: {labels:?}"
     );
 }
 
@@ -724,8 +756,13 @@ fn core_completion_uses_argument_position_for_variable_candidates_and_signature_
         "Int binding should be suggested: {labels:?}"
     );
     assert!(
-        !labels.contains(&"s"),
-        "String binding should not be suggested for Int argument: {labels:?}"
+        labels.contains(&"s"),
+        "String binding should remain available but ranked lower: {labels:?}"
+    );
+    assert!(
+        labels.iter().position(|label| label == &"n")
+            < labels.iter().position(|label| label == &"s"),
+        "Int binding should rank before String binding for Int argument: {labels:?}"
     );
 }
 
@@ -1090,6 +1127,51 @@ defmod Math {
 
     let call = engine.handle_line("add2(20, 22)");
     assert!(rendered_text(&call).contains("42"));
+}
+
+#[test]
+fn core_from_project_runner_source_exposes_selected_profile_definitions() {
+    let root = tempfile_dir("xldr-project-runner-repl");
+    let src = root.join("src");
+    fs::create_dir_all(&src).expect("src dir should be created");
+    let project_file = root.join("project.srt");
+    let helper_file = src.join("helper.srt");
+    fs::write(
+        &helper_file,
+        r#"
+defmod Helper {
+  def add2(x: Int, y: Int) -> Int { x + y }
+}
+"#,
+    )
+    .expect("helper source should be writable");
+    let project_source = r#"
+def profile_name() -> String { "dev" }
+
+Project::config({|project|
+  Project::entrypoint(project, profile_name(), {|config|
+    Config::add_path(config, "./src/helper.srt")
+  })
+})
+"#;
+
+    let mut engine =
+        ReplEngine::from_project_runner_source(surtr_analysis::ProjectRunnerSourceInput {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            active_file: None,
+            source: project_source.to_string(),
+        })
+        .expect("project runner source should preload REPL context");
+
+    let imported = engine.handle_line("import Helper::add2");
+    assert!(rendered_text(&imported).contains("Imported Helper::add2"));
+
+    let call = engine.handle_line("add2(20, 22)");
+    assert!(rendered_text(&call).contains("42"));
+
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]

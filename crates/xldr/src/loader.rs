@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use diagnostics::{SourceId, SourceRegistry};
+use sindr::policy::SourceKind;
 use spire::ast::{Ast, Span};
 
 const BUILTIN_PRELUDE_FILE: &str = "bootstrap.srt";
@@ -232,18 +233,6 @@ const TEST_STD_SOURCE: &str = include_str!("../../../lib/test.srt");
 const REPL_MODULE_NAME: &str = "REPL";
 const SCRIPT_PSEUDO_MODULE_PREFIX: &str = "__Script";
 const REPL_PSEUDO_MODULE_PATH: &str = "__Repl::Session";
-
-/// Logical source categories that drive parser/typechecker policy selection.
-///
-/// The loader always materializes standard sources in the fixed order
-/// `Bootstrap -> [SpecialTypes + Function + Kernel + other standard modules] -> user source`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceKind {
-    Script,
-    DefinitionSource,
-    StdDefinitionSource,
-    ReplChunk,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceDescriptor {

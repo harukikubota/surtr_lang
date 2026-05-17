@@ -296,6 +296,7 @@ pub struct ReplCompletionCandidate {
     pub replacement: String,
     pub kind: ReplCompletionKind,
     pub detail: Option<String>,
+    pub documentation: Option<String>,
     pub replace_start: usize,
     pub replace_end: usize,
 }
@@ -510,6 +511,38 @@ impl ReplEngine {
         let mut engine = Self::from_preloaded_state(state)?;
         engine.reload_seed = ReplReloadSeed::ProjectModuleStages(module_input_stages.to_vec());
         Ok(engine)
+    }
+
+    pub fn from_project_runner_source(
+        input: surtr_analysis::ProjectRunnerSourceInput,
+    ) -> Result<Self, ReplLoadError> {
+        let project_file = input.project_file.to_string_lossy().into_owned();
+        let module_input_stages =
+            crate::project_runner_module_input_stages(input).map_err(|error| {
+                ReplLoadError::Runtime {
+                    file_name: project_file,
+                    message: error.to_string(),
+                }
+            })?;
+        Self::from_project_module_stages(&module_input_stages)
+    }
+
+    pub fn from_project_runner_file(
+        path: &str,
+        profile: Option<&str>,
+    ) -> Result<Self, ReplLoadError> {
+        let selected_profile = profile.unwrap_or("main").to_string();
+        let source = fs::read_to_string(path).map_err(|e| ReplLoadError::SourceReadFailed {
+            file_name: path.to_string(),
+            message: e.to_string(),
+        })?;
+        Self::from_project_runner_source(surtr_analysis::ProjectRunnerSourceInput {
+            project_file: path.into(),
+            selected_profile: selected_profile.clone(),
+            normalized_args: vec![("profile".to_string(), selected_profile)],
+            active_file: None,
+            source,
+        })
     }
 
     pub fn from_preload_files(
@@ -1136,6 +1169,63 @@ impl ReplEngine {
         self.symbols.iter().cloned().collect()
     }
 
+    pub fn semantic_index(&self) -> surtr_analysis::SemanticIndex {
+        let mut symbols =
+            surtr_analysis::SemanticIndex::from_metadata(&self.docs, &self.signatures)
+                .symbols()
+                .to_vec();
+        symbols.extend(
+            surtr_analysis::SemanticIndex::from_declaration_index(&self.declaration_index)
+                .symbols()
+                .iter()
+                .cloned(),
+        );
+
+        let mut seen_bindings = BTreeSet::new();
+        for binding in self.binding_records.iter().rev() {
+            if !seen_bindings.insert(binding.name.as_str()) {
+                continue;
+            }
+            symbols.push(surtr_analysis::CompletionSymbol {
+                label: binding.name.clone(),
+                replacement: binding.name.clone(),
+                kind: surtr_analysis::CompletionKind::Variable,
+                detail: Some(binding.ty.clone()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+            });
+        }
+
+        for entry in self.vm.function_entries().iter().rev() {
+            if entry.flags.generated {
+                continue;
+            }
+            let Some(qualified_name) = entry.qualified_name.as_deref() else {
+                continue;
+            };
+            if !self.function_entry_is_top_level_repl_surface(qualified_name) {
+                continue;
+            }
+            let label = crate::surface_path_name(qualified_name).to_string();
+            symbols.push(surtr_analysis::CompletionSymbol {
+                label: label.clone(),
+                replacement: label,
+                kind: surtr_analysis::CompletionKind::FunctionCall,
+                detail: entry.signature.clone().map(|signature| {
+                    Self::render_signature_with_qualified_name(qualified_name, signature)
+                }),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+            });
+        }
+
+        surtr_analysis::SemanticIndex::from_symbols(symbols)
+    }
+
     fn insert_surface_symbol(&mut self, name: &str) {
         let surface_name = crate::surface_rendered_name(name);
         self.symbols.insert(surface_name.clone());
@@ -1185,12 +1275,81 @@ impl ReplEngine {
                 replace_start,
                 replace_end,
             );
+            self.enrich_global_completion_candidates_from_analysis(
+                &mut candidates,
+                input,
+                cursor,
+                &prefix,
+            );
         }
 
         candidates.truncate(COMPLETION_DEFAULT_LIMIT);
         ReplCompletion {
             candidates,
             signature,
+        }
+    }
+
+    fn enrich_global_completion_candidates_from_analysis(
+        &self,
+        candidates: &mut [ReplCompletionCandidate],
+        input: &str,
+        cursor: usize,
+        prefix: &str,
+    ) {
+        let index = self.semantic_index();
+        let completion = surtr_analysis::complete_prefix(surtr_analysis::CompletionRequest {
+            index: &index,
+            source: input,
+            cursor,
+        });
+        for shared in completion.candidates {
+            let shared = Self::repl_completion_candidate_from_analysis(shared, prefix);
+            if let Some(candidate) = candidates
+                .iter_mut()
+                .find(|candidate| candidate.label == shared.label && candidate.kind == shared.kind)
+            {
+                if candidate.detail.is_none() {
+                    candidate.detail = shared.detail;
+                }
+                if candidate.documentation.is_none() {
+                    candidate.documentation = shared.documentation;
+                }
+            }
+        }
+    }
+
+    fn repl_completion_candidate_from_analysis(
+        candidate: surtr_analysis::CompletionCandidate,
+        prefix: &str,
+    ) -> ReplCompletionCandidate {
+        let unqualified_prefix = !prefix.contains("::");
+        let tail = candidate.label.rsplit_once("::").map(|(_, tail)| tail);
+        let use_tail = unqualified_prefix && tail.is_some_and(|tail| tail.starts_with(prefix));
+        let label = if use_tail {
+            tail.unwrap_or(candidate.label.as_str()).to_string()
+        } else {
+            candidate.label.clone()
+        };
+
+        let mut kind = match candidate.kind {
+            surtr_analysis::CompletionKind::Variable => ReplCompletionKind::Variable,
+            surtr_analysis::CompletionKind::TypeConstructor => ReplCompletionKind::TypeConstructor,
+            surtr_analysis::CompletionKind::TypePath => ReplCompletionKind::TypePath,
+            surtr_analysis::CompletionKind::FunctionCall => ReplCompletionKind::FunctionCall,
+        };
+        if prefix.contains("::") && kind == ReplCompletionKind::FunctionCall {
+            kind = ReplCompletionKind::TypePath;
+        }
+
+        ReplCompletionCandidate {
+            replacement: label.clone(),
+            label,
+            kind,
+            detail: candidate.detail,
+            documentation: candidate.documentation,
+            replace_start: candidate.replace_start,
+            replace_end: candidate.replace_end,
         }
     }
 
@@ -1226,6 +1385,7 @@ impl ReplEngine {
         expected_ty: Option<&str>,
     ) {
         let mut seen = BTreeSet::new();
+        let mut variable_candidates = Vec::new();
         for binding in self.binding_records.iter().rev() {
             if !seen.insert(binding.name.as_str()) {
                 continue;
@@ -1233,20 +1393,35 @@ impl ReplEngine {
             if !binding.name.starts_with(prefix) {
                 continue;
             }
-            if let Some(expected_ty) = expected_ty {
-                if !Self::parameter_type_accepts_arg_type(expected_ty, &binding.ty) {
-                    continue;
-                }
-            }
+            variable_candidates.push(surtr_analysis::CompletionCandidate {
+                label: binding.name.clone(),
+                replacement: binding.name.clone(),
+                kind: surtr_analysis::CompletionKind::Variable,
+                detail: Some(binding.ty.clone()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                replace_start,
+                replace_end,
+            });
+        }
+
+        let ranked_candidates = surtr_analysis::rank_completion_candidates_by_expected_type(
+            variable_candidates,
+            expected_ty,
+            Self::parameter_type_accepts_arg_type,
+        );
+        for candidate in ranked_candidates {
             push_completion_candidate(
                 candidates,
                 ReplCompletionCandidate {
-                    label: binding.name.clone(),
-                    replacement: binding.name.clone(),
+                    label: candidate.label,
+                    replacement: candidate.replacement,
                     kind: ReplCompletionKind::Variable,
-                    detail: Some(binding.ty.clone()),
-                    replace_start,
-                    replace_end,
+                    detail: candidate.detail,
+                    documentation: candidate.documentation,
+                    replace_start: candidate.replace_start,
+                    replace_end: candidate.replace_end,
                 },
             );
         }
@@ -1277,6 +1452,7 @@ impl ReplEngine {
                     replacement: label,
                     kind: ReplCompletionKind::TypeConstructor,
                     detail: self.declaration_signature(decl),
+                    documentation: None,
                     replace_start,
                     replace_end,
                 },
@@ -1297,6 +1473,7 @@ impl ReplEngine {
                     replacement: label,
                     kind: ReplCompletionKind::TypeConstructor,
                     detail: None,
+                    documentation: None,
                     replace_start,
                     replace_end,
                 },
@@ -1365,6 +1542,7 @@ impl ReplEngine {
                     replacement: label,
                     kind,
                     detail,
+                    documentation: None,
                     replace_start,
                     replace_end,
                 },
@@ -1406,6 +1584,7 @@ impl ReplEngine {
                     replacement: label,
                     kind,
                     detail,
+                    documentation: None,
                     replace_start,
                     replace_end,
                 },
@@ -1470,6 +1649,7 @@ impl ReplEngine {
                     replacement: label,
                     kind,
                     detail,
+                    documentation: None,
                     replace_start,
                     replace_end,
                 },
@@ -8704,6 +8884,7 @@ mod tests {
         let mut chunk = interactive_test_chunk();
         chunk.const_base = engine.vm.bytecode().constants.len() as u32;
         chunk.error_template_base = engine.vm.bytecode().error_templates.len() as u32;
+        chunk.type_registry_base = engine.vm.bytecode().type_registry.entries().len() as u32;
         let next_tag = engine
             .vm
             .bytecode()
