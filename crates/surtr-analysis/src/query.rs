@@ -983,8 +983,8 @@ mod tests {
 
     #[test]
     fn reject_nested_capture_applications() {
-        let err =
-            parse_command_query("map(&List::map(&1, &add(Int, &1)))").expect_err("query should fail");
+        let err = parse_command_query("map(&List::map(&1, &add(Int, &1)))")
+            .expect_err("query should fail");
         assert!(
             err.message().contains("nested capture applications"),
             "{}",

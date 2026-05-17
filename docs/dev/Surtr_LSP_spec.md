@@ -95,13 +95,13 @@ wasm + webview では次の形を許す。
 | crate | 役割 |
 |---|---|
 | `surtr-analysis` | protocol 非依存の context resolver、document store、semantic index、completion / hover / diagnostics service |
-| `surtr-query` または `surtr-analysis::query` | REPL command query surface を parse する小さい仕様ロック済み wrapper |
+| `surtr-analysis::query` | REPL / editor command query surface を parse する小さい仕様ロック済み wrapper |
 | `surtr-lsp` | LSP JSON-RPC adapter。URI / UTF-16 position / capability negotiation を `surtr-analysis` の DTO へ写像する |
 | `xldr` | REPL session と UI adapter。`:` command routing と session state を持ち、query parser と semantic service を直接使う |
 | `rune` | CLI dispatch。`surtr lsp` を追加する場合は process 起動のみ担う |
 
-初期実装では、既存 loader / doc metadata 収集の都合で `xldr` の一部 helper を参照してよい。
-ただし target state では、LSP が Xldr の REPL session / UI / line editor に依存しない。
+`SourceKind` は `sindr::policy` に置き、parse rule 導出は `spire` が提供する。
+これにより `surtr-analysis` は Xldr の REPL session / UI / line editor に依存しない。
 
 `surtr-analysis` は原則として次に依存する。
 
@@ -117,8 +117,9 @@ VM 状態を持つため、REPL binding completion だけは Xldr session state 
 REPL command query parser は `spire` に置かない。Surtr source grammar ではなく、
 [../../doc/xldr_command_query_api_spec.md](../../doc/xldr_command_query_api_spec.md) に
 ロックインした tooling query surface であるため、`surtr-analysis::query` の小さい module
-として始める。LSP adapter からも同じ query AST / validation を使う必要が出た時点で、
-`surtr-query` crate へ分離してよい。
+として固定する。Xldr は `ReplQuery` 互換の alias でこの実装を呼ぶ。
+`surtr-query` crate へ分離するのは、query parser が `surtr-analysis` の他責務から
+独立して versioning したくなった場合だけでよい。
 
 ---
 
@@ -415,11 +416,9 @@ CommandQuery
 pipe placeholder の式利用を受けない。受けないものを明確にすることで、LSP / REPL の
 doc / signature / info query が Surtr 本体 grammar と独立して安定する。
 
-置き場は段階的に扱う。
-
-1. 初期は `surtr-analysis::query` に置き、Xldr の `:doc` / `:sig` / `:info` が使う
-2. LSP command palette、hover 補助、REPL virtual document から同じ query parse が必要になったら `surtr-query` crate に分ける
-3. どちらの場合も semantic resolver は `surtr-analysis` に置き、query parser は query AST と validation diagnostics だけを返す
+置き場は `surtr-analysis::query` とする。Xldr の `:doc` / `:sig` / `:info` /
+`:type` / `:facet` はこの parser を共有する。semantic resolver は `surtr-analysis`
+に置き、query parser は query AST と validation diagnostics だけを返す。
 
 LSP は通常 source の completion / hover に command query parser を使わない。
 ただし editor command として `Surtr: Query Signature` のような入口を持つ場合は、
@@ -639,8 +638,8 @@ resolver へ渡す。
 
 共有化の順序は次を推奨する。
 
-1. Xldr の completion / doc / signature の semantic lookup を UI 非依存 API へ切り出す
-2. command query parser を `surtr-analysis::query` の小さい wrapper へ移し、Xldr がそれを呼ぶ
+1. command query parser を `surtr-analysis::query` に置き、Xldr がそれを呼ぶ
+2. Xldr の completion / doc / signature の semantic lookup を UI 非依存 API へ切り出す
 3. LSP adapter が file URI + position + `AnalysisContext` を入力として同じ semantic API を呼ぶ
 4. REPL virtual document を追加し、preload context と live binding を mirror として表示する
 5. command query parser を editor command の補助に使う。ただし通常 source の hover / signature help は source position から解決し、REPL query syntax と混ぜない
@@ -654,11 +653,11 @@ keyword、local、scope、import、member、signature、type context の順で�
 
 ### Phase 0: Analysis boundary
 
-- `surtr-analysis` 相当の protocol 非依存境界を作る。crate 分割するか既存 helper 分割から始めるかは実装時に選ぶ
+- `surtr-analysis` の protocol 非依存境界を作る
 - document store と `LineIndex` を実装する
 - `AnalysisContext` / `RunnerContext` / cache key 型を置く
-- command query parser の初期配置を `surtr-analysis::query` 相当として置き、`surtr-query` 分離条件を残す
-- 既存 loader helper から source composition を切り出す方針を固定する
+- command query parser を `surtr-analysis::query` として置き、Xldr が共有実装を呼ぶ
+- `SourceKind` を `sindr::policy` に置き、parse rule 導出を `spire` に置く
 
 ### Phase 1: Diagnostics MVP
 
@@ -750,7 +749,6 @@ keyword、local、scope、import、member、signature、type context の順で�
 - project runner 専用 `SourceKind` / `ProjectConfigSource` 相当が必要か
 - `RunnerArgs` の最終構造と、`selected_profile` を top-level field に置くか runner args 内に置くか
 - project runner を VM 実行で抽出するか、restricted evaluator で抽出するか
-- command query parser を `surtr-analysis::query` の module に留めるか、`surtr-query` crate へ分けるか
 - external input diagnostics の所属
 - project context 付き script の boot merge 規則と明示 override API の有無
 - active file が複数 profile に属する場合の UI / diagnostics 優先順位
