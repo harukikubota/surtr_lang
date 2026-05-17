@@ -2,6 +2,11 @@ use std::path::PathBuf;
 
 use sindr::policy::{CompileUnitKind, SourceKind};
 
+use crate::project_runner::{
+    extract_project_runner_input, resolve_project_runner, ProjectRunnerInput,
+    ProjectRunnerSourceInput,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnalysisMode {
     Script,
@@ -50,6 +55,7 @@ pub struct RunnerSelection {
     pub project_file: PathBuf,
     pub selected_profile: String,
     pub normalized_args: Vec<(String, String)>,
+    pub source: Option<ProjectRunnerSourceInput>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +98,8 @@ pub enum RunnerDiagnosticKind {
     MissingRunnerSelection,
     ProjectFileMismatch,
     ProjectProfileMismatch,
+    ProjectProfileUnknown,
+    ProjectSourceParseError,
     GlobNoMatch,
     UnreadablePath,
     LoadProjectUnsupported,
@@ -334,6 +342,20 @@ fn resolve_project_context(
         });
     }
 
+    let mut runner = if let Some(source_input) = selection.source.clone() {
+        match extract_project_runner_input(source_input) {
+            Ok(input) => resolve_project_runner(input),
+            Err(source_diagnostics) => {
+                let mut runner = empty_runner_context(project_file.clone(), selection.clone());
+                runner.diagnostics = source_diagnostics;
+                runner
+            }
+        }
+    } else {
+        empty_runner_context(project_file.clone(), selection.clone())
+    };
+    runner.diagnostics.append(&mut runner_diagnostics);
+
     let status = if diagnostics.is_empty() {
         AnalysisContextStatus::Ready
     } else {
@@ -343,21 +365,23 @@ fn resolve_project_context(
     ResolvedAnalysisContext {
         context: base_context,
         status,
-        runner: Some(RunnerContext {
-            project_file,
-            selected_profile: selection.selected_profile,
-            normalized_args: selection.normalized_args,
-            resolved_paths: Vec::new(),
-            active_file_profiles: Vec::new(),
-            module_stages: Vec::new(),
-            boot_summary: ProjectBootSummary::default(),
-            external_inputs: Vec::new(),
-            diagnostics: runner_diagnostics,
-        }),
+        runner: Some(runner),
         script_project: None,
         repl: None,
         diagnostics,
     }
+}
+
+fn empty_runner_context(project_file: PathBuf, selection: RunnerSelection) -> RunnerContext {
+    resolve_project_runner(ProjectRunnerInput {
+        project_file,
+        selected_profile: selection.selected_profile,
+        normalized_args: selection.normalized_args,
+        declared_paths: Vec::new(),
+        active_file_profiles: Vec::new(),
+        boot_summary: ProjectBootSummary::default(),
+        external_inputs: Vec::new(),
+    })
 }
 
 fn ready_context(

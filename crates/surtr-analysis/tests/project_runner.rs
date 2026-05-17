@@ -3,9 +3,96 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use surtr_analysis::{
-    resolve_project_runner, AnalysisSpan, DeclaredProjectPath, ProjectBootSummary,
-    ProjectRunnerInput, RunnerDiagnosticKind,
+    extract_project_runner_input, resolve_project_runner, AnalysisSpan, DeclaredProjectPath,
+    ProjectBootSummary, ProjectRunnerInput, ProjectRunnerSourceInput, RunnerDiagnosticKind,
 };
+
+#[test]
+fn project_runner_extracts_selected_profile_paths_from_project_source() {
+    let root = temp_root("source");
+    let source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "main", {|c|
+    Config::entry_fun(c, "Main::main")
+    |> Config::add_path("./main.srt")
+    |> Config::add_path("./src/*.srt")
+  })
+
+  Project::entrypoint(config, "test", {|c|
+    Config::entry_fun(c, "Main::test")
+    |> Config::add_path("./test.srt")
+  })
+})
+"#;
+
+    let input = extract_project_runner_input(ProjectRunnerSourceInput {
+        project_file: root.join("project.srt"),
+        selected_profile: "main".to_string(),
+        normalized_args: vec![("profile".to_string(), "main".to_string())],
+        source: source.to_string(),
+    })
+    .expect("project source should extract runner input");
+
+    assert_eq!(input.selected_profile, "main");
+    assert_eq!(
+        input
+            .declared_paths
+            .iter()
+            .map(|path| path.literal_or_glob.as_str())
+            .collect::<Vec<_>>(),
+        vec!["./main.srt", "./src/*.srt"]
+    );
+    assert_eq!(input.active_file_profiles, vec!["main", "test"]);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn project_runner_extracts_paths_from_repository_project_example() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("examples/mahjong");
+    let source = fs::read_to_string(root.join("project.srt")).expect("read example project");
+
+    let input = extract_project_runner_input(ProjectRunnerSourceInput {
+        project_file: root.join("project.srt"),
+        selected_profile: "main".to_string(),
+        normalized_args: Vec::new(),
+        source,
+    })
+    .expect("repository project example should extract runner input");
+
+    assert_eq!(input.active_file_profiles, vec!["main"]);
+    assert_eq!(input.declared_paths.len(), 11);
+    assert_eq!(input.declared_paths[0].literal_or_glob, "./main.srt");
+    assert_eq!(input.declared_paths[10].literal_or_glob, "./src/6_cli.srt");
+}
+
+#[test]
+fn project_runner_reports_unknown_selected_profile_from_project_source() {
+    let root = temp_root("unknown-profile");
+    let source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "main", {|c|
+    Config::add_path(c, "./main.srt")
+  })
+})
+"#;
+
+    let diagnostics = extract_project_runner_input(ProjectRunnerSourceInput {
+        project_file: root.join("project.srt"),
+        selected_profile: "test".to_string(),
+        normalized_args: Vec::new(),
+        source: source.to_string(),
+    })
+    .expect_err("unknown profile should be reported as runner diagnostic");
+
+    assert!(diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.kind == RunnerDiagnosticKind::ProjectProfileUnknown));
+
+    let _ = fs::remove_dir_all(root);
+}
 
 #[test]
 fn project_runner_resolves_literal_paths_into_module_stage() {

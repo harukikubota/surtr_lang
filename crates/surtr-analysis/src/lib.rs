@@ -14,7 +14,10 @@ pub use context::{
     RunnerDiagnostic, RunnerDiagnosticKind, RunnerSelection, ScriptProjectContext, SelectedContext,
 };
 pub use document::{DocumentSnapshot, DocumentStore, LineIndex, TextPosition, Utf16Position};
-pub use project_runner::{resolve_project_runner, DeclaredProjectPath, ProjectRunnerInput};
+pub use project_runner::{
+    extract_project_runner_input, resolve_project_runner, DeclaredProjectPath, ProjectRunnerInput,
+    ProjectRunnerSourceInput,
+};
 pub use semantic::{
     complete_prefix, CompletionCandidate, CompletionKind, CompletionRequest, CompletionResponse,
     CompletionSymbol, SemanticIndex,
