@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use sigil::{DeclarationIndex, DeclarationKind};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,6 +77,22 @@ impl SemanticIndex {
             });
         }
 
+        Self::from_symbols(symbols)
+    }
+
+    pub fn from_declaration_index(declarations: &DeclarationIndex) -> Self {
+        let symbols = declarations
+            .values()
+            .filter(|entry| !entry.hidden && (entry.user_importable || entry.user_callable))
+            .filter_map(|entry| {
+                completion_kind_for_declaration_kind(&entry.kind).map(|kind| CompletionSymbol {
+                    label: surface_name(&entry.fq_name),
+                    replacement: surface_name(&entry.fq_name),
+                    kind,
+                    detail: None,
+                })
+            })
+            .collect();
         Self::from_symbols(symbols)
     }
 
@@ -168,6 +185,25 @@ fn completion_kind_for_doc_kind(kind: &DocKind) -> CompletionKind {
         DocKind::Module => CompletionKind::TypePath,
         DocKind::Type => CompletionKind::TypeConstructor,
         DocKind::Function => CompletionKind::FunctionCall,
+    }
+}
+
+fn completion_kind_for_declaration_kind(kind: &DeclarationKind) -> Option<CompletionKind> {
+    match kind {
+        DeclarationKind::Def
+        | DeclarationKind::Extractor
+        | DeclarationKind::TraitMethod
+        | DeclarationKind::ResultCtor
+        | DeclarationKind::ImplMethod
+        | DeclarationKind::ImplCtorNew => Some(CompletionKind::FunctionCall),
+        DeclarationKind::Struct
+        | DeclarationKind::Record
+        | DeclarationKind::Deferror
+        | DeclarationKind::Enum
+        | DeclarationKind::EnumVariant
+        | DeclarationKind::BuiltinType => Some(CompletionKind::TypeConstructor),
+        DeclarationKind::Const => Some(CompletionKind::Variable),
+        DeclarationKind::Trait => Some(CompletionKind::TypePath),
     }
 }
 

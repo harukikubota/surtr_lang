@@ -117,6 +117,7 @@ impl AnalysisService {
         let active_document = self.documents.get(&context.context.active_file).cloned();
         let mut resolved = None;
         let mut typed = None;
+        let mut semantic_index = self.semantic_index.clone();
 
         let ast = if let Some(document) = active_document.as_ref() {
             match parse_document(
@@ -138,6 +139,7 @@ impl AnalysisService {
                             &mut diagnostics,
                             &mut resolved,
                             &mut typed,
+                            &mut semantic_index,
                         );
                     } else {
                         analyze_single_document(
@@ -181,7 +183,7 @@ impl AnalysisService {
             ast,
             resolved,
             typed,
-            semantic_index: self.semantic_index.clone(),
+            semantic_index,
             diagnostics,
         }
     }
@@ -286,6 +288,7 @@ fn analyze_project_stages(
     diagnostics: &mut Vec<AnalysisDiagnostic>,
     resolved: &mut Option<Vec<sigil::resolved::Resolved>>,
     typed: &mut Option<Vec<scar::typed::TypedNode>>,
+    semantic_index: &mut SemanticIndex,
 ) {
     let Some(runner) = context.runner.as_ref() else {
         return;
@@ -296,39 +299,42 @@ fn analyze_project_stages(
     };
 
     match sigil::precollect_declaration_index(&module_stages) {
-        Ok(declaration_index) => match sigil::resolve_staged_program_with_state(
-            &module_stages,
-            Vec::new(),
-            &declaration_index,
-            None,
-        ) {
-            Ok(resolved_program) => {
-                let resolved_nodes = resolved_program.resolved.clone();
-                match scar::typecheck_staged_program_with_context(
-                    resolved_program,
-                    typecheck_context_for_mode(&context.context.mode),
-                ) {
-                    Ok(typed_program) => *typed = Some(typed_program.nodes),
-                    Err(error) => diagnostics.push(diagnostic_from_span(
-                        AnalysisDiagnosticKind::Typecheck,
-                        AnalysisSeverity::Error,
-                        active_document,
-                        error.span.start,
-                        error.span.end,
-                        error.message,
-                    )),
+        Ok(declaration_index) => {
+            *semantic_index = semantic_index_with_declarations(semantic_index, &declaration_index);
+            match sigil::resolve_staged_program_with_state(
+                &module_stages,
+                Vec::new(),
+                &declaration_index,
+                None,
+            ) {
+                Ok(resolved_program) => {
+                    let resolved_nodes = resolved_program.resolved.clone();
+                    match scar::typecheck_staged_program_with_context(
+                        resolved_program,
+                        typecheck_context_for_mode(&context.context.mode),
+                    ) {
+                        Ok(typed_program) => *typed = Some(typed_program.nodes),
+                        Err(error) => diagnostics.push(diagnostic_from_span(
+                            AnalysisDiagnosticKind::Typecheck,
+                            AnalysisSeverity::Error,
+                            active_document,
+                            error.span.start,
+                            error.span.end,
+                            error.message,
+                        )),
+                    }
+                    *resolved = Some(resolved_nodes);
                 }
-                *resolved = Some(resolved_nodes);
+                Err(error) => diagnostics.push(diagnostic_from_span(
+                    AnalysisDiagnosticKind::Resolve,
+                    AnalysisSeverity::Error,
+                    active_document,
+                    error.span.start,
+                    error.span.end,
+                    error.message,
+                )),
             }
-            Err(error) => diagnostics.push(diagnostic_from_span(
-                AnalysisDiagnosticKind::Resolve,
-                AnalysisSeverity::Error,
-                active_document,
-                error.span.start,
-                error.span.end,
-                error.message,
-            )),
-        },
+        }
         Err(error) => diagnostics.push(diagnostic_from_span(
             AnalysisDiagnosticKind::Resolve,
             AnalysisSeverity::Error,
@@ -338,6 +344,20 @@ fn analyze_project_stages(
             error.message,
         )),
     }
+}
+
+fn semantic_index_with_declarations(
+    existing: &SemanticIndex,
+    declaration_index: &sigil::DeclarationIndex,
+) -> SemanticIndex {
+    let mut symbols = existing.symbols().to_vec();
+    symbols.extend(
+        SemanticIndex::from_declaration_index(declaration_index)
+            .symbols()
+            .iter()
+            .cloned(),
+    );
+    SemanticIndex::from_symbols(symbols)
 }
 
 fn build_staged_modules(

@@ -179,6 +179,70 @@ Project::config({|config|
 }
 
 #[test]
+fn analysis_service_project_context_builds_completion_index_from_runner_module_stage() {
+    let root = temp_root("project-completion");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let helper_path = src.join("helper.srt");
+    let main_path = src.join("main.srt");
+    let project_file = root.join("project.srt");
+    std::fs::write(&helper_path, "defmod Helper { def helper() -> Int { 1 } }")
+        .expect("write helper");
+    std::fs::write(&main_path, "import Helper::he").expect("write main");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/helper.srt")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.update_document(main_path.clone(), Some(1), "import Helper::he".to_string());
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: main_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(main_path),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+
+    let snapshot = service.analyze(context);
+    let completion = service.completions(
+        &snapshot,
+        Utf16Position {
+            line: 0,
+            character: "import Helper::he".len() as u32,
+        },
+    );
+
+    assert!(
+        completion
+            .candidates
+            .iter()
+            .any(|candidate| candidate.label == "Helper::helper"),
+        "project declarations should populate completion candidates: {completion:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn analysis_service_completions_use_snapshot_semantic_index_and_utf16_position() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");
