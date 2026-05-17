@@ -1,3 +1,7 @@
+use std::collections::BTreeMap;
+
+use sindr::ir::{DocEntry, DocKind, SignatureEntry};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompletionKind {
     Variable,
@@ -23,14 +27,56 @@ impl SemanticIndex {
     pub fn from_symbols(symbols: Vec<CompletionSymbol>) -> Self {
         let mut deduped = Vec::new();
         for symbol in symbols {
-            if deduped.iter().any(|existing: &CompletionSymbol| {
+            if let Some(existing) = deduped.iter_mut().find(|existing: &&mut CompletionSymbol| {
                 existing.label == symbol.label && existing.kind == symbol.kind
             }) {
+                if existing.detail.is_none() {
+                    existing.detail = symbol.detail;
+                }
                 continue;
             }
             deduped.push(symbol);
         }
+        deduped.sort_by(|left, right| {
+            left.label
+                .cmp(&right.label)
+                .then_with(|| {
+                    completion_kind_rank(&left.kind).cmp(&completion_kind_rank(&right.kind))
+                })
+                .then_with(|| left.replacement.cmp(&right.replacement))
+        });
         Self { symbols: deduped }
+    }
+
+    pub fn from_metadata(docs: &[DocEntry], signatures: &[SignatureEntry]) -> Self {
+        let signature_by_name = signatures
+            .iter()
+            .map(|entry| (entry.qualified_name.as_str(), entry.signature.as_str()))
+            .collect::<BTreeMap<_, _>>();
+
+        let mut symbols = Vec::new();
+        for entry in signatures {
+            symbols.push(CompletionSymbol {
+                label: surface_name(&entry.qualified_name),
+                replacement: surface_name(&entry.qualified_name),
+                kind: completion_kind_for_doc_kind(&entry.kind),
+                detail: Some(entry.signature.clone()),
+            });
+        }
+        for entry in docs {
+            let detail = signature_by_name
+                .get(entry.qualified_name.as_str())
+                .map(|signature| (*signature).to_string())
+                .or_else(|| entry.signature.clone());
+            symbols.push(CompletionSymbol {
+                label: surface_name(&entry.qualified_name),
+                replacement: surface_name(&entry.qualified_name),
+                kind: completion_kind_for_doc_kind(&entry.kind),
+                detail,
+            });
+        }
+
+        Self::from_symbols(symbols)
     }
 
     pub fn symbols(&self) -> &[CompletionSymbol] {
@@ -115,4 +161,25 @@ fn completion_token(input: &str, cursor: usize) -> (usize, usize, String) {
 
 fn completion_token_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':')
+}
+
+fn completion_kind_for_doc_kind(kind: &DocKind) -> CompletionKind {
+    match kind {
+        DocKind::Module => CompletionKind::TypePath,
+        DocKind::Type => CompletionKind::TypeConstructor,
+        DocKind::Function => CompletionKind::FunctionCall,
+    }
+}
+
+fn completion_kind_rank(kind: &CompletionKind) -> u8 {
+    match kind {
+        CompletionKind::Variable => 0,
+        CompletionKind::FunctionCall => 1,
+        CompletionKind::TypeConstructor => 2,
+        CompletionKind::TypePath => 3,
+    }
+}
+
+fn surface_name(name: &str) -> String {
+    sindr::names::surface_rendered_name(name)
 }

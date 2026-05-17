@@ -1,3 +1,8 @@
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use crate::DocumentVersion;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextPosition {
     pub line: u32,
@@ -102,4 +107,68 @@ impl LineIndex {
             Err(idx) => idx.saturating_sub(1),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct DocumentSnapshot {
+    pub path: PathBuf,
+    pub version: Option<i64>,
+    pub text: String,
+    pub content_hash: String,
+    pub line_index: LineIndex,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DocumentStore {
+    documents: BTreeMap<PathBuf, DocumentSnapshot>,
+}
+
+impl DocumentStore {
+    pub fn update_document(
+        &mut self,
+        path: PathBuf,
+        version: Option<i64>,
+        text: String,
+    ) -> DocumentSnapshot {
+        let snapshot = DocumentSnapshot {
+            path: path.clone(),
+            version,
+            content_hash: stable_hash_text(&text),
+            line_index: LineIndex::new(&text),
+            text,
+        };
+        self.documents.insert(path, snapshot.clone());
+        snapshot
+    }
+
+    pub fn get(&self, path: &Path) -> Option<&DocumentSnapshot> {
+        self.documents.get(path)
+    }
+
+    pub fn remove(&mut self, path: &Path) -> Option<DocumentSnapshot> {
+        self.documents.remove(path)
+    }
+
+    pub fn open_document_versions(&self) -> Vec<DocumentVersion> {
+        self.documents
+            .values()
+            .map(|document| DocumentVersion {
+                path: document.path.clone(),
+                version: document.version,
+                content_hash: document.content_hash.clone(),
+            })
+            .collect()
+    }
+}
+
+fn stable_hash_text(text: &str) -> String {
+    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+
+    let mut hash = FNV_OFFSET;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    format!("{hash:016x}")
 }

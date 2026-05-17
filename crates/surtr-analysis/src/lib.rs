@@ -8,7 +8,7 @@ pub use context::{
     AnalysisMode, AnalysisSourceKind, CacheKeyField, DocumentVersion, ModuleFileFingerprint,
     RunnerSelection, SelectedContext,
 };
-pub use document::{LineIndex, TextPosition, Utf16Position};
+pub use document::{DocumentSnapshot, DocumentStore, LineIndex, TextPosition, Utf16Position};
 pub use semantic::{
     complete_prefix, CompletionCandidate, CompletionKind, CompletionRequest, CompletionResponse,
     CompletionSymbol, SemanticIndex,
