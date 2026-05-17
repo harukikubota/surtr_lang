@@ -150,25 +150,40 @@ pub fn extract_project_runner_input(
 ) -> Result<ProjectRunnerInput, Vec<RunnerDiagnostic>> {
     let result = extract_project_runner_result(input.clone())?;
 
+    project_runner_input_from_result(
+        input.project_file,
+        input.selected_profile,
+        input.normalized_args,
+        input.active_file,
+        result,
+    )
+}
+
+pub fn project_runner_input_from_result(
+    project_file: PathBuf,
+    selected_profile: String,
+    normalized_args: Vec<(String, String)>,
+    active_file: Option<PathBuf>,
+    result: ProjectRunnerResult,
+) -> Result<ProjectRunnerInput, Vec<RunnerDiagnostic>> {
     if !result
         .profiles
         .iter()
-        .any(|profile| profile.name == input.selected_profile)
+        .any(|profile| profile.name == selected_profile)
     {
         return Err(vec![RunnerDiagnostic {
             kind: RunnerDiagnosticKind::ProjectProfileUnknown,
-            path: Some(input.project_file.clone()),
+            path: Some(project_file.clone()),
             span: None,
             message: format!(
                 "project profile {} was not found in {}",
-                input.selected_profile,
-                path_value(&input.project_file)
+                selected_profile,
+                path_value(&project_file)
             ),
         }]);
     }
 
-    let active_file_profiles = input
-        .active_file
+    let active_file_profiles = active_file
         .as_ref()
         .map(|active_file| active_file_profiles(&result.profiles, active_file))
         .unwrap_or_else(|| {
@@ -182,15 +197,15 @@ pub fn extract_project_runner_input(
     let declared_paths = result
         .profiles
         .iter()
-        .filter(|profile| profile.name == input.selected_profile)
+        .filter(|profile| profile.name == selected_profile)
         .flat_map(|profile| profile.paths.iter())
         .map(declared_project_path)
         .collect();
 
     Ok(ProjectRunnerInput {
-        project_file: input.project_file,
-        selected_profile: input.selected_profile,
-        normalized_args: input.normalized_args,
+        project_file,
+        selected_profile,
+        normalized_args,
         declared_paths,
         active_file_profiles,
         boot_summary: result.boot_summary,

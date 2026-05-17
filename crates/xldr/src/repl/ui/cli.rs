@@ -2,6 +2,7 @@
 
 use std::io::{self, IsTerminal, Write};
 use std::sync::mpsc;
+#[cfg(feature = "line-editor")]
 use std::time::{Duration, Instant};
 
 #[cfg(feature = "line-editor")]
@@ -23,9 +24,9 @@ use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 #[cfg(feature = "line-editor")]
 use rustyline::{Context, Helper};
 
-use crate::repl::logic::core::{
-    xldr_version, ReplCompletion, ReplCompletionCandidate, ReplCompletionKind, ReplEngine,
-};
+use crate::repl::logic::core::{xldr_version, ReplEngine};
+#[cfg(feature = "line-editor")]
+use crate::repl::logic::core::{ReplCompletion, ReplCompletionCandidate, ReplCompletionKind};
 use crate::repl::logic::{present_for_cli, styled, ReplResult};
 use crate::{CommandError, CommandResult};
 

@@ -312,6 +312,19 @@ AnalysisContextRequest {
 }
 ```
 
+```text
+RunnerSelection {
+  project_file: Path
+  selected_profile: String
+  normalized_args: Vec<(String, String)>
+  runner_result: Option<ProjectRunnerResult>
+  source: Option<ProjectRunnerSourceInput>
+}
+```
+
+host が project runner source を VM 実行できる場合は `runner_result` を渡す。
+LSP-only fallback や未接続 host では `source` から AST extractor で同じ DTO へ寄せてよい。
+
 `SelectedContext` は client UI や CLI 起動引数から明示された解析起点である。
 自動探索より常に優先する。
 
@@ -728,13 +741,20 @@ keyword、local、scope、import、member、signature、type context の順で�
 ### Phase 3: Project context
 
 - project runner resolver の出力を `RunnerContext` として受け取る
+  - project runner source の VM 実行境界は host/runtime 側の `xldr` に置き、
+    standard library の `Project` / `Config` surface が返した runtime value を
+    `ProjectRunnerResult` に decode する。
+  - `surtr-lsp` は `RunnerSelection.source` を受け取った時点で `xldr` の VM 実行器を
+    呼び、成功時は `RunnerSelection.runner_result` を `surtr-analysis` へ渡す。
 - selected profile と normalized runner args を cache key に入れる
 - `Project::add_path` / glob / active file profile membership を diagnostics と status に反映する
 - boot / supervisor config summary と external input state を cache key と diagnostics に反映する
 - `load_project` 付き operational script を解析する
   - v0 では `AnalysisService::resolve_context` が literal-only `load_project` を読み、
-    project runner source を `RunnerContext` へ解決し、LSP completion が project stage
-    declarations を参照できるところまでを固定する
+    project runner source を `RunnerContext` へ解決する。
+  - script body は `load_project` directive を除外した上で project module stages の user
+    program として resolve/typecheck し、diagnostics / completion が同じ project
+    declarations を参照する。
 
 ### Phase 4: REPL and advanced tooling
 

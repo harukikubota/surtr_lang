@@ -212,6 +212,9 @@
   - REPL completion の call argument 文脈では、expected type と合わない binding を除外せず、合う binding を先に出す順位付けへ変更した。
   - REPL completion の expected type 順位付けを `surtr-analysis` の shared ranking helper へ移し、Xldr は session-local binding 候補を同 helper へ渡す形にした。
   - `load_project("./project.srt", profile: "dev")` を `AnalysisService` 側で literal-only operational script directive として読み、project runner source から `RunnerContext` を script context へ添付し、LSP completion が project stage declaration を参照できるようにした。
+  - `load_project` 付き operational script の body は directive を除外した上で project module stages の user program として resolve/typecheck し、script diagnostics も project context に載せるようにした。
+  - `xldr::execute_project_runner_source` を追加し、Project/Config 標準定義を含む project runner source を VM 実行して runtime value から `ProjectRunnerResult` を decode できる境界を作った。
+  - `RunnerSelection` は VM 実行済みの `ProjectRunnerResult` を保持できるようにし、`surtr-lsp` は source 付き選択を受けた場合に `xldr` 実行器で result を詰めてから analysis へ渡す。
 - 固定済み仕様:
   - shared analysis は `crates/surtr-analysis` として crate 新設で進める。既存 Xldr helper の段階移行は、この crate へ利用側を寄せる形で行う。
   - command query parser は `surtr-analysis::query` に留め、現時点では `surtr-query` crate へ分離しない。

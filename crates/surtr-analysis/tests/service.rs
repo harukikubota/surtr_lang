@@ -154,12 +154,75 @@ Seeder::run()
     assert_eq!(script_project.project_file, Some(project_file));
     assert_eq!(script_project.profile, Some("dev".to_string()));
     assert!(script_project.diagnostics.is_empty());
+    assert_eq!(
+        script_project
+            .project_context
+            .as_ref()
+            .map(|context| context.selected_profile.as_str()),
+        Some("dev")
+    );
     let runner = resolved
         .runner
         .expect("load_project should resolve runner context");
     assert_eq!(runner.selected_profile, "dev");
     assert_eq!(runner.resolved_paths[0].literal_or_glob, "./src/main.srt");
     assert_eq!(runner.resolved_paths[0].expanded_files, vec![module_path]);
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn analysis_service_analyzes_load_project_script_body_under_project_context() {
+    let root = temp_root("load-project-script-body");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let script_path = root.join("scripts").join("seed.srt");
+    std::fs::create_dir_all(script_path.parent().expect("script parent")).expect("create scripts");
+    let project_file = root.join("project.srt");
+    let module_path = src.join("main.srt");
+    std::fs::write(&module_path, "defmod Main { def main() -> Int { 1 } }").expect("write module");
+    std::fs::write(
+        &project_file,
+        r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::entry_fun(c, "Main::main")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#,
+    )
+    .expect("write project");
+
+    let mut service = AnalysisService::new();
+    service.update_document(
+        script_path.clone(),
+        Some(1),
+        r#"load_project("../project.srt", profile: "dev")
+
+value = missing_name
+"#
+        .to_string(),
+    );
+
+    let context = service.resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: script_path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(script_path.clone())),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let diagnostics = service.diagnostics(&snapshot);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind == AnalysisDiagnosticKind::Resolve
+                && diagnostic.path == script_path
+                && diagnostic.message.contains("missing_name")
+        }),
+        "script body should be resolved under load_project context: {diagnostics:?}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -205,6 +268,7 @@ Project::config({|config|
             project_file: project_file.clone(),
             selected_profile: "dev".to_string(),
             normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
             source: Some(ProjectRunnerSourceInput {
                 project_file,
                 selected_profile: "dev".to_string(),
@@ -270,6 +334,7 @@ Project::config({|config|
             project_file: project_file.clone(),
             selected_profile: "dev".to_string(),
             normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
             source: Some(ProjectRunnerSourceInput {
                 project_file,
                 selected_profile: "dev".to_string(),
@@ -489,6 +554,7 @@ Project::config({|config|
             project_file: project_file.clone(),
             selected_profile: "dev".to_string(),
             normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
             source: Some(ProjectRunnerSourceInput {
                 project_file,
                 selected_profile: "dev".to_string(),
@@ -557,6 +623,7 @@ Project::config({|config|
             project_file: project_file.clone(),
             selected_profile: "dev".to_string(),
             normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
             source: Some(ProjectRunnerSourceInput {
                 project_file,
                 selected_profile: "dev".to_string(),

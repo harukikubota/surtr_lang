@@ -125,7 +125,21 @@ impl LspAnalysisHost {
     }
 
     pub fn set_runner_selection(&mut self, runner_selection: Option<RunnerSelection>) {
-        self.runner_selection = runner_selection;
+        self.runner_selection = runner_selection.map(|selection| {
+            if selection.runner_result.is_some() {
+                return selection;
+            }
+            let Some(source) = selection.source.clone() else {
+                return selection;
+            };
+            match xldr::execute_project_runner_source(source) {
+                Ok(result) => RunnerSelection {
+                    runner_result: Some(result),
+                    ..selection
+                },
+                Err(_) => selection,
+            }
+        });
     }
 
     pub fn set_semantic_index(&mut self, semantic_index: SemanticIndex) {

@@ -237,6 +237,7 @@ Project::config({|config|
         project_file: project_file.clone(),
         selected_profile: "dev".to_string(),
         normalized_args: vec![("profile".to_string(), "dev".to_string())],
+        runner_result: None,
         source: Some(surtr_analysis::ProjectRunnerSourceInput {
             project_file,
             selected_profile: "dev".to_string(),
@@ -260,6 +261,69 @@ Project::config({|config|
             && item.kind == CompletionItemKind::Function
             && item.text_edit.new_text == "Helper::helper"),
         "project declarations should flow through LSP completion: {items:?}"
+    );
+
+    std::fs::remove_dir_all(workspace).expect("temporary workspace must be removable");
+}
+
+#[test]
+fn completion_uses_vm_executed_project_runner_source() {
+    let workspace = temp_workspace("project-completion-vm");
+    let src = workspace.join("src");
+    std::fs::create_dir_all(&src).expect("temporary src dir must be writable");
+    let helper_path = src.join("helper.srt");
+    let main_path = src.join("main.srt");
+    let project_file = workspace.join("project.srt");
+    std::fs::write(&helper_path, "defmod Helper { def helper() -> Int { 1 } }")
+        .expect("write helper source");
+
+    let uri = path_to_file_uri(&main_path);
+    let source = "he";
+    let project_source = r#"
+def profile_name() -> String { "dev" }
+
+Project::config({|project|
+  Project::entrypoint(project, profile_name(), {|c|
+    Config::add_path(c, "./src/helper.srt")
+  })
+})
+"#;
+    let runner_result =
+        xldr::execute_project_runner_source(surtr_analysis::ProjectRunnerSourceInput {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            active_file: Some(main_path.clone()),
+            source: project_source.to_string(),
+        })
+        .expect("project runner source should execute through VM before LSP context resolution");
+    let mut host = LspAnalysisHost::new(workspace.clone());
+    host.did_open(uri.clone(), Some(1), source.to_string());
+    host.set_selected_context(Some(SelectedContext::ProjectProfile {
+        project_file: project_file.clone(),
+        profile: "dev".to_string(),
+    }));
+    host.set_runner_selection(Some(RunnerSelection {
+        project_file: project_file.clone(),
+        selected_profile: "dev".to_string(),
+        normalized_args: vec![("profile".to_string(), "dev".to_string())],
+        runner_result: Some(runner_result),
+        source: None,
+    }));
+
+    let items = completion_items(
+        &host,
+        &uri,
+        LspPosition {
+            line: 0,
+            character: 2,
+        },
+    );
+
+    assert!(
+        items.iter().any(|item| item.label == "Helper::helper"
+            && item.kind == CompletionItemKind::Function),
+        "VM-executed project runner result should flow through LSP completion: {items:?}"
     );
 
     std::fs::remove_dir_all(workspace).expect("temporary workspace must be removable");
@@ -344,6 +408,7 @@ fn project_runner_diagnostics_are_published_as_lsp_diagnostics() {
         project_file: project_file.clone(),
         selected_profile: "dev".to_string(),
         normalized_args: vec![("profile".to_string(), "dev".to_string())],
+        runner_result: None,
         source: Some(surtr_analysis::ProjectRunnerSourceInput {
             project_file,
             selected_profile: "dev".to_string(),
@@ -394,6 +459,7 @@ Project::config({|config|
         project_file: project_file.clone(),
         selected_profile: "dev".to_string(),
         normalized_args: vec![("profile".to_string(), "dev".to_string())],
+        runner_result: None,
         source: Some(surtr_analysis::ProjectRunnerSourceInput {
             project_file,
             selected_profile: "dev".to_string(),

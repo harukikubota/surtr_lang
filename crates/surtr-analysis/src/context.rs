@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use sindr::policy::{CompileUnitKind, SourceKind};
 
 use crate::project_runner::{
-    extract_project_runner_input, resolve_project_runner, ProjectRunnerInput,
-    ProjectRunnerSourceInput,
+    extract_project_runner_input, project_runner_input_from_result, resolve_project_runner,
+    ProjectRunnerInput, ProjectRunnerResult, ProjectRunnerSourceInput,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +55,7 @@ pub struct RunnerSelection {
     pub project_file: PathBuf,
     pub selected_profile: String,
     pub normalized_args: Vec<(String, String)>,
+    pub runner_result: Option<ProjectRunnerResult>,
     pub source: Option<ProjectRunnerSourceInput>,
 }
 
@@ -118,6 +119,7 @@ pub struct ScriptProjectContext {
     pub directive_span: Option<AnalysisSpan>,
     pub project_file: Option<PathBuf>,
     pub profile: Option<String>,
+    pub project_context: Option<RunnerContext>,
     pub diagnostics: Vec<RunnerDiagnostic>,
 }
 
@@ -223,6 +225,7 @@ pub fn resolve_context(request: AnalysisContextRequest) -> ResolvedAnalysisConte
             } else {
                 SourceKind::DefinitionSource
             };
+            let active_file = request.active_file.clone();
             let mut resolved = ready_context(
                 request.workspace_root,
                 AnalysisMode::Script,
@@ -233,7 +236,25 @@ pub fn resolve_context(request: AnalysisContextRequest) -> ResolvedAnalysisConte
             if let Some(selection) = request.runner_selection {
                 let project_file = selection.project_file.clone();
                 let profile = selection.selected_profile.clone();
-                let runner = if let Some(source_input) = selection.source.clone() {
+                let runner = if let Some(result) = selection.runner_result.clone() {
+                    match project_runner_input_from_result(
+                        selection.project_file.clone(),
+                        selection.selected_profile.clone(),
+                        selection.normalized_args.clone(),
+                        Some(active_file.clone()),
+                        result,
+                    ) {
+                        Ok(input) => resolve_project_runner(input),
+                        Err(source_diagnostics) => {
+                            let mut runner = empty_runner_context(project_file.clone(), selection);
+                            runner.diagnostics = source_diagnostics;
+                            runner
+                        }
+                    }
+                } else if let Some(mut source_input) = selection.source.clone() {
+                    if source_input.active_file.is_none() {
+                        source_input.active_file = Some(active_file.clone());
+                    }
                     match extract_project_runner_input(source_input) {
                         Ok(input) => resolve_project_runner(input),
                         Err(source_diagnostics) => {
@@ -246,11 +267,12 @@ pub fn resolve_context(request: AnalysisContextRequest) -> ResolvedAnalysisConte
                     empty_runner_context(project_file.clone(), selection)
                 };
                 let diagnostics = runner.diagnostics.clone();
-                resolved.runner = Some(runner);
+                resolved.runner = Some(runner.clone());
                 resolved.script_project = Some(ScriptProjectContext {
                     directive_span: None,
                     project_file: Some(project_file),
                     profile: Some(profile),
+                    project_context: Some(runner),
                     diagnostics,
                 });
             }
@@ -374,7 +396,22 @@ fn resolve_project_context(
         });
     }
 
-    let mut runner = if let Some(mut source_input) = selection.source.clone() {
+    let mut runner = if let Some(result) = selection.runner_result.clone() {
+        match project_runner_input_from_result(
+            selection.project_file.clone(),
+            selection.selected_profile.clone(),
+            selection.normalized_args.clone(),
+            Some(active_file.clone()),
+            result,
+        ) {
+            Ok(input) => resolve_project_runner(input),
+            Err(source_diagnostics) => {
+                let mut runner = empty_runner_context(project_file.clone(), selection.clone());
+                runner.diagnostics = source_diagnostics;
+                runner
+            }
+        }
+    } else if let Some(mut source_input) = selection.source.clone() {
         if source_input.active_file.is_none() {
             source_input.active_file = Some(active_file.clone());
         }

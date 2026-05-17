@@ -1,6 +1,7 @@
 mod command_error;
 pub mod error_display;
 mod loader;
+mod project_runner;
 pub mod repl;
 pub mod tui;
 
@@ -22,6 +23,7 @@ pub use loader::{
     CompileSources, LoadError, ModuleInput, ModuleSources, PreparedScriptSources,
     ScriptIncludeDirective, ScriptSourcePrepareError, SourceDescriptor, StagedModule,
 };
+pub use project_runner::{execute_project_runner_source, ProjectRunnerVmError};
 
 use diagnostics::SourceId;
 pub use repl::logic::core::{EldrLoadError, ReplEngine, ReplLoadError};

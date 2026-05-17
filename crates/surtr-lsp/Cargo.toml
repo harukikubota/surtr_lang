@@ -6,3 +6,4 @@ description = "Protocol boundary adapter for Surtr editor tooling"
 
 [dependencies]
 surtr-analysis = { path = "../surtr-analysis" }
+xldr = { path = "../xldr", default-features = false }

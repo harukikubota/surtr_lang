@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use surtr_analysis::{
     parse_document, resolve_context, AnalysisCacheInput, AnalysisCacheKey, AnalysisContext,
     AnalysisContextRequest, AnalysisContextStatus, AnalysisMode, ContextDiagnosticKind,
-    DocumentVersion, ModuleFileFingerprint, ProjectRunnerSourceInput, RunnerSelection,
-    SelectedContext,
+    DocumentVersion, ModuleFileFingerprint, ProjectRunnerPath, ProjectRunnerProfile,
+    ProjectRunnerResult, ProjectRunnerSourceInput, RunnerSelection, SelectedContext,
 };
 
 #[test]
@@ -157,6 +157,7 @@ fn resolve_context_builds_runner_context_from_selected_project_profile() {
             project_file: PathBuf::from("/repo/project.srt"),
             selected_profile: "test".to_string(),
             normalized_args: vec![("env".to_string(), "ci".to_string())],
+            runner_result: None,
             source: None,
         }),
         open_documents: Vec::new(),
@@ -190,6 +191,7 @@ fn resolve_context_marks_selected_project_file_as_project_config_source() {
             project_file: PathBuf::from("/repo/project.srt"),
             selected_profile: "dev".to_string(),
             normalized_args: Vec::new(),
+            runner_result: None,
             source: None,
         }),
         open_documents: Vec::new(),
@@ -216,6 +218,7 @@ fn resolve_context_extracts_project_runner_source_when_available() {
             project_file: PathBuf::from("/repo/project.srt"),
             selected_profile: "dev".to_string(),
             normalized_args: Vec::new(),
+            runner_result: None,
             source: Some(ProjectRunnerSourceInput {
                 project_file: PathBuf::from("/repo/project.srt"),
                 selected_profile: "dev".to_string(),
@@ -244,6 +247,50 @@ Project::config({|config|
 }
 
 #[test]
+fn resolve_context_uses_vm_project_runner_result_when_available() {
+    let resolved = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: PathBuf::from("/repo/src/user.srt"),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: PathBuf::from("/repo/project.srt"),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: PathBuf::from("/repo/project.srt"),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: Some(ProjectRunnerResult {
+                profiles: vec![ProjectRunnerProfile {
+                    name: "dev".to_string(),
+                    entrypoint: "Main::main".to_string(),
+                    paths: vec![ProjectRunnerPath {
+                        declared_by: PathBuf::from("/repo/project.srt"),
+                        literal_or_glob: "./src/user.srt".to_string(),
+                        declaration_span: None,
+                    }],
+                }],
+                boot_summary: Default::default(),
+                external_inputs: Vec::new(),
+            }),
+            source: None,
+        }),
+        open_documents: Vec::new(),
+    });
+
+    let runner = resolved
+        .runner
+        .expect("project context should include runner");
+    assert_eq!(resolved.status, AnalysisContextStatus::Ready);
+    assert_eq!(runner.resolved_paths.len(), 1);
+    assert_eq!(runner.resolved_paths[0].literal_or_glob, "./src/user.srt");
+    assert_eq!(runner.active_file_profiles, vec!["dev"]);
+    assert_eq!(
+        runner.normalized_args,
+        vec![("profile".to_string(), "dev".to_string())]
+    );
+}
+
+#[test]
 fn resolve_context_reports_project_profile_mismatch_without_guessing() {
     let resolved = resolve_context(AnalysisContextRequest {
         workspace_root: PathBuf::from("/repo"),
@@ -256,6 +303,7 @@ fn resolve_context_reports_project_profile_mismatch_without_guessing() {
             project_file: PathBuf::from("/repo/project.srt"),
             selected_profile: "test".to_string(),
             normalized_args: Vec::new(),
+            runner_result: None,
             source: None,
         }),
         open_documents: Vec::new(),
@@ -296,6 +344,7 @@ fn analysis_cache_key_is_stable_for_unordered_runner_args_and_external_inputs() 
                 ("profile".to_string(), "test".to_string()),
                 ("env".to_string(), "ci".to_string()),
             ],
+            runner_result: None,
             source: None,
         }),
         project_runner_hash: Some("project-hash".to_string()),
@@ -322,6 +371,7 @@ fn analysis_cache_key_is_stable_for_unordered_runner_args_and_external_inputs() 
                 ("env".to_string(), "ci".to_string()),
                 ("profile".to_string(), "test".to_string()),
             ],
+            runner_result: None,
             source: None,
         }),
         project_runner_hash: Some("project-hash".to_string()),

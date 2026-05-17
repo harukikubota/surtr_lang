@@ -153,6 +153,7 @@ impl AnalysisService {
                             self,
                             &context,
                             document,
+                            Some(&ast),
                             &mut diagnostics,
                             &mut resolved,
                             &mut typed,
@@ -185,6 +186,7 @@ impl AnalysisService {
                             self,
                             &context,
                             document,
+                            None,
                             &mut diagnostics,
                             &mut resolved,
                             &mut typed,
@@ -346,6 +348,7 @@ impl AnalysisService {
                         directive_span: diagnostic.span,
                         project_file: None,
                         profile: None,
+                        project_context: None,
                         diagnostics: vec![diagnostic],
                     },
                     None,
@@ -372,6 +375,7 @@ impl AnalysisService {
                         directive_span: directive.span,
                         project_file: Some(project_file),
                         profile: Some(directive.profile),
+                        project_context: None,
                         diagnostics,
                     },
                     None,
@@ -401,6 +405,7 @@ impl AnalysisService {
                 directive_span: directive.span,
                 project_file: Some(project_file),
                 profile: Some(selected_profile),
+                project_context: runner.clone(),
                 diagnostics,
             },
             runner,
@@ -765,6 +770,7 @@ fn analyze_project_stages(
     service: &AnalysisService,
     context: &ResolvedAnalysisContext,
     active_document: &DocumentSnapshot,
+    active_ast: Option<&[Ast]>,
     diagnostics: &mut Vec<AnalysisDiagnostic>,
     resolved: &mut Option<Vec<sigil::resolved::Resolved>>,
     typed: &mut Option<Vec<scar::typed::TypedNode>>,
@@ -786,9 +792,10 @@ fn analyze_project_stages(
     match sigil::precollect_declaration_index(&module_stages) {
         Ok(declaration_index) => {
             *semantic_index = semantic_index_with_declarations(semantic_index, &declaration_index);
+            let user_ast = project_user_ast_for_active_document(context, active_ast);
             match sigil::resolve_staged_program_with_state(
                 &module_stages,
-                Vec::new(),
+                user_ast,
                 &declaration_index,
                 None,
             ) {
@@ -829,6 +836,36 @@ fn analyze_project_stages(
             error.message,
         )),
     }
+}
+
+fn project_user_ast_for_active_document(
+    context: &ResolvedAnalysisContext,
+    active_ast: Option<&[Ast]>,
+) -> Vec<Ast> {
+    if !matches!(context.context.mode, AnalysisMode::Script) || context.script_project.is_none() {
+        return Vec::new();
+    }
+
+    let Some(active_ast) = active_ast else {
+        return Vec::new();
+    };
+
+    let mut removed_load_project = false;
+    active_ast
+        .iter()
+        .filter_map(|stmt| {
+            if !removed_load_project && is_load_project_statement(stmt) {
+                removed_load_project = true;
+                None
+            } else {
+                Some(stmt.clone())
+            }
+        })
+        .collect()
+}
+
+fn is_load_project_statement(stmt: &Ast) -> bool {
+    matches!(stmt, Ast::App(_, callee, _) if is_path(callee, &["load_project"]))
 }
 
 fn semantic_index_with_declarations(
