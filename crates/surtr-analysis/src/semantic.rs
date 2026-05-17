@@ -81,18 +81,29 @@ impl SemanticIndex {
     }
 
     pub fn from_declaration_index(declarations: &DeclarationIndex) -> Self {
-        let symbols = declarations
+        let mut symbols = Vec::new();
+        for entry in declarations
             .values()
             .filter(|entry| !entry.hidden && (entry.user_importable || entry.user_callable))
-            .filter_map(|entry| {
-                completion_kind_for_declaration_kind(&entry.kind).map(|kind| CompletionSymbol {
+        {
+            if !entry.module_path.is_empty() {
+                symbols.push(CompletionSymbol {
+                    label: surface_name(&entry.module_path),
+                    replacement: surface_name(&entry.module_path),
+                    kind: CompletionKind::TypePath,
+                    detail: None,
+                });
+            }
+
+            if let Some(kind) = completion_kind_for_declaration_kind(&entry.kind) {
+                symbols.push(CompletionSymbol {
                     label: surface_name(&entry.fq_name),
                     replacement: surface_name(&entry.fq_name),
                     kind,
                     detail: None,
-                })
-            })
-            .collect();
+                });
+            }
+        }
         Self::from_symbols(symbols)
     }
 
@@ -140,7 +151,7 @@ pub fn complete_prefix(request: CompletionRequest<'_>) -> CompletionResponse {
         .index
         .symbols()
         .iter()
-        .filter(|symbol| symbol.label.starts_with(&prefix))
+        .filter(|symbol| completion_symbol_matches_prefix(symbol, &prefix))
         .map(|symbol| CompletionCandidate {
             label: symbol.label.clone(),
             replacement: symbol.replacement.clone(),
@@ -178,6 +189,14 @@ fn completion_token(input: &str, cursor: usize) -> (usize, usize, String) {
 
 fn completion_token_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':')
+}
+
+fn completion_symbol_matches_prefix(symbol: &CompletionSymbol, prefix: &str) -> bool {
+    symbol.label.starts_with(prefix)
+        || symbol
+            .label
+            .rsplit_once("::")
+            .is_some_and(|(_, tail)| tail.starts_with(prefix))
 }
 
 fn completion_kind_for_doc_kind(kind: &DocKind) -> CompletionKind {

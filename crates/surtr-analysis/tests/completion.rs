@@ -1,4 +1,6 @@
+use sigil::{DeclarationEntry, DeclarationIndex, DeclarationKind};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
+use spire::ast::Visibility;
 use surtr_analysis::{
     complete_prefix, CompletionKind, CompletionRequest, CompletionSymbol, SemanticIndex,
 };
@@ -61,6 +63,56 @@ fn completion_request_filters_symbols_by_token_prefix() {
 }
 
 #[test]
+fn completion_request_matches_qualified_symbol_tail_for_unqualified_prefix() {
+    let index = SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "Helper::helper".to_string(),
+        replacement: "Helper::helper".to_string(),
+        kind: CompletionKind::FunctionCall,
+        detail: None,
+    }]);
+
+    let completion = complete_prefix(CompletionRequest {
+        index: &index,
+        source: "he",
+        cursor: 2,
+    });
+
+    assert_eq!(completion.candidates.len(), 1);
+    assert_eq!(completion.candidates[0].label, "Helper::helper");
+}
+
+#[test]
+fn semantic_index_adds_module_owner_symbols_from_declarations() {
+    let mut declarations = DeclarationIndex::new();
+    declarations.insert(
+        "Helper::helper".to_string(),
+        declaration_entry(
+            "Helper",
+            "helper",
+            "Helper::helper",
+            DeclarationKind::Def,
+            true,
+            true,
+        ),
+    );
+
+    let index = SemanticIndex::from_declaration_index(&declarations);
+    let completion = complete_prefix(CompletionRequest {
+        index: &index,
+        source: "He",
+        cursor: 2,
+    });
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(labels.contains(&"Helper"), "labels: {labels:?}");
+    assert!(labels.contains(&"Helper::helper"), "labels: {labels:?}");
+}
+
+#[test]
 fn semantic_index_deduplicates_completion_symbols() {
     let index = SemanticIndex::from_symbols(vec![
         CompletionSymbol {
@@ -78,6 +130,28 @@ fn semantic_index_deduplicates_completion_symbols() {
     ]);
 
     assert_eq!(index.symbols().len(), 1);
+}
+
+fn declaration_entry(
+    module_path: &str,
+    name: &str,
+    fq_name: &str,
+    kind: DeclarationKind,
+    user_importable: bool,
+    user_callable: bool,
+) -> DeclarationEntry {
+    DeclarationEntry {
+        module_path: module_path.to_string(),
+        name: name.to_string(),
+        fq_name: fq_name.to_string(),
+        kind,
+        stage_index: 0,
+        auto_import: false,
+        hidden: false,
+        visibility: Visibility::Public,
+        user_importable,
+        user_callable,
+    }
 }
 
 #[test]
