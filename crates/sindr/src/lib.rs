@@ -6,3 +6,4 @@ pub mod policy;
 pub mod primitives;
 pub mod runtime;
 pub mod viewer;
+pub mod warning;

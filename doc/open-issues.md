@@ -223,6 +223,47 @@
   - 大規模設定は手動または専用 profile で実行し、CI の通常 profile には入れない。
   - VM stats / dump の field を増やす場合は `docs/dev/Rune_observability.md` と snapshot test を同期する。
 
+### OI-033 Compiler warning public surface follow-up
+
+- 背景:
+  - Phase1 では `sindr::warning`、Sigil / Scar の `_with_warnings` API、`UnusedVariable` / `UnusedImportFunction` / `UnusedValue` / `UnusedTypeParameter` の検出を追加した。
+  - ただし、現時点では warning buffer は compiler 内部 API のみに留め、Rune CLI / JSON / REPL / LSP 表示には接続していない。
+  - 利用者向けの現状説明は `docs/site/warnings.md` にまとめたが、表示・抑制・厳格化の policy は未確定である。
+- 未確定点:
+  - `surtr check` / `run` / `build` / `test` / REPL で warning をいつ、どの format で表示するか。
+  - JSON diagnostics に `warnings` を追加する場合、既存 `errors` と同じ location / kind / phase / hint 形状に揃えるか。
+  - `--deny-warnings`、`--warn` / `--allow`、project-level lint config、source-level suppress attribute のどこまでを導入するか。
+  - warning の severity、warning code、machine-readable stable id を持つか。
+  - `WarningSpan` が現在持つ plain offset を、将来 `SourceId` / file path / module stage とどう結びつけるか。
+  - `import Mod` の unused member 警告を style/lint phase として追加するか。
+  - `_name` を unused variable escape として扱うか、現行どおり `_` のみを特別扱いするか。
+  - standard library / generated code / compiler-generated ids 由来の warning をどこまで抑制するか。
+  - Phase1 以外の warning 候補をどの段階で導入するか。
+    - `UnusedImportModule`: `import Mod` で取り込んだ module member が file 内で一度も unqualified use されていない。
+    - `RedundantQualifiedImport`: 明示 import した名前を qualified call でしか使っていない。
+    - `UnreachableMatchArm`: 先行 pattern に覆われる match arm。Rust の DeadCode 相当ではなく pattern 到達不能性に限定する。
+    - `RedundantWildcardArm`: enum / boolean などで前段 arm が全ケースを覆っており、最後の `_` が到達不能。
+    - `SuspiciousShadowing`: 近い scope で同名 binding を shadow しており、外側 binding がその後参照されない。既存の shadowing 許可方針を弱めず warning に留める。
+    - `RedundantTypeAnnotation`: 推論結果と完全一致する局所型注釈。公開 signature や docs として意味を持つ注釈は対象外にする。
+    - `RedundantTraitBound`: 型引数 bound が signature / method body 解決に寄与していない。trait の単純方向解決を壊さない範囲に限定する。
+    - `IgnoredResult`: `Result<T>` を明示 `;` で捨てている。現行の unused value escape と衝突するため、導入するなら opt-in lint から始める。
+    - `DeprecatedSurface`: stdlib API を置き換えるときの移行 warning。標準定義ソースの `@doc` / annotation と連動させるかは未確定。
+    - `NonCanonicalImport`: auto import される標準 helper を明示 import しているなど、意味は同じだが読み味が揺れる import。
+    - `SuspiciousUnitReturn`: `Result<Unit>` や `Unit` が絡む block で、最後の式だけが意図と逆に見える形。誤検出しやすいため候補止まり。
+- 受け入れ条件:
+  - warning 表示を追加しても、error の exit code / JSON 契約 / Ariadne 表示の後方互換性を壊さない。
+  - warning の location が multi-source module、include、stdlib、REPL preload で正しい source に対応する。
+  - Phase1 の `_with_warnings` API と既存 API の互換関係を保ち、既存 caller は引き続き warning を無視できる。
+  - suppress / deny を導入する場合は、利用者向け docs と `docs/dev/` の診断仕様が一致する。
+  - Phase1 以外の warning は DeadCode 全般検出へ拡張せず、scope / import / pattern / type signature の局所解析で説明できる範囲に留める。
+- テスト方針:
+  - `unit/sindr` で warning kind / code / serialization 契約を固定する。
+  - `unit/sigil` / `unit/scar` で warning 抑制・厳格化しても phase 内検出が変わらないことを固定する。
+  - `unit/diagnostics` で warning rendering と JSON shape を固定する。
+  - `integration/rune` で `check` / `run` / `build` / `test` / REPL の human / JSON 出力と exit code を固定する。
+  - LSP 接続時は `docs/dev/Surtr_LSP_spec.md` と連動し、warning severity / range / source mapping を protocol DTO test で固定する。
+  - 追加 warning 候補は一括導入せず、warning kind ごとに最小 fixture と誤検出しない negative case を追加する。
+
 ## 更新ルール
 
 - 解決済み事項は本ファイルに残さず削除する。必要な履歴は正本仕様・関連 spec・コミット履歴で追跡する。

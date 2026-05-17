@@ -30,6 +30,7 @@ REPL は起動時に標準定義ソースと preload を読み切る OnceRead un
 - [エラーハンドリング](./error-handling.md)
 - [Extractor](./extractors.md)
 - [Process](./process.md)
+- [Compiler Warnings](./warnings.md)
 - [言語機能 (`import`, `include`, `@autoimport`)](./language-features.md)
 
 ## 補助ページ

@@ -3,6 +3,7 @@ use std::panic;
 
 use serde::{Deserialize, Serialize};
 use sindr::builtin::{builtin_uid, BUILTIN_METAS};
+use sindr::warning::PhaseOutput;
 use spire::ast::{
     Ast, AstMatchArm, AstPattern, AstTy, ClosureParam, DeclAttrs, ExtractorParam, FunParam, Lit,
     RecordLitArg, Span, StructLitField, SupervisorInitSpec, Visibility,
@@ -22,6 +23,7 @@ mod session;
 mod special_forms;
 #[cfg(test)]
 mod tests;
+mod warnings;
 
 pub use self::declarations::{
     precollect_declaration_index, DeclarationEntry, DeclarationIndex, DeclarationKind,
@@ -34,7 +36,8 @@ use self::declarations::{
     declaration_uid_kind_map, trait_impl_method_qualified_name, trait_method_qualified_name,
 };
 use self::expr::validate_trait_impl_pairs_in_nodes;
-use self::imports::{build_global_scope, build_module_scope};
+use self::imports::{build_global_scope, build_module_scope, build_module_scope_with_imports};
+use self::warnings::collect_resolution_warnings;
 
 const STAGE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
 
@@ -72,8 +75,14 @@ fn auto_import_module_names(module_stages: &[Vec<StagedModuleAst>]) -> Vec<Strin
 
 /// Resolve all identifiers in the AST to unique references.
 pub fn resolve(ast: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
+    resolve_with_warnings(ast).map(|output| output.value)
+}
+
+pub fn resolve_with_warnings(ast: Vec<Ast>) -> Result<PhaseOutput<Vec<Resolved>>, ResolveError> {
     let mut resolver = Resolver::new();
-    resolver.resolve_program(ast)
+    let resolved = resolver.resolve_program(ast)?;
+    let warnings = collect_resolution_warnings(&resolved, &[]);
+    Ok(PhaseOutput::new(resolved, warnings))
 }
 
 pub fn resolve_staged_program(
@@ -93,6 +102,27 @@ pub fn resolve_staged_program(
     .map(|resolved| resolved.resolved)
 }
 
+pub fn resolve_staged_program_with_warnings(
+    module_stages: &[Vec<StagedModuleAst>],
+    user_ast: Vec<Ast>,
+    declaration_index: &DeclarationIndex,
+    user_module_path: Option<String>,
+) -> Result<PhaseOutput<Vec<Resolved>>, ResolveError> {
+    resolve_staged_program_from_state_with_warnings(
+        module_stages,
+        user_ast,
+        declaration_index,
+        user_module_path,
+        0,
+        ResolveResumeState::default(),
+    )
+    .map(|output| {
+        let mut program = output.value;
+        let resolved = std::mem::take(&mut program.resolved);
+        PhaseOutput::new(resolved, output.warnings)
+    })
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolveResumeState {
     pub next_local_id: u32,
@@ -106,13 +136,22 @@ pub struct ResolvedStagedProgram {
     pub resume_state: ResolveResumeState,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ExplicitFunctionImport {
+    pub uid: u32,
+    pub alias: String,
+    pub fq_name: String,
+    pub span: Span,
+    pub kind: DeclarationKind,
+}
+
 pub fn resolve_staged_program_with_state(
     module_stages: &[Vec<StagedModuleAst>],
     user_ast: Vec<Ast>,
     declaration_index: &DeclarationIndex,
     user_module_path: Option<String>,
 ) -> Result<ResolvedStagedProgram, ResolveError> {
-    resolve_staged_program_from_state(
+    resolve_staged_program_from_state_with_warnings(
         module_stages,
         user_ast,
         declaration_index,
@@ -120,6 +159,7 @@ pub fn resolve_staged_program_with_state(
         0,
         ResolveResumeState::default(),
     )
+    .map(|output| output.value)
 }
 
 pub fn resolve_staged_program_from_state(
@@ -130,6 +170,41 @@ pub fn resolve_staged_program_from_state(
     start_stage_index: usize,
     resume_state: ResolveResumeState,
 ) -> Result<ResolvedStagedProgram, ResolveError> {
+    resolve_staged_program_from_state_with_warnings(
+        module_stages,
+        user_ast,
+        declaration_index,
+        user_module_path,
+        start_stage_index,
+        resume_state,
+    )
+    .map(|output| output.value)
+}
+
+pub fn resolve_staged_program_with_state_with_warnings(
+    module_stages: &[Vec<StagedModuleAst>],
+    user_ast: Vec<Ast>,
+    declaration_index: &DeclarationIndex,
+    user_module_path: Option<String>,
+) -> Result<PhaseOutput<ResolvedStagedProgram>, ResolveError> {
+    resolve_staged_program_from_state_with_warnings(
+        module_stages,
+        user_ast,
+        declaration_index,
+        user_module_path,
+        0,
+        ResolveResumeState::default(),
+    )
+}
+
+pub fn resolve_staged_program_from_state_with_warnings(
+    module_stages: &[Vec<StagedModuleAst>],
+    user_ast: Vec<Ast>,
+    declaration_index: &DeclarationIndex,
+    user_module_path: Option<String>,
+    start_stage_index: usize,
+    resume_state: ResolveResumeState,
+) -> Result<PhaseOutput<ResolvedStagedProgram>, ResolveError> {
     let declaration_uids = assign_declaration_uids(declaration_index);
     let declaration_uid_kinds = declaration_uid_kind_map(declaration_index, &declaration_uids);
     let declaration_hidden_by_uid = declaration_index
@@ -144,6 +219,7 @@ pub fn resolve_staged_program_from_state(
     let global_scope = build_global_scope(declaration_index, &declaration_uids);
     let auto_import_modules = auto_import_module_names(module_stages);
     let mut resolved = Vec::new();
+    let mut explicit_function_imports = Vec::new();
     let mut process_specs = Vec::new();
     let mut boot_plan = SupervisorInitSpec::default();
     let mut next_local_id = declaration_uids
@@ -176,6 +252,7 @@ pub fn resolve_staged_program_from_state(
             let mut result = result?;
             rebase_resolved_nodes(&mut result.resolved, stage_local_base, offset);
             resolved.extend(result.resolved);
+            explicit_function_imports.extend(result.explicit_function_imports);
             offset = offset.saturating_add(result.local_id_count);
         }
         next_local_id = stage_local_base.saturating_add(offset);
@@ -235,7 +312,7 @@ pub fn resolve_staged_program_from_state(
 
     if !user_ast.is_empty() {
         collect_supervisor_init_specs(&user_ast, &mut boot_plan);
-        let mut user_scope = build_module_scope(
+        let user_scope_build = build_module_scope_with_imports(
             &global_scope,
             &auto_import_modules,
             declaration_index,
@@ -245,6 +322,8 @@ pub fn resolve_staged_program_from_state(
             user_module_path.as_deref(),
             module_stages.len(),
         )?;
+        explicit_function_imports.extend(user_scope_build.explicit_function_imports);
+        let mut user_scope = user_scope_build.scope;
         user_scope.advance_next_id_to(next_local_id);
         let mut user_resolver = Resolver::with_scope(user_scope);
         user_resolver.declaration_entries = declaration_index.clone().into_iter().collect();
@@ -258,13 +337,17 @@ pub fn resolve_staged_program_from_state(
     }
 
     validate_trait_impl_pairs_in_nodes(&resolved)?;
+    let warnings = collect_resolution_warnings(&resolved, &explicit_function_imports);
 
-    Ok(ResolvedStagedProgram {
-        resolved,
-        process_specs,
-        boot_plan,
-        resume_state: ResolveResumeState { next_local_id },
-    })
+    Ok(PhaseOutput::new(
+        ResolvedStagedProgram {
+            resolved,
+            process_specs,
+            boot_plan,
+            resume_state: ResolveResumeState { next_local_id },
+        },
+        warnings,
+    ))
 }
 
 fn collect_supervisor_init_specs(stmts: &[Ast], boot_plan: &mut SupervisorInitSpec) {
@@ -286,6 +369,7 @@ fn collect_supervisor_init_specs(stmts: &[Ast], boot_plan: &mut SupervisorInitSp
 struct StageModuleResolveResult {
     resolved: Vec<Resolved>,
     local_id_count: u32,
+    explicit_function_imports: Vec<ExplicitFunctionImport>,
 }
 
 fn resolve_stage_modules_parallel(
@@ -306,7 +390,7 @@ fn resolve_stage_modules_parallel(
             let handle = std::thread::Builder::new()
                 .stack_size(STAGE_WORKER_STACK_SIZE)
                 .spawn_scoped(scope, move || {
-                    let mut module_scope = build_module_scope(
+                    let module_scope_build = build_module_scope_with_imports(
                         global_scope,
                         auto_import_modules,
                         declaration_index,
@@ -316,6 +400,7 @@ fn resolve_stage_modules_parallel(
                         Some(module.module_path.as_str()),
                         stage_index,
                     )?;
+                    let mut module_scope = module_scope_build.scope;
                     module_scope.advance_next_id_to(stage_local_base);
                     let mut resolver = Resolver::with_scope(module_scope);
                     resolver.current_module_path = Some(module.module_path.clone());
@@ -330,6 +415,7 @@ fn resolve_stage_modules_parallel(
                     Ok(StageModuleResolveResult {
                         resolved,
                         local_id_count,
+                        explicit_function_imports: module_scope_build.explicit_function_imports,
                     })
                 });
             handles.push(handle.map_err(|err| ResolveError {

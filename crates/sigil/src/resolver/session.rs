@@ -1,6 +1,7 @@
 use super::scope_init::initialize_scope;
 use super::*;
 use super::{assign_declaration_uids, declaration_uid_kind_map};
+use sindr::warning::PhaseOutput;
 
 #[derive(Debug, Clone)]
 pub struct SigilCheckpoint {
@@ -72,6 +73,13 @@ impl SigilSession {
     }
 
     pub fn resolve(&mut self, ast: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
+        self.resolve_with_warnings(ast).map(|output| output.value)
+    }
+
+    pub fn resolve_with_warnings(
+        &mut self,
+        ast: Vec<Ast>,
+    ) -> Result<PhaseOutput<Vec<Resolved>>, ResolveError> {
         self.reject_duplicate_current_module_defs(&ast)?;
         let mut resolver = Resolver::with_scope(self.scope.clone());
         resolver.declaration_entries = self.declaration_entries.clone();
@@ -81,12 +89,13 @@ impl SigilSession {
         resolver.current_module_path = self.current_module_path.clone();
         resolver.allow_top_level_shadowing = true;
         let resolved = resolver.resolve_program(ast)?;
+        let warnings = warnings::collect_resolution_warnings(&resolved, &[]);
         self.declaration_uids = resolver.declaration_uids.clone();
         self.declaration_entries = resolver.declaration_entries.clone();
         self.declaration_uid_kinds = resolver.declaration_uid_kinds.clone();
         self.declaration_hidden_by_uid = resolver.declaration_hidden_by_uid.clone();
         self.scope = resolver.into_scope();
-        Ok(resolved)
+        Ok(PhaseOutput::new(resolved, warnings))
     }
 
     pub fn checkpoint(&self) -> SigilCheckpoint {

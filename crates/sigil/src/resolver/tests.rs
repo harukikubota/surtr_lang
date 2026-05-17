@@ -1,5 +1,6 @@
 use super::*;
 use sindr::primitives::int;
+use sindr::warning::WarningKind;
 use spire::ast::{AstTy, BinOp, Lit};
 
 fn permissive_module_rules() -> spire::ParseRules {
@@ -20,6 +21,14 @@ fn parse_and_resolve(src: &str) -> Result<Vec<Resolved>, ResolveError> {
     let ast =
         spire::parse_with_context(src, spire::ParserContext::project(0)).expect("parse failed");
     resolve(ast)
+}
+
+fn parse_and_resolve_with_warnings(
+    src: &str,
+) -> Result<sindr::warning::PhaseOutput<Vec<Resolved>>, ResolveError> {
+    let ast =
+        spire::parse_with_context(src, spire::ParserContext::project(0)).expect("parse failed");
+    resolve_with_warnings(ast)
 }
 
 #[test]
@@ -43,6 +52,84 @@ value = dbg!(dbg(1), 2)"#,
         .expect("expected resolved dbg node");
 
     assert_eq!(dbg_node.len(), 2);
+}
+
+#[test]
+fn test_warning_unused_local_binding_warns() {
+    let output = parse_and_resolve_with_warnings(
+        r#"def main() -> Int {
+  unused = 1
+  2
+}"#,
+    )
+    .expect("program should resolve");
+
+    let messages = warning_messages(&output, WarningKind::UnusedVariable);
+    assert!(
+        messages.iter().any(|message| message.contains("unused")),
+        "warnings: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn test_warning_used_local_binding_does_not_warn() {
+    let output = parse_and_resolve_with_warnings(
+        r#"def main() -> Int {
+  used = 1
+  used
+}"#,
+    )
+    .expect("program should resolve");
+
+    assert!(
+        output.warnings.is_empty(),
+        "warnings: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn test_warning_function_param_and_match_alias_warn() {
+    let output = parse_and_resolve_with_warnings(
+        r#"def pick(value: Result<Int>, extra: Int) -> Int {
+  match value {
+    Ok(x) @ whole => x,
+    Err(_) => 0,
+  }
+}"#,
+    )
+    .expect("program should resolve");
+
+    let messages = warning_messages(&output, WarningKind::UnusedVariable);
+    assert!(
+        messages.iter().any(|message| message.contains("extra")),
+        "warnings: {:?}",
+        output.warnings
+    );
+    assert!(
+        messages.iter().any(|message| message.contains("whole")),
+        "warnings: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn test_warning_wildcard_pattern_does_not_warn() {
+    let output = parse_and_resolve_with_warnings(
+        r#"def ignore(value: Int) -> Int {
+  match value {
+    _ => 0,
+  }
+}"#,
+    )
+    .expect("program should resolve");
+
+    assert!(
+        output.warnings.is_empty(),
+        "warnings: {:?}",
+        output.warnings
+    );
 }
 
 fn staged_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
@@ -163,6 +250,85 @@ deferror IndexOutOfBounds(detail: String) { detail }"#,
         &declaration_index,
         Some("__Script::fixture".to_string()),
     )
+}
+
+fn resolve_user_with_modules_with_warnings(
+    user_src: &str,
+    module_stages: &[Vec<StagedModuleAst>],
+) -> Result<sindr::warning::PhaseOutput<Vec<Resolved>>, ResolveError> {
+    let user_ast = spire::parse_with_context(user_src, spire::ParserContext::project(0))
+        .expect("user script should parse");
+    let mut full_stages = vec![vec![staged_module(
+        "Bootstrap",
+        parse_module_ast(
+            r#"@builtin def print(a: String) -> Unit
+@builtin def to_string(a: $A) -> String
+@builtin def inspect(a: $A) -> String
+@builtin def safe_div(a: $A, b: $A) -> Result<$A, ZeroDivisionError>
+@builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
+@builtin def eprint(err: Error) -> Unit
+@builtin def set_exit_code(code: Int) -> Unit
+deferror NoneError { "none" }
+deferror ZeroDivisionError { "division by zero" }
+deferror EmptyList { "Empty List." }
+deferror IndexOutOfBounds(detail: String) { detail }"#,
+            "Bootstrap",
+        ),
+    )]];
+    full_stages.push(vec![
+        staged_module(
+            "Agent",
+            parse_module_ast(
+                r#"@hidden
+@builtin def pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>
+@hidden
+@builtin def state(pid: PID<$Process>) -> Result<$State>
+@hidden
+@builtin def store(pid: PID<$Process>, state: $State) -> Result<Unit>"#,
+                "Agent",
+            ),
+        ),
+        staged_module(
+            "GenServer",
+            parse_module_ast(
+                r#"@hidden
+@builtin def pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>
+@hidden
+@builtin def state(pid: PID<$Process>) -> Result<$State>
+@hidden
+@builtin def store(pid: PID<$Process>, state: $State) -> Result<Unit>"#,
+                "GenServer",
+            ),
+        ),
+        staged_module(
+            "DynamicSupervisor",
+            parse_module_ast(
+                r#"@builtin def spawn(worker_init: (-> Result<$State>)) -> Result<PID<$Process>>"#,
+                "DynamicSupervisor",
+            ),
+        ),
+    ]);
+    full_stages.extend(module_stages.iter().cloned());
+    let declaration_index =
+        precollect_declaration_index(&full_stages).expect("precollect should succeed");
+    resolve_staged_program_with_warnings(
+        &full_stages,
+        user_ast,
+        &declaration_index,
+        Some("__Script::fixture".to_string()),
+    )
+}
+
+fn warning_messages(
+    output: &sindr::warning::PhaseOutput<Vec<Resolved>>,
+    kind: WarningKind,
+) -> Vec<String> {
+    output
+        .warnings
+        .iter()
+        .filter(|warning| warning.kind == kind)
+        .map(|warning| warning.message.clone())
+        .collect()
 }
 
 #[test]
@@ -3416,6 +3582,74 @@ print(to_string(add(7, 3)))"#,
         .expect("user call should resolve imported add");
 
     assert_eq!(imported_add_uid, helper_add_uid);
+}
+
+#[test]
+fn test_warning_explicit_unused_function_import_warns() {
+    let module_stages = vec![vec![staged_module(
+        "Helper",
+        parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+    )]];
+
+    let output = resolve_user_with_modules_with_warnings(
+        r#"import Helper::add;
+print("ok")"#,
+        &module_stages,
+    )
+    .expect("program should resolve");
+
+    let messages = warning_messages(&output, WarningKind::UnusedImportFunction);
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("Helper::add")),
+        "warnings: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn test_warning_auto_imported_function_does_not_warn() {
+    let module_stages = vec![vec![staged_auto_import_module(
+        "Helper",
+        parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+    )]];
+
+    let output = resolve_user_with_modules_with_warnings(r#"print("ok")"#, &module_stages)
+        .expect("program should resolve");
+
+    assert!(
+        !output
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == WarningKind::UnusedImportFunction),
+        "warnings: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn test_warning_qualified_call_does_not_consume_explicit_short_import() {
+    let module_stages = vec![vec![staged_module(
+        "Helper",
+        parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+    )]];
+
+    let output = resolve_user_with_modules_with_warnings(
+        r#"import Helper::add;
+print(to_string(Helper::add(1, 2)))"#,
+        &module_stages,
+    )
+    .expect("program should resolve");
+
+    let messages = warning_messages(&output, WarningKind::UnusedImportFunction);
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("Helper::add")),
+        "warnings: {:?}",
+        output.warnings
+    );
 }
 
 #[test]

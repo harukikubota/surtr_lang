@@ -110,8 +110,37 @@ pub(super) fn build_module_scope(
     current_module_path: Option<&str>,
     current_stage_index: usize,
 ) -> Result<Scope, ResolveError> {
+    build_module_scope_with_imports(
+        global_scope,
+        auto_import_modules,
+        declaration_index,
+        declaration_uids,
+        declaration_uid_kinds,
+        stmts,
+        current_module_path,
+        current_stage_index,
+    )
+    .map(|build| build.scope)
+}
+
+pub(super) struct ModuleScopeBuild {
+    pub scope: Scope,
+    pub explicit_function_imports: Vec<ExplicitFunctionImport>,
+}
+
+pub(super) fn build_module_scope_with_imports(
+    global_scope: &Scope,
+    auto_import_modules: &[String],
+    declaration_index: &DeclarationIndex,
+    declaration_uids: &HashMap<String, u32>,
+    declaration_uid_kinds: &HashMap<u32, DeclarationKind>,
+    stmts: &[Ast],
+    current_module_path: Option<&str>,
+    current_stage_index: usize,
+) -> Result<ModuleScopeBuild, ResolveError> {
     let mut scope = global_scope.clone();
     let mut import_state = ImportState::default();
+    let mut explicit_function_imports = Vec::new();
     let auto_import_traits = auto_import_trait_names(declaration_index);
     let auto_import_module_set = auto_import_modules
         .iter()
@@ -125,6 +154,7 @@ pub(super) fn build_module_scope(
         current_stage_index,
         auto_import_traits: &auto_import_traits,
         import_state: &mut import_state,
+        explicit_function_imports: &mut explicit_function_imports,
     };
 
     for stmt in stmts {
@@ -175,7 +205,10 @@ pub(super) fn build_module_scope(
         }
     }
 
-    Ok(scope)
+    Ok(ModuleScopeBuild {
+        scope,
+        explicit_function_imports,
+    })
 }
 
 struct ImportContext<'a> {
@@ -186,6 +219,7 @@ struct ImportContext<'a> {
     current_stage_index: usize,
     auto_import_traits: &'a HashSet<String>,
     import_state: &'a mut ImportState,
+    explicit_function_imports: &'a mut Vec<ExplicitFunctionImport>,
 }
 
 fn lookup_trait_entry<'a>(
@@ -381,6 +415,8 @@ fn import_list_into_scope(
                 span.clone(),
             )?;
         }
+
+        record_explicit_function_import(import_context, entry, name, &span);
 
         if entry.kind == DeclarationKind::Trait {
             let trait_prefix = format!("{}::", name);
@@ -619,6 +655,32 @@ fn import_trait_into_scope(
     Ok(())
 }
 
+fn record_explicit_function_import(
+    import_context: &mut ImportContext<'_>,
+    entry: &DeclarationEntry,
+    alias: &str,
+    span: &Span,
+) {
+    if !matches!(
+        entry.kind,
+        DeclarationKind::Def
+            | DeclarationKind::Extractor
+            | DeclarationKind::TraitMethod
+            | DeclarationKind::ImplMethod
+    ) {
+        return;
+    }
+    import_context
+        .explicit_function_imports
+        .push(ExplicitFunctionImport {
+            uid: import_context.declaration_uids[&entry.fq_name],
+            alias: alias.to_string(),
+            fq_name: entry.fq_name.clone(),
+            span: span.clone(),
+            kind: entry.kind.clone(),
+        });
+}
+
 fn import_single_into_scope(
     scope: &mut Scope,
     import_context: &mut ImportContext<'_>,
@@ -731,6 +793,8 @@ fn import_single_into_scope(
             span.clone(),
         )?;
     }
+
+    record_explicit_function_import(import_context, entry, name, &span);
 
     if entry.kind == DeclarationKind::Trait {
         let trait_prefix = format!("{}::", name);
