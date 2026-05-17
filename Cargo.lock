@@ -1109,7 +1109,6 @@ name = "surtr-lsp"
 version = "0.1.0"
 dependencies = [
  "surtr-analysis",
- "xldr",
 ]
 
 [[package]]

@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use surtr_analysis::{
-    CompletionKind, CompletionSymbol, RunnerSelection, SelectedContext, SemanticIndex,
+    CompletionKind, CompletionSymbol, ProjectBootSummary, ProjectRunnerPath, ProjectRunnerProfile,
+    ProjectRunnerResult, RunnerSelection, SelectedContext, SemanticIndex,
 };
 use surtr_lsp::{
     completion_items, definition, diagnostics, document_symbols, file_uri_to_path, hover,
@@ -291,7 +292,7 @@ Project::config({|config|
 }
 
 #[test]
-fn completion_uses_vm_executed_project_runner_source() {
+fn completion_uses_injected_project_runner_executor() {
     let workspace = temp_workspace("project-completion-vm");
     let src = workspace.join("src");
     std::fs::create_dir_all(&src).expect("temporary src dir must be writable");
@@ -303,25 +304,26 @@ fn completion_uses_vm_executed_project_runner_source() {
 
     let uri = path_to_file_uri(&main_path);
     let source = "he";
-    let project_source = r#"
-def profile_name() -> String { "dev" }
-
-Project::config({|project|
-  Project::entrypoint(project, profile_name(), {|c|
-    Config::add_path(c, "./src/helper.srt")
-  })
-})
-"#;
-    let runner_result =
-        xldr::execute_project_runner_source(surtr_analysis::ProjectRunnerSourceInput {
-            project_file: project_file.clone(),
-            selected_profile: "dev".to_string(),
-            normalized_args: vec![("profile".to_string(), "dev".to_string())],
-            active_file: Some(main_path.clone()),
-            source: project_source.to_string(),
-        })
-        .expect("project runner source should execute through VM before LSP context resolution");
     let mut host = LspAnalysisHost::new(workspace.clone());
+    let helper_path_for_executor = helper_path.clone();
+    host.set_project_runner_executor(Some(
+        move |input: surtr_analysis::ProjectRunnerSourceInput| {
+            assert_eq!(input.selected_profile, "dev");
+            Ok(ProjectRunnerResult {
+                profiles: vec![ProjectRunnerProfile {
+                    name: "dev".to_string(),
+                    entrypoint: "Main::main".to_string(),
+                    paths: vec![ProjectRunnerPath {
+                        declared_by: input.project_file,
+                        literal_or_glob: helper_path_for_executor.to_string_lossy().into_owned(),
+                        declaration_span: None,
+                    }],
+                }],
+                boot_summary: ProjectBootSummary::default(),
+                external_inputs: Vec::new(),
+            })
+        },
+    ));
     host.did_open(uri.clone(), Some(1), source.to_string());
     host.set_selected_context(Some(SelectedContext::ProjectProfile {
         project_file: project_file.clone(),
@@ -331,8 +333,14 @@ Project::config({|project|
         project_file: project_file.clone(),
         selected_profile: "dev".to_string(),
         normalized_args: vec![("profile".to_string(), "dev".to_string())],
-        runner_result: Some(runner_result),
-        source: None,
+        runner_result: None,
+        source: Some(surtr_analysis::ProjectRunnerSourceInput {
+            project_file,
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            active_file: Some(main_path.clone()),
+            source: "computed project source".to_string(),
+        }),
     }));
 
     let items = completion_items(

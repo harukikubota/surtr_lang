@@ -1,10 +1,15 @@
+use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use surtr_analysis::{
     AnalysisContextRequest, AnalysisDiagnosticKind, AnalysisRange, AnalysisService,
-    AnalysisSeverity, CompletionKind, DocumentVersion, RunnerSelection, SelectedContext,
-    SemanticIndex, Utf16Position,
+    AnalysisSeverity, CompletionKind, DocumentVersion, ProjectRunnerResult,
+    ProjectRunnerSourceInput, RunnerSelection, SelectedContext, SemanticIndex, Utf16Position,
 };
+
+type ProjectRunnerExecutor =
+    Arc<dyn Fn(ProjectRunnerSourceInput) -> Result<ProjectRunnerResult, String> + Send + Sync>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LspPosition {
@@ -84,12 +89,28 @@ pub struct LspLocation {
     pub range: LspRange,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LspAnalysisHost {
     workspace_root: PathBuf,
     selected_context: Option<SelectedContext>,
     runner_selection: Option<RunnerSelection>,
+    project_runner_executor: Option<ProjectRunnerExecutor>,
     service: AnalysisService,
+}
+
+impl fmt::Debug for LspAnalysisHost {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LspAnalysisHost")
+            .field("workspace_root", &self.workspace_root)
+            .field("selected_context", &self.selected_context)
+            .field("runner_selection", &self.runner_selection)
+            .field(
+                "project_runner_executor",
+                &self.project_runner_executor.as_ref().map(|_| "<executor>"),
+            )
+            .field("service", &self.service)
+            .finish()
+    }
 }
 
 impl LspAnalysisHost {
@@ -98,6 +119,7 @@ impl LspAnalysisHost {
             workspace_root,
             selected_context: None,
             runner_selection: None,
+            project_runner_executor: None,
             service: AnalysisService::new(),
         }
     }
@@ -132,7 +154,10 @@ impl LspAnalysisHost {
             let Some(source) = selection.source.clone() else {
                 return selection;
             };
-            match xldr::execute_project_runner_source(source) {
+            let Some(executor) = &self.project_runner_executor else {
+                return selection;
+            };
+            match executor(source) {
                 Ok(result) => RunnerSelection {
                     runner_result: Some(result),
                     ..selection
@@ -140,6 +165,16 @@ impl LspAnalysisHost {
                 Err(_) => selection,
             }
         });
+    }
+
+    pub fn set_project_runner_executor<F>(&mut self, executor: Option<F>)
+    where
+        F: Fn(ProjectRunnerSourceInput) -> Result<ProjectRunnerResult, String>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.project_runner_executor = executor.map(|executor| Arc::new(executor) as _);
     }
 
     pub fn set_semantic_index(&mut self, semantic_index: SemanticIndex) {

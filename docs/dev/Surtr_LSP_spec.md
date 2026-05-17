@@ -766,8 +766,10 @@ keyword、local、scope、import、member、signature、type context の順で�
   - project runner source の VM 実行境界は host/runtime 側の `xldr` に置き、
     standard library の `Project` / `Config` surface が返した runtime value を
     `ProjectRunnerResult` に decode する。
-  - `surtr-lsp` は `RunnerSelection.source` を受け取った時点で `xldr` の VM 実行器を
+  - `surtr-lsp` は `RunnerSelection.source` を受け取った時点で host が注入した VM 実行器を
     呼び、成功時は `RunnerSelection.runner_result` を `surtr-analysis` へ渡す。
+    VM 実行器が未注入の場合は、`surtr-analysis` の source-only project runner 抽出へ
+    fallback する。
 - selected profile と normalized runner args を cache key に入れる
 - `Project::add_path` / glob / active file profile membership を diagnostics と status に反映する
 - boot / supervisor config summary と external input state を cache key と diagnostics に反映する

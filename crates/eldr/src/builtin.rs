@@ -3211,6 +3211,7 @@ fn strip_line_ending(mut line: String) -> String {
     line
 }
 
+#[cfg(feature = "terminal-io")]
 fn read_terminal_char() -> Result<Option<String>, String> {
     crossterm::terminal::enable_raw_mode().map_err(|err| err.to_string())?;
     let result = (|| loop {
@@ -3227,6 +3228,12 @@ fn read_terminal_char() -> Result<Option<String>, String> {
     }
 }
 
+#[cfg(not(feature = "terminal-io"))]
+fn read_terminal_char() -> Result<Option<String>, String> {
+    Err("terminal key input is unavailable in this Eldr build".to_string())
+}
+
+#[cfg(feature = "terminal-io")]
 fn key_event_to_string(event: crossterm::event::KeyEvent) -> Result<Option<String>, String> {
     use crossterm::event::KeyCode;
 
