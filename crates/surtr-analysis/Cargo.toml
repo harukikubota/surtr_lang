@@ -6,5 +6,7 @@ description = "Protocol-independent Surtr editor analysis services"
 
 [dependencies]
 diagnostics = { path = "../diagnostics" }
+scar = { path = "../scar" }
+sigil = { path = "../sigil" }
 sindr = { path = "../sindr" }
 spire = { path = "../spire" }

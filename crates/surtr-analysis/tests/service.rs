@@ -57,6 +57,54 @@ fn analysis_service_maps_parse_diagnostics_to_utf16_ranges() {
 }
 
 #[test]
+fn analysis_service_maps_resolve_diagnostics_to_utf16_ranges() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    service.update_document(path.clone(), Some(1), "value = missing_name".to_string());
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(path)),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+
+    let resolve = service
+        .diagnostics(&snapshot)
+        .into_iter()
+        .find(|diagnostic| diagnostic.kind == AnalysisDiagnosticKind::Resolve)
+        .expect("missing name should produce a resolve diagnostic");
+    assert!(resolve.range.is_some());
+    assert!(resolve.message.contains("missing_name"));
+}
+
+#[test]
+fn analysis_service_maps_typecheck_diagnostics_to_utf16_ranges() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    service.update_document(path.clone(), Some(1), "value: Int = \"bad\"".to_string());
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(path)),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+
+    let typecheck = service
+        .diagnostics(&snapshot)
+        .into_iter()
+        .find(|diagnostic| diagnostic.kind == AnalysisDiagnosticKind::Typecheck)
+        .expect("type mismatch should produce a typecheck diagnostic");
+    assert!(typecheck.range.is_some());
+    assert!(typecheck.message.contains("expected Int"));
+}
+
+#[test]
 fn analysis_service_completions_use_snapshot_semantic_index_and_utf16_position() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");

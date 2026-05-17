@@ -14,6 +14,8 @@ pub enum AnalysisDiagnosticKind {
     ContextSelection,
     ProjectRunner,
     Parse,
+    Resolve,
+    Typecheck,
     DocumentMissing,
 }
 
@@ -44,6 +46,8 @@ pub struct AnalysisSnapshot {
     pub context: ResolvedAnalysisContext,
     pub active_document: Option<DocumentSnapshot>,
     pub ast: Option<Vec<Ast>>,
+    pub resolved: Option<Vec<sigil::resolved::Resolved>>,
+    pub typed: Option<Vec<scar::typed::TypedNode>>,
     pub semantic_index: SemanticIndex,
     pub diagnostics: Vec<AnalysisDiagnostic>,
 }
@@ -110,6 +114,8 @@ impl AnalysisService {
     pub fn analyze(&self, context: ResolvedAnalysisContext) -> AnalysisSnapshot {
         let mut diagnostics = diagnostics_from_context(&context);
         let active_document = self.documents.get(&context.context.active_file).cloned();
+        let mut resolved = None;
+        let mut typed = None;
 
         let ast = if let Some(document) = active_document.as_ref() {
             match parse_document(
@@ -122,19 +128,46 @@ impl AnalysisService {
                     &context.context.active_file,
                 ),
             ) {
-                Ok(ast) => Some(ast),
+                Ok(ast) => {
+                    match sigil::resolve(ast.clone()) {
+                        Ok(resolved_nodes) => {
+                            match scar::typecheck_with_context(
+                                resolved_nodes.clone(),
+                                typecheck_context_for_mode(&context.context.mode),
+                            ) {
+                                Ok(typed_nodes) => typed = Some(typed_nodes),
+                                Err(error) => diagnostics.push(diagnostic_from_span(
+                                    AnalysisDiagnosticKind::Typecheck,
+                                    AnalysisSeverity::Error,
+                                    document,
+                                    error.span.start,
+                                    error.span.end,
+                                    error.message,
+                                )),
+                            }
+                            resolved = Some(resolved_nodes);
+                        }
+                        Err(error) => diagnostics.push(diagnostic_from_span(
+                            AnalysisDiagnosticKind::Resolve,
+                            AnalysisSeverity::Error,
+                            document,
+                            error.span.start,
+                            error.span.end,
+                            error.message,
+                        )),
+                    }
+                    Some(ast)
+                }
                 Err(error) => {
                     let span = error.span();
-                    diagnostics.push(AnalysisDiagnostic {
-                        kind: AnalysisDiagnosticKind::Parse,
-                        severity: AnalysisSeverity::Error,
-                        path: document.path.clone(),
-                        range: Some(AnalysisRange {
-                            start: document.line_index.byte_to_utf16_position(span.start),
-                            end: document.line_index.byte_to_utf16_position(span.end),
-                        }),
-                        message: error.message(),
-                    });
+                    diagnostics.push(diagnostic_from_span(
+                        AnalysisDiagnosticKind::Parse,
+                        AnalysisSeverity::Error,
+                        document,
+                        span.start,
+                        span.end,
+                        error.message(),
+                    ));
                     None
                 }
             }
@@ -153,6 +186,8 @@ impl AnalysisService {
             context,
             active_document,
             ast,
+            resolved,
+            typed,
             semantic_index: self.semantic_index.clone(),
             diagnostics,
         }
@@ -214,6 +249,26 @@ impl AnalysisService {
     }
 }
 
+fn diagnostic_from_span(
+    kind: AnalysisDiagnosticKind,
+    severity: AnalysisSeverity,
+    document: &DocumentSnapshot,
+    start: usize,
+    end: usize,
+    message: String,
+) -> AnalysisDiagnostic {
+    AnalysisDiagnostic {
+        kind,
+        severity,
+        path: document.path.clone(),
+        range: Some(AnalysisRange {
+            start: document.line_index.byte_to_utf16_position(start),
+            end: document.line_index.byte_to_utf16_position(end),
+        }),
+        message,
+    }
+}
+
 fn diagnostics_from_context(context: &ResolvedAnalysisContext) -> Vec<AnalysisDiagnostic> {
     let mut diagnostics = Vec::new();
 
@@ -269,6 +324,14 @@ fn compile_unit_kind_for_mode(mode: &AnalysisMode) -> CompileUnitKind {
         AnalysisMode::Project => CompileUnitKind::Project,
         AnalysisMode::ReplPreview => CompileUnitKind::Repl,
     }
+}
+
+fn typecheck_context_for_mode(mode: &AnalysisMode) -> scar::TypecheckContext {
+    let mut context = scar::TypecheckContext::default();
+    if matches!(mode, AnalysisMode::ReplPreview) {
+        context.runtime_policy = sindr::policy::RuntimeSourcePolicy::repl_chunk();
+    }
+    context
 }
 
 fn module_path_for_document(mode: AnalysisMode, path: &Path) -> Option<String> {

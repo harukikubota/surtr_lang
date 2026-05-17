@@ -1098,6 +1098,8 @@ name = "surtr-analysis"
 version = "0.1.0"
 dependencies = [
  "diagnostics",
+ "scar",
+ "sigil",
  "sindr",
  "spire",
 ]
