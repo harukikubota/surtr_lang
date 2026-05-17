@@ -22,6 +22,12 @@ pub struct AnalysisContext {
     pub source_kind: SourceKind,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnalysisSpan {
+    pub start: u32,
+    pub end: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SelectedContext {
     ScriptEntry(PathBuf),
@@ -44,6 +50,116 @@ pub struct RunnerSelection {
     pub project_file: PathBuf,
     pub selected_profile: String,
     pub normalized_args: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedProjectPath {
+    pub declared_by: PathBuf,
+    pub literal_or_glob: String,
+    pub declaration_span: Option<AnalysisSpan>,
+    pub expanded_files: Vec<PathBuf>,
+    pub source_kind: SourceKind,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectBootSummary {
+    pub content_hash: Option<String>,
+    pub fields: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExternalInputStatus {
+    Available,
+    Missing,
+    Unreadable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalInputState {
+    pub name: String,
+    pub content_hash: Option<String>,
+    pub status: ExternalInputStatus,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleStage {
+    pub files: Vec<ModuleFileFingerprint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunnerDiagnosticKind {
+    MissingRunnerSelection,
+    ProjectFileMismatch,
+    ProjectProfileMismatch,
+    GlobNoMatch,
+    UnreadablePath,
+    LoadProjectUnsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunnerDiagnostic {
+    pub kind: RunnerDiagnosticKind,
+    pub path: Option<PathBuf>,
+    pub span: Option<AnalysisSpan>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScriptProjectContext {
+    pub project_file: Option<PathBuf>,
+    pub profile: Option<String>,
+    pub diagnostics: Vec<RunnerDiagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplAnalysisContext {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunnerContext {
+    pub project_file: PathBuf,
+    pub selected_profile: String,
+    pub normalized_args: Vec<(String, String)>,
+    pub resolved_paths: Vec<ResolvedProjectPath>,
+    pub active_file_profiles: Vec<String>,
+    pub module_stages: Vec<ModuleStage>,
+    pub boot_summary: ProjectBootSummary,
+    pub external_inputs: Vec<ExternalInputState>,
+    pub diagnostics: Vec<RunnerDiagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnalysisContextStatus {
+    Ready,
+    NeedsSelection,
+    Invalid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContextDiagnosticKind {
+    NeedsContextSelection,
+    MissingRunnerSelection,
+    ProjectFileMismatch,
+    ProjectProfileMismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextDiagnostic {
+    pub kind: ContextDiagnosticKind,
+    pub path: Option<PathBuf>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedAnalysisContext {
+    pub context: AnalysisContext,
+    pub status: AnalysisContextStatus,
+    pub runner: Option<RunnerContext>,
+    pub script_project: Option<ScriptProjectContext>,
+    pub repl: Option<ReplAnalysisContext>,
+    pub diagnostics: Vec<ContextDiagnostic>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +199,235 @@ pub struct AnalysisCacheInput {
     pub external_inputs: Vec<(String, String)>,
     pub load_project_hash: Option<String>,
     pub active_file_profiles: Vec<String>,
+}
+
+pub fn resolve_context(request: AnalysisContextRequest) -> ResolvedAnalysisContext {
+    let selected_context = request
+        .selected_context
+        .clone()
+        .unwrap_or_else(|| auto_selected_context(&request));
+
+    match selected_context {
+        SelectedContext::ScriptEntry(entry_file) => {
+            let source_kind = if same_path(&request.active_file, &entry_file) {
+                SourceKind::Script
+            } else {
+                SourceKind::DefinitionSource
+            };
+            ready_context(
+                request.workspace_root,
+                AnalysisMode::Script,
+                Some(entry_file),
+                request.active_file,
+                source_kind,
+            )
+        }
+        SelectedContext::ProjectProfile {
+            project_file,
+            profile,
+        } => resolve_project_context(request, project_file, profile),
+        SelectedContext::DefinitionStandalone => ready_context(
+            request.workspace_root,
+            AnalysisMode::DefinitionCheck,
+            None,
+            request.active_file,
+            SourceKind::DefinitionSource,
+        ),
+        SelectedContext::DefinitionUnderEntry { entry_file } => {
+            let source_kind = if same_path(&request.active_file, &entry_file) {
+                SourceKind::Script
+            } else {
+                SourceKind::DefinitionSource
+            };
+            ready_context(
+                request.workspace_root,
+                AnalysisMode::Script,
+                Some(entry_file),
+                request.active_file,
+                source_kind,
+            )
+        }
+        SelectedContext::StdlibDevelopment => ready_context(
+            request.workspace_root,
+            AnalysisMode::DefinitionCheck,
+            None,
+            request.active_file,
+            SourceKind::StdDefinitionSource,
+        ),
+        SelectedContext::ReplPreview { session_id } => {
+            let mut resolved = ready_context(
+                request.workspace_root,
+                AnalysisMode::ReplPreview,
+                None,
+                request.active_file,
+                SourceKind::ReplChunk,
+            );
+            resolved.repl = Some(ReplAnalysisContext { session_id });
+            resolved
+        }
+    }
+}
+
+fn resolve_project_context(
+    request: AnalysisContextRequest,
+    project_file: PathBuf,
+    profile: String,
+) -> ResolvedAnalysisContext {
+    let base_context = AnalysisContext {
+        workspace_root: request.workspace_root,
+        mode: AnalysisMode::Project,
+        entry_file: Some(project_file.clone()),
+        active_file: request.active_file,
+        source_kind: SourceKind::DefinitionSource,
+    };
+
+    let Some(selection) = request.runner_selection else {
+        return ResolvedAnalysisContext {
+            context: base_context,
+            status: AnalysisContextStatus::NeedsSelection,
+            runner: None,
+            script_project: None,
+            repl: None,
+            diagnostics: vec![ContextDiagnostic {
+                kind: ContextDiagnosticKind::MissingRunnerSelection,
+                path: Some(project_file),
+                message: "project context requires normalized runner selection".to_string(),
+            }],
+        };
+    };
+
+    let mut diagnostics = Vec::new();
+    let mut runner_diagnostics = Vec::new();
+
+    if !same_path(&selection.project_file, &project_file) {
+        diagnostics.push(ContextDiagnostic {
+            kind: ContextDiagnosticKind::ProjectFileMismatch,
+            path: Some(selection.project_file.clone()),
+            message: format!(
+                "selected project file {} does not match runner project file {}",
+                path_value(&project_file),
+                path_value(&selection.project_file)
+            ),
+        });
+        runner_diagnostics.push(RunnerDiagnostic {
+            kind: RunnerDiagnosticKind::ProjectFileMismatch,
+            path: Some(selection.project_file.clone()),
+            span: None,
+            message: "runner selection belongs to a different project file".to_string(),
+        });
+    }
+
+    if selection.selected_profile != profile {
+        diagnostics.push(ContextDiagnostic {
+            kind: ContextDiagnosticKind::ProjectProfileMismatch,
+            path: Some(project_file.clone()),
+            message: format!(
+                "selected profile {profile} does not match runner profile {}",
+                selection.selected_profile
+            ),
+        });
+        runner_diagnostics.push(RunnerDiagnostic {
+            kind: RunnerDiagnosticKind::ProjectProfileMismatch,
+            path: Some(project_file.clone()),
+            span: None,
+            message: "runner selection belongs to a different profile".to_string(),
+        });
+    }
+
+    let status = if diagnostics.is_empty() {
+        AnalysisContextStatus::Ready
+    } else {
+        AnalysisContextStatus::NeedsSelection
+    };
+
+    ResolvedAnalysisContext {
+        context: base_context,
+        status,
+        runner: Some(RunnerContext {
+            project_file,
+            selected_profile: selection.selected_profile,
+            normalized_args: selection.normalized_args,
+            resolved_paths: Vec::new(),
+            active_file_profiles: Vec::new(),
+            module_stages: Vec::new(),
+            boot_summary: ProjectBootSummary::default(),
+            external_inputs: Vec::new(),
+            diagnostics: runner_diagnostics,
+        }),
+        script_project: None,
+        repl: None,
+        diagnostics,
+    }
+}
+
+fn ready_context(
+    workspace_root: PathBuf,
+    mode: AnalysisMode,
+    entry_file: Option<PathBuf>,
+    active_file: PathBuf,
+    source_kind: SourceKind,
+) -> ResolvedAnalysisContext {
+    ResolvedAnalysisContext {
+        context: AnalysisContext {
+            workspace_root,
+            mode,
+            entry_file,
+            active_file,
+            source_kind,
+        },
+        status: AnalysisContextStatus::Ready,
+        runner: None,
+        script_project: None,
+        repl: None,
+        diagnostics: Vec::new(),
+    }
+}
+
+fn auto_selected_context(request: &AnalysisContextRequest) -> SelectedContext {
+    if is_stdlib_source(&request.workspace_root, &request.active_file) {
+        return SelectedContext::StdlibDevelopment;
+    }
+    if is_script_fixture(&request.workspace_root, &request.active_file)
+        || is_module_fixture_entry(&request.workspace_root, &request.active_file)
+    {
+        return SelectedContext::ScriptEntry(request.active_file.clone());
+    }
+    SelectedContext::DefinitionStandalone
+}
+
+fn is_stdlib_source(workspace_root: &std::path::Path, active_file: &std::path::Path) -> bool {
+    let Ok(relative) = active_file.strip_prefix(workspace_root) else {
+        return false;
+    };
+    let path = path_value(relative);
+    path.starts_with("lib/") && path.ends_with(".srt") && !path.starts_with("lib/tests/")
+}
+
+fn is_script_fixture(workspace_root: &std::path::Path, active_file: &std::path::Path) -> bool {
+    let Ok(relative) = active_file.strip_prefix(workspace_root) else {
+        return false;
+    };
+    let path = path_value(relative);
+    (path.starts_with("tests/fixtures/script/pass/")
+        || path.starts_with("tests/fixtures/script/fail/"))
+        && path.ends_with(".srt")
+}
+
+fn is_module_fixture_entry(
+    workspace_root: &std::path::Path,
+    active_file: &std::path::Path,
+) -> bool {
+    let Ok(relative) = active_file.strip_prefix(workspace_root) else {
+        return false;
+    };
+    let path = path_value(relative);
+    (path.starts_with("tests/fixtures/modules/pass/")
+        || path.starts_with("tests/fixtures/modules/fail/"))
+        && path.ends_with("/entry.srt")
+}
+
+fn same_path(left: &std::path::Path, right: &std::path::Path) -> bool {
+    path_value(left) == path_value(right)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

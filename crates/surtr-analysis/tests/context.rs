@@ -1,8 +1,9 @@
 use sindr::policy::{CompileUnitKind, SourceKind};
 use std::path::PathBuf;
 use surtr_analysis::{
-    parse_document, AnalysisCacheInput, AnalysisCacheKey, AnalysisContext, AnalysisContextRequest,
-    AnalysisMode, DocumentVersion, ModuleFileFingerprint, RunnerSelection, SelectedContext,
+    parse_document, resolve_context, AnalysisCacheInput, AnalysisCacheKey, AnalysisContext,
+    AnalysisContextRequest, AnalysisContextStatus, AnalysisMode, ContextDiagnosticKind,
+    DocumentVersion, ModuleFileFingerprint, RunnerSelection, SelectedContext,
 };
 
 #[test]
@@ -68,6 +69,120 @@ fn analysis_context_request_preserves_explicit_selected_context() {
         Some(SelectedContext::ScriptEntry(ref path)) if path == &PathBuf::from("/repo/main.srt")
     ));
     assert_eq!(request.open_documents[0].version, Some(7));
+}
+
+#[test]
+fn resolve_context_uses_explicit_script_entry_and_marks_included_files_as_definitions() {
+    let resolved = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: PathBuf::from("/repo/src/user.srt"),
+        selected_context: Some(SelectedContext::ScriptEntry(PathBuf::from(
+            "/repo/main.srt",
+        ))),
+        runner_selection: None,
+        open_documents: Vec::new(),
+    });
+
+    assert_eq!(resolved.status, AnalysisContextStatus::Ready);
+    assert_eq!(resolved.context.mode, AnalysisMode::Script);
+    assert_eq!(
+        resolved.context.entry_file,
+        Some(PathBuf::from("/repo/main.srt"))
+    );
+    assert_eq!(resolved.context.source_kind, SourceKind::DefinitionSource);
+}
+
+#[test]
+fn resolve_context_auto_selects_stdlib_development_for_lib_sources() {
+    let resolved = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: PathBuf::from("/repo/lib/kernel.srt"),
+        selected_context: None,
+        runner_selection: None,
+        open_documents: Vec::new(),
+    });
+
+    assert_eq!(resolved.status, AnalysisContextStatus::Ready);
+    assert_eq!(resolved.context.mode, AnalysisMode::DefinitionCheck);
+    assert_eq!(
+        resolved.context.source_kind,
+        SourceKind::StdDefinitionSource
+    );
+}
+
+#[test]
+fn resolve_context_auto_selects_script_fixture_entries() {
+    let resolved = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: PathBuf::from("/repo/tests/fixtures/script/pass/basic.srt"),
+        selected_context: None,
+        runner_selection: None,
+        open_documents: Vec::new(),
+    });
+
+    assert_eq!(resolved.status, AnalysisContextStatus::Ready);
+    assert_eq!(resolved.context.mode, AnalysisMode::Script);
+    assert_eq!(
+        resolved.context.entry_file,
+        Some(PathBuf::from("/repo/tests/fixtures/script/pass/basic.srt"))
+    );
+    assert_eq!(resolved.context.source_kind, SourceKind::Script);
+}
+
+#[test]
+fn resolve_context_builds_runner_context_from_selected_project_profile() {
+    let resolved = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: PathBuf::from("/repo/src/user.srt"),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: PathBuf::from("/repo/project.srt"),
+            profile: "test".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: PathBuf::from("/repo/project.srt"),
+            selected_profile: "test".to_string(),
+            normalized_args: vec![("env".to_string(), "ci".to_string())],
+        }),
+        open_documents: Vec::new(),
+    });
+
+    let runner = resolved
+        .runner
+        .expect("project context should include runner");
+    assert_eq!(resolved.context.mode, AnalysisMode::Project);
+    assert_eq!(
+        resolved.context.entry_file,
+        Some(PathBuf::from("/repo/project.srt"))
+    );
+    assert_eq!(runner.selected_profile, "test");
+    assert_eq!(
+        runner.normalized_args,
+        vec![("env".to_string(), "ci".to_string())]
+    );
+}
+
+#[test]
+fn resolve_context_reports_project_profile_mismatch_without_guessing() {
+    let resolved = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: PathBuf::from("/repo/src/user.srt"),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: PathBuf::from("/repo/project.srt"),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: PathBuf::from("/repo/project.srt"),
+            selected_profile: "test".to_string(),
+            normalized_args: Vec::new(),
+        }),
+        open_documents: Vec::new(),
+    });
+
+    assert_eq!(resolved.status, AnalysisContextStatus::NeedsSelection);
+    assert!(resolved
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.kind == ContextDiagnosticKind::ProjectProfileMismatch));
 }
 
 #[test]

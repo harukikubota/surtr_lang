@@ -190,12 +190,15 @@
   - `doc/project_runner_pseudo_di_draft.md` では、project runner の profile selection、pseudo DI、operational script、REPL preload、LSP cache key を同じ runner context へ寄せる方針を整理した。
   - `docs/dev/Surtr_LSP_spec.md` では、`surtr-lsp` を protocol adapter とし、REPL と LSP が shared semantic service を直接使う実装方針を開発者向け正本として固定した。
   - `crates/surtr-analysis` を追加し、`LineIndex`、source-kind aware parse entry、`AnalysisContextRequest`、deterministic `AnalysisCacheKey`、semantic completion DTO の初期実装を置いた。
+  - `resolve_context`、`RunnerContext`、context / runner diagnostics DTO、`AnalysisService` の最小 snapshot / diagnostics / completion API を追加し、LSP adapter が active file 単体ではなく context 経由で呼べる境界を作った。
+  - 正規化済み runner 入力から literal / glob path を deterministic に展開して `RunnerContext` へ変換する `resolve_project_runner` を追加した。project runner DSL の実行・抽出はまだ未実装。
   - `SourceKind` は `sindr::policy`、parse rule 導出は `spire` に置き、`surtr-analysis` は Xldr に依存しない構成にした。
   - REPL command query parser は `surtr-analysis::query` に移し、Xldr は同じ parser 実装を呼ぶ。
 - 未確定点:
   - project runner 専用 `SourceKind` / `ProjectConfigSource` が必要か。
   - `RunnerArgs` の最終構造、`selected_profile` を top-level field に置くか runner args 内に置くか。
   - project runner source を Surtr VM で実行して抽出するか、restricted project config evaluator を用意するか。
+  - `resolve_project_runner` へ渡す正規化済み runner facts を、`project.srt` の AST / evaluator からどう生成するか。
   - typed boot builder API の正本名と、LSP が boot / supervisor config をどこまで semantic に理解するか。
   - external file missing / schema mismatch / handler override conflict を runner diagnostics と compile diagnostics のどちらへ所属させるか。
   - project context 付き script の `supervisor_init` merge 規則。
@@ -208,10 +211,12 @@
   - command query parser は `spire` へ入れず、REPL / LSP editor command から使える tooling query wrapper として配置される。
   - script entry を選択すると、script include 先 definition source が同じ compile unit 文脈で解析される。
   - project mode では selected profile、normalized runner args、module stage、project path 展開、boot / external input summary が cache key と diagnostics に反映される。
+  - `AnalysisService` は parse diagnostics と completion の protocol 非依存 DTO を返し、hover / signatureHelp / definition / documentSymbol は同じ snapshot から段階的に実装できる。
   - REPL は内部で LSP JSON-RPC と通信せず、Xldr と `surtr-lsp` が同じ semantic service を別 adapter として利用できる。
   - LSP / analysis core は single-thread wasm host でも動作でき、multi-thread availability に意味論を依存させない。
 - テスト方針:
   - `surtr-analysis` 導入時は context resolver、include graph、cache key、LineIndex の byte / character / UTF-16 変換を unit test で固定する。
+  - `AnalysisService` の snapshot / parse diagnostics / completion と、project runner literal / glob 展開は `surtr-analysis` unit test で固定する。
   - command query parser は `surtr-analysis::query` の unit test と `cargo nextest run -p xldr` の既存 REPL command tests で固定する。
   - `surtr-lsp` 導入時は diagnostics / completion / hover / signatureHelp / definition の protocol DTO 変換を unit test で固定する。
   - `tests/fixtures/script/**`、`tests/fixtures/modules/**`、`lib/**/*.srt` を LSP analysis context の integration fixture として流用する。
