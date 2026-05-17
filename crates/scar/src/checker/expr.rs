@@ -2478,7 +2478,14 @@ impl Checker {
                 ResolvedRecordLitArg::Positional(expr) => {
                     self.check_node_with_expected(expr, Some(expected))
                 }
-                ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+                ResolvedRecordLitArg::Named(_, _) => Err(TypeError {
+                    message: format!(
+                        "{}::{} does not accept named arguments",
+                        trait_name, method_name
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                }),
             })
             .collect::<Result<Vec<_>, _>>()?;
         self.ensure_no_runtime_facet_args(&typed_args, span, "Trait method call")?;
@@ -4240,7 +4247,11 @@ impl Checker {
             let mut reordered: Vec<Option<&Resolved>> = vec![None; params.len()];
             for arg in args {
                 let ResolvedRecordLitArg::Named(name, expr) = arg else {
-                    unreachable!("validated argument form above")
+                    return Err(TypeError {
+                        message: "Cannot mix positional and named arguments".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
                 };
                 let idx = names
                     .iter()
@@ -4300,7 +4311,11 @@ impl Checker {
 
         for (expected_ty, arg) in params.iter().zip(args) {
             let ResolvedRecordLitArg::Positional(expr) = arg else {
-                unreachable!("validated argument form above")
+                return Err(TypeError {
+                    message: "Cannot mix positional and named arguments".into(),
+                    span: span.clone(),
+                    hint: None,
+                });
             };
             let typed = if matches!(self.resolve_ty(expected_ty), Ty::Hole) {
                 self.check_node(expr)?
@@ -5849,7 +5864,11 @@ impl Checker {
                     Ty::Hole => self.check_node(expr),
                     _ => self.check_node_with_expected(expr, Some(expected)),
                 },
-                ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+                ResolvedRecordLitArg::Named(_, _) => Err(TypeError {
+                    message: named_arg_error.clone(),
+                    span: span.clone(),
+                    hint: None,
+                }),
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -6984,6 +7003,14 @@ impl Checker {
         )
     }
 
+    fn unsupported_binop_type_error(op: &BinOp, span: &Span) -> TypeError {
+        TypeError {
+            message: format!("Unsupported binary operator in trait lowering: {op:?}"),
+            span: span.clone(),
+            hint: None,
+        }
+    }
+
     pub(super) fn check_binop(
         &mut self,
         span: &Span,
@@ -7030,7 +7057,7 @@ impl Checker {
                     BinOp::Add => ("Add", "add", "+"),
                     BinOp::Sub => ("Sub", "sub", "-"),
                     BinOp::Mul => ("Mul", "mul", "*"),
-                    _ => unreachable!("validated above"),
+                    _ => return Err(Self::unsupported_binop_type_error(op, span)),
                 };
                 if !compatible {
                     self.substitutions = compatibility_checkpoint;
@@ -7082,14 +7109,14 @@ impl Checker {
                     typed_right,
                 ))
             }
-            BinOp::Slash => unreachable!("handled before generic binop path"),
+            BinOp::Slash => Err(Self::unsupported_binop_type_error(op, span)),
             BinOp::Eq | BinOp::Neq => {
                 if !compatible {
                     self.substitutions = compatibility_checkpoint;
                     let summary = self.trait_implementation_summary(match op {
                         BinOp::Eq => "Eq",
                         BinOp::Neq => "Neq",
-                        _ => unreachable!("validated above"),
+                        _ => return Err(Self::unsupported_binop_type_error(op, span)),
                     });
                     return Err(TypeError {
                         message: format!(
@@ -7097,7 +7124,7 @@ impl Checker {
                             match op {
                                 BinOp::Eq => "==",
                                 BinOp::Neq => "!=",
-                                _ => unreachable!("validated above"),
+                                _ => return Err(Self::unsupported_binop_type_error(op, span)),
                             },
                             self.ty_name(&lt),
                             self.ty_name(&rt),
@@ -7110,7 +7137,7 @@ impl Checker {
                 let (trait_short_name, method_name, symbol) = match op {
                     BinOp::Eq => ("Eq", "eq", "=="),
                     BinOp::Neq => ("Neq", "neq", "!="),
-                    _ => unreachable!("validated above"),
+                    _ => return Err(Self::unsupported_binop_type_error(op, span)),
                 };
                 let eq_trait = self
                     .trait_key_by_short_name(trait_short_name)
@@ -7153,7 +7180,7 @@ impl Checker {
                                 BinOp::Gt => ">",
                                 BinOp::Lte => "<=",
                                 BinOp::Gte => ">=",
-                                _ => unreachable!("validated above"),
+                                _ => return Err(Self::unsupported_binop_type_error(op, span)),
                             },
                             self.ty_name(&lt),
                             self.ty_name(&rt),
@@ -7168,7 +7195,7 @@ impl Checker {
                     BinOp::Gt => (ComparisonOperator::Gt, ">"),
                     BinOp::Lte => (ComparisonOperator::Lte, "<="),
                     BinOp::Gte => (ComparisonOperator::Gte, ">="),
-                    _ => unreachable!("validated above"),
+                    _ => return Err(Self::unsupported_binop_type_error(op, span)),
                 };
                 let method_name = match comparison_op {
                     ComparisonOperator::Lt => "lt",
@@ -8002,7 +8029,14 @@ impl Checker {
         let typed_value = self.check_result_value(value, "recover_kind")?;
         let value_ty = self.resolve_ty(&typed_value.ty);
         let Ty::Result(ok_ty, _) = &value_ty else {
-            unreachable!()
+            return Err(TypeError {
+                message: format!(
+                    "recover_kind value must resolve to Result<...>, got {}",
+                    self.ty_name(&value_ty)
+                ),
+                span: typed_value.span.clone(),
+                hint: None,
+            });
         };
         let ok_ty = ok_ty.as_ref().clone();
         let typed_marker = self.check_node(marker)?;

@@ -3087,7 +3087,10 @@ fn builtin_shell_cd(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError
             &format!("shell working directory not found: {path}"),
         ));
     }
-    let cwd = fs::canonicalize(&host_path).unwrap_or(host_path);
+    let cwd = match canonicalize_shell_cwd(vm, &host_path, path) {
+        Ok(cwd) => cwd,
+        Err(err) => return Ok(err),
+    };
     vm.set_cwd(cwd);
     Ok(ok_result(Value::Unit))
 }
@@ -4468,7 +4471,11 @@ fn filesystem_snapshot(
     }
 
     let mut paths = Vec::new();
-    collect_filesystem_entries(vm, root_raw, 1, max_depth.unwrap_or(1), &mut paths)?;
+    if let Err(err) =
+        collect_filesystem_entries(vm, root_raw, 1, max_depth.unwrap_or(1), &mut paths)
+    {
+        return Ok(err);
+    }
     paths.sort();
 
     let mut entries = Vec::with_capacity(paths.len());
@@ -4495,19 +4502,20 @@ fn collect_filesystem_entries(
     current_depth: usize,
     max_depth: usize,
     out: &mut Vec<String>,
-) -> Result<(), RuntimeError> {
+) -> Result<(), Value> {
     if max_depth == 0 || current_depth > max_depth {
         return Ok(());
     }
     let host_path = vm.resolve_host_path(raw_path);
     let read_dir = match fs::read_dir(&host_path) {
         Ok(read_dir) => read_dir,
-        Err(_) => return Ok(()),
+        Err(err) => return Err(filesystem_io_error(vm, raw_path, err)),
     };
     let mut children = Vec::new();
     for entry in read_dir {
-        let Ok(entry) = entry else {
-            continue;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => return Err(filesystem_io_error(vm, raw_path, err)),
         };
         let raw_child = Path::new(raw_path)
             .join(entry.file_name())
@@ -4524,6 +4532,20 @@ fn collect_filesystem_entries(
         }
     }
     Ok(())
+}
+
+fn canonicalize_shell_cwd(
+    vm: &VM,
+    host_path: &Path,
+    path: &str,
+) -> Result<std::path::PathBuf, Value> {
+    fs::canonicalize(host_path).map_err(|err| {
+        shell_error_with_message(
+            vm,
+            "ShellIoError",
+            &format!("shell failed to canonicalize working directory {path}: {err}"),
+        )
+    })
 }
 
 fn err_value(rich: RichError) -> Value {
@@ -4709,6 +4731,8 @@ mod tests {
         Location, RichError, TypeEntry, TypeKind, TypeRegistry, Value,
     };
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
     fn test_vm() -> VM {
@@ -4894,6 +4918,16 @@ mod tests {
                 .next()
                 .expect("Ok result should carry a payload"),
             other => panic!("expected Ok result, got {:?}", other),
+        }
+    }
+
+    fn err_kind(value: &Value) -> &str {
+        match value {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => &rich.kind,
+                other => panic!("expected Err(Value::Error), got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
         }
     }
 
@@ -6272,6 +6306,90 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_ls_returns_err_when_read_dir_fails() {
+        let dir = sandbox_dir("builtin-filesystem-ls-read-dir-error");
+        let blocked = dir.join("blocked");
+        fs::create_dir_all(&blocked).expect("blocked dir should be creatable");
+        let original_permissions = fs::metadata(&blocked)
+            .expect("blocked metadata should be readable")
+            .permissions();
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000))
+            .expect("permissions should be removable");
+
+        let mut vm = filesystem_vm();
+        let result = call_builtin(
+            &mut vm,
+            builtin_id("filesystem_ls"),
+            vec![Value::Tagged {
+                tag: 30,
+                fields: vec![Value::Str(blocked.to_string_lossy().into_owned())],
+            }],
+        )
+        .expect("filesystem_ls should return a Result value");
+
+        fs::set_permissions(&blocked, original_permissions)
+            .expect("permissions should be restored");
+        let _ = fs::remove_dir_all(dir);
+
+        assert!(matches!(
+            err_kind(&result),
+            "FileSystemPermissionDenied" | "FileSystemIoError"
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_tree_depth_returns_err_when_child_read_dir_fails() {
+        let dir = sandbox_dir("builtin-filesystem-tree-read-dir-error");
+        let blocked = dir.join("blocked");
+        fs::create_dir_all(&blocked).expect("blocked dir should be creatable");
+        let original_permissions = fs::metadata(&blocked)
+            .expect("blocked metadata should be readable")
+            .permissions();
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000))
+            .expect("permissions should be removable");
+
+        let mut vm = filesystem_vm();
+        let result = call_builtin(
+            &mut vm,
+            builtin_id("filesystem_tree_depth"),
+            vec![
+                Value::Tagged {
+                    tag: 30,
+                    fields: vec![Value::Str(dir.to_string_lossy().into_owned())],
+                },
+                Value::Int(2.into()),
+            ],
+        )
+        .expect("filesystem_tree_depth should return a Result value");
+
+        fs::set_permissions(&blocked, original_permissions)
+            .expect("permissions should be restored");
+        let _ = fs::remove_dir_all(dir);
+
+        assert!(matches!(
+            err_kind(&result),
+            "FileSystemPermissionDenied" | "FileSystemIoError"
+        ));
+    }
+
+    #[test]
+    fn shell_cd_canonicalize_error_maps_to_shell_io_error_without_mutating_cwd() {
+        let vm = filesystem_vm();
+        let original = vm.cwd().to_path_buf();
+        let err = super::canonicalize_shell_cwd(
+            &vm,
+            &original.join("missing-after-dir-check"),
+            "missing-after-dir-check",
+        )
+        .expect_err("missing canonical path should map to ShellIoError");
+
+        assert_eq!(err_kind(&err), "ShellIoError");
+        assert_eq!(vm.cwd(), original.as_path());
     }
 
     #[test]

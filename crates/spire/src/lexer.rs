@@ -198,29 +198,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 ));
             }
 
-            let is_ident = {
-                let mut chars = body.chars();
-                matches!(chars.next(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_')
-                    && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-            };
-            let is_qualified_ident = body
-                .split("::")
-                .map(str::trim)
-                .collect::<Vec<_>>()
-                .as_slice()
-                .split_first()
-                .is_some_and(|(_, rest)| {
-                    !rest.is_empty() && body.split("::").all(|segment| {
-                        let mut chars = segment.chars();
-                        matches!(chars.next(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_')
-                            && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-                    })
-                });
-            let is_supported_operator = matches!(
-                body.as_str(),
-                "/" | "+" | "-" | "*" | "++" | "==" | "!=" | "<" | ">" | "<=" | ">="
-            );
-            if !is_ident && !is_qualified_ident && !is_supported_operator {
+            if !crate::func_literal::is_valid_func_literal_body(&body) {
                 return Err(ParseError::syntax(
                     format!("Unsupported FuncLiteral body: `{}`", body),
                     Span { start, end: i + 1 },
@@ -695,6 +673,7 @@ fn line_indent_before(chars: &[char], idx: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::BinOp;
     use sindr::primitives::int;
 
     #[test]
@@ -835,6 +814,41 @@ mod tests {
         assert!(matches!(tokens[15].token, Token::PipeMap));
         assert!(matches!(tokens[16].token, Token::PipeBind));
         assert!(matches!(tokens[17].token, Token::KleisliCompose));
+    }
+
+    #[test]
+    fn test_func_literal_operator_table_covers_lexer_and_parser_operators() {
+        let cases = [
+            ("+", BinOp::Add),
+            ("-", BinOp::Sub),
+            ("*", BinOp::Mul),
+            ("/", BinOp::Slash),
+            ("++", BinOp::Concat),
+            ("==", BinOp::Eq),
+            ("!=", BinOp::Neq),
+            ("<", BinOp::Lt),
+            (">", BinOp::Gt),
+            ("<=", BinOp::Lte),
+            (">=", BinOp::Gte),
+        ];
+
+        for (body, expected) in cases {
+            let operator = crate::func_literal::func_literal_operator(body)
+                .expect("operator should be supported by shared func literal table");
+            assert_eq!(operator.binop, expected);
+
+            let tokens = tokenize(&format!("`{body}`")).unwrap();
+            assert!(matches!(
+                tokens.first(),
+                Some(Spanned {
+                    token: Token::FuncLiteral(found),
+                    ..
+                }) if found == body
+            ));
+        }
+
+        assert!(crate::func_literal::parse_func_literal_path("Kernel::map").is_some());
+        assert!(!crate::func_literal::is_valid_func_literal_body("??"));
     }
 
     #[test]

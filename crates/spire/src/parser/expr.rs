@@ -1,5 +1,8 @@
 use crate::ast::*;
 use crate::error::ParseError;
+use crate::func_literal::{
+    func_literal_operator, parse_func_literal_path, FuncLiteralOperatorTier,
+};
 use crate::token::Token;
 use sindr::primitives::ToPrimitive;
 
@@ -66,27 +69,19 @@ impl Parser<'_> {
     }
 
     fn parse_func_literal_body(body: &str, span: Span) -> Result<FuncLiteralBodyKind, ParseError> {
-        if Self::expr_binop_from_func_literal(body).is_some()
-            || Self::logical_binop_from_func_literal(body).is_some()
-        {
+        if func_literal_operator(body).is_some() {
             return Ok(FuncLiteralBodyKind::Operator(body.to_string()));
         }
 
-        if body.contains("::") {
-            let segments = body.split("::").map(str::to_string).collect::<Vec<_>>();
-            let is_valid_path = segments.len() >= 2
-                && segments.iter().all(|segment| {
-                    let mut chars = segment.chars();
-                    matches!(chars.next(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_')
-                        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-                });
-            if !is_valid_path {
-                return Err(ParseError::syntax(
-                    format!("Unsupported FuncLiteral body: `{}`", body),
-                    span,
-                ));
-            }
+        if let Some(segments) = parse_func_literal_path(body) {
             return Ok(FuncLiteralBodyKind::Path(AstPath { span, segments }));
+        }
+
+        if !crate::func_literal::is_func_literal_ident(body) {
+            return Err(ParseError::syntax(
+                format!("Unsupported FuncLiteral body: `{}`", body),
+                span,
+            ));
         }
 
         Ok(FuncLiteralBodyKind::Name(body.to_string()))
@@ -260,26 +255,13 @@ impl Parser<'_> {
     }
 
     pub(super) fn expr_binop_from_func_literal(body: &str) -> Option<BinOp> {
-        match body {
-            "+" => Some(BinOp::Add),
-            "-" => Some(BinOp::Sub),
-            "*" => Some(BinOp::Mul),
-            "/" => Some(BinOp::Slash),
-            "++" => Some(BinOp::Concat),
-            _ => None,
-        }
+        let operator = func_literal_operator(body)?;
+        (operator.tier == FuncLiteralOperatorTier::Expr).then_some(operator.binop)
     }
 
     pub(super) fn logical_binop_from_func_literal(body: &str) -> Option<BinOp> {
-        match body {
-            "==" => Some(BinOp::Eq),
-            "!=" => Some(BinOp::Neq),
-            "<" => Some(BinOp::Lt),
-            ">" => Some(BinOp::Gt),
-            "<=" => Some(BinOp::Lte),
-            ">=" => Some(BinOp::Gte),
-            _ => None,
-        }
+        let operator = func_literal_operator(body)?;
+        (operator.tier == FuncLiteralOperatorTier::Logical).then_some(operator.binop)
     }
 
     pub(super) fn and_or_func_literal_name(body: &str) -> bool {

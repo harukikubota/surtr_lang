@@ -64,6 +64,62 @@ pub struct DeclarationEntry {
 
 pub type DeclarationIndex = BTreeMap<String, DeclarationEntry>;
 
+fn duplicate_fq_declaration_error(
+    fq_name: &str,
+    prev: &DeclarationEntry,
+    span: &Span,
+) -> ResolveError {
+    ResolveError {
+        message: format!(
+            "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
+            global_surface_name(fq_name),
+            prev.stage_index,
+            prev.module_path
+        ),
+        span: span.clone(),
+        related_labels: Vec::new(),
+    }
+}
+
+fn declaration_entry(
+    module_path: impl Into<String>,
+    name: impl Into<String>,
+    fq_name: impl Into<String>,
+    kind: DeclarationKind,
+    stage_index: usize,
+    auto_import: bool,
+    hidden: bool,
+    visibility: Visibility,
+    user_importable: bool,
+    user_callable: bool,
+) -> DeclarationEntry {
+    DeclarationEntry {
+        module_path: module_path.into(),
+        name: name.into(),
+        fq_name: fq_name.into(),
+        kind,
+        stage_index,
+        auto_import,
+        hidden,
+        visibility,
+        user_importable,
+        user_callable,
+    }
+}
+
+fn insert_declaration_entry(
+    index: &mut DeclarationIndex,
+    entry: DeclarationEntry,
+    span: &Span,
+) -> Result<(), ResolveError> {
+    if let Some(prev) = index.get(&entry.fq_name) {
+        return Err(duplicate_fq_declaration_error(&entry.fq_name, prev, span));
+    }
+
+    index.insert(entry.fq_name.clone(), entry);
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ImplTargetResolution {
     Unique(DeclarationKind),
@@ -745,32 +801,22 @@ pub fn precollect_declaration_index(
                         };
 
                         let fq_name = format!("{}::{}", method_module_path, method_name);
-                        if let Some(prev) = index.get(&fq_name) {
-                            return Err(ResolveError {
-                                message: format!(
-                                    "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
-                                    global_surface_name(&fq_name), prev.stage_index, prev.module_path
-                                ),
-                                span: method_span.clone(),
-                            related_labels: Vec::new(),
-                            });
-                        }
-
-                        index.insert(
-                            fq_name.clone(),
-                            DeclarationEntry {
-                                module_path: method_module_path.clone(),
-                                name: method_name.clone(),
+                        insert_declaration_entry(
+                            &mut index,
+                            declaration_entry(
+                                method_module_path.clone(),
+                                method_name.clone(),
                                 fq_name,
                                 kind,
                                 stage_index,
-                                auto_import: false,
-                                hidden: attrs.hidden,
-                                visibility: entry_visibility(attrs),
-                                user_importable: entry_user_importable(attrs),
-                                user_callable: entry_user_callable(attrs),
-                            },
-                        );
+                                false,
+                                attrs.hidden,
+                                entry_visibility(attrs),
+                                entry_user_importable(attrs),
+                                entry_user_callable(attrs),
+                            ),
+                            method_span,
+                        )?;
                     }
                     continue;
                 }
@@ -781,31 +827,22 @@ pub fn precollect_declaration_index(
                     } else {
                         format!("{}::{}", module.module_path, name)
                     };
-                    if let Some(prev) = index.get(&fq_name) {
-                        return Err(ResolveError {
-                            message: format!(
-                                "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
-                                global_surface_name(&fq_name), prev.stage_index, prev.module_path
-                            ),
-                            span: span.clone(),
-                        related_labels: Vec::new(),
-                        });
-                    }
-                    index.insert(
-                        fq_name.clone(),
-                        DeclarationEntry {
-                            module_path: module.module_path.clone(),
-                            name: name.clone(),
+                    insert_declaration_entry(
+                        &mut index,
+                        declaration_entry(
+                            module.module_path.clone(),
+                            name.clone(),
                             fq_name,
-                            kind: DeclarationKind::Trait,
+                            DeclarationKind::Trait,
                             stage_index,
-                            auto_import: attrs.auto_import,
-                            hidden: false,
-                            visibility: Visibility::Public,
-                            user_importable: true,
-                            user_callable: true,
-                        },
-                    );
+                            attrs.auto_import,
+                            false,
+                            Visibility::Public,
+                            true,
+                            true,
+                        ),
+                        span,
+                    )?;
 
                     for method in methods {
                         let method_name = trait_method_qualified_name(name, &method.name);
@@ -816,31 +853,22 @@ pub fn precollect_declaration_index(
                         };
                         let method_fq_name =
                             trait_method_qualified_name(&qualified_trait_name, &method.name);
-                        if let Some(prev) = index.get(&method_fq_name) {
-                            return Err(ResolveError {
-                                message: format!(
-                                    "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
-                                    global_surface_name(&method_fq_name), prev.stage_index, prev.module_path
-                                ),
-                                span: method.span.clone(),
-                            related_labels: Vec::new(),
-                            });
-                        }
-                        index.insert(
-                            method_fq_name.clone(),
-                            DeclarationEntry {
-                                module_path: module.module_path.clone(),
-                                name: method_name,
-                                fq_name: method_fq_name,
-                                kind: DeclarationKind::TraitMethod,
+                        insert_declaration_entry(
+                            &mut index,
+                            declaration_entry(
+                                module.module_path.clone(),
+                                method_name,
+                                method_fq_name,
+                                DeclarationKind::TraitMethod,
                                 stage_index,
-                                auto_import: false,
-                                hidden: false,
-                                visibility: Visibility::Public,
-                                user_importable: true,
-                                user_callable: true,
-                            },
-                        );
+                                false,
+                                false,
+                                Visibility::Public,
+                                true,
+                                true,
+                            ),
+                            &method.span,
+                        )?;
                     }
                     continue;
                 }
@@ -872,35 +900,26 @@ pub fn precollect_declaration_index(
                             &method_name,
                             method_span.start,
                         );
-                        if let Some(prev) = index.get(&internal_name) {
-                            return Err(ResolveError {
-                                message: format!(
-                                    "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
-                                    global_surface_name(&internal_name), prev.stage_index, prev.module_path
-                                ),
-                                span: method_span.clone(),
-                            related_labels: Vec::new(),
-                            });
-                        }
-                        index.insert(
-                            internal_name.clone(),
-                            DeclarationEntry {
-                                module_path: if module.module_path.is_empty() {
+                        insert_declaration_entry(
+                            &mut index,
+                            declaration_entry(
+                                if module.module_path.is_empty() {
                                     "__traitimpl__".to_string()
                                 } else {
                                     format!("{}::__traitimpl__", module.module_path)
                                 },
-                                name: internal_name.clone(),
-                                fq_name: internal_name,
-                                kind: DeclarationKind::ImplMethod,
+                                internal_name.clone(),
+                                internal_name,
+                                DeclarationKind::ImplMethod,
                                 stage_index,
-                                auto_import: false,
-                                hidden: false,
-                                visibility: Visibility::Private,
-                                user_importable: false,
-                                user_callable: false,
-                            },
-                        );
+                                false,
+                                false,
+                                Visibility::Private,
+                                false,
+                                false,
+                            ),
+                            method_span,
+                        )?;
                     }
                     continue;
                 }
@@ -917,60 +936,42 @@ pub fn precollect_declaration_index(
                         });
                     }
                     let fq_name = name.to_string();
-                    if let Some(prev) = index.get(&fq_name) {
-                        return Err(ResolveError {
-                            message: format!(
-                                "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
-                                global_surface_name(&fq_name), prev.stage_index, prev.module_path
-                            ),
-                            span: span.clone(),
-                        related_labels: Vec::new(),
-                        });
-                    }
-                    index.insert(
-                        fq_name.clone(),
-                        DeclarationEntry {
-                            module_path: TYPE_DECL_ENTRY_MODULE_PATH.to_string(),
-                            name: name.clone(),
+                    insert_declaration_entry(
+                        &mut index,
+                        declaration_entry(
+                            TYPE_DECL_ENTRY_MODULE_PATH,
+                            name.clone(),
                             fq_name,
-                            kind: DeclarationKind::Enum,
+                            DeclarationKind::Enum,
                             stage_index,
-                            auto_import: false,
-                            hidden: false,
-                            visibility: Visibility::Public,
-                            user_importable: true,
-                            user_callable: true,
-                        },
-                    );
+                            false,
+                            false,
+                            Visibility::Public,
+                            true,
+                            true,
+                        ),
+                        span,
+                    )?;
 
                     for variant in variants {
                         let variant_name = format!("{}::{}", name, variant.name);
                         let variant_fq_name = variant_name.clone();
-                        if let Some(prev) = index.get(&variant_fq_name) {
-                            return Err(ResolveError {
-                                message: format!(
-                                    "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
-                                    global_surface_name(&variant_fq_name), prev.stage_index, prev.module_path
-                                ),
-                                span: variant.span.clone(),
-                            related_labels: Vec::new(),
-                            });
-                        }
-                        index.insert(
-                            variant_fq_name.clone(),
-                            DeclarationEntry {
-                                module_path: TYPE_DECL_ENTRY_MODULE_PATH.to_string(),
-                                name: variant_name,
-                                fq_name: variant_fq_name,
-                                kind: DeclarationKind::EnumVariant,
+                        insert_declaration_entry(
+                            &mut index,
+                            declaration_entry(
+                                TYPE_DECL_ENTRY_MODULE_PATH,
+                                variant_name,
+                                variant_fq_name,
+                                DeclarationKind::EnumVariant,
                                 stage_index,
-                                auto_import: false,
-                                hidden: false,
-                                visibility: Visibility::Public,
-                                user_importable: true,
-                                user_callable: true,
-                            },
-                        );
+                                false,
+                                false,
+                                Visibility::Public,
+                                true,
+                                true,
+                            ),
+                            &variant.span,
+                        )?;
                     }
                     continue;
                 }
@@ -1136,42 +1137,33 @@ pub fn precollect_declaration_index(
                     format!("{}::{}", module.module_path, name)
                 };
 
-                if let Some(prev) = index.get(&fq_name) {
-                    return Err(ResolveError {
-                        message: format!(
-                            "Duplicate fully-qualified declaration: {} (already declared in stage {} module {})",
-                            global_surface_name(&fq_name), prev.stage_index, prev.module_path
-                        ),
-                        span: span.clone(),
-                    related_labels: Vec::new(),
-                    });
-                }
-
-                index.insert(
-                    fq_name.clone(),
-                    DeclarationEntry {
-                        module_path: if matches!(
-                            kind,
-                            DeclarationKind::BuiltinType
-                                | DeclarationKind::Struct
-                                | DeclarationKind::Record
-                                | DeclarationKind::Deferror
-                        ) {
-                            TYPE_DECL_ENTRY_MODULE_PATH.to_string()
-                        } else {
-                            module.module_path.clone()
-                        },
-                        name: name.to_string(),
+                let entry_module_path = if matches!(
+                    kind,
+                    DeclarationKind::BuiltinType
+                        | DeclarationKind::Struct
+                        | DeclarationKind::Record
+                        | DeclarationKind::Deferror
+                ) {
+                    TYPE_DECL_ENTRY_MODULE_PATH.to_string()
+                } else {
+                    module.module_path.clone()
+                };
+                insert_declaration_entry(
+                    &mut index,
+                    declaration_entry(
+                        entry_module_path,
+                        name.to_string(),
                         fq_name,
                         kind,
                         stage_index,
-                        auto_import: false,
+                        false,
                         hidden,
                         visibility,
                         user_importable,
                         user_callable,
-                    },
-                );
+                    ),
+                    span,
+                )?;
             }
         }
     }
@@ -1180,6 +1172,63 @@ pub fn precollect_declaration_index(
 }
 
 impl Resolver {
+    fn duplicate_top_level_definition_error(surface: &str, span: &Span) -> ResolveError {
+        ResolveError {
+            message: format!("Duplicate top-level definition: {}", surface),
+            span: span.clone(),
+            related_labels: Vec::new(),
+        }
+    }
+
+    fn reject_duplicate_top_level_declaration(
+        &self,
+        declared_in_batch: &mut HashSet<String>,
+        surface: &str,
+        lookup_name: &str,
+        span: &Span,
+    ) -> Result<(), ResolveError> {
+        if !declared_in_batch.insert(surface.to_string()) {
+            return Err(Self::duplicate_top_level_definition_error(surface, span));
+        }
+        if !self.allow_top_level_shadowing && self.scope.lookup(lookup_name).is_some() {
+            return Err(Self::duplicate_top_level_definition_error(surface, span));
+        }
+        Ok(())
+    }
+
+    fn reserve_declaration_uid(&mut self, qualified_name: &str) -> u32 {
+        self.declaration_uids
+            .get(qualified_name)
+            .copied()
+            .unwrap_or_else(|| {
+                let fresh = self.scope.reserve_id();
+                self.declaration_uids
+                    .insert(qualified_name.to_string(), fresh);
+                fresh
+            })
+    }
+
+    fn reserve_scope_uid(&mut self, name: &str) -> u32 {
+        self.scope
+            .lookup(name)
+            .unwrap_or_else(|| self.scope.reserve_id())
+    }
+
+    fn record_predeclared_uid(&mut self, name: &str, uid: u32, kind: DeclarationKind) {
+        self.predeclared_ids
+            .entry(name.to_string())
+            .or_default()
+            .push_back(uid);
+        self.declaration_uid_kinds.insert(uid, kind);
+    }
+
+    fn predeclare_scope_binding(&mut self, name: &str, uid: u32, alias: Option<&str>) {
+        self.scope.define_with_id(name, uid);
+        if let Some(alias) = alias {
+            define_global_surface_alias(&mut self.scope, alias, uid);
+        }
+    }
+
     pub(super) fn lower_impl_defs(&self, stmts: Vec<Ast>) -> Result<Vec<Ast>, ResolveError> {
         let local_impl_targets;
         let impl_targets = if let Some(stage_targets) = self.current_stage_impl_targets.as_ref() {
@@ -1440,145 +1489,59 @@ impl Resolver {
             match stmt {
                 Ast::Def(span, name, _, _, _, _, _) => {
                     let surface = global_surface_name(name).to_string();
-                    if !declared_in_batch.insert(surface.clone()) {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", surface),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
-                    if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", surface),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
+                    self.reject_duplicate_top_level_declaration(
+                        &mut declared_in_batch,
+                        &surface,
+                        name,
+                        span,
+                    )?;
                     let qualified_name = self.qualify_current_declaration_name(name);
-                    let uid = self
-                        .declaration_uids
-                        .get(&qualified_name)
-                        .copied()
-                        .unwrap_or_else(|| {
-                            let fresh = self.scope.reserve_id();
-                            self.declaration_uids.insert(qualified_name.clone(), fresh);
-                            fresh
-                        });
-                    self.predeclared_ids
-                        .entry(name.clone())
-                        .or_default()
-                        .push_back(uid);
-                    self.declaration_uid_kinds.insert(uid, DeclarationKind::Def);
+                    let uid = self.reserve_declaration_uid(&qualified_name);
+                    self.record_predeclared_uid(name, uid, DeclarationKind::Def);
                     // Keep the outer scope at the most recent declaration,
                     // so forward references resolve to the latest top-level definition.
-                    self.scope.define_with_id(name, uid);
-                    define_global_surface_alias(&mut self.scope, &qualified_name, uid);
+                    self.predeclare_scope_binding(name, uid, Some(&qualified_name));
                 }
                 Ast::ExtractorDef(span, name, _, _, _, _, _) => {
                     let surface = global_surface_name(name).to_string();
-                    if !declared_in_batch.insert(surface.clone()) {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", surface),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
-                    if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", surface),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
+                    self.reject_duplicate_top_level_declaration(
+                        &mut declared_in_batch,
+                        &surface,
+                        name,
+                        span,
+                    )?;
                     let qualified_name = self.qualify_current_declaration_name(name);
-                    let uid = self
-                        .declaration_uids
-                        .get(&qualified_name)
-                        .copied()
-                        .unwrap_or_else(|| {
-                            let fresh = self.scope.reserve_id();
-                            self.declaration_uids.insert(qualified_name.clone(), fresh);
-                            fresh
-                        });
-                    self.predeclared_ids
-                        .entry(name.clone())
-                        .or_default()
-                        .push_back(uid);
-                    self.declaration_uid_kinds
-                        .insert(uid, DeclarationKind::Extractor);
-                    self.scope.define_with_id(name, uid);
-                    define_global_surface_alias(&mut self.scope, &qualified_name, uid);
+                    let uid = self.reserve_declaration_uid(&qualified_name);
+                    self.record_predeclared_uid(name, uid, DeclarationKind::Extractor);
+                    self.predeclare_scope_binding(name, uid, Some(&qualified_name));
                 }
                 Ast::ConstDef(span, name, _, _, attrs) => {
-                    if !declared_in_batch.insert(name.clone()) {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", name),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
-                    if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", name),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
+                    self.reject_duplicate_top_level_declaration(
+                        &mut declared_in_batch,
+                        name,
+                        name,
+                        span,
+                    )?;
                     let qualified_name = if attrs.visibility == Visibility::Public {
                         self.qualify_current_declaration_name(name)
                     } else {
                         self.qualify_current_declaration_name(&format!("__const__::{}", name))
                     };
-                    let uid = self
-                        .declaration_uids
-                        .get(&qualified_name)
-                        .copied()
-                        .unwrap_or_else(|| {
-                            let fresh = self.scope.reserve_id();
-                            self.declaration_uids.insert(qualified_name.clone(), fresh);
-                            fresh
-                        });
-                    self.predeclared_ids
-                        .entry(name.clone())
-                        .or_default()
-                        .push_back(uid);
-                    self.declaration_uid_kinds
-                        .insert(uid, DeclarationKind::Const);
-                    self.scope.define_with_id(name, uid);
-                    define_global_surface_alias(&mut self.scope, &qualified_name, uid);
+                    let uid = self.reserve_declaration_uid(&qualified_name);
+                    self.record_predeclared_uid(name, uid, DeclarationKind::Const);
+                    self.predeclare_scope_binding(name, uid, Some(&qualified_name));
                 }
                 Ast::TraitDef(span, name, _type_params, methods, _) => {
-                    if !declared_in_batch.insert(name.clone()) {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", name),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
-                    if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", name),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
+                    self.reject_duplicate_top_level_declaration(
+                        &mut declared_in_batch,
+                        name,
+                        name,
+                        span,
+                    )?;
                     let qualified_trait = self.qualify_current_declaration_name(name);
-                    let uid = self
-                        .declaration_uids
-                        .get(&qualified_trait)
-                        .copied()
-                        .unwrap_or_else(|| {
-                            let fresh = self.scope.reserve_id();
-                            self.declaration_uids.insert(qualified_trait.clone(), fresh);
-                            fresh
-                        });
-                    self.predeclared_ids
-                        .entry(name.clone())
-                        .or_default()
-                        .push_back(uid);
-                    self.declaration_uid_kinds
-                        .insert(uid, DeclarationKind::Trait);
-                    self.scope.define_with_id(name, uid);
+                    let uid = self.reserve_declaration_uid(&qualified_trait);
+                    self.record_predeclared_uid(name, uid, DeclarationKind::Trait);
+                    self.predeclare_scope_binding(name, uid, None);
 
                     for method in methods {
                         let method_alias = trait_method_qualified_name(name, &method.name);
@@ -1586,45 +1549,19 @@ impl Resolver {
                             &self.qualify_current_declaration_name(name),
                             &method.name,
                         );
-                        if !declared_in_batch.insert(method_alias.clone()) {
-                            return Err(ResolveError {
-                                message: format!(
-                                    "Duplicate top-level definition: {}",
-                                    method_alias
-                                ),
-                                span: method.span.clone(),
-                                related_labels: Vec::new(),
-                            });
-                        }
-                        if !self.allow_top_level_shadowing
-                            && self.scope.lookup(&method_alias).is_some()
-                        {
-                            return Err(ResolveError {
-                                message: format!(
-                                    "Duplicate top-level definition: {}",
-                                    method_alias
-                                ),
-                                span: method.span.clone(),
-                                related_labels: Vec::new(),
-                            });
-                        }
-                        let method_uid = self
-                            .declaration_uids
-                            .get(&qualified_method)
-                            .copied()
-                            .unwrap_or_else(|| {
-                                let fresh = self.scope.reserve_id();
-                                self.declaration_uids
-                                    .insert(qualified_method.clone(), fresh);
-                                fresh
-                            });
-                        self.predeclared_ids
-                            .entry(method_alias.clone())
-                            .or_default()
-                            .push_back(method_uid);
-                        self.declaration_uid_kinds
-                            .insert(method_uid, DeclarationKind::TraitMethod);
-                        self.scope.define_with_id(&method_alias, method_uid);
+                        self.reject_duplicate_top_level_declaration(
+                            &mut declared_in_batch,
+                            &method_alias,
+                            &method_alias,
+                            &method.span,
+                        )?;
+                        let method_uid = self.reserve_declaration_uid(&qualified_method);
+                        self.record_predeclared_uid(
+                            &method_alias,
+                            method_uid,
+                            DeclarationKind::TraitMethod,
+                        );
+                        self.predeclare_scope_binding(&method_alias, method_uid, None);
                     }
                 }
                 Ast::BuiltinDecl(_, name, _, _, _) => {
@@ -1632,107 +1569,51 @@ impl Resolver {
                         continue;
                     }
                     if !declared_in_batch.insert(name.clone()) {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", name),
-                            span: stmt.span().clone(),
-                            related_labels: Vec::new(),
-                        });
+                        return Err(Self::duplicate_top_level_definition_error(
+                            name,
+                            stmt.span(),
+                        ));
                     }
                     // Builtins are keyed by fixed IDs from builtin metadata.
                     // Re-declarations should keep that identity stable.
-                    let uid = self
-                        .scope
-                        .lookup(name)
-                        .unwrap_or_else(|| self.scope.reserve_id());
-                    self.predeclared_ids
-                        .entry(name.clone())
-                        .or_default()
-                        .push_back(uid);
-                    self.declaration_uid_kinds.insert(uid, DeclarationKind::Def);
-                    self.scope.define_with_id(name, uid);
+                    let uid = self.reserve_scope_uid(name);
+                    self.record_predeclared_uid(name, uid, DeclarationKind::Def);
+                    self.predeclare_scope_binding(name, uid, None);
                 }
                 Ast::IntrinsicDecl(_, _, _, _) => continue,
                 Ast::BuiltinExtractorDecl(_, name, _, _, _) => {
                     if !declared_in_batch.insert(name.clone()) {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", name),
-                            span: stmt.span().clone(),
-                            related_labels: Vec::new(),
-                        });
+                        return Err(Self::duplicate_top_level_definition_error(
+                            name,
+                            stmt.span(),
+                        ));
                     }
-                    let uid = self
-                        .scope
-                        .lookup(name)
-                        .unwrap_or_else(|| self.scope.reserve_id());
-                    self.predeclared_ids
-                        .entry(name.clone())
-                        .or_default()
-                        .push_back(uid);
-                    self.declaration_uid_kinds
-                        .insert(uid, DeclarationKind::Extractor);
-                    self.scope.define_with_id(name, uid);
+                    let uid = self.reserve_scope_uid(name);
+                    self.record_predeclared_uid(name, uid, DeclarationKind::Extractor);
+                    self.predeclare_scope_binding(name, uid, None);
                 }
                 Ast::ResultCtorDecl(span, name, _, _, _) => {
-                    if !declared_in_batch.insert(name.clone()) {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", name),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
-                    if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", name),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
-                    let uid = self
-                        .scope
-                        .lookup(name)
-                        .unwrap_or_else(|| self.scope.reserve_id());
-                    self.predeclared_ids
-                        .entry(name.clone())
-                        .or_default()
-                        .push_back(uid);
-                    self.declaration_uid_kinds
-                        .insert(uid, DeclarationKind::ResultCtor);
-                    self.scope.define_with_id(name, uid);
-                    define_global_surface_alias(&mut self.scope, name, uid);
+                    self.reject_duplicate_top_level_declaration(
+                        &mut declared_in_batch,
+                        name,
+                        name,
+                        span,
+                    )?;
+                    let uid = self.reserve_scope_uid(name);
+                    self.record_predeclared_uid(name, uid, DeclarationKind::ResultCtor);
+                    self.predeclare_scope_binding(name, uid, Some(name));
                 }
                 Ast::BuiltinTypeDecl(span, head, _) => {
                     let surface = global_surface_name(&head.name).to_string();
-                    if !declared_in_batch.insert(surface.clone()) {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", surface),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
-                    if !self.allow_top_level_shadowing && self.scope.lookup(&head.name).is_some() {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", surface),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
-                    let uid = self
-                        .declaration_uids
-                        .get(&head.name)
-                        .copied()
-                        .unwrap_or_else(|| {
-                            let fresh = self.scope.reserve_id();
-                            self.declaration_uids.insert(head.name.clone(), fresh);
-                            fresh
-                        });
-                    self.predeclared_ids
-                        .entry(head.name.clone())
-                        .or_default()
-                        .push_back(uid);
-                    self.declaration_uid_kinds
-                        .insert(uid, DeclarationKind::BuiltinType);
-                    self.scope.define_with_id(&head.name, uid);
-                    define_global_surface_alias(&mut self.scope, &head.name, uid);
+                    self.reject_duplicate_top_level_declaration(
+                        &mut declared_in_batch,
+                        &surface,
+                        &head.name,
+                        span,
+                    )?;
+                    let uid = self.reserve_declaration_uid(&head.name);
+                    self.record_predeclared_uid(&head.name, uid, DeclarationKind::BuiltinType);
+                    self.predeclare_scope_binding(&head.name, uid, Some(&head.name));
                 }
                 Ast::StructDef(span, name, ..)
                 | Ast::RecordDef(span, name, _, _)
@@ -1748,40 +1629,19 @@ impl Resolver {
                             related_labels: Vec::new(),
                         });
                     }
-                    if !declared_in_batch.insert(surface.clone()) {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", surface),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
-                    if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", surface),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
+                    self.reject_duplicate_top_level_declaration(
+                        &mut declared_in_batch,
+                        &surface,
+                        name,
+                        span,
+                    )?;
                     let qualified_name = name.clone();
-                    let uid = self
-                        .declaration_uids
-                        .get(&qualified_name)
-                        .copied()
-                        .unwrap_or_else(|| {
-                            let fresh = self.scope.reserve_id();
-                            self.declaration_uids.insert(qualified_name.clone(), fresh);
-                            fresh
-                        });
-                    self.predeclared_ids
-                        .entry(name.clone())
-                        .or_default()
-                        .push_back(uid);
+                    let uid = self.reserve_declaration_uid(&qualified_name);
                     let Some(kind) = type_declaration_kind(stmt) else {
                         continue;
                     };
-                    self.declaration_uid_kinds.insert(uid, kind);
-                    self.scope.define_with_id(name, uid);
-                    define_global_surface_alias(&mut self.scope, name, uid);
+                    self.record_predeclared_uid(name, uid, kind);
+                    self.predeclare_scope_binding(name, uid, Some(name));
                 }
                 Ast::EnumDef(span, name, _, variants, _) => {
                     let surface = global_surface_name(name).to_string();
@@ -1795,80 +1655,36 @@ impl Resolver {
                             related_labels: Vec::new(),
                         });
                     }
-                    if !declared_in_batch.insert(surface.clone()) {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", surface),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
-                    if !self.allow_top_level_shadowing && self.scope.lookup(name).is_some() {
-                        return Err(ResolveError {
-                            message: format!("Duplicate top-level definition: {}", surface),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
+                    self.reject_duplicate_top_level_declaration(
+                        &mut declared_in_batch,
+                        &surface,
+                        name,
+                        span,
+                    )?;
                     let qualified_enum = name.clone();
-                    let uid = self
-                        .declaration_uids
-                        .get(&qualified_enum)
-                        .copied()
-                        .unwrap_or_else(|| {
-                            let fresh = self.scope.reserve_id();
-                            self.declaration_uids.insert(qualified_enum.clone(), fresh);
-                            fresh
-                        });
-                    self.predeclared_ids
-                        .entry(name.clone())
-                        .or_default()
-                        .push_back(uid);
-                    self.declaration_uid_kinds
-                        .insert(uid, DeclarationKind::Enum);
-                    self.scope.define_with_id(name, uid);
-                    define_global_surface_alias(&mut self.scope, name, uid);
+                    let uid = self.reserve_declaration_uid(&qualified_enum);
+                    self.record_predeclared_uid(name, uid, DeclarationKind::Enum);
+                    self.predeclare_scope_binding(name, uid, Some(name));
 
                     for variant in variants {
                         let qualified_ctor = format!("{}::{}", name, variant.name);
-                        if !declared_in_batch.insert(qualified_ctor.clone()) {
-                            return Err(ResolveError {
-                                message: format!(
-                                    "Duplicate top-level definition: {}",
-                                    qualified_ctor
-                                ),
-                                span: variant.span.clone(),
-                                related_labels: Vec::new(),
-                            });
-                        }
-                        if !self.allow_top_level_shadowing
-                            && self.scope.lookup(&qualified_ctor).is_some()
-                        {
-                            return Err(ResolveError {
-                                message: format!(
-                                    "Duplicate top-level definition: {}",
-                                    qualified_ctor
-                                ),
-                                span: variant.span.clone(),
-                                related_labels: Vec::new(),
-                            });
-                        }
-                        let ctor_uid = self
-                            .declaration_uids
-                            .get(&qualified_ctor)
-                            .copied()
-                            .unwrap_or_else(|| {
-                                let fresh = self.scope.reserve_id();
-                                self.declaration_uids.insert(qualified_ctor.clone(), fresh);
-                                fresh
-                            });
-                        self.predeclared_ids
-                            .entry(qualified_ctor.clone())
-                            .or_default()
-                            .push_back(ctor_uid);
-                        self.declaration_uid_kinds
-                            .insert(ctor_uid, DeclarationKind::EnumVariant);
-                        self.scope.define_with_id(&qualified_ctor, ctor_uid);
-                        define_global_surface_alias(&mut self.scope, &qualified_ctor, ctor_uid);
+                        self.reject_duplicate_top_level_declaration(
+                            &mut declared_in_batch,
+                            &qualified_ctor,
+                            &qualified_ctor,
+                            &variant.span,
+                        )?;
+                        let ctor_uid = self.reserve_declaration_uid(&qualified_ctor);
+                        self.record_predeclared_uid(
+                            &qualified_ctor,
+                            ctor_uid,
+                            DeclarationKind::EnumVariant,
+                        );
+                        self.predeclare_scope_binding(
+                            &qualified_ctor,
+                            ctor_uid,
+                            Some(&qualified_ctor),
+                        );
                     }
                 }
                 Ast::TraitImplDef(_, _, _, _, _, _) => {}
