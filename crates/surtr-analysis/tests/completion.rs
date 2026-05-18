@@ -3,8 +3,8 @@ use sindr::ir::{DocEntry, DocKind, SignatureEntry};
 use spire::ast::Visibility;
 use surtr_analysis::{
     complete_prefix, lookup_symbol_at_cursor, rank_completion_candidates_by_expected_type,
-    signature_help_at_cursor, CompletionCandidate, CompletionKind, CompletionOrigin,
-    CompletionRequest, CompletionScope, CompletionSymbol, SemanticIndex,
+    repl_assist_at_cursor, signature_help_at_cursor, CompletionCandidate, CompletionKind,
+    CompletionOrigin, CompletionRequest, CompletionScope, CompletionSymbol, SemanticIndex,
 };
 
 #[test]
@@ -320,6 +320,98 @@ fn semantic_index_returns_signature_help_from_call_context() {
     assert_eq!(help.active_parameter, 1);
     assert_eq!(help.callee_start, 0);
     assert_eq!(help.callee_end, "print".len());
+}
+
+#[test]
+fn repl_assist_combines_call_signature_and_argument_variable_completion() {
+    let index = SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "print".to_string(),
+            replacement: "print".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("print(value: String, newline: Bool) -> Unit".to_string()),
+            documentation: Some("Writes a line.".to_string()),
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "name".to_string(),
+            replacement: "name".to_string(),
+            kind: CompletionKind::Variable,
+            detail: Some("String".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "normalize".to_string(),
+            replacement: "normalize".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("normalize(value: String) -> String".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+    ]);
+
+    let assist = repl_assist_at_cursor(
+        CompletionRequest {
+            index: &index,
+            source: "print(",
+            cursor: "print(".len(),
+        },
+        CompletionScope::VariablesOnly,
+    );
+
+    assert_eq!(assist.active_parameter, Some(0));
+    assert_eq!(
+        assist
+            .signature
+            .as_ref()
+            .map(|signature| signature.signature.as_str()),
+        Some("print(value: String, newline: Bool) -> Unit")
+    );
+    assert_eq!(
+        assist
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["name"]
+    );
+    assert_eq!(assist.replace_start, "print(".len());
+    assert_eq!(assist.replace_end, "print(".len());
+}
+
+#[test]
+fn repl_assist_preserves_repl_tail_presentation() {
+    let index = SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "String::repeat".to_string(),
+        replacement: "String::repeat".to_string(),
+        kind: CompletionKind::FunctionCall,
+        detail: Some("String::repeat(self: String, times: Int) -> String".to_string()),
+        documentation: None,
+        sort_text: None,
+        origin: None,
+        definition: None,
+    }]);
+
+    let assist = repl_assist_at_cursor(
+        CompletionRequest {
+            index: &index,
+            source: "re",
+            cursor: "re".len(),
+        },
+        CompletionScope::All,
+    );
+
+    assert_eq!(assist.signature, None);
+    assert_eq!(assist.candidates.len(), 1);
+    assert_eq!(assist.candidates[0].label, "repeat");
+    assert_eq!(assist.candidates[0].replacement, "repeat");
 }
 
 #[test]

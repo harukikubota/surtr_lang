@@ -1528,6 +1528,18 @@ impl ReplEngine {
             insert_signature(&label, qualified_name.to_string(), signature.clone());
         }
 
+        let mut seen_bindings = BTreeSet::new();
+        for binding in self.binding_records.iter().rev() {
+            if !seen_bindings.insert(binding.name.as_str()) {
+                continue;
+            }
+            if let Some(signature) =
+                Self::callable_binding_signature_from_type(&binding.name, &binding.ty)
+            {
+                insert_signature(&binding.name, binding.name.clone(), signature);
+            }
+        }
+
         ReplCompletionContext {
             index: self.semantic_index(),
             callable_signatures,
@@ -1565,6 +1577,21 @@ impl ReplEngine {
             replace_start: candidate.replace_start,
             replace_end: candidate.replace_end,
         }
+    }
+
+    fn callable_binding_signature_from_type(binding_name: &str, ty: &str) -> Option<String> {
+        let AstTy::Func(_, params, ret) = parse_signature_type(ty)? else {
+            return None;
+        };
+        let params = params
+            .iter()
+            .map(format_query_ty)
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(format!(
+            "{binding_name}({params}) -> {}",
+            format_query_ty(ret.as_ref())
+        ))
     }
 
     fn declaration_is_function_completion_surface(entry: &sigil::DeclarationEntry) -> bool {

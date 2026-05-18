@@ -7,13 +7,13 @@ use spire::{SyntaxOutlineItem, SyntaxOutlineKind};
 
 use crate::{
     complete_prefix, extract_project_runner_input, lookup_symbol_at_cursor, parse_document,
-    parse_document_tolerant, resolve_context, resolve_project_runner_with,
+    parse_document_tolerant, repl_assist_at_cursor, resolve_context, resolve_project_runner_with,
     signature_help_at_cursor, AnalysisContextRequest, AnalysisContextStatus, AnalysisMode,
-    AnalysisSpan, CompletionKind, CompletionRequest, CompletionResponse, CompletionSymbol,
-    DocumentSnapshot, DocumentStore, LineIndex, ProjectRunnerInput, ProjectRunnerSourceInput,
-    ResolvedAnalysisContext, RunnerContext, RunnerDiagnostic, RunnerDiagnosticKind,
-    ScriptProjectContext, SelectedContext, SemanticIndex, SourceLocation, TextPosition,
-    Utf16Position,
+    AnalysisSpan, CompletionKind, CompletionRequest, CompletionResponse, CompletionScope,
+    CompletionSymbol, DocumentSnapshot, DocumentStore, LineIndex, ProjectRunnerInput,
+    ProjectRunnerSourceInput, ReplAssist, ResolvedAnalysisContext, RunnerContext, RunnerDiagnostic,
+    RunnerDiagnosticKind, ScriptProjectContext, SelectedContext, SemanticIndex, SourceLocation,
+    TextPosition, Utf16Position,
 };
 
 pub trait AnalysisHost: std::fmt::Debug + Send + Sync {
@@ -300,6 +300,29 @@ impl AnalysisService {
             source: &document.text,
             cursor,
         })
+    }
+
+    pub fn repl_assist(
+        &self,
+        snapshot: &AnalysisSnapshot,
+        position: Utf16Position,
+        scope: CompletionScope,
+    ) -> ReplAssist {
+        let Some(document) = snapshot.active_document.as_ref() else {
+            return ReplAssist::default();
+        };
+        let Some(cursor) = document.line_index.utf16_position_to_byte(position) else {
+            return ReplAssist::default();
+        };
+
+        repl_assist_at_cursor(
+            CompletionRequest {
+                index: &snapshot.semantic_index,
+                source: &document.text,
+                cursor,
+            },
+            scope,
+        )
     }
 
     pub fn hover(

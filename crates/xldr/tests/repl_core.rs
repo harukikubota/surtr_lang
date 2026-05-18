@@ -317,6 +317,7 @@ fn core_completion_returns_type_constructors_and_type_paths() {
 #[test]
 fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
     let engine = engine();
+    let completion_context = engine.completion_context();
 
     for (prefix, expected) in [
         ("Str", "String"),
@@ -325,7 +326,7 @@ fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
         ("IO", "IO"),
         ("Jso", "Json"),
     ] {
-        let candidate = engine
+        let candidate = completion_context
             .completions(prefix, prefix.len())
             .candidates
             .into_iter()
@@ -334,7 +335,7 @@ fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
         assert_eq!(candidate.kind, ReplCompletionKind::TypeConstructor);
     }
 
-    let string_repeat = engine
+    let string_repeat = completion_context
         .completions("String::re", "String::re".len())
         .candidates
         .into_iter()
@@ -342,7 +343,7 @@ fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
         .expect("qualified String helper should be suggested");
     assert_eq!(string_repeat.kind, ReplCompletionKind::TypePath);
 
-    let facet_view = engine
+    let facet_view = completion_context
         .completions("Facet::v", "Facet::v".len())
         .candidates
         .into_iter()
@@ -350,7 +351,7 @@ fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
         .expect("qualified Facet helper should be suggested");
     assert_eq!(facet_view.kind, ReplCompletionKind::TypePath);
 
-    let all_labels = engine
+    let all_labels = completion_context
         .completions("M", 1)
         .candidates
         .into_iter()
@@ -372,7 +373,7 @@ fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
         "Closure",
     ];
     for name in excluded {
-        let labels = engine
+        let labels = completion_context
             .completions(name, name.len())
             .candidates
             .into_iter()
@@ -2749,6 +2750,26 @@ fn core_sig_supports_closure_bindings_recapture_and_application() {
         recapture_query.contains("Invalid typed call query callee `&a`"),
         "{recapture_query}"
     );
+}
+
+#[test]
+fn core_completion_shows_signature_for_callable_binding_calls() {
+    let mut engine = engine();
+
+    let closure = engine.handle_line("formatter = {|value: Int| to_string(value)}");
+    let closure_text = rendered_text(&closure);
+    assert!(
+        closure_text.contains("formatter: (Int -> String)"),
+        "{closure_text}"
+    );
+
+    let completion = engine.completions("formatter(", "formatter(".len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("callable binding call-site should show signature help");
+    assert_eq!(signature.active_parameter, Some(0));
+    assert_eq!(signature.lines.join("\n"), "formatter([Int]) -> String");
 }
 
 #[test]

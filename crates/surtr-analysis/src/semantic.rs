@@ -234,6 +234,15 @@ pub struct CompletionResponse {
     pub replace_end: usize,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReplAssist {
+    pub candidates: Vec<CompletionCandidate>,
+    pub replace_start: usize,
+    pub replace_end: usize,
+    pub signature: Option<SignatureLookup>,
+    pub active_parameter: Option<usize>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolLookup {
     pub symbol: CompletionSymbol,
@@ -258,6 +267,22 @@ pub fn complete_repl_prefix(
     scope: CompletionScope,
 ) -> CompletionResponse {
     complete_prefix_with_options(request, scope, CompletionPresentation::Repl)
+}
+
+pub fn repl_assist_at_cursor(request: CompletionRequest<'_>, scope: CompletionScope) -> ReplAssist {
+    let completion = complete_repl_prefix(request, scope);
+    let signature = signature_help_at_cursor(request.index, request.source, request.cursor);
+    let active_parameter = signature
+        .as_ref()
+        .map(|signature| signature.active_parameter);
+
+    ReplAssist {
+        candidates: completion.candidates,
+        replace_start: completion.replace_start,
+        replace_end: completion.replace_end,
+        signature,
+        active_parameter,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use surtr_analysis::{
     resolve_context, AnalysisContextRequest, AnalysisDiagnosticKind, AnalysisHost, AnalysisMode,
-    AnalysisService, CompletionKind, CompletionSymbol, ProjectRunnerInput,
+    AnalysisService, CompletionKind, CompletionScope, CompletionSymbol, ProjectRunnerInput,
     ProjectRunnerSourceInput, RunnerContext, RunnerSelection, SelectedContext, SemanticIndex,
     Utf16Position,
 };
@@ -622,6 +622,63 @@ fn analysis_service_completions_use_snapshot_semantic_index_and_utf16_position()
     assert_eq!(completion.candidates[0].label, "print");
     assert_eq!(completion.replace_start, 0);
     assert_eq!(completion.replace_end, 3);
+}
+
+#[test]
+fn analysis_service_repl_assist_uses_repl_scope_and_signature_help() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    service.update_document(path.clone(), Some(1), "print(".to_string());
+    service.set_semantic_index(SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "print".to_string(),
+            replacement: "print".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("print(value: String) -> Unit".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "name".to_string(),
+            replacement: "name".to_string(),
+            kind: CompletionKind::Variable,
+            detail: Some("String".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+    ]));
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(path)),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let assist = service.repl_assist(
+        &snapshot,
+        Utf16Position {
+            line: 0,
+            character: "print(".len() as u32,
+        },
+        CompletionScope::VariablesOnly,
+    );
+
+    assert_eq!(
+        assist
+            .signature
+            .as_ref()
+            .map(|signature| signature.signature.as_str()),
+        Some("print(value: String) -> Unit")
+    );
+    assert_eq!(assist.active_parameter, Some(0));
+    assert_eq!(assist.candidates.len(), 1);
+    assert_eq!(assist.candidates[0].label, "name");
 }
 
 #[test]

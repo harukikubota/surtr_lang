@@ -411,7 +411,7 @@ fn repl_completion_latency_smoke_reports_positive_samples_over_pty() {
     for _ in 0..5 {
         let start = Instant::now();
         let baseline_len = buffer.len();
-        session.write_all(b"r");
+        session.write_all(b"r\t");
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             buffer.extend(session.read_available());
