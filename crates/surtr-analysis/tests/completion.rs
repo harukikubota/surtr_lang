@@ -152,7 +152,7 @@ fn completion_request_matches_qualified_symbol_tail_for_unqualified_prefix() {
 }
 
 #[test]
-fn repl_completion_presents_visible_tail_for_unqualified_prefix_and_paths_for_qualified_prefix() {
+fn repl_completion_requires_unqualified_symbols_for_unqualified_prefix() {
     let index = SemanticIndex::from_symbols(vec![CompletionSymbol {
         label: "String::repeat".to_string(),
         replacement: "String::repeat".to_string(),
@@ -163,6 +163,44 @@ fn repl_completion_presents_visible_tail_for_unqualified_prefix_and_paths_for_qu
         origin: None,
         definition: None,
     }]);
+
+    let unqualified = surtr_analysis::complete_repl_prefix(
+        CompletionRequest {
+            index: &index,
+            source: "re",
+            cursor: 2,
+        },
+        CompletionScope::All,
+    );
+
+    assert!(
+        unqualified.candidates.is_empty(),
+        "qualified-only symbols must not leak into unqualified REPL completion: {:?}",
+        unqualified.candidates
+    );
+
+    let index = SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "String::repeat".to_string(),
+            replacement: "String::repeat".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("String::repeat(self: String, times: Int) -> String".to_string()),
+            documentation: Some("Repeat text.".to_string()),
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "repeat".to_string(),
+            replacement: "repeat".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("String::repeat(self: String, times: Int) -> String".to_string()),
+            documentation: Some("Repeat text.".to_string()),
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+    ]);
 
     let unqualified = surtr_analysis::complete_repl_prefix(
         CompletionRequest {
@@ -388,16 +426,28 @@ fn repl_assist_combines_call_signature_and_argument_variable_completion() {
 
 #[test]
 fn repl_assist_preserves_repl_tail_presentation() {
-    let index = SemanticIndex::from_symbols(vec![CompletionSymbol {
-        label: "String::repeat".to_string(),
-        replacement: "String::repeat".to_string(),
-        kind: CompletionKind::FunctionCall,
-        detail: Some("String::repeat(self: String, times: Int) -> String".to_string()),
-        documentation: None,
-        sort_text: None,
-        origin: None,
-        definition: None,
-    }]);
+    let index = SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "String::repeat".to_string(),
+            replacement: "String::repeat".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("String::repeat(self: String, times: Int) -> String".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "repeat".to_string(),
+            replacement: "repeat".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("String::repeat(self: String, times: Int) -> String".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+    ]);
 
     let assist = repl_assist_at_cursor(
         CompletionRequest {

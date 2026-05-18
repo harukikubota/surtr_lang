@@ -1376,6 +1376,26 @@ impl ReplEngine {
                 origin: None,
                 definition: None,
             });
+            if let Some(tail) = crate::surface_path_name(&entry.qualified_name)
+                .rsplit("::")
+                .next()
+                .filter(|tail| self.visible_uid_matches(tail, &entry.qualified_name))
+            {
+                symbols.push(surtr_analysis::CompletionSymbol {
+                    label: tail.to_string(),
+                    replacement: tail.to_string(),
+                    kind: surtr_analysis::CompletionKind::FunctionCall,
+                    detail: self
+                        .find_signature(tail)
+                        .map(|(qualified_name, signature)| {
+                            Self::render_signature_with_qualified_name(&qualified_name, signature)
+                        }),
+                    documentation: Some(entry.doc.clone()),
+                    sort_text: None,
+                    origin: None,
+                    definition: None,
+                });
+            }
         }
 
         for decl in self.declaration_index.values() {
@@ -1410,6 +1430,29 @@ impl ReplEngine {
                     origin: None,
                     definition: None,
                 });
+                if let Some(tail) = crate::surface_path_name(&decl.fq_name)
+                    .rsplit("::")
+                    .next()
+                    .filter(|tail| self.visible_uid_matches(tail, &decl.fq_name))
+                {
+                    symbols.push(surtr_analysis::CompletionSymbol {
+                        label: tail.to_string(),
+                        replacement: tail.to_string(),
+                        kind: surtr_analysis::CompletionKind::FunctionCall,
+                        detail: self
+                            .find_signature(tail)
+                            .map(|(qualified_name, signature)| {
+                                Self::render_signature_with_qualified_name(
+                                    &qualified_name,
+                                    signature,
+                                )
+                            }),
+                        documentation: None,
+                        sort_text: None,
+                        origin: None,
+                        definition: None,
+                    });
+                }
             }
         }
 
@@ -1466,6 +1509,20 @@ impl ReplEngine {
                 origin: None,
                 definition: None,
             });
+            if let Some(tail) = crate::surface_path_name(qualified_name).rsplit("::").next() {
+                symbols.push(surtr_analysis::CompletionSymbol {
+                    label: tail.to_string(),
+                    replacement: tail.to_string(),
+                    kind: surtr_analysis::CompletionKind::FunctionCall,
+                    detail: entry.signature.clone().map(|signature| {
+                        Self::render_signature_with_qualified_name(qualified_name, signature)
+                    }),
+                    documentation: None,
+                    sort_text: None,
+                    origin: None,
+                    definition: None,
+                });
+            }
         }
 
         surtr_analysis::SemanticIndex::from_symbols(symbols)

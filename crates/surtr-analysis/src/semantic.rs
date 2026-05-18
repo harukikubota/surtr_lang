@@ -314,7 +314,14 @@ fn complete_prefix_with_options(
         .symbols()
         .iter()
         .filter(|symbol| completion_scope_accepts(scope, symbol))
-        .filter(|symbol| prefix.is_empty() || completion_symbol_matches_prefix(symbol, &prefix))
+        .filter(|symbol| {
+            prefix.is_empty()
+                || completion_symbol_matches_prefix(
+                    symbol,
+                    &prefix,
+                    presentation == CompletionPresentation::Full || prefix.contains("::"),
+                )
+        })
     {
         let mut candidate = CompletionCandidate {
             label: symbol.label.clone(),
@@ -576,12 +583,17 @@ fn active_call_parameter(args: &str) -> usize {
     active
 }
 
-fn completion_symbol_matches_prefix(symbol: &CompletionSymbol, prefix: &str) -> bool {
+fn completion_symbol_matches_prefix(
+    symbol: &CompletionSymbol,
+    prefix: &str,
+    allow_tail_match: bool,
+) -> bool {
     symbol.label.starts_with(prefix)
-        || symbol
-            .label
-            .rsplit_once("::")
-            .is_some_and(|(_, tail)| tail.starts_with(prefix))
+        || (allow_tail_match
+            && symbol
+                .label
+                .rsplit_once("::")
+                .is_some_and(|(_, tail)| tail.starts_with(prefix)))
 }
 
 fn completion_kind_for_doc_kind(kind: &DocKind) -> CompletionKind {

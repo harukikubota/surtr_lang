@@ -315,6 +315,47 @@ fn core_completion_returns_type_constructors_and_type_paths() {
 }
 
 #[test]
+fn core_completion_only_shows_unqualified_importable_functions_after_import() {
+    let mut engine = engine();
+
+    let labels_before = engine
+        .completions("a", 1)
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        !labels_before.iter().any(|label| label == "abs"),
+        "Float::abs should not be suggested as a bare call before import: {labels_before:?}"
+    );
+    assert!(
+        engine
+            .completions("Float::a", "Float::a".len())
+            .candidates
+            .iter()
+            .any(|candidate| candidate.label == "Float::abs"),
+        "qualified Float::abs completion should remain available"
+    );
+
+    let imported = rendered_text(&engine.handle_line("import Float::abs"));
+    assert!(
+        imported.contains("Imported Float::abs"),
+        "import should succeed before testing completion: {imported}"
+    );
+
+    let labels_after = engine
+        .completions("a", 1)
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        labels_after.iter().any(|label| label == "abs"),
+        "Float::abs should be suggested as a bare call after import: {labels_after:?}"
+    );
+}
+
+#[test]
 fn core_completion_is_enabled_inside_string_interpolation_only() {
     let engine = engine();
     let string_body = r#""plain Str"#;
