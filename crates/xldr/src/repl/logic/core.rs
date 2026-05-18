@@ -378,11 +378,22 @@ impl ReplCompletionContext {
         }
         let (replace_start, replace_end, prefix) = completion_token(input, cursor);
         let call_context = completion_call_context(input, cursor);
+        let operator_assist = if call_context.is_none() {
+            spire::parse_operator_completion_context(input, cursor)
+                .and_then(|context| self.operator_completion_assist(input, &context))
+        } else {
+            None
+        };
         let signature = call_context
             .as_ref()
             .and_then(|context| self.signature_help_for_call(context));
+        let signature = signature.or_else(|| {
+            operator_assist
+                .as_ref()
+                .map(|assist| assist.signature.clone())
+        });
 
-        if call_context.is_none() && prefix.is_empty() {
+        if call_context.is_none() && operator_assist.is_none() && prefix.is_empty() {
             let mut telemetry = CompletionTelemetry::default();
             telemetry.record_completion_compute(started.elapsed());
             return ReplCompletion {
@@ -418,6 +429,15 @@ impl ReplCompletionContext {
             } else {
                 completion
             }
+        } else if let Some(assist) = operator_assist.as_ref() {
+            self.operator_completion_candidates(
+                &prefix,
+                replace_start,
+                replace_end,
+                assist.candidate_mode,
+                assist.expected_type.as_deref(),
+                assist.expected_callable_return_context.as_deref(),
+            )
         } else {
             surtr_analysis::complete_repl_prefix(
                 completion_request,
@@ -430,7 +450,7 @@ impl ReplCompletionContext {
             .into_iter()
             .map(ReplEngine::repl_completion_candidate_from_analysis)
             .collect::<Vec<_>>();
-        if call_context.is_none() {
+        if call_context.is_none() && operator_assist.is_none() {
             self.inject_special_repl_candidates(
                 &mut candidates,
                 &prefix,
@@ -453,7 +473,9 @@ impl ReplCompletionContext {
             return false;
         }
         let (_, _, prefix) = completion_token(input, cursor);
-        completion_call_context(input, cursor).is_some() || !prefix.is_empty()
+        completion_call_context(input, cursor).is_some()
+            || spire::parse_operator_completion_context(input, cursor).is_some()
+            || !prefix.is_empty()
     }
 
     fn signature_help_for_call(
@@ -471,6 +493,565 @@ impl ReplCompletionContext {
             )],
             active_parameter: Some(context.active_parameter),
         })
+    }
+
+    fn operator_completion_assist(
+        &self,
+        input: &str,
+        context: &spire::OperatorCompletionContext,
+    ) -> Option<OperatorCompletionAssist> {
+        let mut rendered = String::new();
+        let mut current_ty = None;
+
+        for (idx, stage) in context.stages.iter().enumerate() {
+            let lhs_ty = if idx == 0 {
+                self.infer_completion_operand_type(input, &stage.lhs)
+            } else {
+                current_ty.clone()
+            };
+            if idx == 0 {
+                rendered.push_str(&Self::display_completion_ty(lhs_ty.as_ref()));
+            }
+
+            if let Some(rhs) = &stage.rhs {
+                let (rhs_display, result_ty) = self.completed_operator_stage(
+                    input,
+                    stage.operator.as_str(),
+                    lhs_ty.as_ref(),
+                    rhs,
+                );
+                rendered.push_str(&format!(" {} {}", stage.operator, rhs_display));
+                current_ty = result_ty;
+                continue;
+            }
+
+            let expected = Self::active_operator_expected(stage.operator.as_str(), lhs_ty.as_ref());
+            rendered.push_str(&format!(" {} [{}]", stage.operator, expected.display));
+            return Some(OperatorCompletionAssist {
+                signature: ReplSignatureHelp {
+                    lines: vec![rendered],
+                    active_parameter: Some(0),
+                },
+                expected_type: expected.candidate_expected_type,
+                expected_callable_return_context: expected.candidate_expected_return_context,
+                candidate_mode: expected.candidate_mode,
+            });
+        }
+
+        None
+    }
+
+    fn operator_completion_candidates(
+        &self,
+        prefix: &str,
+        replace_start: usize,
+        replace_end: usize,
+        mode: OperatorCompletionCandidateMode,
+        expected_type: Option<&str>,
+        expected_callable_return_context: Option<&str>,
+    ) -> surtr_analysis::CompletionResponse {
+        let mut candidates = Vec::new();
+        for symbol in self.index.symbols() {
+            if !Self::operator_candidate_mode_accepts(mode, symbol) {
+                continue;
+            }
+            let Some((label, replacement)) = Self::operator_completion_label(symbol, prefix) else {
+                continue;
+            };
+            let candidate = surtr_analysis::CompletionCandidate {
+                label,
+                replacement,
+                kind: symbol.kind.clone(),
+                detail: symbol.detail.clone(),
+                documentation: symbol.documentation.clone(),
+                sort_text: symbol.sort_text.clone(),
+                origin: symbol.origin.clone(),
+                replace_start,
+                replace_end,
+            };
+            Self::push_operator_completion_candidate(&mut candidates, candidate);
+        }
+
+        candidates.sort_by(|left, right| {
+            let left_matches = self.operator_candidate_matches_expected(
+                left,
+                mode,
+                expected_type,
+                expected_callable_return_context,
+            );
+            let right_matches = self.operator_candidate_matches_expected(
+                right,
+                mode,
+                expected_type,
+                expected_callable_return_context,
+            );
+            right_matches
+                .cmp(&left_matches)
+                .then_with(|| {
+                    Self::analysis_completion_kind_rank(&left.kind)
+                        .cmp(&Self::analysis_completion_kind_rank(&right.kind))
+                })
+                .then_with(|| left.label.cmp(&right.label))
+                .then_with(|| left.replacement.cmp(&right.replacement))
+        });
+
+        surtr_analysis::CompletionResponse {
+            candidates,
+            replace_start,
+            replace_end,
+        }
+    }
+
+    fn operator_candidate_mode_accepts(
+        mode: OperatorCompletionCandidateMode,
+        symbol: &surtr_analysis::CompletionSymbol,
+    ) -> bool {
+        match mode {
+            OperatorCompletionCandidateMode::Variables => {
+                symbol.kind == surtr_analysis::CompletionKind::Variable
+            }
+            OperatorCompletionCandidateMode::Callables => {
+                symbol.kind == surtr_analysis::CompletionKind::FunctionCall
+                    || (symbol.kind == surtr_analysis::CompletionKind::Variable
+                        && symbol
+                            .detail
+                            .as_deref()
+                            .and_then(parse_signature_type)
+                            .is_some_and(|ty| matches!(ty, AstTy::Func(_, _, _))))
+            }
+        }
+    }
+
+    fn operator_completion_label(
+        symbol: &surtr_analysis::CompletionSymbol,
+        prefix: &str,
+    ) -> Option<(String, String)> {
+        if prefix.is_empty() || symbol.label.starts_with(prefix) {
+            return Some((symbol.label.clone(), symbol.replacement.clone()));
+        }
+        let tail = symbol.label.rsplit_once("::")?.1;
+        if tail.starts_with(prefix) {
+            return Some((tail.to_string(), tail.to_string()));
+        }
+        None
+    }
+
+    fn push_operator_completion_candidate(
+        candidates: &mut Vec<surtr_analysis::CompletionCandidate>,
+        candidate: surtr_analysis::CompletionCandidate,
+    ) {
+        if candidates
+            .iter()
+            .any(|existing| existing.label == candidate.label && existing.kind == candidate.kind)
+        {
+            return;
+        }
+        candidates.push(candidate);
+    }
+
+    fn operator_candidate_matches_expected(
+        &self,
+        candidate: &surtr_analysis::CompletionCandidate,
+        mode: OperatorCompletionCandidateMode,
+        expected_type: Option<&str>,
+        expected_callable_return_context: Option<&str>,
+    ) -> bool {
+        let Some(expected_type) = expected_type else {
+            return false;
+        };
+        match mode {
+            OperatorCompletionCandidateMode::Variables => {
+                candidate.detail.as_deref().is_some_and(|actual| {
+                    ReplEngine::parameter_type_accepts_arg_type(expected_type, actual)
+                })
+            }
+            OperatorCompletionCandidateMode::Callables => self.callable_candidate_matches(
+                candidate,
+                expected_type,
+                expected_callable_return_context,
+            ),
+        }
+    }
+
+    fn callable_candidate_matches(
+        &self,
+        candidate: &surtr_analysis::CompletionCandidate,
+        expected_input: &str,
+        expected_return_context: Option<&str>,
+    ) -> bool {
+        match candidate.kind {
+            surtr_analysis::CompletionKind::FunctionCall => {
+                let Some(signature) = candidate.detail.as_deref().or_else(|| {
+                    self.callable_signature_for_completion(&candidate.label)
+                        .map(|(_, signature)| signature.as_str())
+                }) else {
+                    return false;
+                };
+                let input_matches = ReplEngine::signature_param_types(signature)
+                    .and_then(|params| params.into_iter().next())
+                    .is_some_and(|param| {
+                        ReplEngine::parameter_type_accepts_arg_type(&param, expected_input)
+                    });
+                if !input_matches {
+                    return false;
+                }
+                expected_return_context.is_none_or(|context| {
+                    signature_return_type(signature)
+                        .and_then(parse_signature_type)
+                        .is_some_and(|ret| Self::generic_context_name(&ret) == Some(context))
+                })
+            }
+            surtr_analysis::CompletionKind::Variable => candidate
+                .detail
+                .as_deref()
+                .and_then(parse_signature_type)
+                .and_then(|ty| match ty {
+                    AstTy::Func(_, params, ret) => Some((params, ret.as_ref().clone())),
+                    _ => None,
+                })
+                .is_some_and(|(params, ret)| {
+                    params.first().is_some_and(|param| {
+                        Self::completion_param_accepts_expected_input(param, expected_input)
+                    }) && expected_return_context
+                        .is_none_or(|context| Self::generic_context_name(&ret) == Some(context))
+                }),
+            _ => false,
+        }
+    }
+
+    fn completion_param_accepts_expected_input(param: &AstTy, expected_input: &str) -> bool {
+        match param {
+            AstTy::Named(_, name) if name == "Self" || name.starts_with('$') => true,
+            _ => {
+                ReplEngine::parameter_type_accepts_arg_type(&format_query_ty(param), expected_input)
+            }
+        }
+    }
+
+    fn analysis_completion_kind_rank(kind: &surtr_analysis::CompletionKind) -> u8 {
+        match kind {
+            surtr_analysis::CompletionKind::Variable => 0,
+            surtr_analysis::CompletionKind::TypeConstructor => 1,
+            surtr_analysis::CompletionKind::TypePath => 2,
+            surtr_analysis::CompletionKind::FunctionCall => 3,
+        }
+    }
+
+    fn completed_operator_stage(
+        &self,
+        input: &str,
+        operator: &str,
+        lhs_ty: Option<&AstTy>,
+        rhs: &Span,
+    ) -> (String, Option<AstTy>) {
+        if Self::is_function_operator(operator) {
+            let rhs_source = Self::source_slice_by_span(input, rhs).trim();
+            let callable = self.completed_function_operator_stage(operator, lhs_ty, rhs_source);
+            return match callable {
+                Some((display, ret)) => (display, Some(ret)),
+                None => ("(_ -> _)".to_string(), None),
+            };
+        }
+
+        let rhs_ty = self.infer_completion_operand_type(input, rhs);
+        let rhs_display = Self::display_completion_ty(rhs_ty.as_ref());
+        let result_ty = Self::operator_result_type(operator, lhs_ty, rhs_ty.as_ref());
+        (rhs_display, result_ty)
+    }
+
+    fn active_operator_expected(operator: &str, lhs_ty: Option<&AstTy>) -> ActiveOperatorExpected {
+        if Self::is_function_operator(operator) {
+            return Self::active_function_operator_expected(operator, lhs_ty);
+        }
+
+        let expected = if operator == "++" {
+            "String".to_string()
+        } else {
+            Self::display_completion_ty(lhs_ty)
+        };
+        ActiveOperatorExpected {
+            candidate_expected_type: (expected != "_").then_some(expected.clone()),
+            candidate_expected_return_context: None,
+            display: expected,
+            candidate_mode: OperatorCompletionCandidateMode::Variables,
+        }
+    }
+
+    fn active_function_operator_expected(
+        operator: &str,
+        lhs_ty: Option<&AstTy>,
+    ) -> ActiveOperatorExpected {
+        let (input_ty, return_context) = Self::function_operator_expected_parts(operator, lhs_ty);
+        let input_display = Self::display_completion_ty(input_ty.as_ref());
+        let return_display = return_context
+            .as_ref()
+            .map(|context| format!("{context}<_>"))
+            .unwrap_or_else(|| "_".to_string());
+        ActiveOperatorExpected {
+            display: format!("({input_display} -> {return_display})"),
+            candidate_expected_type: input_ty.as_ref().map(Self::display_ast_ty_for_completion),
+            candidate_expected_return_context: return_context,
+            candidate_mode: OperatorCompletionCandidateMode::Callables,
+        }
+    }
+
+    fn function_operator_expected_parts(
+        operator: &str,
+        lhs_ty: Option<&AstTy>,
+    ) -> (Option<AstTy>, Option<String>) {
+        match operator {
+            "|>" => (lhs_ty.cloned(), None),
+            "|*>" => (
+                lhs_ty
+                    .and_then(Self::context_inner_type)
+                    .map(|(_, inner)| inner.clone()),
+                None,
+            ),
+            "|>=" => lhs_ty
+                .and_then(Self::context_inner_type)
+                .map(|(context, inner)| (Some(inner.clone()), Some(context.to_string())))
+                .unwrap_or((None, None)),
+            ">>" => lhs_ty
+                .and_then(Self::unary_func_parts)
+                .map(|(_, ret)| (Some(ret.clone()), None))
+                .unwrap_or((None, None)),
+            ">*" => lhs_ty
+                .and_then(Self::unary_func_parts)
+                .and_then(|(_, ret)| {
+                    Self::context_inner_type(ret).map(|(_, inner)| (Some(inner.clone()), None))
+                })
+                .unwrap_or((None, None)),
+            ">=>" => lhs_ty
+                .and_then(Self::unary_func_parts)
+                .and_then(|(_, ret)| {
+                    Self::context_inner_type(ret)
+                        .map(|(context, inner)| (Some(inner.clone()), Some(context.to_string())))
+                })
+                .unwrap_or((None, None)),
+            _ => (None, None),
+        }
+    }
+
+    fn operator_result_type(
+        operator: &str,
+        lhs_ty: Option<&AstTy>,
+        rhs_ty: Option<&AstTy>,
+    ) -> Option<AstTy> {
+        match operator {
+            "+" | "-" | "*" => lhs_ty.cloned().or_else(|| rhs_ty.cloned()),
+            "==" | "!=" | "<" | "<=" | ">" | ">=" | "&&" | "||" => Some(AstTy::Named(
+                Span { start: 0, end: 0 },
+                "Boolean".to_string(),
+            )),
+            "++" => Some(AstTy::Named(
+                Span { start: 0, end: 0 },
+                "String".to_string(),
+            )),
+            _ => None,
+        }
+    }
+
+    fn is_function_operator(operator: &str) -> bool {
+        matches!(operator, "|>" | "|*>" | "|>=" | ">>" | ">*" | ">=>")
+    }
+
+    fn infer_completion_operand_type(&self, input: &str, span: &Span) -> Option<AstTy> {
+        let source = Self::source_slice_by_span(input, span).trim();
+        if source.is_empty() {
+            return None;
+        }
+        if source.starts_with('"') && source.ends_with('"') && source.len() >= 2 {
+            return Some(AstTy::Named(
+                Span { start: 0, end: 0 },
+                "String".to_string(),
+            ));
+        }
+        if matches!(source, "True" | "False" | "true" | "false") {
+            return Some(AstTy::Named(
+                Span { start: 0, end: 0 },
+                "Boolean".to_string(),
+            ));
+        }
+        if source.parse::<i128>().is_ok() {
+            return Some(AstTy::Named(Span { start: 0, end: 0 }, "Int".to_string()));
+        }
+        if source.parse::<f64>().is_ok() && source.contains('.') {
+            return Some(AstTy::Named(Span { start: 0, end: 0 }, "Float".to_string()));
+        }
+        self.index
+            .find_symbol(source)
+            .and_then(|symbol| symbol.detail.as_deref())
+            .and_then(parse_signature_type)
+    }
+
+    fn completed_function_operator_stage(
+        &self,
+        operator: &str,
+        lhs_ty: Option<&AstTy>,
+        symbol: &str,
+    ) -> Option<(String, AstTy)> {
+        let (_qualified_name, signature) = self.callable_signature_for_completion(symbol)?;
+        let (params, ret) = ReplEngine::signature_param_asts_and_return(signature)?;
+        let first_param = params.first();
+        let (expected_input, expected_return_context) =
+            Self::function_operator_expected_parts(operator, lhs_ty);
+        let display_input = expected_input
+            .as_ref()
+            .map(Self::display_ast_ty_for_completion)
+            .or_else(|| first_param.map(Self::display_ast_ty_unknown_generics))
+            .unwrap_or_else(|| "_".to_string());
+        let ret = Self::specialize_callable_return(signature, expected_input.as_ref())
+            .unwrap_or_else(|| Self::unknown_generics_to_hole(&ret));
+        let display_ret = Self::display_ast_ty_for_completion(&ret);
+        let display = format!("({display_input} -> {display_ret})");
+        let result_ty =
+            Self::function_operator_result_type(operator, lhs_ty, expected_return_context, ret)?;
+        Some((display, result_ty))
+    }
+
+    fn function_operator_result_type(
+        operator: &str,
+        lhs_ty: Option<&AstTy>,
+        expected_return_context: Option<String>,
+        rhs_ret: AstTy,
+    ) -> Option<AstTy> {
+        match operator {
+            "|>" => Some(rhs_ret),
+            "|*>" => lhs_ty
+                .and_then(Self::context_inner_type)
+                .map(|(context, _)| Self::context_ty(context, rhs_ret)),
+            "|>=" => expected_return_context.as_deref().and_then(|context| {
+                Self::generic_context_name(&rhs_ret)
+                    .is_some_and(|name| name == context)
+                    .then_some(rhs_ret)
+            }),
+            ">>" => lhs_ty
+                .and_then(Self::unary_func_parts)
+                .map(|(params, _)| Self::func_ty(params[0].clone(), rhs_ret)),
+            ">*" => lhs_ty
+                .and_then(Self::unary_func_parts)
+                .and_then(|(params, ret)| {
+                    Self::context_inner_type(ret).map(|(context, _)| {
+                        Self::func_ty(params[0].clone(), Self::context_ty(context, rhs_ret))
+                    })
+                }),
+            ">=>" => lhs_ty
+                .and_then(Self::unary_func_parts)
+                .and_then(|(params, _)| {
+                    expected_return_context.as_deref().and_then(|context| {
+                        Self::generic_context_name(&rhs_ret)
+                            .is_some_and(|name| name == context)
+                            .then_some(Self::func_ty(params[0].clone(), rhs_ret))
+                    })
+                }),
+            _ => None,
+        }
+    }
+
+    fn context_inner_type(ty: &AstTy) -> Option<(&str, &AstTy)> {
+        match ty {
+            AstTy::Generic(_, name, args)
+                if matches!(name.as_str(), "Result" | "List") && !args.is_empty() =>
+            {
+                Some((name.as_str(), &args[0]))
+            }
+            _ => None,
+        }
+    }
+
+    fn generic_context_name(ty: &AstTy) -> Option<&str> {
+        match ty {
+            AstTy::Generic(_, name, args)
+                if matches!(name.as_str(), "Result" | "List") && !args.is_empty() =>
+            {
+                Some(name.as_str())
+            }
+            _ => None,
+        }
+    }
+
+    fn context_ty(context: &str, inner: AstTy) -> AstTy {
+        AstTy::Generic(Span { start: 0, end: 0 }, context.to_string(), vec![inner])
+    }
+
+    fn unary_func_parts(ty: &AstTy) -> Option<(&[AstTy], &AstTy)> {
+        match ty {
+            AstTy::Func(_, params, ret) if params.len() == 1 => Some((params.as_slice(), ret)),
+            _ => None,
+        }
+    }
+
+    fn func_ty(input: AstTy, ret: AstTy) -> AstTy {
+        AstTy::Func(Span { start: 0, end: 0 }, vec![input], Box::new(ret))
+    }
+
+    fn specialize_callable_return(signature: &str, input_ty: Option<&AstTy>) -> Option<AstTy> {
+        let input_ty = input_ty?;
+        let (params, ret) = ReplEngine::signature_param_asts_and_return(signature)?;
+        let first_param = params.first()?;
+        let substitutions = ReplEngine::build_type_substitutions(
+            std::slice::from_ref(first_param),
+            std::slice::from_ref(input_ty),
+            None,
+        )?;
+        Some(ReplEngine::substitute_query_ty(&ret, &substitutions, None))
+    }
+
+    fn display_completion_ty(ty: Option<&AstTy>) -> String {
+        ty.map(Self::display_ast_ty_for_completion)
+            .unwrap_or_else(|| "_".to_string())
+    }
+
+    fn display_ast_ty_for_completion(ty: &AstTy) -> String {
+        format_query_ty(&Self::unknown_generics_to_hole(ty))
+    }
+
+    fn display_ast_ty_unknown_generics(ty: &AstTy) -> String {
+        format_query_ty(&Self::unknown_generics_to_hole(ty))
+    }
+
+    fn unknown_generics_to_hole(ty: &AstTy) -> AstTy {
+        match ty {
+            AstTy::Named(_, name) if name == "Self" || name.starts_with('$') => {
+                AstTy::Named(Span { start: 0, end: 0 }, "_".to_string())
+            }
+            AstTy::Named(_, _) | AstTy::ImplTrait(_, _) => ty.clone(),
+            AstTy::Generic(span, name, args) if name == "Result" && args.len() > 1 => {
+                AstTy::Generic(
+                    span.clone(),
+                    name.clone(),
+                    vec![Self::unknown_generics_to_hole(&args[0])],
+                )
+            }
+            AstTy::Generic(span, name, args) => AstTy::Generic(
+                span.clone(),
+                name.clone(),
+                args.iter().map(Self::unknown_generics_to_hole).collect(),
+            ),
+            AstTy::Tuple(span, items) => AstTy::Tuple(
+                span.clone(),
+                items.iter().map(Self::unknown_generics_to_hole).collect(),
+            ),
+            AstTy::Func(span, params, ret) => AstTy::Func(
+                span.clone(),
+                params.iter().map(Self::unknown_generics_to_hole).collect(),
+                Box::new(Self::unknown_generics_to_hole(ret)),
+            ),
+        }
+    }
+
+    fn source_slice_by_span<'a>(source: &'a str, span: &Span) -> &'a str {
+        let start = Self::char_to_byte(source, span.start);
+        let end = Self::char_to_byte(source, span.end);
+        &source[start..end]
+    }
+
+    fn char_to_byte(source: &str, char_offset: usize) -> usize {
+        source
+            .char_indices()
+            .nth(char_offset)
+            .map(|(idx, _)| idx)
+            .unwrap_or(source.len())
     }
 
     fn inject_special_repl_candidates(
@@ -571,6 +1152,28 @@ impl ReplCompletionContext {
 struct CompletionCallContext {
     callee: String,
     active_parameter: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OperatorCompletionAssist {
+    signature: ReplSignatureHelp,
+    expected_type: Option<String>,
+    expected_callable_return_context: Option<String>,
+    candidate_mode: OperatorCompletionCandidateMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActiveOperatorExpected {
+    display: String,
+    candidate_expected_type: Option<String>,
+    candidate_expected_return_context: Option<String>,
+    candidate_mode: OperatorCompletionCandidateMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperatorCompletionCandidateMode {
+    Variables,
+    Callables,
 }
 
 pub struct ReplEngine {

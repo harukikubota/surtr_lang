@@ -229,8 +229,9 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - REPL core は matching completion candidate を全件保持する。CLI UI は表示件数だけを制限し、将来のページャ導入時にも同じ候補集合を再利用できる構成を保つ
 - CLI REPL は実行ディレクトリの `.xldr.yaml` を読み、`repl.cli.completion_candidates` でユーザに表示する補完候補件数を上書きできる。既定値は `5`
 - preload script の入力行も REPL 履歴の一部として扱い、`vars` と `history` は同じ行番号体系を共有する
-
-候補一覧表示の改善や型文脈つき補完は `doc/open-issues.md` の将来課題として扱う。
+- 演算子 RHS 位置では演算子そのものを補完候補に出さず、シグネチャ表示行に現在位置で期待される型を表示する。例: `1 + ` は `Int + [Int]`、`x |> ` は `Int |> [(Int -> _)]` を表示する
+- `|>` / `|*>` / `|>=` / `>>` / `>*` / `>=>` のような関数演算子は、左から右へ段階的に推論できた型を次段に渡す。未確定の型は `_` として表示し、後続段の部分推論を妨げない
+- 演算子 RHS 位置の候補は、期待型が分かる場合に一致候補を優先表示する。関数演算子では RHS として使える callable surface を候補に含める
 
 ---
 

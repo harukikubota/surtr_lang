@@ -20,7 +20,8 @@ mod ty;
 mod validate;
 
 pub use completion::{
-    parse_incomplete_expr, parse_incomplete_stmt, CompletionContext, IncompleteParseResult,
+    parse_incomplete_expr, parse_incomplete_stmt, parse_operator_completion_context,
+    CompletionContext, IncompleteParseResult, OperatorCompletionContext, OperatorCompletionStage,
 };
 pub use context::{ParseRules, ParserContext};
 pub use diagnostic::{

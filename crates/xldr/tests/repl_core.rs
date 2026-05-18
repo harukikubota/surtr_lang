@@ -1,7 +1,7 @@
 use std::fs;
 use std::time::Duration;
 
-use xldr::repl::logic::core::ReplCompletionKind;
+use xldr::repl::logic::core::{ReplCompletionContext, ReplCompletionKind};
 use xldr::repl::logic::{ReplOutput, ReplResult};
 use xldr::ReplEngine;
 
@@ -233,6 +233,194 @@ fn core_completion_keeps_all_matching_candidates() {
         "core completion should retain all matching candidates for paging: {:?}",
         completion.candidates
     );
+}
+
+#[test]
+fn core_operator_completion_shows_inferred_rhs_signature_without_operator_candidates() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("answer = 42")).contains("answer: Int"));
+    assert!(rendered_text(&engine.handle_line("name = \"surtr\"")).contains("name: String"));
+
+    let completion = engine.completions("1 + ", "1 + ".len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("operator rhs should show signature help");
+    assert_eq!(signature.lines.join("\n"), "Int + [Int]");
+
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        !labels
+            .iter()
+            .any(|label| matches!(*label, "+" | "|>" | "++")),
+        "operator symbols must not be completion candidates: {labels:?}"
+    );
+    let answer_pos = labels
+        .iter()
+        .position(|label| *label == "answer")
+        .expect("Int binding should be suggested");
+    let name_pos = labels
+        .iter()
+        .position(|label| *label == "name")
+        .expect("String binding should remain available after matching Int candidates");
+    assert!(
+        answer_pos < name_pos,
+        "Int candidates should rank before nonmatching variables: {labels:?}"
+    );
+
+    assert!(ReplCompletionContext::should_request("1 + ", "1 + ".len()));
+
+    let partial = engine.completions("1 + an", "1 + an".len());
+    assert_eq!(
+        partial
+            .signature
+            .as_ref()
+            .expect("operator rhs prefix should keep signature help")
+            .lines
+            .join("\n"),
+        "Int + [Int]"
+    );
+    let partial_labels = partial
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        partial_labels.iter().any(|label| *label == "answer"),
+        "matching Int variable should remain visible with a RHS prefix: {partial_labels:?}"
+    );
+}
+
+#[test]
+fn core_operator_completion_shows_string_concat_rhs_signature() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("name = \"surtr\"")).contains("name: String"));
+
+    let completion = engine.completions("name ++ ", "name ++ ".len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("concat rhs should show signature help");
+    assert_eq!(signature.lines.join("\n"), "String ++ [String]");
+}
+
+#[test]
+fn core_operator_completion_stages_function_operator_types() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("x = 1")).contains("x: Int"));
+
+    let first = engine.completions("x |> ", "x |> ".len());
+    let first_signature = first
+        .signature
+        .as_ref()
+        .expect("pipe rhs should show callable shape");
+    assert_eq!(first_signature.lines.join("\n"), "Int |> [(Int -> _)]");
+    let first_labels = first
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        !first_labels
+            .iter()
+            .any(|label| matches!(*label, "|>" | "|*>" | "|>=" | ">>" | ">*" | ">=>")),
+        "function operator symbols must not be completion candidates: {first_labels:?}"
+    );
+    let to_string_pos = first_labels
+        .iter()
+        .position(|label| *label == "to_string")
+        .expect("callable RHS candidate should be suggested for pipe");
+    let print_pos = first_labels
+        .iter()
+        .position(|label| *label == "print")
+        .expect("nonmatching callable should remain available after matching candidates");
+    assert!(
+        to_string_pos < print_pos,
+        "callable candidates accepting Int should rank first: {:?}",
+        first
+            .candidates
+            .iter()
+            .filter(|candidate| matches!(
+                candidate.label.as_str(),
+                "to_string" | "print" | "Show::to_string" | "Kernel::print"
+            ))
+            .collect::<Vec<_>>()
+    );
+
+    let chained = engine.completions("x |> to_string |> ", "x |> to_string |> ".len());
+    let chained_signature = chained
+        .signature
+        .as_ref()
+        .expect("chained pipe rhs should carry staged type");
+    assert_eq!(
+        chained_signature.lines.join("\n"),
+        "Int |> (Int -> String) |> [(String -> _)]"
+    );
+}
+
+#[test]
+fn core_operator_completion_stages_specialized_function_operators() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("xs = [1, 2]")).contains("xs: List<Int>"));
+    assert!(rendered_text(&engine.handle_line("ret = Ok(1)")).contains("ret: Result<Int"));
+    assert!(
+        rendered_text(&engine.handle_line("to_s = {|n: Int| to_string(n)}"))
+            .contains("to_s: (Int -> String)")
+    );
+    assert!(
+        rendered_text(&engine.handle_line("strings = {|n: Int| [to_string(n)]}"))
+            .contains("strings: (Int -> List<String>)")
+    );
+    assert!(
+        rendered_text(&engine.handle_line("inc_ok = {|n: Int| Ok(n + 1)}"))
+            .contains("inc_ok: (Int -> Result<Int")
+    );
+
+    let mapped = engine.completions("xs |*> ", "xs |*> ".len());
+    assert_eq!(
+        mapped.signature.as_ref().unwrap().lines.join("\n"),
+        "List<Int> |*> [(Int -> _)]"
+    );
+
+    let bound = engine.completions("ret |>= ", "ret |>= ".len());
+    assert_eq!(
+        bound.signature.as_ref().unwrap().lines.join("\n"),
+        "Result<Int> |>= [(Int -> Result<_>)]"
+    );
+
+    let composed = engine.completions("to_s >> ", "to_s >> ".len());
+    assert_eq!(
+        composed.signature.as_ref().unwrap().lines.join("\n"),
+        "(Int -> String) >> [(String -> _)]"
+    );
+
+    let lifted = engine.completions("strings >* ", "strings >* ".len());
+    assert_eq!(
+        lifted.signature.as_ref().unwrap().lines.join("\n"),
+        "(Int -> List<String>) >* [(String -> _)]"
+    );
+
+    let kleisli = engine.completions("inc_ok >=> ", "inc_ok >=> ".len());
+    assert_eq!(
+        kleisli.signature.as_ref().unwrap().lines.join("\n"),
+        "(Int -> Result<Int>) >=> [(Int -> Result<_>)]"
+    );
+}
+
+#[test]
+fn core_operator_completion_keeps_unknown_lhs_as_placeholder() {
+    let engine = engine();
+    let completion = engine.completions("missing |> ", "missing |> ".len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("unknown lhs should still show staged operator help");
+
+    assert_eq!(signature.lines.join("\n"), "_ |> [(_ -> _)]");
 }
 
 #[test]

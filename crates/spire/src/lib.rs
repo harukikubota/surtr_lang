@@ -7,10 +7,11 @@ mod token;
 
 // Re-export the main entry point
 pub use parser::{
-    parse, parse_incomplete_expr, parse_incomplete_stmt, parse_tolerant_with_context,
-    parse_with_context, parse_with_context_diagnostic, rebase_ast_spans, CompletionContext,
-    CursorSyntaxContext, IncompleteParseResult, LspDiagnostic, LspDiagnosticSeverity, LspPosition,
-    LspRange, LspRelatedInformation, ParseDiagnostic, ParseRules, ParserContext, SyntaxOutlineItem,
+    parse, parse_incomplete_expr, parse_incomplete_stmt, parse_operator_completion_context,
+    parse_tolerant_with_context, parse_with_context, parse_with_context_diagnostic,
+    rebase_ast_spans, CompletionContext, CursorSyntaxContext, IncompleteParseResult, LspDiagnostic,
+    LspDiagnosticSeverity, LspPosition, LspRange, LspRelatedInformation, OperatorCompletionContext,
+    OperatorCompletionStage, ParseDiagnostic, ParseRules, ParserContext, SyntaxOutlineItem,
     SyntaxOutlineKind, SyntaxToken, SyntaxTokenKind, TolerantParseResult,
 };
 
