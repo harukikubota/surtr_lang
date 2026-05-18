@@ -444,11 +444,9 @@ fn push_completion_candidate(
 
 fn sort_repl_completion_candidates(candidates: &mut [CompletionCandidate]) {
     candidates.sort_by(|left, right| {
-        left.label
-            .cmp(&right.label)
-            .then_with(|| {
-                repl_completion_kind_rank(&left.kind).cmp(&repl_completion_kind_rank(&right.kind))
-            })
+        repl_completion_kind_rank(&left.kind)
+            .cmp(&repl_completion_kind_rank(&right.kind))
+            .then_with(|| left.label.cmp(&right.label))
             .then_with(|| left.replacement.cmp(&right.replacement))
     });
 }
@@ -622,12 +620,41 @@ fn completion_symbol_matches_prefix(
     prefix: &str,
     allow_tail_match: bool,
 ) -> bool {
+    if !prefix.contains("::") && completion_symbol_hides_qualified_owner_match(symbol) {
+        return allow_tail_match
+            && !completion_symbol_hides_tail_match(symbol, prefix)
+            && symbol
+                .label
+                .rsplit_once("::")
+                .is_some_and(|(_, tail)| tail.starts_with(prefix));
+    }
     symbol.label.starts_with(prefix)
         || (allow_tail_match
+            && !completion_symbol_hides_tail_match(symbol, prefix)
             && symbol
                 .label
                 .rsplit_once("::")
                 .is_some_and(|(_, tail)| tail.starts_with(prefix)))
+}
+
+fn completion_symbol_hides_qualified_owner_match(symbol: &CompletionSymbol) -> bool {
+    symbol.kind == CompletionKind::FunctionCall
+        && symbol.label.contains("::")
+        && symbol
+            .label
+            .rsplit_once("::")
+            .and_then(|(_, tail)| tail.chars().next())
+            .is_some_and(char::is_uppercase)
+}
+
+fn completion_symbol_hides_tail_match(symbol: &CompletionSymbol, prefix: &str) -> bool {
+    if prefix.contains("::") || symbol.kind != CompletionKind::FunctionCall {
+        return false;
+    }
+    let Some((_, tail)) = symbol.label.rsplit_once("::") else {
+        return false;
+    };
+    tail.chars().next().is_some_and(char::is_uppercase)
 }
 
 fn completion_kind_for_doc_kind(kind: &DocKind) -> CompletionKind {

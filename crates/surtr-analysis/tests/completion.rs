@@ -236,6 +236,129 @@ fn repl_completion_requires_unqualified_symbols_for_unqualified_prefix() {
 }
 
 #[test]
+fn repl_completion_prefers_type_owners_before_members_for_pascal_case_prefix() {
+    let index = SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "Int".to_string(),
+            replacement: "Int".to_string(),
+            kind: CompletionKind::TypeConstructor,
+            detail: Some("type Int".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "IntBase".to_string(),
+            replacement: "IntBase".to_string(),
+            kind: CompletionKind::TypeConstructor,
+            detail: Some("defenum IntBase".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "IntBase::label".to_string(),
+            replacement: "IntBase::label".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("IntBase::label(self: IntBase) -> String".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+    ]);
+
+    let completion = surtr_analysis::complete_repl_prefix(
+        CompletionRequest {
+            index: &index,
+            source: "Int",
+            cursor: 3,
+        },
+        CompletionScope::All,
+    );
+
+    assert_eq!(
+        completion
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Int", "IntBase", "IntBase::label"]
+    );
+}
+
+#[test]
+fn repl_completion_hides_qualified_enum_variants_until_owner_path_is_confirmed() {
+    let index = SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "IntBase".to_string(),
+            replacement: "IntBase".to_string(),
+            kind: CompletionKind::TypeConstructor,
+            detail: Some("defenum IntBase".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "IntBase::Bin".to_string(),
+            replacement: "IntBase::Bin".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("IntBase::Bin -> IntBase".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "IntBase::Dec".to_string(),
+            replacement: "IntBase::Dec".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("IntBase::Dec -> IntBase".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+    ]);
+
+    let bare = surtr_analysis::complete_repl_prefix(
+        CompletionRequest {
+            index: &index,
+            source: "IntB",
+            cursor: 4,
+        },
+        CompletionScope::All,
+    );
+    assert_eq!(
+        bare.candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["IntBase"]
+    );
+
+    let qualified = surtr_analysis::complete_repl_prefix(
+        CompletionRequest {
+            index: &index,
+            source: "IntBase::",
+            cursor: "IntBase::".len(),
+        },
+        CompletionScope::All,
+    );
+    assert_eq!(
+        qualified
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["IntBase::Bin", "IntBase::Dec"]
+    );
+}
+
+#[test]
 fn repl_completion_scope_can_limit_candidates_to_variables() {
     let index = SemanticIndex::from_symbols(vec![
         CompletionSymbol {

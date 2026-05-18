@@ -521,10 +521,20 @@ impl ReplCompletionContext {
             });
         }
         candidates.sort_by(|left, right| {
-            left.label
-                .cmp(&right.label)
+            Self::repl_completion_kind_rank(&left.kind)
+                .cmp(&Self::repl_completion_kind_rank(&right.kind))
+                .then_with(|| left.label.cmp(&right.label))
                 .then_with(|| left.replacement.cmp(&right.replacement))
         });
+    }
+
+    fn repl_completion_kind_rank(kind: &ReplCompletionKind) -> u8 {
+        match kind {
+            ReplCompletionKind::Variable => 0,
+            ReplCompletionKind::TypeConstructor => 1,
+            ReplCompletionKind::TypePath => 2,
+            ReplCompletionKind::FunctionCall => 3,
+        }
     }
 
     fn special_repl_candidate_detail(&self, replacement: &str) -> Option<String> {
@@ -1673,7 +1683,10 @@ impl ReplEngine {
 
             if Self::declaration_is_function_completion_surface(decl) {
                 let label = crate::surface_path_name(&decl.fq_name).to_string();
-                if let Some((qualified_name, signature)) = self.find_signature(&label) {
+                if let Some((qualified_name, signature)) = self
+                    .find_signature(&label)
+                    .or_else(|| self.declaration_signature_entry(decl))
+                {
                     insert_signature(&label, qualified_name, signature);
                 }
             }
@@ -3062,6 +3075,11 @@ impl ReplEngine {
             sigil::DeclarationKind::Enum => {
                 Some(format!("defenum {}", crate::surface_path_name(&decl.name)))
             }
+            sigil::DeclarationKind::EnumVariant => self
+                .enum_variant_signature_entry(decl)
+                .map(|(qualified_name, signature)| {
+                    Self::render_signature_with_qualified_name(&qualified_name, signature)
+                }),
             sigil::DeclarationKind::BuiltinType => {
                 Some(format!("type {}", crate::surface_path_name(&decl.name)))
             }
@@ -3071,6 +3089,47 @@ impl ReplEngine {
                     Self::render_signature_with_qualified_name(&qualified_name, signature)
                 }),
         }
+    }
+
+    fn declaration_signature_entry(
+        &self,
+        decl: &sigil::DeclarationEntry,
+    ) -> Option<(String, String)> {
+        match decl.kind {
+            sigil::DeclarationKind::EnumVariant => self.enum_variant_signature_entry(decl),
+            _ => self.find_signature(&decl.fq_name),
+        }
+    }
+
+    fn enum_variant_signature_entry(
+        &self,
+        decl: &sigil::DeclarationEntry,
+    ) -> Option<(String, String)> {
+        if decl.kind != sigil::DeclarationKind::EnumVariant {
+            return None;
+        }
+        let (owner, _) = decl.fq_name.rsplit_once("::")?;
+        let variant = self
+            .scar_session
+            .enum_variants_of(owner)?
+            .iter()
+            .find(|variant| {
+                variant.short_name == decl.name
+                    || variant.constructor_name == decl.name
+                    || decl.name.ends_with(&format!("::{}", variant.short_name))
+            })?;
+        let params = variant
+            .payload
+            .iter()
+            .map(Self::ty_to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let signature = format!(
+            "{}({params}) -> {}",
+            crate::surface_path_name(&decl.fq_name),
+            Self::ty_to_string(&variant.enum_ty)
+        );
+        Some((decl.fq_name.clone(), signature))
     }
 
     fn doc_resolved_output(entry: &DocEntry) -> ReplOutput {

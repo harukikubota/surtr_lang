@@ -705,6 +705,30 @@ fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
 }
 
 #[test]
+fn core_completion_keeps_type_owners_ahead_of_members_for_pascal_case_prefix() {
+    let engine = engine();
+    let labels = engine
+        .completions("Int", "Int".len())
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .take(6)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        labels,
+        vec![
+            "Int".to_string(),
+            "IntBase".to_string(),
+            "Int::abs".to_string(),
+            "Int::bit_and".to_string(),
+            "Int::bit_not".to_string(),
+            "Int::bit_not_in".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn core_completion_shows_user_defined_module_owners() {
     let engine = ReplEngine::from_module_source(
         "demo_module.srt",
@@ -1033,6 +1057,55 @@ impl User {
     assert!(
         !rendered.contains("-> Self"),
         "constructor signature must not use synthesized Self fallback when new returns Result<Self>: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_hides_enum_variants_until_owner_path_is_confirmed() {
+    let engine = engine();
+
+    let bare_labels = engine
+        .completions("IntB", "IntB".len())
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        bare_labels,
+        vec![
+            "IntBase",
+            "IntBase::label",
+            "IntBase::prefix",
+            "IntBase::radix"
+        ]
+    );
+
+    let qualified_labels = engine
+        .completions("IntBase::", "IntBase::".len())
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(qualified_labels.contains(&"IntBase::Bin".to_string()));
+    assert!(qualified_labels.contains(&"IntBase::Dec".to_string()));
+    assert!(qualified_labels.contains(&"IntBase::Hex".to_string()));
+    assert!(qualified_labels.contains(&"IntBase::Oct".to_string()));
+}
+
+#[test]
+fn core_completion_shows_tuple_variant_signature_help() {
+    let engine = engine();
+    let completion = engine.completions("BitWidth::Any(", "BitWidth::Any(".len());
+
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("tuple variant call should show signature help");
+    assert_eq!(signature.active_parameter, Some(0));
+    let rendered = signature.lines.join("\n");
+    assert!(
+        rendered.contains("BitWidth::Any([Int]) -> BitWidth"),
+        "tuple variant signature should expose constructor call shape: {rendered:?}"
     );
 }
 
