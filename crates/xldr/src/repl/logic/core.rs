@@ -5459,8 +5459,8 @@ impl ReplEngine {
         &self,
         decl: &sigil::DeclarationEntry,
     ) -> Option<(String, String)> {
-        let qualified_name = format!("{}::new", decl.fq_name);
-        if let Some(signature) = self.find_signature(&qualified_name) {
+        let constructor_qualified_name = format!("{}::new", decl.fq_name);
+        if let Some(signature) = self.find_signature(&constructor_qualified_name) {
             return Some(signature);
         }
 
@@ -5470,7 +5470,7 @@ impl ReplEngine {
             .filter(|entry| entry.kind == DocKind::Function)
             .filter(|entry| {
                 crate::surface_path_name(&entry.qualified_name)
-                    == crate::surface_path_name(&qualified_name)
+                    == crate::surface_path_name(&constructor_qualified_name)
             })
             .map(|entry| (entry.qualified_name.clone(), entry.signature.clone()))
             .collect::<Vec<_>>();
@@ -5494,14 +5494,25 @@ impl ReplEngine {
                     .map(|(name, ty)| format!("{name}: {}", Self::ty_to_string(ty)))
                     .collect::<Vec<_>>()
                     .join(", ");
-                (
-                    qualified_name,
-                    format!(
-                        "{}::new({params}) -> {}",
-                        crate::surface_path_name(&decl.fq_name),
-                        crate::surface_path_name(&decl.fq_name)
+                match def.kind {
+                    scar::env::TypeKind::Record => (
+                        decl.fq_name.clone(),
+                        format!(
+                            "{}({params}) -> {}",
+                            crate::surface_path_name(&decl.fq_name),
+                            crate::surface_path_name(&decl.fq_name)
+                        ),
                     ),
-                )
+                    scar::env::TypeKind::Struct => (
+                        constructor_qualified_name,
+                        format!(
+                            "{}::new({params}) -> {}",
+                            crate::surface_path_name(&decl.fq_name),
+                            crate::surface_path_name(&decl.fq_name)
+                        ),
+                    ),
+                    _ => unreachable!("constructor signatures only support struct/record"),
+                }
             })
     }
 

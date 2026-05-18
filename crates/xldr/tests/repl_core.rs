@@ -2657,6 +2657,23 @@ fn core_sig_type_owner_falls_back_to_constructor_signatures() {
 }
 
 #[test]
+fn core_sig_record_owner_uses_record_constructor_surface() {
+    let mut engine = ReplEngine::from_script_source(
+        "record_sig.srt",
+        r#"
+defrecord ScoreFixture(scores: List<Int>, score: HashMap<Int>)
+"#,
+    )
+    .expect("record preload should bootstrap");
+
+    let sig = signature_text(&engine.handle_line(":sig ScoreFixture"));
+    assert_eq!(
+        sig.trim(),
+        "ScoreFixture(scores: List<Int>, score: HashMap<Int>) -> ScoreFixture"
+    );
+}
+
+#[test]
 fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fallbacks() {
     let mut engine = engine();
 
