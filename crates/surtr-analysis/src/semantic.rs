@@ -205,6 +205,40 @@ impl SemanticIndex {
         let first = tail_matches.next()?;
         tail_matches.next().is_none().then_some(first)
     }
+
+    pub fn upsert_symbol(&mut self, symbol: CompletionSymbol) {
+        if let Some(existing) = self
+            .symbols
+            .iter_mut()
+            .find(|existing| existing.label == symbol.label && existing.kind == symbol.kind)
+        {
+            if existing.detail.is_none() {
+                existing.detail = symbol.detail;
+            }
+            if existing.documentation.is_none() {
+                existing.documentation = symbol.documentation;
+            }
+            if existing.sort_text.is_none() {
+                existing.sort_text = symbol.sort_text;
+            }
+            if existing.origin.is_none() {
+                existing.origin = symbol.origin;
+            }
+            if existing.definition.is_none() {
+                existing.definition = symbol.definition;
+            }
+        } else {
+            self.symbols.push(symbol);
+        }
+        self.symbols.sort_by(|left, right| {
+            left.label
+                .cmp(&right.label)
+                .then_with(|| {
+                    completion_kind_rank(&left.kind).cmp(&completion_kind_rank(&right.kind))
+                })
+                .then_with(|| left.replacement.cmp(&right.replacement))
+        });
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

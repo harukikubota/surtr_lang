@@ -27,7 +27,7 @@ pub struct ReplCompletionResult {
 pub trait ReplCompletionProvider {
     fn submit(&mut self, request: ReplCompletionRequest);
     fn poll_ready(&mut self) -> Option<ReplCompletionResult>;
-    fn replace_context(&mut self, context: ReplCompletionContext);
+    fn schedule_context_refresh(&mut self, context: ReplCompletionContext);
 }
 
 #[derive(Debug, Default, Clone)]
@@ -85,31 +85,25 @@ impl ReplCompletionController {
 #[derive(Default)]
 struct WorkerMailbox {
     pending: Option<ReplCompletionRequest>,
+    pending_context: Option<ReplCompletionContext>,
     ready: VecDeque<ReplCompletionResult>,
     closed: bool,
 }
 
 pub struct BackgroundReplCompletionProvider {
     mailbox: Arc<(Mutex<WorkerMailbox>, Condvar)>,
-    context: Arc<Mutex<ReplCompletionContext>>,
     worker: Option<JoinHandle<()>>,
 }
 
 impl BackgroundReplCompletionProvider {
     pub fn new(context: ReplCompletionContext) -> Self {
         let mailbox = Arc::new((Mutex::new(WorkerMailbox::default()), Condvar::new()));
-        let context_cell = Arc::new(Mutex::new(context));
         let worker_mailbox = Arc::clone(&mailbox);
-        let worker_context = Arc::clone(&context_cell);
         let worker = thread::Builder::new()
             .name("xldr-repl-completion".to_string())
-            .spawn(move || worker_loop(worker_mailbox, worker_context))
+            .spawn(move || worker_loop(worker_mailbox, context))
             .expect("completion worker thread should start");
-        Self {
-            mailbox,
-            context: context_cell,
-            worker: Some(worker),
-        }
+        Self { mailbox, worker: Some(worker) }
     }
 }
 
@@ -127,11 +121,11 @@ impl ReplCompletionProvider for BackgroundReplCompletionProvider {
         mailbox.ready.pop_front()
     }
 
-    fn replace_context(&mut self, context: ReplCompletionContext) {
-        *self
-            .context
-            .lock()
-            .expect("completion context lock should work") = context;
+    fn schedule_context_refresh(&mut self, context: ReplCompletionContext) {
+        let (lock, wake) = &*self.mailbox;
+        let mut mailbox = lock.lock().expect("completion mailbox lock should work");
+        mailbox.pending_context = Some(context);
+        wake.notify_one();
     }
 }
 
@@ -151,13 +145,13 @@ impl Drop for BackgroundReplCompletionProvider {
 
 fn worker_loop(
     mailbox: Arc<(Mutex<WorkerMailbox>, Condvar)>,
-    context: Arc<Mutex<ReplCompletionContext>>,
+    mut context: ReplCompletionContext,
 ) {
     loop {
         let request = {
             let (lock, wake) = &*mailbox;
             let mut state = lock.lock().expect("completion mailbox lock should work");
-            while state.pending.is_none() && !state.closed {
+            while state.pending.is_none() && state.pending_context.is_none() && !state.closed {
                 state = wake
                     .wait(state)
                     .expect("completion worker should wait on mailbox");
@@ -165,14 +159,20 @@ fn worker_loop(
             if state.closed {
                 return;
             }
-            state.pending.take().expect("pending request should exist")
+            let pending_context = state.pending_context.take();
+            let pending_request = state.pending.take();
+            (pending_context, pending_request)
+        };
+
+        if let Some(next_context) = request.0 {
+            context = next_context;
+        }
+
+        let Some(request) = request.1 else {
+            continue;
         };
 
         let started = Instant::now();
-        let context = context
-            .lock()
-            .expect("completion context lock should work")
-            .clone();
         let mut completion = context.completions(&request.input, request.cursor);
         completion
             .telemetry
@@ -210,7 +210,7 @@ mod tests {
             self.ready.pop_front()
         }
 
-        fn replace_context(&mut self, _context: ReplCompletionContext) {}
+        fn schedule_context_refresh(&mut self, _context: ReplCompletionContext) {}
     }
 
     #[test]
@@ -262,5 +262,47 @@ mod tests {
         assert!(controller.submit_if_changed(&mut provider, "Str", 3, None));
         assert!(!controller.submit_if_changed(&mut provider, "", 0, None));
         assert_eq!(provider.requests.len(), 1);
+    }
+
+    #[test]
+    fn background_provider_applies_scheduled_context_before_next_completion() {
+        let initial = ReplCompletionContext::default();
+        let mut provider = BackgroundReplCompletionProvider::new(initial);
+
+        let mut refreshed = ReplCompletionContext::default();
+        refreshed.insert_callable_signature_for_test(
+            "fresh",
+            "Fresh::fresh",
+            "fresh(value: String) -> Unit",
+        );
+        provider.schedule_context_refresh(refreshed.clone());
+
+        provider.submit(ReplCompletionRequest {
+            input: "fresh(".to_string(),
+            cursor: "fresh(".len(),
+            generation: 1,
+            enqueued_at: Instant::now(),
+            event_received_at: None,
+        });
+
+        let deadline = Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if let Some(result) = provider.poll_ready() {
+                let signature = result
+                    .completion
+                    .signature
+                    .expect("refreshed signature should be visible");
+                assert!(
+                    signature
+                        .lines
+                        .iter()
+                        .any(|line| line.contains("Fresh::fresh") && line.contains("-> Unit")),
+                    "{signature:?}"
+                );
+                break;
+            }
+            assert!(Instant::now() < deadline, "completion result should arrive");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 }

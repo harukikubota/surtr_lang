@@ -269,6 +269,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
         BackgroundReplCompletionProvider::new(engine.completion_context());
     let mut completion_controller = ReplCompletionController::default();
     let mut rendered_completion = ReplCompletion::default();
+    let mut rendered_completion_key: Option<(String, usize)> = None;
     let mut tab_completion_mode = false;
 
     redraw_terminal_prompt(
@@ -290,6 +291,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
             &mut completion_provider,
             &mut completion_controller,
             &mut rendered_completion,
+            &mut rendered_completion_key,
         )
         .map_err(|_| CommandError::message(1, "repl: failed to redraw prompt"))?
         {
@@ -328,6 +330,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
                 &mut completion_provider,
                 &mut completion_controller,
                 &mut rendered_completion,
+                &mut rendered_completion_key,
             );
             continue;
         }
@@ -357,6 +360,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
                     } else {
                         completion_controller.cancel_pending();
                         rendered_completion = ReplCompletion::default();
+                        rendered_completion_key = None;
                     }
                     redraw_terminal_prompt(
                         &mut stdout,
@@ -371,6 +375,12 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
             }
             TerminalAction::EnterCompletionMode => {
                 if tab_completion_mode
+                    && rendered_completion_key
+                        .as_ref()
+                        .is_some_and(|(input, cursor)| {
+                            input == &buffer
+                                && *cursor == byte_index_for_char_position(&buffer, cursor_chars)
+                        })
                     && apply_top_terminal_completion(
                         &mut buffer,
                         &mut cursor_chars,
@@ -379,6 +389,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
                 {
                     completion_controller.cancel_pending();
                     rendered_completion = ReplCompletion::default();
+                    rendered_completion_key = None;
                 } else {
                     tab_completion_mode = true;
                     let cursor_byte = byte_index_for_char_position(&buffer, cursor_chars);
@@ -392,6 +403,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
                     } else {
                         completion_controller.cancel_pending();
                         rendered_completion = ReplCompletion::default();
+                        rendered_completion_key = None;
                     }
                 }
                 redraw_terminal_prompt(
@@ -408,6 +420,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
                 tab_completion_mode = false;
                 completion_controller.cancel_pending();
                 rendered_completion = ReplCompletion::default();
+                rendered_completion_key = None;
                 redraw_terminal_prompt(
                     &mut stdout,
                     engine,
@@ -426,9 +439,12 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
                 tab_completion_mode = false;
                 completion_controller.cancel_pending();
                 rendered_completion = ReplCompletion::default();
+                rendered_completion_key = None;
                 let result = with_suspended_raw_mode(|| engine.handle_line(&line))
                     .map_err(|_| CommandError::message(1, "repl: failed to suspend raw mode"))?;
-                completion_provider.replace_context(engine.completion_context());
+                if let Some(context) = engine.cached_completion_context() {
+                    completion_provider.schedule_context_refresh(context);
+                }
                 if repl_result_has_visible_output(&result, color) {
                     print_terminal_result(
                         &mut stdout,
@@ -835,6 +851,7 @@ fn apply_terminal_completion_result(
     provider: &mut dyn ReplCompletionProvider,
     controller: &mut ReplCompletionController,
     rendered_completion: &mut ReplCompletion,
+    rendered_completion_key: &mut Option<(String, usize)>,
 ) -> io::Result<bool> {
     let Some(result) = provider.poll_ready() else {
         return Ok(false);
@@ -863,6 +880,7 @@ fn apply_terminal_completion_result(
     )?;
     completion.telemetry = telemetry;
     *rendered_completion = completion;
+    *rendered_completion_key = Some((result.input, result.cursor));
     Ok(true)
 }
 

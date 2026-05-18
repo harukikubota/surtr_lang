@@ -307,6 +307,7 @@ mod tests {
     struct ImmediateProvider {
         context: ReplCompletionContext,
         ready: VecDeque<ReplCompletionResult>,
+        scheduled_refreshes: usize,
     }
 
     impl ImmediateProvider {
@@ -314,6 +315,7 @@ mod tests {
             Self {
                 context: engine.completion_context(),
                 ready: VecDeque::new(),
+                scheduled_refreshes: 0,
             }
         }
     }
@@ -338,8 +340,9 @@ mod tests {
             self.ready.pop_front()
         }
 
-        fn replace_context(&mut self, context: ReplCompletionContext) {
+        fn schedule_context_refresh(&mut self, context: ReplCompletionContext) {
             self.context = context;
+            self.scheduled_refreshes += 1;
         }
     }
 
@@ -502,6 +505,41 @@ mod tests {
             "tab completion mode should show candidates"
         );
     }
+
+    #[test]
+    fn submit_input_schedules_context_refresh_without_rebuilding_in_place() {
+        let mut engine = ReplEngine::new().expect("REPL engine should bootstrap");
+        let mut app = App::new();
+        let mut provider = ImmediateProvider::new(&engine);
+        app.input.set("value = 1".to_string());
+
+        submit_input(&mut app, &mut engine, &mut provider);
+
+        assert_eq!(provider.scheduled_refreshes, 1);
+        assert!(app.input.text.is_empty(), "submit should return input immediately");
+    }
+
+    #[test]
+    fn submit_input_refreshes_provider_context_with_new_binding_completion() {
+        let mut engine = ReplEngine::new().expect("REPL engine should bootstrap");
+        let mut app = App::new();
+        let mut provider = ImmediateProvider::new(&engine);
+        app.input.set("value = 1".to_string());
+
+        submit_input(&mut app, &mut engine, &mut provider);
+
+        let labels = provider
+            .context
+            .completions("val", 3)
+            .candidates
+            .into_iter()
+            .map(|candidate| candidate.label)
+            .collect::<Vec<_>>();
+        assert!(
+            labels.iter().any(|label| label == "value"),
+            "new binding should be available in refreshed completion context: {labels:?}"
+        );
+    }
 }
 
 // ── Submission ────────────────────────────────────────────────────────────────
@@ -523,7 +561,9 @@ pub(super) fn submit_input(
     app.last_completion_telemetry = None;
 
     let presented = present_for_interaction(engine.handle_line(&source));
-    provider.replace_context(engine.completion_context());
+    if let Some(context) = engine.cached_completion_context() {
+        provider.schedule_context_refresh(context);
+    }
     match presented.event {
         PresentedEvent::None => {}
         PresentedEvent::Result(result) => app.push_result(
@@ -571,7 +611,9 @@ pub(super) fn submit_command(
                 format!(":{cmd} {arg}")
             };
             let presented = present_for_interaction(engine.handle_line(&line));
-            provider.replace_context(engine.completion_context());
+            if let Some(context) = engine.cached_completion_context() {
+                provider.schedule_context_refresh(context);
+            }
             match presented.event {
                 PresentedEvent::Result(result) => {
                     app.push_result(

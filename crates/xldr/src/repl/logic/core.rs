@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::panic;
@@ -486,6 +489,19 @@ impl ReplCompletionContext {
                     .and_then(|tail| self.callable_signatures.get(tail))
             })
     }
+
+    #[cfg(test)]
+    pub(crate) fn insert_callable_signature_for_test(
+        &mut self,
+        label: &str,
+        qualified_name: &str,
+        signature: &str,
+    ) {
+        self.callable_signatures.insert(
+            label.to_string(),
+            (qualified_name.to_string(), signature.to_string()),
+        );
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -520,6 +536,9 @@ pub struct ReplEngine {
     binding_records: Vec<ReplBindingRecord>,
     import_records: Vec<ReplImportRecord>,
     def_records: Vec<ReplDefRecord>,
+    completion_context_cache: RefCell<Option<ReplCompletionContext>>,
+    #[cfg(test)]
+    completion_context_builds: Cell<usize>,
     startup_results: Vec<ReplResult>,
     error_display_mode: ErrorDisplayMode,
 }
@@ -571,6 +590,9 @@ impl ReplEngine {
             binding_records: Vec::new(),
             import_records: Vec::new(),
             def_records: Vec::new(),
+            completion_context_cache: RefCell::new(None),
+            #[cfg(test)]
+            completion_context_builds: Cell::new(0),
             error_display_mode: ErrorDisplayMode::Full,
         };
         engine.bootstrap_std_modules()?;
@@ -653,6 +675,9 @@ impl ReplEngine {
             binding_records: Vec::new(),
             import_records: Vec::new(),
             def_records: Vec::new(),
+            completion_context_cache: RefCell::new(None),
+            #[cfg(test)]
+            completion_context_builds: Cell::new(0),
             startup_results: Vec::new(),
             error_display_mode: ErrorDisplayMode::Full,
         };
@@ -801,6 +826,9 @@ impl ReplEngine {
             binding_records: Vec::new(),
             import_records: state.import_records.clone(),
             def_records: state.def_records.clone(),
+            completion_context_cache: RefCell::new(None),
+            #[cfg(test)]
+            completion_context_builds: Cell::new(0),
             startup_results: Vec::new(),
             error_display_mode: ErrorDisplayMode::Full,
         })
@@ -1529,6 +1557,10 @@ impl ReplEngine {
     }
 
     pub fn completion_context(&self) -> ReplCompletionContext {
+        if let Some(cached) = self.completion_context_cache.borrow().clone() {
+            return cached;
+        }
+
         let mut callable_signatures = BTreeMap::new();
         let mut insert_signature = |label: &str, qualified_name: String, signature: String| {
             callable_signatures
@@ -1609,22 +1641,40 @@ impl ReplEngine {
             }
         }
 
-        ReplCompletionContext {
+        let context = ReplCompletionContext {
             index: self.semantic_index(),
             callable_signatures,
-        }
+        };
+        #[cfg(test)]
+        self.completion_context_builds
+            .set(self.completion_context_builds.get() + 1);
+        *self.completion_context_cache.borrow_mut() = Some(context.clone());
+        context
+    }
+
+    fn insert_completion_symbol(&mut self, symbol: String) {
+        self.symbols.insert(symbol);
     }
 
     fn insert_surface_symbol(&mut self, name: &str) {
         let surface_name = crate::surface_rendered_name(name);
-        self.symbols.insert(surface_name.clone());
+        self.insert_completion_symbol(surface_name.clone());
         if let Some(short) = surface_name.rsplit("::").next() {
-            self.symbols.insert(short.to_string());
+            self.insert_completion_symbol(short.to_string());
         }
     }
 
     pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
         self.completion_context().completions(input, cursor)
+    }
+
+    pub fn cached_completion_context(&self) -> Option<ReplCompletionContext> {
+        self.completion_context_cache.borrow().clone()
+    }
+
+    #[cfg(test)]
+    fn completion_context_build_count(&self) -> usize {
+        self.completion_context_builds.get()
     }
 
     fn repl_completion_candidate_from_analysis(
@@ -1661,6 +1711,113 @@ impl ReplEngine {
             "{binding_name}({params}) -> {}",
             format_query_ty(ret.as_ref())
         ))
+    }
+
+    fn cached_completion_symbol_for_name(
+        &self,
+        name: &str,
+    ) -> Option<surtr_analysis::CompletionSymbol> {
+        if let Some(binding) = self.binding_records.iter().rev().find(|binding| binding.name == name) {
+            return Some(surtr_analysis::CompletionSymbol {
+                label: binding.name.clone(),
+                replacement: binding.name.clone(),
+                kind: surtr_analysis::CompletionKind::Variable,
+                detail: Some(binding.ty.clone()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+            });
+        }
+
+        let decl = self.visible_declaration(name)?;
+        if let Some(label) = self.completion_visible_owner_label(decl) {
+            if label == name {
+                return Some(surtr_analysis::CompletionSymbol {
+                    label: label.clone(),
+                    replacement: label,
+                    kind: surtr_analysis::CompletionKind::TypeConstructor,
+                    detail: self.declaration_signature(decl),
+                    documentation: None,
+                    sort_text: None,
+                    origin: None,
+                    definition: None,
+                });
+            }
+        }
+        if Self::declaration_is_function_completion_surface(decl) {
+            let detail = self.declaration_signature(decl).or_else(|| {
+                self.find_signature(name).map(|(qualified_name, signature)| {
+                    Self::render_signature_with_qualified_name(&qualified_name, signature)
+                })
+            });
+            return Some(surtr_analysis::CompletionSymbol {
+                label: name.to_string(),
+                replacement: name.to_string(),
+                kind: surtr_analysis::CompletionKind::FunctionCall,
+                detail,
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+            });
+        }
+        None
+    }
+
+    fn sync_cached_completion_context_after_commit(
+        &self,
+        imported_symbols: &[String],
+        bindings: &[forge::BindingInfo],
+        function_defs: &[String],
+    ) {
+        let Some(mut context) = self.completion_context_cache.borrow().clone() else {
+            return;
+        };
+
+        let mut seen = BTreeSet::new();
+        for name in imported_symbols
+            .iter()
+            .chain(bindings.iter().map(|binding| &binding.name))
+            .chain(function_defs.iter())
+        {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            if let Some(symbol) = self.cached_completion_symbol_for_name(name) {
+                context.index.upsert_symbol(symbol);
+            }
+            if let Some(binding) = self
+                .binding_records
+                .iter()
+                .rev()
+                .find(|binding| binding.name == *name)
+            {
+                if let Some(signature) =
+                    Self::callable_binding_signature_from_type(&binding.name, &binding.ty)
+                {
+                    context
+                        .callable_signatures
+                        .entry(binding.name.clone())
+                        .or_insert((binding.name.clone(), signature));
+                }
+                continue;
+            }
+            if let Some((qualified_name, signature)) = self.find_signature(name) {
+                context
+                    .callable_signatures
+                    .entry(name.clone())
+                    .or_insert((qualified_name.clone(), signature.clone()));
+                if let Some(tail) = name.rsplit("::").next() {
+                    context
+                        .callable_signatures
+                        .entry(tail.to_string())
+                        .or_insert((qualified_name, signature));
+                }
+            }
+        }
+
+        *self.completion_context_cache.borrow_mut() = Some(context);
     }
 
     fn declaration_is_function_completion_surface(entry: &sigil::DeclarationEntry) -> bool {
@@ -6885,10 +7042,10 @@ impl ReplEngine {
                     }
                 }
                 for imported in &import_result.imported_symbols {
-                    self.symbols.insert(imported.clone());
+                    self.insert_completion_symbol(imported.clone());
                 }
                 for b in &meta.bindings {
-                    self.symbols.insert(b.name.clone());
+                    self.insert_completion_symbol(b.name.clone());
                 }
                 for name in &meta.function_defs {
                     self.insert_surface_symbol(name);
@@ -6909,6 +7066,11 @@ impl ReplEngine {
                     .extend(Self::collect_import_records(&ast, committed_line));
                 self.def_records
                     .extend(Self::collect_def_records(&ast, committed_line));
+                self.sync_cached_completion_context_after_commit(
+                    &import_result.imported_symbols,
+                    &meta.bindings,
+                    &meta.function_defs,
+                );
                 if Self::chunk_is_replayable(&ast) {
                     self.replay_inputs.push(committed_source);
                 }
@@ -8646,6 +8808,9 @@ mod tests {
             binding_records: Vec::new(),
             import_records: Vec::new(),
             def_records: Vec::new(),
+            completion_context_cache: RefCell::new(None),
+            #[cfg(test)]
+            completion_context_builds: Cell::new(0),
             error_display_mode: ErrorDisplayMode::Full,
         }
     }
@@ -8875,6 +9040,60 @@ mod tests {
         let applied = engine.handle_line("f1(10)");
         let applied_text = ReplEngine::repl_result_text(&applied);
         assert!(applied_text.contains("15"), "{applied_text}");
+    }
+
+    #[test]
+    fn completion_context_is_memoized_until_repl_state_changes() {
+        let mut engine = ReplEngine::new().expect("engine should initialize");
+
+        let baseline = engine.completion_context_build_count();
+        let first = engine.completion_context();
+        let second = engine.completion_context();
+
+        assert_eq!(first, second);
+        assert_eq!(engine.completion_context_build_count(), baseline + 1);
+
+        let bind = engine.handle_line("value = 1");
+        assert!(!bind.should_exit, "{}", ReplEngine::repl_result_text(&bind));
+
+        let after_mutation = engine
+            .cached_completion_context()
+            .expect("completion cache should stay available after commit");
+        assert!(
+            after_mutation
+                .callable_signatures
+                .get("value")
+                .is_none(),
+            "plain value bindings should not become callable signatures"
+        );
+        assert_eq!(engine.completion_context_build_count(), baseline + 1);
+
+        let after_cached_reuse = engine.completion_context();
+        assert_eq!(after_mutation, after_cached_reuse);
+        assert_eq!(engine.completion_context_build_count(), baseline + 1);
+    }
+
+    #[test]
+    fn cached_completion_context_keeps_new_binding_after_commit() {
+        let mut engine = ReplEngine::new().expect("engine should initialize");
+        let _ = engine.completion_context();
+
+        let bind = engine.handle_line("value = 1");
+        assert!(!bind.should_exit, "{}", ReplEngine::repl_result_text(&bind));
+
+        let cached = engine
+            .cached_completion_context()
+            .expect("completion cache should remain available after commit");
+        let labels = cached
+            .completions("val", 3)
+            .candidates
+            .into_iter()
+            .map(|candidate| candidate.label)
+            .collect::<Vec<_>>();
+        assert!(
+            labels.iter().any(|label| label == "value"),
+            "cached completion context should include new binding: {labels:?}"
+        );
     }
 
     #[test]
