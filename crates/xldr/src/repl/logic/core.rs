@@ -376,7 +376,7 @@ impl ReplCompletionContext {
                 telemetry,
             };
         }
-        let (_replace_start, _replace_end, prefix) = completion_token(input, cursor);
+        let (replace_start, replace_end, prefix) = completion_token(input, cursor);
         let call_context = completion_call_context(input, cursor);
         let signature = call_context
             .as_ref()
@@ -425,11 +425,19 @@ impl ReplCompletionContext {
             )
         };
 
-        let candidates = completion
+        let mut candidates = completion
             .candidates
             .into_iter()
             .map(ReplEngine::repl_completion_candidate_from_analysis)
             .collect::<Vec<_>>();
+        if call_context.is_none() {
+            self.inject_special_repl_candidates(
+                &mut candidates,
+                &prefix,
+                replace_start,
+                replace_end,
+            );
+        }
         let mut telemetry = CompletionTelemetry::default();
         telemetry.record_completion_compute(started.elapsed());
         ReplCompletion {
@@ -463,6 +471,68 @@ impl ReplCompletionContext {
             )],
             active_parameter: Some(context.active_parameter),
         })
+    }
+
+    fn inject_special_repl_candidates(
+        &self,
+        candidates: &mut Vec<ReplCompletionCandidate>,
+        prefix: &str,
+        replace_start: usize,
+        replace_end: usize,
+    ) {
+        for (label, replacement, aliases) in [
+            ("Ok", "Ok", &[][..]),
+            ("Err", "Err", &[][..]),
+            ("True", "True", &["true"][..]),
+            ("False", "False", &["false"][..]),
+        ] {
+            let matched_label = if label.starts_with(prefix) {
+                Some(label)
+            } else {
+                aliases
+                    .iter()
+                    .copied()
+                    .find(|alias| alias.starts_with(prefix))
+            };
+            let Some(matched_label) = matched_label else {
+                continue;
+            };
+            if aliases.iter().copied().any(|alias| {
+                alias == matched_label
+                    && candidates
+                        .iter()
+                        .any(|candidate| candidate.label == alias && candidate.replacement == alias)
+            }) {
+                continue;
+            }
+            if candidates.iter().any(|candidate| {
+                candidate.label == matched_label && candidate.replacement == replacement
+            }) {
+                continue;
+            }
+            candidates.push(ReplCompletionCandidate {
+                label: matched_label.to_string(),
+                replacement: replacement.to_string(),
+                kind: ReplCompletionKind::FunctionCall,
+                detail: self.special_repl_candidate_detail(replacement),
+                documentation: None,
+                replace_start,
+                replace_end,
+            });
+        }
+        candidates.sort_by(|left, right| {
+            left.label
+                .cmp(&right.label)
+                .then_with(|| left.replacement.cmp(&right.replacement))
+        });
+    }
+
+    fn special_repl_candidate_detail(&self, replacement: &str) -> Option<String> {
+        self.callable_signatures
+            .get(replacement)
+            .map(|(qualified_name, signature)| {
+                ReplEngine::render_signature_with_qualified_name(qualified_name, signature.clone())
+            })
     }
 
     fn expected_param_type_for_call(&self, context: &CompletionCallContext) -> Option<String> {
@@ -1677,6 +1747,11 @@ impl ReplEngine {
     fn repl_completion_candidate_from_analysis(
         candidate: surtr_analysis::CompletionCandidate,
     ) -> ReplCompletionCandidate {
+        let label = Self::repl_completion_label(
+            &candidate.label,
+            &candidate.replacement,
+            candidate.detail.as_deref(),
+        );
         let kind = match candidate.kind {
             surtr_analysis::CompletionKind::Variable => ReplCompletionKind::Variable,
             surtr_analysis::CompletionKind::TypeConstructor => ReplCompletionKind::TypeConstructor,
@@ -1685,13 +1760,40 @@ impl ReplEngine {
         };
 
         ReplCompletionCandidate {
-            label: candidate.label,
+            label,
             replacement: candidate.replacement,
             kind,
             detail: candidate.detail,
             documentation: candidate.documentation,
             replace_start: candidate.replace_start,
             replace_end: candidate.replace_end,
+        }
+    }
+
+    fn repl_completion_label(label: &str, replacement: &str, detail: Option<&str>) -> String {
+        if label != replacement {
+            return label.to_string();
+        }
+
+        let arity = match replacement {
+            "Ok" | "Err" => Some(1),
+            "True" | "False" => Some(0),
+            _ => None,
+        };
+        let Some(arity) = arity else {
+            return label.to_string();
+        };
+
+        if matches!(replacement, "Ok" | "Err")
+            && !detail.is_some_and(|detail| detail.contains(&format!("Result::{replacement}(")))
+        {
+            return label.to_string();
+        }
+
+        if arity == 0 {
+            label.to_string()
+        } else {
+            format!("{label}/{arity}")
         }
     }
 

@@ -330,6 +330,185 @@ fn core_completion_returns_type_constructors_and_type_paths() {
 }
 
 #[test]
+fn core_completion_shows_bare_result_constructors_and_bool_variants() {
+    let engine = engine();
+
+    let ok_candidates = engine.completions("Ok", "Ok".len()).candidates;
+    let ok_labels = ok_candidates
+        .iter()
+        .map(|candidate| candidate.label.clone())
+        .collect::<Vec<_>>();
+    let ok = ok_candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "Ok")
+        .unwrap_or_else(|| panic!("bare Ok constructor should be suggested: {ok_labels:?}"));
+    assert_eq!(ok.kind, ReplCompletionKind::FunctionCall);
+    assert_eq!(ok.replacement, "Ok");
+    assert!(
+        ok.detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("Result::Ok(")),
+        "Ok completion detail should expose the Result constructor signature: {ok:?}"
+    );
+
+    let err_candidates = engine.completions("Err", "Err".len()).candidates;
+    let err_labels = err_candidates
+        .iter()
+        .map(|candidate| candidate.label.clone())
+        .collect::<Vec<_>>();
+    let err = err_candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "Err")
+        .unwrap_or_else(|| panic!("bare Err constructor should be suggested: {err_labels:?}"));
+    assert_eq!(err.kind, ReplCompletionKind::FunctionCall);
+    assert_eq!(err.replacement, "Err");
+    assert!(
+        err.detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("Result::Err(")),
+        "Err completion detail should expose the Result constructor signature: {err:?}"
+    );
+
+    let true_candidates = engine.completions("Tr", "Tr".len()).candidates;
+    let true_labels = true_candidates
+        .iter()
+        .map(|candidate| candidate.label.clone())
+        .collect::<Vec<_>>();
+    let true_variant = true_candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "True")
+        .unwrap_or_else(|| panic!("bare True variant should be suggested: {true_labels:?}"));
+    assert_eq!(true_variant.kind, ReplCompletionKind::FunctionCall);
+    assert_eq!(true_variant.replacement, "True");
+
+    let false_candidates = engine.completions("Fal", "Fal".len()).candidates;
+    let false_labels = false_candidates
+        .iter()
+        .map(|candidate| candidate.label.clone())
+        .collect::<Vec<_>>();
+    let false_variant = false_candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "False")
+        .unwrap_or_else(|| panic!("bare False variant should be suggested: {false_labels:?}"));
+    assert_eq!(false_variant.kind, ReplCompletionKind::FunctionCall);
+    assert_eq!(false_variant.replacement, "False");
+}
+
+#[test]
+fn core_completion_accepts_lowercase_bool_aliases() {
+    let engine = engine();
+
+    let true_candidates = engine.completions("tru", "tru".len()).candidates;
+    let true_labels = true_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    let true_variant = true_candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "true")
+        .unwrap_or_else(|| panic!("lowercase true alias should be suggested: {true_labels:?}"));
+    assert_eq!(true_variant.kind, ReplCompletionKind::FunctionCall);
+    assert_eq!(true_variant.replacement, "True");
+
+    let false_candidates = engine.completions("fal", "fal".len()).candidates;
+    let false_labels = false_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    let false_variant = false_candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "false")
+        .unwrap_or_else(|| panic!("lowercase false alias should be suggested: {false_labels:?}"));
+    assert_eq!(false_variant.kind, ReplCompletionKind::FunctionCall);
+    assert_eq!(false_variant.replacement, "False");
+}
+
+#[test]
+fn core_completion_hides_lowercase_bool_alias_when_shadowed_by_value_binding() {
+    let mut engine = engine();
+    let bound = rendered_text(&engine.handle_line("true = 1"));
+    assert!(bound.contains("true: Int = 1"), "{bound}");
+
+    let candidates = engine.completions("tru", "tru".len()).candidates;
+    let rendered = candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    assert!(
+        !candidates
+            .iter()
+            .any(|candidate| candidate.label == "true" && candidate.replacement == "True"),
+        "special lowercase bool alias should disappear once shadowed: {rendered:?}"
+    );
+    assert!(
+        candidates
+            .iter()
+            .any(|candidate| candidate.label == "true" && candidate.replacement == "true"),
+        "shadowing binding should remain visible as the real completion: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_hides_lowercase_bool_alias_when_shadowed_by_import_or_top_level_def() {
+    let mut imported_engine = ReplEngine::from_module_source(
+        "hoge.srt",
+        r#"
+defmod Hoge {
+  def true() -> Int { 1 }
+}
+"#,
+    )
+    .expect("module preload should succeed");
+
+    let imported = rendered_text(&imported_engine.handle_line("import Hoge::true"));
+    assert!(imported.contains("Imported Hoge::true"), "{imported}");
+
+    let imported_candidates = imported_engine.completions("tru", "tru".len()).candidates;
+    let imported_rendered = imported_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    assert!(
+        !imported_candidates
+            .iter()
+            .any(|candidate| candidate.label == "true" && candidate.replacement == "True"),
+        "imported lowercase symbol should suppress the special bool alias: {imported_rendered:?}"
+    );
+    assert!(
+        imported_candidates
+            .iter()
+            .any(|candidate| candidate.label == "true" && candidate.replacement == "true"),
+        "imported lowercase symbol should stay visible as the actual completion: {imported_rendered:?}"
+    );
+
+    let mut live_engine = engine();
+    let defined = live_engine.handle_line("def true() -> Int { 1 }");
+    assert!(
+        !matches!(defined.output, ReplOutput::EvalError { .. }),
+        "live top-level def should compile: {}",
+        rendered_text(&defined)
+    );
+
+    let live_candidates = live_engine.completions("tru", "tru".len()).candidates;
+    let live_rendered = live_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    assert!(
+        !live_candidates
+            .iter()
+            .any(|candidate| candidate.label == "true" && candidate.replacement == "True"),
+        "live top-level def should suppress the special bool alias: {live_rendered:?}"
+    );
+    assert!(
+        live_candidates
+            .iter()
+            .any(|candidate| candidate.label == "true" && candidate.replacement == "true"),
+        "live top-level def should remain visible as the actual completion: {live_rendered:?}"
+    );
+}
+
+#[test]
 fn core_completion_only_shows_unqualified_importable_functions_after_import() {
     let mut engine = engine();
 
