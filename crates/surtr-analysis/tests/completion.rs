@@ -359,6 +359,166 @@ fn repl_completion_hides_qualified_enum_variants_until_owner_path_is_confirmed()
 }
 
 #[test]
+fn completion_request_injects_shared_result_ctors_and_bool_variants() {
+    let index = SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "Result::Ok".to_string(),
+            replacement: "Result::Ok".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("Result::Ok($T) -> Result<$T, Error>".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "Ok".to_string(),
+            replacement: "Ok".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("Result::Ok($T) -> Result<$T, Error>".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "Result::Err".to_string(),
+            replacement: "Result::Err".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("Result::Err(Error) -> Result<$T, Error>".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "Err".to_string(),
+            replacement: "Err".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("Result::Err(Error) -> Result<$T, Error>".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "Boolean::True".to_string(),
+            replacement: "Boolean::True".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("Boolean::True() -> Boolean".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "True".to_string(),
+            replacement: "True".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("Boolean::True() -> Boolean".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "Boolean::False".to_string(),
+            replacement: "Boolean::False".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("Boolean::False() -> Boolean".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "False".to_string(),
+            replacement: "False".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("Boolean::False() -> Boolean".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+    ]);
+
+    let ok = complete_prefix(CompletionRequest {
+        index: &index,
+        source: "Ok",
+        cursor: 2,
+    });
+    assert_eq!(
+        ok.candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Ok"]
+    );
+    assert_eq!(ok.candidates[0].kind, CompletionKind::FunctionCall);
+    assert_eq!(ok.candidates[0].replacement, "Ok");
+    assert_eq!(
+        ok.candidates[0].detail.as_deref(),
+        Some("Result::Ok($T) -> Result<$T, Error>")
+    );
+
+    let err = complete_prefix(CompletionRequest {
+        index: &index,
+        source: "Err",
+        cursor: 3,
+    });
+    assert_eq!(
+        err.candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Err"]
+    );
+    assert_eq!(
+        err.candidates[0].detail.as_deref(),
+        Some("Result::Err(Error) -> Result<$T, Error>")
+    );
+
+    let true_completion = complete_prefix(CompletionRequest {
+        index: &index,
+        source: "Tr",
+        cursor: 2,
+    });
+    assert_eq!(
+        true_completion
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["True"]
+    );
+    assert_eq!(true_completion.candidates[0].replacement, "True");
+    assert_eq!(
+        true_completion.candidates[0].detail.as_deref(),
+        Some("Boolean::True() -> Boolean")
+    );
+
+    let false_completion = complete_prefix(CompletionRequest {
+        index: &index,
+        source: "Fal",
+        cursor: 3,
+    });
+    assert_eq!(
+        false_completion
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["False"]
+    );
+    assert_eq!(false_completion.candidates[0].replacement, "False");
+    assert_eq!(
+        false_completion.candidates[0].detail.as_deref(),
+        Some("Boolean::False() -> Boolean")
+    );
+}
+
+#[test]
 fn repl_completion_scope_can_limit_candidates_to_variables() {
     let index = SemanticIndex::from_symbols(vec![
         CompletionSymbol {

@@ -6879,6 +6879,12 @@ impl Codegen {
 
             TypedInner::EnumDef(_, variants) => {
                 for variant in variants {
+                    if matches!(
+                        sindr::names::surface_rendered_name(&variant.constructor_name).as_str(),
+                        "Result::Ok" | "Result::Err" | "Boolean::True" | "Boolean::False"
+                    ) {
+                        continue;
+                    }
                     self.state
                         .type_registry
                         .try_register(TypeEntry {

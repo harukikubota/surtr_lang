@@ -106,9 +106,10 @@ impl SemanticIndex {
 
         let mut symbols = Vec::new();
         for entry in signatures {
+            let qualified_name = surface_name(&entry.qualified_name);
             symbols.push(CompletionSymbol {
-                label: surface_name(&entry.qualified_name),
-                replacement: surface_name(&entry.qualified_name),
+                label: qualified_name.clone(),
+                replacement: qualified_name,
                 kind: completion_kind_for_doc_kind(&entry.kind),
                 detail: Some(entry.signature.clone()),
                 documentation: None,
@@ -125,9 +126,10 @@ impl SemanticIndex {
                 .get(entry.qualified_name.as_str())
                 .map(|signature| (*signature).to_string())
                 .or_else(|| entry.signature.clone());
+            let qualified_name = surface_name(&entry.qualified_name);
             symbols.push(CompletionSymbol {
-                label: surface_name(&entry.qualified_name),
-                replacement: surface_name(&entry.qualified_name),
+                label: qualified_name.clone(),
+                replacement: qualified_name,
                 kind: completion_kind_for_doc_kind(&entry.kind),
                 detail,
                 documentation: Some(entry.doc.clone()),
@@ -163,9 +165,10 @@ impl SemanticIndex {
             }
 
             if let Some(kind) = completion_kind_for_declaration_kind(&entry.kind) {
+                let qualified_name = surface_name(&entry.fq_name);
                 symbols.push(CompletionSymbol {
-                    label: surface_name(&entry.fq_name),
-                    replacement: surface_name(&entry.fq_name),
+                    label: qualified_name.clone(),
+                    replacement: qualified_name,
                     kind,
                     detail: None,
                     documentation: None,
@@ -374,9 +377,7 @@ fn complete_prefix_with_options(
         }
         push_completion_candidate(&mut candidates, candidate);
     }
-    if presentation == CompletionPresentation::Repl {
-        sort_repl_completion_candidates(&mut candidates);
-    }
+    sort_completion_candidates(&mut candidates, presentation);
 
     CompletionResponse {
         candidates,
@@ -397,6 +398,17 @@ fn apply_completion_presentation(
     presentation: CompletionPresentation,
     prefix: &str,
 ) {
+    if !prefix.contains("::") && is_builtin_special_variant_symbol(&candidate.label) {
+        if let Some(tail) = candidate
+            .label
+            .rsplit_once("::")
+            .map(|(_, tail)| tail.to_string())
+        {
+            candidate.label = tail.clone();
+            candidate.replacement = tail;
+        }
+    }
+
     if presentation != CompletionPresentation::Repl {
         return;
     }
@@ -440,6 +452,23 @@ fn push_completion_candidate(
         return;
     }
     candidates.push(candidate);
+}
+
+fn sort_completion_candidates(
+    candidates: &mut [CompletionCandidate],
+    presentation: CompletionPresentation,
+) {
+    match presentation {
+        CompletionPresentation::Full => candidates.sort_by(|left, right| {
+            left.label
+                .cmp(&right.label)
+                .then_with(|| {
+                    completion_kind_rank(&left.kind).cmp(&completion_kind_rank(&right.kind))
+                })
+                .then_with(|| left.replacement.cmp(&right.replacement))
+        }),
+        CompletionPresentation::Repl => sort_repl_completion_candidates(candidates),
+    }
 }
 
 fn sort_repl_completion_candidates(candidates: &mut [CompletionCandidate]) {
@@ -712,4 +741,11 @@ fn default_sort_text_for_candidate(candidate: &CompletionCandidate) -> String {
 
 fn surface_name(name: &str) -> String {
     sindr::names::surface_rendered_name(name)
+}
+
+fn is_builtin_special_variant_symbol(name: &str) -> bool {
+    matches!(
+        surface_name(name).as_str(),
+        "Result::Ok" | "Result::Err" | "Boolean::True" | "Boolean::False"
+    )
 }

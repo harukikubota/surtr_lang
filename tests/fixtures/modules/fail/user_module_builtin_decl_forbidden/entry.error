@@ -1,2 +1,2 @@
 phase: parse
-contains: current source policy
+contains: @builtin declarations are only allowed in standard/internal source

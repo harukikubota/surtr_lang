@@ -22,6 +22,7 @@ pub enum Visibility {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeclAttrs {
     pub doc: Option<String>,
+    pub builtin: bool,
     pub auto_import: bool,
     pub hidden: bool,
     pub readonly: bool,
@@ -34,6 +35,7 @@ impl Default for DeclAttrs {
     fn default() -> Self {
         Self {
             doc: None,
+            builtin: false,
             auto_import: false,
             hidden: false,
             readonly: false,

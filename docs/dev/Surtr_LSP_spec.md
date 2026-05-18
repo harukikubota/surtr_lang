@@ -575,6 +575,7 @@ v1 では context-aware candidate を増やす。
 - enum owner / variant display
 - process public surface completion
 - stdlib `@doc` を documentation field に流す
+- builtin-special enum (`Result`, `Boolean`) の bare constructor completion は shorthand label (`Ok`, `Err`, `True`, `False`) を出してよいが、`detail` / hover / `:sig` は canonical surface (`Result::Ok`, `Boolean::True` など) を表示する
 
 later stage の symbol は候補にしない。explicit import / auto-import の shadowing と衝突は
 Sigil 規則に従う。

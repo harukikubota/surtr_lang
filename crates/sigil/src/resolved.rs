@@ -5,6 +5,7 @@ use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, Symbol, Visibility};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedDeclAttrs {
     pub doc: Option<String>,
+    pub builtin: bool,
     pub hidden: bool,
     pub readonly: bool,
     pub visibility: Visibility,
@@ -16,6 +17,7 @@ impl Default for ResolvedDeclAttrs {
     fn default() -> Self {
         Self {
             doc: None,
+            builtin: false,
             hidden: false,
             readonly: false,
             visibility: Visibility::Public,

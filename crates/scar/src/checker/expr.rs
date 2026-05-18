@@ -596,6 +596,37 @@ impl Checker {
 
                 if let Some(variant) = self.lookup_enum_variant_by_constructor_id(id.unique_id) {
                     let variant = self.instantiate_enum_variant(&variant);
+                    if Self::surface_name(&variant.enum_name) == "Boolean" {
+                        if !variant.payload.is_empty() {
+                            return Err(TypeError {
+                                message: format!(
+                                    "Builtin Boolean variant {} unexpectedly requires payload",
+                                    id.name
+                                ),
+                                span: span.clone(),
+                                hint: None,
+                            });
+                        }
+                        let value = match variant.short_name.as_str() {
+                            "True" => true,
+                            "False" => false,
+                            _ => {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "Unknown builtin Boolean variant: {}",
+                                        variant.short_name
+                                    ),
+                                    span: span.clone(),
+                                    hint: None,
+                                });
+                            }
+                        };
+                        return Ok(TypedNode {
+                            ty: Ty::Bool,
+                            span: span.clone(),
+                            node: TypedInner::Lit(Lit::Bool(value)),
+                        });
+                    }
                     if Self::surface_name(&variant.enum_name) == "MatchResult"
                         && !self.in_extractor_body
                     {
@@ -835,8 +866,8 @@ impl Checker {
                 self.check_struct_def(span, id, type_params, fields)
             }
             Resolved::RecordDef(span, id, fields) => self.check_record_def(span, id, fields),
-            Resolved::EnumDef(span, id, type_params, variants, _) => {
-                self.check_enum_def(span, id, type_params, variants)
+            Resolved::EnumDef(span, id, type_params, variants, attrs) => {
+                self.check_enum_def(span, id, type_params, variants, attrs)
             }
             Resolved::StructLit(span, id, field_vals) => {
                 self.check_struct_lit(span, id, field_vals)

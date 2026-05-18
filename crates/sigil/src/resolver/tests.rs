@@ -1286,7 +1286,13 @@ fn test_builtin_decl_resolution() {
             assert_eq!(id.name, "print");
             assert_eq!(id.unique_id, 2); // 0=Ok, 1=Err, 2=print
             assert_eq!(params.len(), 1);
-            assert_eq!(*attrs, ResolvedDeclAttrs::default());
+            assert_eq!(
+                *attrs,
+                ResolvedDeclAttrs {
+                    builtin: true,
+                    ..ResolvedDeclAttrs::default()
+                }
+            );
             assert!(matches!(
                 ret_ty,
                 Some(spire::ast::AstTy::Named(_, ty)) if ty == "Unit"
@@ -1413,7 +1419,13 @@ fn test_builtin_type_decl_resolution() {
         Resolved::BuiltinTypeDecl(_, id, params, attrs) => {
             assert_eq!(id.name, "Int");
             assert!(params.is_empty());
-            assert_eq!(*attrs, ResolvedDeclAttrs::default());
+            assert_eq!(
+                *attrs,
+                ResolvedDeclAttrs {
+                    builtin: true,
+                    ..ResolvedDeclAttrs::default()
+                }
+            );
         }
         _ => panic!("Expected BuiltinTypeDecl"),
     }

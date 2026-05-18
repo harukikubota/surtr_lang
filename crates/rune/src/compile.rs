@@ -258,22 +258,19 @@ pub(crate) fn collect_default_script_compile_sources(
         module_input_stages.push(vec![module_input.clone()]);
     }
 
-    let module_sources = xldr::collect_module_sources_with_stdlib_variant(
-        stdlib_variant,
-        &[],
-        &module_input_stages,
-    )
-    .map_err(|e| {
-        module_source_collection_error_as_rune_error(
-            file_path,
-            source,
-            format!(
-                "{}: failed to collect definition sources: {}",
-                env.command_name(),
-                e
-            ),
-        )
-    })?;
+    let module_sources =
+        xldr::collect_module_sources_with_stdlib_variant(stdlib_variant, &[], &module_input_stages)
+            .map_err(|e| {
+                module_source_collection_error_as_rune_error(
+                    file_path,
+                    source,
+                    format!(
+                        "{}: failed to collect definition sources: {}",
+                        env.command_name(),
+                        e
+                    ),
+                )
+            })?;
     Ok(xldr::compose_script_compile_sources_with_stdlib_variant(
         file_path,
         source,

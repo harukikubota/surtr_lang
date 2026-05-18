@@ -738,13 +738,29 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
         Ok(ty)
     }
 
+    fn builtin_special_enum_ty_for_query(ident: &str, args: &[Ty]) -> Option<Ty> {
+        let surface = ident.strip_prefix("Global::").unwrap_or(ident);
+        match surface {
+            "Boolean" if args.is_empty() => Some(Ty::Bool),
+            "Result" => args
+                .first()
+                .cloned()
+                .map(|ok| Ty::Result(Box::new(ok), Box::new(Ty::Error))),
+            _ => None,
+        }
+    }
+
     fn build_named_type(&mut self, ident: &str) -> Result<Ty, String> {
         if let Some(def) = self.env.lookup_type_def(ident) {
             return Ok(match &def.kind {
                 crate::env::TypeKind::Struct => Ty::Struct(def.name.clone(), def.fields.clone()),
                 crate::env::TypeKind::Record => Ty::Record(def.name.clone(), def.fields.clone()),
                 crate::env::TypeKind::ConcreteError => Ty::Error,
-                crate::env::TypeKind::Enum => Ty::Enum(def.name.clone(), Vec::new()),
+                crate::env::TypeKind::Enum => Self::builtin_special_enum_ty_for_query(
+                    def.name.strip_prefix("Global::").unwrap_or(&def.name),
+                    &[],
+                )
+                .unwrap_or_else(|| Ty::Enum(def.name.clone(), Vec::new())),
             });
         }
 
@@ -801,7 +817,8 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
                 };
                 Ty::Pid(pid_marker_name_from_ty(inner))
             }
-            other => Ty::Enum(other.to_string(), args),
+            other => Self::builtin_special_enum_ty_for_query(other, &args)
+                .unwrap_or_else(|| Ty::Enum(other.to_string(), args)),
         })
     }
 

@@ -344,11 +344,10 @@ fn core_completion_shows_bare_result_constructors_and_bool_variants() {
         .unwrap_or_else(|| panic!("bare Ok constructor should be suggested: {ok_labels:?}"));
     assert_eq!(ok.kind, ReplCompletionKind::FunctionCall);
     assert_eq!(ok.replacement, "Ok");
-    assert!(
-        ok.detail
-            .as_deref()
-            .is_some_and(|detail| detail.contains("Result::Ok(")),
-        "Ok completion detail should expose the Result constructor signature: {ok:?}"
+    assert_eq!(
+        ok.detail.as_deref(),
+        Some("Result::Ok($T) -> Result<$T, Error>"),
+        "Ok completion detail should expose the canonical Result surface: {ok:?}"
     );
 
     let err_candidates = engine.completions("Err", "Err".len()).candidates;
@@ -362,11 +361,10 @@ fn core_completion_shows_bare_result_constructors_and_bool_variants() {
         .unwrap_or_else(|| panic!("bare Err constructor should be suggested: {err_labels:?}"));
     assert_eq!(err.kind, ReplCompletionKind::FunctionCall);
     assert_eq!(err.replacement, "Err");
-    assert!(
-        err.detail
-            .as_deref()
-            .is_some_and(|detail| detail.contains("Result::Err(")),
-        "Err completion detail should expose the Result constructor signature: {err:?}"
+    assert_eq!(
+        err.detail.as_deref(),
+        Some("Result::Err(Error) -> Result<$T, Error>"),
+        "Err completion detail should expose the canonical Result surface: {err:?}"
     );
 
     let true_candidates = engine.completions("Tr", "Tr".len()).candidates;
@@ -380,6 +378,10 @@ fn core_completion_shows_bare_result_constructors_and_bool_variants() {
         .unwrap_or_else(|| panic!("bare True variant should be suggested: {true_labels:?}"));
     assert_eq!(true_variant.kind, ReplCompletionKind::FunctionCall);
     assert_eq!(true_variant.replacement, "True");
+    assert_eq!(
+        true_variant.detail.as_deref(),
+        Some("Boolean::True() -> Boolean")
+    );
 
     let false_candidates = engine.completions("Fal", "Fal".len()).candidates;
     let false_labels = false_candidates
@@ -392,6 +394,10 @@ fn core_completion_shows_bare_result_constructors_and_bool_variants() {
         .unwrap_or_else(|| panic!("bare False variant should be suggested: {false_labels:?}"));
     assert_eq!(false_variant.kind, ReplCompletionKind::FunctionCall);
     assert_eq!(false_variant.replacement, "False");
+    assert_eq!(
+        false_variant.detail.as_deref(),
+        Some("Boolean::False() -> Boolean")
+    );
 }
 
 #[test]
@@ -1080,6 +1086,23 @@ fn core_completion_hides_enum_variants_until_owner_path_is_confirmed() {
         ]
     );
 
+    let bool_labels = engine
+        .completions("Bool", "Bool".len())
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        bool_labels,
+        vec![
+            "Boolean",
+            "Boolean::eqv",
+            "Boolean::implies",
+            "Boolean::not",
+            "Boolean::xor"
+        ]
+    );
+
     let qualified_labels = engine
         .completions("IntBase::", "IntBase::".len())
         .candidates
@@ -1090,6 +1113,26 @@ fn core_completion_hides_enum_variants_until_owner_path_is_confirmed() {
     assert!(qualified_labels.contains(&"IntBase::Dec".to_string()));
     assert!(qualified_labels.contains(&"IntBase::Hex".to_string()));
     assert!(qualified_labels.contains(&"IntBase::Oct".to_string()));
+
+    let boolean_candidates = engine
+        .completions("Boolean::", "Boolean::".len())
+        .candidates;
+    let boolean_labels = boolean_candidates
+        .iter()
+        .map(|candidate| candidate.label.clone())
+        .collect::<Vec<_>>();
+    assert!(boolean_labels.contains(&"Boolean::True".to_string()));
+    assert!(boolean_labels.contains(&"Boolean::False".to_string()));
+
+    let true_variant = boolean_candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "Boolean::True")
+        .expect("qualified Boolean variant should be suggested");
+    assert_eq!(true_variant.kind, ReplCompletionKind::TypePath);
+    assert_eq!(
+        true_variant.detail.as_deref(),
+        Some("Boolean::True() -> Boolean")
+    );
 }
 
 #[test]

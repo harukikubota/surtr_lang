@@ -38,6 +38,17 @@ impl Checker {
         }
     }
 
+    fn builtin_special_enum_ty(name: &str, args: &[Ty]) -> Option<Ty> {
+        match Self::surface_name(name) {
+            "Boolean" if args.is_empty() => Some(Ty::Bool),
+            "Result" => args
+                .first()
+                .cloned()
+                .map(|ok| Ty::Result(Box::new(ok), Box::new(Ty::Error))),
+            _ => None,
+        }
+    }
+
     pub(super) fn is_duration_ty(ty: &Ty) -> bool {
         matches!(ty, Ty::Struct(name, _) if Self::surface_name(name) == "Duration")
     }
@@ -474,6 +485,11 @@ impl Checker {
                                 }
                                 crate::env::TypeKind::ConcreteError => return Ok(Ty::Error),
                                 crate::env::TypeKind::Enum => {
+                                    if let Some(ty) =
+                                        Self::builtin_special_enum_ty(&def.name, &[])
+                                    {
+                                        return Ok(ty);
+                                    }
                                     if def.type_params.is_empty() {
                                         return Ok(Ty::Enum(def.name.clone(), Vec::new()));
                                     }
@@ -722,7 +738,15 @@ impl Checker {
                             def.name.clone(),
                             self.instantiate_type_def_fields(def, &resolved_args),
                         )),
-                        crate::env::TypeKind::Enum => Ok(Ty::Enum(def.name.clone(), resolved_args)),
+                        crate::env::TypeKind::Enum => {
+                            if let Some(ty) =
+                                Self::builtin_special_enum_ty(&def.name, &resolved_args)
+                            {
+                                Ok(ty)
+                            } else {
+                                Ok(Ty::Enum(def.name.clone(), resolved_args))
+                            }
+                        }
                         _ => Err(TypeError {
                             message: format!(
                                 "Generic type {} is not supported in this context",
@@ -1167,7 +1191,15 @@ impl Checker {
                             def.name.clone(),
                             self.instantiate_type_def_fields(&def, &resolved_args),
                         )),
-                        crate::env::TypeKind::Enum => Ok(Ty::Enum(def.name.clone(), resolved_args)),
+                        crate::env::TypeKind::Enum => {
+                            if let Some(ty) =
+                                Self::builtin_special_enum_ty(&def.name, &resolved_args)
+                            {
+                                Ok(ty)
+                            } else {
+                                Ok(Ty::Enum(def.name.clone(), resolved_args))
+                            }
+                        }
                         _ => Err(TypeError {
                             message: format!(
                                 "Generic type {} is not supported in this context",

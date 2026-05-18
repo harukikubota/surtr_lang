@@ -480,38 +480,24 @@ impl ReplCompletionContext {
         replace_start: usize,
         replace_end: usize,
     ) {
-        for (label, replacement, aliases) in [
-            ("Ok", "Ok", &[][..]),
-            ("Err", "Err", &[][..]),
-            ("True", "True", &["true"][..]),
-            ("False", "False", &["false"][..]),
-        ] {
-            let matched_label = if label.starts_with(prefix) {
-                Some(label)
-            } else {
-                aliases
-                    .iter()
-                    .copied()
-                    .find(|alias| alias.starts_with(prefix))
-            };
-            let Some(matched_label) = matched_label else {
-                continue;
-            };
-            if aliases.iter().copied().any(|alias| {
-                alias == matched_label
-                    && candidates
-                        .iter()
-                        .any(|candidate| candidate.label == alias && candidate.replacement == alias)
-            }) {
+        for (label, replacement) in [("true", "True"), ("false", "False")] {
+            if !label.starts_with(prefix) {
                 continue;
             }
-            if candidates.iter().any(|candidate| {
-                candidate.label == matched_label && candidate.replacement == replacement
-            }) {
+            if candidates
+                .iter()
+                .any(|candidate| candidate.label == label && candidate.replacement == label)
+            {
+                continue;
+            }
+            if candidates
+                .iter()
+                .any(|candidate| candidate.label == label && candidate.replacement == replacement)
+            {
                 continue;
             }
             candidates.push(ReplCompletionCandidate {
-                label: matched_label.to_string(),
+                label: label.to_string(),
                 replacement: replacement.to_string(),
                 kind: ReplCompletionKind::FunctionCall,
                 detail: self.special_repl_candidate_detail(replacement),
@@ -1788,25 +1774,14 @@ impl ReplEngine {
             return label.to_string();
         }
 
-        let arity = match replacement {
-            "Ok" | "Err" => Some(1),
-            "True" | "False" => Some(0),
-            _ => None,
-        };
-        let Some(arity) = arity else {
-            return label.to_string();
-        };
-
-        if matches!(replacement, "Ok" | "Err")
-            && !detail.is_some_and(|detail| detail.contains(&format!("Result::{replacement}(")))
-        {
+        if !matches!(replacement, "True" | "False") {
             return label.to_string();
         }
 
-        if arity == 0 {
+        if detail.is_some_and(|detail| detail.contains(&format!("Result::{replacement}("))) {
             label.to_string()
         } else {
-            format!("{label}/{arity}")
+            label.to_string()
         }
     }
 
@@ -3075,11 +3050,12 @@ impl ReplEngine {
             sigil::DeclarationKind::Enum => {
                 Some(format!("defenum {}", crate::surface_path_name(&decl.name)))
             }
-            sigil::DeclarationKind::EnumVariant => self
-                .enum_variant_signature_entry(decl)
-                .map(|(qualified_name, signature)| {
-                    Self::render_signature_with_qualified_name(&qualified_name, signature)
-                }),
+            sigil::DeclarationKind::EnumVariant => {
+                self.enum_variant_signature_entry(decl)
+                    .map(|(qualified_name, signature)| {
+                        Self::render_signature_with_qualified_name(&qualified_name, signature)
+                    })
+            }
             sigil::DeclarationKind::BuiltinType => {
                 Some(format!("type {}", crate::surface_path_name(&decl.name)))
             }
@@ -5441,7 +5417,12 @@ impl ReplEngine {
 
     fn enum_sig_extra_input_message(&self, owner: &str, source: &str) -> Option<String> {
         let decl = self.visible_declaration(owner)?;
-        (decl.kind == sigil::DeclarationKind::Enum).then(|| {
+        (decl.kind == sigil::DeclarationKind::Enum
+            && !matches!(
+                crate::surface_path_name(&decl.fq_name),
+                "Result" | "Boolean"
+            ))
+        .then(|| {
             format!(
                 "Enum signatures are only available for bare type owners: use `:sig {}` instead of `:sig {}`.",
                 crate::surface_path_name(&decl.fq_name),

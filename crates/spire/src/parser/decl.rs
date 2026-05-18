@@ -1819,6 +1819,7 @@ impl Parser<'_> {
             Box::new(body),
             DeclAttrs {
                 doc: attrs.doc,
+                builtin: attrs.builtin,
                 auto_import: attrs.auto_import,
                 hidden: attrs.hidden,
                 readonly: attrs.readonly,
@@ -2649,7 +2650,21 @@ impl Parser<'_> {
             }
             self.skip_newlines();
             let variant_start = self.peek_span().start;
-            let (variant_name, _) = self.expect_ident()?;
+            let (variant_name, _) = if attrs.builtin {
+                match self.peek() {
+                    Token::True => {
+                        let span = self.expect(&Token::True)?;
+                        ("True".to_string(), span)
+                    }
+                    Token::False => {
+                        let span = self.expect(&Token::False)?;
+                        ("False".to_string(), span)
+                    }
+                    _ => self.expect_ident()?,
+                }
+            } else {
+                self.expect_ident()?
+            };
             let mut payload = Vec::new();
 
             if matches!(self.peek(), Token::LParen) {
@@ -3230,6 +3245,18 @@ impl Parser<'_> {
                 )),
             }
         } else if saw_builtin {
+            if !self
+                .context
+                .parse_rules
+                .allowed_top_level_decl_kinds
+                .allows(super::context::TopLevelDeclKind::BuiltinDecl)
+            {
+                return Err(ParseError::syntax(
+                    "@builtin declarations are only allowed in standard/internal source",
+                    start_span.unwrap_or_else(|| self.peek_span()),
+                ));
+            }
+            attrs.builtin = true;
             if attrs.hidden
                 && !self
                     .context
@@ -3246,8 +3273,9 @@ impl Parser<'_> {
                 Token::Def => self.parse_builtin_decl(start, attrs),
                 Token::Defextractor => self.parse_builtin_extractor_decl(start, attrs),
                 Token::Type => self.parse_builtin_type_decl(start, attrs),
+                Token::Defenum => self.parse_enum_def_with_attrs(attrs, Some(start)),
                 _ => Err(ParseError::syntax(
-                    "Expected `def`, `defextractor`, or `type` after @builtin",
+                    "Expected `def`, `defextractor`, `defenum`, or `type` after @builtin",
                     self.peek_span(),
                 )),
             }

@@ -931,11 +931,7 @@ pub fn collect_module_sources_with_module_stages(
 pub fn collect_test_module_sources_with_module_stages(
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<ModuleSources, LoadError> {
-    collect_module_sources_with_stdlib_variant(
-        StdlibVariant::TestEnabled,
-        &[],
-        module_input_stages,
-    )
+    collect_module_sources_with_stdlib_variant(StdlibVariant::TestEnabled, &[], module_input_stages)
 }
 
 pub fn compose_script_compile_sources(

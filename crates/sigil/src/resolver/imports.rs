@@ -11,6 +11,19 @@ fn restricted_surface_import_message(fq_name: &str) -> String {
     format!("Import target `{fq_name}` cannot be imported from user code")
 }
 
+fn builtin_special_variant_bare_alias(entry: &DeclarationEntry) -> Option<&'static str> {
+    if entry.kind != DeclarationKind::EnumVariant {
+        return None;
+    }
+    match global_surface_name(&entry.fq_name) {
+        "Result::Ok" => Some("Ok"),
+        "Result::Err" => Some("Err"),
+        "Boolean::True" => Some("True"),
+        "Boolean::False" => Some("False"),
+        _ => None,
+    }
+}
+
 fn auto_import_trait_names(declaration_index: &DeclarationIndex) -> HashSet<String> {
     declaration_index
         .values()
@@ -94,6 +107,9 @@ pub(super) fn build_global_scope(
                 // Trait canonical paths stay visible as `Eq` / `Eq::eq`.
                 // Bare method helpers like `eq` are injected only by import/prelude.
                 scope.define_with_id(&entry.name, *uid);
+            }
+            if let Some(alias) = builtin_special_variant_bare_alias(entry) {
+                scope.define_with_id(alias, *uid);
             }
         }
     }
@@ -199,6 +215,9 @@ pub(super) fn build_module_scope_with_imports(
                     }
                     if global_surface_name(&entry.fq_name) != entry.fq_name {
                         scope.define_with_id(global_surface_name(&entry.fq_name), *uid);
+                    }
+                    if let Some(alias) = builtin_special_variant_bare_alias(entry) {
+                        scope.define_with_id(alias, *uid);
                     }
                 }
             }

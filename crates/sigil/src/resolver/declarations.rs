@@ -11,6 +11,17 @@ fn is_reserved_builtin_type_redefinition(name: &str) -> bool {
     builtin_type_meta_by_name(surface_name).is_some() && surface_name != "ProcessInit"
 }
 
+fn builtin_special_enum_surface_name(name: &str) -> bool {
+    matches!(global_surface_name(name), "Result" | "Boolean")
+}
+
+fn builtin_special_enum_variant_alias(enum_name: &str, variant_name: &str) -> bool {
+    matches!(
+        (global_surface_name(enum_name), variant_name),
+        ("Result", "Ok" | "Err") | ("Boolean", "True" | "False")
+    )
+}
+
 fn type_declaration_kind(stmt: &Ast) -> Option<DeclarationKind> {
     match stmt {
         Ast::StructDef(..) => Some(DeclarationKind::Struct),
@@ -924,8 +935,8 @@ pub fn precollect_declaration_index(
                     continue;
                 }
 
-                if let Ast::EnumDef(span, name, _, variants, _) = stmt {
-                    if is_reserved_builtin_type_redefinition(name) {
+                if let Ast::EnumDef(span, name, _, variants, attrs) = stmt {
+                    if !attrs.builtin && is_reserved_builtin_type_redefinition(name) {
                         return Err(ResolveError {
                             message: format!(
                                 "Type name `{}` is reserved by a canonical builtin type declaration",
@@ -1643,9 +1654,9 @@ impl Resolver {
                     self.record_predeclared_uid(name, uid, kind);
                     self.predeclare_scope_binding(name, uid, Some(name));
                 }
-                Ast::EnumDef(span, name, _, variants, _) => {
+                Ast::EnumDef(span, name, _, variants, attrs) => {
                     let surface = global_surface_name(name).to_string();
-                    if is_reserved_builtin_type_redefinition(name) {
+                    if !attrs.builtin && is_reserved_builtin_type_redefinition(name) {
                         return Err(ResolveError {
                             message: format!(
                                 "Type name `{}` is reserved by a canonical builtin type declaration",
@@ -1685,6 +1696,21 @@ impl Resolver {
                             ctor_uid,
                             Some(&qualified_ctor),
                         );
+                        if attrs.builtin
+                            && builtin_special_enum_surface_name(name)
+                            && builtin_special_enum_variant_alias(name, &variant.name)
+                        {
+                            self.record_predeclared_uid(
+                                &variant.name,
+                                ctor_uid,
+                                DeclarationKind::EnumVariant,
+                            );
+                            self.predeclare_scope_binding(
+                                &variant.name,
+                                ctor_uid,
+                                Some(&qualified_ctor),
+                            );
+                        }
                     }
                 }
                 Ast::TraitImplDef(_, _, _, _, _, _) => {}

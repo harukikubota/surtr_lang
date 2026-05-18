@@ -4,7 +4,11 @@ Represents `True` and `False`, the values used by `if` and boolean `match`.
 This exact top-level declaration is part of the compiler-checked builtin type
 contract.
 """
-@builtin type Boolean
+@builtin
+defenum Boolean {
+  True,
+  False,
+}
 
 impl Boolean {
   @doc """

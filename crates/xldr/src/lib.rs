@@ -17,8 +17,8 @@ pub use loader::{
     collect_additional_default_std_module_inputs, collect_lib_module_inputs,
     collect_module_sources_with_extra_std_sources, collect_module_sources_with_module_file_stages,
     collect_module_sources_with_module_stages, collect_module_sources_with_modules,
-    collect_module_sources_with_stdlib_variant, collect_test_module_sources_with_module_stages,
-    collect_script_include_directives, compose_script_compile_sources,
+    collect_module_sources_with_stdlib_variant, collect_script_include_directives,
+    collect_test_module_sources_with_module_stages, compose_script_compile_sources,
     compose_script_compile_sources_with_stdlib_variant, derive_primary_module_path,
     is_default_std_module_file_name, is_default_std_module_path,
     module_path_from_source_or_file_name, prepare_script_sources, script_pseudo_module_path,
@@ -342,6 +342,31 @@ fn format_defenum_signature(name: &str, variants: &[spire::ast::EnumVariant]) ->
         .collect::<Vec<_>>()
         .join(", ");
     format!("defenum {} {{ {variants} }}", surface_path_name(name))
+}
+
+fn builtin_special_enum_variant_signature(
+    enum_name: &str,
+    type_params: &[spire::ast::TypeParam],
+    variant: &spire::ast::EnumVariant,
+) -> Option<String> {
+    match (surface_path_name(enum_name), variant.name.as_str()) {
+        ("Result", "Ok") => {
+            let ok_ty = variant
+                .payload
+                .first()
+                .map(format_ast_ty)
+                .unwrap_or_else(|| "$T".to_string());
+            Some(format!("Ok({ok_ty}) -> Result<{ok_ty}, Error>"))
+        }
+        ("Result", "Err") => Some("Err(Error) -> Result<$T, Error>".to_string()),
+        ("Boolean", "True") if type_params.is_empty() && variant.payload.is_empty() => {
+            Some("True() -> Boolean".to_string())
+        }
+        ("Boolean", "False") if type_params.is_empty() && variant.payload.is_empty() => {
+            Some("False() -> Boolean".to_string())
+        }
+        _ => None,
+    }
 }
 
 fn format_struct_signature(name: &str) -> String {
@@ -835,7 +860,7 @@ fn collect_doc_entries_for_ast(
                     });
                 }
             }
-            spire::ast::Ast::EnumDef(_, name, _, variants, attrs) => {
+            spire::ast::Ast::EnumDef(_, name, type_params, variants, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
@@ -844,6 +869,25 @@ fn collect_doc_entries_for_ast(
                         signature: Some(format_defenum_signature(name, variants)),
                         doc: doc.clone(),
                     });
+                }
+                if attrs.builtin {
+                    for variant in variants {
+                        let Some(signature) =
+                            builtin_special_enum_variant_signature(name, type_params, variant)
+                        else {
+                            continue;
+                        };
+                        out.push(DocEntry {
+                            qualified_name: qualified_name(
+                                module_path,
+                                &format!("{name}::{}", variant.name),
+                            ),
+                            kind: DocKind::Function,
+                            module_path: surface_path_name(module_path).to_string(),
+                            signature: Some(signature),
+                            doc: String::new(),
+                        });
+                    }
                 }
             }
             _ => {}
@@ -1127,7 +1171,7 @@ fn collect_signature_entries_for_ast(
                     format_deferror_signature(name, fields),
                 );
             }
-            spire::ast::Ast::EnumDef(_, name, _, variants, _) => {
+            spire::ast::Ast::EnumDef(_, name, type_params, variants, attrs) => {
                 push_signature_entry(
                     out,
                     module_path,
@@ -1135,6 +1179,22 @@ fn collect_signature_entries_for_ast(
                     DocKind::Type,
                     format_defenum_signature(name, variants),
                 );
+                if attrs.builtin {
+                    for variant in variants {
+                        let Some(signature) =
+                            builtin_special_enum_variant_signature(name, type_params, variant)
+                        else {
+                            continue;
+                        };
+                        push_signature_entry(
+                            out,
+                            module_path,
+                            qualified_name(module_path, &format!("{name}::{}", variant.name)),
+                            DocKind::Function,
+                            signature,
+                        );
+                    }
+                }
             }
             _ => {}
         }
@@ -1814,7 +1874,9 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
     build_stdlib_snapshot(StdlibVariant::Default)
 }
 
-fn build_stdlib_snapshot(stdlib_variant: StdlibVariant) -> Result<DefaultStdlibSnapshot, LoadError> {
+fn build_stdlib_snapshot(
+    stdlib_variant: StdlibVariant,
+) -> Result<DefaultStdlibSnapshot, LoadError> {
     let module_sources = match stdlib_variant {
         StdlibVariant::Default => collect_module_sources_with_module_stages(&[])?,
         StdlibVariant::TestEnabled => collect_test_module_sources_with_module_stages(&[])?,
@@ -1847,8 +1909,7 @@ fn build_stdlib_snapshot(stdlib_variant: StdlibVariant) -> Result<DefaultStdlibS
     if let Some(payload) = load_cached_stdlib_semantic_snapshot(
         &stdlib_semantic_cache_path(stdlib_variant),
         &cache_key,
-    )
-    {
+    ) {
         if payload.default_stage_count == default_stage_count {
             return Ok(DefaultStdlibSnapshot {
                 module_stages,

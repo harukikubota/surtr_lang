@@ -1602,7 +1602,13 @@ fn test_builtin_decl() {
         Ast::BuiltinDecl(_, name, params, ret_ty, attrs) => {
             assert_eq!(name, "to_string");
             assert_eq!(params.len(), 1);
-            assert_eq!(attrs, &DeclAttrs::default());
+            assert_eq!(
+                attrs,
+                &DeclAttrs {
+                    builtin: true,
+                    ..DeclAttrs::default()
+                }
+            );
             assert!(matches!(
                 params[0].ty,
                 AstTy::Named(_, ref name) if name == "$A"
@@ -1623,7 +1629,12 @@ fn test_builtin_type_decl() {
     assert!(matches!(
         ast.as_slice(),
         [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name, params, .. }, attrs)]
-            if name == "Int" && params.is_empty() && attrs == &DeclAttrs::default()
+            if name == "Int"
+                && params.is_empty()
+                && attrs == &DeclAttrs {
+                    builtin: true,
+                    ..DeclAttrs::default()
+                }
     ));
 }
 
@@ -1832,6 +1843,60 @@ Construct the error branch.
 }
 
 #[test]
+fn test_std_module_builtin_defenum_result_is_accepted() {
+    let ast = parse_with_context(
+        r#"@builtin
+defenum Result<$T> {
+  Ok($T),
+  Err(Error),
+}"#,
+        ParserContext::module(1, None).with_rules(ParseRules::std_module()),
+    )
+    .expect("builtin result enum should parse in std modules");
+
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::EnumDef(_, name, params, variants, DeclAttrs { .. })]
+            if name.ends_with("Result")
+                && params.len() == 1
+                && params[0].name == "$T"
+                && variants.len() == 2
+                && variants[0].name == "Ok"
+                && variants[1].name == "Err"
+    ));
+}
+
+#[test]
+fn test_std_module_builtin_defenum_boolean_is_accepted() {
+    let ast = parse_with_context(
+        r#"@builtin
+defenum Boolean {
+  True,
+  False,
+}"#,
+        ParserContext::module(1, None).with_rules(ParseRules::std_module()),
+    )
+    .expect("builtin boolean enum should parse in std modules");
+
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::EnumDef(_, name, params, variants, DeclAttrs { .. })]
+            if name.ends_with("Boolean")
+                && params.is_empty()
+                && variants.len() == 2
+                && variants[0].name == "True"
+                && variants[1].name == "False"
+    ));
+}
+
+#[test]
+fn test_user_source_builtin_defenum_is_rejected() {
+    let err = parse("@builtin\ndefenum Boolean { True, False }")
+        .expect_err("user source should reject builtin defenum");
+    assert!(err.message().contains("@builtin"));
+}
+
+#[test]
 fn test_type_keyword_cannot_be_used_as_function_name() {
     let err = parse("def type() -> Int { 0 }").expect_err("type should stay reserved");
     assert!(err.message().contains("Expected identifier"));
@@ -1839,7 +1904,11 @@ fn test_type_keyword_cannot_be_used_as_function_name() {
 
 #[test]
 fn test_builtin_decl_with_body_is_error() {
-    let err = parse("@builtin def print(a: String) -> Unit { print(a) }").expect_err("error");
+    let err = parse_with_context(
+        "@builtin def print(a: String) -> Unit { print(a) }",
+        ParserContext::module(1, Some("Bootstrap".into())).with_rules(ParseRules::std_module()),
+    )
+    .expect_err("builtin declaration with a body should be rejected");
     assert!(err.message().contains("must not have a function body"));
 }
 
@@ -4698,7 +4767,7 @@ fn test_module_compile_unit_rejects_builtin_decl() {
     .expect_err("user module compile unit should reject builtin declarations");
     assert!(err
         .message()
-        .contains("This top-level declaration is not allowed in the current source policy"));
+        .contains("@builtin declarations are only allowed in standard/internal source"));
 }
 
 #[test]
@@ -4707,7 +4776,7 @@ fn test_module_compile_unit_rejects_builtin_type_decl() {
         .expect_err("user module compile unit should reject builtin type declarations");
     assert!(err
         .message()
-        .contains("This top-level declaration is not allowed in the current source policy"));
+        .contains("@builtin declarations are only allowed in standard/internal source"));
 }
 
 #[test]

@@ -116,6 +116,97 @@ fn completion_maps_utf16_position_to_lsp_text_edits() {
 }
 
 #[test]
+fn completion_exposes_shared_result_ctors_and_bool_variants_through_lsp() {
+    let workspace = PathBuf::from("/repo");
+    let path = workspace.join("main.srt");
+    let uri = path_to_file_uri(&path);
+    let mut host = LspAnalysisHost::new(workspace);
+    host.did_open(uri.clone(), Some(1), "Ok".to_string());
+    host.set_selected_context(Some(SelectedContext::ScriptEntry(path.clone())));
+    host.set_semantic_index(SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "Result::Ok".to_string(),
+            replacement: "Result::Ok".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("Result::Ok($T) -> Result<$T, Error>".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "Ok".to_string(),
+            replacement: "Ok".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("Result::Ok($T) -> Result<$T, Error>".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "Boolean::True".to_string(),
+            replacement: "Boolean::True".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("Boolean::True() -> Boolean".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "True".to_string(),
+            replacement: "True".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("Boolean::True() -> Boolean".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+    ]));
+
+    let ok_items = completion_items(
+        &host,
+        &uri,
+        LspPosition {
+            line: 0,
+            character: 2,
+        },
+    );
+    assert!(ok_items.iter().any(|item| item.label == "Ok"));
+    assert!(ok_items.iter().any(|item| {
+        item.label == "Ok"
+            && item
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail == "Result::Ok($T) -> Result<$T, Error>")
+    }));
+
+    host.did_change(&uri, Some(2), "Tr".to_string());
+    let true_items = completion_items(
+        &host,
+        &uri,
+        LspPosition {
+            line: 0,
+            character: 2,
+        },
+    );
+    assert!(true_items.iter().any(|item| item.label == "True"));
+    assert!(true_items.iter().any(|item| {
+        item.label == "True"
+            && item
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail == "Boolean::True() -> Boolean")
+    }));
+    assert!(
+        !true_items.iter().any(|item| item.label == "true"),
+        "lowercase REPL shorthand must not leak into LSP: {true_items:?}"
+    );
+}
+
+#[test]
 fn hover_maps_semantic_detail_and_documentation_to_lsp_dto() {
     let workspace = PathBuf::from("/repo");
     let path = workspace.join("main.srt");

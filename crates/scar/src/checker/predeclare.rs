@@ -227,14 +227,19 @@ impl Checker {
                         .iter()
                         .map(|param| param.name.clone())
                         .collect::<Vec<_>>(),
+                    false,
                 )),
                 Resolved::RecordDef(_, id, _) => {
-                    Some((&id.name, &id.span, TypeKind::Record, Vec::new()))
+                    Some((&id.name, &id.span, TypeKind::Record, Vec::new(), false))
                 }
-                Resolved::DeferrorDef(_, id, _, _) => {
-                    Some((&id.name, &id.span, TypeKind::ConcreteError, Vec::new()))
-                }
-                Resolved::EnumDef(_, id, type_params, _, _) => Some((
+                Resolved::DeferrorDef(_, id, _, _) => Some((
+                    &id.name,
+                    &id.span,
+                    TypeKind::ConcreteError,
+                    Vec::new(),
+                    false,
+                )),
+                Resolved::EnumDef(_, id, type_params, _, attrs) => Some((
                     &id.name,
                     &id.span,
                     TypeKind::Enum,
@@ -242,15 +247,19 @@ impl Checker {
                         .iter()
                         .map(|param| param.name.clone())
                         .collect::<Vec<_>>(),
+                    attrs.builtin,
                 )),
                 _ => None,
             };
 
-            let Some((name, span, kind, type_params)) = maybe_decl else {
+            let Some((name, span, kind, type_params, allow_builtin_reserved_name)) = maybe_decl
+            else {
                 continue;
             };
 
-            if builtin_type_meta_by_name(Self::surface_name(name)).is_some() {
+            if !allow_builtin_reserved_name
+                && builtin_type_meta_by_name(Self::surface_name(name)).is_some()
+            {
                 return Err(TypeError {
                     message: format!(
                         "Type name `{}` is reserved by a canonical builtin type declaration",
@@ -414,7 +423,7 @@ impl Checker {
                             hint: None,
                         })?;
                 }
-                Resolved::EnumDef(_, id, type_params, variants, _) => {
+                Resolved::EnumDef(_, id, type_params, variants, attrs) => {
                     let _ = self
                         .env
                         .resolve_type_def_signature(
@@ -438,10 +447,22 @@ impl Checker {
                         enum_ty_args.push(ty);
                     }
 
-                    self.env.bind_var(
-                        id.unique_id,
-                        Ty::Enum(id.name.clone(), enum_ty_args.clone()),
-                    );
+                    let enum_surface_name = Self::surface_name(&id.name);
+                    let builtin_result_enum = attrs.builtin && enum_surface_name == "Result";
+                    let builtin_boolean_enum = attrs.builtin && enum_surface_name == "Boolean";
+                    let enum_ty = if builtin_result_enum {
+                        let ok_ty = enum_ty_args
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| self.env.fresh_tyvar());
+                        Ty::Result(Box::new(ok_ty), Box::new(Ty::Error))
+                    } else if builtin_boolean_enum {
+                        Ty::Bool
+                    } else {
+                        Ty::Enum(id.name.clone(), enum_ty_args.clone())
+                    };
+
+                    self.env.bind_var(id.unique_id, enum_ty.clone());
                     self.env.register_type_constructor_id(id.unique_id);
 
                     let mut next_discriminant = sindr::primitives::int(0);
@@ -490,7 +511,6 @@ impl Checker {
                             })
                             .collect::<Result<Vec<_>, _>>()?;
 
-                        let tag = self.env.reserve_tag();
                         let short_name = variant
                             .id
                             .name
@@ -498,11 +518,20 @@ impl Checker {
                             .next()
                             .unwrap_or(variant.id.name.as_str())
                             .to_string();
+                        let tag = if builtin_result_enum {
+                            match short_name.as_str() {
+                                "Ok" => 0,
+                                "Err" => 1,
+                                _ => self.env.reserve_tag(),
+                            }
+                        } else {
+                            self.env.reserve_tag()
+                        };
                         let info = crate::env::EnumVariantInfo {
                             constructor_name: variant.id.name.clone(),
                             short_name,
                             enum_name: id.name.clone(),
-                            enum_ty: Ty::Enum(id.name.clone(), enum_ty_args.clone()),
+                            enum_ty: enum_ty.clone(),
                             tag,
                             payload: payload.clone(),
                             discriminant: discriminant.clone(),

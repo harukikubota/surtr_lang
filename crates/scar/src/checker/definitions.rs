@@ -1296,9 +1296,53 @@ impl Checker {
         &mut self,
         span: &Span,
         id: &ResolvedId,
-        _type_params: &[ResolvedTypeParam],
+        type_params: &[ResolvedTypeParam],
         variants: &[ResolvedEnumVariant],
+        attrs: &ResolvedDeclAttrs,
     ) -> Result<TypedNode, TypeError> {
+        if attrs.builtin {
+            match Self::surface_name(&id.name) {
+                "Result" => {
+                    if type_params.len() != 1
+                        || variants.len() != 2
+                        || variants[0].id.name.rsplit("::").next() != Some("Ok")
+                        || variants[1].id.name.rsplit("::").next() != Some("Err")
+                        || variants[0].payload.len() != 1
+                        || variants[1].payload.len() != 1
+                        || !matches!(&variants[0].payload[0], AstTy::Named(_, name) if name == "$T")
+                        || !matches!(&variants[1].payload[0], AstTy::Named(_, name) if name == "Error")
+                    {
+                        return Err(TypeError {
+                            message: "Builtin Result enum must match `defenum Result<$T> { Ok($T), Err(Error) }`.".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    self.seen_builtin_type_decls
+                        .insert("Result".into(), (vec!["$T".into()], span.clone()));
+                }
+                "Boolean" => {
+                    if !type_params.is_empty()
+                        || variants.len() != 2
+                        || variants[0].id.name.rsplit("::").next() != Some("True")
+                        || variants[1].id.name.rsplit("::").next() != Some("False")
+                        || !variants.iter().all(|variant| variant.payload.is_empty())
+                    {
+                        return Err(TypeError {
+                            message:
+                                "Builtin Boolean enum must match `defenum Boolean { True, False }`."
+                                    .into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    self.seen_builtin_type_decls
+                        .insert("Boolean".into(), (Vec::new(), span.clone()));
+                }
+                _ => {}
+            }
+        }
+
         let enum_variants = self
             .lookup_enum_variants_of(&id.name)
             .ok_or_else(|| TypeError {
@@ -1588,6 +1632,99 @@ impl Checker {
 
         if let Some(variant) = self.lookup_enum_variant_by_constructor_id(id.unique_id) {
             let variant = self.instantiate_enum_variant(&variant);
+            let enum_surface_name = Self::surface_name(&variant.enum_name);
+            if enum_surface_name == "Boolean" {
+                if !args.is_empty() {
+                    return Err(TypeError {
+                        message: format!("{} expects 0 argument(s), got {}", id.name, args.len()),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let value = match variant.short_name.as_str() {
+                    "True" => true,
+                    "False" => false,
+                    _ => {
+                        return Err(TypeError {
+                            message: format!(
+                                "Unknown builtin Boolean variant: {}",
+                                variant.short_name
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                };
+                return Ok(TypedNode {
+                    ty: Ty::Bool,
+                    span: span.clone(),
+                    node: TypedInner::Lit(Lit::Bool(value)),
+                });
+            }
+            if enum_surface_name == "Result" {
+                if args.len() != 1 {
+                    return Err(TypeError {
+                        message: format!("{} expects 1 argument(s), got {}", id.name, args.len()),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let inner = match &args[0] {
+                    ResolvedRecordLitArg::Positional(expr) => {
+                        let typed = self.check_node(expr)?;
+                        if self.ty_contains_facet(&typed.ty) {
+                            return Err(TypeError {
+                                message:
+                                    "Result constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
+                                        .into(),
+                                span: typed.span.clone(),
+                                hint: Some(
+                                    "Apply Facet::view/set/over before wrapping with Ok(...) or Err(...)."
+                                        .into(),
+                                ),
+                            });
+                        }
+                        self.maybe_call_zero_arg_function(typed, span.clone())
+                    }
+                    ResolvedRecordLitArg::Named(_, _) => {
+                        return Err(TypeError {
+                            message: format!("{} does not accept named arguments", id.name),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                };
+                if variant.short_name == "Err" {
+                    if !matches!(inner.ty, Ty::Error) {
+                        return Err(TypeError {
+                            message: "Err(...) requires a concrete deferror value.".into(),
+                            span: inner.span.clone(),
+                            hint: Some(
+                                "Use a deferror-defined value in Err(...), not a plain value."
+                                    .into(),
+                            ),
+                        });
+                    }
+                    if self.is_abstract_error_marker_value(&inner) {
+                        return Err(TypeError {
+                            message: "Error is abstract and cannot be constructed directly.".into(),
+                            span: inner.span.clone(),
+                            hint: Some("Use a concrete deferror value in Err(...).".into()),
+                        });
+                    }
+                }
+                let result_ty = if variant.short_name == "Ok" {
+                    Ty::Result(Box::new(inner.ty.clone()), Box::new(Ty::Error))
+                } else {
+                    let ok_var = self.env.fresh_tyvar();
+                    Ty::Result(Box::new(ok_var), Box::new(Ty::Error))
+                };
+                return Ok(TypedNode {
+                    ty: result_ty,
+                    span: span.clone(),
+                    node: TypedInner::ConstructorCall(variant.tag, vec![inner]),
+                });
+            }
             if Self::surface_name(&variant.enum_name) == "MatchResult" && !self.in_extractor_body {
                 return Err(self.match_result_value_not_allowed_error(span));
             }
