@@ -15,6 +15,7 @@ mod interpolate;
 mod pattern;
 mod stmt;
 mod syntax_token;
+mod tolerant;
 mod ty;
 mod validate;
 
@@ -25,6 +26,10 @@ pub use context::{ParseRules, ParserContext};
 pub use diagnostic::{
     LspDiagnostic, LspDiagnosticSeverity, LspPosition, LspRange, LspRelatedInformation,
     ParseDiagnostic,
+};
+pub use tolerant::{
+    parse_tolerant_with_context, CursorSyntaxContext, SyntaxOutlineItem, SyntaxOutlineKind,
+    SyntaxToken, SyntaxTokenKind, TolerantParseResult,
 };
 
 pub const MAX_PARSE_NESTING: usize = 32;
@@ -737,6 +742,38 @@ fn rewrite_facet_path_segment_refs(
     }
 }
 
+fn rewrite_bulk_update_path_refs(
+    path: BulkUpdatePath,
+    old_name: &str,
+    new_name: &str,
+) -> BulkUpdatePath {
+    match path {
+        BulkUpdatePath::Segments(span, segments) => BulkUpdatePath::Segments(
+            span,
+            segments
+                .into_iter()
+                .map(|segment| rewrite_facet_path_segment_refs(segment, old_name, new_name))
+                .collect(),
+        ),
+        BulkUpdatePath::Pin(span, name) => BulkUpdatePath::Pin(span, name),
+        BulkUpdatePath::Chain(span, left, right) => BulkUpdatePath::Chain(
+            span,
+            Box::new(rewrite_bulk_update_path_refs(*left, old_name, new_name)),
+            Box::new(rewrite_bulk_update_path_refs(*right, old_name, new_name)),
+        ),
+        BulkUpdatePath::StripLeft(span, inner, count) => BulkUpdatePath::StripLeft(
+            span,
+            Box::new(rewrite_bulk_update_path_refs(*inner, old_name, new_name)),
+            count,
+        ),
+        BulkUpdatePath::StripRight(span, inner, count) => BulkUpdatePath::StripRight(
+            span,
+            Box::new(rewrite_bulk_update_path_refs(*inner, old_name, new_name)),
+            count,
+        ),
+    }
+}
+
 fn rewrite_process_owner_bulk_entries(
     entries: Vec<BulkUpdateEntry>,
     old_name: &str,
@@ -746,11 +783,7 @@ fn rewrite_process_owner_bulk_entries(
         .into_iter()
         .map(|entry| BulkUpdateEntry {
             span: entry.span,
-            path: entry
-                .path
-                .into_iter()
-                .map(|segment| rewrite_facet_path_segment_refs(segment, old_name, new_name))
-                .collect(),
+            path: rewrite_bulk_update_path_refs(entry.path, old_name, new_name),
             kind: match entry.kind {
                 BulkUpdateEntryKind::Set(expr) => {
                     BulkUpdateEntryKind::Set(rewrite_process_owner_refs(expr, old_name, new_name))
@@ -1285,6 +1318,7 @@ fn pattern_span(pat: &AstPattern) -> &Span {
     match pat {
         AstPattern::Var(span, _)
         | AstPattern::Annotated(span, _, _)
+        | AstPattern::Pin(span, _)
         | AstPattern::Wildcard(span)
         | AstPattern::ListNil(span)
         | AstPattern::ListCons(span, _, _)
@@ -1354,6 +1388,7 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
         AstPattern::Annotated(span, name, ty) => {
             AstPattern::Annotated(shift_span(span, delta), name, shift_ast_ty(ty, delta))
         }
+        AstPattern::Pin(span, name) => AstPattern::Pin(shift_span(span, delta), name),
         AstPattern::Wildcard(span) => AstPattern::Wildcard(shift_span(span, delta)),
         AstPattern::ListNil(span) => AstPattern::ListNil(shift_span(span, delta)),
         AstPattern::ListCons(span, head, tail) => AstPattern::ListCons(
@@ -1491,16 +1526,40 @@ fn shift_facet_path_segment(segment: FacetPathSegment, delta: usize) -> FacetPat
     }
 }
 
+fn shift_bulk_update_path(path: BulkUpdatePath, delta: usize) -> BulkUpdatePath {
+    match path {
+        BulkUpdatePath::Segments(span, segments) => BulkUpdatePath::Segments(
+            shift_span(span, delta),
+            segments
+                .into_iter()
+                .map(|segment| shift_facet_path_segment(segment, delta))
+                .collect(),
+        ),
+        BulkUpdatePath::Pin(span, name) => BulkUpdatePath::Pin(shift_span(span, delta), name),
+        BulkUpdatePath::Chain(span, left, right) => BulkUpdatePath::Chain(
+            shift_span(span, delta),
+            Box::new(shift_bulk_update_path(*left, delta)),
+            Box::new(shift_bulk_update_path(*right, delta)),
+        ),
+        BulkUpdatePath::StripLeft(span, inner, count) => BulkUpdatePath::StripLeft(
+            shift_span(span, delta),
+            Box::new(shift_bulk_update_path(*inner, delta)),
+            count,
+        ),
+        BulkUpdatePath::StripRight(span, inner, count) => BulkUpdatePath::StripRight(
+            shift_span(span, delta),
+            Box::new(shift_bulk_update_path(*inner, delta)),
+            count,
+        ),
+    }
+}
+
 fn shift_bulk_update_entries(entries: Vec<BulkUpdateEntry>, delta: usize) -> Vec<BulkUpdateEntry> {
     entries
         .into_iter()
         .map(|entry| BulkUpdateEntry {
             span: shift_span(entry.span, delta),
-            path: entry
-                .path
-                .into_iter()
-                .map(|segment| shift_facet_path_segment(segment, delta))
-                .collect(),
+            path: shift_bulk_update_path(entry.path, delta),
             kind: match entry.kind {
                 BulkUpdateEntryKind::Set(expr) => {
                     BulkUpdateEntryKind::Set(shift_ast_span(expr, delta))
@@ -1602,6 +1661,16 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             elems
                 .into_iter()
                 .map(|e| shift_ast_span(e, delta))
+                .collect(),
+        ),
+        Ast::HashMapLiteral(span, entries) => Ast::HashMapLiteral(
+            shift_span(span, delta),
+            entries
+                .into_iter()
+                .map(|entry| HashMapLiteralEntry {
+                    key: shift_ast_span(entry.key, delta),
+                    value: shift_ast_span(entry.value, delta),
+                })
                 .collect(),
         ),
         Ast::RangeLiteral(span, start, stop) => Ast::RangeLiteral(
@@ -2109,6 +2178,7 @@ impl Ast {
             | Ast::ListNil(s)
             | Ast::ListCons(s, _, _)
             | Ast::ListLiteral(s, _)
+            | Ast::HashMapLiteral(s, _)
             | Ast::RangeLiteral(s, _, _)
             | Ast::TupleLiteral(s, _)
             | Ast::Grouped(s, _)

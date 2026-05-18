@@ -4,10 +4,12 @@ fn initialize_base_scope() -> Scope {
     let mut scope = Scope::new();
     let dummy = Span { start: 0, end: 0 };
     // Standalone resolver tests do not stage std modules, so keep placeholders
-    // for `Ok` / `Err` here. Real module builds auto-import `Result`, which
-    // overwrites these bindings with the canonical constructor declarations.
+    // for builtin-special constructor sugar here. Real module builds
+    // overwrite these bindings with the canonical constructor declarations.
     scope.define("Ok", dummy.clone());
-    scope.define("Err", dummy);
+    scope.define("Err", dummy.clone());
+    scope.define("True", dummy.clone());
+    scope.define("False", dummy);
     scope
 }
 
@@ -37,6 +39,7 @@ fn is_global_runtime_builtin(name: &str) -> bool {
 pub(super) fn resolve_decl_attrs(attrs: &DeclAttrs) -> ResolvedDeclAttrs {
     ResolvedDeclAttrs {
         doc: attrs.doc.clone(),
+        builtin: attrs.builtin,
         hidden: attrs.hidden,
         readonly: attrs.readonly,
         visibility: attrs.visibility,

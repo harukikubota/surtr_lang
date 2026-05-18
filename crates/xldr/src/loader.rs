@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use diagnostics::{SourceId, SourceRegistry};
+use serde::{Deserialize, Serialize};
+use sindr::policy::SourceKind;
+use spire::ast::{Ast, Span};
 
 const BUILTIN_PRELUDE_FILE: &str = "bootstrap.srt";
 const BUILTIN_PRELUDE_MODULE_PATH: &str = "Bootstrap";
@@ -51,11 +54,6 @@ const DEFAULT_STD_MODULES: &[(&str, &str, &str)] = &[
         "traits/operator/concat.srt",
         include_str!("../../../lib/traits/operator/concat.srt"),
         "Concat",
-    ),
-    (
-        "traits/numeric.srt",
-        include_str!("../../../lib/traits/numeric.srt"),
-        "Numeric",
     ),
     (
         "traits/show.srt",
@@ -236,18 +234,6 @@ const TEST_STD_SOURCE: &str = include_str!("../../../lib/test.srt");
 const REPL_MODULE_NAME: &str = "REPL";
 const SCRIPT_PSEUDO_MODULE_PREFIX: &str = "__Script";
 const REPL_PSEUDO_MODULE_PATH: &str = "__Repl::Session";
-
-/// Logical source categories that drive parser/typechecker policy selection.
-///
-/// The loader always materializes standard sources in the fixed order
-/// `Bootstrap -> [SpecialTypes + Function + Kernel + other standard modules] -> user source`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceKind {
-    Script,
-    DefinitionSource,
-    StdDefinitionSource,
-    ReplChunk,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceDescriptor {
@@ -467,8 +453,139 @@ pub struct ModuleInput {
     pub module_path: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScriptIncludeDirective {
+    pub file_path: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScriptSourcePrepareError {
+    Parse { message: String, span: Span },
+    IncludeRead { message: String, span: Span },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedScriptSources {
+    pub source_for_parse: String,
+    pub include_directives: Vec<ScriptIncludeDirective>,
+    pub include_modules: Vec<ModuleInput>,
+}
+
 fn display_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+pub fn module_path_from_source_or_file_name(file_name: &str, source: &str) -> String {
+    derive_primary_module_path(source)
+        .filter(|module_path| !module_path.is_empty())
+        .unwrap_or_else(|| module_path_from_file_name_lossy(file_name))
+}
+
+fn module_path_from_file_name_lossy(file_name: &str) -> String {
+    let normalized = file_name.replace('\\', "/");
+    let mut body = normalized.trim().trim_start_matches("./").to_string();
+    if let Some(stripped) = body.strip_suffix(".srt") {
+        body = stripped.to_string();
+    }
+    let segments = body
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.is_empty() {
+        "Main".to_string()
+    } else {
+        segments.join("::")
+    }
+}
+
+pub fn collect_script_include_directives(
+    source: &str,
+    source_kind: SourceKind,
+) -> Result<(String, Vec<ScriptIncludeDirective>), ScriptSourcePrepareError> {
+    let ast = spire::parse_with_context(
+        source,
+        spire::ParserContext::script(0).with_rules(crate::derive_parse_rules(source_kind)),
+    )
+    .map_err(|e| ScriptSourcePrepareError::Parse {
+        message: e.message().to_string(),
+        span: e.span().clone(),
+    })?;
+
+    let mut chars = source.chars().collect::<Vec<_>>();
+    let mut directives = Vec::new();
+    for stmt in &ast {
+        if let Ast::Include(span, file_path) = stmt {
+            directives.push(ScriptIncludeDirective {
+                file_path: file_path.clone(),
+                span: span.clone(),
+            });
+            for ch in chars.iter_mut().take(span.end).skip(span.start) {
+                if *ch != '\n' {
+                    *ch = ' ';
+                }
+            }
+        }
+    }
+
+    Ok((chars.into_iter().collect::<String>(), directives))
+}
+
+pub fn prepare_script_sources(
+    file_name: &str,
+    source: &str,
+    source_kind: SourceKind,
+) -> Result<PreparedScriptSources, ScriptSourcePrepareError> {
+    let (source_for_parse, include_directives) =
+        collect_script_include_directives(source, source_kind)?;
+    let include_modules = include_directives
+        .iter()
+        .map(|directive| resolve_script_include_module_input(file_name, source, directive))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(PreparedScriptSources {
+        source_for_parse,
+        include_directives,
+        include_modules,
+    })
+}
+
+fn resolve_script_include_module_input(
+    script_file_path: &str,
+    _script_source: &str,
+    directive: &ScriptIncludeDirective,
+) -> Result<ModuleInput, ScriptSourcePrepareError> {
+    let resolved_path = resolve_script_include_file_path(script_file_path, &directive.file_path);
+    let display_path = display_path(&resolved_path);
+    let module_source =
+        fs::read_to_string(&resolved_path).map_err(|e| ScriptSourcePrepareError::IncludeRead {
+            span: directive.span.clone(),
+            message: format!(
+                "include failed to read `{}`: {}",
+                resolved_path.display(),
+                e
+            ),
+        })?;
+    let module_path = module_path_from_source_or_file_name(&display_path, &module_source);
+
+    Ok(ModuleInput {
+        file_name: display_path,
+        source: module_source,
+        module_path,
+    })
+}
+
+fn resolve_script_include_file_path(script_file_path: &str, raw_path: &str) -> PathBuf {
+    let candidate = Path::new(raw_path);
+    if candidate.is_absolute() {
+        return candidate.to_path_buf();
+    }
+
+    let base_dir = Path::new(script_file_path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    base_dir.join(candidate)
 }
 
 fn lib_relative_path(path: &Path) -> String {
@@ -677,6 +794,13 @@ pub struct CompileSources {
     pub builtin_module_path: Option<String>,
     pub module_source_ids: Vec<SourceId>,
     pub module_stages: Vec<Vec<StagedModule>>,
+    pub stdlib_variant: StdlibVariant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StdlibVariant {
+    Default,
+    TestEnabled,
 }
 
 pub fn collect_module_sources_with_modules(
@@ -717,6 +841,18 @@ pub fn collect_module_sources_with_extra_std_sources(
     extra_std_sources: &[SourceDescriptor],
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<ModuleSources, LoadError> {
+    collect_module_sources_with_stdlib_variant(
+        StdlibVariant::Default,
+        extra_std_sources,
+        module_input_stages,
+    )
+}
+
+pub fn collect_module_sources_with_stdlib_variant(
+    stdlib_variant: StdlibVariant,
+    extra_std_sources: &[SourceDescriptor],
+    module_input_stages: &[Vec<ModuleInput>],
+) -> Result<ModuleSources, LoadError> {
     // Stage 0/1 are reserved for the built-in standard layers. User-provided
     // modules are appended afterwards so they can depend on
     // `Bootstrap -> [SpecialTypes + Function + Kernel + other std modules]` but never precede them.
@@ -753,11 +889,15 @@ pub fn collect_module_sources_with_extra_std_sources(
             STYLED_DOC_SOURCE,
             STYLED_DOC_MODULE_PATH,
         )))
-        .chain(std::iter::once(SourceDescriptor::std_module(
-            TEST_STD_FILE,
-            TEST_STD_SOURCE,
-            TEST_STD_MODULE_PATH,
-        )))
+        .chain(
+            (stdlib_variant == StdlibVariant::TestEnabled)
+                .then_some(SourceDescriptor::std_module(
+                    TEST_STD_FILE,
+                    TEST_STD_SOURCE,
+                    TEST_STD_MODULE_PATH,
+                ))
+                .into_iter(),
+        )
         .collect(),
     ];
 
@@ -785,7 +925,13 @@ pub fn collect_module_sources_with_extra_std_sources(
 pub fn collect_module_sources_with_module_stages(
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<ModuleSources, LoadError> {
-    collect_module_sources_with_extra_std_sources(&[], module_input_stages)
+    collect_module_sources_with_stdlib_variant(StdlibVariant::Default, &[], module_input_stages)
+}
+
+pub fn collect_test_module_sources_with_module_stages(
+    module_input_stages: &[Vec<ModuleInput>],
+) -> Result<ModuleSources, LoadError> {
+    collect_module_sources_with_stdlib_variant(StdlibVariant::TestEnabled, &[], module_input_stages)
 }
 
 pub fn compose_script_compile_sources(
@@ -802,6 +948,26 @@ pub fn compose_script_compile_sources(
         builtin_module_path: module_sources.builtin_module_path,
         module_source_ids: module_sources.module_source_ids,
         module_stages: module_sources.module_stages,
+        stdlib_variant: StdlibVariant::Default,
+    }
+}
+
+pub fn compose_script_compile_sources_with_stdlib_variant(
+    user_file_name: &str,
+    user_source: &str,
+    mut module_sources: ModuleSources,
+    stdlib_variant: StdlibVariant,
+) -> CompileSources {
+    let user_source_id = module_sources.sources.register(user_file_name, user_source);
+    CompileSources {
+        sources: module_sources.sources,
+        user_source_id,
+        user_module_path: script_pseudo_module_path(user_file_name),
+        builtin_source_id: module_sources.builtin_source_id,
+        builtin_module_path: module_sources.builtin_module_path,
+        module_source_ids: module_sources.module_source_ids,
+        module_stages: module_sources.module_stages,
+        stdlib_variant,
     }
 }
 
@@ -930,12 +1096,12 @@ mod tests {
         );
         assert_eq!(
             loaded.module_source_ids.len(),
-            6 + DEFAULT_STD_MODULES.len()
+            5 + DEFAULT_STD_MODULES.len()
         );
         assert_eq!(loaded.module_source_ids[0], loaded.builtin_source_id);
         assert_eq!(loaded.module_stages.len(), 2);
         assert_eq!(loaded.module_stages[0][0].module_path, "Bootstrap");
-        assert_eq!(loaded.module_stages[1].len(), 5 + DEFAULT_STD_MODULES.len());
+        assert_eq!(loaded.module_stages[1].len(), 4 + DEFAULT_STD_MODULES.len());
         let std_paths = loaded.module_stages[1]
             .iter()
             .map(|module| module.module_path.as_str())
@@ -953,7 +1119,6 @@ mod tests {
                 "Neq",
                 "Compare",
                 "Concat",
-                "Numeric",
                 "Show",
                 "Ordering",
                 "Tuple",
@@ -992,9 +1157,31 @@ mod tests {
                 "IO",
                 "Shell",
                 "StyledDoc",
-                "Test",
             ]
         );
+    }
+
+    #[test]
+    fn test_enabled_compile_sources_include_test_module() {
+        let module_sources = collect_test_module_sources_with_module_stages(&[])
+            .expect("test-enabled module collection must succeed");
+        let loaded = compose_script_compile_sources_with_stdlib_variant(
+            "main.srt",
+            "print(\"hi\")",
+            module_sources,
+            StdlibVariant::TestEnabled,
+        );
+
+        assert_eq!(
+            loaded.module_source_ids.len(),
+            6 + DEFAULT_STD_MODULES.len()
+        );
+        assert_eq!(loaded.module_stages[1].len(), 5 + DEFAULT_STD_MODULES.len());
+        let std_paths = loaded.module_stages[1]
+            .iter()
+            .map(|module| module.module_path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(std_paths.last().copied(), Some("Test"));
     }
 
     #[test]
@@ -1054,7 +1241,7 @@ mod tests {
 
         assert_eq!(loaded.module_stages.len(), 4);
         assert_eq!(loaded.module_stages[0].len(), 1); // bootstrap
-        assert_eq!(loaded.module_stages[1].len(), 5 + DEFAULT_STD_MODULES.len()); // special types + Function + Kernel + other std modules + StyledDoc + Test
+        assert_eq!(loaded.module_stages[1].len(), 4 + DEFAULT_STD_MODULES.len()); // special types + Function + Kernel + other std modules + StyledDoc
         assert_eq!(loaded.module_stages[2].len(), 1);
         assert_eq!(loaded.module_stages[3].len(), 2);
         assert_eq!(
@@ -1102,7 +1289,6 @@ mod tests {
                 "Neq",
                 "Compare",
                 "Concat",
-                "Numeric",
                 "Show",
                 "Ordering",
                 "Tuple",
@@ -1141,7 +1327,6 @@ mod tests {
                 "IO",
                 "Shell",
                 "StyledDoc",
-                "Test",
             ]
         );
         assert_eq!(loaded.module_stages[2][0].module_path, "Std::Math");

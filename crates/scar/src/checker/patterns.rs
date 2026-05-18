@@ -1,6 +1,27 @@
 use super::*;
 
 impl Checker {
+    pub(super) fn eq_dispatch_for_pattern_pin(
+        &mut self,
+        ty: &Ty,
+        span: &Span,
+    ) -> Result<TraitDispatch, TypeError> {
+        let receiver_ty = self.resolve_ty(ty);
+        let eq_trait = self
+            .trait_key_by_short_name("Eq")
+            .ok_or_else(|| TypeError {
+                message: "Unknown trait: Eq".into(),
+                span: span.clone(),
+                hint: None,
+            })?;
+        self.trait_dispatch_target(&eq_trait, "eq", &receiver_ty)
+            .ok_or_else(|| TypeError {
+                message: format!("`==` is not defined for {}", self.ty_name(&receiver_ty)),
+                span: span.clone(),
+                hint: Some(self.trait_implementation_summary("Eq")),
+            })
+    }
+
     pub(super) fn is_total_bind_pattern(pat: &ResolvedPattern) -> bool {
         match pat {
             ResolvedPattern::Var(_)
@@ -9,7 +30,8 @@ impl Checker {
             ResolvedPattern::As(inner, _, _) => Self::is_total_bind_pattern(inner),
             ResolvedPattern::Tuple(items) => items.iter().all(Self::is_total_bind_pattern),
             ResolvedPattern::Or(_) => false,
-            ResolvedPattern::ListNil(_)
+            ResolvedPattern::Pin(_)
+            | ResolvedPattern::ListNil(_)
             | ResolvedPattern::ListCons(_, _)
             | ResolvedPattern::IntLit(_, _)
             | ResolvedPattern::StrLit(_, _)
@@ -52,6 +74,38 @@ impl Checker {
                 }
                 let expected = self.resolve_ty(&expected);
                 Ok((TypedPattern::Var(expected.clone(), id.clone()), expected))
+            }
+            ResolvedPattern::Pin(id) => {
+                let pinned_ty =
+                    self.env
+                        .lookup_var(id.unique_id)
+                        .cloned()
+                        .ok_or_else(|| TypeError {
+                            message: format!(
+                                "Pinned pattern requires an existing value `{}`",
+                                id.name
+                            ),
+                            span: id.span.clone(),
+                            hint: None,
+                        })?;
+                let rhs_ty = self.resolve_ty(rhs_ty);
+                let pinned_ty = self.resolve_ty(&pinned_ty);
+                if !self.types_compatible(&pinned_ty, &rhs_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Pinned pattern type mismatch: expected {}, got {}",
+                            self.ty_name(&pinned_ty),
+                            self.ty_name(&rhs_ty)
+                        ),
+                        span: id.span.clone(),
+                        hint: None,
+                    });
+                }
+                let dispatch = self.eq_dispatch_for_pattern_pin(&rhs_ty, &id.span)?;
+                Ok((
+                    TypedPattern::Pin(rhs_ty.clone(), id.clone(), dispatch),
+                    rhs_ty,
+                ))
             }
             ResolvedPattern::As(inner, alias, alias_ty) => {
                 let (typed_inner, inner_ty) = self.check_pattern(inner, rhs_ty, span)?;
@@ -357,6 +411,7 @@ impl Checker {
                 self.env.bind_var(id.unique_id, self.resolve_ty(alias_ty));
                 self.bind_typed_pattern(inner, &rhs_ty);
             }
+            TypedPattern::Pin(_, _, _) => {}
             TypedPattern::Wildcard(_)
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
@@ -401,6 +456,12 @@ impl Checker {
         let keys = self.env.vars.keys().copied().collect::<Vec<_>>();
         for key in keys {
             if let Some(ty) = self.env.vars.get(&key).cloned() {
+                if matches!(
+                    ty,
+                    Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } | Ty::Func(_, _)
+                ) {
+                    continue;
+                }
                 self.env.vars.insert(key, self.resolve_ty(&ty));
             }
         }
@@ -435,6 +496,7 @@ impl Checker {
                 }
             }
             TypedPattern::Var(_, _)
+            | TypedPattern::Pin(_, _, _)
             | TypedPattern::Wildcard(_)
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)

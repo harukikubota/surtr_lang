@@ -11,26 +11,12 @@ mod safebind_and_errors;
 
 const LANGUAGE_FEATURE_BUCKETS: usize = 8;
 
-fn stable_bucket(key: &str, bucket_count: usize) -> usize {
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
-
-    let mut hash = FNV_OFFSET;
-    for byte in key.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-
-    (hash as usize) % bucket_count
-}
-
 fn run_bucket_cases(
     module: &str,
     cases: &[(&str, fn())],
     bucket: usize,
     bucket_count: usize,
 ) -> usize {
-    assert!(bucket_count > 0, "bucket_count must be positive");
     assert!(
         bucket < bucket_count,
         "bucket {} out of range {}",
@@ -40,7 +26,7 @@ fn run_bucket_cases(
 
     let mut ran = 0usize;
     for (name, case) in cases.iter() {
-        if stable_bucket(&format!("{module}::{name}"), bucket_count) != bucket {
+        if crate::support::stable_bucket(&format!("{module}::{name}"), bucket_count) != bucket {
             continue;
         }
         ran += 1;

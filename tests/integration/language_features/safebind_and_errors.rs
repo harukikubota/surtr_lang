@@ -117,6 +117,36 @@ print(match value {
     );
 }
 
+fn pinned_match_and_safebind_compare_existing_value() {
+    assert_output(
+        r#"expected = 2
+value = 2
+print(match value {
+  ^expected => "hit",
+  _ => "miss",
+})
+^expected =? value
+print(to_string(is_match(value, ^expected)))"#,
+        &["hit", "True"],
+    );
+}
+
+fn pinned_pattern_is_not_allowed_with_plain_bind() {
+    assert_compile_error(
+        r#"expected = 2
+^expected = 2"#,
+        "Pinned patterns are not allowed with =",
+    );
+}
+
+fn pin_operator_is_not_allowed_in_expression_position() {
+    assert_compile_error(
+        r#"expected = 2
+value = ^expected"#,
+        "Pin operator ^ is only allowed in MatchBlock patterns and bulk_update paths.",
+    );
+}
+
 fn expr_list_cons_does_not_become_string_cons() {
     assert_compile_error(
         r#"source = ["x"]
@@ -614,6 +644,18 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "match_string_empty_and_uncons_is_exhaustive",
             match_string_empty_and_uncons_is_exhaustive as fn(),
+        ),
+        (
+            "pinned_match_and_safebind_compare_existing_value",
+            pinned_match_and_safebind_compare_existing_value as fn(),
+        ),
+        (
+            "pinned_pattern_is_not_allowed_with_plain_bind",
+            pinned_pattern_is_not_allowed_with_plain_bind as fn(),
+        ),
+        (
+            "pin_operator_is_not_allowed_in_expression_position",
+            pin_operator_is_not_allowed_in_expression_position as fn(),
         ),
         (
             "expr_list_cons_does_not_become_string_cons",

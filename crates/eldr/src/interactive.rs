@@ -213,6 +213,7 @@ mod tests {
             const_base: 0,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
@@ -221,6 +222,7 @@ mod tests {
             callable_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         }
@@ -244,6 +246,7 @@ mod tests {
                     const_base: 0,
                     constants: Vec::new(),
                     new_locals: 0,
+                    type_registry_base: 0,
                     type_entries: Vec::new(),
                     error_template_base: 0,
                     error_templates: Vec::new(),
@@ -252,6 +255,7 @@ mod tests {
                     callable_templates: Vec::new(),
                     functions: vec![function_entry(0, 1, "Main::new")],
                     docs: Vec::new(),
+                    signatures: Vec::new(),
                     runtime_process_specs: Vec::new(),
                     runtime_boot_plan: Default::default(),
                 },
@@ -365,5 +369,30 @@ mod tests {
                 .any(|entry| entry.tag == 99),
             "bootstrap type entry should be committed"
         );
+    }
+
+    #[test]
+    fn push_atomic_bootstrap_rejects_stale_type_registry_base() {
+        let mut vm = InteractiveVm::new(TypeRegistry::new());
+        let mut chunk = empty_chunk();
+        chunk.type_registry_base = 1;
+        chunk.type_entries.push(TypeEntry {
+            tag: 99,
+            name: "Extra".into(),
+            kind: TypeKind::Struct,
+            field_names: Vec::new(),
+            private_flags: Vec::new(),
+        });
+
+        let err = vm
+            .push_chunk(chunk, InteractiveChunkPolicy::Preload)
+            .expect_err("stale type_registry_base must be rejected");
+
+        assert!(
+            err.message.contains("type registry base mismatch"),
+            "{}",
+            err.message
+        );
+        assert!(vm.type_registry().entries().is_empty());
     }
 }

@@ -13,7 +13,9 @@
 - [FS / Shell spec](./FS_Shell_spec.md)
 - [Json / Encode / Decode spec](./Json_spec.md)
 - [Process runtime spec](./ProcessRuntime_spec.md)
+- [Rune CLI spec](./Rune_cli_spec.md)
 - [Rune observability](./Rune_observability.md)
+- [Surtr LSP spec](./Surtr_LSP_spec.md)
 - [Xldr spec](./Xldr_spec.md)
 - [テスト方針](./テスト方針.md)
 

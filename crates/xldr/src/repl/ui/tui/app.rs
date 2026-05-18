@@ -1,7 +1,9 @@
 //! TUI application state types.
 use std::collections::VecDeque;
 
+use crate::repl::logic::core::CompletionTelemetry;
 use crate::repl::logic::{PresentedDoc, PresentedResultKind};
+use crate::repl::ui::completion::ReplCompletionController;
 
 // ── Enums ─────────────────────────────────────────────────────────────────────
 
@@ -57,6 +59,8 @@ pub(super) struct DocEntry {
 pub(super) struct CompletionItem {
     pub(super) label: String,
     pub(super) detail: Option<String>,
+    pub(super) replace_start: usize,
+    pub(super) replace_end: usize,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -87,10 +91,10 @@ impl Completion {
 
     pub(super) fn apply(&self, buf: &mut InputBuffer) {
         if let Some(item) = self.items.get(self.selected) {
-            let prefix_len = super::update::current_token_prefix(buf).len();
-            let cursor = buf.cursor_byte;
-            buf.text.drain((cursor - prefix_len)..cursor);
-            buf.cursor_byte -= prefix_len;
+            let replace_start = item.replace_start.min(buf.text.len());
+            let replace_end = item.replace_end.min(buf.text.len()).max(replace_start);
+            buf.text.drain(replace_start..replace_end);
+            buf.cursor_byte = replace_start;
             for ch in item.label.chars() {
                 buf.insert_char(ch);
             }
@@ -167,6 +171,9 @@ pub(super) struct App {
     pub(super) docs: VecDeque<DocEntry>,
     pub(super) selected_doc: Option<usize>,
     pub(super) completion: Completion,
+    pub(super) completion_controller: ReplCompletionController,
+    pub(super) tab_completion_mode: bool,
+    pub(super) last_completion_telemetry: Option<CompletionTelemetry>,
     pub(super) status: String,
     pub(super) mode: ReplMode,
 }
@@ -185,6 +192,9 @@ impl App {
             docs: VecDeque::new(),
             selected_doc: None,
             completion: Completion::default(),
+            completion_controller: ReplCompletionController::default(),
+            tab_completion_mode: false,
+            last_completion_telemetry: None,
             status: "INSERT | Tab Focus | Ctrl-C Quit".to_string(),
             mode: ReplMode::Repl,
         }
@@ -270,6 +280,11 @@ impl App {
             FocusPane::Results => "Results",
             FocusPane::Docs => "Docs",
         };
-        self.status = format!("{mode} | Focus: {focus} | Tab Focus | Ctrl-C Quit");
+        let completion = if self.tab_completion_mode {
+            "Tab Complete: On"
+        } else {
+            "Tab Complete: Off"
+        };
+        self.status = format!("{mode} | Focus: {focus} | {completion} | Ctrl-C Quit");
     }
 }

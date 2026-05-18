@@ -11,16 +11,25 @@ fn restricted_surface_import_message(fq_name: &str) -> String {
     format!("Import target `{fq_name}` cannot be imported from user code")
 }
 
+fn builtin_special_variant_bare_alias(entry: &DeclarationEntry) -> Option<&'static str> {
+    if entry.kind != DeclarationKind::EnumVariant {
+        return None;
+    }
+    match global_surface_name(&entry.fq_name) {
+        "Result::Ok" => Some("Ok"),
+        "Result::Err" => Some("Err"),
+        "Boolean::True" => Some("True"),
+        "Boolean::False" => Some("False"),
+        _ => None,
+    }
+}
+
 fn auto_import_trait_names(declaration_index: &DeclarationIndex) -> HashSet<String> {
     declaration_index
         .values()
         .filter(|entry| entry.kind == DeclarationKind::Trait && entry.auto_import)
         .map(|entry| entry.name.clone())
         .collect()
-}
-
-fn surface_name(name: &str) -> &str {
-    name.strip_prefix("Global::").unwrap_or(name)
 }
 
 fn is_result_facet_chain_conflict(
@@ -31,12 +40,27 @@ fn is_result_facet_chain_conflict(
     if short_name != "chain" {
         return false;
     }
-    let existing = surface_name(existing_name);
-    let incoming = surface_name(incoming_name);
+    let existing = global_surface_name(existing_name);
+    let incoming = global_surface_name(incoming_name);
     matches!(
         (existing, incoming),
         ("Result::chain", "Facet::chain") | ("Facet::chain", "Result::chain")
     )
+}
+
+fn declaration_is_auto_imported(import_context: &ImportContext<'_>, fq_name: &str) -> bool {
+    import_context
+        .declaration_index
+        .get(fq_name)
+        .is_some_and(|entry| {
+            entry.auto_import
+                || import_context
+                    .auto_import_modules
+                    .contains(global_surface_name(&entry.module_path))
+                || import_context
+                    .auto_import_traits
+                    .contains(global_surface_name(&entry.module_path))
+        })
 }
 
 pub(super) fn build_global_scope(
@@ -69,11 +93,11 @@ pub(super) fn build_global_scope(
                 continue;
             }
             scope.define_with_id(fq_name, *uid);
-            if surface_name(fq_name) != fq_name {
-                scope.define_with_id(surface_name(fq_name), *uid);
+            if global_surface_name(fq_name) != fq_name {
+                scope.define_with_id(global_surface_name(fq_name), *uid);
             }
-            if surface_name(&entry.name) != entry.name {
-                scope.define_with_id(surface_name(&entry.name), *uid);
+            if global_surface_name(&entry.name) != entry.name {
+                scope.define_with_id(global_surface_name(&entry.name), *uid);
             }
             if matches!(
                 entry.kind,
@@ -83,6 +107,9 @@ pub(super) fn build_global_scope(
                 // Trait canonical paths stay visible as `Eq` / `Eq::eq`.
                 // Bare method helpers like `eq` are injected only by import/prelude.
                 scope.define_with_id(&entry.name, *uid);
+            }
+            if let Some(alias) = builtin_special_variant_bare_alias(entry) {
+                scope.define_with_id(alias, *uid);
             }
         }
     }
@@ -99,8 +126,37 @@ pub(super) fn build_module_scope(
     current_module_path: Option<&str>,
     current_stage_index: usize,
 ) -> Result<Scope, ResolveError> {
+    build_module_scope_with_imports(
+        global_scope,
+        auto_import_modules,
+        declaration_index,
+        declaration_uids,
+        declaration_uid_kinds,
+        stmts,
+        current_module_path,
+        current_stage_index,
+    )
+    .map(|build| build.scope)
+}
+
+pub(super) struct ModuleScopeBuild {
+    pub scope: Scope,
+    pub explicit_function_imports: Vec<ExplicitFunctionImport>,
+}
+
+pub(super) fn build_module_scope_with_imports(
+    global_scope: &Scope,
+    auto_import_modules: &[String],
+    declaration_index: &DeclarationIndex,
+    declaration_uids: &HashMap<String, u32>,
+    declaration_uid_kinds: &HashMap<u32, DeclarationKind>,
+    stmts: &[Ast],
+    current_module_path: Option<&str>,
+    current_stage_index: usize,
+) -> Result<ModuleScopeBuild, ResolveError> {
     let mut scope = global_scope.clone();
     let mut import_state = ImportState::default();
+    let mut explicit_function_imports = Vec::new();
     let auto_import_traits = auto_import_trait_names(declaration_index);
     let auto_import_module_set = auto_import_modules
         .iter()
@@ -114,6 +170,7 @@ pub(super) fn build_module_scope(
         current_stage_index,
         auto_import_traits: &auto_import_traits,
         import_state: &mut import_state,
+        explicit_function_imports: &mut explicit_function_imports,
     };
 
     for stmt in stmts {
@@ -153,18 +210,24 @@ pub(super) fn build_module_scope(
                 if let Some(uid) = declaration_uids.get(&entry.fq_name) {
                     scope.define_with_id(&entry.name, *uid);
                     scope.define_with_id(&entry.fq_name, *uid);
-                    if surface_name(&entry.name) != entry.name {
-                        scope.define_with_id(surface_name(&entry.name), *uid);
+                    if global_surface_name(&entry.name) != entry.name {
+                        scope.define_with_id(global_surface_name(&entry.name), *uid);
                     }
-                    if surface_name(&entry.fq_name) != entry.fq_name {
-                        scope.define_with_id(surface_name(&entry.fq_name), *uid);
+                    if global_surface_name(&entry.fq_name) != entry.fq_name {
+                        scope.define_with_id(global_surface_name(&entry.fq_name), *uid);
+                    }
+                    if let Some(alias) = builtin_special_variant_bare_alias(entry) {
+                        scope.define_with_id(alias, *uid);
                     }
                 }
             }
         }
     }
 
-    Ok(scope)
+    Ok(ModuleScopeBuild {
+        scope,
+        explicit_function_imports,
+    })
 }
 
 struct ImportContext<'a> {
@@ -175,6 +238,7 @@ struct ImportContext<'a> {
     current_stage_index: usize,
     auto_import_traits: &'a HashSet<String>,
     import_state: &'a mut ImportState,
+    explicit_function_imports: &'a mut Vec<ExplicitFunctionImport>,
 }
 
 fn lookup_trait_entry<'a>(
@@ -291,7 +355,7 @@ fn import_list_into_scope(
     let module_exists = import_context
         .declaration_index
         .values()
-        .any(|entry| surface_name(&entry.module_path) == module_name);
+        .any(|entry| global_surface_name(&entry.module_path) == module_name);
     if !module_exists {
         return Err(ResolveError {
             message: format!("Unknown module import: {}", module_name),
@@ -308,7 +372,7 @@ fn import_list_into_scope(
 
         let fq_name = format!("{}::{}", module_name, name);
         let Some(entry) = import_context.declaration_index.values().find(|entry| {
-            surface_name(&entry.module_path) == module_name
+            global_surface_name(&entry.module_path) == module_name
                 && (entry.name == *name
                     || entry
                         .name
@@ -371,10 +435,12 @@ fn import_list_into_scope(
             )?;
         }
 
+        record_explicit_function_import(import_context, entry, name, &span);
+
         if entry.kind == DeclarationKind::Trait {
             let trait_prefix = format!("{}::", name);
             for method_entry in import_context.declaration_index.values() {
-                if surface_name(&method_entry.module_path) != module_name
+                if global_surface_name(&method_entry.module_path) != module_name
                     || method_entry.kind != DeclarationKind::TraitMethod
                     || !method_entry.name.starts_with(&trait_prefix)
                 {
@@ -440,7 +506,7 @@ fn import_module_into_scope(
     let mut imported_any = false;
     let mut blocked_by_stage = false;
     for entry in import_context.declaration_index.values() {
-        if surface_name(&entry.module_path) != module_name {
+        if global_surface_name(&entry.module_path) != module_name {
             continue;
         }
         if !is_importable_declaration(&entry.kind) {
@@ -608,6 +674,32 @@ fn import_trait_into_scope(
     Ok(())
 }
 
+fn record_explicit_function_import(
+    import_context: &mut ImportContext<'_>,
+    entry: &DeclarationEntry,
+    alias: &str,
+    span: &Span,
+) {
+    if !matches!(
+        entry.kind,
+        DeclarationKind::Def
+            | DeclarationKind::Extractor
+            | DeclarationKind::TraitMethod
+            | DeclarationKind::ImplMethod
+    ) {
+        return;
+    }
+    import_context
+        .explicit_function_imports
+        .push(ExplicitFunctionImport {
+            uid: import_context.declaration_uids[&entry.fq_name],
+            alias: alias.to_string(),
+            fq_name: entry.fq_name.clone(),
+            span: span.clone(),
+            kind: entry.kind.clone(),
+        });
+}
+
 fn import_single_into_scope(
     scope: &mut Scope,
     import_context: &mut ImportContext<'_>,
@@ -621,7 +713,7 @@ fn import_single_into_scope(
 
     let fq_name = format!("{}::{}", module_name, name);
     let Some(entry) = import_context.declaration_index.values().find(|entry| {
-        surface_name(&entry.module_path) == module_name
+        global_surface_name(&entry.module_path) == module_name
             && (entry.name == name
                 || entry
                     .name
@@ -639,7 +731,7 @@ fn import_single_into_scope(
         let module_exists = import_context
             .declaration_index
             .values()
-            .any(|entry| surface_name(&entry.module_path) == module_name);
+            .any(|entry| global_surface_name(&entry.module_path) == module_name);
         return Err(ResolveError {
             message: if module_exists {
                 format!("Unknown import member: {}", fq_name)
@@ -721,10 +813,12 @@ fn import_single_into_scope(
         )?;
     }
 
+    record_explicit_function_import(import_context, entry, name, &span);
+
     if entry.kind == DeclarationKind::Trait {
         let trait_prefix = format!("{}::", name);
         for method_entry in import_context.declaration_index.values() {
-            if surface_name(&method_entry.module_path) != module_name
+            if global_surface_name(&method_entry.module_path) != module_name
                 || method_entry.kind != DeclarationKind::TraitMethod
                 || !method_entry.name.starts_with(&trait_prefix)
             {
@@ -814,18 +908,8 @@ fn bind_import_name(
                 .find_map(|(fq_name, known_uid)| (*known_uid == existing_uid).then_some(fq_name))
                 .cloned()
                 .unwrap_or_else(|| format!("<uid:{}>", existing_uid));
-            let existing_is_auto_imported = import_context
-                .declaration_index
-                .get(&existing_name)
-                .is_some_and(|entry| {
-                    entry.auto_import
-                        || import_context
-                            .auto_import_modules
-                            .contains(surface_name(&entry.module_path))
-                        || import_context
-                            .auto_import_traits
-                            .contains(surface_name(&entry.module_path))
-                });
+            let existing_is_auto_imported =
+                declaration_is_auto_imported(import_context, &existing_name);
             if !existing_is_auto_imported {
                 return Ok(());
             }
@@ -855,18 +939,8 @@ fn bind_import_name(
             .find_map(|(fq_name, known_uid)| (*known_uid == existing_uid).then_some(fq_name))
             .cloned()
             .unwrap_or_else(|| format!("<uid:{}>", existing_uid));
-        let existing_is_auto_imported = import_context
-            .declaration_index
-            .get(&existing_name)
-            .is_some_and(|entry| {
-                entry.auto_import
-                    || import_context
-                        .auto_import_modules
-                        .contains(surface_name(&entry.module_path))
-                    || import_context
-                        .auto_import_traits
-                        .contains(surface_name(&entry.module_path))
-            });
+        let existing_is_auto_imported =
+            declaration_is_auto_imported(import_context, &existing_name);
         if existing_is_auto_imported {
             scope.define_with_id(short_name, uid);
             return Ok(());

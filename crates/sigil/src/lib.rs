@@ -5,7 +5,9 @@ pub mod scope;
 
 pub use resolver::{
     build_scope_for_module, precollect_declaration_index, resolve, resolve_staged_program,
-    resolve_staged_program_from_state, resolve_staged_program_with_state, DeclarationEntry,
+    resolve_staged_program_from_state, resolve_staged_program_from_state_with_warnings,
+    resolve_staged_program_with_state, resolve_staged_program_with_state_with_warnings,
+    resolve_staged_program_with_warnings, resolve_with_warnings, DeclarationEntry,
     DeclarationIndex, DeclarationKind, ResolveResumeState, ResolvedStagedProgram, SigilCheckpoint,
     SigilSession, StagedModuleAst,
 };

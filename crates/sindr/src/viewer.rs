@@ -426,7 +426,7 @@ fn function_view(
         Some(entry.end_pc)
     };
     let opcode_pcs = end_pc
-        .map(|end| (entry.entry_pc..=end).collect())
+        .map(|end| (entry.entry_pc..end).collect())
         .unwrap_or_default();
     let source_ref = bytecode
         .source_map
@@ -878,6 +878,7 @@ mod tests {
                 signature: Some("def entry() -> Unit".into()),
                 doc: "sample".into(),
             }],
+            signatures: Vec::new(),
             compile_info: CompileInfo::default(),
             labels: vec![LabelEntry {
                 name: "entry".into(),

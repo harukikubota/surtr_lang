@@ -1,6 +1,7 @@
 mod command_error;
 pub mod error_display;
 mod loader;
+mod project_runner;
 pub mod repl;
 pub mod tui;
 
@@ -16,29 +17,41 @@ pub use loader::{
     collect_additional_default_std_module_inputs, collect_lib_module_inputs,
     collect_module_sources_with_extra_std_sources, collect_module_sources_with_module_file_stages,
     collect_module_sources_with_module_stages, collect_module_sources_with_modules,
-    compose_script_compile_sources, derive_primary_module_path, is_default_std_module_file_name,
-    is_default_std_module_path, script_pseudo_module_path, CompileSources, LoadError, ModuleInput,
-    ModuleSources, SourceDescriptor, SourceKind, StagedModule,
+    collect_module_sources_with_stdlib_variant, collect_script_include_directives,
+    collect_test_module_sources_with_module_stages, compose_script_compile_sources,
+    compose_script_compile_sources_with_stdlib_variant, derive_primary_module_path,
+    is_default_std_module_file_name, is_default_std_module_path,
+    module_path_from_source_or_file_name, prepare_script_sources, script_pseudo_module_path,
+    CompileSources, LoadError, ModuleInput, ModuleSources, PreparedScriptSources,
+    ScriptIncludeDirective, ScriptSourcePrepareError, SourceDescriptor, StagedModule,
+    StdlibVariant,
+};
+pub use project_runner::{
+    execute_project_runner_source, project_runner_module_input_stages, ProjectRunnerVmError,
 };
 
 use diagnostics::SourceId;
-pub use repl::logic::core::{EldrLoadError, ReplEngine, ReplLoadError};
+pub use repl::logic::core::{
+    CompletionTelemetry, EldrLoadError, ReplCompletionContext, ReplEngine, ReplLoadError,
+};
 pub use repl::ui::cli::{cli_command, BannerMode, ReplOptions};
+pub use repl::ui::completion::{
+    ReplCompletionProvider, ReplCompletionRequest, ReplCompletionResult,
+};
 use serde::{Deserialize, Serialize};
 use sindr::builtin::{BUILTIN_METAS, BUILTIN_TYPE_METAS};
-use sindr::ir::{stable_hash_hex, Bytecode, DocEntry, DocKind};
+use sindr::ir::{stable_hash_hex, Bytecode, DocEntry, DocKind, SignatureEntry};
+pub use sindr::policy::SourceKind;
 use sindr::policy::{CompileUnitKind, EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
 
 pub const MODULE_SPAN_STRIDE: usize = 1_000_000;
-const IMPLICIT_ROOT_NAMESPACE_PREFIX: &str = "Global::";
 
 pub(crate) fn surface_path_name(name: &str) -> &str {
-    name.strip_prefix(IMPLICIT_ROOT_NAMESPACE_PREFIX)
-        .unwrap_or(name)
+    sindr::names::surface_path_name(name)
 }
 
 pub(crate) fn surface_rendered_name(name: &str) -> String {
-    name.replace(IMPLICIT_ROOT_NAMESPACE_PREFIX, "")
+    sindr::names::surface_rendered_name(name)
 }
 
 fn stable_hash_bytes(bytes: &[u8]) -> String {
@@ -51,6 +64,13 @@ fn stable_hash_bytes(bytes: &[u8]) -> String {
         hash = hash.wrapping_mul(FNV_PRIME);
     }
     format!("{hash:016x}")
+}
+
+fn stdlib_variant_cache_key(stdlib_variant: StdlibVariant) -> &'static str {
+    match stdlib_variant {
+        StdlibVariant::Default => "default",
+        StdlibVariant::TestEnabled => "test-enabled",
+    }
 }
 
 pub fn module_span_base_for_source(source_id: SourceId) -> usize {
@@ -186,6 +206,35 @@ fn format_ast_ty(ty: &spire::ast::AstTy) -> String {
     }
 }
 
+fn rewrite_self_ast_ty(ty: &spire::ast::AstTy, self_ty: &spire::ast::AstTy) -> spire::ast::AstTy {
+    match ty {
+        spire::ast::AstTy::Named(_, name) if name == "Self" => self_ty.clone(),
+        spire::ast::AstTy::Named(_, _) | spire::ast::AstTy::ImplTrait(_, _) => ty.clone(),
+        spire::ast::AstTy::Generic(span, name, args) => spire::ast::AstTy::Generic(
+            span.clone(),
+            name.clone(),
+            args.iter()
+                .map(|arg| rewrite_self_ast_ty(arg, self_ty))
+                .collect(),
+        ),
+        spire::ast::AstTy::Tuple(span, items) => spire::ast::AstTy::Tuple(
+            span.clone(),
+            items
+                .iter()
+                .map(|item| rewrite_self_ast_ty(item, self_ty))
+                .collect(),
+        ),
+        spire::ast::AstTy::Func(span, params, ret) => spire::ast::AstTy::Func(
+            span.clone(),
+            params
+                .iter()
+                .map(|param| rewrite_self_ast_ty(param, self_ty))
+                .collect(),
+            Box::new(rewrite_self_ast_ty(ret, self_ty)),
+        ),
+    }
+}
+
 fn format_type_params(type_params: &[spire::ast::TypeParam]) -> String {
     if type_params.is_empty() {
         String::new()
@@ -295,6 +344,31 @@ fn format_defenum_signature(name: &str, variants: &[spire::ast::EnumVariant]) ->
     format!("defenum {} {{ {variants} }}", surface_path_name(name))
 }
 
+fn builtin_special_enum_variant_signature(
+    enum_name: &str,
+    type_params: &[spire::ast::TypeParam],
+    variant: &spire::ast::EnumVariant,
+) -> Option<String> {
+    match (surface_path_name(enum_name), variant.name.as_str()) {
+        ("Result", "Ok") => {
+            let ok_ty = variant
+                .payload
+                .first()
+                .map(format_ast_ty)
+                .unwrap_or_else(|| "$T".to_string());
+            Some(format!("Ok({ok_ty}) -> Result<{ok_ty}, Error>"))
+        }
+        ("Result", "Err") => Some("Err(Error) -> Result<$T, Error>".to_string()),
+        ("Boolean", "True") if type_params.is_empty() && variant.payload.is_empty() => {
+            Some("True() -> Boolean".to_string())
+        }
+        ("Boolean", "False") if type_params.is_empty() && variant.payload.is_empty() => {
+            Some("False() -> Boolean".to_string())
+        }
+        _ => None,
+    }
+}
+
 fn format_struct_signature(name: &str) -> String {
     format!("defstruct {}", surface_path_name(name))
 }
@@ -315,7 +389,27 @@ fn format_impl_method_signature(
     params: &[spire::ast::FunParam],
     ret_ty: &Option<spire::ast::AstTy>,
 ) -> String {
-    let signature = format_fun_signature(name, type_params, params, ret_ty);
+    let self_ty =
+        spire::ast::AstTy::Named(spire::ast::Span { start: 0, end: 0 }, target.to_string());
+    let params = params
+        .iter()
+        .map(|param| {
+            format!(
+                "{}: {}",
+                param.name,
+                format_ast_ty(&rewrite_self_ast_ty(&param.ty, &self_ty))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let type_params = format_type_params(type_params);
+    let signature = match ret_ty {
+        Some(ret) => format!(
+            "{name}{type_params}({params}) -> {}",
+            format_ast_ty(&rewrite_self_ast_ty(ret, &self_ty))
+        ),
+        None => format!("{name}{type_params}({params})"),
+    };
     if let Some(rest) = signature.strip_prefix(name) {
         format!("{}::{name}{rest}", surface_path_name(target))
     } else {
@@ -330,7 +424,21 @@ fn format_impl_extractor_signature(
     param: &spire::ast::ExtractorParam,
     ret_ty: &spire::ast::AstTy,
 ) -> String {
-    let signature = format_extractor_signature(name, type_params, param, ret_ty);
+    let self_ty =
+        spire::ast::AstTy::Named(spire::ast::Span { start: 0, end: 0 }, target.to_string());
+    let type_params = format_type_params(type_params);
+    let param = match &param.ty {
+        Some(ty) => format!(
+            "{}: {}",
+            param.name,
+            format_ast_ty(&rewrite_self_ast_ty(ty, &self_ty))
+        ),
+        None => param.name.clone(),
+    };
+    let signature = format!(
+        "{name}{type_params}({param}) -> {}",
+        format_ast_ty(&rewrite_self_ast_ty(ret_ty, &self_ty))
+    );
     if let Some(rest) = signature.strip_prefix(name) {
         format!("{}::{name}{rest}", surface_path_name(target))
     } else {
@@ -378,7 +486,25 @@ fn format_trait_impl_method_signature(
     params: &[spire::ast::FunParam],
     ret_ty: &Option<spire::ast::AstTy>,
 ) -> String {
-    let method_sig = format_fun_signature(method_name, type_params, params, ret_ty);
+    let params = params
+        .iter()
+        .map(|param| {
+            format!(
+                "{}: {}",
+                param.name,
+                format_ast_ty(&rewrite_self_ast_ty(&param.ty, target_ty))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let type_params = format_type_params(type_params);
+    let method_sig = match ret_ty {
+        Some(ret) => format!(
+            "{method_name}{type_params}({params}) -> {}",
+            format_ast_ty(&rewrite_self_ast_ty(ret, target_ty))
+        ),
+        None => format!("{method_name}{type_params}({params})"),
+    };
     let impl_sig = format_trait_impl_signature(trait_name, trait_args, target_ty);
     format!("{impl_sig}::{method_sig}")
 }
@@ -734,7 +860,7 @@ fn collect_doc_entries_for_ast(
                     });
                 }
             }
-            spire::ast::Ast::EnumDef(_, name, _, variants, attrs) => {
+            spire::ast::Ast::EnumDef(_, name, type_params, variants, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
@@ -743,6 +869,331 @@ fn collect_doc_entries_for_ast(
                         signature: Some(format_defenum_signature(name, variants)),
                         doc: doc.clone(),
                     });
+                }
+                if attrs.builtin {
+                    for variant in variants {
+                        let Some(signature) =
+                            builtin_special_enum_variant_signature(name, type_params, variant)
+                        else {
+                            continue;
+                        };
+                        out.push(DocEntry {
+                            qualified_name: qualified_name(
+                                module_path,
+                                &format!("{name}::{}", variant.name),
+                            ),
+                            kind: DocKind::Function,
+                            module_path: surface_path_name(module_path).to_string(),
+                            signature: Some(signature),
+                            doc: String::new(),
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn push_signature_entry(
+    out: &mut Vec<SignatureEntry>,
+    module_path: &str,
+    qualified_name: String,
+    kind: DocKind,
+    signature: String,
+) {
+    out.push(SignatureEntry {
+        qualified_name,
+        kind,
+        module_path: surface_path_name(module_path).to_string(),
+        signature,
+    });
+}
+
+fn collect_signature_entries_for_ast(
+    ast: &[spire::ast::Ast],
+    module_path: &str,
+    out: &mut Vec<SignatureEntry>,
+) {
+    for stmt in ast {
+        match stmt {
+            spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Function,
+                    format_fun_signature(name, type_params, params, ret_ty),
+                );
+            }
+            spire::ast::Ast::BuiltinDecl(_, name, params, ret_ty, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Function,
+                    format_fun_signature(name, &[], params, ret_ty),
+                );
+            }
+            spire::ast::Ast::IntrinsicDecl(_, name, signature, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Function,
+                    signature.clone(),
+                );
+            }
+            spire::ast::Ast::ExtractorDef(_, name, type_params, param, ret_ty, _, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Function,
+                    format_extractor_signature(name, type_params, param, ret_ty),
+                );
+            }
+            spire::ast::Ast::BuiltinExtractorDecl(_, name, param, ret_ty, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Function,
+                    format_extractor_signature(name, &[], param, ret_ty),
+                );
+            }
+            spire::ast::Ast::TraitDef(_, name, _type_params, methods, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Type,
+                    format!(
+                        "trait {} {{ {} }}",
+                        surface_path_name(name),
+                        methods
+                            .iter()
+                            .map(|method| format_fun_signature(
+                                &method.name,
+                                &method.type_params,
+                                &method.params,
+                                &Some(method.ret_ty.clone()),
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                );
+                for method in methods {
+                    push_signature_entry(
+                        out,
+                        module_path,
+                        qualified_name(module_path, &format!("{name}::{}", method.name)),
+                        DocKind::Function,
+                        format_trait_method_signature(name, method),
+                    );
+                }
+            }
+            spire::ast::Ast::StructDef(_, name, type_params, _fields, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Type,
+                    format_generic_struct_signature(name, type_params),
+                );
+            }
+            spire::ast::Ast::RecordDef(_, name, _, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Type,
+                    format_record_signature(name),
+                );
+            }
+            spire::ast::Ast::ImplDef(_, target, methods, _) => {
+                for method in methods {
+                    match method {
+                        spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, _) => {
+                            let qualified_method_name =
+                                if surface_path_name(module_path) == surface_path_name(target) {
+                                    format!("{}::{name}", surface_path_name(target))
+                                } else {
+                                    qualified_name(module_path, &format!("{target}::{name}"))
+                                };
+                            push_signature_entry(
+                                out,
+                                module_path,
+                                qualified_method_name,
+                                DocKind::Function,
+                                format_impl_method_signature(
+                                    target,
+                                    name,
+                                    type_params,
+                                    params,
+                                    ret_ty,
+                                ),
+                            );
+                        }
+                        spire::ast::Ast::BuiltinDecl(_, name, params, ret_ty, _) => {
+                            let qualified_method_name =
+                                if surface_path_name(module_path) == surface_path_name(target) {
+                                    format!("{}::{name}", surface_path_name(target))
+                                } else {
+                                    qualified_name(module_path, &format!("{target}::{name}"))
+                                };
+                            push_signature_entry(
+                                out,
+                                module_path,
+                                qualified_method_name,
+                                DocKind::Function,
+                                format_impl_method_signature(target, name, &[], params, ret_ty),
+                            );
+                        }
+                        spire::ast::Ast::ExtractorDef(
+                            _,
+                            name,
+                            type_params,
+                            param,
+                            ret_ty,
+                            _,
+                            _,
+                        ) => {
+                            let qualified_method_name =
+                                if surface_path_name(module_path) == surface_path_name(target) {
+                                    format!("{}::{name}", surface_path_name(target))
+                                } else {
+                                    qualified_name(module_path, &format!("{target}::{name}"))
+                                };
+                            push_signature_entry(
+                                out,
+                                module_path,
+                                qualified_method_name,
+                                DocKind::Function,
+                                format_impl_extractor_signature(
+                                    target,
+                                    name,
+                                    type_params,
+                                    param,
+                                    ret_ty,
+                                ),
+                            );
+                        }
+                        spire::ast::Ast::BuiltinExtractorDecl(_, name, param, ret_ty, _) => {
+                            let qualified_method_name =
+                                if surface_path_name(module_path) == surface_path_name(target) {
+                                    format!("{}::{name}", surface_path_name(target))
+                                } else {
+                                    qualified_name(module_path, &format!("{target}::{name}"))
+                                };
+                            push_signature_entry(
+                                out,
+                                module_path,
+                                qualified_method_name,
+                                DocKind::Function,
+                                format_impl_extractor_signature(target, name, &[], param, ret_ty),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            spire::ast::Ast::TraitImplDef(_, trait_name, trait_args, target_ty, methods, _) => {
+                let rendered = format_trait_impl_signature(trait_name, trait_args, target_ty);
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, &rendered),
+                    DocKind::Type,
+                    rendered.clone(),
+                );
+                for method in methods {
+                    let method_parts = match method {
+                        spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, _) => {
+                            Some((name, type_params.as_slice(), params.as_slice(), ret_ty))
+                        }
+                        spire::ast::Ast::BuiltinDecl(_, name, params, ret_ty, _) => {
+                            Some((name, [].as_slice(), params.as_slice(), ret_ty))
+                        }
+                        _ => None,
+                    };
+                    if let Some((name, type_params, params, ret_ty)) = method_parts {
+                        let rendered = format_trait_impl_method_signature(
+                            trait_name,
+                            trait_args,
+                            target_ty,
+                            name,
+                            type_params,
+                            params,
+                            ret_ty,
+                        );
+                        push_signature_entry(
+                            out,
+                            module_path,
+                            qualified_name(
+                                module_path,
+                                &format!(
+                                    "{}::{}",
+                                    format_trait_impl_signature(trait_name, trait_args, target_ty),
+                                    name
+                                ),
+                            ),
+                            DocKind::Function,
+                            rendered,
+                        );
+                    }
+                }
+            }
+            spire::ast::Ast::BuiltinTypeDecl(_, head, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, &head.name),
+                    DocKind::Type,
+                    format_builtin_type_signature(head),
+                );
+            }
+            spire::ast::Ast::ResultCtorDecl(_, name, param_ty, ret_ty, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Function,
+                    format_result_ctor_signature(name, param_ty, ret_ty),
+                );
+            }
+            spire::ast::Ast::DeferrorDef(_, name, fields, _, _) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Type,
+                    format_deferror_signature(name, fields),
+                );
+            }
+            spire::ast::Ast::EnumDef(_, name, type_params, variants, attrs) => {
+                push_signature_entry(
+                    out,
+                    module_path,
+                    qualified_name(module_path, name),
+                    DocKind::Type,
+                    format_defenum_signature(name, variants),
+                );
+                if attrs.builtin {
+                    for variant in variants {
+                        let Some(signature) =
+                            builtin_special_enum_variant_signature(name, type_params, variant)
+                        else {
+                            continue;
+                        };
+                        push_signature_entry(
+                            out,
+                            module_path,
+                            qualified_name(module_path, &format!("{name}::{}", variant.name)),
+                            DocKind::Function,
+                            signature,
+                        );
+                    }
                 }
             }
             _ => {}
@@ -762,6 +1213,16 @@ pub fn collect_doc_entries(
     docs
 }
 
+pub fn collect_signature_entries(
+    module_stages: &[Vec<sigil::StagedModuleAst>],
+    user_ast: &[spire::ast::Ast],
+    user_module_path: Option<&str>,
+) -> Vec<SignatureEntry> {
+    let mut signatures = Vec::new();
+    collect_signature_entries_into(&mut signatures, module_stages, user_ast, user_module_path);
+    signatures
+}
+
 /// Collect doc metadata while reusing already-collected prefix docs, such as
 /// the default stdlib docs stored in the semantic snapshot.
 pub fn collect_doc_entries_with_base(
@@ -773,6 +1234,17 @@ pub fn collect_doc_entries_with_base(
     let mut docs = base_docs.to_vec();
     collect_doc_entries_into(&mut docs, module_stages, user_ast, user_module_path);
     docs
+}
+
+pub fn collect_signature_entries_with_base(
+    base_signatures: &[SignatureEntry],
+    module_stages: &[Vec<sigil::StagedModuleAst>],
+    user_ast: &[spire::ast::Ast],
+    user_module_path: Option<&str>,
+) -> Vec<SignatureEntry> {
+    let mut signatures = base_signatures.to_vec();
+    collect_signature_entries_into(&mut signatures, module_stages, user_ast, user_module_path);
+    signatures
 }
 
 fn collect_doc_entries_into(
@@ -801,6 +1273,25 @@ fn collect_doc_entries_into(
     }
 
     collect_doc_entries_for_ast(user_ast, user_module_path.unwrap_or_default(), docs);
+}
+
+fn collect_signature_entries_into(
+    signatures: &mut Vec<SignatureEntry>,
+    module_stages: &[Vec<sigil::StagedModuleAst>],
+    user_ast: &[spire::ast::Ast],
+    user_module_path: Option<&str>,
+) {
+    for stage in module_stages {
+        for module in stage {
+            let doc_module_path = module
+                .doc_module_path
+                .as_deref()
+                .unwrap_or(module.module_path.as_str());
+            collect_signature_entries_for_ast(&module.ast, doc_module_path, signatures);
+        }
+    }
+
+    collect_signature_entries_for_ast(user_ast, user_module_path.unwrap_or_default(), signatures);
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -848,12 +1339,7 @@ impl ModuleStageParseError {
 }
 
 pub fn derive_parse_rules(source_kind: SourceKind) -> spire::ParseRules {
-    match source_kind {
-        SourceKind::Script => spire::ParseRules::script(),
-        SourceKind::DefinitionSource => spire::ParseRules::module(),
-        SourceKind::StdDefinitionSource => spire::ParseRules::std_module(),
-        SourceKind::ReplChunk => spire::ParseRules::repl_chunk(),
-    }
+    spire::parse_rules_for_source_kind(source_kind)
 }
 
 pub fn derive_runtime_policy(
@@ -865,18 +1351,23 @@ pub fn derive_runtime_policy(
         SourceKind::Script => RuntimeSourcePolicy::script(),
         SourceKind::DefinitionSource => RuntimeSourcePolicy::module(),
         SourceKind::StdDefinitionSource => RuntimeSourcePolicy::std_module(),
+        SourceKind::ProjectConfigSource => RuntimeSourcePolicy::module(),
         SourceKind::ReplChunk => RuntimeSourcePolicy::repl_chunk(),
     };
 
     let policy = match source_kind {
         SourceKind::Script => ExitCodePolicy::Anywhere,
         SourceKind::ReplChunk => ExitCodePolicy::Forbidden,
-        SourceKind::DefinitionSource | SourceKind::StdDefinitionSource
+        SourceKind::DefinitionSource
+        | SourceKind::StdDefinitionSource
+        | SourceKind::ProjectConfigSource
             if compile_unit_kind == CompileUnitKind::Project =>
         {
             ExitCodePolicy::EntryOnly
         }
-        SourceKind::DefinitionSource | SourceKind::StdDefinitionSource => ExitCodePolicy::Forbidden,
+        SourceKind::DefinitionSource
+        | SourceKind::StdDefinitionSource
+        | SourceKind::ProjectConfigSource => ExitCodePolicy::Forbidden,
     };
 
     base.with_exit_code_policy(policy, entrypoint)
@@ -1159,12 +1650,13 @@ pub struct DefaultStdlibSnapshot {
     pub scar_checkpoint: scar::ScarCheckpoint,
     pub bytecode: forge::bytecode::Bytecode,
     pub docs: Vec<DocEntry>,
+    pub signatures: Vec<SignatureEntry>,
     pub auto_import_modules: BTreeSet<String>,
     pub default_stage_count: usize,
 }
 
-const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 5;
-const TEST_SEMANTIC_PREFIX_CACHE_SCHEMA: u32 = 1;
+const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 10;
+const TEST_SEMANTIC_PREFIX_CACHE_SCHEMA: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedStdlibSemanticEnvelope {
@@ -1180,6 +1672,7 @@ struct CachedStdlibSemanticPayload {
     scar_checkpoint: scar::ScarCheckpoint,
     bytecode: Bytecode,
     docs: Vec<DocEntry>,
+    signatures: Vec<SignatureEntry>,
     auto_import_modules: BTreeSet<String>,
     default_stage_count: usize,
 }
@@ -1229,8 +1722,13 @@ pub fn test_semantic_prefix_cache_key(
     compile_sources: &CompileSources,
 ) -> Result<String, String> {
     let fingerprint = current_exe_fingerprint()?;
+    let stdlib_fingerprint = match compile_sources.stdlib_variant {
+        StdlibVariant::Default => default_stdlib_source_fingerprint()?,
+        StdlibVariant::TestEnabled => test_enabled_stdlib_source_fingerprint()?,
+    };
     Ok(test_semantic_prefix_cache_key_with_fingerprint(
         &fingerprint,
+        &stdlib_fingerprint,
         compile_unit_kind,
         compile_sources,
     ))
@@ -1238,6 +1736,7 @@ pub fn test_semantic_prefix_cache_key(
 
 pub fn test_semantic_prefix_cache_key_with_fingerprint(
     current_exe_fingerprint: &str,
+    stdlib_fingerprint: &str,
     compile_unit_kind: CompileUnitKind,
     compile_sources: &CompileSources,
 ) -> String {
@@ -1256,7 +1755,11 @@ pub fn test_semantic_prefix_cache_key_with_fingerprint(
     key.push('\x1f');
     key.push_str(current_exe_fingerprint);
     key.push('\x1f');
+    key.push_str(stdlib_fingerprint);
+    key.push('\x1f');
     key.push_str(&STDLIB_SEMANTIC_CACHE_SCHEMA.to_string());
+    key.push('\x1f');
+    key.push_str(stdlib_variant_cache_key(compile_sources.stdlib_variant));
     key.push('\x1f');
     key.push_str(match compile_unit_kind {
         CompileUnitKind::Script => "script",
@@ -1286,7 +1789,7 @@ pub fn test_semantic_prefix_cache_key_with_fingerprint(
             key.push('\x1e');
             key.push_str(&module.module_path);
             key.push('\x1e');
-            key.push_str(source_kind_key(module.source_kind));
+            key.push_str(source_kind_cache_key(module.source_kind));
             key.push('\x1e');
             key.push_str(&stable_hash_hex(source));
             key.push('\x1f');
@@ -1294,6 +1797,18 @@ pub fn test_semantic_prefix_cache_key_with_fingerprint(
     }
 
     stable_hash_hex(&key)
+}
+
+fn default_stdlib_source_fingerprint() -> Result<String, String> {
+    let module_sources =
+        collect_module_sources_with_module_stages(&[]).map_err(|err| err.to_string())?;
+    Ok(stdlib_semantic_cache_key(&module_sources))
+}
+
+fn test_enabled_stdlib_source_fingerprint() -> Result<String, String> {
+    let module_sources =
+        collect_test_module_sources_with_module_stages(&[]).map_err(|err| err.to_string())?;
+    Ok(stdlib_semantic_cache_key(&module_sources))
 }
 
 pub fn load_cached_test_semantic_prefix(
@@ -1348,8 +1863,24 @@ pub fn default_stdlib_semantic_snapshot() -> Result<Arc<DefaultStdlibSnapshot>, 
         .clone()
 }
 
+pub fn test_enabled_stdlib_semantic_snapshot() -> Result<Arc<DefaultStdlibSnapshot>, LoadError> {
+    static SNAPSHOT: OnceLock<Result<Arc<DefaultStdlibSnapshot>, LoadError>> = OnceLock::new();
+    SNAPSHOT
+        .get_or_init(|| build_stdlib_snapshot(StdlibVariant::TestEnabled).map(Arc::new))
+        .clone()
+}
+
 fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
-    let module_sources = collect_module_sources_with_module_stages(&[])?;
+    build_stdlib_snapshot(StdlibVariant::Default)
+}
+
+fn build_stdlib_snapshot(
+    stdlib_variant: StdlibVariant,
+) -> Result<DefaultStdlibSnapshot, LoadError> {
+    let module_sources = match stdlib_variant {
+        StdlibVariant::Default => collect_module_sources_with_module_stages(&[])?,
+        StdlibVariant::TestEnabled => collect_test_module_sources_with_module_stages(&[])?,
+    };
     let cache_key = stdlib_semantic_cache_key(&module_sources);
     let module_stages = repl::logic::core::parse_module_stages_from_sources(
         &module_sources.sources,
@@ -1366,6 +1897,7 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
         message: e.message(),
     })?;
     let docs = collect_doc_entries(&module_stages, &[], None);
+    let signatures = collect_signature_entries(&module_stages, &[], None);
     let auto_import_modules = module_stages
         .iter()
         .flat_map(|stage| stage.iter())
@@ -1374,9 +1906,10 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
         .collect::<BTreeSet<_>>();
     let default_stage_count = module_stages.len();
 
-    if let Some(payload) =
-        load_cached_stdlib_semantic_snapshot(&stdlib_semantic_cache_path(), &cache_key)
-    {
+    if let Some(payload) = load_cached_stdlib_semantic_snapshot(
+        &stdlib_semantic_cache_path(stdlib_variant),
+        &cache_key,
+    ) {
         if payload.default_stage_count == default_stage_count {
             return Ok(DefaultStdlibSnapshot {
                 module_stages,
@@ -1385,6 +1918,7 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
                 scar_checkpoint: payload.scar_checkpoint,
                 bytecode: payload.bytecode,
                 docs: payload.docs,
+                signatures: payload.signatures,
                 auto_import_modules: payload.auto_import_modules,
                 default_stage_count: payload.default_stage_count,
             });
@@ -1438,6 +1972,7 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
             .map(|qualified_name| (qualified_name, entry.fun_idx))
     }));
     bytecode.docs = docs.clone();
+    bytecode.signatures = signatures.clone();
     let next_fun_idx = bytecode
         .functions
         .iter()
@@ -1455,11 +1990,12 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
         scar_checkpoint: scar_session.checkpoint(),
         bytecode,
         docs,
+        signatures,
         auto_import_modules,
         module_stages,
     };
     store_cached_stdlib_semantic_snapshot(
-        &stdlib_semantic_cache_path(),
+        &stdlib_semantic_cache_path(stdlib_variant),
         &cache_key,
         CachedStdlibSemanticPayload {
             declaration_index: snapshot.declaration_index.clone(),
@@ -1467,6 +2003,7 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
             scar_checkpoint: snapshot.scar_checkpoint.clone(),
             bytecode: snapshot.bytecode.clone(),
             docs: snapshot.docs.clone(),
+            signatures: snapshot.signatures.clone(),
             auto_import_modules: snapshot.auto_import_modules.clone(),
             default_stage_count: snapshot.default_stage_count,
         },
@@ -1519,20 +2056,20 @@ fn store_cached_stdlib_semantic_snapshot(
     }
 }
 
-fn stdlib_semantic_cache_path() -> PathBuf {
+fn stdlib_semantic_cache_path(stdlib_variant: StdlibVariant) -> PathBuf {
+    let file_name = match stdlib_variant {
+        StdlibVariant::Default => "std.semantic",
+        StdlibVariant::TestEnabled => "std.test.semantic",
+    };
     if let Some(path) = env::var_os("SURTR_STDLIB_CACHE_DIR") {
-        return PathBuf::from(path).join("std.semantic");
+        return PathBuf::from(path).join(file_name);
     }
     target_root_from_current_exe()
-        .map(|root| root.join("surtr-stdlib-cache").join("std.semantic"))
-        .unwrap_or_else(|| {
-            env::temp_dir()
-                .join("surtr-stdlib-cache")
-                .join("std.semantic")
-        })
+        .map(|root| root.join("surtr-stdlib-cache").join(file_name))
+        .unwrap_or_else(|| env::temp_dir().join("surtr-stdlib-cache").join(file_name))
 }
 
-fn target_root_from_current_exe() -> Option<PathBuf> {
+pub fn target_root_from_current_exe() -> Option<PathBuf> {
     let exe = env::current_exe().ok()?;
     let mut current = exe.parent()?;
     while let Some(name) = current.file_name().and_then(|name| name.to_str()) {
@@ -1582,7 +2119,7 @@ fn stdlib_semantic_cache_key(module_sources: &ModuleSources) -> String {
             key.push('\x1e');
             key.push_str(&module.module_path);
             key.push('\x1e');
-            key.push_str(source_kind_key(module.source_kind));
+            key.push_str(source_kind_cache_key(module.source_kind));
             key.push('\x1e');
             key.push_str(&stable_hash_hex(source));
             key.push('\x1f');
@@ -1591,12 +2128,13 @@ fn stdlib_semantic_cache_key(module_sources: &ModuleSources) -> String {
     stable_hash_hex(&key)
 }
 
-fn source_kind_key(kind: SourceKind) -> &'static str {
+pub fn source_kind_cache_key(kind: SourceKind) -> &'static str {
     match kind {
         SourceKind::Script => "script",
         // Keep cache key strings stable for backward compatibility with existing cache entries.
         SourceKind::DefinitionSource => "module",
         SourceKind::StdDefinitionSource => "std",
+        SourceKind::ProjectConfigSource => "project-config",
         SourceKind::ReplChunk => "repl",
     }
 }
@@ -1653,7 +2191,22 @@ defmod B {
         assert!(!snapshot
             .declaration_index
             .values()
+            .any(|entry| entry.fq_name.starts_with("Global::Test::")));
+        assert!(!snapshot
+            .declaration_index
+            .values()
             .any(|entry| entry.module_path == "TestOnly"));
+    }
+
+    #[test]
+    fn test_enabled_stdlib_snapshot_contains_test_module() {
+        let snapshot = test_enabled_stdlib_semantic_snapshot()
+            .expect("test-enabled stdlib snapshot should build");
+
+        assert!(snapshot
+            .declaration_index
+            .values()
+            .any(|entry| entry.fq_name.starts_with("Global::Test::")));
     }
 
     #[test]
@@ -2169,7 +2722,7 @@ defmod Kernel {
     fn collect_doc_entries_includes_impl_and_trait_docs() {
         let ast = spire::parse_with_context(
             r#"@doc """Trait docs."""
-deftrait Numeric {
+deftrait Metric {
   def add(self: Self, rhs: Self) -> Self
 }
 
@@ -2177,8 +2730,8 @@ defstruct User {
   name: String,
 }
 
-@doc """Numeric Int docs."""
-impl Numeric for Int {
+@doc """Metric Int docs."""
+impl Metric for Int {
   def add(self: Self, rhs: Self) -> Self {
     self + rhs
   }
@@ -2202,21 +2755,21 @@ impl Numeric for Int {
 
         let docs = collect_doc_entries(&stages, &[], None);
         assert!(docs.iter().any(|entry| {
-            entry.qualified_name == "Sample::Numeric"
+            entry.qualified_name == "Sample::Metric"
                 && entry.kind == DocKind::Type
                 && entry.doc == "Trait docs."
         }));
         assert!(docs.iter().any(|entry| {
-            entry.qualified_name == "Sample::Numeric::add"
+            entry.qualified_name == "Sample::Metric::add"
                 && entry.kind == DocKind::Function
-                && entry.signature.as_deref() == Some("Numeric::add(self: Self, rhs: Self) -> Self")
+                && entry.signature.as_deref() == Some("Metric::add(self: Self, rhs: Self) -> Self")
                 && entry.doc == "Trait docs."
         }));
         assert!(docs.iter().any(|entry| {
-            entry.qualified_name == "Sample::impl Numeric for Int"
+            entry.qualified_name == "Sample::impl Metric for Int"
                 && entry.kind == DocKind::Type
-                && entry.signature.as_deref() == Some("impl Numeric for Int")
-                && entry.doc == "Numeric Int docs."
+                && entry.signature.as_deref() == Some("impl Metric for Int")
+                && entry.doc == "Metric Int docs."
         }));
     }
 
@@ -2303,21 +2856,21 @@ impl Show for Int {
         assert!(docs.iter().any(|entry| {
             entry.qualified_name == "User::new"
                 && entry.kind == DocKind::Function
-                && entry.signature.as_deref() == Some("User::new(name: String) -> Self")
+                && entry.signature.as_deref() == Some("User::new(name: String) -> User")
                 && entry.doc == "Construct a new user value."
         }));
         assert!(docs.iter().any(|entry| {
             entry.qualified_name == "User::deconstruct"
                 && entry.kind == DocKind::Function
                 && entry.signature.as_deref()
-                    == Some("User::deconstruct(self: Self) -> MatchResult<String, Error>")
+                    == Some("User::deconstruct(self: User) -> MatchResult<String, Error>")
                 && entry.doc == "Deconstruct a user value for pattern matching."
         }));
         assert!(docs.iter().any(|entry| {
             entry.qualified_name == "Sample::impl Show for Int::to_string"
                 && entry.kind == DocKind::Function
                 && entry.signature.as_deref()
-                    == Some("impl Show for Int::to_string(self: Self) -> String")
+                    == Some("impl Show for Int::to_string(self: Int) -> String")
                 && entry.doc == "Render `Int` through the standard display surface."
         }));
     }

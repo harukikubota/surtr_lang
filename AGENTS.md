@@ -40,7 +40,6 @@ surtr/
 | `doc/要件定義v9.md`           | 言語仕様・コンパイラ設計の全体定義 |
 | `docs/dev/EldrVM_spec.md`   | VM仕様書 |
 | `docs/dev/テスト方針.md`    | テストの分離方法・レイヤー |
-| `doc/float.md`               | `Float` の暫定仕様メモ |
 | `docs/dev/Rune_observability.md` | `Rune` / `Eldr` の観測系オプション設計 |
 
 ---
@@ -50,7 +49,7 @@ surtr/
 - `docs/dev/`: 開発者向け正本仕様
   - `EldrVM_spec.md`, `Xldr_spec.md`, `テスト方針.md`, `Rune_observability.md`
 - `doc/`: draft、開発アイデア、タスク入力、tmp ファイル置き場
-  - `要件定義v9.md`, `open-issues.md`, `float.md` など
+  - `要件定義v9.md`, `open-issues.md` など
 - `docs/`: 補助資料・公開向けガイド
 - `lib/*.srt`: 標準定義ソースの利用者向けドキュメント。`@doc` を正本とする
 - `crates/**`: 実装者向け内部契約。公開境界は rustdoc で残す
@@ -147,7 +146,7 @@ Forge は `GetField(idx)` を emit するだけでよい。
 
 - `Int` は `BigInt` を採用し、通常算術でオーバーフローしない前提で扱う
 - runtime 内部 ID（tag / builtin_id / fun_idx）は固定幅の内部識別子として扱い、user-visible `Int` と混同しない
-- `Float` は実装を維持するが、厳密契約は `doc/float.md` で継続整理する
+- `Float` は finite-only の `f64` ラッパーとして扱う
 - `type` は予約語として扱う
 - `@builtin` の surface 宣言は標準定義ソース内の宣言層であり、`@builtin def` / `@builtin type` を受理するが、追加・変更の正本ではない
 - 標準定義ソースの利用者向け説明は `lib/*.srt` の `@doc` に載せる

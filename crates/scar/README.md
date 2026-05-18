@@ -20,6 +20,8 @@ Spire -> Sigil -> Scar -> Forge -> Eldr
 - Validate type annotations
 - Enforce operator/function argument typing rules
 - Resolve field access names into field indexes for codegen
+- Typecheck staged module programs and stdlib/user boundaries
+- Preserve process, facet, and runtime-facing metadata for Forge
 - Report `TypeError` with spans and hints
 
 ## Non-responsibilities

@@ -337,6 +337,39 @@ impl Checker {
                 self.env.bind_var(id.unique_id, bind_ty);
                 Ok(TypedMatchPattern::Binding(id.clone()))
             }
+            ResolvedPattern::Pin(id) => {
+                let pinned_ty =
+                    self.env
+                        .lookup_var(id.unique_id)
+                        .cloned()
+                        .ok_or_else(|| TypeError {
+                            message: format!(
+                                "Pinned pattern requires an existing value `{}`",
+                                id.name
+                            ),
+                            span: id.span.clone(),
+                            hint: None,
+                        })?;
+                let expected_ty = self.resolve_ty(expected_ty);
+                let pinned_ty = self.resolve_ty(&pinned_ty);
+                if !self.types_compatible(&pinned_ty, &expected_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Pinned pattern type mismatch: expected {}, got {}",
+                            self.ty_name(&pinned_ty),
+                            self.ty_name(&expected_ty)
+                        ),
+                        span: id.span.clone(),
+                        hint: None,
+                    });
+                }
+                let dispatch = self.eq_dispatch_for_pattern_pin(&expected_ty, &id.span)?;
+                Ok(TypedMatchPattern::Pin {
+                    id: id.clone(),
+                    ty: expected_ty,
+                    dispatch,
+                })
+            }
             ResolvedPattern::As(inner, alias, alias_ty) => {
                 let typed_inner = self.check_match_subpattern(inner, expected_ty)?;
                 let alias_bind_ty = if let Some(ast_ty) = alias_ty {
@@ -473,7 +506,7 @@ impl Checker {
                     }
                     return Ok(TypedMatchPattern::ErrorKind(ctor_id.name.clone()));
                 }
-                if matches!(expected_ty, Ty::Result(_, _)) {
+                if let Ty::Result(ok_ty, err_ty) = expected_ty {
                     let tag = match ctor_id.name.as_str() {
                         "Ok" => 0u32,
                         "Err" => 1u32,
@@ -495,10 +528,16 @@ impl Checker {
                             hint: None,
                         });
                     }
-                    let inner_ty = match (tag, expected_ty) {
-                        (0, Ty::Result(ok, _)) => ok.as_ref().clone(),
-                        (1, Ty::Result(_, err)) => err.as_ref().clone(),
-                        _ => unreachable!(),
+                    let inner_ty = match tag {
+                        0 => ok_ty.as_ref().clone(),
+                        1 => err_ty.as_ref().clone(),
+                        _ => {
+                            return Err(TypeError {
+                                message: format!("Unknown constructor: {}", ctor_id.name),
+                                span: ctor_id.span.clone(),
+                                hint: None,
+                            });
+                        }
                     };
                     let typed_inner = self.check_match_subpattern(&inner_pats[0], &inner_ty)?;
                     return Ok(TypedMatchPattern::Constructor {
@@ -701,6 +740,7 @@ impl Checker {
                 items.iter().all(|item| self.is_match_catch_all(item))
             }
             TypedMatchPattern::BoolLit(_)
+            | TypedMatchPattern::Pin { .. }
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
             | TypedMatchPattern::DurationLit(_)
@@ -729,6 +769,7 @@ impl Checker {
                 .iter()
                 .any(|item| self.match_pattern_has_bindings(item)),
             TypedMatchPattern::Wildcard
+            | TypedMatchPattern::Pin { .. }
             | TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)

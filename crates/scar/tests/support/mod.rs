@@ -15,7 +15,6 @@ const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../../lib/kernel.srt");
 const ADD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/add.srt");
 const SUB_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/sub.srt");
 const MUL_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/mul.srt");
-const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/numeric.srt");
 const SHOW_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/show.srt");
 const EQ_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/eq.srt");
 const NEQ_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/neq.srt");
@@ -415,10 +414,6 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
             (
                 "Concat",
                 pick_override("Concat", CONCAT_MODULE_SOURCE, overrides),
-            ),
-            (
-                "Numeric",
-                pick_override("Numeric", NUMERIC_MODULE_SOURCE, overrides),
             ),
             ("Show", pick_override("Show", SHOW_MODULE_SOURCE, overrides)),
             (

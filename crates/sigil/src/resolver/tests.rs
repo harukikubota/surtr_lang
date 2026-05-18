@@ -1,5 +1,6 @@
 use super::*;
 use sindr::primitives::int;
+use sindr::warning::WarningKind;
 use spire::ast::{AstTy, BinOp, Lit};
 
 fn permissive_module_rules() -> spire::ParseRules {
@@ -20,6 +21,14 @@ fn parse_and_resolve(src: &str) -> Result<Vec<Resolved>, ResolveError> {
     let ast =
         spire::parse_with_context(src, spire::ParserContext::project(0)).expect("parse failed");
     resolve(ast)
+}
+
+fn parse_and_resolve_with_warnings(
+    src: &str,
+) -> Result<sindr::warning::PhaseOutput<Vec<Resolved>>, ResolveError> {
+    let ast =
+        spire::parse_with_context(src, spire::ParserContext::project(0)).expect("parse failed");
+    resolve_with_warnings(ast)
 }
 
 #[test]
@@ -43,6 +52,84 @@ value = dbg!(dbg(1), 2)"#,
         .expect("expected resolved dbg node");
 
     assert_eq!(dbg_node.len(), 2);
+}
+
+#[test]
+fn test_warning_unused_local_binding_warns() {
+    let output = parse_and_resolve_with_warnings(
+        r#"def main() -> Int {
+  unused = 1
+  2
+}"#,
+    )
+    .expect("program should resolve");
+
+    let messages = warning_messages(&output, WarningKind::UnusedVariable);
+    assert!(
+        messages.iter().any(|message| message.contains("unused")),
+        "warnings: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn test_warning_used_local_binding_does_not_warn() {
+    let output = parse_and_resolve_with_warnings(
+        r#"def main() -> Int {
+  used = 1
+  used
+}"#,
+    )
+    .expect("program should resolve");
+
+    assert!(
+        output.warnings.is_empty(),
+        "warnings: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn test_warning_function_param_and_match_alias_warn() {
+    let output = parse_and_resolve_with_warnings(
+        r#"def pick(value: Result<Int>, extra: Int) -> Int {
+  match value {
+    Ok(x) @ whole => x,
+    Err(_) => 0,
+  }
+}"#,
+    )
+    .expect("program should resolve");
+
+    let messages = warning_messages(&output, WarningKind::UnusedVariable);
+    assert!(
+        messages.iter().any(|message| message.contains("extra")),
+        "warnings: {:?}",
+        output.warnings
+    );
+    assert!(
+        messages.iter().any(|message| message.contains("whole")),
+        "warnings: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn test_warning_wildcard_pattern_does_not_warn() {
+    let output = parse_and_resolve_with_warnings(
+        r#"def ignore(value: Int) -> Int {
+  match value {
+    _ => 0,
+  }
+}"#,
+    )
+    .expect("program should resolve");
+
+    assert!(
+        output.warnings.is_empty(),
+        "warnings: {:?}",
+        output.warnings
+    );
 }
 
 fn staged_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
@@ -163,6 +250,85 @@ deferror IndexOutOfBounds(detail: String) { detail }"#,
         &declaration_index,
         Some("__Script::fixture".to_string()),
     )
+}
+
+fn resolve_user_with_modules_with_warnings(
+    user_src: &str,
+    module_stages: &[Vec<StagedModuleAst>],
+) -> Result<sindr::warning::PhaseOutput<Vec<Resolved>>, ResolveError> {
+    let user_ast = spire::parse_with_context(user_src, spire::ParserContext::project(0))
+        .expect("user script should parse");
+    let mut full_stages = vec![vec![staged_module(
+        "Bootstrap",
+        parse_module_ast(
+            r#"@builtin def print(a: String) -> Unit
+@builtin def to_string(a: $A) -> String
+@builtin def inspect(a: $A) -> String
+@builtin def safe_div(a: $A, b: $A) -> Result<$A, ZeroDivisionError>
+@builtin def safe_mod(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
+@builtin def eprint(err: Error) -> Unit
+@builtin def set_exit_code(code: Int) -> Unit
+deferror NoneError { "none" }
+deferror ZeroDivisionError { "division by zero" }
+deferror EmptyList { "Empty List." }
+deferror IndexOutOfBounds(detail: String) { detail }"#,
+            "Bootstrap",
+        ),
+    )]];
+    full_stages.push(vec![
+        staged_module(
+            "Agent",
+            parse_module_ast(
+                r#"@hidden
+@builtin def pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>
+@hidden
+@builtin def state(pid: PID<$Process>) -> Result<$State>
+@hidden
+@builtin def store(pid: PID<$Process>, state: $State) -> Result<Unit>"#,
+                "Agent",
+            ),
+        ),
+        staged_module(
+            "GenServer",
+            parse_module_ast(
+                r#"@hidden
+@builtin def pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>
+@hidden
+@builtin def state(pid: PID<$Process>) -> Result<$State>
+@hidden
+@builtin def store(pid: PID<$Process>, state: $State) -> Result<Unit>"#,
+                "GenServer",
+            ),
+        ),
+        staged_module(
+            "DynamicSupervisor",
+            parse_module_ast(
+                r#"@builtin def spawn(worker_init: (-> Result<$State>)) -> Result<PID<$Process>>"#,
+                "DynamicSupervisor",
+            ),
+        ),
+    ]);
+    full_stages.extend(module_stages.iter().cloned());
+    let declaration_index =
+        precollect_declaration_index(&full_stages).expect("precollect should succeed");
+    resolve_staged_program_with_warnings(
+        &full_stages,
+        user_ast,
+        &declaration_index,
+        Some("__Script::fixture".to_string()),
+    )
+}
+
+fn warning_messages(
+    output: &sindr::warning::PhaseOutput<Vec<Resolved>>,
+    kind: WarningKind,
+) -> Vec<String> {
+    output
+        .warnings
+        .iter()
+        .filter(|warning| warning.kind == kind)
+        .map(|warning| warning.message.clone())
+        .collect()
 }
 
 #[test]
@@ -759,24 +925,24 @@ fn test_precollect_trait_methods_as_trait_namespace_members() {
 #[test]
 fn test_resolve_rejects_multiple_trait_impl_blocks_for_same_pair() {
     let module_stages = vec![vec![staged_module(
-        "Numeric",
+        "Metric",
         parse_module_ast(
-            r#"deftrait Numeric {
+            r#"deftrait Metric {
   def add(self: Self, rhs: Self) -> Self
 }
 
-impl Numeric for Int {
+impl Metric for Int {
   def add(self: Self, rhs: Self) -> Self {
     self + rhs
   }
 }
 
-impl Numeric for Int {
+impl Metric for Int {
   def add(self: Self, rhs: Self) -> Self {
     self
   }
 }"#,
-            "Numeric",
+            "Metric",
         ),
     )]];
 
@@ -790,7 +956,7 @@ impl Numeric for Int {
     )
     .expect_err("duplicate trait impl pair must fail");
     assert!(err.message.contains("Multiple trait impl blocks for `"));
-    assert!(err.message.contains("Numeric"));
+    assert!(err.message.contains("Metric"));
     assert!(err.message.contains("Int"));
     assert_eq!(err.related_labels.len(), 2);
     assert_eq!(err.related_labels[0].message, "first definition");
@@ -959,7 +1125,7 @@ impl Add for Int {
 #[test]
 fn test_resolve_trait_default_method_body_can_reference_later_sibling() {
     let ast = parse_module_ast(
-        r#"deftrait Numeric {
+        r#"deftrait Metric {
   @doc """Delegates to abs."""
   def magnitude(self: Self) -> Self {
     abs(self)
@@ -967,14 +1133,14 @@ fn test_resolve_trait_default_method_body_can_reference_later_sibling() {
 
   def abs(self: Self) -> Self
 }"#,
-        "Numeric",
+        "Metric",
     );
 
     let resolved = resolve(ast).expect("trait default bodies should resolve");
 
     match &resolved[0] {
         Resolved::TraitDef(_, id, _, methods, _) => {
-            assert_eq!(id.name, "Numeric");
+            assert_eq!(id.name, "Metric");
             assert_eq!(methods.len(), 2);
             assert_eq!(methods[0].attrs.doc.as_deref(), Some("Delegates to abs."));
             match methods[0].body.as_deref() {
@@ -984,7 +1150,7 @@ fn test_resolve_trait_default_method_body_can_reference_later_sibling() {
                         match func.as_ref() {
                             Resolved::Var(_, rid) => {
                                 assert_eq!(rid.name, "abs");
-                                assert_eq!(rid.qualified_name.as_deref(), Some("Numeric::abs"));
+                                assert_eq!(rid.qualified_name.as_deref(), Some("Metric::abs"));
                             }
                             other => panic!("expected sibling trait method var, got {other:?}"),
                         }
@@ -1029,22 +1195,22 @@ impl Add for Int {
 #[test]
 fn test_trait_qualified_call_resolves_via_trait_namespace() {
     let module_stages = vec![vec![staged_module(
-        "Numeric",
+        "Metric",
         parse_module_ast(
-            r#"deftrait Numeric {
+            r#"deftrait Metric {
   def safe_div(self: Self, rhs: Self) -> Result<Self, Error>
 }"#,
-            "Numeric",
+            "Metric",
         ),
     )]];
 
-    let resolved = resolve_user_with_modules(r#"result = Numeric::safe_div(4, 2)"#, &module_stages)
+    let resolved = resolve_user_with_modules(r#"result = Metric::safe_div(4, 2)"#, &module_stages)
         .expect("trait-qualified path should resolve");
 
     match &resolved.last().expect("expected bind node") {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::App(_, func, _) => match func.as_ref() {
-                Resolved::Var(_, id) => assert_eq!(id.name, "Numeric::safe_div"),
+                Resolved::Var(_, id) => assert_eq!(id.name, "Metric::safe_div"),
                 _ => panic!("Expected resolved trait method path"),
             },
             _ => panic!("Expected app"),
@@ -1120,7 +1286,13 @@ fn test_builtin_decl_resolution() {
             assert_eq!(id.name, "print");
             assert_eq!(id.unique_id, 2); // 0=Ok, 1=Err, 2=print
             assert_eq!(params.len(), 1);
-            assert_eq!(*attrs, ResolvedDeclAttrs::default());
+            assert_eq!(
+                *attrs,
+                ResolvedDeclAttrs {
+                    builtin: true,
+                    ..ResolvedDeclAttrs::default()
+                }
+            );
             assert!(matches!(
                 ret_ty,
                 Some(spire::ast::AstTy::Named(_, ty)) if ty == "Unit"
@@ -1247,7 +1419,13 @@ fn test_builtin_type_decl_resolution() {
         Resolved::BuiltinTypeDecl(_, id, params, attrs) => {
             assert_eq!(id.name, "Int");
             assert!(params.is_empty());
-            assert_eq!(*attrs, ResolvedDeclAttrs::default());
+            assert_eq!(
+                *attrs,
+                ResolvedDeclAttrs {
+                    builtin: true,
+                    ..ResolvedDeclAttrs::default()
+                }
+            );
         }
         _ => panic!("Expected BuiltinTypeDecl"),
     }
@@ -1587,8 +1765,12 @@ fn test_is_match_conversion() {
 
 #[test]
 fn test_is_match_rejects_binding_variable_pattern() {
-    let err = parse_and_resolve("x = is_match(Ok(1), Ok(v))").expect_err("must fail");
-    assert!(err.message.contains("does not allow binding variables"));
+    let err = spire::parse_with_context(
+        "x = is_match(Ok(1), Ok(v))",
+        spire::ParserContext::project(0),
+    )
+    .expect_err("must fail");
+    assert!(err.message().contains("does not allow binding variables"));
 }
 
 #[test]
@@ -2118,9 +2300,8 @@ fn test_decode_helper_lowers_format_and_target_args_to_type_ref_witnesses() {
     let module_stages = vec![vec![staged_module(
         "Decode",
         parse_module_ast(
-            r#"@autoimport
-deftrait Decode<$Format, $To> {
-  def decode(self: Self, format: TypeRef<$Format>, to: TypeRef<$To>) -> Result<$To, Error>
+            r#"deftrait Decode<$To> {
+  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
 }"#,
             "Decode",
         ),
@@ -2128,7 +2309,7 @@ deftrait Decode<$Format, $To> {
 
     let resolved = resolve_user_with_modules(
         r#"json = "{}"
-value = decode(json, JsonFormat, Config)"#,
+value = Decode::decode(json, Config)"#,
         &module_stages,
     )
     .expect("decode helper should resolve");
@@ -2139,7 +2320,7 @@ value = decode(json, JsonFormat, Config)"#,
     match bind {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::App(_, func, args) => {
-                assert_eq!(args.len(), 3);
+                assert_eq!(args.len(), 2);
                 match func.as_ref() {
                     Resolved::Var(_, id) => {
                         assert_eq!(id.name, "decode");
@@ -2153,12 +2334,6 @@ value = decode(json, JsonFormat, Config)"#,
                 ));
                 match &args[1] {
                     ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, ty)) => {
-                        assert!(matches!(ty, AstTy::Named(_, name) if name == "JsonFormat"));
-                    }
-                    other => panic!("expected format type witness, got {:?}", other),
-                }
-                match &args[2] {
-                    ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, ty)) => {
                         assert!(matches!(ty, AstTy::Named(_, name) if name == "Config"));
                     }
                     other => panic!("expected target type witness, got {:?}", other),
@@ -2171,13 +2346,82 @@ value = decode(json, JsonFormat, Config)"#,
 }
 
 #[test]
+fn test_decode_helper_inside_decode_impl_uses_trait_helper_not_current_method() {
+    let module_stages = vec![vec![staged_module(
+        "Decode",
+        parse_module_ast(
+            r#"deftrait Decode<$To> {
+  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+}"#,
+            "Decode",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules(
+        r#"impl Decode<Config> for JsonValue {
+  def decode(self: Self, to: TypeRef<Config>) -> Result<Config, Error> {
+    name = JsonValue::decode(self, String)
+    entry = self |> JsonValue::decode(String)
+    name
+  }
+}"#,
+        &module_stages,
+    )
+    .expect("decode helper inside Decode impl should resolve");
+    let method_body = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitImplDef(_, _, _, _, methods) => methods.first().map(|m| m.body.as_ref()),
+            _ => None,
+        })
+        .expect("trait impl method body should exist");
+    let Resolved::Block(_, stmts) = method_body else {
+        panic!("expected block body, got {:?}", method_body);
+    };
+
+    let [Resolved::Bind(_, _, name_rhs), Resolved::Bind(_, _, entry_rhs), ..] = stmts.as_slice()
+    else {
+        panic!("expected name and entry bindings, got {:?}", stmts);
+    };
+
+    assert_decode_helper_call_targets_trait_method(name_rhs.as_ref(), 2);
+    match entry_rhs.as_ref() {
+        Resolved::Pipe(_, _, right) => {
+            assert_decode_helper_call_targets_trait_method(right.as_ref(), 1);
+        }
+        other => panic!("expected pipeline decode helper, got {:?}", other),
+    }
+}
+
+fn assert_decode_helper_call_targets_trait_method(node: &Resolved, arity: usize) {
+    match node {
+        Resolved::App(_, func, args) => {
+            assert_eq!(args.len(), arity);
+            match func.as_ref() {
+                Resolved::Var(_, id) => {
+                    assert_eq!(id.name, "JsonValue::decode");
+                    assert_eq!(id.qualified_name.as_deref(), Some("Decode::Decode::decode"));
+                }
+                other => panic!("expected decode helper var, got {:?}", other),
+            }
+            let target_idx = arity - 1;
+            assert!(matches!(
+                &args[target_idx],
+                ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, AstTy::Named(_, name)))
+                    if name == "String"
+            ));
+        }
+        other => panic!("expected decode helper call, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_encode_helper_lowers_pipeline_partial_format_arg_to_type_ref_witness() {
     let module_stages = vec![vec![staged_module(
         "Encode",
         parse_module_ast(
-            r#"@autoimport
-deftrait Encode<$Format> {
-  def encode(self: Self, format: TypeRef<$Format>) -> Result<String, Error>
+            r#"deftrait Encode<$To> {
+  def encode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
 }"#,
             "Encode",
         ),
@@ -2185,7 +2429,7 @@ deftrait Encode<$Format> {
 
     let resolved = resolve_user_with_modules(
         r#"value = "hello"
-text = value |> encode(JsonFormat)"#,
+text = value |> Encode::encode(JsonValue)"#,
         &module_stages,
     )
     .expect("encode pipeline helper should resolve");
@@ -2210,7 +2454,7 @@ text = value |> encode(JsonFormat)"#,
                     }
                     match &args[0] {
                         ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, ty)) => {
-                            assert!(matches!(ty, AstTy::Named(_, name) if name == "JsonFormat"));
+                            assert!(matches!(ty, AstTy::Named(_, name) if name == "JsonValue"));
                         }
                         other => panic!("expected format type witness, got {:?}", other),
                     }
@@ -2221,6 +2465,112 @@ text = value |> encode(JsonFormat)"#,
         },
         _ => panic!("Expected Bind"),
     }
+}
+
+#[test]
+fn test_json_value_decode_helper_lowers_target_arg_to_type_ref_witness() {
+    let module_stages = vec![vec![staged_module(
+        "Decode",
+        parse_module_ast(
+            r#"deftrait Decode<$To> {
+  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+}"#,
+            "Decode",
+        ),
+    )]];
+
+    let resolved = resolve_user_with_modules(
+        r#"json = "{}"
+value = JsonValue::decode(json, String)
+entry = json |> JsonValue::decode(String)"#,
+        &module_stages,
+    )
+    .expect("JsonValue::decode helper should resolve");
+
+    let value_bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "value"))
+        .expect("value bind should exist");
+    match value_bind {
+        Resolved::Bind(_, _, rhs) => {
+            assert_json_value_decode_helper_call(rhs.as_ref(), 2);
+        }
+        _ => panic!("Expected Bind"),
+    }
+
+    let entry_bind = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "entry"))
+        .expect("entry bind should exist");
+    match entry_bind {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Pipe(_, _, right) => {
+                assert_json_value_decode_helper_call(right.as_ref(), 1);
+            }
+            other => panic!("expected pipeline decode helper, got {:?}", other),
+        },
+        _ => panic!("Expected Bind"),
+    }
+}
+
+fn assert_json_value_decode_helper_call(node: &Resolved, arity: usize) {
+    match node {
+        Resolved::App(_, func, args) => {
+            assert_eq!(args.len(), arity);
+            match func.as_ref() {
+                Resolved::Var(_, id) => {
+                    assert_eq!(id.name, "JsonValue::decode");
+                    assert_eq!(id.qualified_name.as_deref(), Some("Decode::Decode::decode"));
+                }
+                other => panic!("expected decode helper var, got {:?}", other),
+            }
+            let target_idx = arity - 1;
+            assert!(matches!(
+                &args[target_idx],
+                ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, AstTy::Named(_, name)))
+                    if name == "String"
+            ));
+        }
+        other => panic!("expected decode helper call, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_decode_and_encode_are_not_bare_helpers_without_autoimport() {
+    let module_stages = vec![
+        vec![staged_module(
+            "Decode",
+            parse_module_ast(
+                r#"deftrait Decode<$To> {
+  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+}"#,
+                "Decode",
+            ),
+        )],
+        vec![staged_module(
+            "Encode",
+            parse_module_ast(
+                r#"deftrait Encode<$To> {
+  def encode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+}"#,
+                "Encode",
+            ),
+        )],
+    ];
+
+    let decode_err = resolve_user_with_modules(r#"value = decode("{}", String)"#, &module_stages)
+        .expect_err("bare decode should not resolve without @autoimport");
+    assert!(
+        decode_err.message.contains("Undefined function decode/2"),
+        "unexpected error: {decode_err:?}"
+    );
+
+    let encode_err = resolve_user_with_modules(r#"value = encode("{}")"#, &module_stages)
+        .expect_err("bare encode should not resolve without @autoimport");
+    assert!(
+        encode_err.message.contains("Undefined function encode/1"),
+        "unexpected error: {encode_err:?}"
+    );
 }
 
 #[test]
@@ -2974,13 +3324,13 @@ value = greet()"#,
 #[test]
 fn test_std_trait_method_is_auto_imported_from_trait_attribute() {
     let module_stages = vec![vec![staged_module(
-        "Numeric",
+        "Metric",
         parse_module_ast(
             r#"@autoimport
-deftrait Numeric {
+deftrait Metric {
   def add(self: Self, rhs: Self) -> Self
 }"#,
-            "Numeric",
+            "Metric",
         ),
     )]];
 
@@ -3016,18 +3366,18 @@ deftrait Numeric {
 #[test]
 fn test_explicit_import_of_autoimport_trait_is_allowed() {
     let module_stages = vec![vec![staged_module(
-        "Numeric",
+        "Metric",
         parse_module_ast(
             r#"@autoimport
-deftrait Numeric {
+deftrait Metric {
   def add(self: Self, rhs: Self) -> Self
 }"#,
-            "Numeric",
+            "Metric",
         ),
     )]];
 
     let resolved = resolve_user_with_modules(
-        r#"import Numeric;
+        r#"import Metric;
 value = add(1, 2)"#,
         &module_stages,
     )
@@ -3244,6 +3594,74 @@ print(to_string(add(7, 3)))"#,
         .expect("user call should resolve imported add");
 
     assert_eq!(imported_add_uid, helper_add_uid);
+}
+
+#[test]
+fn test_warning_explicit_unused_function_import_warns() {
+    let module_stages = vec![vec![staged_module(
+        "Helper",
+        parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+    )]];
+
+    let output = resolve_user_with_modules_with_warnings(
+        r#"import Helper::add;
+print("ok")"#,
+        &module_stages,
+    )
+    .expect("program should resolve");
+
+    let messages = warning_messages(&output, WarningKind::UnusedImportFunction);
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("Helper::add")),
+        "warnings: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn test_warning_auto_imported_function_does_not_warn() {
+    let module_stages = vec![vec![staged_auto_import_module(
+        "Helper",
+        parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+    )]];
+
+    let output = resolve_user_with_modules_with_warnings(r#"print("ok")"#, &module_stages)
+        .expect("program should resolve");
+
+    assert!(
+        !output
+            .warnings
+            .iter()
+            .any(|warning| warning.kind == WarningKind::UnusedImportFunction),
+        "warnings: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn test_warning_qualified_call_does_not_consume_explicit_short_import() {
+    let module_stages = vec![vec![staged_module(
+        "Helper",
+        parse_module_ast(r#"def add(x: Int, y: Int) -> Int { x + y }"#, "Helper"),
+    )]];
+
+    let output = resolve_user_with_modules_with_warnings(
+        r#"import Helper::add;
+print(to_string(Helper::add(1, 2)))"#,
+        &module_stages,
+    )
+    .expect("program should resolve");
+
+    let messages = warning_messages(&output, WarningKind::UnusedImportFunction);
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("Helper::add")),
+        "warnings: {:?}",
+        output.warnings
+    );
 }
 
 #[test]

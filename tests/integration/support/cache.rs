@@ -78,6 +78,7 @@ fn module_pipeline_cache_key(compile_sources: &CompileSources, mode: TestCompile
                 SourceKind::Script => "script",
                 SourceKind::DefinitionSource => "module",
                 SourceKind::StdDefinitionSource => "std",
+                SourceKind::ProjectConfigSource => "project-config",
                 SourceKind::ReplChunk => "repl",
             };
 

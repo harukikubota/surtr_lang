@@ -4,10 +4,12 @@ use crate::vm::{TaskMode, VmFileError, VmFileMode, VM};
 use num_bigint::{BigInt, BigUint, Sign};
 use regex::Regex;
 use sindr::builtin::{builtin_meta_by_id, BUILTIN_METAS};
+use sindr::names::surface_path_name;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
-    Callable, FileHandleValue, HashMapHandle, ListHandle, Location, RandomGeneratorHandle,
-    RegexCapturesHandle, RegexHandle, RegexMatchHandle, RichError,
+    quote_surtr_string_literal, Callable, FileHandleValue, HashMapHandle, ListHandle, Location,
+    RandomGeneratorHandle, RegexCapturesHandle, RegexHandle, RegexMatchHandle, RichError,
+    TypeEntry,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -686,6 +688,30 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         func: builtin_operator_float_mul,
     },
     BuiltinImpl {
+        name: "floor",
+        func: builtin_float_floor,
+    },
+    BuiltinImpl {
+        name: "ceil",
+        func: builtin_float_ceil,
+    },
+    BuiltinImpl {
+        name: "round",
+        func: builtin_float_round,
+    },
+    BuiltinImpl {
+        name: "trunc",
+        func: builtin_float_trunc,
+    },
+    BuiltinImpl {
+        name: "pi",
+        func: builtin_float_pi,
+    },
+    BuiltinImpl {
+        name: "e",
+        func: builtin_float_e,
+    },
+    BuiltinImpl {
         name: "__operator_int_eq",
         func: builtin_operator_int_eq,
     },
@@ -822,6 +848,7 @@ pub(crate) fn call_builtin(
 ) -> Result<Value, RuntimeError> {
     let meta = builtin_meta_by_id(builtin_id)
         .ok_or_else(|| RuntimeError::new(format!("Unknown builtin id: {}", builtin_id)))?;
+    let expected_arity = expected_builtin_arity(meta.name, meta.arity);
     let arity_matches = if meta.name == "__supervisor_spawn" {
         matches!(args.len(), 2 | 3)
     } else if meta.name == "__supervisor_workers" {
@@ -833,7 +860,7 @@ pub(crate) fn call_builtin(
         return Err(RuntimeError::new(format!(
             "builtin {} arity mismatch: expected {}, got {}",
             meta.name,
-            meta.arity,
+            expected_arity,
             args.len()
         )));
     }
@@ -850,6 +877,14 @@ pub(crate) fn call_builtin(
     );
 
     (builtin.func)(vm, args)
+}
+
+fn expected_builtin_arity(name: &str, default_arity: u8) -> String {
+    match name {
+        "__supervisor_spawn" => "2 or 3".to_string(),
+        "__supervisor_workers" => "3 or 4".to_string(),
+        _ => default_arity.to_string(),
+    }
 }
 
 fn builtin_print(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -871,12 +906,7 @@ fn builtin_inspect(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError>
 
 fn builtin_error_kind(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let rich = decode_error_arg(&args[0], "kind", "err")?;
-    Ok(Value::Str(
-        rich.kind
-            .strip_prefix("Global::")
-            .unwrap_or(&rich.kind)
-            .to_string(),
-    ))
+    Ok(Value::Str(surface_path_name(&rich.kind).to_string()))
 }
 
 fn builtin_error_message(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -1316,10 +1346,11 @@ fn builtin_safe_div(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError
             }
         }
         (Value::Float(a), Value::Float(b)) => {
-            if *b == 0.0 {
+            let (a, b) = expect_finite_float_pair(*a, *b, "safe_div")?;
+            if b == 0.0 {
                 Ok(err_result(vm, "ZeroDivisionError", "division by zero"))
             } else {
-                Ok(ok_result(Value::Float(a / b)))
+                Ok(ok_result(float_value(a / b, "safe_div")?))
             }
         }
         (left, right) => Err(RuntimeError::new(format!(
@@ -1362,6 +1393,33 @@ fn expect_float_pair(args: &[Value], name: &str) -> Result<(f64, f64), RuntimeEr
     Ok((*left, *right))
 }
 
+fn expect_finite_float(value: f64, name: &str) -> Result<f64, RuntimeError> {
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(RuntimeError::new(format!(
+            "{name} expects finite Float values"
+        )))
+    }
+}
+
+fn expect_finite_float_pair(left: f64, right: f64, name: &str) -> Result<(f64, f64), RuntimeError> {
+    Ok((
+        expect_finite_float(left, name)?,
+        expect_finite_float(right, name)?,
+    ))
+}
+
+fn float_value(value: f64, name: &str) -> Result<Value, RuntimeError> {
+    if value.is_finite() {
+        Ok(Value::Float(value))
+    } else {
+        Err(RuntimeError::new(format!(
+            "{name} produced non-finite value"
+        )))
+    }
+}
+
 fn builtin_operator_int_add(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_int_pair(&args, "__operator_int_add")?;
     Ok(Value::Int(left + right))
@@ -1379,17 +1437,80 @@ fn builtin_operator_int_mul(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
 
 fn builtin_operator_float_add(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_add")?;
-    Ok(Value::Float(left + right))
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_add")?;
+    float_value(left + right, "__operator_float_add")
 }
 
 fn builtin_operator_float_sub(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_sub")?;
-    Ok(Value::Float(left - right))
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_sub")?;
+    float_value(left - right, "__operator_float_sub")
 }
 
 fn builtin_operator_float_mul(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_mul")?;
-    Ok(Value::Float(left * right))
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_mul")?;
+    float_value(left * right, "__operator_float_mul")
+}
+
+fn builtin_float_floor(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = expect_finite_float(
+        args.first()
+            .and_then(|arg| match arg {
+                Value::Float(value) => Some(*value),
+                _ => None,
+            })
+            .ok_or_else(|| RuntimeError::new("float_floor expects (Float)"))?,
+        "float_floor",
+    )?;
+    float_value(value.floor(), "float_floor")
+}
+
+fn builtin_float_ceil(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = expect_finite_float(
+        args.first()
+            .and_then(|arg| match arg {
+                Value::Float(value) => Some(*value),
+                _ => None,
+            })
+            .ok_or_else(|| RuntimeError::new("float_ceil expects (Float)"))?,
+        "float_ceil",
+    )?;
+    float_value(value.ceil(), "float_ceil")
+}
+
+fn builtin_float_round(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = expect_finite_float(
+        args.first()
+            .and_then(|arg| match arg {
+                Value::Float(value) => Some(*value),
+                _ => None,
+            })
+            .ok_or_else(|| RuntimeError::new("float_round expects (Float)"))?,
+        "float_round",
+    )?;
+    float_value(value.round(), "float_round")
+}
+
+fn builtin_float_trunc(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let value = expect_finite_float(
+        args.first()
+            .and_then(|arg| match arg {
+                Value::Float(value) => Some(*value),
+                _ => None,
+            })
+            .ok_or_else(|| RuntimeError::new("float_trunc expects (Float)"))?,
+        "float_trunc",
+    )?;
+    float_value(value.trunc(), "float_trunc")
+}
+
+fn builtin_float_pi(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    float_value(std::f64::consts::PI, "float_pi")
+}
+
+fn builtin_float_e(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    float_value(std::f64::consts::E, "float_e")
 }
 
 fn builtin_operator_int_eq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
@@ -1424,31 +1545,37 @@ fn builtin_operator_int_gte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, Run
 
 fn builtin_operator_float_eq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_eq")?;
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_eq")?;
     Ok(Value::Bool(left == right))
 }
 
 fn builtin_operator_float_neq(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_neq")?;
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_neq")?;
     Ok(Value::Bool(left != right))
 }
 
 fn builtin_operator_float_lt(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_lt")?;
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_lt")?;
     Ok(Value::Bool(left < right))
 }
 
 fn builtin_operator_float_lte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_lte")?;
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_lte")?;
     Ok(Value::Bool(left <= right))
 }
 
 fn builtin_operator_float_gt(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_gt")?;
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_gt")?;
     Ok(Value::Bool(left > right))
 }
 
 fn builtin_operator_float_gte(_vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__operator_float_gte")?;
+    let (left, right) = expect_finite_float_pair(left, right, "__operator_float_gte")?;
     Ok(Value::Bool(left >= right))
 }
 
@@ -1488,6 +1615,7 @@ fn builtin_compare_int(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeEr
 
 fn builtin_compare_float(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let (left, right) = expect_float_pair(&args, "__compare_float")?;
+    let (left, right) = expect_finite_float_pair(left, right, "__compare_float")?;
     if left < right {
         ordering_value(vm, "Ordering::Less")
     } else if left > right {
@@ -2959,7 +3087,10 @@ fn builtin_shell_cd(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError
             &format!("shell working directory not found: {path}"),
         ));
     }
-    let cwd = fs::canonicalize(&host_path).unwrap_or(host_path);
+    let cwd = match canonicalize_shell_cwd(vm, &host_path, path) {
+        Ok(cwd) => cwd,
+        Err(err) => return Ok(err),
+    };
     vm.set_cwd(cwd);
     Ok(ok_result(Value::Unit))
 }
@@ -3080,6 +3211,7 @@ fn strip_line_ending(mut line: String) -> String {
     line
 }
 
+#[cfg(feature = "terminal-io")]
 fn read_terminal_char() -> Result<Option<String>, String> {
     crossterm::terminal::enable_raw_mode().map_err(|err| err.to_string())?;
     let result = (|| loop {
@@ -3096,6 +3228,12 @@ fn read_terminal_char() -> Result<Option<String>, String> {
     }
 }
 
+#[cfg(not(feature = "terminal-io"))]
+fn read_terminal_char() -> Result<Option<String>, String> {
+    Err("terminal key input is unavailable in this Eldr build".to_string())
+}
+
+#[cfg(feature = "terminal-io")]
 fn key_event_to_string(event: crossterm::event::KeyEvent) -> Result<Option<String>, String> {
     use crossterm::event::KeyCode;
 
@@ -3161,7 +3299,7 @@ fn inspect_non_callable_value(vm: &VM, value: &Value) -> String {
         }
         Value::HashMap(handle) => {
             if handle.entries.is_empty() {
-                return "HashMap()".to_string();
+                return "hash![]".to_string();
             }
 
             let inner = handle
@@ -3176,7 +3314,7 @@ fn inspect_non_callable_value(vm: &VM, value: &Value) -> String {
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("HashMap({inner})")
+            format!("hash![{inner}]")
         }
         Value::Tuple(items) => {
             let inner = items
@@ -3193,13 +3331,13 @@ fn inspect_non_callable_value(vm: &VM, value: &Value) -> String {
 
 fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
     if let Some(entry) = vm.type_registry().lookup(tag) {
-        if entry.name == "Duration" || entry.name == "Global::Duration" {
+        if is_duration_type_name(&entry.name) {
             if let Some(Value::Int(ms)) = fields.first() {
                 return format!("{ms}ms");
             }
         }
         let render_named_value = || {
-            let display_name = entry.name.strip_prefix("Global::").unwrap_or(&entry.name);
+            let display_name = surface_path_name(&entry.name);
             let hidden_field_count = entry.private_flags.iter().filter(|flag| **flag).count();
             let mut parts = entry
                 .field_names
@@ -3235,16 +3373,9 @@ fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
                     .collect::<Vec<_>>()
                     .join(", ");
                 if payload.is_empty() {
-                    entry
-                        .name
-                        .strip_prefix("Global::")
-                        .unwrap_or(&entry.name)
-                        .to_string()
+                    surface_path_name(&entry.name).to_string()
                 } else {
-                    format!(
-                        "{}({payload})",
-                        entry.name.strip_prefix("Global::").unwrap_or(&entry.name)
-                    )
+                    format!("{}({payload})", surface_path_name(&entry.name))
                 }
             }
         };
@@ -3270,22 +3401,6 @@ fn inspect_tagged_value(vm: &VM, tag: u32, fields: &[Value]) -> String {
         ),
         _ => format!("Tagged({}, {:?})", tag, fields),
     }
-}
-
-fn quote_surtr_string_literal(input: &str) -> String {
-    let mut out = String::with_capacity(input.len() + 2);
-    out.push('"');
-    for ch in input.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
 }
 
 fn inspect_callable(_vm: &VM, callable: &Callable) -> Option<String> {
@@ -3722,7 +3837,7 @@ fn decode_file_path_arg<'a>(
             "{builtin_name} observed unknown FilePath tag {tag}"
         )));
     };
-    if entry.name.strip_prefix("Global::").unwrap_or(&entry.name) != "FilePath" {
+    if surface_path_name(&entry.name) != "FilePath" {
         return Err(RuntimeError::new(format!(
             "{builtin_name} expects FilePath as {arg_name}, got {}",
             entry.name
@@ -3820,17 +3935,12 @@ fn decode_file_mode(
             value
         )));
     };
-    let Some(entry) = vm.type_registry().lookup(*tag) else {
-        return Err(RuntimeError::new(format!(
-            "{builtin_name} observed unknown FileMode tag {tag}"
-        )));
-    };
-    match entry
-        .name
-        .rsplit("::")
-        .next()
-        .unwrap_or(entry.name.as_str())
-    {
+    let entry = lookup_tagged_type_entry(
+        vm,
+        *tag,
+        format!("{builtin_name} observed unknown FileMode tag {tag}"),
+    )?;
+    match type_name_leaf(&entry.name) {
         "Read" => Ok(VmFileMode::Read),
         "Write" => Ok(VmFileMode::Write),
         "Append" => Ok(VmFileMode::Append),
@@ -3876,18 +3986,8 @@ fn decode_string_encoding(vm: &VM, value: &Value) -> Result<StringEncodingMode, 
             "expected StringEncoding enum value for encoding argument",
         ));
     };
-    let Some(entry) = vm.type_registry().lookup(*tag) else {
-        return Err(RuntimeError::new(format!(
-            "unknown StringEncoding tag: {}",
-            tag
-        )));
-    };
-    match entry
-        .name
-        .rsplit("::")
-        .next()
-        .unwrap_or(entry.name.as_str())
-    {
+    let entry = lookup_tagged_type_entry(vm, *tag, format!("unknown StringEncoding tag: {}", tag))?;
+    match type_name_leaf(&entry.name) {
         "Utf8" => Ok(StringEncodingMode::Utf8),
         "Ascii" => Ok(StringEncodingMode::Ascii),
         _other => Err(RuntimeError::new(format!(
@@ -3895,6 +3995,20 @@ fn decode_string_encoding(vm: &VM, value: &Value) -> Result<StringEncodingMode, 
             entry.name
         ))),
     }
+}
+
+fn type_name_leaf(name: &str) -> &str {
+    name.rsplit("::").next().unwrap_or(name)
+}
+
+fn lookup_tagged_type_entry<'a>(
+    vm: &'a VM,
+    tag: u32,
+    unknown_message: String,
+) -> Result<&'a TypeEntry, RuntimeError> {
+    vm.type_registry()
+        .lookup(tag)
+        .ok_or_else(|| RuntimeError::new(unknown_message))
 }
 
 fn bit_index_to_usize(vm: &VM, index: &SurtrInt) -> Result<Result<usize, Value>, RuntimeError> {
@@ -3921,7 +4035,7 @@ fn duration_payload<'a>(vm: &'a VM, value: &'a Value) -> Result<&'a SurtrInt, Ru
                     tag
                 )));
             };
-            if entry.name != "Duration" && entry.name != "Global::Duration" {
+            if !is_duration_type_name(&entry.name) {
                 return Err(RuntimeError::new(format!(
                     "expected Duration struct tag, got {}",
                     entry.name
@@ -3940,6 +4054,10 @@ fn duration_payload<'a>(vm: &'a VM, value: &'a Value) -> Result<&'a SurtrInt, Ru
             other
         ))),
     }
+}
+
+fn is_duration_type_name(name: &str) -> bool {
+    surface_path_name(name) == "Duration"
 }
 
 fn duration_to_u64(
@@ -4042,7 +4160,13 @@ fn json_value_to_surtr(
                     vec![Value::Int(BigInt::from(value))],
                 ))
             } else if let Some(value) = number.as_f64() {
-                Ok(json_variant(ctors.float, 3, vec![Value::Float(value)]))
+                if value.is_finite() {
+                    Ok(json_variant(ctors.float, 3, vec![Value::Float(value)]))
+                } else {
+                    Err(RuntimeError::new(
+                        "JsonValue::Float cannot represent NaN or infinity",
+                    ))
+                }
             } else {
                 Err(RuntimeError::new(
                     "serde_json number could not be represented",
@@ -4354,7 +4478,11 @@ fn filesystem_snapshot(
     }
 
     let mut paths = Vec::new();
-    collect_filesystem_entries(vm, root_raw, 1, max_depth.unwrap_or(1), &mut paths)?;
+    if let Err(err) =
+        collect_filesystem_entries(vm, root_raw, 1, max_depth.unwrap_or(1), &mut paths)
+    {
+        return Ok(err);
+    }
     paths.sort();
 
     let mut entries = Vec::with_capacity(paths.len());
@@ -4381,19 +4509,20 @@ fn collect_filesystem_entries(
     current_depth: usize,
     max_depth: usize,
     out: &mut Vec<String>,
-) -> Result<(), RuntimeError> {
+) -> Result<(), Value> {
     if max_depth == 0 || current_depth > max_depth {
         return Ok(());
     }
     let host_path = vm.resolve_host_path(raw_path);
     let read_dir = match fs::read_dir(&host_path) {
         Ok(read_dir) => read_dir,
-        Err(_) => return Ok(()),
+        Err(err) => return Err(filesystem_io_error(vm, raw_path, err)),
     };
     let mut children = Vec::new();
     for entry in read_dir {
-        let Ok(entry) = entry else {
-            continue;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => return Err(filesystem_io_error(vm, raw_path, err)),
         };
         let raw_child = Path::new(raw_path)
             .join(entry.file_name())
@@ -4410,6 +4539,20 @@ fn collect_filesystem_entries(
         }
     }
     Ok(())
+}
+
+fn canonicalize_shell_cwd(
+    vm: &VM,
+    host_path: &Path,
+    path: &str,
+) -> Result<std::path::PathBuf, Value> {
+    fs::canonicalize(host_path).map_err(|err| {
+        shell_error_with_message(
+            vm,
+            "ShellIoError",
+            &format!("shell failed to canonicalize working directory {path}: {err}"),
+        )
+    })
 }
 
 fn err_value(rich: RichError) -> Value {
@@ -4595,6 +4738,8 @@ mod tests {
         Location, RichError, TypeEntry, TypeKind, TypeRegistry, Value,
     };
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
     fn test_vm() -> VM {
@@ -4780,6 +4925,16 @@ mod tests {
                 .next()
                 .expect("Ok result should carry a payload"),
             other => panic!("expected Ok result, got {:?}", other),
+        }
+    }
+
+    fn err_kind(value: &Value) -> &str {
+        match value {
+            Value::Tagged { tag: 1, fields } => match fields.first() {
+                Some(Value::Error(rich)) => &rich.kind,
+                other => panic!("expected Err(Value::Error), got {:?}", other),
+            },
+            other => panic!("expected Err result, got {:?}", other),
         }
     }
 
@@ -5365,6 +5520,48 @@ mod tests {
     }
 
     #[test]
+    fn float_builtins_reject_non_finite_inputs_and_results() {
+        let mut vm = test_vm();
+
+        let err = call_builtin(
+            &mut vm,
+            builtin_id("__operator_float_add"),
+            vec![Value::Float(f64::MAX), Value::Float(f64::MAX)],
+        )
+        .expect_err("float add must reject infinity result");
+        assert!(err.message.contains("non-finite value"));
+
+        let err = call_builtin(
+            &mut vm,
+            builtin_id("__compare_float"),
+            vec![Value::Float(f64::INFINITY), Value::Float(1.0)],
+        )
+        .expect_err("float compare must reject infinity input");
+        assert!(err
+            .message
+            .contains("__compare_float expects finite Float values"));
+    }
+
+    #[test]
+    fn float_builtins_expose_rounding_and_constants() {
+        let mut vm = test_vm();
+
+        let floor = call_builtin(&mut vm, builtin_id("floor"), vec![Value::Float(1.8)])
+            .expect("floor should succeed");
+        assert!(matches!(floor, Value::Float(value) if value == 1.0));
+
+        let round = call_builtin(&mut vm, builtin_id("round"), vec![Value::Float(-1.5)])
+            .expect("round should succeed");
+        assert!(matches!(round, Value::Float(value) if value == -2.0));
+
+        let pi = call_builtin(&mut vm, builtin_id("pi"), vec![]).expect("pi should succeed");
+        assert!(matches!(pi, Value::Float(value) if value == std::f64::consts::PI));
+
+        let e = call_builtin(&mut vm, builtin_id("e"), vec![]).expect("e should succeed");
+        assert!(matches!(e, Value::Float(value) if value == std::f64::consts::E));
+    }
+
+    #[test]
     fn string_split_builtin_preserves_string_contract() {
         let mut vm = test_vm();
         let parts = call_builtin(
@@ -5925,7 +6122,7 @@ mod tests {
         ]));
         assert_eq!(
             inspect_value(&vm, &value),
-            "HashMap(\"line\\nfeed\" => 1, \"path\\\\to\" => 2)"
+            "hash![\"line\\nfeed\" => 1, \"path\\\\to\" => 2]"
         );
     }
 
@@ -6116,6 +6313,90 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_ls_returns_err_when_read_dir_fails() {
+        let dir = sandbox_dir("builtin-filesystem-ls-read-dir-error");
+        let blocked = dir.join("blocked");
+        fs::create_dir_all(&blocked).expect("blocked dir should be creatable");
+        let original_permissions = fs::metadata(&blocked)
+            .expect("blocked metadata should be readable")
+            .permissions();
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000))
+            .expect("permissions should be removable");
+
+        let mut vm = filesystem_vm();
+        let result = call_builtin(
+            &mut vm,
+            builtin_id("filesystem_ls"),
+            vec![Value::Tagged {
+                tag: 30,
+                fields: vec![Value::Str(blocked.to_string_lossy().into_owned())],
+            }],
+        )
+        .expect("filesystem_ls should return a Result value");
+
+        fs::set_permissions(&blocked, original_permissions)
+            .expect("permissions should be restored");
+        let _ = fs::remove_dir_all(dir);
+
+        assert!(matches!(
+            err_kind(&result),
+            "FileSystemPermissionDenied" | "FileSystemIoError"
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_tree_depth_returns_err_when_child_read_dir_fails() {
+        let dir = sandbox_dir("builtin-filesystem-tree-read-dir-error");
+        let blocked = dir.join("blocked");
+        fs::create_dir_all(&blocked).expect("blocked dir should be creatable");
+        let original_permissions = fs::metadata(&blocked)
+            .expect("blocked metadata should be readable")
+            .permissions();
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000))
+            .expect("permissions should be removable");
+
+        let mut vm = filesystem_vm();
+        let result = call_builtin(
+            &mut vm,
+            builtin_id("filesystem_tree_depth"),
+            vec![
+                Value::Tagged {
+                    tag: 30,
+                    fields: vec![Value::Str(dir.to_string_lossy().into_owned())],
+                },
+                Value::Int(2.into()),
+            ],
+        )
+        .expect("filesystem_tree_depth should return a Result value");
+
+        fs::set_permissions(&blocked, original_permissions)
+            .expect("permissions should be restored");
+        let _ = fs::remove_dir_all(dir);
+
+        assert!(matches!(
+            err_kind(&result),
+            "FileSystemPermissionDenied" | "FileSystemIoError"
+        ));
+    }
+
+    #[test]
+    fn shell_cd_canonicalize_error_maps_to_shell_io_error_without_mutating_cwd() {
+        let vm = filesystem_vm();
+        let original = vm.cwd().to_path_buf();
+        let err = super::canonicalize_shell_cwd(
+            &vm,
+            &original.join("missing-after-dir-check"),
+            "missing-after-dir-check",
+        )
+        .expect_err("missing canonical path should map to ShellIoError");
+
+        assert_eq!(err_kind(&err), "ShellIoError");
+        assert_eq!(vm.cwd(), original.as_path());
     }
 
     #[test]

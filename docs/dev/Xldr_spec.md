@@ -67,12 +67,12 @@ phase ごとの VM 実行ポリシーは Xldr が決め、Eldr へは `Interacti
 
 ### 3.2 初期化
 
-- セッション開始時に標準 definition source を `Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Numeric, Show, Ordering, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Facet, Float, Config, Project, Random, IO, StyledDoc, Test]` の順で読み込む
+- セッション開始時に標準 definition source を `Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test]` の順で読み込む
 - `Bootstrap` source は auto-import アンカーとして先頭に置き、標準 concrete error もここで登録する
-- `SpecialTypes` source では `Unit`, `TypeRef<$T>`, `Hole`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>` の canonical builtin type head を登録する
+- `SpecialTypes` source では `Unit`, `TypeRef<$T>`, `Hole`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>`, `BulkUpdateEntries<$State>`, `Lazy<$T>`, `ProcessInit<$T>` の canonical builtin type head を登録する
 - `Kernel` source では `defmod Kernel` 配下の cross-cutting builtin を登録する
 - 各 type file の top-level では対応する canonical builtin type head を登録する
-- 現行実装の事前ロードファイルは `lib/bootstrap.srt` の後に、`lib/types/special_types.srt`, `lib/kernel.srt`, `lib/traits/operator/*.srt`, `lib/traits/*.srt`, type modules, `lib/facet.srt`, `lib/Config.srt`, `lib/Project.srt`, `lib/Random.srt`, `lib/IO.srt`, `lib/styled_doc.srt`, `lib/test.srt` を同一段として読み込む
+- 現行実装の事前ロードファイルは `lib/bootstrap.srt` の後に、`lib/types/special_types.srt`, `lib/function.srt`, `lib/kernel.srt`, `lib/traits/operator/*.srt`, `lib/traits/*.srt`, type modules, `lib/facet.srt`, `lib/Config.srt`, `lib/Project.srt`, `lib/Random.srt`, `lib/file.srt`, `lib/FileSystem.srt`, `lib/IO.srt`, `lib/Shell.srt`, `lib/styled_doc.srt`, `lib/test.srt` を同一段として読み込む
 - module stage の import 可視性は「前 stage + 同一 stage」とする。同一 stage 内の標準定義ソース / 通常 module は file 読み込み順に依存せず明示 import / auto import でき、later stage 参照は compile error とする
 - loader は追加標準定義ソースも `./lib/**/*.srt` から収集し、`lib/tests/**` と built-in 標準定義ソースと重複するものはデフォルト入力から除外する
 - definition source の primary module path は parse 後 AST と namespace lowering 結果から導出し、loader / Xldr は token 走査で `defmod` head を推定しない
@@ -161,10 +161,10 @@ REPL 実装は次の 3 層に分ける。
 | コマンド | 説明 |
 |---|---|
 | `:help`, `:h [command]` | REPL コマンド一覧、または指定コマンドのヘルプを表示する |
-| `:quit`, `:exit` | REPL を終了する |
+| `:quit`, `:exit`, `:q` | REPL を終了する |
 | `:v <N>` | 行 `N` の結果を再表示する。binding value の再表示は別 surface として扱い、query command には混ぜない。 |
-| `:doc <target>` | public declaration の `@doc` を引く。定義 doc、型 doc、constructor / extractor doc、impl doc、binding 起点 doc、process surface doc を表示する。binding lookup を明示する時は `$name` を使う。typed query は `compare(Int, Int)`, `lt(Int, Int)`, `compare($left, $right)`, `ret |>= up`, `Result<Int> |>= &parse_int`, `xs |> map(&to_string)` のような command query 専用 surface に限定する。`literal` / 任意式 / generic type variable は query 引数に受けない。callable binding が closure のときは `Closure` type doc を返し、続けて binding 付属の `@doc` 本文と最小限の補足情報（signature / captures / provenance）を表示する。process surface では hidden stdlib surface (`GenServer::spawn` など) と concrete public surface (`MyServer::spawn` など) の両方を引け、concrete query は hidden stdlib doc 本文を流用しつつ表示 symbol / signature だけ concrete 名に差し替える。special form を含め、表示する signature は stdlib / user source に書かれた宣言文字列そのものを正とし、REPL 用の compiler-generated signature へ差し替えない。private declaration は undocumented 扱いにせず、private surface であることを明示して拒否する。 |
-| `:sig <target>` | public declaration の signature を表示する。関数、operator、constructor、extractor、enum 定義 surface、callable binding、impl specialization、process surface を表示対象に含む。bare `:sig Ty` は constructor signature、`Ty(args...)` は constructor 照合、`Ty!()` は extractor signature、`StringEncoding` のような enum は variant constructor surface 一覧を返す。enum variant 単体は query target にしない。typed query は concrete type、visible binding、`$binding`、`CaptureQuery` のみを引数に受ける。process surface では hidden stdlib 名と concrete public 名の両方を受け、表示名は query 側に揃える。process owner への bare query (`:sig MyServer`, `:sig MyWorker`) は process summary surface として扱い、PID binding query (`:sig $server`) はその handle の messaging summary を返す。special form を含め、表示する signature は stdlib / user source に書かれた宣言文字列そのものを正とし、REPL 用の compiler-generated signature へ差し替えない。private declaration は generic な not-found に落とさず、private surface であることを明示して拒否する。 |
+| `:doc <target>` | public declaration の `@doc` を引く。定義 doc、型 doc、constructor / extractor doc、impl doc、binding 起点 doc、process surface doc を表示する。binding lookup を明示する時は `$name` を使う。typed query は `compare(Int, Int)`, `lt(Int, Int)`, `compare($left, $right)`, `ret |>= up`, `Result<Int> |>= &parse_int`, `xs |> map(&to_string)` のような command query 専用 surface に限定する。`literal` / 任意式 / generic type variable は query 引数に受けない。callable binding が closure のときは `Closure` type doc を返し、続けて binding 付属の `@doc` 本文と最小限の補足情報（signature / captures / provenance）を表示する。process surface では hidden stdlib surface (`GenServer::spawn` など) と concrete public surface (`MyServer::spawn` など) の両方を引け、concrete query は hidden stdlib doc 本文を流用しつつ表示 symbol / signature だけ concrete 名に差し替える。special form を含め、表示する signature は stdlib / user source に書かれた宣言文字列を正本とするが、`impl Type { ... }` / `impl Trait for Type { ... }` 由来の user-facing signature では `Self` を concrete owner type へ正規化する。trait 定義 surface では source-written `Self` を保持する。private declaration は undocumented 扱いにせず、private surface であることを明示して拒否する。 |
+| `:sig <target>` | public declaration の signature を表示する。関数、operator、constructor、extractor、enum 定義 surface、callable binding、impl specialization、process surface を表示対象に含む。bare `:sig Ty` は constructor signature、`Ty(args...)` は constructor 照合、`Ty!()` は extractor signature、`StringEncoding` のような enum は variant constructor surface 一覧を返す。enum variant 単体は query target にしない。typed query は concrete type、visible binding、`$binding`、`CaptureQuery` のみを引数に受ける。process surface では hidden stdlib 名と concrete public 名の両方を受け、表示名は query 側に揃える。process owner への bare query (`:sig MyServer`, `:sig MyWorker`) は process summary surface として扱い、PID binding query (`:sig $server`) はその handle の messaging summary を返す。special form を含め、表示する signature は stdlib / user source に書かれた宣言文字列を正本とし、completion candidate の `detail` も同じ authored signature surface を使う。`impl Type { ... }` / `impl Trait for Type { ... }` 由来の user-facing signature では `Self` を concrete owner type へ正規化する。trait 定義 surface では source-written `Self` を保持する。source-written signature が取得できない場合だけ synthesized / inferred fallback を許可する。private declaration は generic な not-found に落とさず、private surface であることを明示して拒否する。 |
 | `:info <target>` | 定義、binding、dispatch、operator application query、singleton process owner、PID binding の解決情報を表示する。`$name` による binding 強制、typed call / typed operator の正規化結果、選択 impl、関連 command を出せることを契約に含める。process runtime lookup は singleton を owner 名、worker を PID binding で引く。PID binding の `:info` は raw inspect 表示や数値 PID を出さず、型と process metadata を返す。 |
 | `:type <binding>` | REPL binding の型と `TypeIdentity` を表示する。`$name` による binding 強制を許可する。通常の値は binding のみを対象とし、定義名、typed query、任意式は受けない。process runtime lookup では singleton process owner 名を追加で受け、worker process は PID binding 経由のみを受ける。 |
 | `:facet <facet-target>` | FacetPath 定義または `$facet_binding` の canonical path、segment 一覧、停止点を表示する。値 access 式や一般の callable / plain value は受けず、Facet query surface は command query 専用の制限された対象に限る。 |
@@ -188,7 +188,7 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - `:reload` は両モードとも value binding を破棄する
 
 - 共通引数 surface は `ConcreteTypeKey | BindingKey | ForcedBindingKey | CaptureQuery` に限定する
-- `ConcreteTypeKey` は `Int`, `Result<Int>`, `(Int -> String)` のような具象型のみを受け、`$T`, `List<$T>`, `impl Numeric` は受けない
+- `ConcreteTypeKey` は `Int`, `Result<Int>`, `(Int -> String)` のような具象型のみを受け、`$T`, `List<$T>`, `impl Show` は受けない
 - `ForcedBindingKey` は `$name` で表し、binding lookup を明示する
 - `CaptureQuery` は `&to_string`, `&add(Int, &1)`, `&replace($from, &1, $to)` のような command query 専用 pattern とし、literal、任意式、placeholder 付き capture の再帰を禁止する
 - operator query は `lhs OP rhs` (`|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`) を取り、RHS は実コードの引数注入規則に沿う限定 surface のみ許可する
@@ -226,6 +226,8 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - TTY モードでは行編集、履歴、補完を提供する
 - 補完対象は REPL コマンドと現在スコープで見えるシンボルである
 - 補完候補は入力済み接頭辞に基づいて抽出する
+- REPL core は matching completion candidate を全件保持する。CLI UI は表示件数だけを制限し、将来のページャ導入時にも同じ候補集合を再利用できる構成を保つ
+- CLI REPL は実行ディレクトリの `.xldr.yaml` を読み、`repl.cli.completion_candidates` でユーザに表示する補完候補件数を上書きできる。既定値は `5`
 - preload script の入力行も REPL 履歴の一部として扱い、`vars` と `history` は同じ行番号体系を共有する
 
 候補一覧表示の改善や型文脈つき補完は `doc/open-issues.md` の将来課題として扱う。

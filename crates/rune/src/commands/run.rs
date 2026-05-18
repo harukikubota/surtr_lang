@@ -12,6 +12,7 @@ use crate::compile::{
 };
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
 use crate::run_cache;
+use crate::util::surface_strip_global_prefixes;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VmDumpMode {
@@ -91,13 +92,23 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
     }
 
     let file_path = args[0].clone();
+    if file_path.starts_with('-') {
+        return Err(RuneError::message(
+            1,
+            format!("run: unknown option '{}'", file_path),
+        ));
+    }
     let mut entry = None;
     let mut cli_args = Vec::new();
     let mut vm_dump_path = None;
     let mut vm_dump_mode = VmDumpMode::Error;
+    let mut vm_dump_mode_seen = false;
     let mut observation = RunObservationOptions::default();
+    let mut trace_limit_seen = false;
+    let mut trace_filter_seen = false;
     let mut phase_times = false;
     let mut error_context = ErrorContextMode::Normal;
+    let mut error_context_seen = false;
     let mut i = 1usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -107,7 +118,7 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
             }
             "--entry" => {
                 i += 1;
-                if i >= args.len() {
+                if i >= args.len() || args[i].starts_with('-') {
                     return Err(RuneError::usage("run: missing value for --entry"));
                 }
                 if entry.is_some() {
@@ -120,7 +131,7 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
             }
             "--vm-dump" => {
                 i += 1;
-                if i >= args.len() {
+                if i >= args.len() || args[i].starts_with('-') {
                     return Err(RuneError::usage("run: missing value for --vm-dump"));
                 }
                 if vm_dump_path.is_some() {
@@ -133,9 +144,16 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
             }
             "--vm-dump-on" => {
                 i += 1;
-                if i >= args.len() {
+                if i >= args.len() || args[i].starts_with('-') {
                     return Err(RuneError::usage("run: missing value for --vm-dump-on"));
                 }
+                if vm_dump_mode_seen {
+                    return Err(RuneError::message(
+                        1,
+                        "run: --vm-dump-on may only be specified once",
+                    ));
+                }
+                vm_dump_mode_seen = true;
                 vm_dump_mode = match args[i].as_str() {
                     "error" => VmDumpMode::Error,
                     "always" => VmDumpMode::Always,
@@ -151,15 +169,39 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
                 };
             }
             "--vm-stats" => {
+                if observation.vm_stats {
+                    return Err(RuneError::message(
+                        1,
+                        "run: --vm-stats may only be specified once",
+                    ));
+                }
                 observation.vm_stats = true;
             }
             "--vm-stats-json" => {
+                if observation.vm_stats_json {
+                    return Err(RuneError::message(
+                        1,
+                        "run: --vm-stats-json may only be specified once",
+                    ));
+                }
                 observation.vm_stats_json = true;
             }
             "--trace-opcode" => {
+                if observation.trace_opcodes {
+                    return Err(RuneError::message(
+                        1,
+                        "run: --trace-opcode may only be specified once",
+                    ));
+                }
                 observation.trace_opcodes = true;
             }
             "--trace-call" => {
+                if observation.trace_calls {
+                    return Err(RuneError::message(
+                        1,
+                        "run: --trace-call may only be specified once",
+                    ));
+                }
                 observation.trace_calls = true;
             }
             "--trace-limit" => {
@@ -167,9 +209,22 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
                 if i >= args.len() {
                     return Err(RuneError::usage("run: missing value for --trace-limit"));
                 }
+                if trace_limit_seen {
+                    return Err(RuneError::message(
+                        1,
+                        "run: --trace-limit may only be specified once",
+                    ));
+                }
+                trace_limit_seen = true;
                 let limit = args[i].parse::<usize>().map_err(|_| {
                     RuneError::message(1, format!("run: invalid --trace-limit value '{}'", args[i]))
                 })?;
+                if limit == 0 {
+                    return Err(RuneError::message(
+                        1,
+                        "run: --trace-limit must be greater than 0",
+                    ));
+                }
                 observation.trace_limit = Some(limit);
             }
             "--trace-filter" => {
@@ -177,14 +232,33 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
                 if i >= args.len() {
                     return Err(RuneError::usage("run: missing value for --trace-filter"));
                 }
+                if trace_filter_seen {
+                    return Err(RuneError::message(
+                        1,
+                        "run: --trace-filter may only be specified once",
+                    ));
+                }
+                trace_filter_seen = true;
                 observation.trace_filter = args[i]
                     .split(',')
                     .map(str::trim)
                     .filter(|item| !item.is_empty())
                     .map(|item| item.to_ascii_lowercase())
                     .collect();
+                if observation.trace_filter.is_empty() {
+                    return Err(RuneError::message(
+                        1,
+                        "run: --trace-filter must include a filter",
+                    ));
+                }
             }
             "--phase-times" => {
+                if phase_times {
+                    return Err(RuneError::message(
+                        1,
+                        "run: --phase-times may only be specified once",
+                    ));
+                }
                 phase_times = true;
             }
             "--error-context" => {
@@ -192,6 +266,13 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
                 if i >= args.len() {
                     return Err(RuneError::usage("run: missing value for --error-context"));
                 }
+                if error_context_seen {
+                    return Err(RuneError::message(
+                        1,
+                        "run: --error-context may only be specified once",
+                    ));
+                }
+                error_context_seen = true;
                 error_context = match args[i].as_str() {
                     "verbose" => ErrorContextMode::Verbose,
                     other => {
@@ -286,7 +367,8 @@ fn run_source_file(
         env,
         file_path,
         &compile_plan.source_for_parse,
-        &compile_plan.include_directives,
+        &compile_plan.include_modules,
+        xldr::StdlibVariant::Default,
     )?;
     let bytecode = match run_cache::load(env, &compile_sources, &compile_plan) {
         Some(bytecode) => bytecode,
@@ -948,39 +1030,6 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
     dump
 }
 
-fn surface_strip_global_prefixes(value: &mut JsonValue) {
-    match value {
-        JsonValue::String(text) => {
-            if let Some(stripped) = text.strip_prefix("Global::") {
-                *text = stripped.to_string();
-            }
-        }
-        JsonValue::Array(items) => {
-            for item in items {
-                surface_strip_global_prefixes(item);
-            }
-        }
-        JsonValue::Object(map) => {
-            let keys = map.keys().cloned().collect::<Vec<_>>();
-            for key in keys {
-                let mut item = map
-                    .remove(&key)
-                    .expect("json object key should still exist during surface rewrite");
-                surface_strip_global_prefixes(&mut item);
-                let surface_key = key
-                    .strip_prefix("Global::")
-                    .unwrap_or(key.as_str())
-                    .to_string();
-                map.insert(surface_key, item);
-            }
-            for item in map.values_mut() {
-                surface_strip_global_prefixes(item);
-            }
-        }
-        _ => {}
-    }
-}
-
 fn report_final_result_error_if_any(vm: &eldr::VM) -> bool {
     match vm.last_value() {
         Some(value @ Value::Error(_)) => {
@@ -1032,6 +1081,26 @@ mod tests {
     }
 
     #[test]
+    fn run_options_reject_option_like_entry_value() {
+        let err = parse_run_options(&[
+            "main.srt".to_string(),
+            "--entry".to_string(),
+            "--vm-stats".to_string(),
+        ])
+        .expect_err("option-looking entry value must fail");
+
+        assert_eq!(err.summary(), "run: missing value for --entry");
+    }
+
+    #[test]
+    fn run_options_reject_option_like_input() {
+        let err = parse_run_options(&["--bad".to_string()])
+            .expect_err("option-looking run input must fail before reading input");
+
+        assert_eq!(err.summary(), "run: unknown option '--bad'");
+    }
+
+    #[test]
     fn run_options_parse_vm_dump_options() {
         let opts = parse_run_options(&[
             "main.srt".to_string(),
@@ -1048,6 +1117,18 @@ mod tests {
     }
 
     #[test]
+    fn run_options_reject_option_like_vm_dump_value() {
+        let err = parse_run_options(&[
+            "main.srt".to_string(),
+            "--vm-dump".to_string(),
+            "--vm-stats".to_string(),
+        ])
+        .expect_err("option-looking vm dump value must fail");
+
+        assert_eq!(err.summary(), "run: missing value for --vm-dump");
+    }
+
+    #[test]
     fn run_options_reject_vm_dump_on_without_vm_dump() {
         let err = parse_run_options(&[
             "main.srt".to_string(),
@@ -1056,6 +1137,150 @@ mod tests {
         ])
         .expect_err("vm dump on without vm dump must fail");
         assert_eq!(err.summary(), "run: --vm-dump-on requires --vm-dump");
+    }
+
+    #[test]
+    fn run_options_reject_option_like_vm_dump_on_value() {
+        let err = parse_run_options(&[
+            "main.srt".to_string(),
+            "--vm-dump".to_string(),
+            "vm.json".to_string(),
+            "--vm-dump-on".to_string(),
+            "--vm-stats".to_string(),
+        ])
+        .expect_err("option-looking vm dump mode must fail");
+
+        assert_eq!(err.summary(), "run: missing value for --vm-dump-on");
+    }
+
+    #[test]
+    fn run_options_reject_duplicate_trace_limit() {
+        let err = parse_run_options(&[
+            "main.srt".to_string(),
+            "--trace-limit".to_string(),
+            "10".to_string(),
+            "--trace-limit".to_string(),
+            "20".to_string(),
+        ])
+        .expect_err("duplicate trace limit must fail");
+
+        assert_eq!(
+            err.summary(),
+            "run: --trace-limit may only be specified once"
+        );
+    }
+
+    #[test]
+    fn run_options_reject_zero_trace_limit() {
+        let err = parse_run_options(&[
+            "main.srt".to_string(),
+            "--trace-limit".to_string(),
+            "0".to_string(),
+        ])
+        .expect_err("zero trace limit must fail");
+
+        assert_eq!(err.summary(), "run: --trace-limit must be greater than 0");
+    }
+
+    #[test]
+    fn run_options_reject_duplicate_vm_stats() {
+        let err = parse_run_options(&[
+            "main.srt".to_string(),
+            "--vm-stats".to_string(),
+            "--vm-stats".to_string(),
+        ])
+        .expect_err("duplicate vm stats must fail");
+
+        assert_eq!(err.summary(), "run: --vm-stats may only be specified once");
+    }
+
+    #[test]
+    fn run_options_reject_duplicate_vm_stats_json() {
+        let err = parse_run_options(&[
+            "main.srt".to_string(),
+            "--vm-stats-json".to_string(),
+            "--vm-stats-json".to_string(),
+        ])
+        .expect_err("duplicate vm stats json must fail");
+
+        assert_eq!(
+            err.summary(),
+            "run: --vm-stats-json may only be specified once"
+        );
+    }
+
+    #[test]
+    fn run_options_reject_duplicate_trace_opcode() {
+        let err = parse_run_options(&[
+            "main.srt".to_string(),
+            "--trace-opcode".to_string(),
+            "--trace-opcode".to_string(),
+        ])
+        .expect_err("duplicate trace opcode must fail");
+
+        assert_eq!(
+            err.summary(),
+            "run: --trace-opcode may only be specified once"
+        );
+    }
+
+    #[test]
+    fn run_options_reject_duplicate_trace_call() {
+        let err = parse_run_options(&[
+            "main.srt".to_string(),
+            "--trace-call".to_string(),
+            "--trace-call".to_string(),
+        ])
+        .expect_err("duplicate trace call must fail");
+
+        assert_eq!(
+            err.summary(),
+            "run: --trace-call may only be specified once"
+        );
+    }
+
+    #[test]
+    fn run_options_reject_duplicate_trace_filter() {
+        let err = parse_run_options(&[
+            "main.srt".to_string(),
+            "--trace-filter".to_string(),
+            "call".to_string(),
+            "--trace-filter".to_string(),
+            "opcode".to_string(),
+        ])
+        .expect_err("duplicate trace filter must fail");
+
+        assert_eq!(
+            err.summary(),
+            "run: --trace-filter may only be specified once"
+        );
+    }
+
+    #[test]
+    fn run_options_reject_empty_trace_filter() {
+        let err = parse_run_options(&[
+            "main.srt".to_string(),
+            "--trace-filter".to_string(),
+            " , ".to_string(),
+        ])
+        .expect_err("empty trace filter must fail");
+
+        assert_eq!(err.summary(), "run: --trace-filter must include a filter");
+    }
+
+    #[test]
+    fn run_options_reject_duplicate_phase_times() {
+        let err = parse_run_options(&[
+            "main.srt".to_string(),
+            "--phase-times".to_string(),
+            "--phase-times".to_string(),
+        ])
+        .expect_err("duplicate phase times must fail");
+
+        assert_eq!(
+            err.summary(),
+            "run: --phase-times may only be specified once"
+        );
     }
 
     #[test]

@@ -1,0 +1,40 @@
+defrecord JsonSpecRwConfig(name: String, entrypoint: String)
+
+impl Decode<JsonSpecRwConfig> for JsonValue {
+  def decode(self: Self, to: TypeRef<JsonSpecRwConfig>) -> Result<JsonSpecRwConfig, Error> {
+    name_json =? Json::get(self, "name")
+    name =? JsonValue::decode(name_json, String)
+    entry_json =? Json::get(self, "entrypoint")
+    entry =? JsonValue::decode(entry_json, String)
+    Ok(JsonSpecRwConfig(name, entry))
+  }
+}
+
+impl Encode<JsonValue> for JsonSpecRwConfig {
+  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+    Ok(JsonValue::Object(HashMap::from_entries([
+      ("name", JsonValue::String(self.name)),
+      ("entrypoint", JsonValue::String(self.entrypoint)),
+    ])))
+  }
+}
+
+def load_config(path: String) -> Result<JsonSpecRwConfig, Error> {
+  text =? File::read(path)
+  json =? Json::decode(text)
+  JsonValue::decode(json, JsonSpecRwConfig)
+}
+
+def save_config(path: String, config: JsonSpecRwConfig) -> Result<Unit, Error> {
+  json =? JsonValue::encode(config)
+  text =? Json::encode(json)
+  File::write(path, text)
+}
+
+tmp_root =? FS::path("./tmp/sandbox")
+_ =? FS::mkdir_all(tmp_root)
+path = "./tmp/sandbox/surtr-json-config-rw.fixture.json"
+_ =? save_config(path, JsonSpecRwConfig("surtr", "boot"))
+cfg =? load_config(path)
+_ =? File::delete(path)
+print(cfg.name ++ ":" ++ cfg.entrypoint)

@@ -8,33 +8,30 @@ Surtr の trait system は V1 です。
 標準 trait は大きく 3 層に分けて読むと分かりやすいです。
 
 - capability trait
-  - `Show`, `Compare`, `From`, `TryFrom`, `Numeric`
+  - `Show`, `Compare`, `From`, `TryFrom`
 - operator dispatch trait
   - `Add`, `Sub`, `Mul`, `Eq`, `Neq`, `Concat`
   - `Functor`, `Chainable`, `PipeApply`, `Compose`, `Composable`, `LiftComposable`, `KleisliComposable`
 
 `Compare` は新しい API が三値比較を要求するときの正本です。`< <= > >=` も公開 surface では `Compare` によって意味づけられます。  
-`Numeric` は演算子親ではなく、`safe_div` / `abs` / `min` / `max` のような generic helper 用 capability です。
+数値 helper は generic trait ではなく、`Int::abs` / `Float::safe_div` のような concrete type owner surface として提供します。
 
 ## 宣言側
 
 trait と impl は file-oriented に書きます。
 
 ```surtr
-deftrait Numeric {
-  def abs(self: Self) -> Self
-  def min(self: Self, rhs: Self) -> Self
+deftrait Describable {
+  def describe(self: Self) -> String
 }
 
-impl Numeric for Int {
-  def abs(self: Self) -> Self { if(self < 0, 0 - self, self) }
-  def min(self: Self, rhs: Self) -> Self { if(self < rhs, self, rhs) }
+impl Describable for Int {
+  def describe(self: Self) -> String { to_string(self) }
 }
 ```
 
 正本の標準 trait 宣言は次を参照してください。
 
-- `../../lib/traits/numeric.srt`
 - `../../lib/traits/from.srt`
 - `../../lib/traits/try_from.srt`
 
@@ -43,7 +40,7 @@ impl Numeric for Int {
 利用者がまず触るのは helper surface です。
 
 ```text
-xldr(1)> print(to_string(Numeric::abs(-4)))
+xldr(1)> print(to_string(Int::abs(-4)))
 4
 xldr(2)>
 ```
@@ -77,7 +74,6 @@ xldr(2)>
 ## 確認したソース
 
 - ソース
-  - `../../lib/traits/numeric.srt`
   - `../../lib/traits/from.srt`
   - `../../lib/traits/try_from.srt`
   - `../../lib/types/int.srt`
@@ -86,5 +82,5 @@ xldr(2)>
 
 - `impl Trait` は parameter 位置だけで、`-> impl Trait` はまだ使えません。
 - `where` clause と multi-trait bound はまだ使えません。
-- `+`, `-`, `*` は `Numeric` ではなく `Add` / `Sub` / `Mul` の dispatch です。
+- `+`, `-`, `*` は `Add` / `Sub` / `Mul` の dispatch です。
 - `From` / `TryFrom` の呼び出し surface は簡潔でも、coherence 自体は trait 実装側で管理されています。

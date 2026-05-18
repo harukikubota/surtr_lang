@@ -5,20 +5,22 @@ use scar::types::Ty;
 use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_id_by_name;
 use sindr::ir::{
-    BootEntrySource, CallableTemplate, CallableTemplateArg, CallableTemplateComposeFlavor,
-    CallableTemplateDirectTarget, CallableTemplateKind, CallableTemplateMetadata, CompileInfo,
-    DbgArgTemplate, DbgTemplate, DocEntry, FunctionFlags, RuntimeBootPlan, RuntimeCallableRef,
-    RuntimeHandlerArg, RuntimeHandlerDependency, RuntimeHandlerKind, RuntimeHandlerOverride,
-    RuntimeHandlerSpec, RuntimeHandlerTarget, RuntimeInitPolicy, RuntimeInitResultShape,
-    RuntimeInitSpec, RuntimeLifecycleSpec, RuntimeProcessDependencies, RuntimeStateSpec,
-    RuntimeSupervisionSpec, RuntimeSupervisorOverrideEntry, RuntimeSupervisorPolicy,
-    RuntimeTypeRef, SingletonBootEntry,
+    validate_chunk_function_table, validate_program_function_table,
+    validate_type_registry_append_entries, BootEntrySource, CallableTemplate, CallableTemplateArg,
+    CallableTemplateComposeFlavor, CallableTemplateDirectTarget, CallableTemplateKind,
+    CallableTemplateMetadata, CompileInfo, DbgArgTemplate, DbgTemplate, DocEntry, FunctionFlags,
+    RuntimeBootPlan, RuntimeCallableRef, RuntimeHandlerArg, RuntimeHandlerDependency,
+    RuntimeHandlerKind, RuntimeHandlerOverride, RuntimeHandlerSpec, RuntimeHandlerTarget,
+    RuntimeInitPolicy, RuntimeInitResultShape, RuntimeInitSpec, RuntimeLifecycleSpec,
+    RuntimeProcessDependencies, RuntimeStateSpec, RuntimeSupervisionSpec,
+    RuntimeSupervisorOverrideEntry, RuntimeSupervisorPolicy, RuntimeTypeRef, SingletonBootEntry,
 };
+use sindr::names::{surface_path_name, surface_rendered_name};
 use sindr::primitives::{int, SurtrInt};
-use sindr::runtime::CallableOrigin;
+use sindr::runtime::{quote_surtr_string_literal, CallableOrigin};
 use spire::ast::{
-    AstTy, BinOp, Lit, ProcessInstance, ProcessRuntimeHandlerKind, Span, SupervisorInitSpec,
-    Visibility,
+    AstTy, BinOp, Lit, ProcessInstance, ProcessKind, ProcessRuntimeHandlerKind, Span,
+    SupervisorInitSpec, Visibility,
 };
 
 use crate::bytecode::*;
@@ -26,6 +28,7 @@ use crate::error::CodegenError;
 use crate::opcode::Opcode;
 use crate::registry::{TypeEntry, TypeKind, TypeRegistry};
 
+const DYNAMIC_SUPERVISOR_PROCESS_NAME: &str = "DynamicSupervisor";
 /// Lower the typed AST to bytecode.
 pub fn codegen(typed: Vec<TypedNode>) -> Result<Bytecode, CodegenError> {
     codegen_typed_program(TypedProgram {
@@ -49,7 +52,7 @@ pub fn codegen_typed_program(typed: TypedProgram) -> Result<Bytecode, CodegenErr
         build_runtime_process_specs(&process_specs, &nodes, &state.functions)?;
     let runtime_boot_plan = build_runtime_boot_plan(&boot_plan, &process_specs)?;
     validate_required_singletons(&nodes, &process_specs, &runtime_boot_plan)?;
-    Ok(Bytecode {
+    let bytecode = Bytecode {
         opcodes,
         constants: state.constants,
         num_locals: state.next_slot as usize,
@@ -60,6 +63,7 @@ pub fn codegen_typed_program(typed: TypedProgram) -> Result<Bytecode, CodegenErr
         functions: state.functions,
         source_map: None,
         docs: Vec::new(),
+        signatures: Vec::new(),
         compile_info: CompileInfo::default(),
         labels: Vec::new(),
         imports: Vec::new(),
@@ -71,7 +75,22 @@ pub fn codegen_typed_program(typed: TypedProgram) -> Result<Bytecode, CodegenErr
         pc_spans: Vec::new(),
         runtime_process_specs,
         runtime_boot_plan,
-    })
+    };
+    validate_program_function_table(
+        &bytecode.opcodes,
+        &bytecode.callable_templates,
+        &bytecode.runtime_process_specs.entries,
+        &bytecode.functions,
+    )
+    .map_err(codegen_validation_error)?;
+    Ok(bytecode)
+}
+
+fn codegen_validation_error(error: impl std::fmt::Display) -> CodegenError {
+    CodegenError {
+        message: error.to_string(),
+        span: Span { start: 0, end: 0 },
+    }
 }
 
 fn validate_required_singletons(
@@ -290,6 +309,24 @@ fn collect_missing_singleton_calls(
             for arg in args {
                 collect_missing_singleton_calls(
                     arg,
+                    surface_to_process,
+                    available_singletons,
+                    available_supervisors,
+                    first_missing,
+                );
+            }
+        }
+        TypedInner::HashMapLiteral(entries) => {
+            for (key, value) in entries {
+                collect_missing_singleton_calls(
+                    key,
+                    surface_to_process,
+                    available_singletons,
+                    available_supervisors,
+                    first_missing,
+                );
+                collect_missing_singleton_calls(
+                    value,
                     surface_to_process,
                     available_singletons,
                     available_supervisors,
@@ -537,6 +574,7 @@ pub fn compose_bytecode_with_chunk(
         })?;
 
     let const_base = base.constants.len();
+    let type_registry_base = base.type_registry.entries().len();
     let error_template_base = base.error_templates.len();
     let dbg_template_base = base.dbg_templates.len();
     if chunk.const_base as usize != const_base {
@@ -544,6 +582,15 @@ pub fn compose_bytecode_with_chunk(
             message: format!(
                 "chunk constant base mismatch: chunk={}, base={}",
                 chunk.const_base, const_base
+            ),
+            span: Span { start: 0, end: 0 },
+        });
+    }
+    if chunk.type_registry_base as usize != type_registry_base {
+        return Err(CodegenError {
+            message: format!(
+                "chunk type registry base mismatch: chunk={}, base={}",
+                chunk.type_registry_base, type_registry_base
             ),
             span: Span { start: 0, end: 0 },
         });
@@ -586,6 +633,17 @@ pub fn compose_bytecode_with_chunk(
         &mut chunk.runtime_process_specs,
         base.functions.len(),
     )?;
+    validate_chunk_function_table(
+        &chunk.opcodes,
+        &chunk.callable_templates,
+        &chunk.runtime_process_specs,
+        &chunk.functions,
+        base.functions.len(),
+        false,
+    )
+    .map_err(codegen_validation_error)?;
+    validate_type_registry_append_entries(base.type_registry.entries(), &chunk.type_entries)
+        .map_err(codegen_validation_error)?;
 
     let mut base_ops = base.opcodes;
     relocate_base_ops_for_insert(&mut base_ops, base_halt, chunk_top_len)?;
@@ -622,8 +680,6 @@ pub fn compose_bytecode_with_chunk(
         let idx = entry.fun_idx as usize;
         if idx == functions.len() {
             functions.push(entry);
-        } else if idx < functions.len() {
-            functions[idx] = entry;
         } else {
             return Err(CodegenError {
                 message: format!(
@@ -638,7 +694,9 @@ pub fn compose_bytecode_with_chunk(
 
     base.opcodes = opcodes;
     base.constants.extend(chunk.constants);
-    base.type_registry.extend(chunk.type_entries);
+    base.type_registry
+        .try_extend(chunk.type_entries)
+        .map_err(codegen_validation_error)?;
     base.error_templates.extend(chunk.error_templates);
     base.dbg_templates.extend(chunk.dbg_templates);
     base.callable_templates.extend(chunk.callable_templates);
@@ -769,43 +827,41 @@ fn build_runtime_boot_plan(
     let default_timeout_ms = runtime.runtime_limits.default_init_timeout_ms;
 
     for entry in &boot_plan.entries {
-        let spec = match resolve_boot_process_spec(process_specs, &entry.process_name, &entry.span)
-        {
-            Ok(spec) => spec,
-            Err(err) if entry.process_name == "DynamicSupervisor" => {
-                if entry.timeout_ms.is_some() || !entry.handlers.is_empty() {
-                    return Err(CodegenError {
+        let spec =
+            match resolve_boot_process_spec(process_specs, &entry.process_name, &entry.span) {
+                Ok(spec) => spec,
+                Err(err) if entry.process_name == DYNAMIC_SUPERVISOR_PROCESS_NAME => {
+                    if entry.timeout_ms.is_some() || !entry.handlers.is_empty() {
+                        return Err(CodegenError {
                         message:
                             "supervisor_init supervisor entry does not accept timeout or handlers"
                                 .into(),
                         span: entry.span.clone(),
                     });
+                    }
+                    if runtime.supervisor_overrides.iter().any(|registered| {
+                        registered.process_name == DYNAMIC_SUPERVISOR_PROCESS_NAME
+                    }) {
+                        return Err(CodegenError {
+                            message: "supervisor_init entry is duplicated".into(),
+                            span: entry.span.clone(),
+                        });
+                    }
+                    let base_policy = default_dynamic_supervisor_policy();
+                    runtime
+                        .supervisor_overrides
+                        .push(RuntimeSupervisorOverrideEntry {
+                            process_name: DYNAMIC_SUPERVISOR_PROCESS_NAME.into(),
+                            policy: runtime_supervisor_policy_from_effective(
+                                &base_policy,
+                                &entry.overrides,
+                            ),
+                        });
+                    let _ = err;
+                    continue;
                 }
-                if runtime
-                    .supervisor_overrides
-                    .iter()
-                    .any(|registered| registered.process_name == "DynamicSupervisor")
-                {
-                    return Err(CodegenError {
-                        message: "supervisor_init entry is duplicated".into(),
-                        span: entry.span.clone(),
-                    });
-                }
-                let base_policy = default_dynamic_supervisor_policy();
-                runtime
-                    .supervisor_overrides
-                    .push(RuntimeSupervisorOverrideEntry {
-                        process_name: "DynamicSupervisor".into(),
-                        policy: runtime_supervisor_policy_from_effective(
-                            &base_policy,
-                            &entry.overrides,
-                        ),
-                    });
-                let _ = err;
-                continue;
-            }
-            Err(err) => return Err(err),
-        };
+                Err(err) => return Err(err),
+            };
         match spec.spec.instance {
             ProcessInstance::Worker => {
                 return Err(CodegenError {
@@ -930,11 +986,8 @@ fn build_runtime_boot_plan(
 }
 
 fn runtime_supervisor_process_name(spec: &TypedProcessSpec) -> String {
-    if spec.spec.kind == spire::ast::ProcessKind::DynamicSupervisor {
-        spec.process_name
-            .strip_prefix("Global::")
-            .unwrap_or(&spec.process_name)
-            .to_string()
+    if spec.spec.kind == ProcessKind::DynamicSupervisor {
+        surface_path_name(&spec.process_name).to_string()
     } else {
         spec.process_name.clone()
     }
@@ -1301,21 +1354,27 @@ fn build_runtime_process_specs(
             span: Span { start: 0, end: 0 },
         })?;
         let mut set_entry = None;
+        let mut set_name = None;
         if let Some(set_uid) = spec.set_uid {
-            let set_name = qualified_names.get(&set_uid).ok_or_else(|| CodegenError {
+            let lowered_set_name = qualified_names.get(&set_uid).ok_or_else(|| CodegenError {
                 message: format!(
                     "missing lowered set handler metadata for process `{}`",
                     spec.process_name
                 ),
                 span: Span { start: 0, end: 0 },
             })?;
-            set_entry = Some(function_entries.get(set_name).ok_or_else(|| CodegenError {
-                message: format!(
-                    "missing bytecode set handler for process `{}`",
-                    spec.process_name
-                ),
-                span: Span { start: 0, end: 0 },
-            })?);
+            let bytecode_set_entry =
+                function_entries
+                    .get(lowered_set_name)
+                    .ok_or_else(|| CodegenError {
+                        message: format!(
+                            "missing bytecode set handler for process `{}`",
+                            spec.process_name
+                        ),
+                        span: Span { start: 0, end: 0 },
+                    })?;
+            set_name = Some(lowered_set_name.clone());
+            set_entry = Some(bytecode_set_entry);
         }
         if spec.spec.handler_specs.is_empty() {
             handler_specs.push(RuntimeHandlerSpec {
@@ -1337,12 +1396,16 @@ fn build_runtime_process_specs(
                 arity: get_entry.arity,
             });
             if let Some(set_entry) = set_entry {
+                let set_name = set_name.ok_or_else(|| CodegenError {
+                    message: format!(
+                        "missing lowered set handler metadata for process `{}`",
+                        spec.process_name
+                    ),
+                    span: Span { start: 0, end: 0 },
+                })?;
                 handler_specs.push(RuntimeHandlerSpec {
                     handler_id: 2,
-                    name: qualified_names
-                        .get(&spec.set_uid.expect("set entry exists"))
-                        .cloned()
-                        .unwrap_or_default(),
+                    name: set_name,
                     kind: if process_kind == RuntimeProcessKind::GenServer {
                         RuntimeHandlerKind::Cast
                     } else {
@@ -1914,14 +1977,22 @@ impl ForgeSession {
         let runtime_process_specs =
             build_runtime_process_specs(&process_specs, &typed_for_meta, &functions)?.entries;
         let runtime_boot_plan = build_runtime_boot_plan(&boot_plan, &process_specs)?;
-        Ok((
-            BytecodeChunk {
-                runtime_process_specs,
-                runtime_boot_plan,
-                ..chunk
-            },
-            meta,
-        ))
+        let base_function_len = self.state.functions.len().saturating_sub(functions.len());
+        let chunk = BytecodeChunk {
+            runtime_process_specs,
+            runtime_boot_plan,
+            ..chunk
+        };
+        validate_chunk_function_table(
+            &chunk.opcodes,
+            &chunk.callable_templates,
+            &chunk.runtime_process_specs,
+            &chunk.functions,
+            base_function_len,
+            false,
+        )
+        .map_err(codegen_validation_error)?;
+        Ok((chunk, meta))
     }
 
     fn codegen_chunk_nodes_with_options(
@@ -1932,6 +2003,7 @@ impl ForgeSession {
         let before = self.state.clone();
         let typed_for_meta = typed.clone();
         let const_base = before.constants.len();
+        let type_registry_base = before.type_registry.entries().len();
         let error_template_base = before.error_templates.len();
         let dbg_template_base = before.dbg_templates.len();
         let mut gene = Codegen::from_state(before.clone());
@@ -1963,6 +2035,10 @@ impl ForgeSession {
             message: "constant base exceeds u32".into(),
             span: Span { start: 0, end: 0 },
         })?;
+        let type_registry_base = u32::try_from(type_registry_base).map_err(|_| CodegenError {
+            message: "type registry base exceeds u32".into(),
+            span: Span { start: 0, end: 0 },
+        })?;
         let error_template_base = u32::try_from(error_template_base).map_err(|_| CodegenError {
             message: "error template base exceeds u32".into(),
             span: Span { start: 0, end: 0 },
@@ -1979,6 +2055,7 @@ impl ForgeSession {
                 const_base,
                 constants: new_constants,
                 new_locals,
+                type_registry_base,
                 type_entries,
                 error_template_base,
                 error_templates,
@@ -1987,6 +2064,7 @@ impl ForgeSession {
                 callable_templates,
                 functions: functions.clone(),
                 docs: Vec::new(),
+                signatures: Vec::new(),
                 runtime_process_specs: Vec::new(),
                 runtime_boot_plan: Default::default(),
             },
@@ -2096,13 +2174,18 @@ fn localize_chunk_indices(
 
 #[cfg(test)]
 mod tests {
-    use super::{compose_bytecode_with_chunk, localize_chunk_indices, Codegen, ForgeSession};
+    use super::{
+        compose_bytecode_with_chunk, format_function_signature, localize_chunk_indices,
+        ty_to_string, Codegen, ForgeSession, MatchPatternDecomp, MatchPatternDecompChild,
+        PatternDecomp, PatternDecompChild,
+    };
     use crate::bytecode::{Bytecode, BytecodeChunk, CompileInfo, Constant, ErrTemplate};
     use crate::opcode::Opcode;
     use scar::typed::TypedProcessHandlerUid;
     use scar::typed::{
-        ComposeFlavor, TypedDbgArg, TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern,
-        TypedNode, TypedPattern, TypedProcessSpec, TypedProgram,
+        ComposeFlavor, TypedDbgArg, TypedFacetPath, TypedFacetPathKind, TypedFacetSegment,
+        TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode, TypedPattern,
+        TypedProcessSpec, TypedProgram, TypedTypeParam,
     };
     use scar::types::Ty;
     use sigil::resolved::ResolvedId;
@@ -2147,6 +2230,40 @@ mod tests {
             id: resolved_id(name, None, unique_id),
             ty,
         }
+    }
+
+    #[test]
+    fn ty_to_string_uses_surface_names_for_runtime_display_types() {
+        let user_ty = Ty::Struct("Global::User".into(), Vec::new());
+        assert_eq!(ty_to_string(&user_ty), "User");
+
+        let option_ty = Ty::Enum("Global::Option".into(), vec![user_ty.clone()]);
+        assert_eq!(ty_to_string(&option_ty), "Option<User>");
+
+        let pid_ty = Ty::Pid("Global::Worker".into());
+        assert_eq!(ty_to_string(&pid_ty), "PID<Worker>");
+    }
+
+    #[test]
+    fn format_function_signature_preserves_generic_surface_names() {
+        let type_params = vec![TypedTypeParam {
+            name: "$A".into(),
+            ty_var: 42,
+            bound: None,
+        }];
+        let range_ty = Ty::Struct(
+            "Global::Range".into(),
+            vec![("min".into(), Ty::Var(42)), ("max".into(), Ty::Var(42))],
+        );
+        let params = vec![
+            typed_fun_param("min", 1, Ty::Var(42)),
+            typed_fun_param("max", 2, Ty::Var(42)),
+        ];
+
+        assert_eq!(
+            format_function_signature("new", &type_params, &params, &range_ty),
+            "new<$A>(min: $A, max: $A) -> Range<$A>"
+        );
     }
 
     fn local_var(name: &str, unique_id: u32, ty: Ty) -> TypedNode {
@@ -2289,6 +2406,7 @@ mod tests {
             functions: vec![function_entry(0, 6, 8), function_entry(1, 8, 10)],
             source_map: None,
             docs: vec![doc_entry("Global::base_doc")],
+            signatures: Vec::new(),
             compile_info: CompileInfo::default(),
             labels: Vec::new(),
             imports: Vec::new(),
@@ -2344,18 +2462,20 @@ mod tests {
                 Constant::Str("boom".into()),
             ],
             new_locals: 3,
+            type_registry_base: 1,
             type_entries: vec![type_entry(3, "Global::ChunkType")],
             error_template_base: 1,
             error_templates: vec![err_template(1, "Global::ChunkError")],
             dbg_template_base: 1,
             dbg_templates: vec![dbg_template(1)],
             callable_templates: Vec::new(),
-            functions: vec![function_entry(1, 5, 10), function_entry(2, 10, 12)],
+            functions: vec![function_entry(2, 5, 10), function_entry(3, 10, 12)],
             docs: vec![
                 doc_entry("Global::base_doc"),
                 doc_entry("Global::chunk_doc"),
             ],
-            runtime_process_specs: vec![runtime_process_spec("Global::ChunkAgent", 1)],
+            signatures: Vec::new(),
+            runtime_process_specs: vec![runtime_process_spec("Global::ChunkAgent", 2)],
             runtime_boot_plan: RuntimeBootPlan {
                 singletons: vec![singleton_boot("Global::ChunkAgent")],
                 ..RuntimeBootPlan::default()
@@ -2745,6 +2865,28 @@ mod tests {
     }
 
     #[test]
+    fn stale_tuple_bind_decomp_returns_codegen_error() {
+        let mut gene = Codegen::new();
+        let tuple_ty = Ty::Tuple(vec![Ty::Int, Ty::Int]);
+        let pat = TypedPattern::Tuple(
+            tuple_ty,
+            vec![
+                TypedPattern::Var(Ty::Int, resolved_id("left", None, 183)),
+                TypedPattern::Var(Ty::Int, resolved_id("right", None, 184)),
+            ],
+        );
+        let decomp = PatternDecomp::Tuple(vec![PatternDecompChild {
+            slot: 4,
+            decomp: PatternDecomp::None,
+        }]);
+
+        let err = gene
+            .emit_pattern_bind_from_local(&pat, 0, Some(decomp), &span(1, 10))
+            .expect_err("stale tuple decomp should become CodegenError");
+        assert!(err.message.contains("tuple pattern decomp arity mismatch"));
+    }
+
+    #[test]
     fn emit_list_cons_bind_reuses_test_head_tail_slots() {
         let mut gene = Codegen::new();
         let list_ty = Ty::List(Box::new(Ty::Int));
@@ -2865,6 +3007,76 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn stale_match_tuple_decomp_returns_codegen_error() {
+        let mut gene = Codegen::new();
+        let pat = TypedMatchPattern::Tuple(vec![
+            TypedMatchPattern::Binding(resolved_id("left", None, 192)),
+            TypedMatchPattern::Binding(resolved_id("right", None, 193)),
+        ]);
+        let decomp = MatchPatternDecomp::Tuple(vec![MatchPatternDecompChild {
+            slot: 4,
+            decomp: MatchPatternDecomp::None,
+        }]);
+
+        let err = gene
+            .emit_match_pattern_bind(&pat, 0, Some(decomp), &span(1, 10))
+            .expect_err("stale tuple match decomp should become CodegenError");
+        assert!(err.message.contains("tuple match decomp arity mismatch"));
+    }
+
+    #[test]
+    fn stale_constructor_match_decomp_returns_codegen_error() {
+        let mut gene = Codegen::new();
+        let pat = TypedMatchPattern::Constructor {
+            tag: 9,
+            field_offset: 0,
+            fields: vec![
+                TypedMatchPattern::Binding(resolved_id("left", None, 194)),
+                TypedMatchPattern::Binding(resolved_id("right", None, 195)),
+            ],
+        };
+        let decomp = MatchPatternDecomp::Constructor(vec![MatchPatternDecompChild {
+            slot: 4,
+            decomp: MatchPatternDecomp::None,
+        }]);
+
+        let err = gene
+            .emit_match_pattern_bind(&pat, 0, Some(decomp), &span(1, 10))
+            .expect_err("stale constructor match decomp should become CodegenError");
+        assert!(err
+            .message
+            .contains("constructor match decomp arity mismatch"));
+    }
+
+    #[test]
+    fn malformed_facet_segment_slots_returns_codegen_error() {
+        let mut gene = Codegen::new();
+        let index = lit_node(Ty::Int, Lit::Int(0.into()), span(5, 6));
+        let path = TypedFacetPath {
+            source_ty: Ty::List(Box::new(Ty::Int)),
+            focus_ty: Ty::Int,
+            path_kind: TypedFacetPathKind::Structural,
+            may_fail: false,
+            source_readonly_root: false,
+            segments: vec![TypedFacetSegment::ListIndex {
+                index: Box::new(index),
+                display: "0".into(),
+                literal_index: Some(0.into()),
+                focus_readonly_root: false,
+                focus_type_name: None,
+            }],
+        };
+        let mismatch_end = gene.fresh_label();
+
+        let err = gene
+            .emit_facet_segments_from_local(0, &path, &[], &span(1, 6), Some(mismatch_end))
+            .expect_err("missing facet segment slots should become CodegenError");
+        assert!(err
+            .message
+            .contains("missing precomputed slot metadata for segment 1"));
     }
 
     #[test]
@@ -3462,16 +3674,19 @@ mod tests {
         );
         assert!(matches!(bytecode.opcodes[9], Opcode::Halt));
 
-        assert_eq!(bytecode.functions.len(), 3);
+        assert_eq!(bytecode.functions.len(), 4);
         assert_eq!(bytecode.functions[0].fun_idx, 0);
         assert_eq!(bytecode.functions[0].entry_pc, 10);
         assert_eq!(bytecode.functions[0].end_pc, 12);
         assert_eq!(bytecode.functions[1].fun_idx, 1);
-        assert_eq!(bytecode.functions[1].entry_pc, 14);
-        assert_eq!(bytecode.functions[1].end_pc, 19);
+        assert_eq!(bytecode.functions[1].entry_pc, 12);
+        assert_eq!(bytecode.functions[1].end_pc, 14);
         assert_eq!(bytecode.functions[2].fun_idx, 2);
-        assert_eq!(bytecode.functions[2].entry_pc, 19);
-        assert_eq!(bytecode.functions[2].end_pc, 21);
+        assert_eq!(bytecode.functions[2].entry_pc, 14);
+        assert_eq!(bytecode.functions[2].end_pc, 19);
+        assert_eq!(bytecode.functions[3].fun_idx, 3);
+        assert_eq!(bytecode.functions[3].entry_pc, 19);
+        assert_eq!(bytecode.functions[3].end_pc, 21);
 
         assert_eq!(bytecode.constants.len(), 7);
         assert_eq!(bytecode.error_templates.len(), 2);
@@ -3527,9 +3742,15 @@ mod tests {
 
         let mut dbg_chunk = relocatable_chunk();
         dbg_chunk.dbg_template_base += 1;
-        let err = compose_bytecode_with_chunk(base, dbg_chunk)
+        let err = compose_bytecode_with_chunk(base.clone(), dbg_chunk)
             .expect_err("dbg template base mismatch must fail");
         assert!(err.message.contains("chunk dbg template base mismatch"));
+
+        let mut type_chunk = relocatable_chunk();
+        type_chunk.type_registry_base += 1;
+        let err = compose_bytecode_with_chunk(base, type_chunk)
+            .expect_err("type registry base mismatch must fail");
+        assert!(err.message.contains("chunk type registry base mismatch"));
     }
 
     #[test]
@@ -3542,6 +3763,7 @@ mod tests {
 
         assert!(err
             .message
+            .to_ascii_lowercase()
             .contains("function table invariant violated in chunk"));
     }
 
@@ -4032,11 +4254,8 @@ fn collect_stmt_meta(
     function_defs: &mut Vec<String>,
 ) {
     match &stmt.node {
-        TypedInner::Bind(pat, _) | TypedInner::SafeBind(pat, _) => {
-            let rhs = match &stmt.node {
-                TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs) => rhs.as_ref(),
-                _ => unreachable!(),
-            };
+        TypedInner::Bind(pat, rhs) | TypedInner::SafeBind(pat, rhs) => {
+            let rhs = rhs.as_ref();
             collect_pattern_binding_infos(
                 pat,
                 slot_map,
@@ -4146,6 +4365,7 @@ fn collect_pattern_binding_infos(
             );
         }
         TypedPattern::Wildcard(_)
+        | TypedPattern::Pin(_, _, _)
         | TypedPattern::ListNil(_)
         | TypedPattern::IntLit(_, _)
         | TypedPattern::StrLit(_, _)
@@ -4304,6 +4524,10 @@ fn trait_short_name(trait_name: &str) -> &str {
 }
 
 fn ty_to_string(ty: &Ty) -> String {
+    ty_to_string_with_type_params(ty, &[])
+}
+
+fn ty_to_string_with_type_params(ty: &Ty, type_params: &[TypedTypeParam]) -> String {
     match ty {
         Ty::Int => "Int".into(),
         Ty::Float => "Float".into(),
@@ -4311,47 +4535,91 @@ fn ty_to_string(ty: &Ty) -> String {
         Ty::Bool => "Boolean".into(),
         Ty::Unit => "Unit".into(),
         Ty::Hole => "_".into(),
-        Ty::List(inner) => format!("List<{}>", ty_to_string(inner)),
-        Ty::Lazy(inner) => format!("Lazy<{}>", ty_to_string(inner)),
-        Ty::TypeRef(inner) => format!("TypeRef<{}>", ty_to_string(inner)),
-        Ty::Pid(name) => format!("PID<{}>", name),
+        Ty::List(inner) => format!(
+            "List<{}>",
+            ty_to_string_with_type_params(inner, type_params)
+        ),
+        Ty::Lazy(inner) => format!(
+            "Lazy<{}>",
+            ty_to_string_with_type_params(inner, type_params)
+        ),
+        Ty::TypeRef(inner) => format!(
+            "TypeRef<{}>",
+            ty_to_string_with_type_params(inner, type_params)
+        ),
+        Ty::Pid(name) => format!("PID<{}>", surface_rendered_name(name)),
         Ty::Facet(source, focus) => {
-            format!("Facet<{}, {}>", ty_to_string(source), ty_to_string(focus))
+            format!(
+                "Facet<{}, {}>",
+                ty_to_string_with_type_params(source, type_params),
+                ty_to_string_with_type_params(focus, type_params)
+            )
         }
         Ty::Tuple(items) => format!(
             "({})",
             items
                 .iter()
-                .map(ty_to_string)
+                .map(|item| ty_to_string_with_type_params(item, type_params))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        Ty::Result(ok, err) => format!("Result<{}, {}>", ty_to_string(ok), ty_to_string(err)),
-        Ty::Struct(name, _) | Ty::Record(name, _) => name.clone(),
-        Ty::Enum(name, args) => {
+        Ty::Result(ok, err) => format!(
+            "Result<{}, {}>",
+            ty_to_string_with_type_params(ok, type_params),
+            ty_to_string_with_type_params(err, type_params)
+        ),
+        Ty::Struct(name, fields) | Ty::Record(name, fields) => {
+            let name = surface_path_name(name);
+            let args = type_params
+                .iter()
+                .filter(|param| {
+                    fields
+                        .iter()
+                        .any(|(_, field_ty)| ty_contains_var(field_ty, param.ty_var))
+                })
+                .map(|param| param.name.clone())
+                .collect::<Vec<_>>();
             if args.is_empty() {
-                name.clone()
+                name.to_string()
+            } else {
+                format!("{}<{}>", name, args.join(", "))
+            }
+        }
+        Ty::Enum(name, args) => {
+            let name = surface_path_name(name);
+            if args.is_empty() {
+                name.to_string()
             } else {
                 format!(
                     "{}<{}>",
                     name,
-                    args.iter().map(ty_to_string).collect::<Vec<_>>().join(", ")
+                    args.iter()
+                        .map(|arg| ty_to_string_with_type_params(arg, type_params))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )
             }
         }
         Ty::Error => "Error".into(),
-        // Hide internal type-variable IDs from REPL output.
-        Ty::Var(_id) => "_".into(),
+        Ty::Var(id) => type_params
+            .iter()
+            .find(|param| param.ty_var == *id)
+            .map(|param| param.name.clone())
+            .unwrap_or_else(|| "_".into()),
         Ty::Func(params, ret) => {
             let param_str = params
                 .iter()
-                .map(ty_to_string)
+                .map(|param| ty_to_string_with_type_params(param, type_params))
                 .collect::<Vec<_>>()
                 .join(", ");
             if param_str.is_empty() {
-                format!("(-> {})", ty_to_string(ret))
+                format!("(-> {})", ty_to_string_with_type_params(ret, type_params))
             } else {
-                format!("({} -> {})", param_str, ty_to_string(ret))
+                format!(
+                    "({} -> {})",
+                    param_str,
+                    ty_to_string_with_type_params(ret, type_params)
+                )
             }
         }
         Ty::BuiltinFunc { name, .. } => format!("Builtin({})", name),
@@ -4359,13 +4627,69 @@ fn ty_to_string(ty: &Ty) -> String {
     }
 }
 
-fn format_function_signature(name: &str, params: &[TypedFunParam], ret_ty: &Ty) -> String {
+fn ty_contains_var(ty: &Ty, needle: u32) -> bool {
+    match ty {
+        Ty::Var(var) => *var == needle,
+        Ty::List(inner) | Ty::Lazy(inner) | Ty::TypeRef(inner) => ty_contains_var(inner, needle),
+        Ty::Tuple(items) => items.iter().any(|item| ty_contains_var(item, needle)),
+        Ty::Func(params, ret) => {
+            params.iter().any(|param| ty_contains_var(param, needle))
+                || ty_contains_var(ret, needle)
+        }
+        Ty::Facet(source, focus) => {
+            ty_contains_var(source, needle) || ty_contains_var(focus, needle)
+        }
+        Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
+            params.iter().any(|param| ty_contains_var(param, needle))
+                || ty_contains_var(ret, needle)
+        }
+        Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
+            .iter()
+            .any(|(_, field_ty)| ty_contains_var(field_ty, needle)),
+        Ty::Enum(_, args) => args.iter().any(|arg| ty_contains_var(arg, needle)),
+        Ty::Result(ok, err) => ty_contains_var(ok, needle) || ty_contains_var(err, needle),
+        Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Pid(_) | Ty::Hole | Ty::Error => {
+            false
+        }
+    }
+}
+
+fn format_function_signature(
+    name: &str,
+    type_params: &[TypedTypeParam],
+    params: &[TypedFunParam],
+    ret_ty: &Ty,
+) -> String {
+    let type_params_surface = if type_params.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<{}>",
+            type_params
+                .iter()
+                .map(|param| match &param.bound {
+                    Some(bound) => format!("{}: {}", param.name, bound),
+                    None => param.name.clone(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
     let params = params
         .iter()
-        .map(|param| format!("{}: {}", param.id.name, ty_to_string(&param.ty)))
+        .map(|param| {
+            format!(
+                "{}: {}",
+                param.id.name,
+                ty_to_string_with_type_params(&param.ty, type_params)
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
-    format!("{name}({params}) -> {}", ty_to_string(ret_ty))
+    format!(
+        "{name}{type_params_surface}({params}) -> {}",
+        ty_to_string_with_type_params(ret_ty, type_params)
+    )
 }
 
 fn format_error_constructor_signature(name: &str, params: &[TypedFunParam]) -> String {
@@ -4549,6 +4873,20 @@ impl Codegen {
         self.state.next_slot += 1;
         self.state.slot_map.insert(unique_id, slot);
         slot
+    }
+
+    fn existing_slot_for_id(&self, id: &ResolvedId, span: &Span) -> Result<u32, CodegenError> {
+        self.state
+            .slot_map
+            .get(&id.unique_id)
+            .copied()
+            .ok_or_else(|| CodegenError {
+                message: format!(
+                    "Pinned value `{}` is not available in the local scope",
+                    id.name
+                ),
+                span: span.clone(),
+            })
     }
 
     fn reserve_fun_idx(&mut self) -> u32 {
@@ -5138,10 +5476,10 @@ impl Codegen {
         self.state.slot_map = HashMap::new();
         let (lhs_slot, rhs_slot, input_slot, arity) = if direct_targets.is_some() {
             self.state.next_slot = 1;
-            (None, None, 0u32, 1u8)
+            (0u32, 0u32, 0u32, 1u8)
         } else {
             self.state.next_slot = 3;
-            (Some(0u32), Some(1u32), 2u32, 3u8)
+            (0u32, 1u32, 2u32, 3u8)
         };
         let entry_pc = self.current_pos() as u32;
         let prev_in_function = self.in_function;
@@ -5154,8 +5492,8 @@ impl Codegen {
                     self.emit_direct_call(lhs, 1, span);
                     self.emit_direct_call(rhs, 1, span);
                 } else {
-                    self.emit(Opcode::LoadLocal(rhs_slot.expect("captured rhs slot")));
-                    self.emit(Opcode::LoadLocal(lhs_slot.expect("captured lhs slot")));
+                    self.emit(Opcode::LoadLocal(rhs_slot));
+                    self.emit(Opcode::LoadLocal(lhs_slot));
                     self.emit(Opcode::LoadLocal(input_slot));
                     self.emit(Opcode::CallClosure {
                         arity: 1,
@@ -5175,7 +5513,7 @@ impl Codegen {
                 if let Some((lhs, _)) = direct_targets {
                     self.emit_direct_call(lhs, 1, span);
                 } else {
-                    self.emit(Opcode::LoadLocal(lhs_slot.expect("captured lhs slot")));
+                    self.emit(Opcode::LoadLocal(lhs_slot));
                     self.emit(Opcode::LoadLocal(input_slot));
                     self.emit(Opcode::CallClosure {
                         arity: 1,
@@ -5208,7 +5546,7 @@ impl Codegen {
                             self.emit(Opcode::GetField { field_index: 0 });
                             self.emit_direct_call(rhs, 1, span);
                         } else {
-                            self.emit(Opcode::LoadLocal(rhs_slot.expect("captured rhs slot")));
+                            self.emit(Opcode::LoadLocal(rhs_slot));
                             self.emit(Opcode::LoadLocal(result_slot));
                             self.emit(Opcode::GetField { field_index: 0 });
                             self.emit(Opcode::CallClosure {
@@ -5226,7 +5564,7 @@ impl Codegen {
                             self.emit(Opcode::GetField { field_index: 0 });
                             self.emit_direct_call(rhs, 1, span);
                         } else {
-                            self.emit(Opcode::LoadLocal(rhs_slot.expect("captured rhs slot")));
+                            self.emit(Opcode::LoadLocal(rhs_slot));
                             self.emit(Opcode::LoadLocal(result_slot));
                             self.emit(Opcode::GetField { field_index: 0 });
                             self.emit(Opcode::CallClosure {
@@ -5246,14 +5584,14 @@ impl Codegen {
                     self.emit_direct_call(lhs, 1, span);
                     self.emit_direct_callable_ref(rhs);
                 } else {
-                    self.emit(Opcode::LoadLocal(lhs_slot.expect("captured lhs slot")));
+                    self.emit(Opcode::LoadLocal(lhs_slot));
                     self.emit(Opcode::LoadLocal(input_slot));
                     self.emit(Opcode::CallClosure {
                         arity: 1,
                         span_start: span.start as u32,
                         span_end: span.end as u32,
                     });
-                    self.emit(Opcode::LoadLocal(rhs_slot.expect("captured rhs slot")));
+                    self.emit(Opcode::LoadLocal(rhs_slot));
                 }
                 match helper {
                     ListHelperRef::Builtin(builtin_id) => self.emit(Opcode::CallBuiltin {
@@ -5696,9 +6034,9 @@ impl Codegen {
     }
 
     fn emit_function_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
-        let (fun_idx, id, params, ret_ty, body, visibility) = match &node.node {
-            TypedInner::Def(fun_idx, id, _type_params, params, ret_ty, body, visibility) => {
-                (fun_idx, id, params, ret_ty, body, visibility)
+        let (fun_idx, id, type_params, params, ret_ty, body, visibility) = match &node.node {
+            TypedInner::Def(fun_idx, id, type_params, params, ret_ty, body, visibility) => {
+                (fun_idx, id, type_params, params, ret_ty, body, visibility)
             }
             _ => {
                 return Err(CodegenError {
@@ -5732,7 +6070,12 @@ impl Codegen {
             num_locals,
             arity: params.len() as u8,
             qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
-            signature: Some(format_function_signature(&id.name, params, ret_ty)),
+            signature: Some(format_function_signature(
+                &id.name,
+                type_params,
+                params,
+                ret_ty,
+            )),
             end_pc: 0,
             span_start: node.span.start as u32,
             span_end: node.span.end as u32,
@@ -5930,7 +6273,7 @@ impl Codegen {
                     fail_label,
                     &rhs.span,
                 )?;
-                self.emit_pattern_bind_from_local(pat, payload_slot, Some(decomp))?;
+                self.emit_pattern_bind_from_local(pat, payload_slot, Some(decomp), &rhs.span)?;
 
                 let success_label = self.fresh_label();
                 self.emit_jump(success_label);
@@ -5950,13 +6293,11 @@ impl Codegen {
 
             TypedInner::SupervisorSpawn {
                 supervisor_process,
-                worker_process,
                 init,
+                ..
             } => {
                 let supervisor_idx = self.add_constant(Constant::Str(supervisor_process.clone()));
                 self.emit(Opcode::LoadConst(supervisor_idx));
-                let worker_idx = self.add_constant(Constant::Str(worker_process.clone()));
-                self.emit(Opcode::LoadConst(worker_idx));
                 self.emit_node(init)?;
                 let builtin_id =
                     Self::builtin_id("__supervisor_spawn").ok_or_else(|| CodegenError {
@@ -5965,7 +6306,7 @@ impl Codegen {
                     })?;
                 self.emit(Opcode::CallBuiltin {
                     builtin_id,
-                    arity: 3,
+                    arity: 2,
                     span_start: node.span.start as u32,
                     span_end: node.span.end as u32,
                 });
@@ -6010,14 +6351,12 @@ impl Codegen {
 
             TypedInner::SupervisorWorkers {
                 supervisor_process,
-                worker_process,
                 init,
                 strategy,
+                ..
             } => {
                 let supervisor_idx = self.add_constant(Constant::Str(supervisor_process.clone()));
                 self.emit(Opcode::LoadConst(supervisor_idx));
-                let worker_idx = self.add_constant(Constant::Str(worker_process.clone()));
-                self.emit(Opcode::LoadConst(worker_idx));
                 self.emit_node(init)?;
                 self.emit_node(strategy)?;
                 let builtin_id =
@@ -6027,7 +6366,7 @@ impl Codegen {
                     })?;
                 self.emit(Opcode::CallBuiltin {
                     builtin_id,
-                    arity: 4,
+                    arity: 3,
                     span_start: node.span.start as u32,
                     span_end: node.span.end as u32,
                 });
@@ -6261,6 +6600,27 @@ impl Codegen {
                     len: elems.len() as u32,
                 });
             }
+            TypedInner::HashMapLiteral(entries) => {
+                for (key, value) in entries {
+                    self.emit_node(key)?;
+                    self.emit_node(value)?;
+                    self.emit(Opcode::TupleNew { len: 2 });
+                }
+                self.emit(Opcode::ListFromItems {
+                    len: entries.len() as u32,
+                });
+                let builtin_id =
+                    Self::builtin_id("map_from_entries").ok_or_else(|| CodegenError {
+                        message: "Unknown builtin: map_from_entries".into(),
+                        span: node.span.clone(),
+                    })?;
+                self.emit(Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: 1,
+                    span_start: node.span.start as u32,
+                    span_end: node.span.end as u32,
+                });
+            }
             TypedInner::TupleLiteral(elems) => {
                 for elem in elems {
                     self.emit_node(elem)?;
@@ -6482,38 +6842,62 @@ impl Codegen {
             }
 
             TypedInner::StructDef(tag, name, field_names, field_policies, _) => {
-                self.state.type_registry.register(TypeEntry {
-                    tag: *tag,
-                    name: name.clone(),
-                    kind: TypeKind::Struct,
-                    field_names: field_names.clone(),
-                    private_flags: field_policies.iter().map(|policy| policy.private).collect(),
-                });
+                self.state
+                    .type_registry
+                    .try_register(TypeEntry {
+                        tag: *tag,
+                        name: name.clone(),
+                        kind: TypeKind::Struct,
+                        field_names: field_names.clone(),
+                        private_flags: field_policies.iter().map(|policy| policy.private).collect(),
+                    })
+                    .map_err(|err| CodegenError {
+                        message: err.to_string(),
+                        span: node.span.clone(),
+                    })?;
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
             TypedInner::RecordDef(tag, name, field_names, field_policies, _) => {
-                self.state.type_registry.register(TypeEntry {
-                    tag: *tag,
-                    name: name.clone(),
-                    kind: TypeKind::Record,
-                    field_names: field_names.clone(),
-                    private_flags: field_policies.iter().map(|policy| policy.private).collect(),
-                });
+                self.state
+                    .type_registry
+                    .try_register(TypeEntry {
+                        tag: *tag,
+                        name: name.clone(),
+                        kind: TypeKind::Record,
+                        field_names: field_names.clone(),
+                        private_flags: field_policies.iter().map(|policy| policy.private).collect(),
+                    })
+                    .map_err(|err| CodegenError {
+                        message: err.to_string(),
+                        span: node.span.clone(),
+                    })?;
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
             TypedInner::EnumDef(_, variants) => {
                 for variant in variants {
-                    self.state.type_registry.register(TypeEntry {
-                        tag: variant.tag,
-                        name: variant.constructor_name.clone(),
-                        kind: TypeKind::EnumVariant,
-                        field_names: variant.field_names.clone(),
-                        private_flags: vec![false; variant.field_names.len()],
-                    });
+                    if matches!(
+                        sindr::names::surface_rendered_name(&variant.constructor_name).as_str(),
+                        "Result::Ok" | "Result::Err" | "Boolean::True" | "Boolean::False"
+                    ) {
+                        continue;
+                    }
+                    self.state
+                        .type_registry
+                        .try_register(TypeEntry {
+                            tag: variant.tag,
+                            name: variant.constructor_name.clone(),
+                            kind: TypeKind::EnumVariant,
+                            field_names: variant.field_names.clone(),
+                            private_flags: vec![false; variant.field_names.len()],
+                        })
+                        .map_err(|err| CodegenError {
+                            message: err.to_string(),
+                            span: node.span.clone(),
+                        })?;
                 }
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
@@ -7022,12 +7406,13 @@ impl Codegen {
                 self.emit(Opcode::StoreLocal(current_slot));
             }
             TypedFacetSegment::ListIndex { literal_index, .. } => {
+                let slots = Self::facet_segment_slots(path, segment_slots, segment_idx, span)?;
                 let focus_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(current_slot));
                 self.emit_facet_segment_argument(
                     &path.segments[segment_idx],
-                    segment_slots[segment_idx][0],
+                    slots[0],
                     literal_index.as_ref(),
                     None,
                 )?;
@@ -7050,7 +7435,7 @@ impl Codegen {
                 self.emit(Opcode::LoadLocal(current_slot));
                 self.emit_facet_segment_argument(
                     &path.segments[segment_idx],
-                    segment_slots[segment_idx][0],
+                    slots[0],
                     literal_index.as_ref(),
                     None,
                 )?;
@@ -7070,12 +7455,13 @@ impl Codegen {
                 literal_end,
                 ..
             } => {
+                let slots = Self::facet_segment_slots(path, segment_slots, segment_idx, span)?;
                 let focus_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(current_slot));
                 self.emit_facet_list_range_arguments(
                     &path.segments[segment_idx],
-                    segment_slots[segment_idx],
+                    slots,
                     literal_start.as_ref(),
                     literal_end.as_ref(),
                 )?;
@@ -7098,7 +7484,7 @@ impl Codegen {
                 self.emit(Opcode::LoadLocal(current_slot));
                 self.emit_facet_list_range_arguments(
                     &path.segments[segment_idx],
-                    segment_slots[segment_idx],
+                    slots,
                     literal_start.as_ref(),
                     literal_end.as_ref(),
                 )?;
@@ -7114,12 +7500,13 @@ impl Codegen {
                 );
             }
             TypedFacetSegment::MapKey { literal_key, .. } => {
+                let slots = Self::facet_segment_slots(path, segment_slots, segment_idx, span)?;
                 let focus_slot = self.state.next_slot;
                 self.state.next_slot += 1;
                 self.emit(Opcode::LoadLocal(current_slot));
                 self.emit_facet_segment_argument(
                     &path.segments[segment_idx],
-                    segment_slots[segment_idx][0],
+                    slots[0],
                     None,
                     literal_key.as_ref(),
                 )?;
@@ -7142,7 +7529,7 @@ impl Codegen {
                 self.emit(Opcode::LoadLocal(current_slot));
                 self.emit_facet_segment_argument(
                     &path.segments[segment_idx],
-                    segment_slots[segment_idx][0],
+                    slots[0],
                     None,
                     literal_key.as_ref(),
                 )?;
@@ -7426,10 +7813,11 @@ impl Codegen {
                             span: span.clone(),
                         });
                     };
+                    let slots = Self::facet_segment_slots(path, segment_slots, segment_idx, span)?;
                     self.emit(Opcode::LoadLocal(current_slot));
                     self.emit_facet_segment_argument(
                         segment,
-                        segment_slots[segment_idx][0],
+                        slots[0],
                         literal_index.as_ref(),
                         None,
                     )?;
@@ -7452,10 +7840,11 @@ impl Codegen {
                             span: span.clone(),
                         });
                     };
+                    let slots = Self::facet_segment_slots(path, segment_slots, segment_idx, span)?;
                     self.emit(Opcode::LoadLocal(current_slot));
                     self.emit_facet_list_range_arguments(
                         segment,
-                        segment_slots[segment_idx],
+                        slots,
                         literal_start.as_ref(),
                         literal_end.as_ref(),
                     )?;
@@ -7474,10 +7863,11 @@ impl Codegen {
                             span: span.clone(),
                         });
                     };
+                    let slots = Self::facet_segment_slots(path, segment_slots, segment_idx, span)?;
                     self.emit(Opcode::LoadLocal(current_slot));
                     self.emit_facet_segment_argument(
                         segment,
-                        segment_slots[segment_idx][0],
+                        slots[0],
                         None,
                         literal_key.as_ref(),
                     )?;
@@ -7570,6 +7960,29 @@ impl Codegen {
         }
     }
 
+    fn facet_segment_slots(
+        path: &TypedFacetPath,
+        segment_slots: &[[Option<u32>; 2]],
+        segment_idx: usize,
+        span: &Span,
+    ) -> Result<[Option<u32>; 2], CodegenError> {
+        segment_slots.get(segment_idx).copied().ok_or_else(|| {
+            let display = path
+                .segments
+                .get(segment_idx)
+                .map(Self::facet_segment_display)
+                .unwrap_or_else(|| "<missing>".into());
+            CodegenError {
+                message: format!(
+                    "Malformed facet path: missing precomputed slot metadata for segment {} ({})",
+                    segment_idx + 1,
+                    display
+                ),
+                span: span.clone(),
+            }
+        })
+    }
+
     fn emit_variant_mismatch_result(&mut self, detail: &str, span: &Span) {
         let err_tag = self.add_constant(Constant::Tag(1));
         self.emit(Opcode::LoadConst(err_tag));
@@ -7591,7 +8004,7 @@ impl Codegen {
             let pattern_fail = self.fresh_label();
             let decomp =
                 self.emit_pattern_test_from_local(pat, payload_slot, pattern_fail, &rhs.span)?;
-            self.emit_pattern_bind_from_local(pat, payload_slot, Some(decomp))?;
+            self.emit_pattern_bind_from_local(pat, payload_slot, Some(decomp), &rhs.span)?;
             let success_label = self.fresh_label();
             self.emit_jump(success_label);
 
@@ -7643,7 +8056,7 @@ impl Codegen {
                 fail_mismatch,
                 &rhs.span,
             )?;
-            self.emit_pattern_bind_from_local(pat, payload_slot, Some(outcome.decomp))?;
+            self.emit_pattern_bind_from_local(pat, payload_slot, Some(outcome.decomp), &rhs.span)?;
             let success_label = self.fresh_label();
             self.emit_jump(success_label);
 
@@ -7676,7 +8089,7 @@ impl Codegen {
         let pattern_fail = self.fresh_label();
         let decomp =
             self.emit_pattern_test_from_local(pat, payload_slot, pattern_fail, &rhs.span)?;
-        self.emit_pattern_bind_from_local(pat, payload_slot, Some(decomp))?;
+        self.emit_pattern_bind_from_local(pat, payload_slot, Some(decomp), &rhs.span)?;
         let success_label = self.fresh_label();
         self.emit_jump(success_label);
 
@@ -7716,7 +8129,7 @@ impl Codegen {
                 fail_mismatch,
                 &rhs.span,
             )?;
-            self.emit_pattern_bind_from_local(pat, list_slot, Some(outcome.decomp))?;
+            self.emit_pattern_bind_from_local(pat, list_slot, Some(outcome.decomp), &rhs.span)?;
             let success_label = self.fresh_label();
             self.emit_jump(success_label);
 
@@ -7748,7 +8161,7 @@ impl Codegen {
 
         let pattern_fail = self.fresh_label();
         let decomp = self.emit_pattern_test_from_local(pat, list_slot, pattern_fail, &rhs.span)?;
-        self.emit_pattern_bind_from_local(pat, list_slot, Some(decomp))?;
+        self.emit_pattern_bind_from_local(pat, list_slot, Some(decomp), &rhs.span)?;
         let success_label = self.fresh_label();
         self.emit_jump(success_label);
 
@@ -8165,6 +8578,12 @@ impl Codegen {
     ) -> Result<PatternDecomp, CodegenError> {
         let decomp = match pat {
             TypedPattern::Var(_, _) | TypedPattern::Wildcard(_) => PatternDecomp::None,
+            TypedPattern::Pin(ty, id, dispatch) => {
+                let pinned_slot = self.existing_slot_for_id(id, err_span)?;
+                self.emit_eq_dispatch_from_slots(dispatch, ty, slot, pinned_slot, err_span)?;
+                self.emit_jump_if_false(fail_label);
+                PatternDecomp::None
+            }
             TypedPattern::As(_, inner, _) => self.emit_pattern_test_from_local_with_mode(
                 inner,
                 slot,
@@ -8319,6 +8738,7 @@ impl Codegen {
         pat: &TypedPattern,
         slot: u32,
         decomp: Option<PatternDecomp>,
+        err_span: &Span,
     ) -> Result<(), CodegenError> {
         match pat {
             TypedPattern::Var(_, id) => {
@@ -8330,9 +8750,10 @@ impl Codegen {
                 let bind_slot = self.alloc_slot(id.unique_id);
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::StoreLocal(bind_slot));
-                self.emit_pattern_bind_from_local(inner, slot, decomp)?;
+                self.emit_pattern_bind_from_local(inner, slot, decomp, err_span)?;
             }
             TypedPattern::Wildcard(_)
+            | TypedPattern::Pin(_, _, _)
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
@@ -8346,7 +8767,12 @@ impl Codegen {
                 for (index, item) in items.iter().enumerate() {
                     let (item_slot, item_decomp) = if let Some(children) = cached_children.as_mut()
                     {
-                        let child = children.next().expect("tuple decomp arity mismatch");
+                        let child = children.next().ok_or_else(|| CodegenError {
+                            message:
+                                "Internal invariant broken: tuple pattern decomp arity mismatch"
+                                    .into(),
+                            span: err_span.clone(),
+                        })?;
                         (child.slot, Some(child.decomp))
                     } else {
                         let item_slot = self.state.next_slot;
@@ -8358,11 +8784,11 @@ impl Codegen {
                         self.emit(Opcode::StoreLocal(item_slot));
                         (item_slot, None)
                     };
-                    self.emit_pattern_bind_from_local(item, item_slot, item_decomp)?;
+                    self.emit_pattern_bind_from_local(item, item_slot, item_decomp, err_span)?;
                 }
             }
             TypedPattern::ListCons(_, _, _) => {
-                self.emit_list_cons_pattern_bind_from_local(pat, slot, decomp)?;
+                self.emit_list_cons_pattern_bind_from_local(pat, slot, decomp, err_span)?;
             }
             TypedPattern::ResultOk(_, inner) => {
                 let (inner_slot, inner_decomp) = match decomp {
@@ -8376,7 +8802,7 @@ impl Codegen {
                         (inner_slot, None)
                     }
                 };
-                self.emit_pattern_bind_from_local(inner, inner_slot, inner_decomp)?;
+                self.emit_pattern_bind_from_local(inner, inner_slot, inner_decomp, err_span)?;
             }
             TypedPattern::Extractor {
                 input_ty,
@@ -8395,7 +8821,12 @@ impl Codegen {
                 };
                 if let Some(children) = cached_children {
                     for (item, child) in items.iter().zip(children.into_iter()) {
-                        self.emit_pattern_bind_from_local(item, child.slot, Some(child.decomp))?;
+                        self.emit_pattern_bind_from_local(
+                            item,
+                            child.slot,
+                            Some(child.decomp),
+                            err_span,
+                        )?;
                     }
                 } else {
                     let impossible_no_match = self.fresh_label();
@@ -8413,7 +8844,7 @@ impl Codegen {
                         &extractor.span,
                     )?;
                     for (item, item_slot) in items.iter().zip(item_slots.iter()) {
-                        self.emit_pattern_bind_from_local(item, *item_slot, None)?;
+                        self.emit_pattern_bind_from_local(item, *item_slot, None, err_span)?;
                     }
                     self.emit_jump(done);
                     self.patch_label(impossible_no_match);
@@ -8494,6 +8925,7 @@ impl Codegen {
         pat: &TypedPattern,
         slot: u32,
         decomp: Option<PatternDecomp>,
+        err_span: &Span,
     ) -> Result<(), CodegenError> {
         let mut current_pat = pat;
         let mut current_slot = slot;
@@ -8519,14 +8951,14 @@ impl Codegen {
                     (head_slot, None, tail_slot, None)
                 }
             };
-            self.emit_pattern_bind_from_local(head, head_slot, head_decomp)?;
+            self.emit_pattern_bind_from_local(head, head_slot, head_decomp, err_span)?;
 
             current_pat = tail;
             current_slot = tail_slot;
             current_decomp = tail_decomp;
         }
 
-        self.emit_pattern_bind_from_local(current_pat, current_slot, current_decomp)
+        self.emit_pattern_bind_from_local(current_pat, current_slot, current_decomp, err_span)
     }
 
     fn reserve_pattern_slots_for_facet_bind(&mut self, pat: &TypedPattern) {
@@ -9050,8 +9482,9 @@ impl Codegen {
                     };
 
                     let pat = &arm.pattern;
-                    let decomp = self.emit_match_pattern_test(pat, scrut_slot, next_arm)?;
-                    self.emit_match_pattern_bind(pat, scrut_slot, Some(decomp))?;
+                    let decomp =
+                        self.emit_match_pattern_test(pat, scrut_slot, next_arm, &scrutinee.span)?;
+                    self.emit_match_pattern_bind(pat, scrut_slot, Some(decomp), &scrutinee.span)?;
                     if let Some(guard) = &arm.guard {
                         self.emit_node(guard)?;
                         self.emit_jump_if_false(next_arm);
@@ -9412,8 +9845,9 @@ impl Codegen {
             };
 
             let pat = &arm.pattern;
-            let decomp = self.emit_match_pattern_test(pat, scrut_slot, next_arm)?;
-            self.emit_match_pattern_bind(pat, scrut_slot, Some(decomp))?;
+            let decomp =
+                self.emit_match_pattern_test(pat, scrut_slot, next_arm, &scrutinee.span)?;
+            self.emit_match_pattern_bind(pat, scrut_slot, Some(decomp), &scrutinee.span)?;
             if let Some(guard) = &arm.guard {
                 self.emit_node(guard)?;
                 self.emit_jump_if_false(next_arm);
@@ -9440,11 +9874,18 @@ impl Codegen {
         pat: &TypedMatchPattern,
         slot: u32,
         fail_label: Label,
+        err_span: &Span,
     ) -> Result<MatchPatternDecomp, CodegenError> {
         let decomp = match pat {
             TypedMatchPattern::Binding(_) | TypedMatchPattern::Wildcard => MatchPatternDecomp::None,
+            TypedMatchPattern::Pin { id, ty, dispatch } => {
+                let pinned_slot = self.existing_slot_for_id(id, err_span)?;
+                self.emit_eq_dispatch_from_slots(dispatch, ty, slot, pinned_slot, err_span)?;
+                self.emit_jump_if_false(fail_label);
+                MatchPatternDecomp::None
+            }
             TypedMatchPattern::As(inner, _) => {
-                self.emit_match_pattern_test(inner, slot, fail_label)?
+                self.emit_match_pattern_test(inner, slot, fail_label, err_span)?
             }
             TypedMatchPattern::BoolLit(b) => {
                 self.emit(Opcode::LoadLocal(slot));
@@ -9482,7 +9923,7 @@ impl Codegen {
                 let success_label = self.fresh_label();
                 for item in items {
                     let next_label = self.fresh_label();
-                    self.emit_match_pattern_test(item, slot, next_label)?;
+                    self.emit_match_pattern_test(item, slot, next_label, err_span)?;
                     self.emit_jump(success_label);
                     self.patch_label(next_label);
                 }
@@ -9500,7 +9941,8 @@ impl Codegen {
                         field_index: index as u32,
                     });
                     self.emit(Opcode::StoreLocal(item_slot));
-                    let item_decomp = self.emit_match_pattern_test(item, item_slot, fail_label)?;
+                    let item_decomp =
+                        self.emit_match_pattern_test(item, item_slot, fail_label, err_span)?;
                     children.push(MatchPatternDecompChild {
                         slot: item_slot,
                         decomp: item_decomp,
@@ -9530,7 +9972,7 @@ impl Codegen {
                     });
                     self.emit(Opcode::StoreLocal(inner_slot));
                     let field_decomp =
-                        self.emit_match_pattern_test(field_pat, inner_slot, fail_label)?;
+                        self.emit_match_pattern_test(field_pat, inner_slot, fail_label, err_span)?;
                     children.push(MatchPatternDecompChild {
                         slot: inner_slot,
                         decomp: field_decomp,
@@ -9571,7 +10013,8 @@ impl Codegen {
                 )?;
                 let mut children = Vec::with_capacity(items.len());
                 for (item, item_slot) in items.iter().zip(item_slots.iter()) {
-                    let item_decomp = self.emit_match_pattern_test(item, *item_slot, fail_label)?;
+                    let item_decomp =
+                        self.emit_match_pattern_test(item, *item_slot, fail_label, err_span)?;
                     children.push(MatchPatternDecompChild {
                         slot: *item_slot,
                         decomp: item_decomp,
@@ -9588,6 +10031,7 @@ impl Codegen {
         pat: &TypedMatchPattern,
         slot: u32,
         decomp: Option<MatchPatternDecomp>,
+        err_span: &Span,
     ) -> Result<(), CodegenError> {
         match pat {
             TypedMatchPattern::Binding(id) => {
@@ -9599,9 +10043,10 @@ impl Codegen {
                 let bind_slot = self.alloc_slot(alias.unique_id);
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::StoreLocal(bind_slot));
-                self.emit_match_pattern_bind(inner, slot, decomp)?;
+                self.emit_match_pattern_bind(inner, slot, decomp, err_span)?;
             }
             TypedMatchPattern::Wildcard
+            | TypedMatchPattern::Pin { .. }
             | TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
             | TypedMatchPattern::StrLit(_)
@@ -9617,7 +10062,11 @@ impl Codegen {
                 for (index, item) in items.iter().enumerate() {
                     let (item_slot, item_decomp) = if let Some(children) = cached_children.as_mut()
                     {
-                        let child = children.next().expect("tuple match decomp arity mismatch");
+                        let child = children.next().ok_or_else(|| CodegenError {
+                            message: "Internal invariant broken: tuple match decomp arity mismatch"
+                                .into(),
+                            span: err_span.clone(),
+                        })?;
                         (child.slot, Some(child.decomp))
                     } else {
                         let item_slot = self.state.next_slot;
@@ -9629,7 +10078,7 @@ impl Codegen {
                         self.emit(Opcode::StoreLocal(item_slot));
                         (item_slot, None)
                     };
-                    self.emit_match_pattern_bind(item, item_slot, item_decomp)?;
+                    self.emit_match_pattern_bind(item, item_slot, item_decomp, err_span)?;
                 }
             }
             TypedMatchPattern::Constructor {
@@ -9642,27 +10091,31 @@ impl Codegen {
                     _ => None,
                 };
                 for (idx, field_pat) in fields.iter().enumerate() {
-                    let (inner_slot, inner_decomp) =
-                        if let Some(children) = cached_children.as_mut() {
-                            let child = children
-                                .next()
-                                .expect("constructor match decomp arity mismatch");
-                            (child.slot, Some(child.decomp))
-                        } else {
-                            let inner_slot = self.state.next_slot;
-                            self.state.next_slot += 1;
-                            self.emit(Opcode::LoadLocal(slot));
-                            self.emit(Opcode::GetField {
-                                field_index: *field_offset + idx as u32,
-                            });
-                            self.emit(Opcode::StoreLocal(inner_slot));
-                            (inner_slot, None)
-                        };
-                    self.emit_match_pattern_bind(field_pat, inner_slot, inner_decomp)?;
+                    let (inner_slot, inner_decomp) = if let Some(children) =
+                        cached_children.as_mut()
+                    {
+                        let child = children.next().ok_or_else(|| CodegenError {
+                            message:
+                                "Internal invariant broken: constructor match decomp arity mismatch"
+                                    .into(),
+                            span: err_span.clone(),
+                        })?;
+                        (child.slot, Some(child.decomp))
+                    } else {
+                        let inner_slot = self.state.next_slot;
+                        self.state.next_slot += 1;
+                        self.emit(Opcode::LoadLocal(slot));
+                        self.emit(Opcode::GetField {
+                            field_index: *field_offset + idx as u32,
+                        });
+                        self.emit(Opcode::StoreLocal(inner_slot));
+                        (inner_slot, None)
+                    };
+                    self.emit_match_pattern_bind(field_pat, inner_slot, inner_decomp, err_span)?;
                 }
             }
             TypedMatchPattern::ListCons(_, _) => {
-                self.emit_list_cons_match_pattern_bind(pat, slot, decomp)?;
+                self.emit_list_cons_match_pattern_bind(pat, slot, decomp, err_span)?;
             }
             TypedMatchPattern::Extractor {
                 input_ty,
@@ -9680,7 +10133,12 @@ impl Codegen {
                 };
                 if let Some(children) = cached_children {
                     for (item, child) in items.iter().zip(children.into_iter()) {
-                        self.emit_match_pattern_bind(item, child.slot, Some(child.decomp))?;
+                        self.emit_match_pattern_bind(
+                            item,
+                            child.slot,
+                            Some(child.decomp),
+                            err_span,
+                        )?;
                     }
                 } else {
                     let impossible_no_match = self.fresh_label();
@@ -9698,7 +10156,7 @@ impl Codegen {
                         &extractor.span,
                     )?;
                     for (item, item_slot) in items.iter().zip(item_slots.iter()) {
-                        self.emit_match_pattern_bind(item, *item_slot, None)?;
+                        self.emit_match_pattern_bind(item, *item_slot, None, err_span)?;
                     }
                     self.emit_jump(done);
                     self.patch_label(impossible_no_match);
@@ -9730,7 +10188,12 @@ impl Codegen {
             self.emit(Opcode::LoadLocal(current_slot));
             self.emit(Opcode::ListHead);
             self.emit(Opcode::StoreLocal(head_slot));
-            let head_decomp = self.emit_match_pattern_test(head, head_slot, fail_label)?;
+            let head_decomp = self.emit_match_pattern_test(
+                head,
+                head_slot,
+                fail_label,
+                &Span { start: 0, end: 0 },
+            )?;
 
             let tail_slot = self.state.next_slot;
             self.state.next_slot += 1;
@@ -9743,7 +10206,12 @@ impl Codegen {
             current_slot = tail_slot;
         }
 
-        let tail_decomp = self.emit_match_pattern_test(current_pat, current_slot, fail_label)?;
+        let tail_decomp = self.emit_match_pattern_test(
+            current_pat,
+            current_slot,
+            fail_label,
+            &Span { start: 0, end: 0 },
+        )?;
         let decomp = links.into_iter().rev().fold(
             tail_decomp,
             |tail, (head_slot, head_decomp, tail_slot)| MatchPatternDecomp::ListCons {
@@ -9765,6 +10233,7 @@ impl Codegen {
         pat: &TypedMatchPattern,
         slot: u32,
         decomp: Option<MatchPatternDecomp>,
+        err_span: &Span,
     ) -> Result<(), CodegenError> {
         let mut current_pat = pat;
         let mut current_slot = slot;
@@ -9790,14 +10259,14 @@ impl Codegen {
                     (head_slot, None, tail_slot, None)
                 }
             };
-            self.emit_match_pattern_bind(head, head_slot, head_decomp)?;
+            self.emit_match_pattern_bind(head, head_slot, head_decomp, err_span)?;
 
             current_pat = tail;
             current_slot = tail_slot;
             current_decomp = tail_decomp;
         }
 
-        self.emit_match_pattern_bind(current_pat, current_slot, current_decomp)
+        self.emit_match_pattern_bind(current_pat, current_slot, current_decomp, err_span)
     }
 
     // ── Label resolution ──
@@ -9844,6 +10313,77 @@ impl Codegen {
             self.emit(Opcode::NotBool);
         }
         Ok(())
+    }
+
+    fn emit_enum_eq_from_slots(&mut self, op: &BinOp, left_slot: u32, right_slot: u32) {
+        self.emit(Opcode::LoadLocal(left_slot));
+        self.emit(Opcode::GetField { field_index: 0 });
+        self.emit(Opcode::LoadLocal(right_slot));
+        self.emit(Opcode::GetField { field_index: 0 });
+        self.emit(Opcode::EqInt);
+        if matches!(op, BinOp::Neq) {
+            self.emit(Opcode::NotBool);
+        }
+    }
+
+    fn emit_eq_dispatch_from_slots(
+        &mut self,
+        dispatch: &TraitDispatch,
+        receiver_ty: &Ty,
+        left_slot: u32,
+        right_slot: u32,
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        match dispatch {
+            TraitDispatch::Pending => Err(CodegenError {
+                message: "bounded trait call must be specialized before codegen".into(),
+                span: span.clone(),
+            }),
+            TraitDispatch::Static(TraitDispatchTarget::BinOp(op))
+                if matches!(op, BinOp::Eq | BinOp::Neq)
+                    && matches!(receiver_ty, Ty::Enum(_, _)) =>
+            {
+                self.emit_enum_eq_from_slots(op, left_slot, right_slot);
+                Ok(())
+            }
+            TraitDispatch::Static(TraitDispatchTarget::BinOp(op)) => {
+                self.emit(Opcode::LoadLocal(left_slot));
+                self.emit(Opcode::LoadLocal(right_slot));
+                let opcode = self.binop_to_opcode(op, receiver_ty, span)?;
+                self.emit(opcode);
+                Ok(())
+            }
+            TraitDispatch::Static(TraitDispatchTarget::Builtin(name)) => {
+                self.emit(Opcode::LoadLocal(left_slot));
+                self.emit(Opcode::LoadLocal(right_slot));
+                if let Some(opcode) = Self::direct_builtin_opcode(name, 2) {
+                    self.emit(opcode);
+                } else {
+                    let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
+                        message: format!("Unknown builtin: {}", name),
+                        span: span.clone(),
+                    })?;
+                    self.emit(Opcode::CallBuiltin {
+                        builtin_id,
+                        arity: 2,
+                        span_start: span.start as u32,
+                        span_end: span.end as u32,
+                    });
+                }
+                Ok(())
+            }
+            TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }) => {
+                self.emit(Opcode::LoadLocal(left_slot));
+                self.emit(Opcode::LoadLocal(right_slot));
+                self.emit(Opcode::Call {
+                    fun_idx: *fun_idx,
+                    arity: 2,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                });
+                Ok(())
+            }
+        }
     }
 
     fn emit_duration_payload_from_local(&mut self, slot: u32) {
@@ -10112,22 +10652,6 @@ fn literal_pattern_display(pat: &TypedPattern) -> Option<String> {
     }
 }
 
-fn quote_surtr_string_literal(input: &str) -> String {
-    let mut out = String::with_capacity(input.len() + 2);
-    out.push('"');
-    for ch in input.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\t' => out.push_str("\\t"),
-            _ => out.push(ch),
-        }
-    }
-    out.push('"');
-    out
-}
-
 #[cfg(test)]
 mod process_runtime_v2_tests {
     use super::*;
@@ -10267,6 +10791,57 @@ mod process_runtime_v2_tests {
         }
     }
 
+    fn result_int_ty() -> Ty {
+        Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))
+    }
+
+    fn worker_init_callable() -> TypedNode {
+        let ret_ty = result_int_ty();
+        let fun = TypedNode {
+            ty: Ty::UserFunc {
+                fun_idx: 7,
+                type_params: Vec::new(),
+                params: Vec::new(),
+                ret: Box::new(ret_ty.clone()),
+            },
+            span: span(30, 42),
+            node: TypedInner::Var(ResolvedId {
+                name: "init".into(),
+                qualified_name: Some("MyWorker::init".into()),
+                unique_id: 701,
+                compiler_generated: true,
+                span: span(30, 42),
+            }),
+        };
+        TypedNode {
+            ty: Ty::Func(Vec::new(), Box::new(ret_ty.clone())),
+            span: span(30, 42),
+            node: TypedInner::Closure(
+                Vec::new(),
+                Vec::new(),
+                Box::new(TypedNode {
+                    ty: ret_ty,
+                    span: span(30, 42),
+                    node: TypedInner::App(Box::new(fun), Vec::new()),
+                }),
+            ),
+        }
+    }
+
+    fn worker_strategy_value() -> TypedNode {
+        TypedNode {
+            ty: Ty::Struct("WorkerStrategy".into(), Vec::new()),
+            span: span(50, 58),
+            node: TypedInner::Var(ResolvedId {
+                name: "strategy".into(),
+                qualified_name: None,
+                unique_id: 702,
+                compiler_generated: false,
+                span: span(50, 58),
+            }),
+        }
+    }
+
     #[test]
     fn validate_required_singletons_rejects_direct_call_when_absent_from_boot_plan() {
         let err = validate_required_singletons(
@@ -10350,5 +10925,83 @@ mod process_runtime_v2_tests {
             &RuntimeBootPlan::default(),
         )
         .expect("DynamicSupervisor is implicitly registered");
+    }
+
+    #[test]
+    fn supervisor_spawn_lowers_to_metadata_arity_shape() {
+        let mut gene = Codegen::new();
+        let node = TypedNode {
+            ty: Ty::Result(Box::new(Ty::Pid("MyWorker".into())), Box::new(Ty::Error)),
+            span: span(1, 48),
+            node: TypedInner::SupervisorSpawn {
+                supervisor_process: "MySup".into(),
+                worker_process: "MyWorker".into(),
+                init: Box::new(worker_init_callable()),
+            },
+        };
+
+        gene.emit_node(&node)
+            .expect("supervisor spawn emission should succeed");
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+        let builtin_id =
+            Codegen::builtin_id("__supervisor_spawn").expect("__supervisor_spawn exists");
+
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::CallBuiltin {
+                builtin_id: actual,
+                arity: 2,
+                ..
+            } if *actual == builtin_id
+        )));
+        assert!(!opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::CallBuiltin {
+                builtin_id: actual,
+                arity: 3,
+                ..
+            } if *actual == builtin_id
+        )));
+    }
+
+    #[test]
+    fn supervisor_workers_lowers_to_metadata_arity_shape() {
+        let mut gene = Codegen::new();
+        let node = TypedNode {
+            ty: Ty::Result(
+                Box::new(Ty::Enum("Workers".into(), vec![Ty::Pid("MyWorker".into())])),
+                Box::new(Ty::Error),
+            ),
+            span: span(1, 64),
+            node: TypedInner::SupervisorWorkers {
+                supervisor_process: "MySup".into(),
+                worker_process: "MyWorker".into(),
+                init: Box::new(worker_init_callable()),
+                strategy: Box::new(worker_strategy_value()),
+            },
+        };
+
+        gene.emit_node(&node)
+            .expect("supervisor workers emission should succeed");
+        let (opcodes, _) = gene.finalize().expect("labels should resolve");
+        let builtin_id =
+            Codegen::builtin_id("__supervisor_workers").expect("__supervisor_workers exists");
+
+        assert!(opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::CallBuiltin {
+                builtin_id: actual,
+                arity: 3,
+                ..
+            } if *actual == builtin_id
+        )));
+        assert!(!opcodes.iter().any(|opcode| matches!(
+            opcode,
+            Opcode::CallBuiltin {
+                builtin_id: actual,
+                arity: 4,
+                ..
+            } if *actual == builtin_id
+        )));
     }
 }

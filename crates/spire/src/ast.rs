@@ -22,6 +22,7 @@ pub enum Visibility {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeclAttrs {
     pub doc: Option<String>,
+    pub builtin: bool,
     pub auto_import: bool,
     pub hidden: bool,
     pub readonly: bool,
@@ -34,6 +35,7 @@ impl Default for DeclAttrs {
     fn default() -> Self {
         Self {
             doc: None,
+            builtin: false,
             auto_import: false,
             hidden: false,
             readonly: false,
@@ -244,7 +246,7 @@ pub enum BinOp {
 pub enum AstTy {
     /// `Int`, `String`, `Boolean`, `Unit`, `User`, ...
     Named(Span, Symbol),
-    /// `impl Numeric`
+    /// `impl Describable`
     ImplTrait(Span, Symbol),
     /// `List<T>`, `Result<T, E>`, user-defined generic types, ...
     Generic(Span, Symbol, Vec<AstTy>),
@@ -262,6 +264,8 @@ pub enum AstPattern {
     Var(Span, Symbol),
     /// `x: Int`
     Annotated(Span, Symbol, AstTy),
+    /// `^x`
+    Pin(Span, Symbol),
     /// `_`
     Wildcard(Span),
     /// `[]`
@@ -340,8 +344,29 @@ impl FacetPathSegment {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BulkUpdateEntry {
     pub span: Span,
-    pub path: Vec<FacetPathSegment>,
+    pub path: BulkUpdatePath,
     pub kind: BulkUpdateEntryKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BulkUpdatePath {
+    Segments(Span, Vec<FacetPathSegment>),
+    Pin(Span, Symbol),
+    Chain(Span, Box<BulkUpdatePath>, Box<BulkUpdatePath>),
+    StripLeft(Span, Box<BulkUpdatePath>, usize),
+    StripRight(Span, Box<BulkUpdatePath>, usize),
+}
+
+impl BulkUpdatePath {
+    pub fn span(&self) -> &Span {
+        match self {
+            Self::Segments(span, _)
+            | Self::Pin(span, _)
+            | Self::Chain(span, _, _)
+            | Self::StripLeft(span, _, _)
+            | Self::StripRight(span, _, _) => span,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -427,6 +452,12 @@ pub struct ClosureParam {
 pub struct DbgArg {
     pub span: Span,
     pub expr: Ast,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HashMapLiteralEntry {
+    pub key: Ast,
+    pub value: Ast,
 }
 
 /// Record literal argument — positional or named.
@@ -653,7 +684,7 @@ pub enum Ast {
     TraitDef(Span, Symbol, Vec<TypeParam>, Vec<TraitMethodSig>, DeclAttrs),
 
     /// Trait impl definition:
-    /// `impl Numeric for Int { ... }`
+    /// `impl Describable for Int { ... }`
     /// `impl From<String> for Int { ... }`
     TraitImplDef(Span, Symbol, Vec<AstTy>, AstTy, Vec<Ast>, DeclAttrs),
 
@@ -674,6 +705,9 @@ pub enum Ast {
 
     /// Semicolon — explicit Unit coercion marker (wraps the discarded expr)
     Semi(Span, Box<Ast>),
+
+    /// String-keyed HashMap literal: `hash!["key" => value]`
+    HashMapLiteral(Span, Vec<HashMapLiteralEntry>),
 }
 
 #[cfg(test)]

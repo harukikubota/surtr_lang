@@ -2,6 +2,13 @@ use super::context::ParseUnitKind;
 use super::*;
 use sindr::primitives::int;
 
+fn bulk_path_segments(path: &BulkUpdatePath) -> &[FacetPathSegment] {
+    match path {
+        BulkUpdatePath::Segments(_, segments) => segments,
+        other => panic!("expected bulk path segments, got {other:?}"),
+    }
+}
+
 #[test]
 fn test_bind_and_var() {
     let ast = parse("x = 42").unwrap();
@@ -619,14 +626,23 @@ fn test_facet_bulk_update_special_form_parses() {
                 Ast::BulkUpdate(_, source, entries) => {
                     assert!(matches!(source.as_ref(), Ast::Var(_, name) if name == "user"));
                     assert_eq!(entries.len(), 3);
-                    assert_eq!(entries[0].path, vec![FacetPathSegment::field("name")]);
+                    assert_eq!(
+                        bulk_path_segments(&entries[0].path),
+                        [FacetPathSegment::field("name")]
+                    );
                     assert!(matches!(entries[0].kind, BulkUpdateEntryKind::Set(_)));
-                    assert_eq!(entries[1].path, vec![FacetPathSegment::field("score")]);
+                    assert_eq!(
+                        bulk_path_segments(&entries[1].path),
+                        [FacetPathSegment::field("score")]
+                    );
                     assert!(matches!(
                         entries[1].kind,
                         BulkUpdateEntryKind::OverResult(_)
                     ));
-                    assert_eq!(entries[2].path, vec![FacetPathSegment::field("address")]);
+                    assert_eq!(
+                        bulk_path_segments(&entries[2].path),
+                        [FacetPathSegment::field("address")]
+                    );
                     assert!(matches!(entries[2].kind, BulkUpdateEntryKind::Nested(_)));
                 }
                 other => panic!("Expected BulkUpdate, got {other:?}"),
@@ -967,7 +983,7 @@ impl Int {
 #[test]
 fn test_trait_def_parses_method_signatures() {
     let ast = parse_with_context(
-        r#"deftrait Numeric {
+        r#"deftrait Describable {
   def add(self: Self, rhs: Self) -> Self
   def abs(self: Self) -> Self
 }"#,
@@ -977,7 +993,7 @@ fn test_trait_def_parses_method_signatures() {
 
     match ast.as_slice() {
         [Ast::TraitDef(_, name, type_params, methods, attrs)] => {
-            assert_eq!(name, "Numeric");
+            assert_eq!(name, "Describable");
             assert_eq!(attrs, &DeclAttrs::default());
             assert!(type_params.is_empty());
             assert_eq!(methods.len(), 2);
@@ -997,7 +1013,7 @@ fn test_trait_def_parses_method_signatures() {
 #[test]
 fn test_trait_def_parses_method_docs_and_optional_default_bodies() {
     let ast = parse_with_context(
-        r#"deftrait Numeric {
+        r#"deftrait Describable {
   @doc """Delegates to abs."""
   def magnitude(self: Self) -> Self {
     abs(self)
@@ -1011,7 +1027,7 @@ fn test_trait_def_parses_method_docs_and_optional_default_bodies() {
 
     match ast.as_slice() {
         [Ast::TraitDef(_, name, _, methods, _)] => {
-            assert_eq!(name, "Numeric");
+            assert_eq!(name, "Describable");
             assert_eq!(methods.len(), 2);
             assert_eq!(methods[0].name, "magnitude");
             assert_eq!(methods[0].attrs.doc.as_deref(), Some("Delegates to abs."));
@@ -1029,7 +1045,7 @@ fn test_trait_def_parses_method_docs_and_optional_default_bodies() {
 #[test]
 fn test_trait_impl_parses_and_keeps_methods() {
     let ast = parse_with_context(
-        r#"impl Numeric for Int {
+        r#"impl Describable for Int {
   def add(self: Self, rhs: Self) -> Self {
     self + rhs
   }
@@ -1044,7 +1060,7 @@ fn test_trait_impl_parses_and_keeps_methods() {
 
     match ast.as_slice() {
         [Ast::TraitImplDef(_, trait_name, trait_args, AstTy::Named(_, target), methods, attrs)] => {
-            assert_eq!(trait_name, "Numeric");
+            assert_eq!(trait_name, "Describable");
             assert!(trait_args.is_empty());
             assert_eq!(target, "Global::Int");
             assert_eq!(attrs, &DeclAttrs::default());
@@ -1106,7 +1122,7 @@ fn test_trait_impl_rejects_builtin_defp_method() {
 fn test_doc_attributes_parse_for_trait_and_trait_impl_decls() {
     let ast = parse_with_context(
         r#"@doc """Trait docs."""
-deftrait Numeric {
+deftrait Describable {
   def add(self: Self, rhs: Self) -> Self
 }
 
@@ -1122,7 +1138,7 @@ impl Show for User {
 
     match &ast[0] {
         Ast::TraitDef(_, name, _, _, attrs) => {
-            assert_eq!(name, "Numeric");
+            assert_eq!(name, "Describable");
             assert_eq!(attrs.doc.as_deref(), Some("Trait docs."));
         }
         _ => panic!("Expected TraitDef"),
@@ -1398,14 +1414,14 @@ fn test_doc_attributes_parse_for_trait_impl_methods() {
 
 #[test]
 fn test_function_def_parses_bounded_type_params() {
-    let ast = parse("def add<$N: Numeric>(x: $N, y: $N) -> $N { x }").unwrap();
+    let ast = parse("def add<$N: Describable>(x: $N, y: $N) -> $N { x }").unwrap();
 
     match ast.as_slice() {
         [Ast::Def(_, name, type_params, params, Some(AstTy::Named(_, ret_ty)), _, _)] => {
             assert_eq!(name, "add");
             assert_eq!(type_params.len(), 1);
             assert_eq!(type_params[0].name, "$N");
-            assert_eq!(type_params[0].bound.as_deref(), Some("Numeric"));
+            assert_eq!(type_params[0].bound.as_deref(), Some("Describable"));
             assert_eq!(params.len(), 2);
             assert!(matches!(params[0].ty, AstTy::Named(_, ref ty) if ty == "$N"));
             assert!(matches!(params[1].ty, AstTy::Named(_, ref ty) if ty == "$N"));
@@ -1468,7 +1484,7 @@ fn test_trait_impl_parses_trait_type_args() {
 
 #[test]
 fn test_function_def_parses_parameter_position_impl_trait() {
-    let ast = parse("def abs(x: impl Numeric) -> Int { 0 }").unwrap();
+    let ast = parse("def abs(x: impl Describable) -> Int { 0 }").unwrap();
 
     match ast.as_slice() {
         [Ast::Def(_, name, type_params, params, Some(AstTy::Named(_, ret_ty)), _, _)] => {
@@ -1476,7 +1492,7 @@ fn test_function_def_parses_parameter_position_impl_trait() {
             assert!(type_params.is_empty());
             assert_eq!(params.len(), 1);
             assert!(
-                matches!(params[0].ty, AstTy::ImplTrait(_, ref trait_name) if trait_name == "Numeric")
+                matches!(params[0].ty, AstTy::ImplTrait(_, ref trait_name) if trait_name == "Describable")
             );
             assert_eq!(ret_ty, "Int");
         }
@@ -1486,7 +1502,7 @@ fn test_function_def_parses_parameter_position_impl_trait() {
 
 #[test]
 fn test_return_position_impl_trait_is_rejected() {
-    let err = parse("def bad(x: Int) -> impl Numeric { x }")
+    let err = parse("def bad(x: Int) -> impl Describable { x }")
         .expect_err("return-position impl Trait should be rejected");
     assert!(err
         .message()
@@ -1495,7 +1511,7 @@ fn test_return_position_impl_trait_is_rejected() {
 
 #[test]
 fn test_where_clause_is_rejected() {
-    let err = parse("def add(x: Int) -> Int where Int: Numeric { x }")
+    let err = parse("def add(x: Int) -> Int where Int: Describable { x }")
         .expect_err("where clauses should be rejected");
     assert!(err
         .message()
@@ -1586,7 +1602,13 @@ fn test_builtin_decl() {
         Ast::BuiltinDecl(_, name, params, ret_ty, attrs) => {
             assert_eq!(name, "to_string");
             assert_eq!(params.len(), 1);
-            assert_eq!(attrs, &DeclAttrs::default());
+            assert_eq!(
+                attrs,
+                &DeclAttrs {
+                    builtin: true,
+                    ..DeclAttrs::default()
+                }
+            );
             assert!(matches!(
                 params[0].ty,
                 AstTy::Named(_, ref name) if name == "$A"
@@ -1607,7 +1629,12 @@ fn test_builtin_type_decl() {
     assert!(matches!(
         ast.as_slice(),
         [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name, params, .. }, attrs)]
-            if name == "Int" && params.is_empty() && attrs == &DeclAttrs::default()
+            if name == "Int"
+                && params.is_empty()
+                && attrs == &DeclAttrs {
+                    builtin: true,
+                    ..DeclAttrs::default()
+                }
     ));
 }
 
@@ -1816,6 +1843,60 @@ Construct the error branch.
 }
 
 #[test]
+fn test_std_module_builtin_defenum_result_is_accepted() {
+    let ast = parse_with_context(
+        r#"@builtin
+defenum Result<$T> {
+  Ok($T),
+  Err(Error),
+}"#,
+        ParserContext::module(1, None).with_rules(ParseRules::std_module()),
+    )
+    .expect("builtin result enum should parse in std modules");
+
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::EnumDef(_, name, params, variants, DeclAttrs { .. })]
+            if name.ends_with("Result")
+                && params.len() == 1
+                && params[0].name == "$T"
+                && variants.len() == 2
+                && variants[0].name == "Ok"
+                && variants[1].name == "Err"
+    ));
+}
+
+#[test]
+fn test_std_module_builtin_defenum_boolean_is_accepted() {
+    let ast = parse_with_context(
+        r#"@builtin
+defenum Boolean {
+  True,
+  False,
+}"#,
+        ParserContext::module(1, None).with_rules(ParseRules::std_module()),
+    )
+    .expect("builtin boolean enum should parse in std modules");
+
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::EnumDef(_, name, params, variants, DeclAttrs { .. })]
+            if name.ends_with("Boolean")
+                && params.is_empty()
+                && variants.len() == 2
+                && variants[0].name == "True"
+                && variants[1].name == "False"
+    ));
+}
+
+#[test]
+fn test_user_source_builtin_defenum_is_rejected() {
+    let err = parse("@builtin\ndefenum Boolean { True, False }")
+        .expect_err("user source should reject builtin defenum");
+    assert!(err.message().contains("@builtin"));
+}
+
+#[test]
 fn test_type_keyword_cannot_be_used_as_function_name() {
     let err = parse("def type() -> Int { 0 }").expect_err("type should stay reserved");
     assert!(err.message().contains("Expected identifier"));
@@ -1823,7 +1904,11 @@ fn test_type_keyword_cannot_be_used_as_function_name() {
 
 #[test]
 fn test_builtin_decl_with_body_is_error() {
-    let err = parse("@builtin def print(a: String) -> Unit { print(a) }").expect_err("error");
+    let err = parse_with_context(
+        "@builtin def print(a: String) -> Unit { print(a) }",
+        ParserContext::module(1, Some("Bootstrap".into())).with_rules(ParseRules::std_module()),
+    )
+    .expect_err("builtin declaration with a body should be rejected");
     assert!(err.message().contains("must not have a function body"));
 }
 
@@ -2484,6 +2569,57 @@ fn test_list_cons_expr() {
 }
 
 #[test]
+fn test_single_item_list_literal_accepts_trailing_comma() {
+    let ast = parse("nums = [1,]").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::ListLiteral(_, elems) => {
+                assert_eq!(elems.len(), 1);
+                assert!(matches!(elems[0], Ast::Lit(_, Lit::Int(ref n)) if *n == int(1)));
+            }
+            other => panic!("Expected ListLiteral, got {other:?}"),
+        },
+        other => panic!("Expected Bind, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_hash_map_literal_accepts_string_and_expression_keys() {
+    let ast = parse(r#"scores = hash!["talk" => 80, String::trim(raw) => 90,]"#).unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::HashMapLiteral(_, entries) => {
+                assert_eq!(entries.len(), 2);
+                assert!(matches!(entries[0].key, Ast::Lit(_, Lit::Str(ref key)) if key == "talk"));
+                assert!(matches!(entries[0].value, Ast::Lit(_, Lit::Int(ref n)) if *n == int(80)));
+                assert!(matches!(entries[1].key, Ast::App(_, _, _)));
+                assert!(matches!(entries[1].value, Ast::Lit(_, Lit::Int(ref n)) if *n == int(90)));
+            }
+            other => panic!("Expected HashMapLiteral, got {other:?}"),
+        },
+        other => panic!("Expected Bind, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_empty_hash_map_literal() {
+    let ast = parse("scores = hash![]").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::HashMapLiteral(_, entries) => assert!(entries.is_empty()),
+            other => panic!("Expected HashMapLiteral, got {other:?}"),
+        },
+        other => panic!("Expected Bind, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_hash_map_literal_requires_fat_arrow() {
+    let err = parse(r#"scores = hash!["talk", 80]"#).expect_err("expected parse error");
+    assert!(err.message().contains("expected `=>` in hash! literal"));
+}
+
+#[test]
 fn test_range_literal_expr() {
     let ast = parse("nums = [1..3]").unwrap();
     match &ast[0] {
@@ -2510,6 +2646,23 @@ fn test_string_range_literal_expr() {
             other => panic!("Expected RangeLiteral, got {other:?}"),
         },
         other => panic!("Expected Bind, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_single_item_list_pattern_accepts_trailing_comma() {
+    let ast = parse("[head,] =? value").unwrap();
+    match &ast[0] {
+        Ast::SafeBind(_, pattern, rhs) => {
+            assert!(matches!(
+                pattern,
+                AstPattern::ListCons(_, head, tail)
+                    if matches!(head.as_ref(), AstPattern::Var(_, name) if name == "head")
+                    && matches!(tail.as_ref(), AstPattern::ListNil(_))
+            ));
+            assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
+        }
+        other => panic!("Expected SafeBind, got {other:?}"),
     }
 }
 
@@ -2927,7 +3080,7 @@ Facet::bulk_update(book) {
             assert!(matches!(
                 entries.as_slice(),
                 [BulkUpdateEntry { path, .. }]
-                    if matches!(path.as_slice(), [FacetPathSegment::Field { name, .. }, FacetPathSegment::Bracket(_)] if name == "scores")
+                    if matches!(bulk_path_segments(path), [FacetPathSegment::Field { name, .. }, FacetPathSegment::Bracket(_)] if name == "scores")
             ));
         }
         other => panic!("Expected bulk update, got {:?}", other),
@@ -3803,8 +3956,14 @@ fn parses_bulk_update_index_key_optional_and_case_actions() {
         panic!("expected bulk update");
     };
     assert_eq!(entries.len(), 4);
-    assert!(matches!(entries[0].path[1], FacetPathSegment::Bracket(_)));
-    assert!(matches!(entries[1].path[1], FacetPathSegment::Bracket(_)));
+    assert!(matches!(
+        bulk_path_segments(&entries[0].path)[1],
+        FacetPathSegment::Bracket(_)
+    ));
+    assert!(matches!(
+        bulk_path_segments(&entries[1].path)[1],
+        FacetPathSegment::Bracket(_)
+    ));
     assert!(matches!(entries[2].kind, BulkUpdateEntryKind::CaseOver(_)));
     assert!(matches!(entries[3].kind, BulkUpdateEntryKind::CaseSet(_)));
 }
@@ -4608,7 +4767,7 @@ fn test_module_compile_unit_rejects_builtin_decl() {
     .expect_err("user module compile unit should reject builtin declarations");
     assert!(err
         .message()
-        .contains("This top-level declaration is not allowed in the current source policy"));
+        .contains("@builtin declarations are only allowed in standard/internal source"));
 }
 
 #[test]
@@ -4617,7 +4776,7 @@ fn test_module_compile_unit_rejects_builtin_type_decl() {
         .expect_err("user module compile unit should reject builtin type declarations");
     assert!(err
         .message()
-        .contains("This top-level declaration is not allowed in the current source policy"));
+        .contains("@builtin declarations are only allowed in standard/internal source"));
 }
 
 #[test]

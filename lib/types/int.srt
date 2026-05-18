@@ -126,7 +126,7 @@ impl Int {
   xldr(1)> Int::safe_div(8, 2)
   Ok(4)
   """
-  @builtin def safe_div(a: $A, b: $A) -> Result<$A, ZeroDivisionError>
+  @builtin def safe_div(a: Int, b: Int) -> Result<Int, ZeroDivisionError>
 
   @doc """
   Compute `a mod b` for integers and return `Err(ZeroDivisionError)` on zero.
@@ -515,7 +515,7 @@ impl Int {
     if(
       shift >= width_bits,
       0,
-      match safe_div(value, _pow2(shift)) {
+      match Int::safe_div(value, _pow2(shift)) {
         Ok(quotient) => quotient,
         Err(_) => 0,
       },
@@ -830,48 +830,6 @@ impl Mul for Int {
   12
   """
   @builtin def mul(self: Self, rhs: Self) -> Self
-}
-
-impl Numeric for Int {
-  @doc """
-  Divide by `rhs`, returning `Err(ZeroDivisionError)` for zero divisors.
-  ## REPL
-  xldr(1)> safe_div(8, 2)
-  Ok(4)
-  """
-  def safe_div(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError> {
-    Int::safe_div(self, rhs)
-  }
-
-  @doc """
-  Return the absolute value of the integer.
-  ## REPL
-  xldr(1)> abs(-3)
-  3
-  """
-  def abs(self: Self) -> Self {
-    Int::abs(self)
-  }
-
-  @doc """
-  Return the smaller of the two integer values.
-  ## REPL
-  xldr(1)> min(1, 2)
-  1
-  """
-  def min(self: Self, rhs: Self) -> Self {
-    Int::min(self, rhs)
-  }
-
-  @doc """
-  Return the larger of the two integer values.
-  ## REPL
-  xldr(1)> max(1, 2)
-  2
-  """
-  def max(self: Self, rhs: Self) -> Self {
-    Int::max(self, rhs)
-  }
 }
 
 impl Show for Int {

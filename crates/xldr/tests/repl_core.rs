@@ -1,6 +1,7 @@
 use std::fs;
 use std::time::Duration;
 
+use xldr::repl::logic::core::ReplCompletionKind;
 use xldr::repl::logic::{ReplOutput, ReplResult};
 use xldr::ReplEngine;
 
@@ -164,6 +165,1151 @@ fn signature_text(result: &ReplResult) -> String {
         }
         other => panic!("expected signature output, got {}", output_kind(other)),
     }
+}
+
+#[test]
+fn core_completion_returns_global_candidates_with_details() {
+    let mut engine = engine();
+    assert!(
+        engine.completions("", 0).candidates.is_empty(),
+        "empty prompt should not show global completion noise"
+    );
+    assert!(rendered_text(&engine.handle_line("answer = 42")).contains("answer: Int"));
+
+    let completion = engine.completions("ans", 3);
+    let answer = completion
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "answer")
+        .expect("answer binding should be suggested");
+    assert_eq!(answer.kind, ReplCompletionKind::Variable);
+    assert_eq!(answer.detail.as_deref(), Some("Int"));
+
+    let print = engine
+        .completions("pri", 3)
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "print")
+        .expect("pathless function calls should be suggested");
+    assert_eq!(print.kind, ReplCompletionKind::FunctionCall);
+    assert!(print
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("print(")));
+    assert!(print
+        .documentation
+        .as_deref()
+        .is_some_and(|doc| doc.contains("Print a string to stdout")));
+    assert!(
+        completion.telemetry.completion_compute_ns.is_some(),
+        "completion telemetry should record compute time: {:?}",
+        completion.telemetry
+    );
+    assert!(
+        completion
+            .telemetry
+            .completion_compute_ns
+            .is_some_and(|value| value > 0),
+        "completion telemetry should be positive: {:?}",
+        completion.telemetry
+    );
+}
+
+#[test]
+fn core_completion_keeps_all_matching_candidates() {
+    let mut engine = engine();
+    for idx in 0..6 {
+        let result = engine.handle_line(&format!("value_{idx} = {idx}"));
+        assert!(
+            rendered_text(&result).contains(&format!("value_{idx}: Int")),
+            "{}",
+            rendered_text(&result)
+        );
+    }
+
+    let completion = engine.completions("value_", "value_".len());
+    assert!(
+        completion.candidates.len() >= 6,
+        "core completion should retain all matching candidates for paging: {:?}",
+        completion.candidates
+    );
+}
+
+#[test]
+fn core_exposes_shared_semantic_index_for_repl_and_lsp_lookup() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("answer = 42")).contains("answer: Int"));
+
+    let index = engine.semantic_index();
+    let answer = surtr_analysis::lookup_symbol_at_cursor(&index, "answer", 3)
+        .expect("REPL binding should be visible through shared semantic lookup");
+    assert_eq!(answer.symbol.label, "answer");
+    assert_eq!(answer.symbol.kind, surtr_analysis::CompletionKind::Variable);
+    assert_eq!(answer.symbol.detail.as_deref(), Some("Int"));
+
+    let print = index
+        .find_symbol("print")
+        .expect("stdlib function should be visible through shared semantic index");
+    assert_eq!(print.kind, surtr_analysis::CompletionKind::FunctionCall);
+    assert!(print
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("print(")));
+    assert!(print.documentation.is_some());
+}
+
+#[test]
+fn core_shared_repl_completion_helper_preserves_repl_visibility_and_presentation() {
+    let engine = engine();
+    let index = engine.semantic_index();
+
+    let string_repeat = surtr_analysis::complete_repl_prefix(
+        surtr_analysis::CompletionRequest {
+            index: &index,
+            source: "String::re",
+            cursor: "String::re".len(),
+        },
+        surtr_analysis::CompletionScope::All,
+    );
+    let repeat = string_repeat
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "String::repeat")
+        .expect("shared REPL completion should expose qualified String helpers");
+    assert_eq!(repeat.kind, surtr_analysis::CompletionKind::TypePath);
+    assert!(
+        repeat
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("String::repeat(")),
+        "shared completion should retain signature detail: {repeat:?}"
+    );
+
+    let process_init = surtr_analysis::complete_repl_prefix(
+        surtr_analysis::CompletionRequest {
+            index: &index,
+            source: "ProcessInit",
+            cursor: "ProcessInit".len(),
+        },
+        surtr_analysis::CompletionScope::All,
+    );
+    assert!(
+        process_init.candidates.is_empty(),
+        "shared REPL completion must preserve xldr hidden-owner filtering: {:?}",
+        process_init.candidates
+    );
+}
+
+#[test]
+fn core_completion_returns_type_constructors_and_type_paths() {
+    let engine = engine();
+
+    let duration = engine
+        .completions("Dur", 3)
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "Duration")
+        .expect("type constructor should be suggested");
+    assert_eq!(duration.kind, ReplCompletionKind::TypeConstructor);
+    assert!(duration
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("Duration")));
+
+    let int_min = engine
+        .completions("Int::mi", "Int::mi".len())
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "Int::min")
+        .expect("qualified type path should be suggested");
+    assert_eq!(int_min.kind, ReplCompletionKind::TypePath);
+    assert!(int_min
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("Int::min(")));
+}
+
+#[test]
+fn core_completion_shows_bare_result_constructors_and_bool_variants() {
+    let engine = engine();
+
+    let ok_candidates = engine.completions("Ok", "Ok".len()).candidates;
+    let ok_labels = ok_candidates
+        .iter()
+        .map(|candidate| candidate.label.clone())
+        .collect::<Vec<_>>();
+    let ok = ok_candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "Ok")
+        .unwrap_or_else(|| panic!("bare Ok constructor should be suggested: {ok_labels:?}"));
+    assert_eq!(ok.kind, ReplCompletionKind::FunctionCall);
+    assert_eq!(ok.replacement, "Ok");
+    assert_eq!(
+        ok.detail.as_deref(),
+        Some("Result::Ok($T) -> Result<$T, Error>"),
+        "Ok completion detail should expose the canonical Result surface: {ok:?}"
+    );
+
+    let err_candidates = engine.completions("Err", "Err".len()).candidates;
+    let err_labels = err_candidates
+        .iter()
+        .map(|candidate| candidate.label.clone())
+        .collect::<Vec<_>>();
+    let err = err_candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "Err")
+        .unwrap_or_else(|| panic!("bare Err constructor should be suggested: {err_labels:?}"));
+    assert_eq!(err.kind, ReplCompletionKind::FunctionCall);
+    assert_eq!(err.replacement, "Err");
+    assert_eq!(
+        err.detail.as_deref(),
+        Some("Result::Err(Error) -> Result<$T, Error>"),
+        "Err completion detail should expose the canonical Result surface: {err:?}"
+    );
+
+    let true_candidates = engine.completions("Tr", "Tr".len()).candidates;
+    let true_labels = true_candidates
+        .iter()
+        .map(|candidate| candidate.label.clone())
+        .collect::<Vec<_>>();
+    let true_variant = true_candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "True")
+        .unwrap_or_else(|| panic!("bare True variant should be suggested: {true_labels:?}"));
+    assert_eq!(true_variant.kind, ReplCompletionKind::FunctionCall);
+    assert_eq!(true_variant.replacement, "True");
+    assert_eq!(
+        true_variant.detail.as_deref(),
+        Some("Boolean::True() -> Boolean")
+    );
+
+    let false_candidates = engine.completions("Fal", "Fal".len()).candidates;
+    let false_labels = false_candidates
+        .iter()
+        .map(|candidate| candidate.label.clone())
+        .collect::<Vec<_>>();
+    let false_variant = false_candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "False")
+        .unwrap_or_else(|| panic!("bare False variant should be suggested: {false_labels:?}"));
+    assert_eq!(false_variant.kind, ReplCompletionKind::FunctionCall);
+    assert_eq!(false_variant.replacement, "False");
+    assert_eq!(
+        false_variant.detail.as_deref(),
+        Some("Boolean::False() -> Boolean")
+    );
+}
+
+#[test]
+fn core_completion_accepts_lowercase_bool_aliases() {
+    let engine = engine();
+
+    let true_candidates = engine.completions("tru", "tru".len()).candidates;
+    let true_labels = true_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    let true_variant = true_candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "true")
+        .unwrap_or_else(|| panic!("lowercase true alias should be suggested: {true_labels:?}"));
+    assert_eq!(true_variant.kind, ReplCompletionKind::FunctionCall);
+    assert_eq!(true_variant.replacement, "True");
+
+    let false_candidates = engine.completions("fal", "fal".len()).candidates;
+    let false_labels = false_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    let false_variant = false_candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "false")
+        .unwrap_or_else(|| panic!("lowercase false alias should be suggested: {false_labels:?}"));
+    assert_eq!(false_variant.kind, ReplCompletionKind::FunctionCall);
+    assert_eq!(false_variant.replacement, "False");
+}
+
+#[test]
+fn core_completion_hides_lowercase_bool_alias_when_shadowed_by_value_binding() {
+    let mut engine = engine();
+    let bound = rendered_text(&engine.handle_line("true = 1"));
+    assert!(bound.contains("true: Int = 1"), "{bound}");
+
+    let candidates = engine.completions("tru", "tru".len()).candidates;
+    let rendered = candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    assert!(
+        !candidates
+            .iter()
+            .any(|candidate| candidate.label == "true" && candidate.replacement == "True"),
+        "special lowercase bool alias should disappear once shadowed: {rendered:?}"
+    );
+    assert!(
+        candidates
+            .iter()
+            .any(|candidate| candidate.label == "true" && candidate.replacement == "true"),
+        "shadowing binding should remain visible as the real completion: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_hides_lowercase_bool_alias_when_shadowed_by_import_or_top_level_def() {
+    let mut imported_engine = ReplEngine::from_module_source(
+        "hoge.srt",
+        r#"
+defmod Hoge {
+  def true() -> Int { 1 }
+}
+"#,
+    )
+    .expect("module preload should succeed");
+
+    let imported = rendered_text(&imported_engine.handle_line("import Hoge::true"));
+    assert!(imported.contains("Imported Hoge::true"), "{imported}");
+
+    let imported_candidates = imported_engine.completions("tru", "tru".len()).candidates;
+    let imported_rendered = imported_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    assert!(
+        !imported_candidates
+            .iter()
+            .any(|candidate| candidate.label == "true" && candidate.replacement == "True"),
+        "imported lowercase symbol should suppress the special bool alias: {imported_rendered:?}"
+    );
+    assert!(
+        imported_candidates
+            .iter()
+            .any(|candidate| candidate.label == "true" && candidate.replacement == "true"),
+        "imported lowercase symbol should stay visible as the actual completion: {imported_rendered:?}"
+    );
+
+    let mut live_engine = engine();
+    let defined = live_engine.handle_line("def true() -> Int { 1 }");
+    assert!(
+        !matches!(defined.output, ReplOutput::EvalError { .. }),
+        "live top-level def should compile: {}",
+        rendered_text(&defined)
+    );
+
+    let live_candidates = live_engine.completions("tru", "tru".len()).candidates;
+    let live_rendered = live_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    assert!(
+        !live_candidates
+            .iter()
+            .any(|candidate| candidate.label == "true" && candidate.replacement == "True"),
+        "live top-level def should suppress the special bool alias: {live_rendered:?}"
+    );
+    assert!(
+        live_candidates
+            .iter()
+            .any(|candidate| candidate.label == "true" && candidate.replacement == "true"),
+        "live top-level def should remain visible as the actual completion: {live_rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_only_shows_unqualified_importable_functions_after_import() {
+    let mut engine = engine();
+
+    let labels_before = engine
+        .completions("a", 1)
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        !labels_before.iter().any(|label| label == "abs"),
+        "Float::abs should not be suggested as a bare call before import: {labels_before:?}"
+    );
+    assert!(
+        engine
+            .completions("Float::a", "Float::a".len())
+            .candidates
+            .iter()
+            .any(|candidate| candidate.label == "Float::abs"),
+        "qualified Float::abs completion should remain available"
+    );
+
+    let imported = rendered_text(&engine.handle_line("import Float::abs"));
+    assert!(
+        imported.contains("Imported Float::abs"),
+        "import should succeed before testing completion: {imported}"
+    );
+
+    let labels_after = engine
+        .completions("a", 1)
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        labels_after.iter().any(|label| label == "abs"),
+        "Float::abs should be suggested as a bare call after import: {labels_after:?}"
+    );
+}
+
+#[test]
+fn core_completion_and_sig_prefer_authored_signatures_for_imported_helpers() {
+    let mut engine = engine();
+
+    let with_completion = engine
+        .completions("wi", 2)
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "with")
+        .expect("Result::with should be suggested");
+    assert_eq!(
+        with_completion.detail.as_deref(),
+        Some("Result::with(value: Result<$A>, f: Result<($A -> $B)>) -> Result<$B>")
+    );
+
+    let list_at_completion = engine
+        .completions("List::a", "List::a".len())
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "List::at")
+        .expect("List::at should be suggested");
+    assert_eq!(
+        list_at_completion.detail.as_deref(),
+        Some("List::at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds>")
+    );
+
+    let imported = rendered_text(&engine.handle_line("import List::{at}"));
+    assert!(imported.contains("Imported List::at"), "{imported}");
+
+    let at_completion = engine
+        .completions("at", 2)
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "at")
+        .expect("imported at helper should be suggested");
+    assert_eq!(
+        at_completion.detail.as_deref(),
+        Some("List::at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds>")
+    );
+
+    assert_eq!(
+        signature_text(&engine.handle_line(":sig at")).trim(),
+        "List::at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds>"
+    );
+    assert_eq!(
+        signature_text(&engine.handle_line(":sig with")).trim(),
+        "Result::with(value: Result<$A>, f: Result<($A -> $B)>) -> Result<$B>"
+    );
+    assert_eq!(
+        signature_text(&engine.handle_line(":sig List::at")).trim(),
+        "List::at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds>"
+    );
+    assert_eq!(
+        signature_text(&engine.handle_line(":sig Result::with")).trim(),
+        "Result::with(value: Result<$A>, f: Result<($A -> $B)>) -> Result<$B>"
+    );
+}
+
+#[test]
+fn core_completion_is_enabled_inside_string_interpolation_only() {
+    let engine = engine();
+    let string_body = r#""plain Str"#;
+    assert!(
+        engine
+            .completions(string_body, string_body.len())
+            .candidates
+            .is_empty(),
+        "completion should stay disabled in ordinary string text"
+    );
+
+    let interpolation = r#""plain #{Str"#;
+    let labels = engine
+        .completions(interpolation, interpolation.len())
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"String".to_string()),
+        "completion should be enabled inside string interpolation: {labels:?}"
+    );
+}
+
+#[test]
+fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
+    let engine = engine();
+    let completion_context = engine.completion_context();
+
+    for (prefix, expected) in [
+        ("Str", "String"),
+        ("Lis", "List"),
+        ("Fac", "Facet"),
+        ("IO", "IO"),
+        ("Jso", "Json"),
+    ] {
+        let candidate = completion_context
+            .completions(prefix, prefix.len())
+            .candidates
+            .into_iter()
+            .find(|candidate| candidate.label == expected)
+            .unwrap_or_else(|| panic!("{expected} should be suggested for prefix {prefix}"));
+        assert_eq!(candidate.kind, ReplCompletionKind::TypeConstructor);
+    }
+
+    let string_repeat = completion_context
+        .completions("String::re", "String::re".len())
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "String::repeat")
+        .expect("qualified String helper should be suggested");
+    assert_eq!(string_repeat.kind, ReplCompletionKind::TypePath);
+
+    let facet_view = completion_context
+        .completions("Facet::v", "Facet::v".len())
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "Facet::view")
+        .expect("qualified Facet helper should be suggested");
+    assert_eq!(facet_view.kind, ReplCompletionKind::TypePath);
+
+    let all_labels = completion_context
+        .completions("M", 1)
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        !all_labels.iter().any(|label| label == "MatchResult"),
+        "MatchResult should not be suggested: {all_labels:?}"
+    );
+
+    let excluded = [
+        "MatchArms",
+        "CondClauses",
+        "BulkUpdateEntries",
+        "Hole",
+        "Lazy",
+        "TypeRef",
+        "ProcessInit",
+        "Closure",
+    ];
+    for name in excluded {
+        let labels = completion_context
+            .completions(name, name.len())
+            .candidates
+            .into_iter()
+            .map(|candidate| candidate.label)
+            .collect::<Vec<_>>();
+        assert!(
+            !labels.iter().any(|label| label == name),
+            "{name} should not be suggested: {labels:?}"
+        );
+    }
+}
+
+#[test]
+fn core_completion_keeps_type_owners_ahead_of_members_for_pascal_case_prefix() {
+    let engine = engine();
+    let labels = engine
+        .completions("Int", "Int".len())
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .take(6)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        labels,
+        vec![
+            "Int".to_string(),
+            "IntBase".to_string(),
+            "Int::abs".to_string(),
+            "Int::bit_and".to_string(),
+            "Int::bit_not".to_string(),
+            "Int::bit_not_in".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn core_completion_shows_user_defined_module_owners() {
+    let engine = ReplEngine::from_module_source(
+        "demo_module.srt",
+        r#"
+defmod Demo {
+  @doc """
+  Say hi.
+  """
+  def hello() -> String { "hi" }
+}
+"#,
+    )
+    .expect("module preload should bootstrap");
+
+    let demo = engine
+        .completions("Dem", 3)
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "Demo")
+        .expect("user-defined module owner should be suggested");
+    assert_eq!(demo.kind, ReplCompletionKind::TypeConstructor);
+
+    let hello = engine
+        .completions("Demo::h", "Demo::h".len())
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "Demo::hello")
+        .expect("user-defined module member should be suggested");
+    assert_eq!(hello.kind, ReplCompletionKind::TypePath);
+
+    let mut engine = engine;
+    let sig = signature_text(&engine.handle_line(":sig Demo::hello"));
+    assert!(sig.contains("Demo::hello() -> String"), "{sig}");
+    assert!(!sig.contains("Global::"), "{sig}");
+}
+
+#[test]
+fn core_completion_shows_script_preload_owner_and_members_without_docs() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> Self {
+    User { name, age }
+  }
+
+  def birthday(self) -> Self {
+    put(~self.age, self.age + 1)
+  }
+}
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let user = engine
+        .completions("U", "U".len())
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "User")
+        .expect("script preload owner should be suggested without docs");
+    assert_eq!(user.kind, ReplCompletionKind::TypeConstructor);
+
+    let ctor = engine
+        .completions("User::n", "User::n".len())
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "User::new")
+        .expect("undocumented impl ctor should be suggested");
+    assert_eq!(ctor.kind, ReplCompletionKind::TypePath);
+    assert!(
+        ctor.detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("User::new(name: String, age: Int) -> User")),
+        "constructor completion detail should use surface names: {ctor:?}"
+    );
+    assert!(
+        ctor.detail
+            .as_deref()
+            .is_none_or(|detail| !detail.contains("Global::")),
+        "constructor completion detail must not expose Global: {ctor:?}"
+    );
+
+    let method = engine
+        .completions("User::b", "User::b".len())
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "User::birthday")
+        .expect("undocumented impl method should be suggested");
+    assert_eq!(method.kind, ReplCompletionKind::TypePath);
+    assert!(
+        method
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("User::birthday(self: User) -> User")),
+        "method completion detail should use surface names: {method:?}"
+    );
+    assert!(
+        method
+            .detail
+            .as_deref()
+            .is_none_or(|detail| !detail.contains("Global::")),
+        "method completion detail must not expose Global: {method:?}"
+    );
+}
+
+#[test]
+fn core_script_top_level_defs_are_signature_and_completion_surfaces_without_docs() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/top_level.srt",
+        r#"
+def greet(name: String) -> String { name }
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let sig = signature_text(&engine.handle_line(":sig greet"));
+    assert!(
+        sig.contains("greet(name: String) -> String"),
+        "script top-level def should have a signature surface: {sig}"
+    );
+    assert!(!sig.contains("Global::"), "{sig}");
+
+    let completion = engine.completions("gre", "gre".len());
+    let greet = completion
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "greet")
+        .expect("script top-level def should be suggested by bare name");
+    assert_eq!(greet.kind, ReplCompletionKind::FunctionCall);
+    assert!(
+        greet
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("greet(name: String) -> String")),
+        "completion detail should mirror :sig: {greet:?}"
+    );
+
+    let docs = rendered_text(&engine.handle_line(":doc greet"));
+    assert!(
+        docs.contains("No docs found for greet"),
+        "top-level script defs do not get doc support in this change: {docs}"
+    );
+}
+
+#[test]
+fn core_typed_sig_query_uses_impl_signatures_without_docs() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/no_doc_impl.srt",
+        r#"
+deftrait Pairwise {
+  def pair(self: Self, rhs: Self) -> Self
+}
+
+defstruct Duo {
+  value: Int,
+}
+
+impl Duo {
+  def new(value: Int) -> Self {
+    Duo { value }
+  }
+}
+
+impl Pairwise for Duo {
+  def pair(self: Self, rhs: Self) -> Self {
+    Duo { value: self.value + rhs.value }
+  }
+}
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let doc = rendered_text(&engine.handle_line(":doc pair(Duo, Duo)"));
+    assert!(
+        doc.contains("No docs found for pair(Duo, Duo)"),
+        "typed doc query should still require @doc: {doc}"
+    );
+
+    let sig = signature_text(&engine.handle_line(":sig pair(Duo, Duo)"));
+    assert!(
+        sig.contains("defined:\n  impl Pairwise for Duo::pair(self: Duo, rhs: Duo) -> Duo"),
+        "{sig}"
+    );
+    assert!(
+        sig.contains("specialized:\n  pair(Duo, Duo) -> Duo"),
+        "{sig}"
+    );
+}
+
+#[test]
+fn core_live_repl_top_level_defs_are_signature_and_completion_surfaces() {
+    let mut engine = engine();
+    let def = engine.handle_line("def local(x: Int) -> Int { x + 1 }");
+    assert!(
+        !matches!(def.output, ReplOutput::EvalError { .. }),
+        "live top-level def should compile: {}",
+        rendered_text(&def)
+    );
+
+    let sig = signature_text(&engine.handle_line(":sig local"));
+    assert!(
+        sig.contains("local(x: Int) -> Int"),
+        "live REPL top-level def should have a signature surface: {sig}"
+    );
+
+    let completion = engine.completions("loc", "loc".len());
+    let local = completion
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "local")
+        .expect("live REPL top-level def should be suggested by bare name");
+    assert_eq!(local.kind, ReplCompletionKind::FunctionCall);
+    assert!(
+        local
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("local(x: Int) -> Int")),
+        "completion detail should mirror :sig: {local:?}"
+    );
+}
+
+#[test]
+fn core_completion_hides_global_noise_for_empty_constructor_call_arguments() {
+    let engine = engine();
+    let completion = engine.completions("Duration(", "Duration(".len());
+
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("constructor call should still show signature help");
+    assert_eq!(signature.active_parameter, Some(0));
+    assert!(
+        signature.lines.join("\n").contains("Duration::new("),
+        "constructor signature should remain visible: {:?}",
+        signature.lines
+    );
+    assert!(
+        signature.lines.join("\n").contains("[Int]"),
+        "active constructor parameter should be highlighted: {:?}",
+        signature.lines
+    );
+    assert!(
+        completion.candidates.is_empty(),
+        "empty constructor argument position should not show unrelated global candidates: {:?}",
+        completion.candidates
+    );
+}
+
+#[test]
+fn core_completion_shows_script_preload_constructor_signature_without_docs() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defstruct User {
+  name: String,
+  age: Int,
+}
+
+impl User {
+  def new(name: String, age: Int) -> User {
+    User { name, age }
+  }
+}
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let completion = engine.completions("User(", "User(".len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("script preload constructor should show signature help");
+    assert_eq!(signature.active_parameter, Some(0));
+    let rendered = signature.lines.join("\n");
+    assert!(
+        rendered.contains("User::new("),
+        "constructor signature should use owner surface: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("name: [String]"),
+        "first constructor parameter should be highlighted: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("-> User"),
+        "constructor signature should follow the actual new return type: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("-> Self"),
+        "constructor signature must not fall back to synthesized Self when new returns User: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_constructor_signature_follows_result_self_new_signature() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user_result.srt",
+        r#"
+defstruct User {
+  name: String,
+}
+
+impl User {
+  def new(name: String) -> Result<Self> {
+    Ok(User { name })
+  }
+}
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let completion = engine.completions("User(", "User(".len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("script preload constructor should show signature help");
+    let rendered = signature.lines.join("\n");
+    assert!(
+        rendered.contains("User::new(name: [String]) -> Result<User, Error>"),
+        "constructor signature should follow Result<Self> from new after type normalization: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("-> Self"),
+        "constructor signature must not use synthesized Self fallback when new returns Result<Self>: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_hides_enum_variants_until_owner_path_is_confirmed() {
+    let engine = engine();
+
+    let bare_labels = engine
+        .completions("IntB", "IntB".len())
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        bare_labels,
+        vec![
+            "IntBase",
+            "IntBase::label",
+            "IntBase::prefix",
+            "IntBase::radix"
+        ]
+    );
+
+    let bool_labels = engine
+        .completions("Bool", "Bool".len())
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        bool_labels,
+        vec![
+            "Boolean",
+            "Boolean::eqv",
+            "Boolean::implies",
+            "Boolean::not",
+            "Boolean::xor"
+        ]
+    );
+
+    let qualified_labels = engine
+        .completions("IntBase::", "IntBase::".len())
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(qualified_labels.contains(&"IntBase::Bin".to_string()));
+    assert!(qualified_labels.contains(&"IntBase::Dec".to_string()));
+    assert!(qualified_labels.contains(&"IntBase::Hex".to_string()));
+    assert!(qualified_labels.contains(&"IntBase::Oct".to_string()));
+
+    let boolean_candidates = engine
+        .completions("Boolean::", "Boolean::".len())
+        .candidates;
+    let boolean_labels = boolean_candidates
+        .iter()
+        .map(|candidate| candidate.label.clone())
+        .collect::<Vec<_>>();
+    assert!(boolean_labels.contains(&"Boolean::True".to_string()));
+    assert!(boolean_labels.contains(&"Boolean::False".to_string()));
+
+    let true_variant = boolean_candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "Boolean::True")
+        .expect("qualified Boolean variant should be suggested");
+    assert_eq!(true_variant.kind, ReplCompletionKind::TypePath);
+    assert_eq!(
+        true_variant.detail.as_deref(),
+        Some("Boolean::True() -> Boolean")
+    );
+}
+
+#[test]
+fn core_completion_shows_tuple_variant_signature_help() {
+    let engine = engine();
+    let completion = engine.completions("BitWidth::Any(", "BitWidth::Any(".len());
+
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("tuple variant call should show signature help");
+    assert_eq!(signature.active_parameter, Some(0));
+    let rendered = signature.lines.join("\n");
+    assert!(
+        rendered.contains("BitWidth::Any([Int]) -> BitWidth"),
+        "tuple variant signature should expose constructor call shape: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_ranks_constructor_arguments_by_expected_parameter_type() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("n = 3")).contains("n: Int"));
+    assert!(rendered_text(&engine.handle_line(r#"s = "text""#)).contains("s: String"));
+
+    let completion = engine.completions("Duration(", "Duration(".len());
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(
+        labels.contains(&"n"),
+        "Int binding should be suggested for constructor argument: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"s"),
+        "String binding should remain available but ranked lower: {labels:?}"
+    );
+    assert!(
+        labels.iter().position(|label| label == &"n")
+            < labels.iter().position(|label| label == &"s"),
+        "Int binding should rank before String binding for Int constructor argument: {labels:?}"
+    );
+}
+
+#[test]
+fn core_completion_hides_trait_impl_members_from_qualified_type_paths() {
+    let engine = engine();
+    let labels = engine
+        .completions("Boolean::", "Boolean::".len())
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+
+    for expected in [
+        "Boolean::not",
+        "Boolean::xor",
+        "Boolean::eqv",
+        "Boolean::implies",
+    ] {
+        assert!(
+            labels.iter().any(|label| label == expected),
+            "owner method should be suggested: {expected}; labels={labels:?}"
+        );
+    }
+
+    for hidden in [
+        "Boolean::impl Show for Boolean::to_string",
+        "Boolean::impl Eq for Boolean::eq",
+        "Boolean::impl Neq for Boolean::neq",
+        "Boolean::impl From<String> for Boolean::from",
+        "Boolean::impl From<Boolean> for Boolean::from",
+    ] {
+        assert!(
+            labels.iter().all(|label| label != hidden),
+            "trait impl member should not be suggested: {hidden}; labels={labels:?}"
+        );
+    }
+}
+
+#[test]
+fn core_completion_uses_argument_position_for_variable_candidates_and_signature_help() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("n = 3")).contains("n: Int"));
+    assert!(rendered_text(&engine.handle_line(r#"s = "text""#)).contains("s: String"));
+
+    let input = "Int::min(";
+    let completion = engine.completions(input, input.len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("signature help should be available at call argument position");
+    assert_eq!(signature.active_parameter, Some(0));
+    let signature_text = signature.lines.join("\n");
+    assert!(signature_text.contains("Int::min("), "{signature_text}");
+    assert!(
+        signature_text.contains("[Int]"),
+        "active parameter type should be highlighted: {signature_text}"
+    );
+
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"n"),
+        "Int binding should be suggested: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"s"),
+        "String binding should remain available but ranked lower: {labels:?}"
+    );
+    assert!(
+        labels.iter().position(|label| label == &"n")
+            < labels.iter().position(|label| label == &"s"),
+        "Int binding should rank before String binding for Int argument: {labels:?}"
+    );
+}
+
+#[test]
+fn core_completion_prefers_trait_surface_for_neq_helper_details() {
+    let engine = engine();
+
+    let bare = engine.completions("neq", "neq".len());
+    let neq = bare
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "neq")
+        .expect("neq helper should be suggested");
+    let bare_detail = neq
+        .detail
+        .as_deref()
+        .expect("neq helper should include detail");
+    assert_eq!(
+        bare_detail,
+        "trait Neq { neq(self: Self, rhs: Self) -> Boolean }"
+    );
+
+    let call = engine.completions("neq(", "neq(".len());
+    let call_signature = call
+        .signature
+        .as_ref()
+        .expect("neq call-site should show signature help");
+    assert_eq!(call_signature.active_parameter, Some(0));
+    let call_text = call_signature.lines.join("\n");
+    assert_eq!(
+        call_text.trim(),
+        "trait Neq { neq(self: [Self], rhs: Self) -> Boolean }"
+    );
+
+    let inferred = engine.completions("neq(1", "neq(1".len());
+    let inferred_signature = inferred
+        .signature
+        .as_ref()
+        .expect("neq(1 should keep signature help visible");
+    assert_eq!(inferred_signature.active_parameter, Some(0));
+    let inferred_text = inferred_signature.lines.join("\n");
+    assert_eq!(
+        inferred_text.trim(),
+        "trait Neq { neq(self: [Self], rhs: Self) -> Boolean }"
+    );
+
+    let second_arg = engine.completions("neq(,)", "neq(,)".len() - 1);
+    let second_signature = second_arg
+        .signature
+        .as_ref()
+        .expect("neq(,) should keep signature help visible");
+    assert_eq!(second_signature.active_parameter, Some(1));
+    let second_text = second_signature.lines.join("\n");
+    assert_eq!(
+        second_text.trim(),
+        "trait Neq { neq(self: Self, rhs: [Self]) -> Boolean }"
+    );
 }
 
 fn status_text(result: &ReplResult) -> String {
@@ -474,6 +1620,51 @@ defmod Math {
 }
 
 #[test]
+fn core_from_project_runner_source_exposes_selected_profile_definitions() {
+    let root = tempfile_dir("xldr-project-runner-repl");
+    let src = root.join("src");
+    fs::create_dir_all(&src).expect("src dir should be created");
+    let project_file = root.join("project.srt");
+    let helper_file = src.join("helper.srt");
+    fs::write(
+        &helper_file,
+        r#"
+defmod Helper {
+  def add2(x: Int, y: Int) -> Int { x + y }
+}
+"#,
+    )
+    .expect("helper source should be writable");
+    let project_source = r#"
+def profile_name() -> String { "dev" }
+
+Project::config({|project|
+  Project::entrypoint(project, profile_name(), {|config|
+    Config::add_path(config, "./src/helper.srt")
+  })
+})
+"#;
+
+    let mut engine =
+        ReplEngine::from_project_runner_source(surtr_analysis::ProjectRunnerSourceInput {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            active_file: None,
+            source: project_source.to_string(),
+        })
+        .expect("project runner source should preload REPL context");
+
+    let imported = engine.handle_line("import Helper::add2");
+    assert!(rendered_text(&imported).contains("Imported Helper::add2"));
+
+    let call = engine.handle_line("add2(20, 22)");
+    assert!(rendered_text(&call).contains("42"));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn core_from_module_source_rejects_include_directive() {
     let result = ReplEngine::from_module_source(
         "math.srt",
@@ -545,6 +1736,89 @@ fn core_static_impl_methods_keep_runtime_arity_in_sync() {
     let codepoints = engine.handle_line("String::codepoints(\"a\", StringEncoding::Ascii)");
     assert!(!codepoints.should_exit);
     assert!(rendered_text(&codepoints).contains("Ok([97])"));
+}
+
+#[test]
+fn core_range_bindings_keep_constructor_and_compare_fun_indices_in_sync() {
+    let mut engine = engine();
+
+    let a = engine.handle_line("a = 20ms");
+    assert!(!a.should_exit);
+    assert!(rendered_text(&a).contains("a: Duration = 20ms"));
+
+    let a_typed = engine.handle_line("a =? 20ms");
+    assert!(!a_typed.should_exit);
+    assert!(rendered_text(&a_typed).contains("a: Duration = 20ms"));
+
+    let b_typed = engine.handle_line("b =? 10ms");
+    assert!(!b_typed.should_exit);
+    assert!(rendered_text(&b_typed).contains("b: Duration = 10ms"));
+
+    let range = engine.handle_line("Range(a,b)");
+    assert!(!range.should_exit);
+    assert!(rendered_text(&range).contains("Range(min: 20ms, max: 10ms)"));
+
+    let normalized = engine.handle_line("Range::normalized(a,b)");
+    assert!(!normalized.should_exit);
+    assert!(rendered_text(&normalized).contains("Range(min: 10ms, max: 20ms)"));
+
+    let neq = engine.handle_line("Range(b,a) != Range(b, 100ms)");
+    assert!(!neq.should_exit);
+    let text = rendered_text(&neq);
+    assert!(text.contains("True"), "{text}");
+    assert!(!text.contains("Unknown function index"), "{text}");
+    assert!(!text.contains("Call arity mismatch"), "{text}");
+}
+
+#[test]
+fn core_range_generic_helpers_survive_sig_doc_interleaving() {
+    let mut engine = engine();
+
+    let a = engine.handle_line("a = 20ms");
+    assert!(!a.should_exit);
+    assert!(rendered_text(&a).contains("a: Duration = 20ms"));
+
+    let sig = signature_text(&engine.handle_line(":sig compare(Duration, Duration)"));
+    assert!(sig.contains("compare(Duration, Duration)"), "{sig}");
+
+    let doc = doc_text(&engine.handle_line(":doc Range(Int, Int)"));
+    assert!(!doc.contains("Unknown function index"), "{doc}");
+    assert!(!doc.contains("Call arity mismatch"), "{doc}");
+
+    let b = engine.handle_line("b =? 10ms");
+    assert!(!b.should_exit);
+    assert!(rendered_text(&b).contains("b: Duration = 10ms"));
+
+    let neq = engine.handle_line("Range(a,b) != Range(b, 100ms)");
+    assert!(!neq.should_exit);
+    let text = rendered_text(&neq);
+    assert!(text.contains("True"), "{text}");
+    assert!(!text.contains("Unknown function index"), "{text}");
+    assert!(!text.contains("Call arity mismatch"), "{text}");
+}
+
+#[test]
+fn core_range_generic_helpers_survive_runtime_error_rollback() {
+    let mut engine = engine();
+
+    let a = engine.handle_line("a = 20ms");
+    assert!(!a.should_exit);
+    assert!(rendered_text(&a).contains("a: Duration = 20ms"));
+
+    let b = engine.handle_line("b =? 10ms");
+    assert!(!b.should_exit);
+    assert!(rendered_text(&b).contains("b: Duration = 10ms"));
+
+    let runtime_error = engine.handle_line("Process::self()");
+    assert!(matches!(runtime_error.output, ReplOutput::EvalError { .. }));
+    assert!(rendered_text(&runtime_error).contains("Process::self"));
+
+    let neq = engine.handle_line("Range(a,b) != Range(b, 100ms)");
+    assert!(!neq.should_exit);
+    let text = rendered_text(&neq);
+    assert!(text.contains("True"), "{text}");
+    assert!(!text.contains("Unknown function index"), "{text}");
+    assert!(!text.contains("Call arity mismatch"), "{text}");
 }
 
 #[test]
@@ -1093,7 +2367,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 
     let typed_sig = engine.handle_line(":sig compare(Int, Int)");
     let typed_sig = signature_text(&typed_sig);
-    assert!(typed_sig.contains("impl Compare for Int::compare(self: Self, rhs: Self) -> Ordering"));
+    assert!(typed_sig.contains("impl Compare for Int::compare(self: Int, rhs: Int) -> Ordering"));
 
     let helper_sig = engine.handle_line(":sig compare");
     let helper_sig = signature_text(&helper_sig);
@@ -1116,16 +2390,34 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "Compare::lt(self: Self, rhs: Self) -> Boolean"
     );
 
+    let neq_helper_sig = engine.handle_line(":sig neq");
+    let neq_helper_sig = signature_text(&neq_helper_sig);
+    assert_eq!(
+        neq_helper_sig.trim(),
+        "trait Neq { neq(self: Self, rhs: Self) -> Boolean }"
+    );
+
     let typed_less_than_sig = engine.handle_line(":sig lt(Int, Int)");
     let typed_less_than_sig = signature_text(&typed_less_than_sig);
     assert!(
         typed_less_than_sig
-            .contains("defined:\n  impl Compare for Int::lt(self: Self, rhs: Self) -> Boolean"),
+            .contains("defined:\n  impl Compare for Int::lt(self: Int, rhs: Int) -> Boolean"),
         "{typed_less_than_sig}"
     );
     assert!(
         typed_less_than_sig.contains("specialized:\n  lt(Int, Int) -> Boolean"),
         "{typed_less_than_sig}"
+    );
+
+    let typed_neq_sig = engine.handle_line(":sig neq(Int, Int)");
+    let typed_neq_sig = signature_text(&typed_neq_sig);
+    assert!(
+        typed_neq_sig.contains("defined:\n  impl Neq for Int::neq(self: Int, rhs: Int) -> Boolean"),
+        "{typed_neq_sig}"
+    );
+    assert!(
+        typed_neq_sig.contains("specialized:\n  neq(Int, Int) -> Boolean"),
+        "{typed_neq_sig}"
     );
 
     let operator_sig = engine.handle_line(":sig |>");
@@ -1167,7 +2459,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 
     let typed_doc = engine.handle_line(":doc compare(Int, Int)");
     let typed_doc = doc_text(&typed_doc);
-    assert!(typed_doc.contains("impl Compare for Int::compare(self: Self, rhs: Self) -> Ordering"));
+    assert!(typed_doc.contains("impl Compare for Int::compare(self: Int, rhs: Int) -> Ordering"));
     assert!(typed_doc.contains("Return the three-way ordering between the two integer values."));
     assert!(
         !typed_doc.contains("\n  Return the three-way ordering between the two integer values.")
@@ -1177,6 +2469,11 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let helper_doc = doc_text(&helper_doc);
     assert!(helper_doc.contains("Compare::compare"));
     assert!(helper_doc.contains("Standard `Compare` trait declaration."));
+
+    let neq_helper_doc = engine.handle_line(":doc neq");
+    let neq_helper_doc = doc_text(&neq_helper_doc);
+    assert!(neq_helper_doc.contains("trait Neq { neq(self: Self, rhs: Self) -> Boolean }"));
+    assert!(neq_helper_doc.contains("Standard `Neq` operator trait declaration."));
 
     let operator_doc = engine.handle_line(":doc <");
     let operator_doc = doc_text(&operator_doc);
@@ -1194,7 +2491,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let typed_less_than_doc = engine.handle_line(":doc lt(Int, Int)");
     let typed_less_than_doc = doc_text(&typed_less_than_doc);
     assert!(
-        typed_less_than_doc.contains("impl Compare for Int::lt(self: Self, rhs: Self) -> Boolean"),
+        typed_less_than_doc.contains("impl Compare for Int::lt(self: Int, rhs: Int) -> Boolean"),
         "{typed_less_than_doc}"
     );
     assert!(
@@ -1204,10 +2501,21 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "{typed_less_than_doc}"
     );
 
+    let typed_neq_doc = engine.handle_line(":doc neq(Int, Int)");
+    let typed_neq_doc = doc_text(&typed_neq_doc);
+    assert!(
+        typed_neq_doc.contains("impl Neq for Int::neq(self: Int, rhs: Int) -> Boolean"),
+        "{typed_neq_doc}"
+    );
+    assert!(
+        typed_neq_doc.contains("Return `True` when the integer values differ."),
+        "{typed_neq_doc}"
+    );
+
     let constructor_doc = engine.handle_line(":doc Duration(Int)");
     let constructor_doc = doc_text(&constructor_doc);
     assert!(
-        constructor_doc.contains("Duration::new(value: Int) -> Result<Self, Error>"),
+        constructor_doc.contains("Duration::new(value: Int) -> Result<Duration, Error>"),
         "{constructor_doc}"
     );
     assert!(
@@ -1218,7 +2526,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_doc = engine.handle_line(":doc Duration!()");
     let extractor_doc = doc_text(&extractor_doc);
     assert!(
-        extractor_doc.contains("Duration::deconstruct(self: Self) -> MatchResult<Int, Error>"),
+        extractor_doc.contains("Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"),
         "{extractor_doc}"
     );
     assert!(
@@ -1230,8 +2538,9 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_sig = engine.handle_line(":sig Duration!()");
     let extractor_sig = signature_text(&extractor_sig);
     assert!(
-        extractor_sig
-            .contains("defined:\n  Duration::deconstruct(self: Self) -> MatchResult<Int, Error>"),
+        extractor_sig.contains(
+            "defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"
+        ),
         "{extractor_sig}"
     );
     assert!(
@@ -1246,8 +2555,9 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_sig_explicit_self = engine.handle_line(":sig Duration!(Duration)");
     let extractor_sig_explicit_self = signature_text(&extractor_sig_explicit_self);
     assert!(
-        extractor_sig_explicit_self
-            .contains("defined:\n  Duration::deconstruct(self: Self) -> MatchResult<Int, Error>"),
+        extractor_sig_explicit_self.contains(
+            "defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"
+        ),
         "{extractor_sig_explicit_self}"
     );
     assert!(
@@ -1260,14 +2570,14 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let duration_sig = signature_text(&duration_sig);
     assert_eq!(
         duration_sig.trim(),
-        "Duration::new(value: Int) -> Result<Self, Error>"
+        "Duration::new(value: Int) -> Result<Duration, Error>"
     );
 
     let duration_empty_call_sig = engine.handle_line(":sig Duration()");
     let duration_empty_call_sig = signature_text(&duration_empty_call_sig);
     assert_eq!(
         duration_empty_call_sig.trim(),
-        "Duration::new(value: Int) -> Result<Self, Error>"
+        "Duration::new(value: Int) -> Result<Duration, Error>"
     );
 
     let unsupported = engine.handle_line(":doc compare(make_value(), Int)");
@@ -1338,7 +2648,12 @@ fn core_sig_type_owner_falls_back_to_constructor_signatures() {
     assert!(point_sig.contains("StyledDocStyle::new("), "{point_sig}");
     assert!(point_sig.contains("fg: Option"), "{point_sig}");
     assert!(point_sig.contains("italic: Boolean"), "{point_sig}");
-    assert!(point_sig.contains("-> Self"), "{point_sig}");
+    assert!(point_sig.contains("-> StyledDocStyle"), "{point_sig}");
+
+    let style = rendered_text(&engine.handle_line(
+        "style = StyledDocStyle::new(Option::None, Option::None, True, False, False, False)",
+    ));
+    assert!(style.contains("style: StyledDocStyle"), "{style}");
 }
 
 #[test]
@@ -1872,6 +3187,26 @@ fn core_sig_supports_closure_bindings_recapture_and_application() {
 }
 
 #[test]
+fn core_completion_shows_signature_for_callable_binding_calls() {
+    let mut engine = engine();
+
+    let closure = engine.handle_line("formatter = {|value: Int| to_string(value)}");
+    let closure_text = rendered_text(&closure);
+    assert!(
+        closure_text.contains("formatter: (Int -> String)"),
+        "{closure_text}"
+    );
+
+    let completion = engine.completions("formatter(", "formatter(".len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("callable binding call-site should show signature help");
+    assert_eq!(signature.active_parameter, Some(0));
+    assert_eq!(signature.lines.join("\n"), "formatter([Int]) -> String");
+}
+
+#[test]
 fn core_callable_refs_and_signature_errors_are_ui_independent() {
     let mut engine = engine();
 
@@ -1984,6 +3319,39 @@ fn core_save_writes_decodable_eldr_snapshot() {
 }
 
 #[test]
+fn core_eldr_sig_queries_do_not_depend_on_docs_chunk() {
+    let mut engine = engine();
+    let dir = tempfile_dir("xldr-repl-core-eldr-sig-without-docs");
+    let path = dir.join("session.eldr");
+
+    let save = engine.handle_line(&format!(":save {}", path.display()));
+    assert!(rendered_text(&save).contains("saved to"));
+
+    let bytes = fs::read(&path).expect("saved .eldr should exist");
+    let mut bytecode = sindr::ir::Bytecode::decode(&bytes).expect("saved .eldr should decode");
+    bytecode.docs.clear();
+    let bytes = bytecode.encode().expect("modified .eldr should encode");
+
+    let mut restored = ReplEngine::from_eldr(&bytes).expect("restored engine should load");
+
+    let doc = rendered_text(&restored.handle_line(":doc compare(Int, Int)"));
+    assert!(
+        doc.contains("No docs found for compare(Int, Int)"),
+        "doc query should read only Docs chunk: {doc}"
+    );
+
+    let sig = signature_text(&restored.handle_line(":sig compare(Int, Int)"));
+    assert!(
+        sig.contains("impl Compare for Int::compare(self: Int, rhs: Int) -> Ordering"),
+        "{sig}"
+    );
+    assert!(
+        sig.contains("specialized:\n  compare(Int, Int) -> Ordering"),
+        "{sig}"
+    );
+}
+
+#[test]
 fn core_quit_command_sets_exit_without_ui_work() {
     let mut engine = engine();
 
@@ -2060,10 +3428,11 @@ fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
     let style_doc = doc_text(&style_doc);
     assert!(style_doc.contains("StyledDocStyle"), "{style_doc}");
     assert!(
-        style_doc.contains("defrecord StyledDocStyle"),
+        style_doc.contains("defstruct StyledDocStyle"),
         "{style_doc}"
     );
-    assert!(style_doc.contains("undocumented"), "{style_doc}");
+    assert!(style_doc.contains("StyledDocStyle.bold"), "{style_doc}");
+    assert!(style_doc.contains("lines.[0]"), "{style_doc}");
 
     let helper_before_import = engine.handle_line(":doc add");
     let helper_before_import = rendered_text(&helper_before_import);

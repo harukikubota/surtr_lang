@@ -32,8 +32,8 @@
 - `--format json`
 - `--format viewer-json`
 - `--entry <name>`
-- `--opcode-histogram`
-- `--peephole-candidates`
+- `--opcode-histogram` (`--format json` only)
+- `--peephole-candidates` (`--format json` only)
 
 ---
 
@@ -43,7 +43,8 @@
 - 開発観測のための統計・トレース・時間計測は `stderr`
 - `--vm-dump` は指定パスへ JSON ファイルを書き出す
 - `dump --format json` / `dump --format viewer-json` の本体 JSON は `stdout`
-- `dump --opcode-histogram` は `dump --format json` の JSON 本体に内包する
+- `dump --opcode-histogram` / `dump --peephole-candidates` は
+  `dump --format json` の JSON 本体に内包し、`viewer-json` では受け付けない
 
 この方針により、`spec` テストやパイプ処理で `stdout` 契約を壊さない。
 
@@ -207,6 +208,7 @@ runtime error または `run` entrypoint が返した `Err(...)` の表示に以
 {
   "summary": {
     "generated_function_count": 4,
+    "generated_wrapper_functions": 1,
     "partial_apply_wrapper_count": 1,
     "functions_with_call_closure": 2
   },
@@ -231,6 +233,7 @@ runtime error または `run` entrypoint が返した `Err(...)` の表示に以
         "call": 2,
         "call_builtin": 0,
         "call_closure": 0,
+        "tail_call_closure": 0,
         "capture_closure": 0,
         "capture_closure_zero": 0
       }

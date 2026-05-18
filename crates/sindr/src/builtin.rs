@@ -1,4 +1,4 @@
-use crate::names::{builtin_type_name, TypeName};
+use crate::names::{builtin_type_name, surface_path_name, TypeName};
 
 /// Built-in function metadata shared across Sigil / Scar / Forge / Eldr.
 ///
@@ -846,6 +846,36 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         sig_str: "(Float, Float) -> Float",
     },
     BuiltinMeta {
+        name: "floor",
+        arity: 1,
+        sig_str: "(Float) -> Float",
+    },
+    BuiltinMeta {
+        name: "ceil",
+        arity: 1,
+        sig_str: "(Float) -> Float",
+    },
+    BuiltinMeta {
+        name: "round",
+        arity: 1,
+        sig_str: "(Float) -> Float",
+    },
+    BuiltinMeta {
+        name: "trunc",
+        arity: 1,
+        sig_str: "(Float) -> Float",
+    },
+    BuiltinMeta {
+        name: "pi",
+        arity: 0,
+        sig_str: "() -> Float",
+    },
+    BuiltinMeta {
+        name: "e",
+        arity: 0,
+        sig_str: "() -> Float",
+    },
+    BuiltinMeta {
         name: "__operator_int_eq",
         arity: 2,
         sig_str: "(Int, Int) -> Boolean",
@@ -1122,7 +1152,7 @@ pub fn builtin_meta_by_name(name: &str) -> Option<&'static BuiltinMeta> {
 }
 
 pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&str>) -> &'a str {
-    let qualified_name = qualified_name.map(|name| name.strip_prefix("Global::").unwrap_or(name));
+    let qualified_name = qualified_name.map(surface_path_name);
     match qualified_name {
         Some("IO::get") => "io_get",
         Some("IO::get_line") => "io_get_line",

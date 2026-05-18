@@ -1,0 +1,3 @@
+import Process::on_down
+
+print(to_string(on_down))

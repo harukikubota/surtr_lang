@@ -210,8 +210,8 @@ fn collect_module_fixture_stages(case_dir: &Path) -> Vec<Vec<ModuleInput>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        compile_error_fixtures, module_compile_error_fixtures, module_spec_fixtures,
-        parse_stage_dir_order, spec_fixtures,
+        assert_compile_error_matches, compile_error_fixtures, module_compile_error_fixtures,
+        module_spec_fixtures, parse_stage_dir_order, spec_fixtures, CompileErrorExpectation,
     };
     use std::path::Path;
 
@@ -275,6 +275,41 @@ mod tests {
                 .to_string_lossy()
                 .contains("/tests/fixtures/modules/fail/")),
             "module fail fixtures should live under tests/fixtures/modules/fail"
+        );
+    }
+
+    #[test]
+    fn compile_error_matcher_checks_phase_and_needles() {
+        let expected = CompileErrorExpectation {
+            phase: Some("typecheck".to_string()),
+            contains: vec!["expected Int".to_string(), "got String".to_string()],
+        };
+
+        assert_compile_error_matches(
+            &expected,
+            "phase=typecheck; message=expected Int, got String",
+            Path::new("fixture.srt"),
+        );
+    }
+
+    #[test]
+    fn json_config_rw_fixture_uses_tmp_and_cleans_up() {
+        let fixture = spec_fixtures()
+            .into_iter()
+            .find(|fixture| {
+                fixture
+                    .source_path
+                    .ends_with("tests/fixtures/script/pass/json/config_file_rw.srt")
+            })
+            .expect("expected json config rw fixture");
+
+        assert!(
+            fixture.source.contains("./tmp/"),
+            "json config rw fixture should write under ./tmp"
+        );
+        assert!(
+            fixture.source.contains("File::delete(path)"),
+            "json config rw fixture should delete the temporary file"
         );
     }
 }
@@ -425,4 +460,29 @@ pub fn extract_phase_tag(message: &str) -> Option<&str> {
     message
         .strip_prefix("phase=")
         .and_then(|rest| rest.split_once(';').map(|(phase, _)| phase))
+}
+
+pub fn assert_compile_error_matches(
+    expected: &CompileErrorExpectation,
+    actual: &str,
+    display_path: &Path,
+) {
+    if let Some(expected_phase) = expected.phase.as_deref() {
+        let actual_phase = extract_phase_tag(actual).unwrap_or("unknown");
+        assert_eq!(
+            actual_phase,
+            expected_phase,
+            "phase mismatch for {}",
+            display_path.display()
+        );
+    }
+    for needle in &expected.contains {
+        assert!(
+            actual.contains(needle),
+            "expected '{}' in error for {}\nactual: {}",
+            needle,
+            display_path.display(),
+            actual
+        );
+    }
 }

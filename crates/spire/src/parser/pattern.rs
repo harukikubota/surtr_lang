@@ -21,11 +21,13 @@ impl Parser<'_> {
             start: super::pattern_span(&pat).start,
             end: rhs.span().end,
         };
-        Ok(match assign_tok {
-            Token::Bind => Ast::Bind(span, pat, Box::new(rhs)),
-            Token::SafeBind => Ast::SafeBind(span, pat, Box::new(rhs)),
-            _ => unreachable!("validated assignment token"),
-        })
+        if matches!(assign_tok, Token::Bind) && pattern_contains_pin(&pat) {
+            return Err(ParseError::syntax(
+                "Pinned patterns are not allowed with =. Use =? or match for value checks.",
+                span,
+            ));
+        }
+        Self::assignment_ast(assign_tok, span, pat, rhs)
     }
 
     pub(super) fn is_pattern_bind_stmt_start(&self) -> bool {
@@ -34,6 +36,7 @@ impl Parser<'_> {
             Token::LBrack
                 | Token::LParen
                 | Token::Ident(_)
+                | Token::Caret
                 | Token::Int(_)
                 | Token::Str(_)
                 | Token::True
@@ -77,6 +80,10 @@ impl Parser<'_> {
                 }
 
                 let mut items = vec![first];
+                if matches!(parser.peek(), Token::RBrack) {
+                    let end = parser.expect(&Token::RBrack)?;
+                    return Ok(super::fixed_bind_list_pattern(sp.start, end.end, items));
+                }
                 items.push(parser.parse_bind_pattern()?);
                 while matches!(parser.peek(), Token::Comma) {
                     parser.advance();
@@ -112,11 +119,17 @@ impl Parser<'_> {
             self.skip_newlines();
             alts.push(self.parse_bind_pattern_atom()?);
         }
-        let mut pat = if alts.len() == 1 {
-            alts.pop().expect("one pattern alternative")
+        let mut pat = if let [single] = alts.as_slice() {
+            single.clone()
         } else {
-            let start = super::pattern_span(alts.first().expect("pattern alternative")).start;
-            let end = super::pattern_span(alts.last().expect("pattern alternative")).end;
+            let start = alts
+                .first()
+                .map(|pat| super::pattern_span(pat).start)
+                .unwrap_or_else(|| self.peek_span().start);
+            let end = alts
+                .last()
+                .map(|pat| super::pattern_span(pat).end)
+                .unwrap_or(start);
             AstPattern::Or(Span { start, end }, alts)
         };
         loop {
@@ -167,6 +180,23 @@ impl Parser<'_> {
             Token::Ident(name) if name == "_" => {
                 self.advance();
                 Ok(AstPattern::Wildcard(sp))
+            }
+            Token::Caret => {
+                self.advance();
+                let (name, name_span) = self.expect_ident()?;
+                if name == "self" && self.impl_target_stack.is_empty() {
+                    return Err(ParseError::syntax(
+                        "`self` can only be used inside impl methods",
+                        name_span,
+                    ));
+                }
+                Ok(AstPattern::Pin(
+                    Span {
+                        start: sp.start,
+                        end: name_span.end,
+                    },
+                    name,
+                ))
             }
             Token::Int(n) => {
                 self.advance();
@@ -359,5 +389,47 @@ impl Parser<'_> {
     /// Match pattern now reuses the same grammar as bind/safe-bind patterns.
     pub(super) fn parse_match_pattern(&mut self) -> Result<AstPattern, ParseError> {
         self.parse_bind_pattern()
+    }
+}
+
+pub(super) fn pattern_contains_pin(pattern: &AstPattern) -> bool {
+    match pattern {
+        AstPattern::Pin(_, _) => true,
+        AstPattern::As(_, inner, _, _) => pattern_contains_pin(inner),
+        AstPattern::ListCons(_, head, tail) => {
+            pattern_contains_pin(head) || pattern_contains_pin(tail)
+        }
+        AstPattern::Constructor(_, _, items)
+        | AstPattern::Call(_, _, items)
+        | AstPattern::Tuple(_, items)
+        | AstPattern::Or(_, items) => items.iter().any(pattern_contains_pin),
+        AstPattern::Var(_, _)
+        | AstPattern::Annotated(_, _, _)
+        | AstPattern::Wildcard(_)
+        | AstPattern::ListNil(_)
+        | AstPattern::IntLit(_, _)
+        | AstPattern::StrLit(_, _)
+        | AstPattern::BoolLit(_, _)
+        | AstPattern::DurationLit(_, _) => false,
+    }
+}
+
+pub(super) fn pattern_contains_binding_var(pattern: &AstPattern) -> bool {
+    match pattern {
+        AstPattern::Var(_, _) | AstPattern::Annotated(_, _, _) | AstPattern::As(_, _, _, _) => true,
+        AstPattern::ListCons(_, head, tail) => {
+            pattern_contains_binding_var(head) || pattern_contains_binding_var(tail)
+        }
+        AstPattern::Constructor(_, _, items)
+        | AstPattern::Call(_, _, items)
+        | AstPattern::Tuple(_, items)
+        | AstPattern::Or(_, items) => items.iter().any(pattern_contains_binding_var),
+        AstPattern::Wildcard(_)
+        | AstPattern::Pin(_, _)
+        | AstPattern::ListNil(_)
+        | AstPattern::IntLit(_, _)
+        | AstPattern::StrLit(_, _)
+        | AstPattern::BoolLit(_, _)
+        | AstPattern::DurationLit(_, _) => false,
     }
 }

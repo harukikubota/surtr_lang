@@ -1,7 +1,9 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
+use std::fmt;
 use std::rc::Rc;
 
+use crate::names::surface_path_name;
 use crate::primitives::{BuiltinId, FunctionId, RuntimeTag, SurtrInt};
 
 /// Kind of user-defined type at runtime.
@@ -23,6 +25,32 @@ pub struct TypeEntry {
     pub private_flags: Vec<bool>,
 }
 
+/// Validation error for runtime type metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeRegistryError {
+    message: String,
+}
+
+impl TypeRegistryError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for TypeRegistryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for TypeRegistryError {}
+
 /// Registry of all user-defined types in a compiled program.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeRegistry {
@@ -39,12 +67,27 @@ impl TypeRegistry {
     }
 
     pub fn from_entries(entries: Vec<TypeEntry>) -> Self {
+        Self::try_from_entries(entries).expect("invalid TypeRegistry entries")
+    }
+
+    pub fn try_from_entries(entries: Vec<TypeEntry>) -> Result<Self, TypeRegistryError> {
         let mut registry = Self::new();
-        registry.extend(entries);
-        registry
+        registry.try_extend(entries)?;
+        Ok(registry)
     }
 
     pub fn register(&mut self, entry: TypeEntry) {
+        self.try_register(entry)
+            .expect("invalid TypeRegistry entry");
+    }
+
+    pub fn try_register(&mut self, entry: TypeEntry) -> Result<(), TypeRegistryError> {
+        validate_type_registry_append(&self.entries, std::slice::from_ref(&entry))?;
+        self.register_unchecked(entry);
+        Ok(())
+    }
+
+    fn register_unchecked(&mut self, entry: TypeEntry) {
         self.tag_to_index.insert(entry.tag, self.entries.len());
         self.entries.push(entry);
     }
@@ -53,9 +96,20 @@ impl TypeRegistry {
     where
         I: IntoIterator<Item = TypeEntry>,
     {
+        self.try_extend(entries)
+            .expect("invalid TypeRegistry extension");
+    }
+
+    pub fn try_extend<I>(&mut self, entries: I) -> Result<(), TypeRegistryError>
+    where
+        I: IntoIterator<Item = TypeEntry>,
+    {
+        let entries = entries.into_iter().collect::<Vec<_>>();
+        validate_type_registry_append(&self.entries, &entries)?;
         for entry in entries {
-            self.register(entry);
+            self.register_unchecked(entry);
         }
+        Ok(())
     }
 
     pub fn entries(&self) -> &[TypeEntry] {
@@ -79,10 +133,9 @@ impl TypeRegistry {
     }
 
     pub fn lookup_by_name(&self, qualified_name: &str) -> Option<&TypeEntry> {
+        let surface_query = surface_path_name(qualified_name);
         self.entries.iter().find(|entry| {
-            entry.name == qualified_name
-                || entry.name.strip_prefix("Global::") == Some(qualified_name)
-                || qualified_name.strip_prefix("Global::") == Some(entry.name.as_str())
+            entry.name == qualified_name || surface_path_name(&entry.name) == surface_query
         })
     }
 
@@ -112,8 +165,76 @@ impl<'de> Deserialize<'de> for TypeRegistry {
         D: Deserializer<'de>,
     {
         let entries = Vec::<TypeEntry>::deserialize(deserializer)?;
-        Ok(Self::from_entries(entries))
+        Self::try_from_entries(entries).map_err(serde::de::Error::custom)
     }
+}
+
+pub fn validate_type_registry_append(
+    existing: &[TypeEntry],
+    entries: &[TypeEntry],
+) -> Result<(), TypeRegistryError> {
+    let mut by_tag = HashMap::new();
+    let mut by_surface_name: HashMap<String, &TypeEntry> = HashMap::new();
+
+    for entry in existing {
+        validate_type_entry_shape(entry)?;
+        if matches!(entry.tag, 0 | 1) {
+            return Err(TypeRegistryError::new(format!(
+                "reserved result tag reused in TypeRegistry: {}",
+                entry.tag
+            )));
+        }
+        if by_tag.insert(entry.tag, entry).is_some() {
+            return Err(TypeRegistryError::new(format!(
+                "duplicate type tag in TypeRegistry: {}",
+                entry.tag
+            )));
+        }
+        let surface_name = surface_path_name(&entry.name).to_string();
+        if let Some(previous) = by_surface_name.insert(surface_name, entry) {
+            return Err(TypeRegistryError::new(format!(
+                "duplicate type name in TypeRegistry: {} conflicts with {}",
+                entry.name, previous.name
+            )));
+        }
+    }
+
+    for entry in entries {
+        validate_type_entry_shape(entry)?;
+        if matches!(entry.tag, 0 | 1) {
+            return Err(TypeRegistryError::new(format!(
+                "reserved result tag reused in TypeRegistry: {}",
+                entry.tag
+            )));
+        }
+        if by_tag.insert(entry.tag, entry).is_some() {
+            return Err(TypeRegistryError::new(format!(
+                "duplicate type tag in TypeRegistry: {}",
+                entry.tag
+            )));
+        }
+        let surface_name = surface_path_name(&entry.name).to_string();
+        if let Some(previous) = by_surface_name.insert(surface_name, entry) {
+            return Err(TypeRegistryError::new(format!(
+                "duplicate type name in TypeRegistry: {} conflicts with {}",
+                entry.name, previous.name
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_type_entry_shape(entry: &TypeEntry) -> Result<(), TypeRegistryError> {
+    if entry.private_flags.len() != entry.field_names.len() {
+        return Err(TypeRegistryError::new(format!(
+            "TypeRegistry entry {} private_flags length {} does not match field_names length {}",
+            entry.name,
+            entry.private_flags.len(),
+            entry.field_names.len()
+        )));
+    }
+    Ok(())
 }
 
 /// Runtime value in the Surtr VM.
@@ -261,10 +382,6 @@ pub enum CallableOrigin {
 }
 
 impl Value {
-    fn surface_type_name(type_name: &str) -> &str {
-        type_name.strip_prefix("Global::").unwrap_or(type_name)
-    }
-
     fn render_named_value(
         type_name: &str,
         field_names: &[String],
@@ -291,11 +408,7 @@ impl Value {
             parts.push("..private".to_string());
         }
 
-        format!(
-            "{}({})",
-            Self::surface_type_name(type_name),
-            parts.join(", ")
-        )
+        format!("{}({})", surface_path_name(type_name), parts.join(", "))
     }
 
     /// Display string for `to_string` built-in.
@@ -330,7 +443,7 @@ impl Value {
             }
             Value::HashMap(handle) => {
                 if handle.entries.is_empty() {
-                    return "HashMap()".to_string();
+                    return "hash![]".to_string();
                 }
                 let inner = handle
                     .sorted_entries()
@@ -344,7 +457,7 @@ impl Value {
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("HashMap({inner})")
+                format!("hash![{inner}]")
             }
             Value::Tuple(items) => {
                 let inner = items
@@ -356,7 +469,7 @@ impl Value {
             }
             Value::Tagged { tag, fields } => {
                 if let Some(entry) = registry.lookup(*tag) {
-                    if Self::surface_type_name(&entry.name) == "Duration" {
+                    if surface_path_name(&entry.name) == "Duration" {
                         if let Some(Value::Int(ms)) = fields.first() {
                             return format!("{ms}ms");
                         }
@@ -377,9 +490,9 @@ impl Value {
                                 .collect::<Vec<_>>()
                                 .join(", ");
                             if payload.is_empty() {
-                                Self::surface_type_name(&entry.name).to_string()
+                                surface_path_name(&entry.name).to_string()
                             } else {
-                                format!("{}({})", Self::surface_type_name(&entry.name), payload)
+                                format!("{}({})", surface_path_name(&entry.name), payload)
                             }
                         }
                     }
@@ -433,7 +546,7 @@ impl Value {
             Value::RandomGenerator(_) => "RandomGenerator(<opaque>)".to_string(),
             Value::Pid(handle) => format!(
                 "PID({}#{})",
-                Self::surface_type_name(&handle.process_name),
+                surface_path_name(&handle.process_name),
                 handle.id
             ),
             Value::FileHandle(handle) => format!("FileHandle#{}", handle.id),
@@ -447,7 +560,7 @@ impl Value {
     }
 }
 
-fn quote_surtr_string_literal(input: &str) -> String {
+pub fn quote_surtr_string_literal(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + 2);
     out.push('"');
     for ch in input.chars() {
@@ -679,7 +792,7 @@ impl RichError {
     }
 
     pub fn to_eprint_lines(&self) -> Vec<String> {
-        let display_kind = self.kind.strip_prefix("Global::").unwrap_or(&self.kind);
+        let display_kind = surface_path_name(&self.kind);
         let mut lines = vec![format!(
             "Error: {}: {}",
             display_kind,
@@ -687,7 +800,7 @@ impl RichError {
         )];
         let mut next = self.cause.as_deref();
         while let Some(cause) = next {
-            let cause_kind = cause.kind.strip_prefix("Global::").unwrap_or(&cause.kind);
+            let cause_kind = surface_path_name(&cause.kind);
             lines.push(format!(
                 "Caused by: {}: {}",
                 cause_kind,
@@ -715,7 +828,7 @@ impl RichError {
         lines.push(format!(
             "{}{}({:?})",
             first_prefix,
-            Value::surface_type_name(&self.kind),
+            surface_path_name(&self.kind),
             self.visible_message()
         ));
         if let Some(cause) = self.cause.as_deref() {
@@ -930,7 +1043,7 @@ mod tests {
         ]));
         assert_eq!(
             value.to_display_string(&registry),
-            "HashMap(\"line\\nfeed\" => 1, \"path\\\\to\" => 2, \"say\\\"hi\" => 3, \"tab\\tchar\" => 4)"
+            "hash![\"line\\nfeed\" => 1, \"path\\\\to\" => 2, \"say\\\"hi\" => 3, \"tab\\tchar\" => 4]"
         );
     }
 
@@ -991,6 +1104,76 @@ mod tests {
             registry.lookup(42).map(|entry| entry.name.as_str()),
             Some("Global::Profile")
         );
+    }
+
+    #[test]
+    fn type_registry_try_extend_rejects_reserved_and_duplicate_tags() {
+        let mut registry = TypeRegistry::from_entries(vec![TypeEntry {
+            tag: 10,
+            name: "Global::User".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["name".into()],
+            private_flags: vec![false],
+        }]);
+
+        let reserved = registry.try_register(TypeEntry {
+            tag: 0,
+            name: "Global::BadOk".into(),
+            kind: TypeKind::Struct,
+            field_names: Vec::new(),
+            private_flags: Vec::new(),
+        });
+        assert!(reserved
+            .expect_err("reserved tags must be rejected")
+            .to_string()
+            .contains("reserved result tag"));
+
+        let duplicate = registry.try_register(TypeEntry {
+            tag: 10,
+            name: "Global::OtherUser".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["id".into()],
+            private_flags: vec![false],
+        });
+        assert!(duplicate
+            .expect_err("duplicate tags must be rejected")
+            .to_string()
+            .contains("duplicate type tag"));
+    }
+
+    #[test]
+    fn type_registry_try_register_rejects_incompatible_name_and_privacy_shape() {
+        let mut registry = TypeRegistry::from_entries(vec![TypeEntry {
+            tag: 10,
+            name: "Global::User".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["name".into()],
+            private_flags: vec![false],
+        }]);
+
+        let duplicate_name = registry.try_register(TypeEntry {
+            tag: 11,
+            name: "Global::User".into(),
+            kind: TypeKind::Record,
+            field_names: vec!["name".into(), "age".into()],
+            private_flags: vec![false, false],
+        });
+        assert!(duplicate_name
+            .expect_err("incompatible duplicate names must be rejected")
+            .to_string()
+            .contains("duplicate type name"));
+
+        let bad_privacy_shape = registry.try_register(TypeEntry {
+            tag: 12,
+            name: "Global::Profile".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["id".into(), "label".into()],
+            private_flags: vec![false],
+        });
+        assert!(bad_privacy_shape
+            .expect_err("privacy flag count must match fields")
+            .to_string()
+            .contains("private_flags length"));
     }
 
     #[test]

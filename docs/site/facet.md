@@ -380,20 +380,20 @@ may stop at:
 1. Expr.Add - variant mismatch returns Result
 ```
 
-`Result<T>` source から始める value-side query でも、停止点は `:facet` にまとまります。
+`Result<T>` source から始める facet binding でも、停止点は `:facet` にまとまります。
 
 ```text
-xldr(1)> :facet result_user.profile.name
+xldr(1)> :facet $result_user_name
 type: Facet<Result<User>, String>
 full path: User.profile.name
 may stop at:
 1. source - input already starts in Result context
 ```
 
-dynamic container path では bracket expression の表示もそのまま残ります。
+dynamic container path の任意式は command query surface では扱いません。REPL では値側で作った facet binding を `$name` で指定します。
 
 ```text
-xldr(1)> :facet User.scores.[index + 1]
+xldr(1)> :facet $next_score
 type: Facet<User, Int>
 full path: User.scores.[index + 1]
 ```
@@ -460,7 +460,7 @@ facet = User.password
 - `var_name.lenspath` は read sugar であって、field access 一般の許可とは同義ではありません。private field は見える範囲でしか path にできず、`value.private_field` も同じ境界で拒否されます。
 - `Tuple._0` のような tuple root は、同一スコープの local binding として保持できます。`Facet::view(...)` や `/` で同じスコープ内に消費してください。
 - chain した path は canonical 表示へ圧縮されるので、`User.profile / Profile.name` を inspect すると `User.profile.name` に見えます。`/` の組み立て履歴そのものは残りません。
-- variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:facet <binding|expr>` で確認するのが一番わかりやすいです。
+- variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:facet <FacetPath|$binding>` で確認するのが一番わかりやすいです。
 - スコープをまたぐときは `Facet` ではなく、`Facet::view(...)` 済みの値を渡します。
 - `Result` を返す updater とつなぐ field には、`Option<T>` より `T?` の方が更新パイプが短くなります。
 - `List.[expr]` / `List.[start..end]` / `HashMap.[expr]` は普通の path では runtime 式を許可しますが、`const Facet<...>` では literal だけに絞られます。

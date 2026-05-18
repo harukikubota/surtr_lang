@@ -10,7 +10,6 @@ module との境界をまとめる開発者向け正本仕様。
 - builtin / VM 実装契約
 - テストで固定すべき観点
 
-入力メモは [../../doc/FS_Shell_原案.md](../../doc/FS_Shell_原案.md)。
 language-level の正本は [../../doc/要件定義v9.md](../../doc/要件定義v9.md)、
 runtime 実行層の詳細は [EldrVM spec](./EldrVM_spec.md)、テスト配置方針は
 [テスト方針](./テスト方針.md) を併読する。
@@ -264,6 +263,8 @@ defmod Shell {
 
 `Shell::cd` は Surtr VM / 実行コンテキストの working directory を変更する。
 host parent process の cwd を変更する契約ではない。
+directory として受理した path の canonicalize に失敗した場合は
+`Err(ShellIoError)` を返し、VM context cwd は変更しない。
 
 `Shell::exec(command, args)` は shell parser を通さず、`command` と `args` を
 分離して実行する。起動できた場合、process の終了 code が非ゼロでも
@@ -335,6 +336,8 @@ VM は `Shell::pwd` / `Shell::cd` 用に execution context cwd を持つ。
 `Shell::cd` は並列 test や複数 VM 実行に干渉しないよう、process-wide
 `std::env::set_current_dir` へ直接寄せない。実装上どうしても host cwd を使う場合でも、
 公開契約は VM context cwd とし、テストで漏れを検出する。
+directory 判定後の canonicalize が失敗した場合、`Shell::cd` は
+`Err(ShellIoError)` を返して現在の VM context cwd を保持する。
 
 ### 3.4 Shell execution
 

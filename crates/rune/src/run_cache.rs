@@ -1,8 +1,6 @@
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use std::time::UNIX_EPOCH;
+use std::path::PathBuf;
 
 use forge::bytecode::{stable_hash_hex, Bytecode};
 
@@ -77,8 +75,13 @@ pub(crate) fn store(
 
 fn enabled() -> bool {
     !matches!(
-        env::var("SURTR_RUN_CACHE").ok().as_deref(),
-        Some("0") | Some("false") | Some("FALSE") | Some("no") | Some("NO")
+        env::var("SURTR_RUN_CACHE")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("0") | Some("false") | Some("no")
     )
 }
 
@@ -95,24 +98,14 @@ fn cache_path(
 
 fn cache_root() -> PathBuf {
     if let Some(path) = env::var_os("SURTR_RUN_CACHE_DIR") {
-        return PathBuf::from(path);
+        if !path.to_string_lossy().trim().is_empty() {
+            return PathBuf::from(path);
+        }
     }
 
-    target_root_from_current_exe()
+    xldr::target_root_from_current_exe()
         .map(|root| root.join("run-cache").join("eldr"))
         .unwrap_or_else(|| env::temp_dir().join("surtr-run-cache").join("eldr"))
-}
-
-fn target_root_from_current_exe() -> Option<PathBuf> {
-    let exe = env::current_exe().ok()?;
-    let mut current = exe.parent()?;
-    while let Some(name) = current.file_name().and_then(|name| name.to_str()) {
-        if name == "debug" || name == "release" {
-            return current.parent().map(Path::to_path_buf);
-        }
-        current = current.parent()?;
-    }
-    None
 }
 
 fn cache_key(
@@ -132,7 +125,7 @@ fn cache_key(
     let mut key = String::new();
     key.push_str(CACHE_VERSION);
     key.push('\x1f');
-    key.push_str(&current_exe_fingerprint()?);
+    key.push_str(&xldr::current_exe_fingerprint().ok()?);
     key.push('\x1f');
     key.push_str(env.command_name());
     key.push('\x1f');
@@ -175,7 +168,7 @@ fn push_module_pipeline_key(key: &mut String, compile_sources: &xldr::CompileSou
             key.push('\x1f');
             key.push_str(&module.module_path);
             key.push('\x1f');
-            key.push_str(source_kind_key(module.source_kind));
+            key.push_str(xldr::source_kind_cache_key(module.source_kind));
             key.push('\x1f');
             key.push_str(&stable_hash_hex(source));
             key.push('\x1e');
@@ -183,31 +176,42 @@ fn push_module_pipeline_key(key: &mut String, compile_sources: &xldr::CompileSou
     }
 }
 
-fn source_kind_key(kind: xldr::SourceKind) -> &'static str {
-    match kind {
-        xldr::SourceKind::Script => "script",
-        // Keep serialized key values stable for backward-compatible cache reuse.
-        xldr::SourceKind::DefinitionSource => "module",
-        xldr::SourceKind::StdDefinitionSource => "std",
-        xldr::SourceKind::ReplChunk => "repl",
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::{cache_root, enabled};
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
 
-fn current_exe_fingerprint() -> Option<String> {
-    static FINGERPRINT: OnceLock<Option<String>> = OnceLock::new();
-    FINGERPRINT
-        .get_or_init(|| {
-            let exe = env::current_exe().ok()?;
-            let metadata = fs::metadata(&exe).ok()?;
-            let modified = metadata.modified().ok()?;
-            let modified = modified.duration_since(UNIX_EPOCH).ok()?;
-            Some(stable_hash_hex(&format!(
-                "{}\x1f{}\x1f{}\x1f{}",
-                exe.display(),
-                metadata.len(),
-                modified.as_secs(),
-                modified.subsec_nanos()
-            )))
-        })
-        .clone()
+    fn env_lock() -> &'static Mutex<()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn run_cache_false_env_values_are_trimmed_and_case_insensitive() {
+        let _guard = env_lock().lock().expect("env lock");
+        let previous = std::env::var("SURTR_RUN_CACHE").ok();
+        std::env::set_var("SURTR_RUN_CACHE", " False ");
+
+        assert!(!enabled());
+
+        match previous {
+            Some(value) => std::env::set_var("SURTR_RUN_CACHE", value),
+            None => std::env::remove_var("SURTR_RUN_CACHE"),
+        }
+    }
+
+    #[test]
+    fn run_cache_empty_dir_env_uses_default_root() {
+        let _guard = env_lock().lock().expect("env lock");
+        let previous = std::env::var("SURTR_RUN_CACHE_DIR").ok();
+        std::env::set_var("SURTR_RUN_CACHE_DIR", " ");
+
+        assert_ne!(cache_root(), PathBuf::from(" "));
+
+        match previous {
+            Some(value) => std::env::set_var("SURTR_RUN_CACHE_DIR", value),
+            None => std::env::remove_var("SURTR_RUN_CACHE_DIR"),
+        }
+    }
 }

@@ -1,11 +1,13 @@
 use sindr::builtin::builtin_meta_by_id;
 use sindr::ir::{
-    line_column_for_offset, Bytecode, BytecodeChunk, CallableTemplate, CallableTemplateArg,
-    CallableTemplateComposeFlavor, CallableTemplateDirectTarget, CallableTemplateKind, Constant,
-    DocEntry, FunctionEntry, Opcode, RuntimeHandlerTarget, RuntimeInitPolicy,
-    RuntimeProcessInstance, RuntimeProcessSpec, RuntimeProcessSpecTable, RuntimeSupervisorPolicy,
-    SourceMap,
+    line_column_for_offset, validate_chunk_function_table, validate_program_function_table,
+    validate_type_registry_append_entries, Bytecode, BytecodeChunk, CallableTemplate,
+    CallableTemplateArg, CallableTemplateComposeFlavor, CallableTemplateDirectTarget,
+    CallableTemplateKind, Constant, DocEntry, FunctionEntry, Opcode, RuntimeHandlerTarget,
+    RuntimeInitPolicy, RuntimeProcessInstance, RuntimeProcessSpec, RuntimeProcessSpecTable,
+    RuntimeSupervisorPolicy, SourceMap,
 };
+use sindr::names::IMPLICIT_ROOT_NAMESPACE_PREFIX;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
     Callable, CallableMetadata, CallableOrigin, CallableTarget, FileHandleValue, ListHandle,
@@ -854,7 +856,7 @@ pub struct VM {
     open_files: HashMap<u64, VmOpenFile>,
     next_file_handle_id: u64,
     cwd: PathBuf,
-    /// VM-owned process table for the initial actor/agent runtime.
+    /// VM-owned process table built from bytecode runtime process specs.
     process_runtime: ProcessRuntime,
 }
 
@@ -1080,6 +1082,104 @@ impl VM {
             }
             sindr::ir::CallableTemplateDirectTarget::Function(fun_idx) => {
                 self.invoke_callable_sync(self.callable_for_function(*fun_idx), args)
+            }
+        }
+    }
+
+    fn invoke_direct_template_target_step(
+        &mut self,
+        target: &CallableTemplateDirectTarget,
+        args: Vec<Value>,
+    ) -> StepOutcome {
+        match target {
+            CallableTemplateDirectTarget::Builtin(builtin_id) => {
+                match call_builtin(self, *builtin_id, args) {
+                    Ok(Value::PendingFuture(future_id)) => {
+                        StepOutcome::Halt(Value::PendingFuture(future_id))
+                    }
+                    Ok(value) => StepOutcome::Halt(value),
+                    Err(err) => StepOutcome::RuntimeError(err),
+                }
+            }
+            CallableTemplateDirectTarget::Function(fun_idx) => {
+                self.invoke_callable_step(self.callable_for_function(*fun_idx), args)
+            }
+        }
+    }
+
+    fn invoke_callable_template_step(
+        &mut self,
+        template_id: u32,
+        lexical_captures: Vec<Value>,
+        runtime_args: Vec<Value>,
+    ) -> StepOutcome {
+        let template = match self.callable_template(template_id) {
+            Ok(template) => template.clone(),
+            Err(err) => return StepOutcome::RuntimeError(err),
+        };
+        match template.kind {
+            CallableTemplateKind::PartialDirectCall {
+                target,
+                arg_sources,
+            } => {
+                let mut final_args = Vec::with_capacity(arg_sources.len());
+                for source in arg_sources {
+                    let value = match source {
+                        CallableTemplateArg::Bound(idx) => {
+                            lexical_captures.get(idx as usize).cloned().ok_or_else(|| {
+                                RuntimeError::new(format!(
+                                    "Callable template {} bound arg out of bounds: {}",
+                                    template_id, idx
+                                ))
+                            })
+                        }
+                        CallableTemplateArg::Runtime(idx) => {
+                            runtime_args.get(idx as usize).cloned().ok_or_else(|| {
+                                RuntimeError::new(format!(
+                                    "Callable template {} runtime arg out of bounds: {}",
+                                    template_id, idx
+                                ))
+                            })
+                        }
+                    };
+                    match value {
+                        Ok(value) => final_args.push(value),
+                        Err(err) => return StepOutcome::RuntimeError(err),
+                    }
+                }
+                self.invoke_direct_template_target_step(&target, final_args)
+            }
+            CallableTemplateKind::InjectDirectCall {
+                target,
+                bound_arg_count,
+            } => {
+                let Some((first_arg, rest_args)) = runtime_args.split_first() else {
+                    return StepOutcome::RuntimeError(RuntimeError::new(format!(
+                        "Callable template {} requires at least one runtime argument",
+                        template_id
+                    )));
+                };
+                let mut final_args =
+                    Vec::with_capacity(1 + lexical_captures.len() + rest_args.len());
+                final_args.push(first_arg.clone());
+                final_args.extend(
+                    lexical_captures
+                        .iter()
+                        .take(bound_arg_count as usize)
+                        .cloned(),
+                );
+                final_args.extend(rest_args.iter().cloned());
+                self.invoke_direct_template_target_step(&target, final_args)
+            }
+            CallableTemplateKind::ComposeDirect { .. } => {
+                match self.invoke_callable_template_sync(
+                    template_id,
+                    lexical_captures,
+                    runtime_args,
+                ) {
+                    Ok(value) => StepOutcome::Halt(value),
+                    Err(err) => StepOutcome::RuntimeError(err),
+                }
             }
         }
     }
@@ -2782,6 +2882,34 @@ impl VM {
                 })
             }
             StepOutcome::Pending { future_id, resume } => {
+                if self
+                    .process_runtime
+                    .futures
+                    .get(&future_id)
+                    .is_some_and(|future| future.correlation_id.is_some())
+                {
+                    self.process_runtime.attach_future_deadline(
+                        future_id,
+                        self.process_runtime.current_tick_ms,
+                        timeout_ms,
+                        true,
+                    );
+                    self.wait_for_any_future(&[future_id])?;
+                    return match self.resume_execution(resume) {
+                        StepOutcome::Halt(value) => Ok(value),
+                        pending @ StepOutcome::Pending { .. } => {
+                            match self.drive_pending_to_halt(pending)? {
+                                StepOutcome::Halt(value) => Ok(value),
+                                StepOutcome::RuntimeError(err) => Err(err),
+                                _ => Err(RuntimeError::new("callable execution did not finish")),
+                            }
+                        }
+                        StepOutcome::RuntimeError(err) => Err(err),
+                        StepOutcome::Continue => {
+                            Err(RuntimeError::new("callable execution did not finish"))
+                        }
+                    };
+                }
                 let completion_future = self
                     .process_runtime
                     .allocate_future_after(None, timeout_ms, true);
@@ -3503,6 +3631,7 @@ impl VM {
             const_base: chunk_const_base,
             constants,
             new_locals,
+            type_registry_base: chunk_type_registry_base,
             type_entries,
             error_template_base: chunk_error_template_base,
             error_templates,
@@ -3511,12 +3640,14 @@ impl VM {
             callable_templates,
             functions,
             docs,
+            signatures: _,
             runtime_process_specs,
             runtime_boot_plan,
         } = chunk;
         self.ensure_root_supervisor_booted()?;
         let code_base = self.bytecode.opcodes.len();
         let const_base = self.bytecode.constants.len();
+        let type_registry_base = self.bytecode.type_registry.entries().len();
         let error_template_base = self.bytecode.error_templates.len();
         let dbg_template_base = self.bytecode.dbg_templates.len();
         if chunk_const_base as usize != const_base {
@@ -3529,6 +3660,12 @@ impl VM {
             return Err(RuntimeError::new(format!(
                 "Chunk error template base mismatch: chunk={}, vm={}",
                 chunk_error_template_base, error_template_base
+            )));
+        }
+        if chunk_type_registry_base as usize != type_registry_base {
+            return Err(RuntimeError::new(format!(
+                "Chunk type registry base mismatch: chunk={}, vm={}",
+                chunk_type_registry_base, type_registry_base
             )));
         }
         if chunk_dbg_template_base as usize != dbg_template_base {
@@ -3546,7 +3683,10 @@ impl VM {
             dbg_template_base,
         )?;
         self.bytecode.constants.extend(constants);
-        self.bytecode.type_registry.extend(type_entries);
+        self.bytecode
+            .type_registry
+            .try_extend(type_entries)
+            .map_err(|err| RuntimeError::new(format!("Bytecode verifier: {}", err)))?;
         self.bytecode.error_templates.extend(error_templates);
         self.bytecode.dbg_templates.extend(dbg_templates);
         self.bytecode.callable_templates.extend(callable_templates);
@@ -4419,14 +4559,7 @@ impl VM {
                 let runtime_arity = full_args.len().saturating_sub(lexical_captures.len());
                 let runtime_args = full_args.split_off(lexical_captures.len());
                 debug_assert_eq!(runtime_args.len(), runtime_arity);
-                match self.invoke_callable_template_sync(
-                    template_id,
-                    lexical_captures,
-                    runtime_args,
-                ) {
-                    Ok(value) => StepOutcome::Halt(value),
-                    Err(err) => StepOutcome::RuntimeError(err),
-                }
+                self.invoke_callable_template_step(template_id, lexical_captures, runtime_args)
             }
         }
     }
@@ -4669,7 +4802,7 @@ impl VM {
                 Ok(Value::TaskHandle(completion_future))
             }
             TaskMode::Launch => {
-                if timeout_ms.is_none() {
+                let Some(timeout_ms) = timeout_ms else {
                     let outcome = self.invoke_callable_isolated_step(callable, Vec::new());
                     if let Some((awaiting_future, continuation)) =
                         self.detached_waiting_from_outcome(outcome, None)?
@@ -4681,18 +4814,16 @@ impl VM {
                         );
                     }
                     return Ok(ok_vm_result(Value::Unit));
-                }
-                let completion_future = self.process_runtime.allocate_future_after(
-                    None,
-                    timeout_ms.expect("checked is_some"),
-                    true,
-                );
+                };
+                let completion_future = self
+                    .process_runtime
+                    .allocate_future_after(None, timeout_ms, true);
                 let outcome = self.invoke_callable_step(callable, Vec::new());
                 let _ = self.await_task_completion(completion_future, outcome)?;
                 Ok(ok_vm_result(Value::Unit))
             }
             TaskMode::Cast => {
-                if timeout_ms.is_none() {
+                let Some(timeout_ms) = timeout_ms else {
                     let outcome = self.invoke_callable_isolated_step(callable, Vec::new());
                     if let Some((awaiting_future, continuation)) =
                         self.detached_waiting_from_outcome(outcome, None)?
@@ -4704,12 +4835,10 @@ impl VM {
                         );
                     }
                     return Ok(ok_vm_result(Value::Unit));
-                }
-                let completion_future = self.process_runtime.allocate_future_after(
-                    None,
-                    timeout_ms.expect("checked is_some"),
-                    true,
-                );
+                };
+                let completion_future = self
+                    .process_runtime
+                    .allocate_future_after(None, timeout_ms, true);
                 let outcome = self.invoke_callable_step(callable, Vec::new());
                 let _ = self.await_task_completion(completion_future, outcome)?;
                 Ok(ok_vm_result(Value::Unit))
@@ -4761,8 +4890,16 @@ impl VM {
     }
 
     fn verify_program(bytecode: &Bytecode) -> Result<(), RuntimeError> {
-        Self::verify_type_registry_entries(bytecode.type_registry.entries(), None)?;
+        validate_type_registry_append_entries(&[], bytecode.type_registry.entries())
+            .map_err(|err| RuntimeError::new(format!("Bytecode verifier: {}", err)))?;
         Self::verify_source_map_entries(bytecode.source_map.as_ref(), bytecode.opcodes.len(), "")?;
+        validate_program_function_table(
+            &bytecode.opcodes,
+            &bytecode.callable_templates,
+            &bytecode.runtime_process_specs.entries,
+            &bytecode.functions,
+        )
+        .map_err(|err| RuntimeError::new(err.to_string()))?;
 
         let halt_pos = if let Some(pos) = bytecode
             .opcodes
@@ -4827,6 +4964,39 @@ impl VM {
                         )));
                     }
                 }
+                Opcode::LoadBuiltinRef(builtin_id) | Opcode::CallBuiltin { builtin_id, .. } => {
+                    if builtin_meta_by_id(*builtin_id).is_none() {
+                        return Err(RuntimeError::new(format!(
+                            "Bytecode verifier: unknown builtin ref {}",
+                            builtin_id
+                        )));
+                    }
+                }
+                Opcode::LoadFunctionRef(_) | Opcode::Call { .. } => {}
+                Opcode::LoadCallableTemplateRef(template_id) => {
+                    if !bytecode
+                        .callable_templates
+                        .iter()
+                        .any(|template| template.template_id == *template_id)
+                    {
+                        return Err(RuntimeError::new(format!(
+                            "Bytecode verifier: unknown callable template ref {}",
+                            template_id
+                        )));
+                    }
+                }
+                Opcode::Dbg { template_id, .. } => {
+                    if !bytecode
+                        .dbg_templates
+                        .iter()
+                        .any(|template| template.id == *template_id)
+                    {
+                        return Err(RuntimeError::new(format!(
+                            "Bytecode verifier: unknown dbg template ref {}",
+                            template_id
+                        )));
+                    }
+                }
                 Opcode::Return | Opcode::TailCallClosure { .. } if idx <= halt_pos => {
                     return Err(RuntimeError::new("Return at top-level"));
                 }
@@ -4834,35 +5004,15 @@ impl VM {
             }
         }
 
-        for (idx, entry) in bytecode.functions.iter().enumerate() {
-            if entry.fun_idx as usize != idx {
-                return Err(RuntimeError::new(format!(
-                    "Function table invariant violated: functions[{}].fun_idx = {}",
-                    idx, entry.fun_idx
-                )));
-            }
-            if entry.entry_pc as usize >= bytecode.opcodes.len() {
-                return Err(RuntimeError::new(format!(
-                    "Function {} entry_pc out of bounds: {}",
-                    entry.fun_idx, entry.entry_pc
-                )));
-            }
-            if entry.entry_pc as usize <= halt_pos {
-                return Err(RuntimeError::new(format!(
-                    "Bytecode verifier: function {} entry_pc {} must be after top-level Halt {}",
-                    entry.fun_idx, entry.entry_pc, halt_pos
-                )));
-            }
-        }
-
         Ok(())
     }
 
     fn verify_chunk(&self, chunk: &BytecodeChunk) -> Result<(), RuntimeError> {
-        Self::verify_type_registry_entries(
+        validate_type_registry_append_entries(
+            self.bytecode.type_registry.entries(),
             &chunk.type_entries,
-            Some(self.bytecode.type_registry.entries()),
-        )?;
+        )
+        .map_err(|err| RuntimeError::new(format!("Bytecode verifier: {}", err)))?;
         Self::verify_source_map_entries(chunk.source_map.as_ref(), chunk.opcodes.len(), "chunk")?;
 
         let const_base = self.bytecode.constants.len();
@@ -4878,6 +5028,13 @@ impl VM {
             return Err(RuntimeError::new(format!(
                 "Chunk error template base mismatch: chunk={}, vm={}",
                 chunk.error_template_base, error_template_base
+            )));
+        }
+        let type_registry_base = self.bytecode.type_registry.entries().len();
+        if chunk.type_registry_base as usize != type_registry_base {
+            return Err(RuntimeError::new(format!(
+                "Chunk type registry base mismatch: chunk={}, vm={}",
+                chunk.type_registry_base, type_registry_base
             )));
         }
 
@@ -4947,71 +5104,15 @@ impl VM {
             }
         }
 
-        let mut seen_fun_idxs = BTreeSet::new();
-        let mut next_append_idx = self.bytecode.functions.len();
-        let mut sorted_entries = chunk.functions.iter().collect::<Vec<_>>();
-        sorted_entries.sort_by_key(|entry| entry.fun_idx);
-
-        for entry in sorted_entries {
-            let idx = entry.fun_idx as usize;
-            if !seen_fun_idxs.insert(entry.fun_idx) {
-                return Err(RuntimeError::new(format!(
-                    "Bytecode verifier: duplicate function entry for fun_idx {}",
-                    entry.fun_idx
-                )));
-            }
-            if idx > next_append_idx {
-                return Err(RuntimeError::new(format!(
-                    "Function table invariant violated in chunk: fun_idx {} > len {}",
-                    idx, next_append_idx
-                )));
-            }
-            if idx == next_append_idx {
-                next_append_idx += 1;
-            }
-            if entry.entry_pc as usize >= chunk.opcodes.len() {
-                return Err(RuntimeError::new(format!(
-                    "Bytecode verifier: function {} entry_pc out of chunk bounds: {}",
-                    entry.fun_idx, entry.entry_pc
-                )));
-            }
-            if entry.entry_pc as usize <= halt_pos {
-                return Err(RuntimeError::new(format!(
-                    "Bytecode verifier: function {} entry_pc {} must be after top-level Halt {}",
-                    entry.fun_idx, entry.entry_pc, halt_pos
-                )));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn verify_type_registry_entries(
-        entries: &[sindr::runtime::TypeEntry],
-        existing: Option<&[sindr::runtime::TypeEntry]>,
-    ) -> Result<(), RuntimeError> {
-        let mut seen_tags = BTreeSet::new();
-        if let Some(existing) = existing {
-            for entry in existing {
-                seen_tags.insert(entry.tag);
-            }
-        }
-
-        for entry in entries {
-            if matches!(entry.tag, 0 | 1) {
-                return Err(RuntimeError::new(format!(
-                    "Bytecode verifier: reserved result tag reused in TypeRegistry: {}",
-                    entry.tag
-                )));
-            }
-
-            if !seen_tags.insert(entry.tag) {
-                return Err(RuntimeError::new(format!(
-                    "Bytecode verifier: duplicate type tag in TypeRegistry: {}",
-                    entry.tag
-                )));
-            }
-        }
+        validate_chunk_function_table(
+            &chunk.opcodes,
+            &chunk.callable_templates,
+            &chunk.runtime_process_specs,
+            &chunk.functions,
+            self.bytecode.functions.len(),
+            true,
+        )
+        .map_err(|err| RuntimeError::new(err.to_string()))?;
 
         Ok(())
     }
@@ -5443,9 +5544,9 @@ impl VM {
             }
 
             // Arithmetic (Float)
-            Opcode::AddFloat => self.float_binop(|a, b| Value::Float(a + b))?,
-            Opcode::SubFloat => self.float_binop(|a, b| Value::Float(a - b))?,
-            Opcode::MulFloat => self.float_binop(|a, b| Value::Float(a * b))?,
+            Opcode::AddFloat => self.float_binop("AddFloat", |a, b| a + b)?,
+            Opcode::SubFloat => self.float_binop("SubFloat", |a, b| a - b)?,
+            Opcode::MulFloat => self.float_binop("MulFloat", |a, b| a * b)?,
 
             // Comparison (Int)
             Opcode::EqInt => self.int_binop(|a, b| Ok(Value::Bool(a == b)))?,
@@ -5456,12 +5557,12 @@ impl VM {
             Opcode::GteInt => self.int_binop(|a, b| Ok(Value::Bool(a >= b)))?,
 
             // Comparison (Float)
-            Opcode::EqFloat => self.float_binop(|a, b| Value::Bool(a == b))?,
-            Opcode::NeqFloat => self.float_binop(|a, b| Value::Bool(a != b))?,
-            Opcode::LtFloat => self.float_binop(|a, b| Value::Bool(a < b))?,
-            Opcode::GtFloat => self.float_binop(|a, b| Value::Bool(a > b))?,
-            Opcode::LteFloat => self.float_binop(|a, b| Value::Bool(a <= b))?,
-            Opcode::GteFloat => self.float_binop(|a, b| Value::Bool(a >= b))?,
+            Opcode::EqFloat => self.float_predicate(|a, b| a == b)?,
+            Opcode::NeqFloat => self.float_predicate(|a, b| a != b)?,
+            Opcode::LtFloat => self.float_predicate(|a, b| a < b)?,
+            Opcode::GtFloat => self.float_predicate(|a, b| a > b)?,
+            Opcode::LteFloat => self.float_predicate(|a, b| a <= b)?,
+            Opcode::GteFloat => self.float_predicate(|a, b| a >= b)?,
 
             // Comparison (String)
             Opcode::EqStr => {
@@ -5540,7 +5641,7 @@ impl VM {
             }
             Opcode::NegFloat => {
                 let a = self.pop_float()?;
-                self.stack.push(Value::Float(-a));
+                self.stack.push(Self::finite_float_value(-a, "NegFloat")?);
             }
             Opcode::NotBool => {
                 let a = self.pop_bool()?;
@@ -6392,7 +6493,7 @@ impl VM {
         Ok(match constant {
             Constant::Int(n) => Value::Int(n.clone()),
             Constant::Tag(tag) => Value::Tag(*tag),
-            Constant::Float(f) => Value::Float(*f),
+            Constant::Float(f) => Self::finite_float_value(*f, "LoadConst")?,
             Constant::Str(s) => Value::Str(s.clone()),
             Constant::Bool(b) => Value::Bool(*b),
             Constant::Unit => Value::Unit,
@@ -6533,7 +6634,8 @@ impl VM {
 
     fn pop_float(&mut self) -> Result<f64, RuntimeError> {
         match self.pop_stack()? {
-            Value::Float(f) => Ok(f),
+            Value::Float(f) if f.is_finite() => Ok(f),
+            Value::Float(_) => Err(RuntimeError::new("Expected finite Float")),
             other => Err(RuntimeError::new(format!(
                 "Expected Float, got {:?}",
                 other
@@ -6566,13 +6668,35 @@ impl VM {
         Ok(())
     }
 
-    fn float_binop<F>(&mut self, f: F) -> Result<(), RuntimeError>
+    fn finite_float_value(value: f64, op_name: &str) -> Result<Value, RuntimeError> {
+        if value.is_finite() {
+            Ok(Value::Float(value))
+        } else if op_name == "LoadConst" {
+            Err(RuntimeError::new("Float constants must be finite"))
+        } else {
+            Err(RuntimeError::new(format!(
+                "Float operation produced non-finite value: {op_name}"
+            )))
+        }
+    }
+
+    fn float_binop<F>(&mut self, op_name: &str, f: F) -> Result<(), RuntimeError>
     where
-        F: FnOnce(f64, f64) -> Value,
+        F: FnOnce(f64, f64) -> f64,
     {
         let b = self.pop_float()?;
         let a = self.pop_float()?;
-        self.stack.push(f(a, b));
+        self.stack.push(Self::finite_float_value(f(a, b), op_name)?);
+        Ok(())
+    }
+
+    fn float_predicate<F>(&mut self, f: F) -> Result<(), RuntimeError>
+    where
+        F: FnOnce(f64, f64) -> bool,
+    {
+        let b = self.pop_float()?;
+        let a = self.pop_float()?;
+        self.stack.push(Value::Bool(f(a, b)));
         Ok(())
     }
 }
@@ -6647,12 +6771,12 @@ impl ProcessRuntime {
         if self.specs_by_name.contains_key(process_name) {
             return Some(process_name);
         }
-        if let Some(surface_name) = process_name.strip_prefix("Global::") {
+        if let Some(surface_name) = process_name.strip_prefix(IMPLICIT_ROOT_NAMESPACE_PREFIX) {
             if self.specs_by_name.contains_key(surface_name) {
                 return Some(surface_name);
             }
         } else {
-            let canonical_name = format!("Global::{process_name}");
+            let canonical_name = format!("{IMPLICIT_ROOT_NAMESPACE_PREFIX}{process_name}");
             if self.specs_by_name.contains_key(&canonical_name) {
                 return self
                     .specs_by_name
@@ -6785,17 +6909,23 @@ impl ProcessRuntime {
     }
 
     fn resolve_future(&mut self, future_id: FutureId, value: Value) -> Vec<u64> {
-        let Some(future) = self.futures.get_mut(&future_id) else {
-            return Vec::new();
+        let waiters = {
+            let Some(future) = self.futures.get_mut(&future_id) else {
+                return Vec::new();
+            };
+            if !matches!(future.state, FutureState::Running) {
+                return Vec::new();
+            }
+            future.state = FutureState::Ready(value);
+            future.deadline_tick = None;
+            future.cancel_on_timeout = false;
+            if let Some(correlation_id) = future.correlation_id.take() {
+                self.reply_table.remove(&correlation_id);
+            }
+            std::mem::take(&mut future.waiters)
         };
-        if !matches!(future.state, FutureState::Running) {
-            return Vec::new();
-        }
-        future.state = FutureState::Ready(value);
-        if let Some(correlation_id) = future.correlation_id.take() {
-            self.reply_table.remove(&correlation_id);
-        }
-        let waiters = std::mem::take(&mut future.waiters);
+        self.deadline_queue
+            .retain(|entry| entry.future_id != future_id);
         for waiter in &waiters {
             self.waiting_table.remove(waiter);
             let should_enqueue = if let Some(process) = self.processes.get_mut(waiter) {
@@ -6858,11 +6988,11 @@ impl ProcessRuntime {
             return;
         }
         future.cancel_on_timeout = future.cancel_on_timeout || cancel_on_timeout;
-        future.deadline_tick = match future.deadline_tick {
-            Some(current) => Some(current.min(deadline_tick)),
-            None => Some(deadline_tick),
+        let deadline_tick = match future.deadline_tick {
+            Some(current) => current.min(deadline_tick),
+            None => deadline_tick,
         };
-        let deadline_tick = future.deadline_tick.expect("set above");
+        future.deadline_tick = Some(deadline_tick);
         if !self
             .deadline_queue
             .iter()
@@ -7475,6 +7605,45 @@ mod tests {
     }
 
     #[test]
+    fn load_const_rejects_non_finite_float_constants() {
+        let mut bytecode = base_bytecode(vec![Opcode::LoadConst(0), Opcode::Halt]);
+        bytecode.constants = vec![Constant::Float(f64::INFINITY)];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        match vm.step_context(&mut ctx) {
+            StepOutcome::RuntimeError(err) => {
+                assert!(err.message.contains("Float constants must be finite"))
+            }
+            other => panic!("expected runtime error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn add_float_rejects_non_finite_results() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::LoadConst(1),
+            Opcode::AddFloat,
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Float(f64::MAX), Constant::Float(f64::MAX)];
+        let mut vm = VM::new(bytecode);
+        let mut ctx = top_level_context(0, 0);
+
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        assert!(matches!(vm.step_context(&mut ctx), StepOutcome::Continue));
+        match vm.step_context(&mut ctx) {
+            StepOutcome::RuntimeError(err) => {
+                assert!(err
+                    .message
+                    .contains("Float operation produced non-finite value"))
+            }
+            other => panic!("expected runtime error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn string_predicates_execute_as_one_opcode() {
         let mut bytecode = base_bytecode(vec![
             Opcode::LoadConst(0),
@@ -7668,13 +7837,13 @@ mod tests {
                 Opcode::Halt,
             ],
         );
-        let duration_tag = 0;
+        let duration_tag = 20;
         bytecode.type_registry.register(TypeEntry {
             tag: duration_tag,
             name: "Duration".into(),
             kind: TypeKind::Struct,
             field_names: vec!["millis".into()],
-            private_flags: Vec::new(),
+            private_flags: vec![false],
         });
         bytecode.constants = vec![Constant::Tag(duration_tag), Constant::Int(int(10))];
         let mut vm = VM::new(bytecode);
@@ -7719,13 +7888,13 @@ mod tests {
             ],
         );
         bytecode.type_registry.register(TypeEntry {
-            tag: 0,
+            tag: 20,
             name: "Duration".into(),
             kind: TypeKind::Struct,
             field_names: vec!["millis".into()],
-            private_flags: Vec::new(),
+            private_flags: vec![false],
         });
-        bytecode.constants = vec![Constant::Tag(0), Constant::Int(int(10))];
+        bytecode.constants = vec![Constant::Tag(20), Constant::Int(int(10))];
         let mut vm = VM::new(bytecode);
         let pid = vm
             .allocate_process_instance("Sleeper".into(), Some(Value::Unit), None, None)
@@ -7913,6 +8082,7 @@ mod tests {
             const_base: 0,
             constants: vec![Constant::Str("rolled back".into())],
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -7921,6 +8091,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -8774,6 +8945,7 @@ mod tests {
             const_base: 0,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
@@ -8782,6 +8954,7 @@ mod tests {
             callable_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: RuntimeBootPlan::default(),
         };
@@ -9149,13 +9322,20 @@ mod tests {
         let expired = vm.expire_process_deadlines(3);
         assert_eq!(expired, vec![future_id]);
         assert!(!vm.process_runtime.reply_table.contains_key(&correlation_id));
+        assert!(vm
+            .process_runtime
+            .deadline_queue
+            .iter()
+            .all(|entry| entry.future_id != future_id));
         assert_eq!(vm.process_runtime.waiting_table.get(&pid), None);
+        let future = vm
+            .process_runtime
+            .futures
+            .get(&future_id)
+            .expect("future should exist");
+        assert_eq!(future.deadline_tick, None);
         assert!(matches!(
-            vm.process_runtime
-                .futures
-                .get(&future_id)
-                .expect("future should exist")
-                .state,
+            future.state,
             super::FutureState::Ready(Value::Tagged { tag: 1, .. })
         ));
     }
@@ -9169,6 +9349,7 @@ mod tests {
             const_base: 0,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
@@ -9177,6 +9358,7 @@ mod tests {
             callable_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         });
@@ -9834,6 +10016,7 @@ mod tests {
             const_base: 0,
             constants: vec![Constant::Int(int(99)), Constant::Int(int(7))],
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -9842,6 +10025,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -9862,6 +10046,7 @@ mod tests {
             const_base: 1,
             constants: vec![Constant::Int(int(42))],
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -9870,6 +10055,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -9903,6 +10089,7 @@ mod tests {
             const_base: 0,
             constants: vec![Constant::Str("new message".into())],
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -9920,6 +10107,7 @@ mod tests {
             }],
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -9953,6 +10141,7 @@ mod tests {
                 const_base: 0,
                 constants: vec![Constant::Str("boom".into())],
                 new_locals: 0,
+                type_registry_base: 0,
                 type_entries: Vec::new(),
                 dbg_template_base: 0,
                 dbg_templates: Vec::new(),
@@ -9970,6 +10159,7 @@ mod tests {
                 }],
                 functions: Vec::new(),
                 docs: Vec::new(),
+                signatures: Vec::new(),
                 runtime_process_specs: Vec::new(),
                 runtime_boot_plan: Default::default(),
             })
@@ -10029,6 +10219,7 @@ mod tests {
             const_base: 1,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -10037,6 +10228,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -10057,6 +10249,7 @@ mod tests {
             const_base: 1,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -10065,6 +10258,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -10089,6 +10283,7 @@ mod tests {
             const_base: 0,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -10097,6 +10292,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: vec![function_entry(0, 2, 1, 0, Some("new"))],
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -10131,6 +10327,7 @@ mod tests {
             const_base: 0,
             constants: vec![Constant::Str("hello".into())],
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -10139,6 +10336,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -10160,6 +10358,7 @@ mod tests {
             const_base: 0,
             constants: vec![Constant::Int(int(1))],
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -10168,6 +10367,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -10197,6 +10397,7 @@ mod tests {
             const_base: 0,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -10205,6 +10406,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -10241,6 +10443,7 @@ mod tests {
             const_base: 0,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             dbg_template_base: 0,
             dbg_templates: Vec::new(),
@@ -10249,6 +10452,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -10269,9 +10473,9 @@ mod tests {
     }
 
     #[test]
-    fn run_rejects_reserved_type_tag_in_registry() {
+    fn type_registry_rejects_reserved_type_tag() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
-        bytecode.type_registry.register(TypeEntry {
+        let err = bytecode.type_registry.try_register(TypeEntry {
             tag: 0,
             name: "Bad".into(),
             kind: TypeKind::Struct,
@@ -10279,21 +10483,26 @@ mod tests {
             private_flags: vec![],
         });
 
-        let err = VM::new(bytecode).run().expect_err("must fail");
-        assert!(err.message.contains("reserved result tag"));
+        assert!(err
+            .expect_err("reserved result tags must be rejected")
+            .to_string()
+            .contains("reserved result tag"));
     }
 
     #[test]
-    fn run_rejects_duplicate_type_tag_in_registry() {
+    fn type_registry_rejects_duplicate_type_tag() {
         let mut bytecode = base_bytecode(vec![Opcode::Halt]);
-        bytecode.type_registry.register(TypeEntry {
-            tag: 10,
-            name: "A".into(),
-            kind: TypeKind::Struct,
-            field_names: vec![],
-            private_flags: vec![],
-        });
-        bytecode.type_registry.register(TypeEntry {
+        bytecode
+            .type_registry
+            .try_register(TypeEntry {
+                tag: 10,
+                name: "A".into(),
+                kind: TypeKind::Struct,
+                field_names: vec![],
+                private_flags: vec![],
+            })
+            .expect("first type entry should be valid");
+        let err = bytecode.type_registry.try_register(TypeEntry {
             tag: 10,
             name: "B".into(),
             kind: TypeKind::Record,
@@ -10301,8 +10510,10 @@ mod tests {
             private_flags: vec![],
         });
 
-        let err = VM::new(bytecode).run().expect_err("must fail");
-        assert!(err.message.contains("duplicate type tag"));
+        assert!(err
+            .expect_err("duplicate type tags must be rejected")
+            .to_string()
+            .contains("duplicate type tag"));
     }
 
     #[test]
@@ -10364,6 +10575,7 @@ mod tests {
             const_base: 0,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: vec![TypeEntry {
                 tag: 1,
                 name: "Bad".into(),
@@ -10378,6 +10590,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -10404,6 +10617,7 @@ mod tests {
             const_base: 0,
             constants: Vec::new(),
             new_locals: 0,
+            type_registry_base: 1,
             type_entries: vec![TypeEntry {
                 tag: 10,
                 name: "Duplicate".into(),
@@ -10418,6 +10632,7 @@ mod tests {
             error_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         };
@@ -11354,6 +11569,95 @@ mod tests {
             vm.ready_future_value(future_id),
             Some(Value::Tagged { tag: 0, fields }) if matches!(fields.first(), Some(Value::Int(value)) if *value == int(99))
         ));
+    }
+
+    #[test]
+    fn genserver_reply_later_outer_timeout_wins_before_callback_sleep_completion() {
+        let mut bytecode = base_bytecode(vec![Opcode::Halt]);
+        bytecode.type_registry.register(TypeEntry {
+            tag: 2,
+            name: "Duration".into(),
+            kind: TypeKind::Struct,
+            field_names: vec!["millis".into()],
+            private_flags: vec![true],
+        });
+        bytecode.runtime_process_specs = RuntimeProcessSpecTable {
+            entries: vec![test_runtime_process_spec(
+                0,
+                "Worker",
+                RuntimeProcessKind::GenServer,
+                RuntimeProcessInstance::Worker,
+                false,
+                0,
+                0,
+                None,
+            )],
+        };
+        let mut vm = VM::new(bytecode);
+        let pid = PidHandle {
+            id: vm
+                .allocate_supervised_worker(
+                    "Worker".into(),
+                    Some(Value::Int(int(41))),
+                    "DynamicSupervisor".into(),
+                )
+                .expect("worker allocation should succeed"),
+            process_name: "Worker".into(),
+        };
+        let callback = Callable {
+            target: CallableTarget::Builtin(builtin_id("__process_sleep")),
+            lexical_captures: vec![Value::Tagged {
+                tag: 2,
+                fields: vec![Value::Int(int(100))],
+            }],
+            metadata: CallableMetadata::default(),
+        };
+
+        let value = vm
+            .genserver_call_reply_later(&pid, Value::Int(int(42)), callback)
+            .expect("reply later should create a reply future");
+        let Value::PendingFuture(reply_future) = value else {
+            panic!("reply later should return a pending reply future");
+        };
+        vm.process_runtime.attach_future_deadline(
+            reply_future,
+            vm.process_runtime.current_tick_ms,
+            1,
+            true,
+        );
+
+        vm.wait_for_any_future(&[reply_future])
+            .expect("outer timeout should resolve the reply future");
+
+        assert!(matches!(
+            vm.ready_future_value(reply_future),
+            Some(Value::Tagged { tag: 1, fields }) if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Timeout")
+        ));
+        assert!(vm.process_runtime.reply_table.is_empty());
+        assert!(vm
+            .process_runtime
+            .deadline_queue
+            .iter()
+            .all(|entry| entry.future_id != reply_future));
+        assert_eq!(
+            vm.process_runtime
+                .futures
+                .get(&reply_future)
+                .expect("reply future should remain tracked")
+                .deadline_tick,
+            None
+        );
+
+        vm.process_runtime.current_tick_ms = 100;
+        vm.expire_process_deadlines(100);
+        vm.drive_ready_detached_tasks()
+            .expect("sleeping callback completion should not overwrite timed-out reply");
+
+        assert!(matches!(
+            vm.ready_future_value(reply_future),
+            Some(Value::Tagged { tag: 1, fields }) if matches!(fields.first(), Some(Value::Error(err)) if err.kind == "Timeout")
+        ));
+        assert!(vm.process_runtime.detached_tasks.is_empty());
     }
 
     #[test]

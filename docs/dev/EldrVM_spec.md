@@ -22,10 +22,10 @@ Eldr は次を担わない。
 - 型検査（Scar）
 - コード生成（Forge）
 
-File v1 の host filesystem surface は `lib/file.srt` の `File` module を正本とし、
-VM はその lower 先 builtin を実行する。path は実行時の current working directory
-基準で解決し、存在しない path や open/read/write failure は `RuntimeError` ではなく
-user-facing `Result` の domain error として返す。
+File / FS の host filesystem surface は `lib/File.srt` と `lib/FileSystem.srt` の
+標準 module を正本とし、VM はその lower 先 builtin を実行する。path は実行時の
+current working directory 基準で解決し、存在しない path や open/read/write failure は
+`RuntimeError` ではなく user-facing `Result` の domain error として返す。
 
 ---
 
@@ -45,7 +45,8 @@ user-facing `Result` の domain error として返す。
 
 - REPL 増分実行に使う差分単位
 - opcode は chunk 単位で生成される
-- `const_base` と `error_template_base` を持ち、VM 側で絶対 index へ再配置する
+- `const_base`, `type_registry_base`, `error_template_base`, `dbg_template_base` を持ち、VM 側で現在状態と照合してから絶対 index へ再配置する
+- `type_registry_base` は chunk 生成時点の VM-wide TypeRegistry entry 数であり、preload/project chunk が古い registry 前提で append されることを禁止する
 
 ---
 
@@ -93,9 +94,9 @@ user-facing `Result` の domain error として返す。
 - Xldr は source-level REPL policy を持つが、Eldr は `SourceKind::ReplChunk` や暗黙モジュールを解釈しない
 - `InteractiveVm` の公開 API は `push_chunk(chunk, policy)` の 1 入口とし、policy は少なくとも `ReplAppendOnly` と `Preload` を持つ
 - `BytecodeChunk` の `LoadConst` / `MakeError` は chunk-local index で生成される
-- `push_chunk()` は `const_base` / `error_template_base` により絶対 index へ再配置する
+- `push_chunk()` は `const_base` / `error_template_base` / `dbg_template_base` により絶対 index へ再配置する
 - `push_chunk()` は jump 先も append 後の opcode 位置へ再配置する
-- `chunk.const_base` / `chunk.error_template_base` が VM の現在プール長と一致しない場合は `RuntimeError` とする
+- `chunk.const_base` / `chunk.type_registry_base` / `chunk.error_template_base` / `chunk.dbg_template_base` が VM の現在プール長と一致しない場合は `RuntimeError` とする
 - Forge の chunk codegen は top-level 末尾へ必ず `Halt` を 1 つ挿入する
 - top-level 実行は append された `code_base` から開始し、最初の `Halt` で停止する
 - 関数本体は top-level `Halt` 後ろに配置され、top-level からは到達不能であり、`Call` / `CallClosure` でのみ到達する
@@ -107,6 +108,7 @@ user-facing `Result` の domain error として返す。
 - `policy = ReplAppendOnly` のとき、`InteractiveVm` は公開 REPL 境界として append-only function table を強制し、`fun_idx < current_function_len` の `FunctionEntry` を含む chunk を拒否する
 - `policy = ReplAppendOnly` のとき、`type_entries`、`runtime_process_specs`、`runtime_boot_plan` の追加を拒否する
 - `policy = Preload` のとき、Xldr が構築した preload/bootstrap chunk を live REPL 開始前に適用できる
+- `fun_idx` は VM 内の物理 slot であり、言語上の安定 identity ではない。Forge/Eldr は shared verifier により function table prefix 不変、dense append、function ref 範囲を検査する
 - rollback 対象は bytecode append 分、function overwrite、locals、operand stack、call frames、pc、process runtime、exit code、標準 I/O / REPL host I/O / test event cursor、`last_result` とする
 
 ### 3.6 トップレベル名衝突ポリシー（コンパイラ契約）
@@ -217,7 +219,7 @@ compile / surface 契約との対応は次のとおり。
 - `inspect(Struct)` / `to_string(Struct)` は `Type(field: value, ...)` を返し、内部専用の `Type { ... }` 構造体リテラルは表示しない
 - `inspect` は再帰的に string literal を quote し、`to_string` は素の string 値を使う
 - private field を含む named-field 値は公開 field のみを表示し、hidden 部分を `..private` として要約する
-- `inspect(HashMap)` / `to_string(HashMap)` は `HashMap("key" => value, ...)` 形式で、key は `String` literal と同じ escaping で表示する
+- `inspect(HashMap)` / `to_string(HashMap)` は生成可能な literal 形式 `hash!["key" => value, ...]` で、空 map は `hash![]`、key は `String` literal と同じ escaping で表示する
 - `inspect(HashMap)` / `to_string(HashMap)` / `map_keys` / `map_values_list` はキー昇順の deterministic order を使う
 - `eprint(Error)` は先頭行を `Error: Kind: message`、以降を `Caused by: Kind: message` で出力する
 - `Error::kind(Error)` は `RichError.kind`、`Error::message(Error)` は `RichError.message` を `String` として返す
@@ -255,7 +257,8 @@ Opcode は以下のカテゴリを持つ。
 - `JumpIfLocalTagEq` / `JumpIfLocalTagNe` の `tag_const_idx` は `Constant::Tag` を指し、`LoadConst` と同じ relocation / verifier 規則に従う。`target_pc` は `Jump*` と同じ jump-target verifier / relocation 規則に従う
 - `TailCallClosure { arity, span_start, span_end }` は tail position の `CallClosure { arity, span_start, span_end }; Return` と同じ意味の圧縮 opcode とする。callable / argument / lexical capture の評価規約は `CallClosure` と同じで、結果は現在フレームの呼び出し元へ直接返る。target が user function の場合だけ user-function TCO として `tail_calls_optimized` を増やす。builtin / template target は圧縮実行として現在 frame の caller へ返るが、user-function TCO 観測値には含めない
 
-実 opcode 一覧とオペランドは `crates/forge/src/opcode.rs` を正とする。
+実 opcode 一覧とオペランドは `crates/sindr/src/ir.rs` の `Opcode` を正とする。
+`crates/forge/src/opcode.rs` は Forge 側の再エクスポート層であり、定義の正本ではない。
 
 ---
 
@@ -298,7 +301,7 @@ Opcode は以下のカテゴリを持つ。
 - `Error::kind` / `Error::message` / `Error::format` は `Error` 値を introspection / 表示文字列化する runtime builtin とし、それ以外の値への適用は VM 側ガード対象とする
 - `Result::recover` は compiler が lowering する special form であり、runtime builtin としては持たない
 - `Int` は `BigInt` を用い、tag/builtin/function ID などの runtime 内部値とは分離する
-- `HashMap` の runtime 表現は immutable map を基準にし、duplicate key 更新時は後勝ちで値を上書きする
+- `HashMap` の runtime 表現は `HashMap<String, Value>` の immutable map を基準にし、duplicate key 更新時は後勝ちで値を上書きする
 - process / task / duration 系の hidden builtin は owner module (`Process`, `Task`, `Duration`) 側の `@hidden @builtin ...` 宣言に対応し、`CallBuiltin` で実装する。VM は process table / PID capability / handler callable invocation を経由する。詳細な process runtime 契約は [ProcessRuntime spec](./ProcessRuntime_spec.md) を正とする。
 - `__supervisor_workers` は `(supervisor, worker_init, WorkerStrategy)` を受け取る。Eldr v1 は `WorkerScale::Fix(n)` のみ実行し、`init == n` かつ `0 <= min <= n <= max` を満たさない場合は `Err(InvalidWorkerStrategy)` を返す。
 - process runtime snapshot は `worker_sets` を含む。各要素は `id`, `worker_process`, `supervisor`, `target`, `min`, `max`, `member_pids`, `live_count` を持つ。
@@ -307,7 +310,9 @@ Opcode は以下のカテゴリを持つ。
 - regex 系は Rust `regex` crate のラッパーとして builtin 実装し、regex 未サポート構文は `RegexCompileError` として返す
 - `RegexCaptures` の runtime 表現は `groups: Vec<Option<(start, end)>>`, `name_to_index: HashMap<String, usize>`, `input: String` を保持する
 - random 系は `CallBuiltin` で実装し、Opcode は追加しない。`RandomGenerator` は opaque な seedable state として保持し、半開区間が空の場合は `InvalidRandomRange` を `Result` の `Err` として返す
-- `Float` の厳密契約は `doc/float.md` を参照する
+- `Float` は finite-only の `f64` ラッパーとして扱う
+- VM は `LoadConst`, float arithmetic opcode, float builtin helper, `safe_div`, JSON bridge の各経路で non-finite value を user-visible `Float` として生成しない
+- `Float` helper surface では `abs`, `min`, `max`, `floor`, `ceil`, `round`, `trunc`, `pi`, `e` を提供する
 
 ### 7.1 Json builtins
 
@@ -321,7 +326,7 @@ Opcode は以下のカテゴリを持つ。
 - malformed JSON は `Err(JsonParseError(line, column, detail))` を返し、`RuntimeError` にしない
 - `JsonValue` 以外の値が `json_stringify` に渡った場合は `Err(JsonEncodeError(detail))` を返す。`TypeRegistry` 不整合や variant arity 不整合は VM 内部不整合として `RuntimeError` でよい
 
-組込み宣言の読み込み順序は compile 側で `Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Numeric, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Option, Generator, HashMap, Result, Duration, Process, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc] -> [Test] -> ユーザ拡張` に固定される。同一 stage 内の import は file 読み込み順に依存せず compile 側で解決され、later stage 参照は compile error になる。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
+組込み宣言の読み込み順序は compile 側で `Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test] -> ユーザ拡張` に固定される。同一 stage 内の import は file 読み込み順に依存せず compile 側で解決され、later stage 参照は compile error になる。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
 
 ### 7.2 TypeRegistry
 
@@ -329,6 +334,7 @@ Opcode は以下のカテゴリを持つ。
 - 表示 (`to_string`) と診断表示で参照される
 - 実装は deterministic な entry 列を保持したまま、内部 index により O(1) 相当 lookup を行ってよい
 - `Ok=0`, `Err=1` は予約 tag
+- `TypeRegistry` mutation は検証 API を経由し、予約 tag、duplicate tag、duplicate type name、`field_names` と `private_flags` の長さ不一致を拒否する
 - runtime tag は user-visible `Int` に乗せ替えない
 
 ---
@@ -337,8 +343,8 @@ Opcode は以下のカテゴリを持つ。
 
 - マジック: `ELDR`
 - ヘッダ: `magic/version/debug_level/num_chunks`
-- ヘッダ `version` は現行 `1` を維持する
-- 意味的 bytecode 版は `CInf.bytecode_version` に保持し、現行は `1`
+- ヘッダ `version` は現行 `2` とする
+- 意味的 bytecode 版は `CInf.bytecode_version` に保持し、現行は `2`
 - `.eldr` は単一バイナリ実行物であり、チャンク分割の主目的は実行時ロード都合ではなく viewer / disasm / 診断 / 比較の観測性にある
 - 必須チャンク:
   - `Code`
@@ -346,6 +352,8 @@ Opcode は以下のカテゴリを持つ。
   - `Func`
   - `Type`
   - `ErrT`
+  - `DbgT`
+  - `CalT`
   - `CInf`
   - `LblT`
   - `ImpT`
@@ -355,14 +363,19 @@ Opcode は以下のカテゴリを持つ。
   - `SpnT`
   - `SrcP`
   - `PcSp`
+  - `Proc`
+  - `Boot`
 - 任意チャンク:
   - `Docs`
+  - `SigT`
 - `Code` は opcode 列のみを持つ
 - `num_locals` は `CInf` に保持する
 - `Cnst` は実行用 constant pool の正本
 - `LitT` は viewer / 比較用の literal table
 - `Func` は関数境界と viewer 用 flag / span を持つ
 - `LblT` / `PcSp` / `Line` / `SpnT` / `SrcP` は viewer 向け索引・source 対応情報である
+- `DbgT` は `dbg!` 表示 template、`CalT` は callable template、`Proc` / `Boot` は process runtime metadata を持つ
+- `SigT` は REPL / docs 用 signature table であり、存在しない bytecode も受理する
 
 ### 8.1 `Func` と `LblT` の役割分離
 
@@ -397,7 +410,8 @@ call opcode / error template / function span を使って source 対応を補完
 - optional compiler / target / build profile
 - optional source hash / module hash
 
-詳細なエンコード/デコード仕様は `crates/forge/src/bytecode.rs` を正とする。
+詳細なエンコード/デコード仕様は `crates/sindr/src/ir.rs` を正とする。
+`crates/forge/src/bytecode.rs` は Forge から使うための re-export 層である。
 
 ---
 

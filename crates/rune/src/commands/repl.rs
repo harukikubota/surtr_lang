@@ -11,12 +11,31 @@ fn parse_repl_options(args: &[String]) -> RuneResult<xldr::ReplOptions> {
 
     while i < args.len() {
         match args[i].as_str() {
-            "--quiet" => options.quiet = true,
-            "--banner" => options.banner = xldr::BannerMode::Detailed,
-            "--version" => options.version = true,
+            "--quiet" => {
+                if options.quiet {
+                    return Err(RuneError::usage("repl: --quiet may only be specified once"));
+                }
+                options.quiet = true;
+            }
+            "--banner" => {
+                if options.banner == xldr::BannerMode::Detailed {
+                    return Err(RuneError::usage(
+                        "repl: --banner may only be specified once",
+                    ));
+                }
+                options.banner = xldr::BannerMode::Detailed;
+            }
+            "--version" => {
+                if options.version {
+                    return Err(RuneError::usage(
+                        "repl: --version may only be specified once",
+                    ));
+                }
+                options.version = true;
+            }
             "--script" => {
                 i += 1;
-                if i >= args.len() {
+                if i >= args.len() || args[i].starts_with('-') {
                     return Err(RuneError::usage("repl: missing value for --script"));
                 }
                 if options.script_path.is_some() {
@@ -28,7 +47,7 @@ fn parse_repl_options(args: &[String]) -> RuneResult<xldr::ReplOptions> {
             }
             "--module" => {
                 i += 1;
-                if i >= args.len() {
+                if i >= args.len() || args[i].starts_with('-') {
                     return Err(RuneError::usage("repl: missing value for --module"));
                 }
                 if options.module_path.is_some() {
@@ -38,6 +57,30 @@ fn parse_repl_options(args: &[String]) -> RuneResult<xldr::ReplOptions> {
                 }
                 options.module_path = Some(args[i].clone());
             }
+            "--project" => {
+                i += 1;
+                if i >= args.len() || args[i].starts_with('-') {
+                    return Err(RuneError::usage("repl: missing value for --project"));
+                }
+                if options.project_path.is_some() {
+                    return Err(RuneError::usage(
+                        "repl: --project may only be specified once",
+                    ));
+                }
+                options.project_path = Some(args[i].clone());
+            }
+            "--profile" => {
+                i += 1;
+                if i >= args.len() || args[i].starts_with('-') {
+                    return Err(RuneError::usage("repl: missing value for --profile"));
+                }
+                if options.project_profile.is_some() {
+                    return Err(RuneError::usage(
+                        "repl: --profile may only be specified once",
+                    ));
+                }
+                options.project_profile = Some(args[i].clone());
+            }
             other => {
                 return Err(RuneError::usage(format!(
                     "repl: unknown option '{}'",
@@ -46,6 +89,17 @@ fn parse_repl_options(args: &[String]) -> RuneResult<xldr::ReplOptions> {
             }
         }
         i += 1;
+    }
+
+    if options.project_path.is_some()
+        && (options.module_path.is_some() || options.script_path.is_some())
+    {
+        return Err(RuneError::usage(
+            "repl: --project cannot be combined with --module or --script",
+        ));
+    }
+    if options.project_profile.is_some() && options.project_path.is_none() {
+        return Err(RuneError::usage("repl: --profile requires --project"));
     }
 
     Ok(options)
@@ -74,6 +128,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_repl_options_accepts_project_and_profile() {
+        let options = parse_repl_options(&[
+            "--project".to_string(),
+            "project.srt".to_string(),
+            "--profile".to_string(),
+            "test".to_string(),
+        ])
+        .expect("options should parse");
+
+        assert_eq!(options.project_path.as_deref(), Some("project.srt"));
+        assert_eq!(options.project_profile.as_deref(), Some("test"));
+    }
+
+    #[test]
     fn parse_repl_options_rejects_duplicate_script_flag() {
         let err = parse_repl_options(&[
             "--script".to_string(),
@@ -91,6 +159,78 @@ mod tests {
     }
 
     #[test]
+    fn parse_repl_options_rejects_duplicate_project_flag() {
+        let err = parse_repl_options(&[
+            "--project".to_string(),
+            "a.srt".to_string(),
+            "--project".to_string(),
+            "b.srt".to_string(),
+        ])
+        .expect_err("duplicate project flag must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("--project may only be specified once"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_duplicate_profile_flag() {
+        let err = parse_repl_options(&[
+            "--project".to_string(),
+            "project.srt".to_string(),
+            "--profile".to_string(),
+            "dev".to_string(),
+            "--profile".to_string(),
+            "test".to_string(),
+        ])
+        .expect_err("duplicate profile flag must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("--profile may only be specified once"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_duplicate_quiet() {
+        let err = parse_repl_options(&["--quiet".to_string(), "--quiet".to_string()])
+            .expect_err("duplicate quiet flag must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("--quiet may only be specified once"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_duplicate_banner() {
+        let err = parse_repl_options(&["--banner".to_string(), "--banner".to_string()])
+            .expect_err("duplicate banner flag must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("--banner may only be specified once"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_duplicate_version() {
+        let err = parse_repl_options(&["--version".to_string(), "--version".to_string()])
+            .expect_err("duplicate version flag must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("--version may only be specified once"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn parse_repl_options_rejects_missing_module_value() {
         let err = parse_repl_options(&["--module".to_string()])
             .expect_err("missing module value must fail");
@@ -99,6 +239,93 @@ mod tests {
         assert!(
             rendered.contains("missing value for --module"),
             "{rendered}"
+        );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_missing_project_value() {
+        let err = parse_repl_options(&["--project".to_string()])
+            .expect_err("missing project value must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("missing value for --project"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_missing_profile_value() {
+        let err = parse_repl_options(&["--profile".to_string()])
+            .expect_err("missing profile value must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("missing value for --profile"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_option_like_script_value() {
+        let err = parse_repl_options(&["--script".to_string(), "--module".to_string()])
+            .expect_err("option-looking script value must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("missing value for --script"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_option_like_module_value() {
+        let err = parse_repl_options(&["--module".to_string(), "--script".to_string()])
+            .expect_err("option-looking module value must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("missing value for --module"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_profile_without_project() {
+        let err = parse_repl_options(&["--profile".to_string(), "dev".to_string()])
+            .expect_err("profile without project must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("--profile requires --project"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_project_with_script_or_module() {
+        let script_err = parse_repl_options(&[
+            "--project".to_string(),
+            "project.srt".to_string(),
+            "--script".to_string(),
+            "main.srt".to_string(),
+        ])
+        .expect_err("project and script must not be combined");
+        assert!(
+            format!("{script_err:?}").contains("--project cannot be combined"),
+            "{script_err:?}"
+        );
+
+        let module_err = parse_repl_options(&[
+            "--project".to_string(),
+            "project.srt".to_string(),
+            "--module".to_string(),
+            "mod.srt".to_string(),
+        ])
+        .expect_err("project and module must not be combined");
+        assert!(
+            format!("{module_err:?}").contains("--project cannot be combined"),
+            "{module_err:?}"
         );
     }
 }

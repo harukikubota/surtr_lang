@@ -12,7 +12,7 @@
 `Rune` は以下を担う。
 
 - `surtr` CLI の引数解析
-- `run` / `build` / `dump` / `test` / `repl` / `tui` の command dispatch
+- `check` / `run` / `build` / `dump` / `test` / `repl` / `tui` の command dispatch
 - script file / bytecode file の実行入口
 - CLI 境界での usage error と command 単位の option validation
 

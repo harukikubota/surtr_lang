@@ -9,6 +9,14 @@ This top-level declaration exists so the rest of the pipeline can talk about
 
 impl Float {
   @doc """
+  Divide two float values and return `Err(ZeroDivisionError)` instead of trapping.
+  ## REPL
+  xldr(1)> Float::safe_div(3.0, 2.0)
+  Ok(1.5)
+  """
+  @builtin def safe_div(a: Float, b: Float) -> Result<Float, ZeroDivisionError>
+
+  @doc """
   Return the absolute value of `value`.
   ## REPL
   xldr(1)> Float::abs(-1.5)
@@ -37,6 +45,54 @@ impl Float {
   def max(a: Float, b: Float) -> Float {
     if(a >= b, a, b)
   }
+
+  @doc """
+  Round `value` down to the nearest integer value, keeping the result as `Float`.
+  ## REPL
+  xldr(1)> Float::floor(1.8)
+  1.0
+  """
+  @builtin def floor(value: Float) -> Float
+
+  @doc """
+  Round `value` up to the nearest integer value, keeping the result as `Float`.
+  ## REPL
+  xldr(1)> Float::ceil(1.2)
+  2.0
+  """
+  @builtin def ceil(value: Float) -> Float
+
+  @doc """
+  Round `value` to the nearest integer value, keeping the result as `Float`.
+  ## REPL
+  xldr(1)> Float::round(1.5)
+  2.0
+  """
+  @builtin def round(value: Float) -> Float
+
+  @doc """
+  Drop the fractional part of `value`, keeping the result as `Float`.
+  ## REPL
+  xldr(1)> Float::trunc(-1.8)
+  -1.0
+  """
+  @builtin def trunc(value: Float) -> Float
+
+  @doc """
+  Return the builtin `pi` constant as a finite `Float`.
+  ## REPL
+  xldr(1)> Float::pi()
+  3.141592653589793
+  """
+  @builtin def pi() -> Float
+
+  @doc """
+  Return the builtin `e` constant as a finite `Float`.
+  ## REPL
+  xldr(1)> Float::e()
+  2.718281828459045
+  """
+  @builtin def e() -> Float
 }
 
 impl Add for Float {
@@ -67,48 +123,6 @@ impl Mul for Float {
   3.0
   """
   @builtin def mul(self: Self, rhs: Self) -> Self
-}
-
-impl Numeric for Float {
-  @doc """
-  Divide by `rhs`, returning `Err(ZeroDivisionError)` for zero divisors.
-  ## REPL
-  xldr(1)> safe_div(3.0, 2.0)
-  Ok(1.5)
-  """
-  def safe_div(self: Self, rhs: Self) -> Result<Self, ZeroDivisionError> {
-    safe_div(self, rhs)
-  }
-
-  @doc """
-  Return the absolute value of the float.
-  ## REPL
-  xldr(1)> abs(-1.5)
-  1.5
-  """
-  def abs(self: Self) -> Self {
-    Float::abs(self)
-  }
-
-  @doc """
-  Return the smaller of the two float values.
-  ## REPL
-  xldr(1)> min(1.5, 2.0)
-  1.5
-  """
-  def min(self: Self, rhs: Self) -> Self {
-    Float::min(self, rhs)
-  }
-
-  @doc """
-  Return the larger of the two float values.
-  ## REPL
-  xldr(1)> max(1.5, 2.0)
-  2.0
-  """
-  def max(self: Self, rhs: Self) -> Self {
-    Float::max(self, rhs)
-  }
 }
 
 impl Show for Float {

@@ -73,6 +73,7 @@ pub enum Token {
     Amp,            // &
     Tilde,          // ~
     Dollar,         // $
+    Caret,          // ^
 
     // ── Statement separators ──
     Newline,

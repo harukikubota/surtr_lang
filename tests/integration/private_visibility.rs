@@ -1,28 +1,17 @@
 use crate::common::{
-    extract_phase_tag, module_compile_error_fixtures, module_spec_fixtures, normalize_text,
-    parse_compile_error_expectation, repo_root, ModuleFixtureCase,
+    assert_compile_error_matches, module_compile_error_fixtures, module_spec_fixtures,
+    normalize_text, parse_compile_error_expectation, repo_root, ModuleFixtureCase,
 };
 use crate::support;
 
 fn compile_multi_source_case(
     case: &ModuleFixtureCase,
 ) -> Result<forge::bytecode::Bytecode, String> {
-    let module_sources = support::collect_module_sources(&case.module_stages)?;
-    let compile_sources = support::compose_script_sources(
-        &case.entry_path.to_string_lossy(),
-        case.entry_source,
-        module_sources,
-    );
-
-    support::compile_script_sources(&compile_sources)
+    support::compile_module_fixture_case(case)
 }
 
 fn run_multi_source_case(case: &ModuleFixtureCase) -> Result<Vec<String>, String> {
-    let bytecode = compile_multi_source_case(case)?;
-    let mut vm = eldr::VM::new(bytecode).with_output_capture();
-    vm.run()
-        .map_err(|e| format!("phase=runtime; message={}", e))?;
-    Ok(vm.output.unwrap_or_default())
+    support::run_module_fixture_case(case)
 }
 
 #[test]
@@ -139,19 +128,6 @@ fn private_visibility_compile_error_fixtures_pass() {
         let err = compile_multi_source_case(&fixture.case)
             .expect_err("private visibility compile fixture should fail");
 
-        if let Some(expected_phase) = expected.phase.as_deref() {
-            let actual_phase = extract_phase_tag(&err).unwrap_or("unknown");
-            assert_eq!(actual_phase, expected_phase);
-        }
-
-        for needle in &expected.contains {
-            assert!(
-                err.contains(needle),
-                "expected '{}' in error for {}\nactual: {}",
-                needle,
-                fixture.case.case_dir.display(),
-                err
-            );
-        }
+        assert_compile_error_matches(&expected, &err, &fixture.case.case_dir);
     }
 }

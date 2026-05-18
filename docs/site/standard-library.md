@@ -17,7 +17,7 @@ Surtr 全体では、関数は常に何らかの namespace に属します。標
 標準定義ソースの初期ロード順は次で固定されています。
 
 ```text
-Bootstrap -> [Kernel, Numeric, Show, Eq, Ordering, Compare, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, Shell, IO, DynamicSupervisor] -> user source
+Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test] -> user source
 ```
 
 このうち auto import されるのは `Bootstrap`, `Kernel` と、`@autoimport` が付いた標準 `impl Type` owner helper surface および標準 trait です。  
@@ -57,7 +57,7 @@ ordered comparison は `compare(left, right)` または `< <= > >=` を使い、
 ### `SpecialTypes`
 
 - `special_types.srt` に compiler-special builtin type を集約する
-- 現在は `Unit`, `TypeRef<$T>`, `Hole` をここへ置く
+- 現在は `Unit`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>`, `BulkUpdateEntries<$State>`, `Lazy<$T>`, `ProcessInit<$T>`, `TypeRef<$T>`, `Hole` をここへ置く
 - `defmod` は持たず、top-level canonical type declaration だけを持つ
 - user-facing な振る舞いは各 trait / callable / module surface 側から現れる
 
@@ -65,8 +65,6 @@ ordered comparison は `compare(left, right)` または `< <= > >=` を使い、
 
 現時点では次の module が用意されています。
 
-- `Numeric`
-  - helper capability trait
 - `Int`
 - `String`
 - `Boolean`
@@ -87,12 +85,10 @@ ordered comparison は `compare(left, right)` または `< <= > >=` を使い、
 この分離により、「型そのものの compiler 契約」と「その型の helper / docs / 将来 API」を同じ file に置きつつ、役割は混ぜずに管理できます。
 `impl Type` や `impl Trait for Type` は、この module API とは別の型専用 namespace として並びます。
 
-`Numeric` だけは type module ではなく、トップレベル trait 宣言専用の標準定義ソースです。
+数値 helper は共通 trait ではなく、`Int` / `Float` の type owner surface として置きます。
 
-- `numeric.srt` に `deftrait Numeric` を置く
-- `int.srt` のトップレベルに `impl Numeric for Int` を置く
-- `float.srt` のトップレベルに `impl Numeric for Float` を置く
-- `Numeric` は `safe_div`, `abs`, `min`, `max` の helper capability を表す
+- `int.srt` の `impl Int` に `safe_div`, `safe_mod`, `abs`, `min`, `max` などを置く
+- `float.srt` の `impl Float` に `safe_div`, `abs`, `min`, `max` などを置く
 - `+`, `-`, `*` は `Add` / `Sub` / `Mul` dispatch を通るが、runtime には trait object を導入しない
 
 ## 3. `@builtin type` の契約
@@ -192,14 +188,19 @@ head.
 @builtin type String
 
 @doc """
-String module.
-Groups string-oriented helpers.
+Concrete string-module error for `String::repeat`.
+Negative counts stay as recoverable values instead of becoming implicit
+runtime traps.
 """
-defmod String {
+deferror NegativeRepeatCount(count: Int) {
+  "repeat count must be non-negative: #{count}"
+}
+
+impl String {
   @doc """
-  Placeholder while the module API grows.
+  Return the number of Unicode scalar values in the string.
   """
-  def dummy() { () }
+  @builtin def len(value: String) -> Int
 }
 ```
 
@@ -217,9 +218,6 @@ defmod String {
 - `Kernel`
   - cross-cutting builtin と `Unit`
   - `if` / `if_then` の language-level contract
-- `Numeric`
-  - compile-time only trait dispatch の最初の公開契約
-  - `Int` / `Float` が共有する算術 surface
 - `Int`
   - arbitrary-precision integer surface
 - `String`
@@ -232,9 +230,10 @@ defmod String {
   - homogeneous sequence 型
   - `[]` を Nil とし、トップレベルの `cons`, `first`, `len` と `List` module helper を持つ
 - `HashMap`
-  - immutable な insertion-order map（key は常に `String`）
+  - immutable な key-sorted map（key は常に `String`）
+  - `hash![key => value, ...]` literal を持ち、key は `String` 型を得られる式
   - `HashMap::empty` / `from_entries` / `insert` / `remove` / `get` / `keys` / `values` を持つ
-  - `inspect` / `to_string` は `HashMap("key" => value, ...)` 形式
+  - `inspect` / `to_string` は `hash!["key" => value, ...]` 形式
 - `Result`
   - `Ok` / `Err` を中心にした Either 指向の失敗表現
 - `Facet`
@@ -246,7 +245,7 @@ defmod String {
 ## 7. 更新するときのルール
 
 - cross-cutting runtime builtin value を足すときは `kernel.srt` の `defmod Kernel` と shared builtin metadata の両方を更新する
-- `Numeric` surface を増やすときは `numeric.srt` の trait 宣言、各 concrete impl、Scar の trait dispatch、Forge の lowering を同時に更新する
+- 数値 helper surface を増やすときは対象 type owner (`int.srt` / `float.srt`) と shared builtin metadata / Forge lowering を同時に更新する
 - `if` / `assert` / `and` / `eq` のような compiler-handled helper を足すときは `kernel.srt` と resolver/checker の canonical contract を同時に更新する
 - builtin type を変えるときは、対応する `lib/*.srt` の `@builtin type` と compiler 側の canonical contract を同時に更新する
 - `Result` constructor contract を変えるときは `result.srt` の `Ok` / `Err` 宣言と checker 側の canonical rule を同時に更新する
@@ -353,12 +352,12 @@ ret = List::reverse(acc)
 
 意味論の要点:
 
-- `insert` で duplicate key を更新すると、値のみ差し替え、最初の挿入順を維持する
+- `insert` で duplicate key を更新すると、値のみ差し替える
 - `remove` は key が存在しない場合 no-op
-- `keys` / `values` は insertion order を保つ
-- `inspect` / `to_string` は key を quoted string で表示し、空 map は `HashMap()` と表示する
+- `keys` / `values` はキー昇順 deterministic order を保つ
+- `inspect` / `to_string` は key を quoted string で表示し、空 map は `hash![]` と表示する
 
-将来 `hash![...]` の literal sugar を入れる余地はあるが、現時点の正本 surface は `HashMap::from_entries` / `HashMap::insert` を基準にする。
+`hash![key => value, ...]` は `HashMap::from_entries` へ lower される生成 literal で、key は `String` 型を得られる任意の式です。
 
 ## 10. `Result` module の位置づけ
 
@@ -621,7 +620,7 @@ facet = User.name
 name = Facet::view(facet, user)
 ```
 
-REPL では `:type` / `:info` に加えて `:facet <binding|expr>` が使えます。
+REPL では `:type` / `:info` に加えて `:facet <FacetPath|$binding>` が使えます。
 `type` と `full path` の確認に加えて、variant selector や `Result` source を含む
 path の停止点をまとめて見たいときに使います。
 

@@ -1,6 +1,8 @@
 use forge::bytecode::Bytecode;
 
-use super::compile::{compile_project_script, compile_script};
+use crate::common::ModuleFixtureCase;
+
+use super::compile::{compile_module_fixture_case, compile_project_script, compile_script};
 
 #[allow(dead_code)]
 pub fn run_script(source_name: &str, source: &str) -> Result<Vec<String>, String> {
@@ -11,6 +13,13 @@ pub fn run_script(source_name: &str, source: &str) -> Result<Vec<String>, String
 #[allow(dead_code)]
 pub fn run_project_script(source_name: &str, source: &str) -> Result<Vec<String>, String> {
     let (stdout, _stderr) = run_project_script_with_stderr(source_name, source)?;
+    Ok(stdout)
+}
+
+#[allow(dead_code)]
+pub fn run_module_fixture_case(case: &ModuleFixtureCase) -> Result<Vec<String>, String> {
+    let bytecode = compile_module_fixture_case(case)?;
+    let (stdout, _stderr) = run_bytecode_with_stderr(bytecode)?;
     Ok(stdout)
 }
 

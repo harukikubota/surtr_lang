@@ -41,10 +41,19 @@ impl Parser<'_> {
         let parts = self.parse_interpolated_parts(&raw, &span, content_offset)?;
         if parts.is_empty() {
             Ok(Ast::Lit(span, Lit::Str(raw)))
-        } else if matches!(parts.as_slice(), [InterpolatedPart::Text(_)]) {
-            match parts.into_iter().next() {
-                Some(InterpolatedPart::Text(text)) => Ok(Ast::Lit(span, Lit::Str(text))),
-                _ => unreachable!("checked single text part"),
+        } else if let [InterpolatedPart::Text(_)] = parts.as_slice() {
+            let [part] = <[InterpolatedPart; 1]>::try_from(parts).map_err(|parts| {
+                ParseError::syntax(
+                    format!(
+                        "Interpolated string text simplification expected one part, got {}",
+                        parts.len()
+                    ),
+                    span.clone(),
+                )
+            })?;
+            match part {
+                InterpolatedPart::Text(text) => Ok(Ast::Lit(span, Lit::Str(text))),
+                InterpolatedPart::Expr(_) => Ok(Ast::InterpolatedStr(span, vec![part])),
             }
         } else {
             Ok(Ast::InterpolatedStr(span, parts))
@@ -173,8 +182,17 @@ impl Parser<'_> {
                     base_span.clone(),
                 ));
             }
+            let [expr] = <[Ast; 1]>::try_from(parsed).map_err(|parsed| {
+                ParseError::syntax(
+                    format!(
+                        "Interpolation expression must contain exactly one expression, got {}",
+                        parsed.len()
+                    ),
+                    base_span.clone(),
+                )
+            })?;
             let expr_offset = base_span.start + content_offset + expr_start;
-            let expr = super::shift_ast_span(parsed.into_iter().next().unwrap(), expr_offset);
+            let expr = super::shift_ast_span(expr, expr_offset);
             parts.push(InterpolatedPart::Expr(Box::new(expr)));
         }
 

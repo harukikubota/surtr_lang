@@ -1,6 +1,6 @@
 use crate::common::{
-    extract_phase_tag, module_compile_error_fixtures, module_spec_fixtures, normalize_text,
-    parse_compile_error_expectation, repo_root, unique_temp_dir,
+    assert_compile_error_matches, module_compile_error_fixtures, module_spec_fixtures,
+    normalize_text, parse_compile_error_expectation, repo_root, unique_temp_dir,
 };
 use crate::support;
 use xldr::ModuleInput;
@@ -22,27 +22,11 @@ fn find_module_compile_error_case(name: &str) -> crate::common::ModuleCompileErr
 }
 
 fn compile_case_output(case: &crate::common::ModuleFixtureCase) -> Result<Vec<String>, String> {
-    let module_sources = support::collect_module_sources(&case.module_stages)?;
-    let compile_sources = support::compose_script_sources(
-        &case.entry_path.to_string_lossy(),
-        case.entry_source,
-        module_sources,
-    );
-    let bytecode = support::compile_script_sources(&compile_sources)?;
-    let mut vm = eldr::VM::new(bytecode).with_output_capture();
-    vm.run()
-        .map_err(|e| format!("phase=runtime; message={}", e))?;
-    Ok(vm.output.unwrap_or_default())
+    support::run_module_fixture_case(case)
 }
 
 fn compile_case(case: &crate::common::ModuleFixtureCase) -> Result<(), String> {
-    let module_sources = support::collect_module_sources(&case.module_stages)?;
-    let compile_sources = support::compose_script_sources(
-        &case.entry_path.to_string_lossy(),
-        case.entry_source,
-        module_sources,
-    );
-    support::compile_script_sources(&compile_sources).map(|_| ())
+    support::compile_module_fixture_case(case).map(|_| ())
 }
 
 fn run_inline_module(
@@ -198,10 +182,7 @@ fn namespaced_duplicate_type_in_same_namespace_is_rejected() {
     let fixture = find_module_compile_error_case("namespaced_duplicate_type_same_namespace");
     let expected = parse_compile_error_expectation(&fixture.error_path);
     let err = compile_case(&fixture.case).expect_err("fixture should fail");
-    assert_eq!(extract_phase_tag(&err), expected.phase.as_deref());
-    for needle in &expected.contains {
-        assert!(err.contains(needle), "expected '{needle}' in '{err}'");
-    }
+    assert_compile_error_matches(&expected, &err, &fixture.case.case_dir);
 }
 
 #[test]
@@ -209,8 +190,5 @@ fn namespaced_import_collision_keeps_existing_function_import_rules() {
     let fixture = find_module_compile_error_case("namespaced_function_import_collision");
     let expected = parse_compile_error_expectation(&fixture.error_path);
     let err = compile_case(&fixture.case).expect_err("fixture should fail");
-    assert_eq!(extract_phase_tag(&err), expected.phase.as_deref());
-    for needle in &expected.contains {
-        assert!(err.contains(needle), "expected '{needle}' in '{err}'");
-    }
+    assert_compile_error_matches(&expected, &err, &fixture.case.case_dir);
 }

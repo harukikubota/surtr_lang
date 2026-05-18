@@ -35,7 +35,6 @@ mod tests {
     const ADD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/add.srt");
     const SUB_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/sub.srt");
     const MUL_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/mul.srt");
-    const NUMERIC_MODULE_SOURCE: &str = include_str!("../../../lib/traits/numeric.srt");
     const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/traits/show.srt");
     const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/eq.srt");
     const NEQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/neq.srt");
@@ -201,7 +200,6 @@ mod tests {
                 ("Neq", NEQ_MODULE_SOURCE),
                 ("Compare", COMPARE_MODULE_SOURCE),
                 ("Concat", CONCAT_MODULE_SOURCE),
-                ("Numeric", NUMERIC_MODULE_SOURCE),
                 ("Show", SHOW_MODULE_SOURCE),
                 ("Ordering", ORDERING_MODULE_SOURCE),
                 ("From", FROM_MODULE_SOURCE),
@@ -523,6 +521,19 @@ mod tests {
             ty: Ty::List(Box::new(Ty::Int)),
             span: test_span(),
             node: TypedInner::ListLiteral(values.into_iter().map(int_lit).collect()),
+        }
+    }
+
+    fn hash_map_lit_int(entries: impl IntoIterator<Item = (&'static str, i64)>) -> TypedNode {
+        TypedNode {
+            ty: Ty::Enum("HashMap".into(), vec![Ty::Int]),
+            span: test_span(),
+            node: TypedInner::HashMapLiteral(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (str_lit(key), int_lit(value)))
+                    .collect(),
+            ),
         }
     }
 
@@ -905,6 +916,31 @@ print(to_string(add(1, 2)))"#,
     }
 
     #[test]
+    fn hash_map_literal_lowers_to_map_from_entries_builtin() {
+        let bytecode = codegen_typed(vec![hash_map_lit_int([("b", 2), ("a", 1)])]);
+        let map_from_entries_id =
+            builtin_id_by_name("map_from_entries").expect("map_from_entries builtin exists");
+        let top_level = top_level_opcodes(&bytecode);
+
+        assert!(top_level.iter().any(|op| {
+            matches!(
+                op,
+                Opcode::CallBuiltin {
+                    builtin_id,
+                    arity: 1,
+                    ..
+                } if *builtin_id == map_from_entries_id
+            )
+        }));
+        assert!(top_level
+            .iter()
+            .any(|op| matches!(op, Opcode::TupleNew { len: 2 })));
+        assert!(top_level
+            .iter()
+            .any(|op| matches!(op, Opcode::ListFromItems { len: 2 })));
+    }
+
+    #[test]
     fn pipe_direct_injected_user_call_lowers_without_partial_wrapper() {
         let bytecode = codegen_typed(vec![
             binary_first_def("first_int", 0, 20),
@@ -1234,11 +1270,11 @@ print("ok")"#,
     }
 
     #[test]
-    fn numeric_trait_calls_lower_to_existing_targets() {
+    fn concrete_numeric_helpers_lower_to_existing_targets() {
         let bytecode = codegen_source(
             r#"sum = 1 + 2
-quot = Numeric::safe_div(8, 2)
-largest = Numeric::max(1.5, 2.5)"#,
+quot = Float::safe_div(8.0, 2.0)
+largest = Float::max(1.5, 2.5)"#,
         );
 
         let safe_div_id =

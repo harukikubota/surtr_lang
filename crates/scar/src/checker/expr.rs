@@ -55,16 +55,8 @@ impl Checker {
         }
     }
 
-    fn parse_standalone_tuple_root_index(name: &str) -> Option<usize> {
+    fn parse_tuple_index_name(name: &str) -> Option<usize> {
         let suffix = name.strip_prefix('_')?;
-        if suffix.is_empty() || !suffix.chars().all(|ch| ch.is_ascii_digit()) {
-            return None;
-        }
-        suffix.parse::<usize>().ok()
-    }
-
-    fn parse_tuple_segment_index(field: &str) -> Option<usize> {
-        let suffix = field.strip_prefix('_')?;
         if suffix.is_empty() || !suffix.chars().all(|ch| ch.is_ascii_digit()) {
             return None;
         }
@@ -115,6 +107,10 @@ impl Checker {
             | TypedInner::StructLit(_, stmts) => stmts
                 .iter()
                 .find_map(|stmt| self.first_pending_trait_helper(stmt)),
+            TypedInner::HashMapLiteral(entries) => entries.iter().find_map(|(key, value)| {
+                self.first_pending_trait_helper(key)
+                    .or_else(|| self.first_pending_trait_helper(value))
+            }),
             TypedInner::Bind(_, rhs)
             | TypedInner::SafeBind(_, rhs)
             | TypedInner::Semi(rhs)
@@ -298,6 +294,17 @@ impl Checker {
                     .into_iter()
                     .map(|item| self.concretize_pending_trait_calls(item))
                     .collect::<Result<Vec<_>, _>>()?,
+            ),
+            TypedInner::HashMapLiteral(entries) => TypedInner::HashMapLiteral(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| {
+                        Ok((
+                            self.concretize_pending_trait_calls(key)?,
+                            self.concretize_pending_trait_calls(value)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, TypeError>>()?,
             ),
             TypedInner::InterpolatedStr(parts) => TypedInner::InterpolatedStr(
                 parts
@@ -589,6 +596,37 @@ impl Checker {
 
                 if let Some(variant) = self.lookup_enum_variant_by_constructor_id(id.unique_id) {
                     let variant = self.instantiate_enum_variant(&variant);
+                    if Self::surface_name(&variant.enum_name) == "Boolean" {
+                        if !variant.payload.is_empty() {
+                            return Err(TypeError {
+                                message: format!(
+                                    "Builtin Boolean variant {} unexpectedly requires payload",
+                                    id.name
+                                ),
+                                span: span.clone(),
+                                hint: None,
+                            });
+                        }
+                        let value = match variant.short_name.as_str() {
+                            "True" => true,
+                            "False" => false,
+                            _ => {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "Unknown builtin Boolean variant: {}",
+                                        variant.short_name
+                                    ),
+                                    span: span.clone(),
+                                    hint: None,
+                                });
+                            }
+                        };
+                        return Ok(TypedNode {
+                            ty: Ty::Bool,
+                            span: span.clone(),
+                            node: TypedInner::Lit(Lit::Bool(value)),
+                        });
+                    }
                     if Self::surface_name(&variant.enum_name) == "MatchResult"
                         && !self.in_extractor_body
                     {
@@ -624,7 +662,7 @@ impl Checker {
                     });
                 }
 
-                if let Some(index) = Self::parse_standalone_tuple_root_index(id.name.as_str()) {
+                if let Some(index) = Self::parse_tuple_index_name(id.name.as_str()) {
                     return Err(TypeError {
                         message: format!(
                             "Standalone tuple root _{} is not allowed; use tuple access with ._{}",
@@ -745,6 +783,7 @@ impl Checker {
             Resolved::ListNil(span) => self.check_list_nil(span),
             Resolved::ListCons(span, head, tail) => self.check_list_cons(span, head, tail),
             Resolved::ListLiteral(span, elems) => self.check_list_literal(span, elems),
+            Resolved::HashMapLiteral(span, entries) => self.check_hash_map_literal(span, entries),
             Resolved::RangeLiteral(span, start, stop) => {
                 self.check_range_literal(span, start, stop)
             }
@@ -800,6 +839,9 @@ impl Checker {
                 let mut typed_stmts = Vec::new();
                 let mut last_ty = Ty::Unit;
                 for s in stmts {
+                    // Inference substitutions are statement-local inside blocks too.
+                    // Otherwise an earlier generic call can monomorphize later siblings.
+                    self.substitutions.clear();
                     let t = self.check_node(s)?;
                     last_ty = t.ty.clone();
                     typed_stmts.push(t);
@@ -824,8 +866,8 @@ impl Checker {
                 self.check_struct_def(span, id, type_params, fields)
             }
             Resolved::RecordDef(span, id, fields) => self.check_record_def(span, id, fields),
-            Resolved::EnumDef(span, id, type_params, variants, _) => {
-                self.check_enum_def(span, id, type_params, variants)
+            Resolved::EnumDef(span, id, type_params, variants, attrs) => {
+                self.check_enum_def(span, id, type_params, variants, attrs)
             }
             Resolved::StructLit(span, id, field_vals) => {
                 self.check_struct_lit(span, id, field_vals)
@@ -1095,6 +1137,7 @@ impl Checker {
                 }
             }
             TypedPattern::Wildcard(_)
+            | TypedPattern::Pin(_, _, _)
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
@@ -1528,19 +1571,10 @@ impl Checker {
         if params.len() != 2 || !self.types_compatible(&params[0], &params[1]) {
             return self.check_app(span, func, args);
         }
-        if args.len() != 2
-            || args
-                .iter()
-                .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
-        {
+        let [ResolvedRecordLitArg::Positional(compare_expr), ResolvedRecordLitArg::Positional(key_expr)] =
+            args
+        else {
             return self.check_app(span, func, args);
-        }
-
-        let ResolvedRecordLitArg::Positional(compare_expr) = &args[0] else {
-            unreachable!("named arguments rejected above")
-        };
-        let ResolvedRecordLitArg::Positional(key_expr) = &args[1] else {
-            unreachable!("named arguments rejected above")
         };
 
         let source_ty = self.resolve_ty(&params[0]);
@@ -1685,10 +1719,10 @@ impl Checker {
         if let Some(message) = self.bound_mismatch_message(expected, actual) {
             return message;
         }
+        let rendered = self.diagnostic_ty_names(&[expected, actual]);
         format!(
             "Argument type mismatch: expected {}, got {}",
-            self.ty_name(expected),
-            self.ty_name(actual)
+            rendered[0], rendered[1]
         )
     }
 
@@ -1697,11 +1731,12 @@ impl Checker {
             (Ty::Var(var), actual_ty) => {
                 let bounds = self.tyvar_bound_names(var);
                 if !bounds.is_empty() && !self.ty_satisfies_bounds(&actual_ty, &bounds) {
+                    let rendered = self.diagnostic_ty_names(&[expected, &actual_ty]);
                     Some(format!(
                         "Argument type mismatch: expected {} implementing {}, got {}",
-                        self.ty_name(expected),
+                        rendered[0],
                         bounds.join(" + "),
-                        self.ty_name(&actual_ty)
+                        rendered[1]
                     ))
                 } else {
                     None
@@ -1742,7 +1777,7 @@ impl Checker {
                 "{}\n`{}` evaluates this call before composition; the result type {} is not a function value.",
                 signature,
                 op_name,
-                self.ty_name(&typed.ty)
+                self.diagnostic_ty_name(&typed.ty)
             )
         } else {
             format!(
@@ -1785,6 +1820,7 @@ impl Checker {
             | Resolved::ListNil(span)
             | Resolved::ListCons(span, _, _)
             | Resolved::ListLiteral(span, _)
+            | Resolved::HashMapLiteral(span, _)
             | Resolved::RangeLiteral(span, _, _)
             | Resolved::TupleLiteral(span, _)
             | Resolved::Grouped(span, _)
@@ -1835,15 +1871,18 @@ impl Checker {
     }
 
     pub(super) fn callable_signature_from_parts(&self, params: &[Ty], ret: &Ty) -> String {
-        let param_str = params
+        let ty_refs = params
             .iter()
-            .map(|ty| self.ty_name(ty))
-            .collect::<Vec<_>>()
-            .join(", ");
+            .map(|ty| ty as &Ty)
+            .chain(std::iter::once(ret))
+            .collect::<Vec<_>>();
+        let rendered = self.diagnostic_ty_names(&ty_refs);
+        let (rendered_params, rendered_ret) = rendered.split_at(params.len());
+        let param_str = rendered_params.join(", ");
         if param_str.is_empty() {
-            format!("(-> {})", self.ty_name(ret))
+            format!("(-> {})", rendered_ret[0])
         } else {
-            format!("({} -> {})", param_str, self.ty_name(ret))
+            format!("({} -> {})", param_str, rendered_ret[0])
         }
     }
 
@@ -1864,6 +1903,13 @@ impl Checker {
         ret: &Ty,
         first_param_name: Option<&str>,
     ) -> String {
+        let ty_refs = params
+            .iter()
+            .map(|ty| ty as &Ty)
+            .chain(std::iter::once(ret))
+            .collect::<Vec<_>>();
+        let rendered = self.diagnostic_ty_names(&ty_refs);
+        let (rendered_params, rendered_ret) = rendered.split_at(params.len());
         let param_list = params
             .iter()
             .enumerate()
@@ -1872,15 +1918,15 @@ impl Checker {
                     (0, Some(name)) => name.to_string(),
                     _ => format!("arg{}", idx + 1),
                 };
-                format!("{}: {}", name, self.ty_name(ty))
+                let rendered_ty = &rendered_params[idx];
+                let _ = ty;
+                format!("{}: {}", name, rendered_ty)
             })
             .collect::<Vec<_>>()
             .join(", ");
         format!(
             "Call target signature: {}({}) -> {}",
-            display_name,
-            param_list,
-            self.ty_name(ret)
+            display_name, param_list, rendered_ret[0]
         )
     }
 
@@ -2090,11 +2136,16 @@ impl Checker {
                             .qualified_name
                             .as_ref()
                             .unwrap_or(&method.function_id.name);
-                        let function_id = self.function_ids_by_name.get(function_key)?;
-                        let function_ty = self.env.lookup_var(function_id.unique_id)?;
-                        let Ty::UserFunc { fun_idx, .. } = function_ty else {
-                            return None;
-                        };
+                        let fun_idx = self
+                            .specializable_fun_idx_for_function_key(function_key)
+                            .or_else(|| {
+                                let function_id = self.function_ids_by_name.get(function_key)?;
+                                let function_ty = self.env.lookup_var(function_id.unique_id)?;
+                                let Ty::UserFunc { fun_idx, .. } = function_ty else {
+                                    return None;
+                                };
+                                Some(*fun_idx)
+                            })?;
                         let display_name =
                             method
                                 .display_name_override
@@ -2114,7 +2165,7 @@ impl Checker {
                                 });
                         return Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
                             name: display_name,
-                            fun_idx: *fun_idx,
+                            fun_idx,
                         }));
                     }
                 }
@@ -2181,11 +2232,16 @@ impl Checker {
                     .qualified_name
                     .as_ref()
                     .unwrap_or(&method.function_id.name);
-                let function_id = self.function_ids_by_name.get(function_key)?;
-                let function_ty = self.env.lookup_var(function_id.unique_id)?;
-                let Ty::UserFunc { fun_idx, .. } = function_ty else {
-                    return None;
-                };
+                let fun_idx = self
+                    .specializable_fun_idx_for_function_key(function_key)
+                    .or_else(|| {
+                        let function_id = self.function_ids_by_name.get(function_key)?;
+                        let function_ty = self.env.lookup_var(function_id.unique_id)?;
+                        let Ty::UserFunc { fun_idx, .. } = function_ty else {
+                            return None;
+                        };
+                        Some(*fun_idx)
+                    })?;
                 let display_name = method
                     .display_name_override
                     .clone()
@@ -2204,7 +2260,7 @@ impl Checker {
                     .unwrap_or_else(|| Checker::surface_name(&method.function_id.name).into());
                 return Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
                     name: display_name,
-                    fun_idx: *fun_idx,
+                    fun_idx,
                 }));
             }
             None
@@ -2212,6 +2268,18 @@ impl Checker {
         self.profiler
             .finish(ProfileEvent::GenericTraitCandidateScan, profile);
         result
+    }
+
+    fn specializable_fun_idx_for_function_key(&self, function_key: &str) -> Option<u32> {
+        self.specializable_defs.iter().find_map(|(fun_idx, def)| {
+            let name = match &def.node {
+                TypedInner::Def(_, id, ..) | TypedInner::ExtractorDef(_, id, ..) => {
+                    id.qualified_name.as_ref().unwrap_or(&id.name)
+                }
+                _ => return None,
+            };
+            (name == function_key).then_some(*fun_idx)
+        })
     }
 
     fn operator_trait_dispatch_for_args(
@@ -2364,6 +2432,7 @@ impl Checker {
         trait_name: &str,
         method_name: &str,
         args: &[ResolvedRecordLitArg],
+        receiver_owner_hint: Option<&str>,
     ) -> Result<TypedNode, TypeError> {
         if args
             .iter()
@@ -2440,10 +2509,41 @@ impl Checker {
                 ResolvedRecordLitArg::Positional(expr) => {
                     self.check_node_with_expected(expr, Some(expected))
                 }
-                ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+                ResolvedRecordLitArg::Named(_, _) => Err(TypeError {
+                    message: format!(
+                        "{}::{} does not accept named arguments",
+                        trait_name, method_name
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                }),
             })
             .collect::<Result<Vec<_>, _>>()?;
         self.ensure_no_runtime_facet_args(&typed_args, span, "Trait method call")?;
+
+        if let Some(owner_hint) = receiver_owner_hint {
+            if let Some(receiver) = typed_args.first() {
+                let receiver_ty = self.resolve_ty(&receiver.ty);
+                if let Some(receiver_name) = self.trait_target_name(&receiver_ty) {
+                    if Self::surface_name(&receiver_name) != owner_hint {
+                        return Err(TypeError {
+                            message: format!(
+                                "{}::{} helper requires receiver type {}, got {}",
+                                owner_hint,
+                                method_name,
+                                owner_hint,
+                                self.ty_name(&receiver_ty)
+                            ),
+                            span: receiver.span.clone(),
+                            hint: Some(format!(
+                                "Use {}::{} only for {} values.",
+                                owner_hint, method_name, owner_hint
+                            )),
+                        });
+                    }
+                }
+            }
+        }
 
         for (idx, (expected, arg)) in param_tys.iter().zip(&typed_args).enumerate() {
             if !self.types_compatible(expected, &arg.ty) {
@@ -4178,7 +4278,11 @@ impl Checker {
             let mut reordered: Vec<Option<&Resolved>> = vec![None; params.len()];
             for arg in args {
                 let ResolvedRecordLitArg::Named(name, expr) = arg else {
-                    unreachable!("validated argument form above")
+                    return Err(TypeError {
+                        message: "Cannot mix positional and named arguments".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
                 };
                 let idx = names
                     .iter()
@@ -4238,7 +4342,11 @@ impl Checker {
 
         for (expected_ty, arg) in params.iter().zip(args) {
             let ResolvedRecordLitArg::Positional(expr) = arg else {
-                unreachable!("validated argument form above")
+                return Err(TypeError {
+                    message: "Cannot mix positional and named arguments".into(),
+                    span: span.clone(),
+                    hint: None,
+                });
             };
             let typed = if matches!(self.resolve_ty(expected_ty), Ty::Hole) {
                 self.check_node(expr)?
@@ -4619,6 +4727,16 @@ impl Checker {
         let ResolvedRecordLitArg::Positional(right_expr) = &args[1] else {
             unreachable!("validated argument form above")
         };
+
+        if let Resolved::FacetCapture(capture_span, expr) = left_expr {
+            let (source_expr, pending_path) =
+                self.expand_facet_capture_path("Facet::chain", capture_span, expr)?;
+            let (_, _, source_value_ty) =
+                self.check_facet_source_value("Facet::chain", &source_expr)?;
+            let left_path =
+                self.specialize_pending_facet_path(pending_path, span, Some(&source_value_ty))?;
+            return self.compose_facet_paths(span, left_path, right_expr, "Facet::chain");
+        }
 
         let left = self.check_node(left_expr)?;
         match left.node {
@@ -5565,8 +5683,18 @@ impl Checker {
             return Ok(typed);
         }
 
-        if let Some((_id, trait_name, method_name)) = self.trait_method_ref(func) {
-            return self.check_trait_method_call(span, &trait_name, &method_name, args);
+        if let Some((id, trait_name, method_name)) = self.trait_method_ref(func) {
+            let receiver_owner_hint = id
+                .name
+                .strip_suffix(&format!("::{}", method_name))
+                .filter(|owner| *owner == "JsonValue");
+            return self.check_trait_method_call(
+                span,
+                &trait_name,
+                &method_name,
+                args,
+                receiver_owner_hint,
+            );
         }
 
         let typed_func = self.check_node(func)?;
@@ -5767,7 +5895,11 @@ impl Checker {
                     Ty::Hole => self.check_node(expr),
                     _ => self.check_node_with_expected(expr, Some(expected)),
                 },
-                ResolvedRecordLitArg::Named(_, _) => unreachable!("validated above"),
+                ResolvedRecordLitArg::Named(_, _) => Err(TypeError {
+                    message: named_arg_error.clone(),
+                    span: span.clone(),
+                    hint: None,
+                }),
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -6553,7 +6685,10 @@ impl Checker {
                 }
                 Some(other) => {
                     return Err(TypeError {
-                        message: format!("Expected function type, got {}", self.ty_name(other)),
+                        message: format!(
+                            "Expected function type, got {}",
+                            self.diagnostic_ty_name(other)
+                        ),
                         span: span.clone(),
                         hint: None,
                     });
@@ -6578,8 +6713,8 @@ impl Checker {
                             message: format!(
                                 "closure parameter `{}` expected {}, got {}",
                                 param.id.name,
-                                self.ty_name(param_ty),
-                                self.ty_name(&annotated)
+                                self.diagnostic_ty_names(&[param_ty, &annotated])[0],
+                                self.diagnostic_ty_names(&[param_ty, &annotated])[1]
                             ),
                             span: param.id.span.clone(),
                             hint: None,
@@ -6723,7 +6858,7 @@ impl Checker {
                 return Err(TypeError {
                     message: format!(
                         "Expected function type, got {}",
-                        self.ty_name(&self.resolve_ty(expected_ty))
+                        self.diagnostic_ty_name(&self.resolve_ty(expected_ty))
                     ),
                     span: span.clone(),
                     hint: None,
@@ -6852,7 +6987,7 @@ impl Checker {
             Ty::Func(params, ret) => (params.clone(), ret.as_ref().clone()),
             other => {
                 return Err(TypeError {
-                    message: format!("Not a function: {}", self.ty_name(other)),
+                    message: format!("Not a function: {}", self.diagnostic_ty_name(other)),
                     span: typed_target.span.clone(),
                     hint: Some(
                         "Capture (`&`) requires a function name, function value, or closure."
@@ -6897,6 +7032,14 @@ impl Checker {
             target,
             Resolved::FieldAccess(_, _, _) | Resolved::FacetSegmentAccess(_, _, _)
         )
+    }
+
+    fn unsupported_binop_type_error(op: &BinOp, span: &Span) -> TypeError {
+        TypeError {
+            message: format!("Unsupported binary operator in trait lowering: {op:?}"),
+            span: span.clone(),
+            hint: None,
+        }
     }
 
     pub(super) fn check_binop(
@@ -6945,7 +7088,7 @@ impl Checker {
                     BinOp::Add => ("Add", "add", "+"),
                     BinOp::Sub => ("Sub", "sub", "-"),
                     BinOp::Mul => ("Mul", "mul", "*"),
-                    _ => unreachable!("validated above"),
+                    _ => return Err(Self::unsupported_binop_type_error(op, span)),
                 };
                 if !compatible {
                     self.substitutions = compatibility_checkpoint;
@@ -6997,14 +7140,14 @@ impl Checker {
                     typed_right,
                 ))
             }
-            BinOp::Slash => unreachable!("handled before generic binop path"),
+            BinOp::Slash => Err(Self::unsupported_binop_type_error(op, span)),
             BinOp::Eq | BinOp::Neq => {
                 if !compatible {
                     self.substitutions = compatibility_checkpoint;
                     let summary = self.trait_implementation_summary(match op {
                         BinOp::Eq => "Eq",
                         BinOp::Neq => "Neq",
-                        _ => unreachable!("validated above"),
+                        _ => return Err(Self::unsupported_binop_type_error(op, span)),
                     });
                     return Err(TypeError {
                         message: format!(
@@ -7012,7 +7155,7 @@ impl Checker {
                             match op {
                                 BinOp::Eq => "==",
                                 BinOp::Neq => "!=",
-                                _ => unreachable!("validated above"),
+                                _ => return Err(Self::unsupported_binop_type_error(op, span)),
                             },
                             self.ty_name(&lt),
                             self.ty_name(&rt),
@@ -7025,7 +7168,7 @@ impl Checker {
                 let (trait_short_name, method_name, symbol) = match op {
                     BinOp::Eq => ("Eq", "eq", "=="),
                     BinOp::Neq => ("Neq", "neq", "!="),
-                    _ => unreachable!("validated above"),
+                    _ => return Err(Self::unsupported_binop_type_error(op, span)),
                 };
                 let eq_trait = self
                     .trait_key_by_short_name(trait_short_name)
@@ -7068,7 +7211,7 @@ impl Checker {
                                 BinOp::Gt => ">",
                                 BinOp::Lte => "<=",
                                 BinOp::Gte => ">=",
-                                _ => unreachable!("validated above"),
+                                _ => return Err(Self::unsupported_binop_type_error(op, span)),
                             },
                             self.ty_name(&lt),
                             self.ty_name(&rt),
@@ -7083,7 +7226,7 @@ impl Checker {
                     BinOp::Gt => (ComparisonOperator::Gt, ">"),
                     BinOp::Lte => (ComparisonOperator::Lte, "<="),
                     BinOp::Gte => (ComparisonOperator::Gte, ">="),
-                    _ => unreachable!("validated above"),
+                    _ => return Err(Self::unsupported_binop_type_error(op, span)),
                 };
                 let method_name = match comparison_op {
                     ComparisonOperator::Lt => "lt",
@@ -7211,7 +7354,7 @@ impl Checker {
                 || matches!(rhs_ty, Ty::Int | Ty::Float)
             {
                 Some(
-                    "Infix `/` is reserved for compose/join. Use `safe_div(...)` for division."
+                    "Infix `/` is reserved for compose/join. Use `Int::safe_div(...)` or `Float::safe_div(...)` for division."
                         .into(),
                 )
             } else {
@@ -7336,6 +7479,64 @@ impl Checker {
             ty: Ty::List(Box::new(elem_ty)),
             span: span.clone(),
             node: TypedInner::ListLiteral(typed_elems),
+        })
+    }
+
+    pub(super) fn check_hash_map_literal(
+        &mut self,
+        span: &Span,
+        entries: &[sigil::resolved::ResolvedHashMapLiteralEntry],
+    ) -> Result<TypedNode, TypeError> {
+        if entries.is_empty() {
+            return Ok(TypedNode {
+                ty: Ty::Enum("HashMap".into(), vec![self.env.fresh_tyvar()]),
+                span: span.clone(),
+                node: TypedInner::HashMapLiteral(Vec::new()),
+            });
+        }
+
+        let mut typed_entries = Vec::new();
+        for entry in entries {
+            let typed_key = self.check_node(&entry.key)?;
+            self.ensure_no_runtime_facet_value(&typed_key, "HashMap literal key")?;
+            if !self.types_compatible(&Ty::Str, &typed_key.ty) {
+                return Err(TypeError {
+                    message: format!(
+                        "HashMap literal key must be String, got {}",
+                        self.ty_name(&typed_key.ty)
+                    ),
+                    span: typed_key.span.clone(),
+                    hint: Some(
+                        "Use `hash![key_expr => value]` with a key expression that returns String."
+                            .into(),
+                    ),
+                });
+            }
+
+            let typed_value = self.check_node(&entry.value)?;
+            self.ensure_no_runtime_facet_value(&typed_value, "HashMap literal value")?;
+            typed_entries.push((typed_key, typed_value));
+        }
+
+        let value_ty = typed_entries[0].1.ty.clone();
+        for (_, value) in typed_entries.iter().skip(1) {
+            if !self.types_compatible(&value_ty, &value.ty) {
+                return Err(TypeError {
+                    message: format!(
+                        "expected {}, got {}",
+                        self.ty_name(&value_ty),
+                        self.ty_name(&value.ty)
+                    ),
+                    span: value.span.clone(),
+                    hint: Some("All HashMap literal values must have the same type".into()),
+                });
+            }
+        }
+
+        Ok(TypedNode {
+            ty: Ty::Enum("HashMap".into(), vec![value_ty]),
+            span: span.clone(),
+            node: TypedInner::HashMapLiteral(typed_entries),
         })
     }
 
@@ -7859,7 +8060,14 @@ impl Checker {
         let typed_value = self.check_result_value(value, "recover_kind")?;
         let value_ty = self.resolve_ty(&typed_value.ty);
         let Ty::Result(ok_ty, _) = &value_ty else {
-            unreachable!()
+            return Err(TypeError {
+                message: format!(
+                    "recover_kind value must resolve to Result<...>, got {}",
+                    self.ty_name(&value_ty)
+                ),
+                span: typed_value.span.clone(),
+                hint: None,
+            });
         };
         let ok_ty = ok_ty.as_ref().clone();
         let typed_marker = self.check_node(marker)?;
@@ -8302,7 +8510,7 @@ impl Checker {
         if id.name != "Tuple" {
             return Ok(None);
         }
-        let Some(index) = Self::parse_tuple_segment_index(field) else {
+        let Some(index) = Self::parse_tuple_index_name(field) else {
             return Ok(None);
         };
 

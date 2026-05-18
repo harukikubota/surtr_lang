@@ -9,7 +9,7 @@ compiler-special type があります。
 - `Hole`
 
 canonical declaration の正本は
-[`../../lib/special_types.srt`](/Users/haruca/work/rust/surtr/lib/special_types.srt)
+[`../../lib/types/special_types.srt`](../../lib/types/special_types.srt)
 です。
 
 ## 何が special なのか

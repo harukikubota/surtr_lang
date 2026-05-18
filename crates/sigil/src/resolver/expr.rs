@@ -7,8 +7,8 @@ use super::scope_init::{
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
 use spire::ast::{
-    AstPath, BinOp, BulkUpdateEntry, BulkUpdateEntryKind, DbgArg, FacetPathSegment,
-    InterpolatedPart,
+    AstPath, BinOp, BulkUpdateEntry, BulkUpdateEntryKind, BulkUpdatePath, DbgArg, FacetPathSegment,
+    HashMapLiteralEntry, InterpolatedPart,
 };
 
 const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
@@ -59,10 +59,36 @@ const TYPE_REF_HELPERS: &[TypeRefHelperSpec] = &[
         bare_name: "decode",
         owner: "Decode",
         method: "decode",
-        arity: 3,
-        witness_arg_indices: &[1, 2],
+        arity: 2,
+        witness_arg_indices: &[1],
     },
 ];
+
+#[derive(Debug, Clone, Copy)]
+enum TypeRefHelperCall {
+    InScope(&'static TypeRefHelperSpec),
+    ExplicitTrait(&'static TypeRefHelperSpec),
+    JsonValueDecode(&'static TypeRefHelperSpec),
+}
+
+impl TypeRefHelperCall {
+    fn spec(self) -> &'static TypeRefHelperSpec {
+        match self {
+            Self::InScope(spec) | Self::ExplicitTrait(spec) | Self::JsonValueDecode(spec) => spec,
+        }
+    }
+
+    fn allows_canonical_resolution(self) -> bool {
+        !matches!(self, Self::InScope(_))
+    }
+
+    fn helper_owner_hint(self) -> Option<&'static str> {
+        match self {
+            Self::JsonValueDecode(_) => Some("JsonValue"),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CanonicalSpecialForm {
@@ -80,10 +106,7 @@ enum CanonicalSpecialForm {
 
 impl Resolver {
     fn canonical_special_form_from_qname(qualified_name: &str) -> Option<CanonicalSpecialForm> {
-        match qualified_name
-            .strip_prefix("Global::")
-            .unwrap_or(qualified_name)
-        {
+        match global_surface_name(qualified_name) {
             "Kernel::if" => Some(CanonicalSpecialForm::If(IfKind::If3)),
             "Kernel::if_then" => Some(CanonicalSpecialForm::If(IfKind::IfThen2)),
             "Kernel::if_let" => Some(CanonicalSpecialForm::IfLet),
@@ -123,10 +146,7 @@ impl Resolver {
             ));
         }
         match (
-            entry
-                .module_path
-                .strip_prefix("Global::")
-                .unwrap_or(entry.module_path.as_str()),
+            global_surface_name(entry.module_path.as_str()),
             entry.name.as_str(),
         ) {
             ("Kernel", "if") => Some(CanonicalSpecialForm::If(IfKind::If3)),
@@ -385,7 +405,13 @@ impl Resolver {
             });
         }
 
-        let max_index = *used.iter().max().expect("used is not empty");
+        let Some(max_index) = used.iter().max().copied() else {
+            return Err(ResolveError {
+                message: "capture call is missing placeholder arguments".into(),
+                span: span.clone(),
+                related_labels: Vec::new(),
+            });
+        };
         for index in 1..=max_index {
             if !used.contains(&index) {
                 return Err(ResolveError {
@@ -476,6 +502,23 @@ impl Resolver {
                 for stmt in stmts {
                     self.collect_capture_placeholders(
                         stmt,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                        used,
+                    )?;
+                }
+                Ok(())
+            }
+            Ast::HashMapLiteral(_, entries) => {
+                for entry in entries {
+                    self.collect_capture_placeholders(
+                        &entry.key,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                        used,
+                    )?;
+                    self.collect_capture_placeholders(
+                        &entry.value,
                         allow_placeholders,
                         inside_placeholder_capture,
                         used,
@@ -904,6 +947,28 @@ impl Resolver {
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             )),
+            Ast::HashMapLiteral(span, entries) => Ok(Ast::HashMapLiteral(
+                span,
+                entries
+                    .into_iter()
+                    .map(|entry| {
+                        Ok(HashMapLiteralEntry {
+                            key: self.rewrite_capture_placeholders(
+                                entry.key,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                            value: self.rewrite_capture_placeholders(
+                                entry.value,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, ResolveError>>()?,
+            )),
             Ast::RangeLiteral(span, start, stop) => Ok(Ast::RangeLiteral(
                 span,
                 Box::new(self.rewrite_capture_placeholders(
@@ -1169,9 +1234,14 @@ impl Resolver {
                 .into_iter()
                 .map(|arg| self.rewrite_capture_placeholders(arg, &span, true, true))
                 .collect::<Result<Vec<_>, _>>()?;
-            let mut rewritten_args = rewritten_args.into_iter();
-            let left = rewritten_args.next().expect("checked len == 2");
-            let right = rewritten_args.next().expect("checked len == 2");
+            let [left, right]: [Ast; 2] = rewritten_args.try_into().map_err(|_| ResolveError {
+                message: format!(
+                    "operator capture `{}` expects exactly 2 argument expressions",
+                    func.body
+                ),
+                span: span.clone(),
+                related_labels: Vec::new(),
+            })?;
             let body = self.make_operator_capture_body(&span, &func.body, left, right)?;
             let params = (1..=max_index)
                 .map(|index| ClosureParam {
@@ -1268,6 +1338,9 @@ impl Resolver {
             Ast::Block(_, stmts) | Ast::ListLiteral(_, stmts) | Ast::TupleLiteral(_, stmts) => {
                 stmts.iter().find_map(Self::pipe_slot_span)
             }
+            Ast::HashMapLiteral(_, entries) => entries.iter().find_map(|entry| {
+                Self::pipe_slot_span(&entry.key).or_else(|| Self::pipe_slot_span(&entry.value))
+            }),
             Ast::RangeLiteral(_, start, stop) => {
                 Self::pipe_slot_span(start).or_else(|| Self::pipe_slot_span(stop))
             }
@@ -1402,17 +1475,26 @@ impl Resolver {
         self.desugar_pipeline_rhs_special_form_partial(rhs)
     }
 
-    fn type_ref_helper_for_call(func: &Ast) -> Option<&'static TypeRefHelperSpec> {
+    fn type_ref_helper_for_call(func: &Ast) -> Option<TypeRefHelperCall> {
         match func {
+            Ast::Var(_, name) if name == "decode" || name == "encode" => None,
             Ast::Var(_, name) => TYPE_REF_HELPERS
                 .iter()
-                .find(|spec| spec.bare_name == name.as_str()),
+                .find(|spec| spec.bare_name == name.as_str())
+                .map(TypeRefHelperCall::InScope),
             Ast::Path(_, path) if path.segments.len() >= 2 => {
                 let method = path.segments.last()?;
                 let owner = path.segments.get(path.segments.len() - 2)?;
+                if owner == "JsonValue" && method == "decode" {
+                    return TYPE_REF_HELPERS
+                        .iter()
+                        .find(|spec| spec.owner == "Decode" && spec.method == "decode")
+                        .map(TypeRefHelperCall::JsonValueDecode);
+                }
                 TYPE_REF_HELPERS
                     .iter()
                     .find(|spec| spec.owner == owner.as_str() && spec.method == method.as_str())
+                    .map(TypeRefHelperCall::ExplicitTrait)
             }
             _ => None,
         }
@@ -1421,22 +1503,51 @@ impl Resolver {
     fn resolve_type_ref_helper_func(
         &self,
         span: Span,
-        spec: &TypeRefHelperSpec,
+        helper: TypeRefHelperCall,
     ) -> Option<Resolved> {
+        let spec = helper.spec();
         let method_alias = format!("{}::{}", spec.owner, spec.method);
-        let uid = self
-            .scope
-            .lookup(&method_alias)
-            .or_else(|| self.declaration_uids.get(&method_alias).copied())?;
+        let scoped_uid = self.scope.lookup(&method_alias);
+        let uid = if helper.allows_canonical_resolution() {
+            scoped_uid
+                .or_else(|| self.declaration_uids.get(&method_alias).copied())
+                .or_else(|| {
+                    let canonical_fq = format!("{}::{}", spec.owner, method_alias);
+                    self.declaration_uids.get(&canonical_fq).copied()
+                })
+                .or_else(|| {
+                    self.declaration_entries
+                        .iter()
+                        .find_map(|(fq_name, entry)| {
+                            (entry.kind == DeclarationKind::TraitMethod
+                                && global_surface_name(&entry.module_path) == spec.owner
+                                && entry.name == method_alias)
+                                .then(|| self.declaration_uids.get(fq_name).copied())
+                                .flatten()
+                        })
+                })
+        } else {
+            scoped_uid
+        }?;
         let fq_name = self
             .declaration_fq_name_for_uid(uid)
             .unwrap_or(method_alias);
-        let entry = self.declaration_entries.get(&fq_name)?;
-        (entry.kind == DeclarationKind::TraitMethod).then(|| {
+        let is_trait_method = self
+            .declaration_entries
+            .get(&fq_name)
+            .is_some_and(|entry| entry.kind == DeclarationKind::TraitMethod)
+            || self
+                .declaration_uid_kinds
+                .get(&uid)
+                .is_some_and(|kind| *kind == DeclarationKind::TraitMethod);
+        is_trait_method.then(|| {
             Resolved::Var(
                 span.clone(),
                 ResolvedId {
-                    name: spec.method.into(),
+                    name: helper
+                        .helper_owner_hint()
+                        .map(|owner| format!("{}::{}", owner, spec.method))
+                        .unwrap_or_else(|| spec.method.into()),
                     qualified_name: Some(fq_name),
                     unique_id: uid,
                     compiler_generated: false,
@@ -1955,16 +2066,24 @@ impl Resolver {
 
 impl Resolver {
     fn flatten_bulk_update_entries(
-        prefix: &[FacetPathSegment],
+        prefix: Option<BulkUpdatePath>,
         entries: Vec<BulkUpdateEntry>,
-        out: &mut Vec<(Span, Vec<FacetPathSegment>, BulkUpdateEntryKind)>,
+        out: &mut Vec<(Span, BulkUpdatePath, BulkUpdateEntryKind)>,
     ) {
         for entry in entries {
-            let mut path = prefix.to_vec();
-            path.extend(entry.path);
+            let path = match &prefix {
+                Some(prefix) => {
+                    let span = Span {
+                        start: prefix.span().start,
+                        end: entry.path.span().end,
+                    };
+                    BulkUpdatePath::Chain(span, Box::new(prefix.clone()), Box::new(entry.path))
+                }
+                None => entry.path,
+            };
             match entry.kind {
                 BulkUpdateEntryKind::Nested(children) => {
-                    Self::flatten_bulk_update_entries(&path, children, out);
+                    Self::flatten_bulk_update_entries(Some(path), children, out);
                 }
                 kind => out.push((entry.span, path, kind)),
             }
@@ -1989,12 +2108,123 @@ impl Resolver {
         Ok(Ast::FacetCapture(span.clone(), Box::new(expr)))
     }
 
+    fn static_bulk_update_segments(
+        path: &BulkUpdatePath,
+    ) -> Result<Option<Vec<FacetPathSegment>>, ResolveError> {
+        match path {
+            BulkUpdatePath::Segments(_, segments) => Ok(Some(segments.clone())),
+            BulkUpdatePath::Pin(_, _) => Ok(None),
+            BulkUpdatePath::Chain(_, left, right) => {
+                let Some(mut left_segments) = Self::static_bulk_update_segments(left)? else {
+                    return Ok(None);
+                };
+                let Some(right_segments) = Self::static_bulk_update_segments(right)? else {
+                    return Ok(None);
+                };
+                left_segments.extend(right_segments);
+                Ok(Some(left_segments))
+            }
+            BulkUpdatePath::StripLeft(span, inner, count) => {
+                let Some(segments) = Self::static_bulk_update_segments(inner)? else {
+                    return Err(ResolveError {
+                        message:
+                            "bulk_update path strip operations require a concrete DSL path fragment"
+                                .into(),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    });
+                };
+                if *count >= segments.len() {
+                    return Err(ResolveError {
+                        message: "bulk_update target path cannot be empty".into(),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    });
+                }
+                Ok(Some(segments.into_iter().skip(*count).collect()))
+            }
+            BulkUpdatePath::StripRight(span, inner, count) => {
+                let Some(mut segments) = Self::static_bulk_update_segments(inner)? else {
+                    return Err(ResolveError {
+                        message:
+                            "bulk_update path strip operations require a concrete DSL path fragment"
+                                .into(),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    });
+                };
+                if *count >= segments.len() {
+                    return Err(ResolveError {
+                        message: "bulk_update target path cannot be empty".into(),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    });
+                }
+                let keep = segments.len() - *count;
+                segments.truncate(keep);
+                Ok(Some(segments))
+            }
+        }
+    }
+
+    fn make_bulk_update_path_expr(
+        span: &Span,
+        root_name: &str,
+        path: &BulkUpdatePath,
+    ) -> Result<Ast, ResolveError> {
+        if let Some(segments) = Self::static_bulk_update_segments(path)? {
+            if segments.is_empty() {
+                return Err(ResolveError {
+                    message: "bulk_update target path cannot be empty".into(),
+                    span: span.clone(),
+                    related_labels: Vec::new(),
+                });
+            }
+            return Self::make_bulk_update_capture_path(span, root_name, &segments);
+        }
+
+        match path {
+            BulkUpdatePath::Pin(pin_span, name) => Ok(Ast::Var(pin_span.clone(), name.clone())),
+            BulkUpdatePath::Chain(chain_span, left, right) => {
+                let left_expr = Self::make_bulk_update_path_expr(chain_span, root_name, left)?;
+                let right_expr = Self::make_bulk_update_path_expr(chain_span, root_name, right)?;
+                Ok(Ast::App(
+                    chain_span.clone(),
+                    Box::new(Ast::Path(
+                        chain_span.clone(),
+                        AstPath {
+                            span: chain_span.clone(),
+                            segments: vec!["Facet".into(), "chain".into()],
+                        },
+                    )),
+                    vec![
+                        RecordLitArg::Positional(left_expr),
+                        RecordLitArg::Positional(right_expr),
+                    ],
+                ))
+            }
+            BulkUpdatePath::Segments(path_span, _)
+            | BulkUpdatePath::StripLeft(path_span, _, _)
+            | BulkUpdatePath::StripRight(path_span, _, _) => Err(ResolveError {
+                message: "bulk_update static path could not be lowered".into(),
+                span: path_span.clone(),
+                related_labels: Vec::new(),
+            }),
+        }
+    }
+
     fn make_facet_intrinsic_call(
         span: &Span,
         method: &str,
         path_expr: Ast,
+        source_expr: Option<Ast>,
         value_expr: Ast,
     ) -> Ast {
+        let mut args = vec![RecordLitArg::Positional(path_expr)];
+        if let Some(source_expr) = source_expr {
+            args.push(RecordLitArg::Positional(source_expr));
+        }
+        args.push(RecordLitArg::Positional(value_expr));
         Ast::App(
             span.clone(),
             Box::new(Ast::Path(
@@ -2004,10 +2234,7 @@ impl Resolver {
                     segments: vec!["Facet".into(), method.into()],
                 },
             )),
-            vec![
-                RecordLitArg::Positional(path_expr),
-                RecordLitArg::Positional(value_expr),
-            ],
+            args,
         )
     }
 
@@ -2018,7 +2245,7 @@ impl Resolver {
         entries: Vec<BulkUpdateEntry>,
     ) -> Result<Resolved, ResolveError> {
         let mut flat_entries = Vec::new();
-        Self::flatten_bulk_update_entries(&[], entries, &mut flat_entries);
+        Self::flatten_bulk_update_entries(None, entries, &mut flat_entries);
 
         let mut expr = Ast::ConstructorCall(
             source.span().clone(),
@@ -2032,24 +2259,52 @@ impl Resolver {
             .map(|(index, (span, path, kind))| (index, span, path, kind))
         {
             let param_name = format!("__bulk_state_{}_{}", span.start, index);
-            let capture = Self::make_bulk_update_capture_path(&entry_span, &param_name, &path)?;
+            let capture = Self::make_bulk_update_path_expr(&entry_span, &param_name, &path)?;
+            let source_expr = if matches!(capture, Ast::FacetCapture(_, _)) {
+                None
+            } else {
+                Some(Ast::Var(entry_span.clone(), param_name.clone()))
+            };
             let body = match kind {
                 BulkUpdateEntryKind::Set(value) => {
-                    Self::make_facet_intrinsic_call(&entry_span, "set", capture, value)
+                    Self::make_facet_intrinsic_call(&entry_span, "set", capture, source_expr, value)
                 }
-                BulkUpdateEntryKind::Over(update_fun) => {
-                    Self::make_facet_intrinsic_call(&entry_span, "over", capture, update_fun)
+                BulkUpdateEntryKind::Over(update_fun) => Self::make_facet_intrinsic_call(
+                    &entry_span,
+                    "over",
+                    capture,
+                    source_expr,
+                    update_fun,
+                ),
+                BulkUpdateEntryKind::OverResult(update_fun) => Self::make_facet_intrinsic_call(
+                    &entry_span,
+                    "over_result",
+                    capture,
+                    source_expr,
+                    update_fun,
+                ),
+                BulkUpdateEntryKind::CaseSet(value) => Self::make_facet_intrinsic_call(
+                    &entry_span,
+                    "case_set",
+                    capture,
+                    source_expr,
+                    value,
+                ),
+                BulkUpdateEntryKind::CaseOver(update_fun) => Self::make_facet_intrinsic_call(
+                    &entry_span,
+                    "case_over",
+                    capture,
+                    source_expr,
+                    update_fun,
+                ),
+                BulkUpdateEntryKind::Nested(_) => {
+                    return Err(ResolveError {
+                        message: "nested bulk_update entries must be flattened before lowering"
+                            .into(),
+                        span: entry_span,
+                        related_labels: Vec::new(),
+                    });
                 }
-                BulkUpdateEntryKind::OverResult(update_fun) => {
-                    Self::make_facet_intrinsic_call(&entry_span, "over_result", capture, update_fun)
-                }
-                BulkUpdateEntryKind::CaseSet(value) => {
-                    Self::make_facet_intrinsic_call(&entry_span, "case_set", capture, value)
-                }
-                BulkUpdateEntryKind::CaseOver(update_fun) => {
-                    Self::make_facet_intrinsic_call(&entry_span, "case_over", capture, update_fun)
-                }
-                BulkUpdateEntryKind::Nested(_) => unreachable!("nested entries must be flattened"),
             };
             let closure = Ast::Closure(
                 entry_span.clone(),
@@ -2102,17 +2357,19 @@ impl Resolver {
                     }
                 }
 
-                if let Some(spec) = Self::type_ref_helper_for_call(&func) {
+                if let Some(helper) = Self::type_ref_helper_for_call(&func) {
+                    let spec = helper.spec();
                     let resolved_func = self
-                        .resolve_type_ref_helper_func(func.span().clone(), spec)
+                        .resolve_type_ref_helper_func(func.span().clone(), helper)
                         .map(Ok)
                         .unwrap_or_else(|| {
                             self.resolve_node(*func.clone()).map_err(|err| {
                                 self.map_undefined_callable_error(err, &func, args.len())
                             })
                         })?;
-                    let injected_receiver = args.len() + 1 == spec.arity;
-                    if args.len() != spec.arity && !injected_receiver {
+                    let direct_arity = args.len();
+                    let injected_receiver = direct_arity + 1 == spec.arity;
+                    if direct_arity != spec.arity && !injected_receiver {
                         return Err(ResolveError {
                             message: format!(
                                 "{} expects exactly {} positional arguments",
@@ -2265,6 +2522,19 @@ impl Resolver {
                 Ok(Resolved::ListLiteral(span, resolved))
             }
 
+            Ast::HashMapLiteral(span, entries) => {
+                let resolved = entries
+                    .into_iter()
+                    .map(|entry| {
+                        Ok(crate::resolved::ResolvedHashMapLiteralEntry {
+                            key: self.resolve_node(entry.key)?,
+                            value: self.resolve_node(entry.value)?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, ResolveError>>()?;
+                Ok(Resolved::HashMapLiteral(span, resolved))
+            }
+
             Ast::RangeLiteral(span, start, stop) => {
                 let start = self.resolve_node(*start)?;
                 let stop = self.resolve_node(*stop)?;
@@ -2371,9 +2641,7 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
-                if let Some(surface_name) = name.strip_prefix("Global::") {
-                    self.scope.define_with_id(surface_name, uid);
-                }
+                define_global_surface_alias(&mut self.scope, &name, uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
@@ -2411,9 +2679,7 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
-                if let Some(surface_name) = name.strip_prefix("Global::") {
-                    self.scope.define_with_id(surface_name, uid);
-                }
+                define_global_surface_alias(&mut self.scope, &name, uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
@@ -2444,9 +2710,7 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
-                if let Some(surface_name) = name.strip_prefix("Global::") {
-                    self.scope.define_with_id(surface_name, uid);
-                }
+                define_global_surface_alias(&mut self.scope, &name, uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,
@@ -2496,9 +2760,7 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
-                if let Some(surface_name) = name.strip_prefix("Global::") {
-                    self.scope.define_with_id(surface_name, uid);
-                }
+                define_global_surface_alias(&mut self.scope, &name, uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name: name.clone(),
@@ -2520,9 +2782,7 @@ impl Resolver {
                         .or_else(|| self.scope.lookup(&ctor_name))
                         .unwrap_or_else(|| self.scope.reserve_id());
                     self.scope.define_with_id(&ctor_name, ctor_uid);
-                    if let Some(surface_ctor_name) = ctor_name.strip_prefix("Global::") {
-                        self.scope.define_with_id(surface_ctor_name, ctor_uid);
-                    }
+                    define_global_surface_alias(&mut self.scope, &ctor_name, ctor_uid);
                     let qualified_ctor_name = self.qualify_current_declaration_name(&ctor_name);
                     resolved_variants.push(ResolvedEnumVariant {
                         id: ResolvedId {
@@ -2581,9 +2841,7 @@ impl Resolver {
                 self.scope.advance_next_id_to(body_resolver.scope.next_id());
                 self.scope.define_with_id(&name, fun_uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
-                if let Some(surface_name) = qualified_name.strip_prefix("Global::") {
-                    self.scope.define_with_id(surface_name, fun_uid);
-                }
+                define_global_surface_alias(&mut self.scope, &qualified_name, fun_uid);
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),
@@ -2616,11 +2874,8 @@ impl Resolver {
                 } else {
                     Some(self.qualify_current_declaration_name(&format!("__const__::{}", name)))
                 };
-                if let Some(surface_name) = qualified_name
-                    .as_deref()
-                    .and_then(|name| name.strip_prefix("Global::"))
-                {
-                    self.scope.define_with_id(surface_name, uid);
+                if let Some(qualified_name) = qualified_name.as_deref() {
+                    define_global_surface_alias(&mut self.scope, qualified_name, uid);
                 }
                 let rid = ResolvedId {
                     name,
@@ -2657,9 +2912,7 @@ impl Resolver {
                 self.scope.advance_next_id_to(body_resolver.scope.next_id());
                 self.scope.define_with_id(&name, fun_uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
-                if let Some(surface_name) = qualified_name.strip_prefix("Global::") {
-                    self.scope.define_with_id(surface_name, fun_uid);
-                }
+                define_global_surface_alias(&mut self.scope, &qualified_name, fun_uid);
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),
@@ -2990,9 +3243,7 @@ impl Resolver {
                     .take_predeclared_id(&head.name)
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&head.name, builtin_type_uid);
-                if let Some(surface_name) = head.name.strip_prefix("Global::") {
-                    self.scope.define_with_id(surface_name, builtin_type_uid);
-                }
+                define_global_surface_alias(&mut self.scope, &head.name, builtin_type_uid);
                 let qualified_name = self.qualify_current_declaration_name(&head.name);
                 let rid = ResolvedId {
                     name: head.name,
@@ -3014,9 +3265,7 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
-                if let Some(surface_name) = name.strip_prefix("Global::") {
-                    self.scope.define_with_id(surface_name, uid);
-                }
+                define_global_surface_alias(&mut self.scope, &name, uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let rid = ResolvedId {
                     name,

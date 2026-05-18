@@ -18,6 +18,8 @@ Spire -> Sigil -> Scar -> Forge -> Eldr
 
 - Assign a stable `unique_id` to each binding
 - Resolve references across lexical scopes
+- Precollect staged module declarations before body resolution
+- Apply auto-import and explicit import visibility rules
 - Handle shadowing safely
 - Report `ResolveError` for undefined names
 - Convert `if` application form to a dedicated `Resolved::If` node

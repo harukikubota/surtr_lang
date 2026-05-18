@@ -177,16 +177,16 @@ top-level 宣言名として直接見えます。
 Surtr には V1 の trait system があります。まずは capability trait と operator dispatch trait を分けて読むと理解しやすいです。
 
 ```surtr
-deftrait Numeric {
-  def abs(self: Self) -> Self
+deftrait Describable {
+  def describe(self: Self) -> String
 }
 
-def twice<$N: Numeric>(x: $N) -> $N {
-  Numeric::abs(x)
+def render<$T: Describable>(x: $T) -> String {
+  Describable::describe(x)
 }
 
-def show_abs(x: impl Numeric) -> String {
-  inspect(Numeric::abs(x))
+def show_value(x: impl Show) -> String {
+  to_string(x)
 }
 ```
 
@@ -194,13 +194,13 @@ def show_abs(x: impl Numeric) -> String {
 
 - `deftrait` は method 宣言だけを持つ
 - trait は `deftrait Name<$T, ...> { ... }` のように型引数を取れる
-- 実装は `impl Numeric for Int { ... }` の形で書く
-- `+`, `-`, `*` は `Numeric` ではなく `Add` / `Sub` / `Mul` の dispatch
+- 実装は `impl Describable for Int { ... }` の形で書く
+- `+`, `-`, `*` は `Add` / `Sub` / `Mul` の dispatch
 - `Compare` は三値比較の正本で、`< <= > >=` も `Compare` を前提に動く
 - trait 側の型引数を使う実装は `impl Trait<Concrete> for Type { ... }` の形で書く
 - `impl Trait` は parameter 位置だけで使える
-- 戻り値でも同じ型を使いたいときは `<$N: Numeric>` のように名前付き bound を使う
-- `-> impl Numeric` と `where ...` はまだ使えない
+- 戻り値でも同じ型を使いたいときは `<$T: Describable>` のように名前付き bound を使う
+- `-> impl Trait` と `where ...` はまだ使えない
 
 target type を明示する trait では、compiler-reserved な witness type
 `TypeRef<$T>` を method parameter にだけ置けます。
@@ -777,7 +777,7 @@ not_fn = &`Boolean::not`
 - `print(String) -> Unit`
 - `to_string(A) -> String`
 - `inspect(A) -> String`
-- `safe_div(A, A) -> Result<A, ZeroDivisionError>`
+- `safe_div(A, A) -> Result<A, ZeroDivisionError>` (`Int::safe_div` / `Float::safe_div` の runtime target)
 - `safe_mod(Int, Int) -> Result<Int, ZeroDivisionError>`
 - `eprint(Error) -> Unit`
 - `set_exit_code(Int) -> Unit`
@@ -790,7 +790,7 @@ not_fn = &`Boolean::not`
 現在の Surtr では、標準定義ソースを次の順で先に読み込みます。
 
 ```text
-Bootstrap -> [SpecialTypes, Kernel, Numeric, Show, Eq, Ordering, Compare, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Facet, Float] -> user source
+Bootstrap -> [SpecialTypes, Kernel, Show, Eq, Ordering, Compare, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Facet, Float] -> user source
 ```
 
 役割の分け方は次のとおりです。
@@ -803,9 +803,6 @@ Bootstrap -> [SpecialTypes, Kernel, Numeric, Show, Eq, Ordering, Compare, Concat
 - `Kernel`
   - auto import される最小の標準 API
   - `defmod Kernel` 配下に置かれる `print` のような cross-cutting builtin
-- `Numeric`
-  - compile-time trait dispatch の基準になる trait 宣言
-  - `Int` / `Float` が共有する `add`, `sub`, `mul`, `safe_div`, `abs`, `min`, `max` の契約
 - 各 type module
   - `Int` や `String` のような型ごとの helper と説明
   - その型自身の `@builtin type` 宣言
@@ -865,7 +862,7 @@ value: Result<Int> = Ok(42)
 - `defstruct`
 - `defrecord`
 - `deferror`
-- trait (`Numeric` first)
+- trait
 - `Result`
 - `List`
 

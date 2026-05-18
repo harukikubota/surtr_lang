@@ -1366,6 +1366,7 @@ impl Parser<'_> {
         self.expect(&Token::Import)?;
         let (first_seg, first_span) = self.expect_ident()?;
         let path_start = first_span.start;
+        let first_end = first_span.end;
         let mut qualified = vec![(first_seg, first_span)];
         let mut saw_separator = false;
 
@@ -1380,9 +1381,13 @@ impl Parser<'_> {
             if self.has_path_separator() && matches!(self.peek_n(2), Some(Token::LBrace)) {
                 self.consume_path_separator()?;
                 let (names, end) = self.parse_import_selector_list()?;
+                let module_end = qualified
+                    .last()
+                    .map(|(_, span)| span.end)
+                    .unwrap_or(first_end);
                 (
                     qualified.iter().map(|(name, _)| name.clone()).collect(),
-                    qualified.last().expect("non-empty path").1.end,
+                    module_end,
                     ImportSpec::List(names),
                     end.end,
                 )
@@ -1392,21 +1397,35 @@ impl Parser<'_> {
                     self.peek_span(),
                 ));
             } else if saw_separator {
-                let (name, selected_span) = qualified
-                    .pop()
-                    .expect("qualified import with separator has at least 2 segments");
+                let Some((name, selected_span)) = qualified.pop() else {
+                    return Err(ParseError::syntax(
+                        "Expected import path",
+                        Span {
+                            start: path_start,
+                            end: first_end,
+                        },
+                    ));
+                };
+                let module_end = qualified
+                    .last()
+                    .map(|(_, span)| span.end)
+                    .unwrap_or(first_end);
                 (
                     qualified.iter().map(|(module, _)| module.clone()).collect(),
-                    qualified.last().expect("module path is non-empty").1.end,
+                    module_end,
                     ImportSpec::Single(name),
                     selected_span.end,
                 )
             } else {
+                let module_end = qualified
+                    .last()
+                    .map(|(_, span)| span.end)
+                    .unwrap_or(first_end);
                 (
                     qualified.iter().map(|(name, _)| name.clone()).collect(),
-                    qualified.last().expect("non-empty path").1.end,
+                    module_end,
                     ImportSpec::All,
-                    qualified.last().expect("non-empty path").1.end,
+                    module_end,
                 )
             };
 
@@ -1800,6 +1819,7 @@ impl Parser<'_> {
             Box::new(body),
             DeclAttrs {
                 doc: attrs.doc,
+                builtin: attrs.builtin,
                 auto_import: attrs.auto_import,
                 hidden: attrs.hidden,
                 readonly: attrs.readonly,
@@ -1808,7 +1828,12 @@ impl Parser<'_> {
                 user_callable: attrs.user_callable,
             },
         );
-        let attrs = ast_decl_attrs(&ast).expect("impl method is a declaration");
+        let attrs = ast_decl_attrs(&ast).ok_or_else(|| {
+            ParseError::syntax(
+                "impl method lowering must produce a declaration",
+                ast.span().clone(),
+            )
+        })?;
         validate_doc_visibility(attrs, ast.span())?;
         Ok(ast)
     }
@@ -2625,7 +2650,21 @@ impl Parser<'_> {
             }
             self.skip_newlines();
             let variant_start = self.peek_span().start;
-            let (variant_name, _) = self.expect_ident()?;
+            let (variant_name, _) = if attrs.builtin {
+                match self.peek() {
+                    Token::True => {
+                        let span = self.expect(&Token::True)?;
+                        ("True".to_string(), span)
+                    }
+                    Token::False => {
+                        let span = self.expect(&Token::False)?;
+                        ("False".to_string(), span)
+                    }
+                    _ => self.expect_ident()?,
+                }
+            } else {
+                self.expect_ident()?
+            };
             let mut payload = Vec::new();
 
             if matches!(self.peek(), Token::LParen) {
@@ -3206,6 +3245,18 @@ impl Parser<'_> {
                 )),
             }
         } else if saw_builtin {
+            if !self
+                .context
+                .parse_rules
+                .allowed_top_level_decl_kinds
+                .allows(super::context::TopLevelDeclKind::BuiltinDecl)
+            {
+                return Err(ParseError::syntax(
+                    "@builtin declarations are only allowed in standard/internal source",
+                    start_span.unwrap_or_else(|| self.peek_span()),
+                ));
+            }
+            attrs.builtin = true;
             if attrs.hidden
                 && !self
                     .context
@@ -3222,8 +3273,9 @@ impl Parser<'_> {
                 Token::Def => self.parse_builtin_decl(start, attrs),
                 Token::Defextractor => self.parse_builtin_extractor_decl(start, attrs),
                 Token::Type => self.parse_builtin_type_decl(start, attrs),
+                Token::Defenum => self.parse_enum_def_with_attrs(attrs, Some(start)),
                 _ => Err(ParseError::syntax(
-                    "Expected `def`, `defextractor`, or `type` after @builtin",
+                    "Expected `def`, `defextractor`, `defenum`, or `type` after @builtin",
                     self.peek_span(),
                 )),
             }
@@ -3265,7 +3317,7 @@ impl Parser<'_> {
         }
     }
 
-    pub(super) fn parse_defagent_without_legacy_meta(&mut self) -> Result<Ast, ParseError> {
+    pub(super) fn parse_defagent_default_attrs(&mut self) -> Result<Ast, ParseError> {
         let start = self.peek_span().start;
         self.parse_defagent(None, DeclAttrs::default(), start)
     }
@@ -4069,8 +4121,12 @@ impl Parser<'_> {
                 }
                 None => {
                     let def = make_process_helper_private(def);
-                    let attrs = ast_decl_attrs(&def)
-                        .expect("process helper lowering always produces a declaration");
+                    let attrs = ast_decl_attrs(&def).ok_or_else(|| {
+                        ParseError::syntax(
+                            "process helper lowering must produce a declaration",
+                            def.span().clone(),
+                        )
+                    })?;
                     validate_doc_visibility(attrs, def.span())?;
                     helpers.push(def);
                 }
@@ -4098,22 +4154,33 @@ impl Parser<'_> {
             )
         })?;
 
-        let meta = meta.unwrap_or_else(|| {
-            let process_meta = process_meta.expect("new defagent should parse process meta");
-            AgentMeta {
-                kind: if set.is_some() {
-                    AgentKind::State
-                } else {
-                    AgentKind::ReadOnly
-                },
-                instance: process_meta.instance,
-                state: process_meta.state,
-                boot: false,
-                registry: process_meta.instance == AgentInstance::Singleton,
-                lazy: process_meta.init_policy == InitPolicy::Lazy,
-                handlers: process_meta.handlers,
+        let meta = match meta {
+            Some(meta) => meta,
+            None => {
+                let process_meta = process_meta.ok_or_else(|| {
+                    ParseError::syntax(
+                        "defagent must include process metadata",
+                        Span {
+                            start,
+                            end: end.end,
+                        },
+                    )
+                })?;
+                AgentMeta {
+                    kind: if set.is_some() {
+                        AgentKind::State
+                    } else {
+                        AgentKind::ReadOnly
+                    },
+                    instance: process_meta.instance,
+                    state: process_meta.state,
+                    boot: false,
+                    registry: process_meta.instance == AgentInstance::Singleton,
+                    lazy: process_meta.init_policy == InitPolicy::Lazy,
+                    handlers: process_meta.handlers,
+                }
             }
-        });
+        };
 
         self.validate_agent_meta(
             &meta,
@@ -4201,8 +4268,12 @@ impl Parser<'_> {
                 }
                 None => {
                     let def = make_process_helper_private(def);
-                    let attrs = ast_decl_attrs(&def)
-                        .expect("process helper lowering always produces a declaration");
+                    let attrs = ast_decl_attrs(&def).ok_or_else(|| {
+                        ParseError::syntax(
+                            "process helper lowering must produce a declaration",
+                            def.span().clone(),
+                        )
+                    })?;
                     validate_doc_visibility(attrs, def.span())?;
                     helpers.push(def);
                 }
@@ -4487,13 +4558,9 @@ impl Parser<'_> {
                 body.push(build_state_get_wrapper(
                     &span, &name, &get_name, &get_def, singleton,
                 )?);
-                if let Some(set_def) = &set_def {
+                if let (Some(set_name), Some(set_def)) = (set_name.as_deref(), set_def.as_ref()) {
                     body.push(build_state_set_wrapper(
-                        &span,
-                        &name,
-                        set_name.as_deref().expect("@set name should exist"),
-                        set_def,
-                        singleton,
+                        &span, &name, set_name, set_def, singleton,
                     )?);
                 }
             }

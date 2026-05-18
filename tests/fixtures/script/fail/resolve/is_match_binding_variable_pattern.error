@@ -1,2 +1,2 @@
-phase: resolve
+phase: parse
 contains: does not allow binding variables

@@ -9,14 +9,30 @@ test("Float") {
       assert_eq((1.5, 1.25, 2.5), (Float::abs(-1.5), Float::min(2.5, 1.25), Float::max(2.5, 1.25)))
     }
 
+    it("supports floor ceil round and trunc") {
+      assert_eq(
+        (1.0, 2.0, 2.0, 1.0, -2.0, -1.0, -2.0, -1.0),
+        (
+          Float::floor(1.8),
+          Float::ceil(1.2),
+          Float::round(1.5),
+          Float::trunc(1.8),
+          Float::floor(-1.2),
+          Float::ceil(-1.8),
+          Float::round(-1.5),
+          Float::trunc(-1.8)
+        ),
+      )
+    }
+
     it("supports add sub and mul trait dispatch") {
       assert_eq((3.5, 2.5, 3.0), (Add::add(1.5, 2.0), Sub::sub(3.5, 1.0), Mul::mul(1.5, 2.0)))
     }
 
-    it("supports safe division through Numeric") {
+    it("supports safe division through Float") {
       assert_eq(
         ("Ok(1.5)", "Err(ZeroDivisionError(\"division by zero\"))"),
-        (inspect(safe_div(3.0, 2.0)), inspect(safe_div(3.0, 0.0))),
+        (inspect(Float::safe_div(3.0, 2.0)), inspect(Float::safe_div(3.0, 0.0))),
       )
     }
   }
@@ -48,13 +64,20 @@ test("Float") {
       assert_eq(("1.5", 1.5, "1.5"), (to_string(1.5), from(1.5, Float), from(1.5, String)))
     }
 
+    it("exposes builtin constants through Float") {
+      assert_eq(
+        ("3.141592653589793", "2.718281828459045"),
+        (to_string(Float::pi()), to_string(Float::e())),
+      )
+    }
+
     it("renders user-defined wrappers through Show") {
       assert_eq("Score(4.5)", to_string(Score::new(4.5)))
     }
   }
 
-  describe("trait integration") {
-    it("uses generic numeric helpers with floats") {
+  describe("type-owner integration") {
+    it("uses concrete float helpers") {
       assert_eq(
         ("Ok(1.5)", "Err(ZeroDivisionError(\"division by zero\"))"),
         (inspect(safe_ratio(3.0, 2.0)), inspect(safe_ratio(3.0, 0.0))),

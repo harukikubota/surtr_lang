@@ -7,18 +7,8 @@ use super::Parser;
 impl Parser<'_> {
     // ── Type annotation parsing ──
 
-    fn ast_ty_span(ty: &AstTy) -> &Span {
-        match ty {
-            AstTy::Named(span, _)
-            | AstTy::ImplTrait(span, _)
-            | AstTy::Generic(span, _, _)
-            | AstTy::Tuple(span, _)
-            | AstTy::Func(span, _, _) => span,
-        }
-    }
-
     fn wrap_optional_ty(&self, inner: AstTy, end: usize) -> AstTy {
-        let start = Self::ast_ty_span(&inner).start;
+        let start = super::ast_ty_span(&inner).start;
         AstTy::Generic(Span { start, end }, "Option".to_string(), vec![inner])
     }
 

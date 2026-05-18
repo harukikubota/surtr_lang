@@ -11,6 +11,14 @@ pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
     if !(1..=2).contains(&args.len()) {
         return Err(RuneError::usage(String::new()));
     }
+    for arg in args {
+        if arg.starts_with('-') {
+            return Err(RuneError::message(
+                1,
+                format!("build: unknown option '{}'", arg),
+            ));
+        }
+    }
     build_command(
         &args[0],
         args.get(1).map(String::as_str),
@@ -28,7 +36,8 @@ fn build_command(input_srt: &str, output_eldr: Option<&str>, env: ExecutionEnv) 
         env,
         input_srt,
         &compile_plan.source_for_parse,
-        &compile_plan.include_directives,
+        &compile_plan.include_modules,
+        xldr::StdlibVariant::Default,
     )?;
     let bytecode = compile_source(env, &compile_sources, &compile_plan)?;
     let bytes = bytecode
@@ -41,4 +50,17 @@ fn build_command(input_srt: &str, output_eldr: Option<&str>, env: ExecutionEnv) 
     fs::write(&output_path, bytes)
         .map_err(|e| RuneError::message(1, format!("Error writing {}: {}", output_path, e)))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_rejects_option_like_input() {
+        let err = dispatch(&["--bad".to_string()])
+            .expect_err("option-looking build input must fail before reading input");
+
+        assert_eq!(err.summary(), "build: unknown option '--bad'");
+    }
 }

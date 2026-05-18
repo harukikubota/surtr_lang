@@ -9,6 +9,9 @@ use sindr::builtin::{
     builtin_type_meta_by_name, builtin_uid, BuiltinMeta, BUILTIN_METAS, BUILTIN_TYPE_METAS,
 };
 use sindr::policy::{ExitCodePolicy, RuntimeSourcePolicy};
+use sindr::warning::{
+    CompilerWarning, PhaseOutput, WarningBuffer, WarningKind, WarningPhase, WarningSpan,
+};
 use spire::ast::{AstTy, BinOp, Lit, Span};
 
 use crate::env::{TypeEnv, TypeKind};
@@ -449,16 +452,35 @@ pub fn typecheck(resolved: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
     typecheck_with_context(resolved, TypecheckContext::default())
 }
 
+pub fn typecheck_with_warnings(
+    resolved: Vec<Resolved>,
+) -> Result<PhaseOutput<Vec<TypedNode>>, TypeError> {
+    typecheck_with_context_with_warnings(resolved, TypecheckContext::default())
+}
+
 pub fn typecheck_staged_program(
     program: sigil::ResolvedStagedProgram,
 ) -> Result<TypedProgram, TypeError> {
     typecheck_staged_program_with_context(program, TypecheckContext::default())
 }
 
+pub fn typecheck_staged_program_with_warnings(
+    program: sigil::ResolvedStagedProgram,
+) -> Result<PhaseOutput<TypedProgram>, TypeError> {
+    typecheck_staged_program_with_context_with_warnings(program, TypecheckContext::default())
+}
+
 pub fn typecheck_staged_program_with_context(
     program: sigil::ResolvedStagedProgram,
     context: TypecheckContext,
 ) -> Result<TypedProgram, TypeError> {
+    typecheck_staged_program_with_context_with_warnings(program, context).map(|output| output.value)
+}
+
+pub fn typecheck_staged_program_with_context_with_warnings(
+    program: sigil::ResolvedStagedProgram,
+    context: TypecheckContext,
+) -> Result<PhaseOutput<TypedProgram>, TypeError> {
     let process_specs = program
         .process_specs
         .into_iter()
@@ -468,19 +490,31 @@ pub fn typecheck_staged_program_with_context(
     checker.set_process_handler_dependencies(&process_specs);
     checker.boot_plan = program.boot_plan.clone();
     let nodes = checker.check_program(program.resolved)?;
-    Ok(TypedProgram {
-        nodes,
-        process_specs,
-        boot_plan: program.boot_plan,
-    })
+    let warnings = checker.warnings.take();
+    Ok(PhaseOutput::new(
+        TypedProgram {
+            nodes,
+            process_specs,
+            boot_plan: program.boot_plan,
+        },
+        warnings,
+    ))
 }
 
 pub fn typecheck_with_context(
     resolved: Vec<Resolved>,
     context: TypecheckContext,
 ) -> Result<Vec<TypedNode>, TypeError> {
+    typecheck_with_context_with_warnings(resolved, context).map(|output| output.value)
+}
+
+pub fn typecheck_with_context_with_warnings(
+    resolved: Vec<Resolved>,
+    context: TypecheckContext,
+) -> Result<PhaseOutput<Vec<TypedNode>>, TypeError> {
     let mut checker = Checker::new(context);
-    checker.check_program(resolved)
+    let value = checker.check_program(resolved)?;
+    Ok(PhaseOutput::new(value, checker.warnings.take()))
 }
 
 pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
@@ -671,10 +705,9 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
                     Ty::Func(items, Box::new(ret))
                 } else {
                     self.expect(")")?;
-                    if items.len() == 1 {
-                        items.pop().expect("single grouped type")
-                    } else {
-                        Ty::Tuple(items)
+                    match items.as_slice() {
+                        [single] => single.clone(),
+                        _ => Ty::Tuple(items),
                     }
                 }
             }
@@ -705,13 +738,29 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
         Ok(ty)
     }
 
+    fn builtin_special_enum_ty_for_query(ident: &str, args: &[Ty]) -> Option<Ty> {
+        let surface = ident.strip_prefix("Global::").unwrap_or(ident);
+        match surface {
+            "Boolean" if args.is_empty() => Some(Ty::Bool),
+            "Result" => args
+                .first()
+                .cloned()
+                .map(|ok| Ty::Result(Box::new(ok), Box::new(Ty::Error))),
+            _ => None,
+        }
+    }
+
     fn build_named_type(&mut self, ident: &str) -> Result<Ty, String> {
         if let Some(def) = self.env.lookup_type_def(ident) {
             return Ok(match &def.kind {
                 crate::env::TypeKind::Struct => Ty::Struct(def.name.clone(), def.fields.clone()),
                 crate::env::TypeKind::Record => Ty::Record(def.name.clone(), def.fields.clone()),
                 crate::env::TypeKind::ConcreteError => Ty::Error,
-                crate::env::TypeKind::Enum => Ty::Enum(def.name.clone(), Vec::new()),
+                crate::env::TypeKind::Enum => Self::builtin_special_enum_ty_for_query(
+                    def.name.strip_prefix("Global::").unwrap_or(&def.name),
+                    &[],
+                )
+                .unwrap_or_else(|| Ty::Enum(def.name.clone(), Vec::new())),
             });
         }
 
@@ -768,7 +817,8 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
                 };
                 Ty::Pid(pid_marker_name_from_ty(inner))
             }
-            other => Ty::Enum(other.to_string(), args),
+            other => Self::builtin_special_enum_ty_for_query(other, &args)
+                .unwrap_or_else(|| Ty::Enum(other.to_string(), args)),
         })
     }
 
@@ -875,6 +925,63 @@ fn format_builtin_type_param_suffix(params: &[&str]) -> String {
 type TraitImplKey = (String, String);
 type TraitImplIndex = HashMap<String, Vec<TraitImplKey>>;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+struct SpecializationKey {
+    function_name: String,
+    type_args: Vec<CanonicalTyKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+enum CanonicalTyKey {
+    Int,
+    Float,
+    String,
+    Boolean,
+    Unit,
+    Error,
+    Hole,
+    Var(u32),
+    List(Box<CanonicalTyKey>),
+    Tuple(Vec<CanonicalTyKey>),
+    Func {
+        params: Vec<CanonicalTyKey>,
+        ret: Box<CanonicalTyKey>,
+    },
+    TypeRef(Box<CanonicalTyKey>),
+    Lazy(Box<CanonicalTyKey>),
+    Facet {
+        source: Box<CanonicalTyKey>,
+        focus: Box<CanonicalTyKey>,
+    },
+    Pid(String),
+    BuiltinFunc {
+        name: String,
+        params: Vec<CanonicalTyKey>,
+        ret: Box<CanonicalTyKey>,
+    },
+    UserFunc {
+        type_params: Vec<u32>,
+        params: Vec<CanonicalTyKey>,
+        ret: Box<CanonicalTyKey>,
+    },
+    Struct {
+        name: String,
+        fields: Vec<(String, CanonicalTyKey)>,
+    },
+    Record {
+        name: String,
+        fields: Vec<(String, CanonicalTyKey)>,
+    },
+    Enum {
+        name: String,
+        args: Vec<CanonicalTyKey>,
+    },
+    Result {
+        ok: Box<CanonicalTyKey>,
+        err: Box<CanonicalTyKey>,
+    },
+}
+
 #[derive(Debug, Clone)]
 struct PersistentCheckerState {
     env: TypeEnv,
@@ -884,6 +991,7 @@ struct PersistentCheckerState {
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
+    specialization_fun_idxs: HashMap<SpecializationKey, u32>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<(String, String), TraitImplInfo>,
     trait_impl_index_by_base_trait: TraitImplIndex,
@@ -901,6 +1009,7 @@ impl PersistentCheckerState {
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
             specializable_defs: HashMap::new(),
+            specialization_fun_idxs: HashMap::new(),
             traits: HashMap::new(),
             trait_impls: HashMap::new(),
             trait_impl_index_by_base_trait: HashMap::new(),
@@ -918,6 +1027,7 @@ impl PersistentCheckerState {
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
             specializable_defs: self.specializable_defs.clone(),
+            specialization_fun_idxs: self.specialization_fun_idxs.clone(),
             traits: self.traits.clone(),
             trait_impls: self.trait_impls.clone(),
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
@@ -938,6 +1048,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             impl_method_uids: checkpoint.impl_method_uids,
             function_ids_by_name: checkpoint.function_ids_by_name,
             specializable_defs: checkpoint.specializable_defs,
+            specialization_fun_idxs: checkpoint.specialization_fun_idxs,
             traits: checkpoint.traits,
             trait_impls: checkpoint.trait_impls,
             trait_impl_index_by_base_trait: checkpoint.trait_impl_index_by_base_trait,
@@ -956,6 +1067,8 @@ pub struct ScarCheckpoint {
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
+    #[serde(default)]
+    specialization_fun_idxs: HashMap<SpecializationKey, u32>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<(String, String), TraitImplInfo>,
     trait_impl_index_by_base_trait: TraitImplIndex,
@@ -982,6 +1095,13 @@ impl ScarSession {
         self.typecheck_with_context(resolved, TypecheckContext::default())
     }
 
+    pub fn typecheck_with_warnings(
+        &mut self,
+        resolved: Vec<Resolved>,
+    ) -> Result<PhaseOutput<Vec<TypedNode>>, TypeError> {
+        self.typecheck_with_context_with_warnings(resolved, TypecheckContext::default())
+    }
+
     pub fn typecheck_staged_program(
         &mut self,
         program: sigil::ResolvedStagedProgram,
@@ -989,11 +1109,30 @@ impl ScarSession {
         self.typecheck_staged_program_with_context(program, TypecheckContext::default())
     }
 
+    pub fn typecheck_staged_program_with_warnings(
+        &mut self,
+        program: sigil::ResolvedStagedProgram,
+    ) -> Result<PhaseOutput<TypedProgram>, TypeError> {
+        self.typecheck_staged_program_with_context_with_warnings(
+            program,
+            TypecheckContext::default(),
+        )
+    }
+
     pub fn typecheck_staged_program_with_context(
         &mut self,
         program: sigil::ResolvedStagedProgram,
         context: TypecheckContext,
     ) -> Result<TypedProgram, TypeError> {
+        self.typecheck_staged_program_with_context_with_warnings(program, context)
+            .map(|output| output.value)
+    }
+
+    pub fn typecheck_staged_program_with_context_with_warnings(
+        &mut self,
+        program: sigil::ResolvedStagedProgram,
+        context: TypecheckContext,
+    ) -> Result<PhaseOutput<TypedProgram>, TypeError> {
         let process_specs = program
             .process_specs
             .into_iter()
@@ -1004,13 +1143,17 @@ impl ScarSession {
         checker.boot_plan = program.boot_plan.clone();
         let nodes = checker.check_program(program.resolved)?;
         let persisted_process_specs = checker.process_specs.clone();
+        let warnings = checker.warnings.take();
         self.state = checker.into_persistent_state();
         self.process_specs = persisted_process_specs;
-        Ok(TypedProgram {
-            nodes,
-            process_specs,
-            boot_plan: program.boot_plan,
-        })
+        Ok(PhaseOutput::new(
+            TypedProgram {
+                nodes,
+                process_specs,
+                boot_plan: program.boot_plan,
+            },
+            warnings,
+        ))
     }
 
     pub fn typecheck_with_context(
@@ -1018,13 +1161,23 @@ impl ScarSession {
         resolved: Vec<Resolved>,
         context: TypecheckContext,
     ) -> Result<Vec<TypedNode>, TypeError> {
+        self.typecheck_with_context_with_warnings(resolved, context)
+            .map(|output| output.value)
+    }
+
+    pub fn typecheck_with_context_with_warnings(
+        &mut self,
+        resolved: Vec<Resolved>,
+        context: TypecheckContext,
+    ) -> Result<PhaseOutput<Vec<TypedNode>>, TypeError> {
         let mut checker = Checker::with_persistent_state(self.state.clone(), context);
         checker.set_process_handler_dependencies(self.process_specs.as_slice());
         let typed = checker.check_program(resolved)?;
         let persisted_process_specs = checker.process_specs.clone();
+        let warnings = checker.warnings.take();
         self.state = checker.into_persistent_state();
         self.process_specs = persisted_process_specs;
-        Ok(typed)
+        Ok(PhaseOutput::new(typed, warnings))
     }
 
     pub fn checkpoint(&self) -> ScarCheckpoint {
@@ -1057,6 +1210,9 @@ impl ScarSession {
         I: IntoIterator<Item = (&'a str, u32)>,
     {
         let function_indices = functions.into_iter().collect::<HashMap<_, _>>();
+        let mut function_id_entries = self.state.function_ids_by_name.iter().collect::<Vec<_>>();
+        function_id_entries.sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
+        let specializable_by_name = self.specializable_fun_idxs_by_name();
         let mut next_fun_idx = function_indices
             .values()
             .copied()
@@ -1065,17 +1221,18 @@ impl ScarSession {
             .unwrap_or(self.state.env.next_fun_idx);
         let mut specializable_rekeys = Vec::new();
         let mut fun_idx_rewrites = HashMap::new();
-        for (qualified_name, id) in &self.state.function_ids_by_name {
+        for (qualified_name, id) in function_id_entries {
             let old_fun_idx = match self.state.env.vars.get(&id.unique_id) {
                 Some(Ty::UserFunc { fun_idx, .. }) => Some(*fun_idx),
                 _ => None,
             };
             let fun_idx = if let Some(fun_idx) = function_indices.get(qualified_name.as_str()) {
                 *fun_idx
-            } else if let Some(old_fun_idx) = self.specializable_fun_idx_for_name(qualified_name) {
+            } else if let Some(old_fun_idx) = specializable_by_name.get(qualified_name.as_str()) {
                 let new_fun_idx = next_fun_idx;
                 next_fun_idx += 1;
-                specializable_rekeys.push((old_fun_idx, new_fun_idx));
+                specializable_rekeys.push((*old_fun_idx, new_fun_idx));
+                fun_idx_rewrites.insert(*old_fun_idx, new_fun_idx);
                 new_fun_idx
             } else {
                 continue;
@@ -1100,6 +1257,10 @@ impl ScarSession {
         for def in self.state.specializable_defs.values_mut() {
             Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
         }
+        Self::rewrite_specialization_fun_indices(
+            &mut self.state.specialization_fun_idxs,
+            &fun_idx_rewrites,
+        );
         self.state.env.next_fun_idx = self.state.env.next_fun_idx.max(next_fun_idx);
     }
 
@@ -1139,17 +1300,42 @@ impl ScarSession {
         for def in self.state.specializable_defs.values_mut() {
             Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
         }
+        Self::rewrite_specialization_fun_indices(
+            &mut self.state.specialization_fun_idxs,
+            &fun_idx_rewrites,
+        );
         self.state.env.next_fun_idx = self.state.env.next_fun_idx.max(next_fun_idx);
     }
 
-    fn specializable_fun_idx_for_name(&self, qualified_name: &str) -> Option<u32> {
-        self.state
+    fn rewrite_specialization_fun_indices(
+        specialization_fun_idxs: &mut HashMap<SpecializationKey, u32>,
+        rewrites: &HashMap<u32, u32>,
+    ) {
+        for fun_idx in specialization_fun_idxs.values_mut() {
+            if let Some(new_fun_idx) = rewrites.get(fun_idx) {
+                *fun_idx = *new_fun_idx;
+            }
+        }
+    }
+
+    fn specializable_fun_idxs_by_name(&self) -> HashMap<String, u32> {
+        let mut entries: Vec<(String, u32)> = self
+            .state
             .specializable_defs
             .iter()
-            .find_map(|(fun_idx, def)| {
-                (Self::def_qualified_name(def).as_deref() == Some(qualified_name))
-                    .then_some(*fun_idx)
-            })
+            .filter_map(|(fun_idx, def)| Self::def_qualified_name(def).map(|name| (name, *fun_idx)))
+            .collect::<Vec<_>>();
+        entries.sort_by(|(left_name, left_idx), (right_name, right_idx)| {
+            left_name
+                .cmp(right_name)
+                .then_with(|| left_idx.cmp(right_idx))
+        });
+
+        let mut by_name = HashMap::new();
+        for (name, fun_idx) in entries {
+            by_name.entry(name).or_insert(fun_idx);
+        }
+        by_name
     }
 
     fn def_qualified_name(def: &TypedNode) -> Option<String> {
@@ -1309,6 +1495,12 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_node(stmt, rewrites);
                 }
             }
+            TypedInner::HashMapLiteral(entries) => {
+                for (key, value) in entries {
+                    Self::rewrite_fun_indices_in_node(key, rewrites);
+                    Self::rewrite_fun_indices_in_node(value, rewrites);
+                }
+            }
             TypedInner::Bind(pattern, rhs) | TypedInner::SafeBind(pattern, rhs) => {
                 Self::rewrite_fun_indices_in_pattern(pattern, rewrites);
                 Self::rewrite_fun_indices_in_node(rhs, rewrites);
@@ -1450,6 +1642,7 @@ impl ScarSession {
     fn rewrite_fun_indices_in_pattern(pattern: &mut TypedPattern, rewrites: &HashMap<u32, u32>) {
         match pattern {
             TypedPattern::Var(ty, _)
+            | TypedPattern::Pin(ty, _, _)
             | TypedPattern::As(ty, _, _)
             | TypedPattern::Wildcard(ty)
             | TypedPattern::ListNil(ty)
@@ -1492,6 +1685,7 @@ impl ScarSession {
                 }
             }
             TypedPattern::Var(_, _)
+            | TypedPattern::Pin(_, _, _)
             | TypedPattern::Wildcard(_)
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
@@ -1525,6 +1719,7 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_match_pattern(tail, rewrites);
             }
             TypedMatchPattern::Binding(_)
+            | TypedMatchPattern::Pin { .. }
             | TypedMatchPattern::Wildcard
             | TypedMatchPattern::BoolLit(_)
             | TypedMatchPattern::IntLit(_)
@@ -1561,6 +1756,92 @@ impl Default for ScarSession {
     }
 }
 
+#[cfg(test)]
+mod specialization_state_tests {
+    use super::*;
+
+    fn test_span() -> Span {
+        Span { start: 0, end: 0 }
+    }
+
+    fn resolved_id(name: &str, qualified_name: &str, unique_id: u32) -> ResolvedId {
+        ResolvedId {
+            name: name.to_string(),
+            qualified_name: Some(qualified_name.to_string()),
+            unique_id,
+            compiler_generated: false,
+            span: test_span(),
+        }
+    }
+
+    fn user_func_ty(fun_idx: u32) -> Ty {
+        Ty::UserFunc {
+            fun_idx,
+            type_params: Vec::new(),
+            params: vec![Ty::Int],
+            ret: Box::new(Ty::Int),
+        }
+    }
+
+    fn specialization_key() -> SpecializationKey {
+        SpecializationKey {
+            function_name: "Global::helper".to_string(),
+            type_args: vec![CanonicalTyKey::Int],
+        }
+    }
+
+    fn session_with_cached_specialization(uid: u32, old_fun_idx: u32) -> ScarSession {
+        let mut session = ScarSession::new();
+        let id = resolved_id("helper", "Global::helper", uid);
+        session
+            .state
+            .function_ids_by_name
+            .insert("Global::helper".to_string(), id);
+        session
+            .state
+            .env
+            .vars
+            .insert(uid, user_func_ty(old_fun_idx));
+        session
+            .state
+            .specialization_fun_idxs
+            .insert(specialization_key(), old_fun_idx);
+        session
+    }
+
+    #[test]
+    fn reconcile_function_indices_rewrites_specialization_cache_values() {
+        let mut session = session_with_cached_specialization(10, 40);
+
+        session.reconcile_function_indices([("Global::helper", 77)]);
+
+        assert_eq!(
+            session
+                .state
+                .specialization_fun_idxs
+                .get(&specialization_key())
+                .copied(),
+            Some(77)
+        );
+    }
+
+    #[test]
+    fn reconcile_visible_function_indices_rewrites_specialization_cache_values() {
+        let mut session = session_with_cached_specialization(10, 40);
+
+        session.reconcile_visible_function_indices([(10, 77)]);
+
+        assert_eq!(
+            session
+                .state
+                .specialization_fun_idxs
+                .get(&specialization_key())
+                .copied(),
+            Some(77)
+        );
+    }
+}
+
 struct Checker {
     env: TypeEnv,
     function_return_ty: Option<Ty>,
@@ -1575,6 +1856,7 @@ struct Checker {
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
+    specialization_fun_idxs: HashMap<SpecializationKey, u32>,
     substitutions: HashMap<u32, Ty>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
     runtime_policy: RuntimeSourcePolicy,
@@ -1589,6 +1871,7 @@ struct Checker {
     process_handler_dependencies: HashMap<String, HashMap<String, String>>,
     process_specs: Vec<TypedProcessSpec>,
     boot_plan: spire::ast::SupervisorInitSpec,
+    warnings: WarningBuffer,
 }
 
 impl Checker {
@@ -1650,6 +1933,7 @@ impl Checker {
             impl_method_uids: state.impl_method_uids,
             function_ids_by_name: state.function_ids_by_name,
             specializable_defs: state.specializable_defs,
+            specialization_fun_idxs: state.specialization_fun_idxs,
             substitutions: HashMap::new(),
             tyvar_bounds: state.tyvar_bounds,
             runtime_policy: context.runtime_policy,
@@ -1664,6 +1948,7 @@ impl Checker {
             process_handler_dependencies: HashMap::new(),
             process_specs: Vec::new(),
             boot_plan: spire::ast::SupervisorInitSpec::default(),
+            warnings: WarningBuffer::default(),
         }
     }
 
@@ -1710,6 +1995,299 @@ impl Checker {
                 (spec.process_name.clone(), slots)
             })
             .collect();
+    }
+
+    fn warning_span(span: &Span) -> WarningSpan {
+        WarningSpan {
+            start: span.start,
+            end: span.end,
+        }
+    }
+
+    fn push_warning(
+        &mut self,
+        kind: WarningKind,
+        phase: WarningPhase,
+        span: &Span,
+        message: impl Into<String>,
+        hint: Option<String>,
+    ) {
+        self.warnings.push(CompilerWarning::new(
+            kind,
+            phase,
+            Self::warning_span(span),
+            message,
+            hint,
+        ));
+    }
+
+    fn collect_unused_type_parameter_warnings(&mut self, stmts: &[Resolved]) {
+        for stmt in stmts {
+            match stmt {
+                Resolved::StructDef(_, id, type_params, fields, _) => {
+                    let mut used = HashSet::new();
+                    for field in fields {
+                        Self::collect_ast_ty_type_params(&field.ty, &mut used);
+                    }
+                    self.warn_unused_type_params(type_params, &used, &id.name);
+                }
+                Resolved::EnumDef(_, id, type_params, variants, _) => {
+                    let mut used = HashSet::new();
+                    for variant in variants {
+                        for payload in &variant.payload {
+                            Self::collect_ast_ty_type_params(payload, &mut used);
+                        }
+                    }
+                    self.warn_unused_type_params(type_params, &used, &id.name);
+                }
+                Resolved::Def(_, id, type_params, params, ret_ty, _, _) => {
+                    let used = Self::signature_type_param_uses(params, ret_ty.as_ref());
+                    self.warn_unused_type_params(type_params, &used, &id.name);
+                }
+                Resolved::ExtractorDef(_, id, type_params, param, ret_ty, _, _) => {
+                    let mut used = HashSet::new();
+                    if let Some(param_ty) = &param.ty {
+                        Self::collect_ast_ty_type_params(param_ty, &mut used);
+                    }
+                    Self::collect_ast_ty_type_params(ret_ty, &mut used);
+                    self.warn_unused_type_params(type_params, &used, &id.name);
+                }
+                Resolved::TraitDef(_, id, type_params, methods, _) => {
+                    let mut trait_used = HashSet::new();
+                    for method in methods {
+                        for param in &method.params {
+                            Self::collect_ast_ty_type_params(&param.ty, &mut trait_used);
+                        }
+                        Self::collect_ast_ty_type_params(&method.ret_ty, &mut trait_used);
+
+                        let method_used =
+                            Self::signature_type_param_uses(&method.params, Some(&method.ret_ty));
+                        self.warn_unused_type_params(
+                            &method.type_params,
+                            &method_used,
+                            &method.id.name,
+                        );
+                    }
+                    self.warn_unused_type_params(type_params, &trait_used, &id.name);
+                }
+                Resolved::TraitImplDef(_, _, _, _, methods) => {
+                    for method in methods {
+                        let used =
+                            Self::signature_type_param_uses(&method.params, method.ret_ty.as_ref());
+                        self.warn_unused_type_params(
+                            &method.type_params,
+                            &used,
+                            &method.function_id.name,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn signature_type_param_uses(
+        params: &[ResolvedFunParam],
+        ret_ty: Option<&AstTy>,
+    ) -> HashSet<String> {
+        let mut used = HashSet::new();
+        for param in params {
+            Self::collect_ast_ty_type_params(&param.ty, &mut used);
+        }
+        if let Some(ret_ty) = ret_ty {
+            Self::collect_ast_ty_type_params(ret_ty, &mut used);
+        }
+        used
+    }
+
+    fn collect_ast_ty_type_params(ty: &AstTy, used: &mut HashSet<String>) {
+        match ty {
+            AstTy::Named(_, name) => {
+                if name.starts_with('$') {
+                    used.insert(name.clone());
+                }
+            }
+            AstTy::ImplTrait(_, _) => {}
+            AstTy::Generic(_, name, args) => {
+                if name.starts_with('$') {
+                    used.insert(name.clone());
+                }
+                for arg in args {
+                    Self::collect_ast_ty_type_params(arg, used);
+                }
+            }
+            AstTy::Tuple(_, items) => {
+                for item in items {
+                    Self::collect_ast_ty_type_params(item, used);
+                }
+            }
+            AstTy::Func(_, params, ret) => {
+                for param in params {
+                    Self::collect_ast_ty_type_params(param, used);
+                }
+                Self::collect_ast_ty_type_params(ret, used);
+            }
+        }
+    }
+
+    fn warn_unused_type_params(
+        &mut self,
+        type_params: &[ResolvedTypeParam],
+        used: &HashSet<String>,
+        owner_name: &str,
+    ) {
+        for param in type_params {
+            if used.contains(&param.name) {
+                continue;
+            }
+            self.push_warning(
+                WarningKind::UnusedTypeParameter,
+                WarningPhase::Typecheck,
+                &param.span,
+                format!("unused type parameter `{}` in `{}`", param.name, owner_name),
+                Some("Remove the type parameter if it is not part of the signature.".into()),
+            );
+        }
+    }
+
+    fn collect_unused_value_warnings_in_sequence(&mut self, nodes: &[TypedNode]) {
+        for (idx, node) in nodes.iter().enumerate() {
+            if idx + 1 < nodes.len()
+                && !matches!(node.ty, Ty::Unit)
+                && !Self::is_explicit_discard(node)
+            {
+                self.push_warning(
+                    WarningKind::UnusedValue,
+                    WarningPhase::Typecheck,
+                    &node.span,
+                    "unused value",
+                    Some("Use `;` if this value is intentionally discarded.".into()),
+                );
+            }
+            self.collect_unused_value_warnings_in_node(node);
+        }
+    }
+
+    fn collect_unused_value_warnings_in_node(&mut self, node: &TypedNode) {
+        match &node.node {
+            TypedInner::Block(stmts) => self.collect_unused_value_warnings_in_sequence(stmts),
+            TypedInner::App(func, args)
+            | TypedInner::InjectCall(func, args)
+            | TypedInner::Capture(func, args) => {
+                self.collect_unused_value_warnings_in_node(func);
+                for arg in args {
+                    self.collect_unused_value_warnings_in_node(arg);
+                }
+            }
+            TypedInner::TraitCall { args, .. }
+            | TypedInner::ListLiteral(args)
+            | TypedInner::TupleLiteral(args)
+            | TypedInner::StructLit(_, args)
+            | TypedInner::ConstructorCall(_, args) => {
+                for arg in args {
+                    self.collect_unused_value_warnings_in_node(arg);
+                }
+            }
+            TypedInner::Bind(_, rhs)
+            | TypedInner::SafeBind(_, rhs)
+            | TypedInner::FieldAccess(rhs, _)
+            | TypedInner::Semi(rhs) => self.collect_unused_value_warnings_in_node(rhs),
+            TypedInner::BinOp(_, left, right)
+            | TypedInner::Pipe(left, right)
+            | TypedInner::Compose(_, left, right)
+            | TypedInner::ListCons(left, right) => {
+                self.collect_unused_value_warnings_in_node(left);
+                self.collect_unused_value_warnings_in_node(right);
+            }
+            TypedInner::InterpolatedStr(parts) => {
+                for part in parts {
+                    if let TypedInterpolatedPart::Expr(expr) = part {
+                        self.collect_unused_value_warnings_in_node(expr);
+                    }
+                }
+            }
+            TypedInner::Dbg(args) => {
+                for arg in args {
+                    self.collect_unused_value_warnings_in_node(&arg.expr);
+                }
+            }
+            TypedInner::If(cond, then_branch, else_branch) => {
+                self.collect_unused_value_warnings_in_node(cond);
+                self.collect_unused_value_warnings_in_node(then_branch);
+                if let Some(else_branch) = else_branch {
+                    self.collect_unused_value_warnings_in_node(else_branch);
+                }
+            }
+            TypedInner::Assert(cond, err)
+            | TypedInner::MapErr(cond, err)
+            | TypedInner::Cause(cond, err) => {
+                self.collect_unused_value_warnings_in_node(cond);
+                self.collect_unused_value_warnings_in_node(err);
+            }
+            TypedInner::Ensure(value, pred, err) | TypedInner::RecoverKind(value, pred, err) => {
+                self.collect_unused_value_warnings_in_node(value);
+                self.collect_unused_value_warnings_in_node(pred);
+                self.collect_unused_value_warnings_in_node(err);
+            }
+            TypedInner::Match(scrutinee, arms) => {
+                self.collect_unused_value_warnings_in_node(scrutinee);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.collect_unused_value_warnings_in_node(guard);
+                    }
+                    self.collect_unused_value_warnings_in_node(&arm.body);
+                }
+            }
+            TypedInner::SupervisorSpawn { init, .. }
+            | TypedInner::SupervisorWorkers { init, .. } => {
+                self.collect_unused_value_warnings_in_node(init);
+            }
+            TypedInner::SupervisorAdopt { pid, .. } => {
+                self.collect_unused_value_warnings_in_node(pid);
+            }
+            TypedInner::FacetView { source, .. } => {
+                self.collect_unused_value_warnings_in_node(source);
+            }
+            TypedInner::FacetSet { source, value, .. } => {
+                self.collect_unused_value_warnings_in_node(source);
+                self.collect_unused_value_warnings_in_node(value);
+            }
+            TypedInner::FacetOver {
+                source, update_fun, ..
+            } => {
+                self.collect_unused_value_warnings_in_node(source);
+                self.collect_unused_value_warnings_in_node(update_fun);
+            }
+            TypedInner::DeferrorDef(_, _, _, _, show)
+            | TypedInner::Def(_, _, _, _, _, show, _)
+            | TypedInner::ExtractorDef(_, _, _, _, _, show, _)
+            | TypedInner::Closure(_, _, show) => {
+                self.collect_unused_value_warnings_in_node(show);
+            }
+            TypedInner::HashMapLiteral(entries) => {
+                for (key, value) in entries {
+                    self.collect_unused_value_warnings_in_node(key);
+                    self.collect_unused_value_warnings_in_node(value);
+                }
+            }
+            TypedInner::Lit(_)
+            | TypedInner::Var(_)
+            | TypedInner::ListNil
+            | TypedInner::ProcessContextHandler { .. }
+            | TypedInner::SupervisorStatus { .. }
+            | TypedInner::FacetPath(_)
+            | TypedInner::PendingFacetPath(_)
+            | TypedInner::EnumDef(_, _)
+            | TypedInner::TraitDef(_, _)
+            | TypedInner::TraitImplDef(_, _)
+            | TypedInner::BuiltinExtractorDecl(_, _, _)
+            | TypedInner::StructDef(_, _, _, _, _)
+            | TypedInner::RecordDef(_, _, _, _, _) => {}
+        }
+    }
+
+    fn is_explicit_discard(node: &TypedNode) -> bool {
+        matches!(node.node, TypedInner::Semi(_))
     }
 
     fn is_lazy_init_function_symbol(&self, symbol: &str) -> bool {
@@ -2196,6 +2774,8 @@ impl Checker {
         {
             self.trait_methods_by_qualified_name = child.trait_methods_by_qualified_name.clone();
         }
+        self.warnings
+            .extend(child.warnings.as_slice().iter().cloned());
         self.profiler
             .finish(ProfileEvent::ChildCheckerAbsorb, profile);
     }
@@ -2251,6 +2831,7 @@ impl Checker {
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
             specializable_defs: self.specializable_defs.clone(),
+            specialization_fun_idxs: self.specialization_fun_idxs.clone(),
             traits: self.traits.clone(),
             trait_impls: self.trait_impls.clone(),
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
@@ -2268,6 +2849,7 @@ impl Checker {
             impl_method_uids: self.impl_method_uids,
             function_ids_by_name: self.function_ids_by_name,
             specializable_defs: self.specializable_defs,
+            specialization_fun_idxs: self.specialization_fun_idxs,
             traits: self.traits,
             trait_impls: self.trait_impls,
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait,
@@ -2319,6 +2901,8 @@ impl Checker {
         let mut stmt_kind_totals = HashMap::<String, (u64, Duration)>::new();
 
         let result = (|| -> Result<Vec<TypedNode>, TypeError> {
+            self.collect_unused_type_parameter_warnings(&stmts);
+
             let t = profile_enabled.then(Instant::now);
             self.predeclare_error_types(&stmts);
             if let Some(start) = t {
@@ -2357,6 +2941,10 @@ impl Checker {
             let t = profile_enabled.then(Instant::now);
             for stmt in stmts {
                 stmt_count += 1;
+                // Inference substitutions are expression-local. Letting them leak
+                // across sibling top-level statements can accidentally monomorphize
+                // later generic calls based on earlier ones.
+                self.substitutions.clear();
                 let stmt_label = profile_enabled.then(|| Self::profile_stmt_label(&stmt));
                 let stmt_start = profile_enabled.then(Instant::now);
                 if let Resolved::ConstDef(..) = &stmt {
@@ -2414,6 +3002,7 @@ impl Checker {
             if let Some(start) = t {
                 specialize_program_dur = start.elapsed();
             }
+            self.collect_unused_value_warnings_in_sequence(&specialized);
             Ok(specialized)
         })();
 

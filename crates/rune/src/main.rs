@@ -38,6 +38,12 @@ fn dispatch(args: &[String]) -> RuneResult<()> {
             let Some(file_path) = normalized_args.get(2) else {
                 return Err(crate::error::RuneError::usage(String::new()));
             };
+            if file_path.starts_with('-') {
+                return Err(crate::error::RuneError::message(
+                    1,
+                    format!("dump: unknown option '{}'", file_path),
+                ));
+            }
             commands::dump::dispatch(file_path, &normalized_args[3..])
         }
         Some("tui") => commands::tui::dispatch(&normalized_args[2..]),
@@ -101,5 +107,18 @@ mod tests {
             result.is_ok(),
             "existing script path should be routed through run dispatch"
         );
+    }
+
+    #[test]
+    fn dump_rejects_option_like_input() {
+        let err = dispatch(&[
+            "surtr".to_string(),
+            "dump".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+        ])
+        .expect_err("option-looking dump input must fail before reading input");
+
+        assert_eq!(err.summary(), "dump: unknown option '--format'");
     }
 }

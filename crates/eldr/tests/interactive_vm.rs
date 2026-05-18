@@ -11,6 +11,7 @@ fn const_chunk(value: i64) -> BytecodeChunk {
         const_base: 0,
         constants: vec![Constant::Int(int(value))],
         new_locals: 0,
+        type_registry_base: 0,
         type_entries: Vec::new(),
         error_template_base: 0,
         error_templates: Vec::new(),
@@ -19,6 +20,7 @@ fn const_chunk(value: i64) -> BytecodeChunk {
         callable_templates: Vec::new(),
         functions: Vec::new(),
         docs: Vec::new(),
+        signatures: Vec::new(),
         runtime_process_specs: Vec::new(),
         runtime_boot_plan: Default::default(),
     }
@@ -31,6 +33,7 @@ fn invalid_const_base_chunk() -> BytecodeChunk {
         const_base: 99,
         constants: vec![Constant::Int(int(7))],
         new_locals: 0,
+        type_registry_base: 0,
         type_entries: Vec::new(),
         error_template_base: 0,
         error_templates: Vec::new(),
@@ -39,6 +42,7 @@ fn invalid_const_base_chunk() -> BytecodeChunk {
         callable_templates: Vec::new(),
         functions: Vec::new(),
         docs: Vec::new(),
+        signatures: Vec::new(),
         runtime_process_specs: Vec::new(),
         runtime_boot_plan: Default::default(),
     }

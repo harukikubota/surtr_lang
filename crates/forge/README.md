@@ -18,8 +18,9 @@ Spire -> Sigil -> Scar -> Forge -> Eldr
 
 - Emit opcodes from typed AST nodes
 - Build constants and locals layout
-- Emit `CallBuiltin(u16, u8, u32, u32)` for builtin calls
+- Emit `CallBuiltin { builtin_id, arity, span_start, span_end }` for builtin calls
 - Build `TypeRegistry` metadata consumed by Eldr
+- Emit `RuntimeProcessSpec` and `RuntimeBootPlan` metadata consumed by Eldr
 - Report `CodegenError` when code generation fails
 
 ## Non-responsibilities

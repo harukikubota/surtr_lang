@@ -1,13 +1,17 @@
 @doc """
 Standard `Result` type declaration.
 `Result` represents success-or-error control flow as a value.
-The canonical builtin head is `Result<$T>`.
+The canonical builtin enum surface is `Result<$T>`.
 This is the language's Either-oriented success/failure representation.
 Its runtime representation is enum-like, but the language treats `Result` as a
 dedicated built-in abstraction rather than exposing it as the future general
 `Enum` surface.
 """
-@builtin type Result<$T>
+@builtin
+defenum Result<$T> {
+  Ok($T),
+  Err(Error),
+}
 
 @doc """
 Internal control result returned from extractor evaluation inside MatchBlock.
@@ -22,22 +26,6 @@ defenum MatchResult<$Value> {
   NoMatch,
   Err(Error),
 }
-
-@doc """
-Construct the success branch of `Result`.
-This is a declaration-only surface contract for the constructor shape.
-The parser normalizes this special `@builtin type` spelling into the internal
-Result-constructor declaration that later phases validate.
-"""
-@builtin type Ok($T) -> Result<$T>
-
-@doc """
-Construct the failure branch of `Result`.
-Concrete `deferror` values flow through the abstract `Error` type here.
-This keeps the language surface focused on `Result` as an Either-style value
-without exposing the runtime representation directly.
-"""
-@builtin type Err(Error) -> Result<$T>
 
 @autoimport
 impl Result {

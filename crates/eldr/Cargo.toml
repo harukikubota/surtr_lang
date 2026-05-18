@@ -4,10 +4,14 @@ version = "0.1.0"
 edition = "2021"
 description = "Old Norse for fire — the Surtr virtual machine"
 
+[features]
+default = ["terminal-io"]
+terminal-io = ["dep:crossterm"]
+
 [dependencies]
 diagnostics = { path = "../diagnostics" }
 sindr = { path = "../sindr" }
 num-bigint = { workspace = true }
 regex = { version = "1.11.1", default-features = false, features = ["std", "unicode"] }
-crossterm = { version = "0.28", default-features = false, features = ["events"] }
+crossterm = { version = "0.28", default-features = false, features = ["events"], optional = true }
 serde_json = "1"

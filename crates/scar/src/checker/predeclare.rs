@@ -227,14 +227,19 @@ impl Checker {
                         .iter()
                         .map(|param| param.name.clone())
                         .collect::<Vec<_>>(),
+                    false,
                 )),
                 Resolved::RecordDef(_, id, _) => {
-                    Some((&id.name, &id.span, TypeKind::Record, Vec::new()))
+                    Some((&id.name, &id.span, TypeKind::Record, Vec::new(), false))
                 }
-                Resolved::DeferrorDef(_, id, _, _) => {
-                    Some((&id.name, &id.span, TypeKind::ConcreteError, Vec::new()))
-                }
-                Resolved::EnumDef(_, id, type_params, _, _) => Some((
+                Resolved::DeferrorDef(_, id, _, _) => Some((
+                    &id.name,
+                    &id.span,
+                    TypeKind::ConcreteError,
+                    Vec::new(),
+                    false,
+                )),
+                Resolved::EnumDef(_, id, type_params, _, attrs) => Some((
                     &id.name,
                     &id.span,
                     TypeKind::Enum,
@@ -242,15 +247,19 @@ impl Checker {
                         .iter()
                         .map(|param| param.name.clone())
                         .collect::<Vec<_>>(),
+                    attrs.builtin,
                 )),
                 _ => None,
             };
 
-            let Some((name, span, kind, type_params)) = maybe_decl else {
+            let Some((name, span, kind, type_params, allow_builtin_reserved_name)) = maybe_decl
+            else {
                 continue;
             };
 
-            if builtin_type_meta_by_name(Self::surface_name(name)).is_some() {
+            if !allow_builtin_reserved_name
+                && builtin_type_meta_by_name(Self::surface_name(name)).is_some()
+            {
                 return Err(TypeError {
                     message: format!(
                         "Type name `{}` is reserved by a canonical builtin type declaration",
@@ -414,7 +423,7 @@ impl Checker {
                             hint: None,
                         })?;
                 }
-                Resolved::EnumDef(_, id, type_params, variants, _) => {
+                Resolved::EnumDef(_, id, type_params, variants, attrs) => {
                     let _ = self
                         .env
                         .resolve_type_def_signature(
@@ -438,10 +447,22 @@ impl Checker {
                         enum_ty_args.push(ty);
                     }
 
-                    self.env.bind_var(
-                        id.unique_id,
-                        Ty::Enum(id.name.clone(), enum_ty_args.clone()),
-                    );
+                    let enum_surface_name = Self::surface_name(&id.name);
+                    let builtin_result_enum = attrs.builtin && enum_surface_name == "Result";
+                    let builtin_boolean_enum = attrs.builtin && enum_surface_name == "Boolean";
+                    let enum_ty = if builtin_result_enum {
+                        let ok_ty = enum_ty_args
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| self.env.fresh_tyvar());
+                        Ty::Result(Box::new(ok_ty), Box::new(Ty::Error))
+                    } else if builtin_boolean_enum {
+                        Ty::Bool
+                    } else {
+                        Ty::Enum(id.name.clone(), enum_ty_args.clone())
+                    };
+
+                    self.env.bind_var(id.unique_id, enum_ty.clone());
                     self.env.register_type_constructor_id(id.unique_id);
 
                     let mut next_discriminant = sindr::primitives::int(0);
@@ -490,7 +511,6 @@ impl Checker {
                             })
                             .collect::<Result<Vec<_>, _>>()?;
 
-                        let tag = self.env.reserve_tag();
                         let short_name = variant
                             .id
                             .name
@@ -498,11 +518,20 @@ impl Checker {
                             .next()
                             .unwrap_or(variant.id.name.as_str())
                             .to_string();
+                        let tag = if builtin_result_enum {
+                            match short_name.as_str() {
+                                "Ok" => 0,
+                                "Err" => 1,
+                                _ => self.env.reserve_tag(),
+                            }
+                        } else {
+                            self.env.reserve_tag()
+                        };
                         let info = crate::env::EnumVariantInfo {
                             constructor_name: variant.id.name.clone(),
                             short_name,
                             enum_name: id.name.clone(),
-                            enum_ty: Ty::Enum(id.name.clone(), enum_ty_args.clone()),
+                            enum_ty: enum_ty.clone(),
                             tag,
                             payload: payload.clone(),
                             discriminant: discriminant.clone(),
@@ -769,6 +798,7 @@ impl Checker {
                 Ok(())
             }
             TypedPattern::Wildcard(_)
+            | TypedPattern::Pin(_, _, _)
             | TypedPattern::ListNil(_)
             | TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
@@ -1062,8 +1092,7 @@ impl Checker {
         {
             return &["Float", "Int"];
         }
-        if self.trait_matches_short_name(trait_name, "Numeric")
-            || self.trait_matches_short_name(trait_name, "Sub")
+        if self.trait_matches_short_name(trait_name, "Sub")
             || self.trait_matches_short_name(trait_name, "Mul")
         {
             return &["Float", "Int"];
@@ -1159,13 +1188,7 @@ impl Checker {
         }
     }
 
-    pub(super) fn tyvar_satisfies_compiler_trait(&self, var: u32, trait_name: &str) -> bool {
-        if self.trait_matches_short_name(trait_name, "Show") {
-            return self
-                .trait_key_by_short_name("Numeric")
-                .as_deref()
-                .is_some_and(|numeric_trait| self.tyvar_has_bound(var, numeric_trait));
-        }
+    pub(super) fn tyvar_satisfies_compiler_trait(&self, _var: u32, _trait_name: &str) -> bool {
         false
     }
 
@@ -1259,12 +1282,6 @@ impl Checker {
             if let Some(op) = op {
                 return Some(TraitDispatchTarget::BinOp(op));
             }
-        }
-        if self.trait_matches_short_name(trait_name, "Numeric")
-            && matches!(target_name, "Int" | "Float")
-            && method_name == "safe_div"
-        {
-            return Some(TraitDispatchTarget::Builtin("safe_div".into()));
         }
         if self.trait_matches_short_name(trait_name, "Show")
             && matches!(
@@ -1641,10 +1658,18 @@ impl Checker {
             }
 
             for (method_name, impl_method) in &method_map {
-                let trait_method = trait_info
-                    .methods
-                    .get(method_name)
-                    .expect("validated above");
+                let trait_method =
+                    trait_info
+                        .methods
+                        .get(method_name)
+                        .ok_or_else(|| TypeError {
+                            message: format!(
+                                "Trait impl {} for {} defines unknown method `{}`",
+                                trait_id.name, target_name, method_name
+                            ),
+                            span: impl_method.span.clone(),
+                            hint: None,
+                        })?;
                 if trait_method.type_params.len() != impl_method.type_params.len() {
                     return Err(TypeError {
                         message: format!(

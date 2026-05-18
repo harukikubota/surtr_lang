@@ -1,0 +1,2 @@
+Ok(SupervisorStatus(supervisor: MySup, child_count: 1, strategy: OneForOne, max_restarts: 5, max_seconds: 10, allow_adopt: True, shutdown_timeout: Option::None))
+Ok(5)

@@ -3,6 +3,8 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 
 struct ChildGuard {
     child: Option<Child>,
@@ -105,6 +107,107 @@ fn strip_ansi(input: &str) -> String {
     }
 
     out
+}
+
+#[cfg(unix)]
+struct PtyGuard {
+    child: Option<Child>,
+    master_fd: i32,
+}
+
+#[cfg(unix)]
+impl PtyGuard {
+    fn spawn(command: &mut Command) -> Self {
+        use std::fs::File;
+        use std::os::fd::FromRawFd;
+
+        let mut master_fd = -1;
+        let mut slave_fd = -1;
+        let rc = unsafe {
+            libc::openpty(
+                &mut master_fd,
+                &mut slave_fd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, 0, "openpty should succeed");
+
+        let stdin_fd = unsafe { libc::dup(slave_fd) };
+        let stdout_fd = unsafe { libc::dup(slave_fd) };
+        let stderr_fd = unsafe { libc::dup(slave_fd) };
+        assert!(
+            stdin_fd >= 0 && stdout_fd >= 0 && stderr_fd >= 0,
+            "dup should succeed"
+        );
+
+        let slave = unsafe { File::from_raw_fd(slave_fd) };
+        command
+            .stdin(Stdio::from(unsafe { File::from_raw_fd(stdin_fd) }))
+            .stdout(Stdio::from(unsafe { File::from_raw_fd(stdout_fd) }))
+            .stderr(Stdio::from(unsafe { File::from_raw_fd(stderr_fd) }));
+        let child = command
+            .spawn()
+            .expect("failed to spawn surtr repl with pty");
+        drop(slave);
+
+        let flags = unsafe { libc::fcntl(master_fd, libc::F_GETFL) };
+        assert!(flags >= 0, "fcntl F_GETFL should succeed");
+        let rc = unsafe { libc::fcntl(master_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+        assert_eq!(rc, 0, "fcntl F_SETFL should succeed");
+
+        Self {
+            child: Some(child),
+            master_fd,
+        }
+    }
+
+    fn write_all(&self, bytes: &[u8]) {
+        let written = unsafe { libc::write(self.master_fd, bytes.as_ptr().cast(), bytes.len()) };
+        assert_eq!(
+            written,
+            bytes.len() as isize,
+            "pty write should write all bytes"
+        );
+    }
+
+    fn read_available(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let read = unsafe { libc::read(self.master_fd, buf.as_mut_ptr().cast(), buf.len()) };
+            if read > 0 {
+                out.extend_from_slice(&buf[..read as usize]);
+                continue;
+            }
+            if read == 0 {
+                break;
+            }
+            let err = std::io::Error::last_os_error();
+            if matches!(
+                err.raw_os_error(),
+                Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK
+            ) {
+                break;
+            }
+            panic!("pty read failed: {err}");
+        }
+        out
+    }
+}
+
+#[cfg(unix)]
+impl Drop for PtyGuard {
+    fn drop(&mut self) {
+        unsafe {
+            libc::close(self.master_fd);
+        }
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 #[test]
@@ -257,6 +360,107 @@ fn repl_pipe_stdin_prints_prompts_and_eval_output() {
 }
 
 #[test]
+fn repl_accepts_single_item_list_literal_with_trailing_comma() {
+    let output = run_repl_session("[1,]\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(stdout.contains("xldr(1)> [1]"), "{stdout}");
+    assert!(!stderr.contains("ParseError"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_completion_latency_smoke_reports_positive_samples_over_pty() {
+    fn pump_until(session: &PtyGuard, buffer: &mut Vec<u8>, needle: &[u8], timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            buffer.extend(session.read_available());
+            if buffer.windows(needle.len()).any(|window| window == needle) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "did not observe {:?} in PTY output:\n{}",
+            String::from_utf8_lossy(needle),
+            String::from_utf8_lossy(buffer)
+        );
+    }
+
+    let mut command = surtr_command();
+    command.arg("repl").arg("--quiet");
+    let session = PtyGuard::spawn(&mut command);
+    let mut buffer = Vec::new();
+    pump_until(&session, &mut buffer, b"xldr(1)> ", Duration::from_secs(30));
+
+    session.write_all(b"St");
+    let warmup_deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < warmup_deadline {
+        buffer.extend(session.read_available());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let mut samples_ms = Vec::new();
+    for _ in 0..5 {
+        let start = Instant::now();
+        let baseline_len = buffer.len();
+        session.write_all(b"r\t");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            buffer.extend(session.read_available());
+            if buffer[baseline_len..]
+                .windows(b"String".len())
+                .any(|window| window == b"String")
+            {
+                samples_ms.push(start.elapsed().as_secs_f64() * 1000.0);
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "completion did not appear over PTY"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        session.write_all(&[0x7f]);
+        let settle_deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < settle_deadline {
+            buffer.extend(session.read_available());
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    samples_ms.sort_by(|left, right| left.partial_cmp(right).expect("values should be finite"));
+    let median_ms = samples_ms[samples_ms.len() / 2];
+    let p95_index = ((samples_ms.len() - 1) * 95) / 100;
+    let p95_ms = samples_ms[p95_index];
+
+    assert!(
+        median_ms > 0.0,
+        "median latency should be positive: {samples_ms:?}"
+    );
+    assert!(
+        p95_ms >= median_ms,
+        "p95 should not be below median: {samples_ms:?}"
+    );
+    assert!(
+        buffer
+            .windows(b"type String".len())
+            .any(|window| window == b"type String"),
+        "PTY output should contain completion candidates:\n{}",
+        String::from_utf8_lossy(&buffer)
+    );
+
+    session.write_all(b":q\r");
+}
+
+#[test]
 fn repl_static_impl_methods_keep_declared_arity() {
     let output = run_repl_session(
         "print(to_string(Generator::to_list(Generator::range(1, 3))))\nprint(to_string(String::codepoints(\"a\", StringEncoding::Ascii)))\n:quit\n",
@@ -271,6 +475,24 @@ fn repl_static_impl_methods_keep_declared_arity() {
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(stdout.contains("[1, 2, 3]"), "{stdout}");
     assert!(stdout.contains("Ok([97])"), "{stdout}");
+    assert!(!stdout.contains("Call arity mismatch"), "{stdout}");
+}
+
+#[test]
+fn repl_range_duration_comparisons_execute_without_arity_mismatch() {
+    let output = run_repl_session(
+        "print(to_string(compare(Range(10ms, 20ms), Range(10ms, 30ms))))\nprint(to_string(Range(10ms, 20ms) == Range(10ms, 20ms)))\nprint(to_string(Range(10ms, 20ms) != Range(10ms, 30ms)))\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("Ordering::Less"), "{stdout}");
+    assert!(stdout.contains("True"), "{stdout}");
     assert!(!stdout.contains("Call arity mismatch"), "{stdout}");
 }
 
@@ -417,16 +639,17 @@ fn repl_sig_type_owner_constructor_fallback_renders_through_cli() {
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(
-        stdout.contains("Duration::new(value: Int) -> Result<Self, Error>"),
+        stdout.contains("Duration::new(value: Int) -> Result<Duration, Error>"),
         "{stdout}"
     );
     assert!(
         stdout
-            .matches("Duration::new(value: Int) -> Result<Self, Error>")
+            .matches("Duration::new(value: Int) -> Result<Duration, Error>")
             .count()
             >= 2,
         "{stdout}"
     );
+    assert!(!stdout.contains("Result<Self, Error>"), "{stdout}");
     assert!(stdout.contains("* Option::Some"), "{stdout}");
     assert!(stdout.contains("* Option::None"), "{stdout}");
 }
@@ -461,7 +684,7 @@ fn repl_sig_attached_extractor_owner_query_matches_zero_arg_form() {
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(
         stdout
-            .matches("Duration::deconstruct(self: Self) -> MatchResult<Int, Error>")
+            .matches("Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>")
             .count()
             >= 3,
         "{stdout}"
@@ -709,6 +932,20 @@ fn repl_human_diagnostic_stays_on_stderr() {
 }
 
 #[test]
+fn repl_rejects_test_module_usage() {
+    let output = run_repl_session("Test::it(\"a\", {Ok(())})\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl should remain alive after compile error\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(stderr.contains("Undefined function Test::it/2"), "{stderr}");
+}
+
+#[test]
 fn repl_script_preload_flag_exposes_preloaded_docs_and_defs() {
     let temp = unique_temp_dir("repl-script-preload");
     let source_path = temp.join("preload.srt");
@@ -819,6 +1056,40 @@ answer = one()
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(stdout.contains("1"), "{stdout}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn repl_script_preload_top_level_sig_has_surface_name_without_docs() {
+    let temp = unique_temp_dir("repl-script-top-level-sig");
+    let script_path = temp.join("top_level.srt");
+    fs::write(
+        &script_path,
+        r#"
+def greet(name: String) -> String { name }
+"#,
+    )
+    .expect("failed to write preload script");
+
+    let output = run_repl_session_with_args(
+        &[
+            "--script",
+            script_path.to_str().expect("script path must be utf-8"),
+        ],
+        ":sig greet\n:doc greet\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("greet(name: String) -> String"), "{stdout}");
+    assert!(stdout.contains("No docs found for greet"), "{stdout}");
+    assert!(!stdout.contains("Global::"), "{stdout}");
 
     let _ = fs::remove_dir_all(temp);
 }
@@ -987,7 +1258,7 @@ def from_script() -> Int { inc(1) }
             "--script",
             script_path.to_str().expect("script path must be utf-8"),
         ],
-        "from_script()\n:quit\n",
+        ":sig Helper::inc\n:sig from_script\nfrom_script()\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -997,7 +1268,10 @@ def from_script() -> Int { inc(1) }
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(stdout.contains("Helper::inc(x: Int) -> Int"), "{stdout}");
+    assert!(stdout.contains("from_script() -> Int"), "{stdout}");
     assert!(stdout.contains("2"), "{stdout}");
+    assert!(!stdout.contains("Global::"), "{stdout}");
 
     let _ = fs::remove_dir_all(temp);
 }
@@ -1005,7 +1279,7 @@ def from_script() -> Int { inc(1) }
 #[test]
 fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     let output = run_repl_session(
-        ":doc Tuple\n:sig Tuple\n:doc Config\n:doc StyledDocStyle\n:doc add\nimport Add::add\n:doc add\npair = (\"alice\", 2)\nresult_pair = (Ok(2), \"ok\")\n:sig pair._1\n:sig Facet::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})\n:quit\n",
+        ":doc Tuple\n:sig Tuple\n:doc Config\n:doc StyledDocStyle\n:sig StyledDocStyle\n:doc add\nimport Add::add\n:doc add\npair = (\"alice\", 2)\nstyle = StyledDocStyle::new(Option::None, Option::None, True, False, False, False)\nresult_pair = (Ok(2), \"ok\")\n:sig pair._1\n:sig Facet::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -1020,7 +1294,10 @@ fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     assert!(stdout.contains("Tuple._1"), "{stdout}");
     assert!(stdout.contains("No signature found for Tuple"), "{stdout}");
     assert!(stdout.contains("defstruct Config"), "{stdout}");
-    assert!(stdout.contains("defrecord StyledDocStyle"), "{stdout}");
+    assert!(stdout.contains("defstruct StyledDocStyle"), "{stdout}");
+    assert!(stdout.contains("StyledDocStyle::new("), "{stdout}");
+    assert!(stdout.contains("italic: Boolean"), "{stdout}");
+    assert!(stdout.contains("StyledDocStyle.bold"), "{stdout}");
     assert!(stdout.contains("No docs found for add"), "{stdout}");
     assert!(stdout.contains("Imported Add::add"), "{stdout}");
     assert!(stdout.contains("Add::add"), "{stdout}");

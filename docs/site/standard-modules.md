@@ -14,7 +14,7 @@ Surtr の標準定義ソースは language surface の一部です。
   - `print`, `inspect`, `if`, `assert`, `ensure` などの cross-cutting API
   - auto import される最小の標準 API
 - trait modules
-  - capability: `Numeric`, `Show`, `Compare`, `From`, `TryFrom`
+  - capability: `Show`, `Compare`, `From`, `TryFrom`
   - operator dispatch: `Eq`, `Concat` など
 - type modules
   - `Int`, `String`, `Regex`, `Boolean`, `Error`, `List`, `Generator`, `HashMap`, `Result`, `Range`, `Option`, `Facet`, `Float`
@@ -24,7 +24,7 @@ Surtr の標準定義ソースは language surface の一部です。
 ## どこを見るか
 
 - 条件分岐や出力: `../../lib/kernel.srt`
-- 数値演算の契約: `../../lib/traits/numeric.srt`
+- 数値 helper: `../../lib/types/int.srt`, `../../lib/types/float.srt`
 - 変換: `../../lib/traits/from.srt`, `../../lib/traits/try_from.srt`
 - 型ごとの helper: `../../lib/types/int.srt`, `../../lib/types/string.srt`, `../../lib/types/list.srt` など
 - range helpers と generator range: `../../lib/types/range.srt`, `../../lib/types/generator.srt`
@@ -52,6 +52,7 @@ xldr(2)>
 ## 次に読むページ
 
 - `Kernel` を先に触りたいなら `./kernel.md`
+- `Float` を触りたいなら `./float.md`
 - `Regex` を触りたいなら `./regex.md`
 - `Json` を触りたいなら `./json.md`
 - `File` を触りたいなら `./file-io.md`
@@ -68,7 +69,6 @@ xldr(2)>
   - `../../lib/file.srt`
   - `../../lib/FileSystem.srt`
   - `../../lib/Shell.srt`
-  - `../../lib/traits/numeric.srt`
 
 ## 躓きやすいポイント
 

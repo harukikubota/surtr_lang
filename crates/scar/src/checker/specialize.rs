@@ -17,7 +17,7 @@ impl Checker {
         let mut bound_tyvars_by_fun_idx = HashMap::new();
         for (fun_idx, def) in &defs_by_fun_idx {
             let bound_tyvars = self.collect_bound_tyvars_for_def(def);
-            let needs = Self::typed_node_has_pending_trait_call(def);
+            let needs = Self::typed_node_has_pending_trait_call(def) || !bound_tyvars.is_empty();
             if needs {
                 needs_specialization.insert(*fun_idx);
             }
@@ -26,7 +26,7 @@ impl Checker {
 
         let mut rewritten = Vec::new();
         let mut generated_defs = Vec::new();
-        let mut specialization_fun_idxs: HashMap<(u32, Vec<String>), u32> = HashMap::new();
+        let mut specialization_fun_idxs = self.specialization_fun_idxs.clone();
 
         for stmt in stmts {
             if let Some(fun_idx) = Self::def_fun_idx(&stmt) {
@@ -47,6 +47,7 @@ impl Checker {
         }
 
         rewritten.extend(generated_defs);
+        self.specialization_fun_idxs = specialization_fun_idxs;
         Ok(rewritten)
     }
 
@@ -56,7 +57,7 @@ impl Checker {
         defs_by_fun_idx: &HashMap<u32, TypedNode>,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
-        specialization_fun_idxs: &mut HashMap<(u32, Vec<String>), u32>,
+        specialization_fun_idxs: &mut HashMap<SpecializationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
     ) -> Result<TypedNode, TypeError> {
         let span = node.span.clone();
@@ -456,6 +457,31 @@ impl Checker {
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?,
+            ),
+            TypedInner::HashMapLiteral(entries) => TypedInner::HashMapLiteral(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| {
+                        Ok((
+                            self.rewrite_specializations_in_node(
+                                key,
+                                defs_by_fun_idx,
+                                bound_tyvars_by_fun_idx,
+                                needs_specialization,
+                                specialization_fun_idxs,
+                                generated_defs,
+                            )?,
+                            self.rewrite_specializations_in_node(
+                                value,
+                                defs_by_fun_idx,
+                                bound_tyvars_by_fun_idx,
+                                needs_specialization,
+                                specialization_fun_idxs,
+                                generated_defs,
+                            )?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, TypeError>>()?,
             ),
             TypedInner::TupleLiteral(items) => TypedInner::TupleLiteral(
                 items
@@ -922,27 +948,11 @@ impl Checker {
         defs_by_fun_idx: &HashMap<u32, TypedNode>,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
-        specialization_fun_idxs: &mut HashMap<(u32, Vec<String>), u32>,
+        specialization_fun_idxs: &mut HashMap<SpecializationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
     ) -> Result<u32, TypeError> {
-        let key = (
-            original_fun_idx,
-            concrete_tys
-                .iter()
-                .map(|ty| self.ty_name(ty))
-                .collect::<Vec<_>>(),
-        );
-        if let Some(existing) = specialization_fun_idxs.get(&key) {
-            return Ok(*existing);
-        }
-
-        let specialized_fun_idx = self.env.next_fun_idx;
-        self.env.next_fun_idx += 1;
-        specialization_fun_idxs.insert(key, specialized_fun_idx);
-
         let original_def = defs_by_fun_idx
             .get(&original_fun_idx)
-            .cloned()
             .ok_or_else(|| TypeError {
                 message: format!(
                     "Missing generic definition for fun_idx {}",
@@ -951,9 +961,17 @@ impl Checker {
                 span: Span { start: 0, end: 0 },
                 hint: None,
             })?;
+        let key = self.specialization_key_for_def(original_def, concrete_tys)?;
+        if let Some(existing) = specialization_fun_idxs.get(&key) {
+            return Ok(*existing);
+        }
+
+        let specialized_fun_idx = self.env.next_fun_idx;
+        self.env.next_fun_idx += 1;
+        specialization_fun_idxs.insert(key, specialized_fun_idx);
 
         let substituted_def =
-            self.substitute_specialized_def(original_def, specialized_fun_idx, mapping)?;
+            self.substitute_specialized_def(original_def.clone(), specialized_fun_idx, mapping)?;
         let rewritten_def = self.rewrite_specializations_in_node(
             substituted_def,
             defs_by_fun_idx,
@@ -964,6 +982,122 @@ impl Checker {
         )?;
         generated_defs.push(rewritten_def);
         Ok(specialized_fun_idx)
+    }
+
+    fn specialization_key_for_def(
+        &self,
+        def: &TypedNode,
+        concrete_tys: &[Ty],
+    ) -> Result<SpecializationKey, TypeError> {
+        let function_name = Self::specialization_function_name(def).ok_or_else(|| TypeError {
+            message: "Expected def/extractor for specialization key".into(),
+            span: def.span.clone(),
+            hint: None,
+        })?;
+        Ok(SpecializationKey {
+            function_name,
+            type_args: concrete_tys
+                .iter()
+                .map(|ty| self.canonical_ty_key(ty))
+                .collect(),
+        })
+    }
+
+    fn specialization_function_name(def: &TypedNode) -> Option<String> {
+        match &def.node {
+            TypedInner::Def(_, id, ..) | TypedInner::ExtractorDef(_, id, ..) => {
+                Some(id.qualified_name.clone().unwrap_or_else(|| id.name.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    fn canonical_ty_key(&self, ty: &Ty) -> CanonicalTyKey {
+        match self.resolve_ty(ty) {
+            Ty::Int => CanonicalTyKey::Int,
+            Ty::Float => CanonicalTyKey::Float,
+            Ty::Str => CanonicalTyKey::String,
+            Ty::Bool => CanonicalTyKey::Boolean,
+            Ty::Unit => CanonicalTyKey::Unit,
+            Ty::Error => CanonicalTyKey::Error,
+            Ty::Hole => CanonicalTyKey::Hole,
+            Ty::Var(var) => CanonicalTyKey::Var(var),
+            Ty::List(inner) => CanonicalTyKey::List(Box::new(self.canonical_ty_key(&inner))),
+            Ty::Tuple(items) => CanonicalTyKey::Tuple(
+                items
+                    .iter()
+                    .map(|item| self.canonical_ty_key(item))
+                    .collect(),
+            ),
+            Ty::Func(params, ret) => CanonicalTyKey::Func {
+                params: params
+                    .iter()
+                    .map(|param| self.canonical_ty_key(param))
+                    .collect(),
+                ret: Box::new(self.canonical_ty_key(&ret)),
+            },
+            Ty::TypeRef(inner) => CanonicalTyKey::TypeRef(Box::new(self.canonical_ty_key(&inner))),
+            Ty::Lazy(inner) => CanonicalTyKey::Lazy(Box::new(self.canonical_ty_key(&inner))),
+            Ty::Facet(source, focus) => CanonicalTyKey::Facet {
+                source: Box::new(self.canonical_ty_key(&source)),
+                focus: Box::new(self.canonical_ty_key(&focus)),
+            },
+            Ty::Pid(name) => CanonicalTyKey::Pid(Self::canonical_specialization_name(&name)),
+            Ty::BuiltinFunc { name, params, ret } => CanonicalTyKey::BuiltinFunc {
+                name,
+                params: params
+                    .iter()
+                    .map(|param| self.canonical_ty_key(param))
+                    .collect(),
+                ret: Box::new(self.canonical_ty_key(&ret)),
+            },
+            Ty::UserFunc {
+                type_params,
+                params,
+                ret,
+                ..
+            } => CanonicalTyKey::UserFunc {
+                type_params,
+                params: params
+                    .iter()
+                    .map(|param| self.canonical_ty_key(param))
+                    .collect(),
+                ret: Box::new(self.canonical_ty_key(&ret)),
+            },
+            Ty::Struct(name, fields) => CanonicalTyKey::Struct {
+                name: Self::canonical_specialization_name(&name),
+                fields: self.canonical_field_keys(&fields),
+            },
+            Ty::Record(name, fields) => CanonicalTyKey::Record {
+                name: Self::canonical_specialization_name(&name),
+                fields: self.canonical_field_keys(&fields),
+            },
+            Ty::Enum(name, args) => CanonicalTyKey::Enum {
+                name: Self::canonical_specialization_name(&name),
+                args: args.iter().map(|arg| self.canonical_ty_key(arg)).collect(),
+            },
+            Ty::Result(ok, err) => CanonicalTyKey::Result {
+                ok: Box::new(self.canonical_ty_key(&ok)),
+                err: Box::new(self.canonical_ty_key(&err)),
+            },
+        }
+    }
+
+    fn canonical_field_keys(&self, fields: &[(String, Ty)]) -> Vec<(String, CanonicalTyKey)> {
+        let mut fields = fields
+            .iter()
+            .map(|(name, ty)| (name.clone(), self.canonical_ty_key(ty)))
+            .collect::<Vec<_>>();
+        fields.sort_by(|(left, _), (right, _)| left.cmp(right));
+        fields
+    }
+
+    fn canonical_specialization_name(name: &str) -> String {
+        if name.starts_with('$') || name.contains("::") {
+            name.to_string()
+        } else {
+            format!("Global::{name}")
+        }
     }
 
     fn substitute_specialized_def(
@@ -1064,6 +1198,13 @@ impl Checker {
             (Ty::List(left), Ty::List(right)) => {
                 self.match_specialization_ty(left, right, bound_tyvars, mapping)
             }
+            (Ty::TypeRef(left), Ty::TypeRef(right)) | (Ty::Lazy(left), Ty::Lazy(right)) => {
+                self.match_specialization_ty(left, right, bound_tyvars, mapping)
+            }
+            (Ty::Facet(left_source, left_focus), Ty::Facet(right_source, right_focus)) => {
+                self.match_specialization_ty(left_source, right_source, bound_tyvars, mapping);
+                self.match_specialization_ty(left_focus, right_focus, bound_tyvars, mapping);
+            }
             (Ty::Tuple(left), Ty::Tuple(right)) => {
                 for (left, right) in left.iter().zip(right.iter()) {
                     self.match_specialization_ty(left, right, bound_tyvars, mapping);
@@ -1088,6 +1229,38 @@ impl Checker {
             {
                 for (left, right) in left_args.iter().zip(right_args.iter()) {
                     self.match_specialization_ty(left, right, bound_tyvars, mapping);
+                }
+            }
+            (Ty::Struct(left_name, left_fields), Ty::Struct(right_name, right_fields))
+                if left_name == right_name =>
+            {
+                for ((left_field_name, left_field_ty), (right_field_name, right_field_ty)) in
+                    left_fields.iter().zip(right_fields.iter())
+                {
+                    if left_field_name == right_field_name {
+                        self.match_specialization_ty(
+                            left_field_ty,
+                            right_field_ty,
+                            bound_tyvars,
+                            mapping,
+                        );
+                    }
+                }
+            }
+            (Ty::Record(left_name, left_fields), Ty::Record(right_name, right_fields))
+                if left_name == right_name =>
+            {
+                for ((left_field_name, left_field_ty), (right_field_name, right_field_ty)) in
+                    left_fields.iter().zip(right_fields.iter())
+                {
+                    if left_field_name == right_field_name {
+                        self.match_specialization_ty(
+                            left_field_ty,
+                            right_field_ty,
+                            bound_tyvars,
+                            mapping,
+                        );
+                    }
                 }
             }
             _ => {}
@@ -1167,6 +1340,12 @@ impl Checker {
             TypedInner::ListLiteral(items) | TypedInner::TupleLiteral(items) => {
                 for item in items {
                     self.collect_bound_tyvars_in_node(item, ordered, seen);
+                }
+            }
+            TypedInner::HashMapLiteral(entries) => {
+                for (key, value) in entries {
+                    self.collect_bound_tyvars_in_node(key, ordered, seen);
+                    self.collect_bound_tyvars_in_node(value, ordered, seen);
                 }
             }
             TypedInner::InterpolatedStr(parts) => {
@@ -1458,6 +1637,17 @@ impl Checker {
                     .map(|item| self.substitute_typed_node_with_mapping(item, mapping))
                     .collect(),
             ),
+            TypedInner::HashMapLiteral(entries) => TypedInner::HashMapLiteral(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| {
+                        (
+                            self.substitute_typed_node_with_mapping(key, mapping),
+                            self.substitute_typed_node_with_mapping(value, mapping),
+                        )
+                    })
+                    .collect(),
+            ),
             TypedInner::TupleLiteral(items) => TypedInner::TupleLiteral(
                 items
                     .into_iter()
@@ -1728,6 +1918,9 @@ impl Checker {
             TypedPattern::Var(ty, id) => {
                 TypedPattern::Var(self.substitute_ty_with_mapping(&ty, mapping), id)
             }
+            TypedPattern::Pin(ty, id, dispatch) => {
+                TypedPattern::Pin(self.substitute_ty_with_mapping(&ty, mapping), id, dispatch)
+            }
             TypedPattern::As(ty, inner, id) => TypedPattern::As(
                 self.substitute_ty_with_mapping(&ty, mapping),
                 Box::new(self.substitute_typed_pattern_with_mapping(*inner, mapping)),
@@ -1802,6 +1995,11 @@ impl Checker {
     ) -> TypedMatchPattern {
         match pattern {
             TypedMatchPattern::Binding(id) => TypedMatchPattern::Binding(id),
+            TypedMatchPattern::Pin { id, ty, dispatch } => TypedMatchPattern::Pin {
+                id,
+                ty: self.substitute_ty_with_mapping(&ty, mapping),
+                dispatch,
+            },
             TypedMatchPattern::As(inner, id) => TypedMatchPattern::As(
                 Box::new(self.substitute_typed_match_pattern_with_mapping(*inner, mapping)),
                 id,
@@ -1975,8 +2173,14 @@ impl Checker {
 
     fn typed_node_has_pending_trait_call(node: &TypedNode) -> bool {
         match &node.node {
-            TypedInner::TraitCall { dispatch, args, .. } => {
+            TypedInner::TraitCall {
+                dispatch,
+                receiver_ty,
+                args,
+                ..
+            } => {
                 matches!(dispatch, TraitDispatch::Pending)
+                    || matches!(receiver_ty, Ty::Var(_))
                     || args.iter().any(Self::typed_node_has_pending_trait_call)
             }
             TypedInner::App(func, args)
@@ -2002,6 +2206,10 @@ impl Checker {
             TypedInner::ListLiteral(items) | TypedInner::TupleLiteral(items) => {
                 items.iter().any(Self::typed_node_has_pending_trait_call)
             }
+            TypedInner::HashMapLiteral(entries) => entries.iter().any(|(key, value)| {
+                Self::typed_node_has_pending_trait_call(key)
+                    || Self::typed_node_has_pending_trait_call(value)
+            }),
             TypedInner::InterpolatedStr(parts) => parts.iter().any(|part| match part {
                 TypedInterpolatedPart::Text(_) => false,
                 TypedInterpolatedPart::Expr(expr) => Self::typed_node_has_pending_trait_call(expr),
@@ -2092,5 +2300,202 @@ impl Checker {
             TypedInner::Def(fun_idx, ..) | TypedInner::ExtractorDef(fun_idx, ..) => Some(*fun_idx),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use spire::ast::Visibility;
+
+    fn test_span() -> Span {
+        Span { start: 0, end: 0 }
+    }
+
+    fn resolved_id(name: &str, qualified_name: Option<&str>, unique_id: u32) -> ResolvedId {
+        ResolvedId {
+            name: name.to_string(),
+            qualified_name: qualified_name.map(str::to_string),
+            unique_id,
+            compiler_generated: false,
+            span: test_span(),
+        }
+    }
+
+    fn generic_identity_ty(fun_idx: u32, ty_var: u32) -> Ty {
+        Ty::UserFunc {
+            fun_idx,
+            type_params: vec![ty_var],
+            params: vec![Ty::Var(ty_var)],
+            ret: Box::new(Ty::Var(ty_var)),
+        }
+    }
+
+    fn generic_identity_def(
+        fun_idx: u32,
+        id: ResolvedId,
+        param_id: ResolvedId,
+        ty_var: u32,
+    ) -> TypedNode {
+        TypedNode {
+            ty: generic_identity_ty(fun_idx, ty_var),
+            span: test_span(),
+            node: TypedInner::Def(
+                fun_idx,
+                id,
+                vec![TypedTypeParam {
+                    name: "$A".to_string(),
+                    ty_var,
+                    bound: Some("Add".to_string()),
+                }],
+                vec![TypedFunParam {
+                    id: param_id.clone(),
+                    ty: Ty::Var(ty_var),
+                }],
+                Ty::Var(ty_var),
+                Box::new(TypedNode {
+                    ty: Ty::Var(ty_var),
+                    span: test_span(),
+                    node: TypedInner::Var(param_id),
+                }),
+                Visibility::Public,
+            ),
+        }
+    }
+
+    fn typed_arg(unique_id: u32, ty: Ty) -> TypedNode {
+        TypedNode {
+            ty,
+            span: test_span(),
+            node: TypedInner::Var(resolved_id("arg", None, unique_id)),
+        }
+    }
+
+    fn call_generic(id: ResolvedId, fun_idx: u32, ty_var: u32, arg: TypedNode) -> TypedNode {
+        let ret_ty = arg.ty.clone();
+        TypedNode {
+            ty: ret_ty,
+            span: test_span(),
+            node: TypedInner::App(
+                Box::new(TypedNode {
+                    ty: generic_identity_ty(fun_idx, ty_var),
+                    span: test_span(),
+                    node: TypedInner::Var(id),
+                }),
+                vec![arg],
+            ),
+        }
+    }
+
+    fn generated_def_fun_idxs(nodes: &[TypedNode], qualified_name: &str) -> Vec<u32> {
+        nodes
+            .iter()
+            .filter_map(|node| match &node.node {
+                TypedInner::Def(fun_idx, id, ..)
+                    if id.qualified_name.as_deref() == Some(qualified_name) =>
+                {
+                    Some(*fun_idx)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn app_fun_idxs(nodes: &[TypedNode]) -> Vec<u32> {
+        nodes
+            .iter()
+            .filter_map(|node| match &node.node {
+                TypedInner::App(func, _) => match &func.ty {
+                    Ty::UserFunc { fun_idx, .. } => Some(*fun_idx),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn specializations_reuse_identity_across_incremental_runs() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        checker.env.next_fun_idx = 100;
+        let ty_var = 1;
+        let original_fun_idx = 20;
+        let function_id = resolved_id("id", Some("Global::id"), 10);
+        let param_id = resolved_id("x", None, 11);
+        let original_def =
+            generic_identity_def(original_fun_idx, function_id.clone(), param_id, ty_var);
+
+        let first = checker
+            .specialize_program(vec![
+                original_def,
+                call_generic(
+                    function_id.clone(),
+                    original_fun_idx,
+                    ty_var,
+                    typed_arg(1000, Ty::Int),
+                ),
+            ])
+            .expect("first specialization should succeed");
+        let first_generated = generated_def_fun_idxs(&first, "Global::id");
+        assert_eq!(first_generated.len(), 1);
+
+        let second = checker
+            .specialize_program(vec![call_generic(
+                function_id,
+                original_fun_idx,
+                ty_var,
+                typed_arg(1001, Ty::Int),
+            )])
+            .expect("second specialization should succeed");
+
+        assert!(
+            generated_def_fun_idxs(&second, "Global::id").is_empty(),
+            "incremental reuse should not emit another specialization def"
+        );
+        assert_eq!(app_fun_idxs(&second), first_generated);
+    }
+
+    #[test]
+    fn specialization_keys_distinguish_structural_type_arguments() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        checker.env.next_fun_idx = 100;
+        let ty_var = 1;
+        let original_fun_idx = 20;
+        let function_id = resolved_id("id", Some("Global::id"), 10);
+        let param_id = resolved_id("x", None, 11);
+        let original_def =
+            generic_identity_def(original_fun_idx, function_id.clone(), param_id, ty_var);
+
+        let box_int = Ty::Struct(
+            "Global::Box".to_string(),
+            vec![("value".to_string(), Ty::Int)],
+        );
+        let box_string = Ty::Struct(
+            "Global::Box".to_string(),
+            vec![("value".to_string(), Ty::Str)],
+        );
+        let typed = checker
+            .specialize_program(vec![
+                original_def,
+                call_generic(
+                    function_id.clone(),
+                    original_fun_idx,
+                    ty_var,
+                    typed_arg(1000, box_int),
+                ),
+                call_generic(
+                    function_id,
+                    original_fun_idx,
+                    ty_var,
+                    typed_arg(1001, box_string),
+                ),
+            ])
+            .expect("specialization should succeed");
+
+        let generated = generated_def_fun_idxs(&typed, "Global::id");
+        assert_eq!(generated.len(), 2);
+        let app_fun_idxs = app_fun_idxs(&typed);
+        assert_eq!(app_fun_idxs.len(), 2);
+        assert_ne!(app_fun_idxs[0], app_fun_idxs[1]);
     }
 }

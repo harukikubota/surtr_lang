@@ -1,0 +1,3 @@
+import Process::join
+
+print(to_string(join))

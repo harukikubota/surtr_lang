@@ -5,7 +5,7 @@ import Test;
 test("HashMap") {
   describe("constructors and lookup") {
     it("builds and inspects the empty map") {
-      assert_eq("HashMap()", inspect(HashMap::empty()))
+      assert_eq("hash![]", inspect(HashMap::empty()))
     }
 
     it("inserts and reports entry presence") {
@@ -29,7 +29,7 @@ test("HashMap") {
   describe("entry normalization") {
     it("from_entries keeps the last duplicate value") {
       assert_eq(
-        "HashMap(\"a\" => 3, \"b\" => 2)",
+        "hash![\"a\" => 3, \"b\" => 2]",
         inspect(HashMap::from_entries([("b", 2), ("a", 1), ("a", 3)])),
       )
     }
@@ -38,7 +38,7 @@ test("HashMap") {
       from_entries = HashMap::from_entries([("b", 2), ("a", 1), ("a", 3)])
       removed = HashMap::remove(from_entries, "b")
       assert_eq(
-        ("HashMap(\"a\" => 3)", "HashMap(\"a\" => 3)"),
+        ("hash![\"a\" => 3]", "hash![\"a\" => 3]"),
         (inspect(removed), inspect(HashMap::remove(removed, "missing"))),
       )
     }
@@ -60,7 +60,7 @@ test("HashMap") {
     it("maps only the values while preserving key order") {
       from_entries = HashMap::from_entries([("b", 2), ("a", 1), ("a", 3)])
       assert_eq(
-        "HashMap(\"a\" => 30, \"b\" => 20)",
+        "hash![\"a\" => 30, \"b\" => 20]",
         inspect(HashMap::map_values(from_entries, {|v| v * 10})),
       )
     }
@@ -85,7 +85,7 @@ test("HashMap") {
         ("tab\tchar", 4),
       ])
       assert_eq(
-        "HashMap(\"line\\nfeed\" => 1, \"path\\\\to\" => 2, \"say\\\"hi\" => 3, \"tab\\tchar\" => 4)",
+        "hash![\"line\\nfeed\" => 1, \"path\\\\to\" => 2, \"say\\\"hi\" => 3, \"tab\\tchar\" => 4]",
         inspect(escaped),
       )
     }

@@ -99,9 +99,10 @@ cargo clean
 - Canonical specs and internal design notes in `doc/`
   - [Requirements (V9, Japanese)](./doc/要件定義v9.md)
   - [Open issues](./doc/open-issues.md)
-  - [Float memo](./doc/float.md)
 - Internal docs index
   - [Internal docs guide](./docs/internal/README.md)
+- User-facing `Float` guide
+  - [Float](./docs/site/float.md)
 - Standard-library docs live in `lib/*.srt` via `@doc`
 - Implementation contracts live in Rust doc comments under `crates/**`
 - Install guide
@@ -128,4 +129,4 @@ Implementation notes:
 - `type` is a reserved keyword; std modules can declare builtin surfaces with `@builtin def ...` and `@builtin type ...`
 - std modules are split into `Bootstrap`, `Kernel`, and type-oriented modules (`Int`, `String`, `Boolean`, `Error`, `List`, `Result`, `Float`); cross-cutting builtins live under `defmod Kernel` in `kernel.srt`, and each builtin type head is declared at the top level of its corresponding `lib/*.srt`
 - closure parameter annotations are optional and match-arm LHS follows the same pattern grammar as safe-bind
-- `Float` remains implemented, but its precise contract is tracked separately in [doc/float.md](./doc/float.md)
+- `Float` is implemented as a finite-only `f64` wrapper

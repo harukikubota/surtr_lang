@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::fmt;
 
 use crate::builtin::builtin_meta_by_id;
 use crate::primitives::{BuiltinId, FunctionId, RuntimeTag, SurtrInt};
-use crate::runtime::{CallableOrigin, TypeEntry, TypeRegistry};
+use crate::runtime::{validate_type_registry_append, CallableOrigin, TypeEntry, TypeRegistry};
 
 /// Surtr bytecode instructions.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -708,6 +710,9 @@ pub struct Bytecode {
     /// Symbol-level documentation carried from `@doc` through `.eldr`.
     #[serde(default)]
     pub docs: Vec<DocEntry>,
+    /// Signature-only surface metadata used by REPL `:sig`.
+    #[serde(default)]
+    pub signatures: Vec<SignatureEntry>,
     #[serde(default)]
     pub compile_info: CompileInfo,
     #[serde(default)]
@@ -745,6 +750,7 @@ impl Default for Bytecode {
             functions: Vec::new(),
             source_map: None,
             docs: Vec::new(),
+            signatures: Vec::new(),
             compile_info: CompileInfo::default(),
             labels: Vec::new(),
             imports: Vec::new(),
@@ -769,6 +775,8 @@ pub struct BytecodeChunk {
     pub const_base: u32,
     pub constants: Vec<Constant>,
     pub new_locals: usize,
+    /// Base offset of runtime type metadata when this chunk is produced.
+    pub type_registry_base: u32,
     pub type_entries: Vec<TypeEntry>,
     /// Base offset of error templates in the VM-wide pool when this chunk is produced.
     pub error_template_base: u32,
@@ -779,6 +787,7 @@ pub struct BytecodeChunk {
     pub callable_templates: Vec<CallableTemplate>,
     pub functions: Vec<FunctionEntry>,
     pub docs: Vec<DocEntry>,
+    pub signatures: Vec<SignatureEntry>,
     pub runtime_process_specs: Vec<RuntimeProcessSpec>,
     pub runtime_boot_plan: RuntimeBootPlan,
 }
@@ -866,6 +875,217 @@ impl Default for CallableTemplateMetadata {
     }
 }
 
+/// Shared bytecode verifier error used by producers and the VM.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BytecodeValidationError {
+    message: String,
+}
+
+impl BytecodeValidationError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for BytecodeValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for BytecodeValidationError {}
+
+impl From<crate::runtime::TypeRegistryError> for BytecodeValidationError {
+    fn from(value: crate::runtime::TypeRegistryError) -> Self {
+        Self::new(value.to_string())
+    }
+}
+
+pub fn validate_type_registry_append_entries(
+    existing: &[TypeEntry],
+    entries: &[TypeEntry],
+) -> Result<(), BytecodeValidationError> {
+    validate_type_registry_append(existing, entries).map_err(Into::into)
+}
+
+pub fn validate_program_function_table(
+    opcodes: &[Opcode],
+    callable_templates: &[CallableTemplate],
+    runtime_process_specs: &[RuntimeProcessSpec],
+    functions: &[FunctionEntry],
+) -> Result<(), BytecodeValidationError> {
+    let halt_pos = top_level_halt_pos(opcodes, "bytecode")?;
+    let mut seen_fun_idxs = BTreeSet::new();
+    for (idx, entry) in functions.iter().enumerate() {
+        if entry.fun_idx as usize != idx {
+            return Err(BytecodeValidationError::new(format!(
+                "Function table invariant violated: functions[{}].fun_idx = {}",
+                idx, entry.fun_idx
+            )));
+        }
+        if !seen_fun_idxs.insert(entry.fun_idx) {
+            return Err(BytecodeValidationError::new(format!(
+                "Bytecode verifier: duplicate function entry for fun_idx {}",
+                entry.fun_idx
+            )));
+        }
+        validate_function_entry_pc(entry, opcodes.len(), halt_pos, "")?;
+    }
+
+    validate_function_refs(
+        functions.len(),
+        opcodes,
+        callable_templates,
+        runtime_process_specs,
+    )
+}
+
+pub fn validate_chunk_function_table(
+    opcodes: &[Opcode],
+    callable_templates: &[CallableTemplate],
+    runtime_process_specs: &[RuntimeProcessSpec],
+    functions: &[FunctionEntry],
+    base_function_len: usize,
+    allow_existing_replacements: bool,
+) -> Result<usize, BytecodeValidationError> {
+    let halt_pos = top_level_halt_pos(opcodes, "chunk")?;
+    let mut seen_fun_idxs = BTreeSet::new();
+    let mut next_append_idx = base_function_len;
+    let mut sorted_entries = functions.iter().collect::<Vec<_>>();
+    sorted_entries.sort_by_key(|entry| entry.fun_idx);
+
+    for entry in sorted_entries {
+        let idx = entry.fun_idx as usize;
+        if !seen_fun_idxs.insert(entry.fun_idx) {
+            return Err(BytecodeValidationError::new(format!(
+                "Bytecode verifier: duplicate function entry for fun_idx {}",
+                entry.fun_idx
+            )));
+        }
+        if idx < base_function_len {
+            if !allow_existing_replacements {
+                return Err(BytecodeValidationError::new(format!(
+                    "Function table invariant violated in chunk: fun_idx {} would replace existing prefix len {}",
+                    idx, base_function_len
+                )));
+            }
+        } else if idx == next_append_idx {
+            next_append_idx += 1;
+        } else {
+            return Err(BytecodeValidationError::new(format!(
+                "Function table invariant violated in chunk: fun_idx {} > len {}",
+                idx, next_append_idx
+            )));
+        }
+        validate_function_entry_pc(entry, opcodes.len(), halt_pos, "chunk ")?;
+    }
+
+    validate_function_refs(
+        next_append_idx,
+        opcodes,
+        callable_templates,
+        runtime_process_specs,
+    )?;
+    Ok(next_append_idx)
+}
+
+fn top_level_halt_pos(opcodes: &[Opcode], context: &str) -> Result<usize, BytecodeValidationError> {
+    if let Some(pos) = opcodes.iter().position(|op| matches!(op, Opcode::Halt)) {
+        return Ok(pos);
+    }
+    if opcodes
+        .iter()
+        .any(|op| matches!(op, Opcode::Return | Opcode::TailCallClosure { .. }))
+    {
+        return Err(BytecodeValidationError::new("Return at top-level"));
+    }
+    Err(BytecodeValidationError::new(format!(
+        "Bytecode verifier: {context} missing Halt"
+    )))
+}
+
+fn validate_function_entry_pc(
+    entry: &FunctionEntry,
+    opcode_len: usize,
+    halt_pos: usize,
+    context: &str,
+) -> Result<(), BytecodeValidationError> {
+    if entry.entry_pc as usize >= opcode_len {
+        return Err(BytecodeValidationError::new(format!(
+            "Bytecode verifier: function {} entry_pc out of {}bounds: {}",
+            entry.fun_idx, context, entry.entry_pc
+        )));
+    }
+    if entry.entry_pc as usize <= halt_pos {
+        return Err(BytecodeValidationError::new(format!(
+            "Bytecode verifier: function {} entry_pc {} must be after top-level Halt {}",
+            entry.fun_idx, entry.entry_pc, halt_pos
+        )));
+    }
+    Ok(())
+}
+
+fn validate_function_refs(
+    function_len: usize,
+    opcodes: &[Opcode],
+    callable_templates: &[CallableTemplate],
+    runtime_process_specs: &[RuntimeProcessSpec],
+) -> Result<(), BytecodeValidationError> {
+    for op in opcodes {
+        match op {
+            Opcode::LoadFunctionRef(fun_idx) | Opcode::Call { fun_idx, .. } => {
+                validate_function_ref(function_len, *fun_idx, "opcode")?;
+            }
+            _ => {}
+        }
+    }
+
+    for template in callable_templates {
+        match &template.kind {
+            CallableTemplateKind::PartialDirectCall { target, .. }
+            | CallableTemplateKind::InjectDirectCall { target, .. } => {
+                if let CallableTemplateDirectTarget::Function(fun_idx) = target {
+                    validate_function_ref(function_len, *fun_idx, "callable template")?;
+                }
+            }
+            CallableTemplateKind::ComposeDirect { .. } => {}
+        }
+    }
+
+    for spec in runtime_process_specs {
+        validate_function_ref(
+            function_len,
+            spec.init.callable.fun_idx,
+            "runtime process init",
+        )?;
+        for handler in &spec.handlers {
+            validate_function_ref(function_len, handler.fun_idx, "runtime process handler")?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_function_ref(
+    function_len: usize,
+    fun_idx: FunctionId,
+    context: &str,
+) -> Result<(), BytecodeValidationError> {
+    if fun_idx as usize >= function_len {
+        return Err(BytecodeValidationError::new(format!(
+            "Bytecode verifier: Unknown function index {} in {} (function table len {})",
+            fun_idx, context, function_len
+        )));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DocKind {
     Module,
@@ -881,6 +1101,15 @@ pub struct DocEntry {
     pub module_path: String,
     pub signature: Option<String>,
     pub doc: String,
+}
+
+/// Persisted signature entry stored in `.eldr` `SigT` chunks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignatureEntry {
+    pub qualified_name: String,
+    pub kind: DocKind,
+    pub module_path: String,
+    pub signature: String,
 }
 
 /// Constant pool entry.
@@ -1096,6 +1325,7 @@ impl Bytecode {
     const CHUNK_SOURCES: [u8; 4] = *b"SrcP";
     const CHUNK_PC_SPANS: [u8; 4] = *b"PcSp";
     const CHUNK_DOCS: [u8; 4] = *b"Docs";
+    const CHUNK_SIGNATURES: [u8; 4] = *b"SigT";
     const CHUNK_PROCESS_SPECS: [u8; 4] = *b"Proc";
     const CHUNK_BOOT_PLAN: [u8; 4] = *b"Boot";
 
@@ -1160,6 +1390,12 @@ impl Bytecode {
 
         if !bytecode.docs.is_empty() {
             chunks.push((Self::CHUNK_DOCS, serialize_chunk(&bytecode.docs)?));
+        }
+        if !bytecode.signatures.is_empty() {
+            chunks.push((
+                Self::CHUNK_SIGNATURES,
+                serialize_chunk(&bytecode.signatures)?,
+            ));
         }
 
         let num_chunks = chunks.len() as u32;
@@ -1226,6 +1462,8 @@ fn decode_payloads(
     let sources = deserialize_required::<Vec<SourceFileEntry>>(payloads, "SrcP")?;
     let pc_spans = deserialize_required::<Vec<PcSpanEntry>>(payloads, "PcSp")?;
     let docs = deserialize_optional::<Vec<DocEntry>>(payloads, "Docs")?.unwrap_or_default();
+    let signatures =
+        deserialize_optional::<Vec<SignatureEntry>>(payloads, "SigT")?.unwrap_or_default();
     let runtime_process_specs =
         deserialize_optional::<RuntimeProcessSpecTable>(payloads, "Proc")?.unwrap_or_default();
     let runtime_boot_plan =
@@ -1242,6 +1480,7 @@ fn decode_payloads(
         functions,
         source_map: rebuild_source_map(&spans, &pc_spans),
         docs,
+        signatures,
         compile_info,
         labels,
         imports,
@@ -1406,6 +1645,7 @@ fn is_known_chunk_tag(tag: &str) -> bool {
             | "Proc"
             | "Boot"
             | "Docs"
+            | "SigT"
     )
 }
 
@@ -1453,33 +1693,16 @@ fn derive_imports(opcodes: &[Opcode], functions: &[FunctionEntry]) -> Vec<Import
             } => {
                 let entry = builtin_imports
                     .entry(*builtin_id)
-                    .or_insert_with(|| ImportEntry {
-                        symbol: builtin_meta_by_id(*builtin_id)
-                            .map(|meta| meta.name.to_string())
-                            .unwrap_or_else(|| format!("builtin#{}", builtin_id)),
-                        kind: ImportKind::Builtin,
-                        arity: *arity,
-                        builtin_id: Some(*builtin_id),
-                        function_id: None,
-                        call_pcs: Vec::new(),
-                    });
+                    .or_insert_with(|| builtin_import_entry(*builtin_id, *arity));
                 entry.call_pcs.push(pc as u32);
             }
             Opcode::LoadBuiltinRef(builtin_id) => {
+                let arity = builtin_meta_by_id(*builtin_id)
+                    .map(|meta| meta.arity)
+                    .unwrap_or(0);
                 let entry = builtin_imports
                     .entry(*builtin_id)
-                    .or_insert_with(|| ImportEntry {
-                        symbol: builtin_meta_by_id(*builtin_id)
-                            .map(|meta| meta.name.to_string())
-                            .unwrap_or_else(|| format!("builtin#{}", builtin_id)),
-                        kind: ImportKind::Builtin,
-                        arity: builtin_meta_by_id(*builtin_id)
-                            .map(|meta| meta.arity)
-                            .unwrap_or(0),
-                        builtin_id: Some(*builtin_id),
-                        function_id: None,
-                        call_pcs: Vec::new(),
-                    });
+                    .or_insert_with(|| builtin_import_entry(*builtin_id, arity));
                 entry.call_pcs.push(pc as u32);
             }
             Opcode::Call { fun_idx, .. } | Opcode::LoadFunctionRef(fun_idx) => {
@@ -1517,6 +1740,19 @@ fn derive_imports(opcodes: &[Opcode], functions: &[FunctionEntry]) -> Vec<Import
         .into_values()
         .chain(function_imports.into_values())
         .collect()
+}
+
+fn builtin_import_entry(builtin_id: u16, arity: u8) -> ImportEntry {
+    ImportEntry {
+        symbol: builtin_meta_by_id(builtin_id)
+            .map(|meta| meta.name.to_string())
+            .unwrap_or_else(|| format!("builtin#{}", builtin_id)),
+        kind: ImportKind::Builtin,
+        arity,
+        builtin_id: Some(builtin_id),
+        function_id: None,
+        call_pcs: Vec::new(),
+    }
 }
 
 fn derive_exports(functions: &[FunctionEntry], docs: &[DocEntry]) -> Vec<ExportEntry> {
@@ -1841,6 +2077,7 @@ mod tests {
                 signature: Some("type Int".to_string()),
                 doc: "Builtin Int type.".to_string(),
             }],
+            signatures: Vec::new(),
             compile_info: CompileInfo {
                 num_locals: 1,
                 source_hash: Some(stable_hash_hex("let x = 42")),

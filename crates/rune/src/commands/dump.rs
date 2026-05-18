@@ -11,9 +11,11 @@ use crate::compile::{
     script_plan_error_as_rune_error,
 };
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
+use crate::util::surface_strip_global_prefixes;
 
 pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
     let mut format = "json";
+    let mut format_seen = false;
     let mut entry: Option<String> = None;
     let mut include_opcode_histogram = false;
     let mut include_peephole_candidates = false;
@@ -25,11 +27,18 @@ pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
                 if i >= args.len() {
                     return Err(RuneError::message(1, "dump: missing value for --format"));
                 }
+                if format_seen {
+                    return Err(RuneError::message(
+                        1,
+                        "dump: --format may only be specified once",
+                    ));
+                }
+                format_seen = true;
                 format = args[i].as_str();
             }
             "--entry" => {
                 i += 1;
-                if i >= args.len() {
+                if i >= args.len() || args[i].starts_with('-') {
                     return Err(RuneError::message(1, "dump: missing value for --entry"));
                 }
                 if entry.is_some() {
@@ -41,9 +50,21 @@ pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
                 entry = Some(args[i].clone());
             }
             "--opcode-histogram" => {
+                if include_opcode_histogram {
+                    return Err(RuneError::message(
+                        1,
+                        "dump: --opcode-histogram may only be specified once",
+                    ));
+                }
                 include_opcode_histogram = true;
             }
             "--peephole-candidates" => {
+                if include_peephole_candidates {
+                    return Err(RuneError::message(
+                        1,
+                        "dump: --peephole-candidates may only be specified once",
+                    ));
+                }
                 include_peephole_candidates = true;
             }
             other => {
@@ -65,11 +86,11 @@ pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
             ),
         ));
     }
-
     let options = DumpOptions {
         include_opcode_histogram,
         include_peephole_candidates,
     };
+    validate_dump_options(format, &options)?;
 
     if Path::new(file_path)
         .extension()
@@ -118,6 +139,25 @@ struct DumpOptions {
     include_peephole_candidates: bool,
 }
 
+fn validate_dump_options(format: &str, options: &DumpOptions) -> RuneResult<()> {
+    if format != "viewer-json" {
+        return Ok(());
+    }
+    if options.include_opcode_histogram {
+        return Err(RuneError::message(
+            1,
+            "dump: --opcode-histogram is only supported with --format json",
+        ));
+    }
+    if options.include_peephole_candidates {
+        return Err(RuneError::message(
+            1,
+            "dump: --peephole-candidates is only supported with --format json",
+        ));
+    }
+    Ok(())
+}
+
 fn dump_entry_source(
     file_path: &str,
     cli_entry: Option<&str>,
@@ -134,7 +174,8 @@ fn dump_entry_source(
         env,
         file_path,
         &compile_plan.source_for_parse,
-        &compile_plan.include_directives,
+        &compile_plan.include_modules,
+        xldr::StdlibVariant::Default,
     )?;
     let bytecode = compile_source(env, &compile_sources, &compile_plan)?;
     let bytes = bytecode
@@ -668,6 +709,108 @@ fn function_for_pc(bytecode: &Bytecode, pc: usize) -> Option<&FunctionEntry> {
     })
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dump_rejects_duplicate_format_option() {
+        let err = dispatch(
+            "missing.eldr",
+            &[
+                "--format".to_string(),
+                "json".to_string(),
+                "--format".to_string(),
+                "viewer-json".to_string(),
+            ],
+        )
+        .expect_err("duplicate dump format must fail before reading input");
+
+        assert_eq!(err.summary(), "dump: --format may only be specified once");
+    }
+
+    #[test]
+    fn dump_rejects_option_like_entry_value() {
+        let err = dispatch(
+            "missing.srt",
+            &["--entry".to_string(), "--format".to_string()],
+        )
+        .expect_err("option-looking entry value must fail");
+
+        assert_eq!(err.summary(), "dump: missing value for --entry");
+    }
+
+    #[test]
+    fn dump_rejects_opcode_histogram_with_viewer_json() {
+        let err = dispatch(
+            "missing.eldr",
+            &[
+                "--format".to_string(),
+                "viewer-json".to_string(),
+                "--opcode-histogram".to_string(),
+            ],
+        )
+        .expect_err("viewer-json histogram flag must fail before reading input");
+
+        assert_eq!(
+            err.summary(),
+            "dump: --opcode-histogram is only supported with --format json"
+        );
+    }
+
+    #[test]
+    fn dump_rejects_duplicate_opcode_histogram() {
+        let err = dispatch(
+            "missing.eldr",
+            &[
+                "--opcode-histogram".to_string(),
+                "--opcode-histogram".to_string(),
+            ],
+        )
+        .expect_err("duplicate histogram flag must fail before reading input");
+
+        assert_eq!(
+            err.summary(),
+            "dump: --opcode-histogram may only be specified once"
+        );
+    }
+
+    #[test]
+    fn dump_rejects_peephole_candidates_with_viewer_json() {
+        let err = dispatch(
+            "missing.eldr",
+            &[
+                "--format".to_string(),
+                "viewer-json".to_string(),
+                "--peephole-candidates".to_string(),
+            ],
+        )
+        .expect_err("viewer-json peephole flag must fail before reading input");
+
+        assert_eq!(
+            err.summary(),
+            "dump: --peephole-candidates is only supported with --format json"
+        );
+    }
+
+    #[test]
+    fn dump_rejects_duplicate_peephole_candidates() {
+        let err = dispatch(
+            "missing.eldr",
+            &[
+                "--peephole-candidates".to_string(),
+                "--peephole-candidates".to_string(),
+            ],
+        )
+        .expect_err("duplicate peephole flag must fail before reading input");
+
+        assert_eq!(
+            err.summary(),
+            "dump: --peephole-candidates may only be specified once"
+        );
+    }
+}
+
 fn function_end_pc(bytecode: &Bytecode, entry: &FunctionEntry) -> usize {
     if entry.end_pc > entry.entry_pc {
         return entry.end_pc as usize;
@@ -694,37 +837,4 @@ fn opcode_source_for_pc(bytecode: &Bytecode, pc: usize) -> Option<OpcodeSource> 
                 .find(|entry| entry.opcode_index as usize == pc)
         })
         .cloned()
-}
-
-fn surface_strip_global_prefixes(value: &mut Value) {
-    match value {
-        Value::String(text) => {
-            if let Some(stripped) = text.strip_prefix("Global::") {
-                *text = stripped.to_string();
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                surface_strip_global_prefixes(item);
-            }
-        }
-        Value::Object(map) => {
-            let keys = map.keys().cloned().collect::<Vec<_>>();
-            for key in keys {
-                let mut item = map
-                    .remove(&key)
-                    .expect("json object key should still exist during surface rewrite");
-                surface_strip_global_prefixes(&mut item);
-                let surface_key = key
-                    .strip_prefix("Global::")
-                    .unwrap_or(key.as_str())
-                    .to_string();
-                map.insert(surface_key, item);
-            }
-            for item in map.values_mut() {
-                surface_strip_global_prefixes(item);
-            }
-        }
-        _ => {}
-    }
 }

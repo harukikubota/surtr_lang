@@ -94,6 +94,18 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         string_range_literal_typechecks_to_result_list_string as fn(),
     ),
     (
+        "hash_map_literal_typechecks_string_key_expressions",
+        hash_map_literal_typechecks_string_key_expressions as fn(),
+    ),
+    (
+        "hash_map_literal_rejects_non_string_keys",
+        hash_map_literal_rejects_non_string_keys as fn(),
+    ),
+    (
+        "hash_map_literal_rejects_mixed_value_types",
+        hash_map_literal_rejects_mixed_value_types as fn(),
+    ),
+    (
         "match_string_requires_empty_and_uncons_arms_for_exhaustiveness",
         match_string_requires_empty_and_uncons_arms_for_exhaustiveness as fn(),
     ),
@@ -812,6 +824,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         user_function_call_rejects_mixed_named_and_positional_args as fn(),
     ),
     (
+        "user_function_call_rejects_duplicate_named_arg",
+        user_function_call_rejects_duplicate_named_arg as fn(),
+    ),
+    (
         "impl_self_rebinding_allows_self_type",
         impl_self_rebinding_allows_self_type as fn(),
     ),
@@ -824,8 +840,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         deferror_show_type_mismatch_points_to_show_expression_span as fn(),
     ),
     (
-        "operator_and_numeric_trait_calls_typecheck_with_static_dispatch",
-        operator_and_numeric_trait_calls_typecheck_with_static_dispatch as fn(),
+        "operator_traits_and_concrete_numeric_helpers_typecheck",
+        operator_traits_and_concrete_numeric_helpers_typecheck as fn(),
     ),
     (
         "duration_operator_traits_dispatch_to_surtr_impls",
@@ -836,12 +852,28 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         bounded_add_generics_specialize_without_pending_trait_calls as fn(),
     ),
     (
+        "range_duration_comparisons_specialize_without_pending_trait_calls",
+        range_duration_comparisons_specialize_without_pending_trait_calls as fn(),
+    ),
+    (
+        "generic_struct_constructor_calls_remain_polymorphic_within_closure_body",
+        generic_struct_constructor_calls_remain_polymorphic_within_closure_body as fn(),
+    ),
+    (
+        "generic_struct_constructor_calls_remain_polymorphic_within_one_source",
+        generic_struct_constructor_calls_remain_polymorphic_within_one_source as fn(),
+    ),
+    (
         "scar_session_preserves_trait_registry_across_chunks",
         scar_session_preserves_trait_registry_across_chunks as fn(),
     ),
     (
         "add_trait_mismatch_lists_available_implementations",
         add_trait_mismatch_lists_available_implementations as fn(),
+    ),
+    (
+        "trait_method_call_rejects_named_arguments_without_panic",
+        trait_method_call_rejects_named_arguments_without_panic as fn(),
     ),
     (
         "add_trait_missing_receiver_lists_available_implementations",
@@ -868,8 +900,28 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         encode_helper_typechecks_as_generic_trait_call as fn(),
     ),
     (
+        "json_value_encode_source_alias_typechecks",
+        json_value_encode_source_alias_typechecks as fn(),
+    ),
+    (
         "decode_helper_typechecks_format_and_target_witnesses",
         decode_helper_typechecks_format_and_target_witnesses as fn(),
+    ),
+    (
+        "decode_helper_inside_decode_impl_dispatches_by_receiver_and_witnesses",
+        decode_helper_inside_decode_impl_dispatches_by_receiver_and_witnesses as fn(),
+    ),
+    (
+        "decode_helper_allows_same_pattern_recursive_dispatch",
+        decode_helper_allows_same_pattern_recursive_dispatch as fn(),
+    ),
+    (
+        "encode_helper_dispatches_to_receiver_impl_with_json_value_target",
+        encode_helper_dispatches_to_receiver_impl_with_json_value_target as fn(),
+    ),
+    (
+        "encode_helper_allows_same_pattern_recursive_dispatch",
+        encode_helper_allows_same_pattern_recursive_dispatch as fn(),
     ),
     (
         "from_helper_suggests_try_from_when_only_fallible_impl_exists",
@@ -1416,6 +1468,29 @@ fn string_range_literal_typechecks_to_result_list_string() {
         rhs.ty,
         Ty::Result(Box::new(Ty::List(Box::new(Ty::Str))), Box::new(Ty::Error))
     );
+}
+
+fn hash_map_literal_typechecks_string_key_expressions() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"raw = " talk "
+scores = hash!["talk" => 80, String::trim(raw) => 90]"#,
+    );
+    let typed = typecheck(resolved).expect("typecheck should succeed");
+    let rhs = typed_bind_rhs(&typed, "scores");
+    assert_eq!(rhs.ty, Ty::Enum("HashMap".into(), vec![Ty::Int]));
+    assert!(matches!(rhs.node, TypedInner::HashMapLiteral(_)));
+}
+
+fn hash_map_literal_rejects_non_string_keys() {
+    let resolved = resolve_with_builtin_prelude(r#"scores = hash![1 => "bad"]"#);
+    let err = typecheck(resolved).expect_err("typecheck should fail");
+    assert!(err.message.contains("HashMap literal key must be String"));
+}
+
+fn hash_map_literal_rejects_mixed_value_types() {
+    let resolved = resolve_with_builtin_prelude(r#"scores = hash!["ok" => 1, "bad" => "two"]"#);
+    let err = typecheck(resolved).expect_err("typecheck should fail");
+    assert!(err.message.contains("expected Int, got String"));
 }
 
 fn match_string_requires_empty_and_uncons_arms_for_exhaustiveness() {
@@ -2427,7 +2502,7 @@ fn slash_operator_rejects_numeric_division_and_points_to_safe_div() {
     assert!(err
         .hint
         .as_deref()
-        .is_some_and(|hint| hint.contains("safe_div")));
+        .is_some_and(|hint| hint.contains("Int::safe_div")));
 }
 
 fn facet_tuple_type_root_without_context_can_bind_as_deferred_path() {
@@ -4725,6 +4800,15 @@ value = add3(1, y: 2, z: 3)"#,
         .contains("Cannot mix positional and named arguments"));
 }
 
+fn user_function_call_rejects_duplicate_named_arg() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"def add2(x: Int, y: Int) -> Int { x + y }
+value = add2(x: 1, x: 2)"#,
+    );
+    let err = typecheck(resolved).expect_err("duplicate named arg should fail");
+    assert!(err.message.contains("Duplicate argument 'x'"));
+}
+
 fn impl_self_rebinding_allows_self_type() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct User {
@@ -4782,11 +4866,11 @@ fn deferror_show_type_mismatch_points_to_show_expression_span() {
     assert_eq!(err.span.start, literal_start);
 }
 
-fn operator_and_numeric_trait_calls_typecheck_with_static_dispatch() {
+fn operator_traits_and_concrete_numeric_helpers_typecheck() {
     let typed = typecheck_with_builtin_prelude(
         r#"sum = 1 + 2
-quot = Numeric::safe_div(8, 2)
-largest = Numeric::max(1.5, 2.5)"#,
+quot = Float::safe_div(8.0, 2.0)
+largest = Float::max(1.5, 2.5)"#,
     );
 
     let trait_calls = typed
@@ -4805,6 +4889,7 @@ largest = Numeric::max(1.5, 2.5)"#,
         })
         .collect::<Vec<_>>();
 
+    assert_eq!(trait_calls.len(), 1);
     assert!(trait_calls
         .iter()
         .any(|(trait_name, method_name, dispatch)| {
@@ -4815,30 +4900,6 @@ largest = Numeric::max(1.5, 2.5)"#,
                     scar::typed::TraitDispatch::Static(scar::typed::TraitDispatchTarget::BinOp(
                         spire::ast::BinOp::Add
                     ))
-                )
-        }));
-    assert!(trait_calls
-        .iter()
-        .any(|(trait_name, method_name, dispatch)| {
-            *trait_name == "Numeric"
-                && *method_name == "safe_div"
-                && matches!(
-                    dispatch,
-                    scar::typed::TraitDispatch::Static(
-                        scar::typed::TraitDispatchTarget::Builtin(name)
-                    ) if name == "safe_div"
-                )
-        }));
-    assert!(trait_calls
-        .iter()
-        .any(|(trait_name, method_name, dispatch)| {
-            *trait_name == "Numeric"
-                && *method_name == "max"
-                && matches!(
-                    dispatch,
-                    scar::typed::TraitDispatch::Static(
-                        scar::typed::TraitDispatchTarget::UserFunction { name, .. }
-                    ) if name == "Float::max"
                 )
         }));
 }
@@ -5020,6 +5081,9 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             | TypedInner::ListLiteral(items)
             | TypedInner::ConstructorCall(_, items)
             | TypedInner::StructLit(_, items) => items.iter().any(has_pending_trait_call),
+            TypedInner::HashMapLiteral(entries) => entries
+                .iter()
+                .any(|(key, value)| has_pending_trait_call(key) || has_pending_trait_call(value)),
             TypedInner::If(cond, then_branch, else_branch) => {
                 has_pending_trait_call(cond)
                     || has_pending_trait_call(then_branch)
@@ -5088,6 +5152,250 @@ b = double(1.5)"#,
     assert!(!typed.iter().any(has_pending_trait_call));
 }
 
+fn range_duration_comparisons_specialize_without_pending_trait_calls() {
+    fn has_pending_trait_call(node: &TypedNode) -> bool {
+        match &node.node {
+            TypedInner::TraitCall { dispatch, args, .. } => {
+                matches!(dispatch, scar::typed::TraitDispatch::Pending)
+                    || args.iter().any(has_pending_trait_call)
+            }
+            TypedInner::App(func, args)
+            | TypedInner::InjectCall(func, args)
+            | TypedInner::Capture(func, args) => {
+                has_pending_trait_call(func) || args.iter().any(has_pending_trait_call)
+            }
+            TypedInner::Block(stmts) => stmts.iter().any(has_pending_trait_call),
+            TypedInner::Bind(_, rhs)
+            | TypedInner::SafeBind(_, rhs)
+            | TypedInner::Semi(rhs)
+            | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
+            TypedInner::ProcessContextHandler { .. } => false,
+            TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
+            TypedInner::SupervisorAdopt { pid, .. } => has_pending_trait_call(pid),
+            TypedInner::SupervisorStatus { .. } => false,
+            TypedInner::SupervisorWorkers { init, strategy, .. } => {
+                has_pending_trait_call(init) || has_pending_trait_call(strategy)
+            }
+            TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_) => false,
+            TypedInner::FacetView { source, .. } => has_pending_trait_call(source),
+            TypedInner::FacetSet { source, value, .. } => {
+                has_pending_trait_call(source) || has_pending_trait_call(value)
+            }
+            TypedInner::FacetOver {
+                source, update_fun, ..
+            } => has_pending_trait_call(source) || has_pending_trait_call(update_fun),
+            TypedInner::BinOp(_, left, right)
+            | TypedInner::Pipe(left, right)
+            | TypedInner::Compose(_, left, right)
+            | TypedInner::ListCons(left, right) => {
+                has_pending_trait_call(left) || has_pending_trait_call(right)
+            }
+            TypedInner::TupleLiteral(items)
+            | TypedInner::ListLiteral(items)
+            | TypedInner::ConstructorCall(_, items)
+            | TypedInner::StructLit(_, items) => items.iter().any(has_pending_trait_call),
+            TypedInner::HashMapLiteral(entries) => entries
+                .iter()
+                .any(|(key, value)| has_pending_trait_call(key) || has_pending_trait_call(value)),
+            TypedInner::If(cond, then_branch, else_branch) => {
+                has_pending_trait_call(cond)
+                    || has_pending_trait_call(then_branch)
+                    || else_branch.as_deref().is_some_and(has_pending_trait_call)
+            }
+            TypedInner::Assert(cond, err) => {
+                has_pending_trait_call(cond) || has_pending_trait_call(err)
+            }
+            TypedInner::Ensure(value, pred, err) => {
+                has_pending_trait_call(value)
+                    || has_pending_trait_call(pred)
+                    || has_pending_trait_call(err)
+            }
+            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
+                has_pending_trait_call(value) || has_pending_trait_call(err)
+            }
+            TypedInner::RecoverKind(value, marker, handler) => {
+                has_pending_trait_call(value)
+                    || has_pending_trait_call(marker)
+                    || has_pending_trait_call(handler)
+            }
+            TypedInner::Match(scrutinee, arms) => {
+                has_pending_trait_call(scrutinee)
+                    || arms.iter().any(|arm| {
+                        arm.guard.as_ref().is_some_and(has_pending_trait_call)
+                            || has_pending_trait_call(&arm.body)
+                    })
+            }
+            TypedInner::InterpolatedStr(parts) => parts.iter().any(|part| match part {
+                scar::typed::TypedInterpolatedPart::Text(_) => false,
+                scar::typed::TypedInterpolatedPart::Expr(expr) => has_pending_trait_call(expr),
+            }),
+            TypedInner::Dbg(args) => args.iter().any(|arg| has_pending_trait_call(&arg.expr)),
+            TypedInner::Def(_, _, _, _, _, body, _)
+            | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
+            | TypedInner::Closure(_, _, body) => has_pending_trait_call(body),
+            TypedInner::Lit(_)
+            | TypedInner::Var(_)
+            | TypedInner::ListNil
+            | TypedInner::DeferrorDef(..)
+            | TypedInner::EnumDef(..)
+            | TypedInner::TraitDef(..)
+            | TypedInner::TraitImplDef(..)
+            | TypedInner::BuiltinExtractorDecl(..)
+            | TypedInner::StructDef(..)
+            | TypedInner::RecordDef(..) => false,
+        }
+    }
+
+    let typed = typecheck_with_builtin_prelude(
+        r#"left = Range(10ms, 20ms)
+right = Range(10ms, 30ms)
+same = Range(10ms, 20ms)
+ordering = compare(left, right)
+eq = left == same
+neq = left != right"#,
+    );
+
+    assert!(!typed.iter().any(has_pending_trait_call));
+}
+
+fn generic_struct_constructor_calls_remain_polymorphic_within_one_source() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defstruct Box<$A> {
+  value: $A,
+}
+impl Box {
+  def new<$A>(value: $A) -> Box<$A> {
+    Box { value: value }
+  }
+}
+a = Box(1)
+b = Box(10ms)"#,
+    );
+
+    let mut bindings = typed.iter().filter_map(|node| match &node.node {
+        TypedInner::Bind(TypedPattern::Var(ty, id), rhs) if id.name == "a" || id.name == "b" => {
+            Some((id.name.as_str(), ty, rhs.as_ref()))
+        }
+        _ => None,
+    });
+
+    let a = bindings.next().expect("expected a binding");
+    let b = bindings.next().expect("expected b binding");
+
+    assert_eq!(a.0, "a");
+    assert!(matches!(
+        a.1,
+        Ty::Struct(name, fields)
+            if name == "Global::Box"
+                && matches!(fields.as_slice(), [(field, Ty::Int)] if field == "value")
+    ));
+    assert!(matches!(
+        a.2.ty,
+        Ty::Struct(ref name, ref fields)
+            if name == "Global::Box"
+                && matches!(fields.as_slice(), [(field, Ty::Int)] if field == "value")
+    ));
+
+    assert_eq!(b.0, "b");
+    assert!(matches!(
+        b.1,
+        Ty::Struct(name, fields)
+            if name == "Global::Box"
+                && matches!(fields.as_slice(), [(field, Ty::Struct(inner, _inner_fields))]
+                    if field == "value"
+                        && inner == "Duration")
+    ));
+    assert!(matches!(
+        b.2.ty,
+        Ty::Struct(ref name, ref fields)
+            if name == "Global::Box"
+                && matches!(fields.as_slice(), [(field, Ty::Struct(inner, _inner_fields))]
+                    if field == "value"
+                        && inner == "Duration")
+    ));
+}
+
+fn generic_struct_constructor_calls_remain_polymorphic_within_closure_body() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"factory = {||
+  raw = Range(3, 1)
+  dur = Range(10ms, 20ms)
+  (raw, dur)
+}"#,
+    );
+
+    let factory = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(TypedPattern::Var(_, id), rhs) if id.name == "factory" => Some(rhs),
+            _ => None,
+        })
+        .expect("expected factory binding");
+
+    let TypedInner::Closure(_, _, body) = &factory.node else {
+        panic!("expected closure");
+    };
+    let TypedInner::Block(stmts) = &body.node else {
+        panic!("expected closure body block");
+    };
+
+    let mut range_bindings = stmts.iter().filter_map(|node| match &node.node {
+        TypedInner::Bind(TypedPattern::Var(ty, id), rhs)
+            if id.name == "raw" || id.name == "dur" =>
+        {
+            Some((id.name.as_str(), ty, rhs.as_ref()))
+        }
+        _ => None,
+    });
+
+    let raw = range_bindings.next().expect("expected raw binding");
+    let dur = range_bindings.next().expect("expected dur binding");
+
+    assert_eq!(raw.0, "raw");
+    assert!(matches!(
+        raw.1,
+        Ty::Struct(name, fields)
+            if (name == "Range" || name == "Global::Range")
+                && matches!(fields.as_slice(), [(min, Ty::Int), (max, Ty::Int)]
+                    if min == "min" && max == "max")
+    ));
+    assert!(matches!(
+        raw.2.ty,
+        Ty::Struct(ref name, ref fields)
+            if (name == "Range" || name == "Global::Range")
+                && matches!(fields.as_slice(), [(min, Ty::Int), (max, Ty::Int)]
+                    if min == "min" && max == "max")
+    ));
+
+    assert_eq!(dur.0, "dur");
+    assert!(matches!(
+        dur.1,
+        Ty::Struct(name, fields)
+            if (name == "Range" || name == "Global::Range")
+                && matches!(
+                    fields.as_slice(),
+                    [(min, Ty::Struct(inner_min, _)), (max, Ty::Struct(inner_max, _))]
+                        if min == "min"
+                            && max == "max"
+                            && inner_min == "Duration"
+                            && inner_max == "Duration"
+                )
+    ));
+    assert!(matches!(
+        dur.2.ty,
+        Ty::Struct(ref name, ref fields)
+            if (name == "Range" || name == "Global::Range")
+                && matches!(
+                    fields.as_slice(),
+                    [(min, Ty::Struct(inner_min, _)), (max, Ty::Struct(inner_max, _))]
+                        if min == "min"
+                            && max == "max"
+                            && inner_min == "Duration"
+                            && inner_max == "Duration"
+                )
+    ));
+}
+
 fn scar_session_preserves_trait_registry_across_chunks() {
     let mut session = session_from_cached_std_prelude();
     let user_resolved = resolve_with_builtin_prelude("value = 1 + 2");
@@ -5122,6 +5430,14 @@ fn add_trait_mismatch_lists_available_implementations() {
     let hint = err.hint.as_deref().expect("trait summary hint");
     assert!(hint.contains("Call target signature: Add::add"));
     assert!(hint.contains("Add is implemented for: Duration, Float, Int"));
+}
+
+fn trait_method_call_rejects_named_arguments_without_panic() {
+    let resolved = resolve_with_builtin_prelude("value = Add::add(self: 1, rhs: 2)");
+    let err = typecheck(resolved).expect_err("named trait method args should fail");
+    assert!(err
+        .message
+        .contains("Add::add does not accept named arguments"));
 }
 
 fn add_trait_missing_receiver_lists_available_implementations() {
@@ -5223,7 +5539,7 @@ fn try_from_helper_typechecks_as_generic_trait_call() {
 }
 
 fn encode_helper_typechecks_as_generic_trait_call() {
-    let typed = typecheck_with_builtin_prelude(r#"value = encode("hello", JsonFormat)"#);
+    let typed = typecheck_with_builtin_prelude(r#"value = Encode::encode("hello", JsonValue)"#);
     let rhs = typed
         .iter()
         .find_map(|node| match &node.node {
@@ -5244,9 +5560,9 @@ fn encode_helper_typechecks_as_generic_trait_call() {
             args,
             ..
         } => {
-            assert_eq!(trait_name, "Encode<JsonFormat>");
+            assert_eq!(trait_name, "Encode<JsonValue>");
             assert_eq!(method_name, "encode");
-            assert_eq!(name, "Encode<JsonFormat>::String::encode");
+            assert_eq!(name, "Encode<JsonValue>::String::encode");
             assert_eq!(receiver_ty, &scar::types::Ty::Str);
             assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
             assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
@@ -5255,8 +5571,22 @@ fn encode_helper_typechecks_as_generic_trait_call() {
     }
 }
 
+fn json_value_encode_source_alias_typechecks() {
+    let typed = typecheck_with_builtin_prelude(r#"value = JsonValue::encode("hello")"#);
+    let rhs = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+            _ => None,
+        })
+        .expect("bind rhs should exist");
+    assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
+}
+
 fn decode_helper_typechecks_format_and_target_witnesses() {
-    let typed = typecheck_with_builtin_prelude(r#"value = decode("null", JsonFormat, JsonValue)"#);
+    let typed = typecheck_with_builtin_prelude(
+        r#"value = JsonValue::decode(JsonValue::String("ok"), String)"#,
+    );
     let rhs = typed
         .iter()
         .find_map(|node| match &node.node {
@@ -5277,15 +5607,198 @@ fn decode_helper_typechecks_format_and_target_witnesses() {
             args,
             ..
         } => {
-            assert_eq!(trait_name, "Decode<JsonFormat, JsonValue>");
+            assert_eq!(trait_name, "Decode<String>");
             assert_eq!(method_name, "decode");
-            assert_eq!(name, "Decode<JsonFormat, JsonValue>::String::decode");
-            assert_eq!(receiver_ty, &scar::types::Ty::Str);
+            assert_eq!(name, "Decode<String>::JsonValue::decode");
+            assert!(
+                matches!(receiver_ty, scar::types::Ty::Enum(name, _) if name.ends_with("JsonValue"))
+            );
             assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
-            assert!(matches!(args[2].ty, scar::types::Ty::TypeRef(_)));
             assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
         }
         other => panic!("expected trait call, got {:?}", other),
+    }
+}
+
+fn decode_helper_inside_decode_impl_dispatches_by_receiver_and_witnesses() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord JsonSpecConfig(name: String, entrypoint: String)
+
+impl Decode<JsonSpecConfig> for JsonValue {
+  def decode(self: Self, to: TypeRef<JsonSpecConfig>) -> Result<JsonSpecConfig, Error> {
+    name_json =? Json::get(self, "name")
+    name =? JsonValue::decode(name_json, String)
+    entry_json =? Json::get(self, "entrypoint")
+    entry =? entry_json |> JsonValue::decode(String)
+    Ok(JsonSpecConfig(name, entry))
+  }
+}
+
+cfg = JsonValue::decode(JsonValue::Null, JsonSpecConfig)"#,
+    );
+    let mut calls = Vec::new();
+    for node in &typed {
+        collect_decode_trait_calls(node, &mut calls);
+    }
+    let string_decode_calls = calls
+        .iter()
+        .filter(|(trait_name, dispatch_name)| {
+            trait_name.as_str() == "Decode<String>"
+                && dispatch_name
+                    .as_deref()
+                    .is_some_and(|name| name.ends_with("JsonValue::decode"))
+        })
+        .count();
+    assert_eq!(
+        string_decode_calls, 2,
+        "nested direct and pipeline decode calls should dispatch to String decoder: {calls:?}"
+    );
+    assert!(
+        calls.iter().any(|(trait_name, dispatch_name)| {
+            trait_name.as_str() == "Decode<JsonSpecConfig>"
+                && dispatch_name
+                    .as_deref()
+                    .is_some_and(|name| name.ends_with("JsonValue::decode"))
+        }),
+        "custom Config decoder should still be registered as its own dispatch target: {calls:?}"
+    );
+}
+
+fn decode_helper_allows_same_pattern_recursive_dispatch() {
+    typecheck_with_builtin_prelude(
+        r#"defrecord JsonSpecRecursive(value: String)
+
+impl Decode<JsonSpecRecursive> for JsonValue {
+  def decode(self: Self, to: TypeRef<JsonSpecRecursive>) -> Result<JsonSpecRecursive, Error> {
+    JsonValue::decode(self, JsonSpecRecursive)
+  }
+}"#,
+    );
+}
+
+fn encode_helper_dispatches_to_receiver_impl_with_json_value_target() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord JsonSpecConfig(name: String, entrypoint: String)
+
+impl Encode<JsonValue> for JsonSpecConfig {
+  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+    Ok(JsonValue::String(self.name))
+  }
+}
+
+json = Encode::encode(JsonSpecConfig("surtr", "boot"), JsonValue)"#,
+    );
+    let rhs = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
+            _ => None,
+        })
+        .expect("bind rhs should exist");
+    match &rhs.node {
+        TypedInner::TraitCall {
+            trait_name,
+            method_name,
+            dispatch:
+                scar::typed::TraitDispatch::Static(scar::typed::TraitDispatchTarget::UserFunction {
+                    name,
+                    ..
+                }),
+            args,
+            ..
+        } => {
+            assert_eq!(trait_name, "Encode<JsonValue>");
+            assert_eq!(method_name, "encode");
+            assert_eq!(name, "Encode<JsonValue>::Global::JsonSpecConfig::encode");
+            assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
+        }
+        other => panic!("expected trait call, got {:?}", other),
+    }
+}
+
+fn encode_helper_allows_same_pattern_recursive_dispatch() {
+    typecheck_with_builtin_prelude(
+        r#"defrecord JsonSpecRecursive(value: String)
+
+impl Encode<JsonValue> for JsonSpecRecursive {
+  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+    Encode::encode(self, JsonValue)
+  }
+}"#,
+    );
+}
+
+fn collect_decode_trait_calls(node: &TypedNode, calls: &mut Vec<(String, Option<String>)>) {
+    match &node.node {
+        TypedInner::TraitCall {
+            trait_name,
+            method_name,
+            dispatch,
+            args,
+            ..
+        } => {
+            if method_name == "decode" {
+                calls.push((trait_name.clone(), trait_dispatch_name(dispatch)));
+            }
+            for arg in args {
+                collect_decode_trait_calls(arg, calls);
+            }
+        }
+        TypedInner::App(func, args) | TypedInner::InjectCall(func, args) => {
+            collect_decode_trait_calls(func, calls);
+            for arg in args {
+                collect_decode_trait_calls(arg, calls);
+            }
+        }
+        TypedInner::Block(stmts) => {
+            for stmt in stmts {
+                collect_decode_trait_calls(stmt, calls);
+            }
+        }
+        TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs) => {
+            collect_decode_trait_calls(rhs, calls);
+        }
+        TypedInner::Def(_, _, _, _, _, body, _)
+        | TypedInner::ExtractorDef(_, _, _, _, _, body, _) => {
+            collect_decode_trait_calls(body, calls);
+        }
+        TypedInner::Closure(_, _, body)
+        | TypedInner::Semi(body)
+        | TypedInner::FieldAccess(body, _) => {
+            collect_decode_trait_calls(body, calls);
+        }
+        TypedInner::Pipe(left, right)
+        | TypedInner::BinOp(_, left, right)
+        | TypedInner::Compose(_, left, right)
+        | TypedInner::ListCons(left, right) => {
+            collect_decode_trait_calls(left, calls);
+            collect_decode_trait_calls(right, calls);
+        }
+        TypedInner::ConstructorCall(_, args)
+        | TypedInner::ListLiteral(args)
+        | TypedInner::TupleLiteral(args) => {
+            for arg in args {
+                collect_decode_trait_calls(arg, calls);
+            }
+        }
+        TypedInner::If(cond, then_branch, else_branch) => {
+            collect_decode_trait_calls(cond, calls);
+            collect_decode_trait_calls(then_branch, calls);
+            if let Some(else_branch) = else_branch {
+                collect_decode_trait_calls(else_branch, calls);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn trait_dispatch_name(dispatch: &scar::typed::TraitDispatch) -> Option<String> {
+    match dispatch {
+        scar::typed::TraitDispatch::Static(scar::typed::TraitDispatchTarget::UserFunction {
+            name,
+            ..
+        }) => Some(name.clone()),
+        _ => None,
     }
 }
 

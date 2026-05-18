@@ -1,7 +1,10 @@
+#[cfg(test)]
+use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::panic;
-use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use diagnostics::{DiagnosticSpec, SourceId, SourceRegistry};
 use eldr::builtin::inspect_value;
@@ -13,9 +16,10 @@ use scar::typed::{
     TypedInner, TypedNode, TypedPattern,
 };
 use scar::types::Ty;
+use serde::{Deserialize, Serialize};
 use sigil::error::ResolveError;
 use sindr::builtin::BUILTIN_METAS;
-use sindr::ir::{DocEntry, DocKind};
+use sindr::ir::{DocEntry, DocKind, SignatureEntry};
 use sindr::policy::CompileUnitKind;
 use spire::ast::{Ast, AstTy, BinOp, ImportSpec, RecordLitArg, Span};
 
@@ -101,8 +105,11 @@ const COMPARE_METHOD_DOC_TARGETS: &[(&str, &str)] = &[
 const REPL_UNRESOLVED_TYPE_MESSAGE: &str = "Cannot persist binding with unresolved type variable.";
 const REPL_UNRESOLVED_TYPE_HINT: &str =
     "Add a type annotation or use the value in a context that determines the success type.";
-
 const STAGE_PARSE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+fn duration_to_nanos(elapsed: Duration) -> u64 {
+    elapsed.as_nanos().min(u128::from(u64::MAX)) as u64
+}
 
 /// Error returned when loading a `.eldr` file into a REPL engine.
 #[derive(Debug)]
@@ -184,12 +191,6 @@ impl std::fmt::Display for ReplLoadError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-struct PreloadIncludeDirective {
-    file_path: String,
-    span: Span,
-}
-
 #[derive(Debug, Clone)]
 struct PreparedScriptPreload {
     file_name: String,
@@ -209,11 +210,13 @@ struct PreloadedChunkState {
     scar_checkpoint: scar::ScarCheckpoint,
     vm: eldr::InteractiveVm,
     docs: Vec<DocEntry>,
+    signatures: Vec<SignatureEntry>,
     process_metadata: BTreeMap<String, ReplProcessMetadata>,
     symbols: BTreeSet<String>,
     auto_import_modules: BTreeSet<String>,
     script_runtime_inputs: Vec<String>,
     script_preload_docs: Vec<DocEntry>,
+    script_preload_signatures: Vec<SignatureEntry>,
     import_records: Vec<ReplImportRecord>,
     def_records: Vec<ReplDefRecord>,
 }
@@ -286,6 +289,290 @@ struct ReplDefRecord {
     arity: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplCompletionKind {
+    Variable,
+    TypeConstructor,
+    TypePath,
+    FunctionCall,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplCompletionCandidate {
+    pub label: String,
+    pub replacement: String,
+    pub kind: ReplCompletionKind,
+    pub detail: Option<String>,
+    pub documentation: Option<String>,
+    pub replace_start: usize,
+    pub replace_end: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplSignatureHelp {
+    pub lines: Vec<String>,
+    pub active_parameter: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompletionTelemetry {
+    pub input_event_to_ui_handler_ns: Option<u64>,
+    pub completion_queue_ns: Option<u64>,
+    pub completion_compute_ns: Option<u64>,
+    pub completion_apply_ns: Option<u64>,
+    pub completion_render_ns: Option<u64>,
+    pub total_key_to_visible_response_ns: Option<u64>,
+}
+
+impl CompletionTelemetry {
+    pub fn record_input_event_to_ui_handler(&mut self, elapsed: Duration) {
+        self.input_event_to_ui_handler_ns = Some(duration_to_nanos(elapsed));
+    }
+
+    pub fn record_completion_compute(&mut self, elapsed: Duration) {
+        self.completion_compute_ns = Some(duration_to_nanos(elapsed));
+    }
+
+    pub fn record_completion_queue(&mut self, elapsed: Duration) {
+        self.completion_queue_ns = Some(duration_to_nanos(elapsed));
+    }
+
+    pub fn record_completion_apply(&mut self, elapsed: Duration) {
+        self.completion_apply_ns = Some(duration_to_nanos(elapsed));
+    }
+
+    pub fn record_completion_render(&mut self, elapsed: Duration) {
+        self.completion_render_ns = Some(duration_to_nanos(elapsed));
+    }
+
+    pub fn record_total_key_to_visible_response(&mut self, elapsed: Duration) {
+        self.total_key_to_visible_response_ns = Some(duration_to_nanos(elapsed));
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReplCompletion {
+    pub candidates: Vec<ReplCompletionCandidate>,
+    pub signature: Option<ReplSignatureHelp>,
+    pub telemetry: CompletionTelemetry,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReplCompletionContext {
+    index: surtr_analysis::SemanticIndex,
+    callable_signatures: BTreeMap<String, (String, String)>,
+}
+
+impl ReplCompletionContext {
+    pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
+        let started = Instant::now();
+        let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
+        if !completion_allowed_at_cursor(input, cursor) {
+            let mut telemetry = CompletionTelemetry::default();
+            telemetry.record_completion_compute(started.elapsed());
+            return ReplCompletion {
+                candidates: Vec::new(),
+                signature: None,
+                telemetry,
+            };
+        }
+        let (replace_start, replace_end, prefix) = completion_token(input, cursor);
+        let call_context = completion_call_context(input, cursor);
+        let signature = call_context
+            .as_ref()
+            .and_then(|context| self.signature_help_for_call(context));
+
+        if call_context.is_none() && prefix.is_empty() {
+            let mut telemetry = CompletionTelemetry::default();
+            telemetry.record_completion_compute(started.elapsed());
+            return ReplCompletion {
+                candidates: Vec::new(),
+                signature,
+                telemetry,
+            };
+        }
+
+        let completion_request = surtr_analysis::CompletionRequest {
+            index: &self.index,
+            source: input,
+            cursor,
+        };
+        let completion = if let Some(context) = call_context.as_ref() {
+            let expected_ty = signature
+                .as_ref()
+                .and_then(|_| self.expected_param_type_for_call(context));
+            let mut completion = surtr_analysis::complete_repl_prefix(
+                completion_request,
+                surtr_analysis::CompletionScope::VariablesOnly,
+            );
+            completion.candidates = surtr_analysis::rank_completion_candidates_by_expected_type(
+                completion.candidates,
+                expected_ty.as_deref(),
+                ReplEngine::parameter_type_accepts_arg_type,
+            );
+            if completion.candidates.is_empty() && expected_ty.is_none() && !prefix.is_empty() {
+                surtr_analysis::complete_repl_prefix(
+                    completion_request,
+                    surtr_analysis::CompletionScope::All,
+                )
+            } else {
+                completion
+            }
+        } else {
+            surtr_analysis::complete_repl_prefix(
+                completion_request,
+                surtr_analysis::CompletionScope::All,
+            )
+        };
+
+        let mut candidates = completion
+            .candidates
+            .into_iter()
+            .map(ReplEngine::repl_completion_candidate_from_analysis)
+            .collect::<Vec<_>>();
+        if call_context.is_none() {
+            self.inject_special_repl_candidates(
+                &mut candidates,
+                &prefix,
+                replace_start,
+                replace_end,
+            );
+        }
+        let mut telemetry = CompletionTelemetry::default();
+        telemetry.record_completion_compute(started.elapsed());
+        ReplCompletion {
+            candidates,
+            signature,
+            telemetry,
+        }
+    }
+
+    pub fn should_request(input: &str, cursor: usize) -> bool {
+        let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
+        if !completion_allowed_at_cursor(input, cursor) {
+            return false;
+        }
+        let (_, _, prefix) = completion_token(input, cursor);
+        completion_call_context(input, cursor).is_some() || !prefix.is_empty()
+    }
+
+    fn signature_help_for_call(
+        &self,
+        context: &CompletionCallContext,
+    ) -> Option<ReplSignatureHelp> {
+        let (qualified_name, signature) =
+            self.callable_signature_for_completion(&context.callee)?;
+        let rendered =
+            ReplEngine::render_signature_with_qualified_name(&qualified_name, signature.clone());
+        Some(ReplSignatureHelp {
+            lines: vec![highlight_signature_parameter(
+                &rendered,
+                context.active_parameter,
+            )],
+            active_parameter: Some(context.active_parameter),
+        })
+    }
+
+    fn inject_special_repl_candidates(
+        &self,
+        candidates: &mut Vec<ReplCompletionCandidate>,
+        prefix: &str,
+        replace_start: usize,
+        replace_end: usize,
+    ) {
+        for (label, replacement) in [("true", "True"), ("false", "False")] {
+            if !label.starts_with(prefix) {
+                continue;
+            }
+            if candidates
+                .iter()
+                .any(|candidate| candidate.label == label && candidate.replacement == label)
+            {
+                continue;
+            }
+            if candidates
+                .iter()
+                .any(|candidate| candidate.label == label && candidate.replacement == replacement)
+            {
+                continue;
+            }
+            candidates.push(ReplCompletionCandidate {
+                label: label.to_string(),
+                replacement: replacement.to_string(),
+                kind: ReplCompletionKind::FunctionCall,
+                detail: self.special_repl_candidate_detail(replacement),
+                documentation: None,
+                replace_start,
+                replace_end,
+            });
+        }
+        candidates.sort_by(|left, right| {
+            Self::repl_completion_kind_rank(&left.kind)
+                .cmp(&Self::repl_completion_kind_rank(&right.kind))
+                .then_with(|| left.label.cmp(&right.label))
+                .then_with(|| left.replacement.cmp(&right.replacement))
+        });
+    }
+
+    fn repl_completion_kind_rank(kind: &ReplCompletionKind) -> u8 {
+        match kind {
+            ReplCompletionKind::Variable => 0,
+            ReplCompletionKind::TypeConstructor => 1,
+            ReplCompletionKind::TypePath => 2,
+            ReplCompletionKind::FunctionCall => 3,
+        }
+    }
+
+    fn special_repl_candidate_detail(&self, replacement: &str) -> Option<String> {
+        self.callable_signatures
+            .get(replacement)
+            .map(|(qualified_name, signature)| {
+                ReplEngine::render_signature_with_qualified_name(qualified_name, signature.clone())
+            })
+    }
+
+    fn expected_param_type_for_call(&self, context: &CompletionCallContext) -> Option<String> {
+        let (_qualified_name, signature) =
+            self.callable_signature_for_completion(&context.callee)?;
+        let types = ReplEngine::signature_param_types(signature)?;
+        types.get(context.active_parameter).cloned()
+    }
+
+    fn callable_signature_for_completion(&self, symbol: &str) -> Option<&(String, String)> {
+        self.callable_signatures
+            .get(symbol)
+            .or_else(|| {
+                self.callable_signatures
+                    .get(ReplEngine::canonical_symbol(symbol))
+            })
+            .or_else(|| {
+                symbol
+                    .rsplit("::")
+                    .next()
+                    .and_then(|tail| self.callable_signatures.get(tail))
+            })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_callable_signature_for_test(
+        &mut self,
+        label: &str,
+        qualified_name: &str,
+        signature: &str,
+    ) {
+        self.callable_signatures.insert(
+            label.to_string(),
+            (qualified_name.to_string(), signature.to_string()),
+        );
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompletionCallContext {
+    callee: String,
+    active_parameter: usize,
+}
+
 pub struct ReplEngine {
     sources: SourceRegistry,
     builtin_source_id: SourceId,
@@ -303,6 +590,7 @@ pub struct ReplEngine {
     result_metas: Vec<Option<forge::ChunkMeta>>,
     symbols: BTreeSet<String>,
     docs: Vec<DocEntry>,
+    signatures: Vec<SignatureEntry>,
     process_metadata: BTreeMap<String, ReplProcessMetadata>,
     auto_import_modules: BTreeSet<String>,
     reload_seed: ReplReloadSeed,
@@ -311,6 +599,9 @@ pub struct ReplEngine {
     binding_records: Vec<ReplBindingRecord>,
     import_records: Vec<ReplImportRecord>,
     def_records: Vec<ReplDefRecord>,
+    completion_context_cache: RefCell<Option<ReplCompletionContext>>,
+    #[cfg(test)]
+    completion_context_builds: Cell<usize>,
     startup_results: Vec<ReplResult>,
     error_display_mode: ErrorDisplayMode,
 }
@@ -353,6 +644,7 @@ impl ReplEngine {
                 .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
                 .collect(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
             reload_seed: ReplReloadSeed::Empty,
@@ -361,6 +653,9 @@ impl ReplEngine {
             binding_records: Vec::new(),
             import_records: Vec::new(),
             def_records: Vec::new(),
+            completion_context_cache: RefCell::new(None),
+            #[cfg(test)]
+            completion_context_builds: Cell::new(0),
             error_display_mode: ErrorDisplayMode::Full,
         };
         engine.bootstrap_std_modules()?;
@@ -388,6 +683,7 @@ impl ReplEngine {
             .map_err(EldrLoadError::Load)?;
 
         let docs = bytecode.docs.clone();
+        let signatures = bytecode.signatures.clone();
         let forge_session = forge::ForgeSession::from_bytecode(&bytecode);
         let vm = session::bytecode_interactive_vm(bytecode);
 
@@ -399,11 +695,19 @@ impl ReplEngine {
             .collect();
         for entry in vm.bytecode().functions.iter() {
             if let Some(name) = &entry.qualified_name {
-                symbols.insert(name.clone());
+                let surface_name = crate::surface_rendered_name(name);
+                symbols.insert(surface_name.clone());
+                if let Some(short) = surface_name.rsplit("::").next() {
+                    symbols.insert(short.to_string());
+                }
             }
         }
         for entry in vm.bytecode().type_registry.entries().iter() {
-            symbols.insert(entry.name.clone());
+            let surface_name = crate::surface_rendered_name(&entry.name);
+            symbols.insert(surface_name.clone());
+            if let Some(short) = surface_name.rsplit("::").next() {
+                symbols.insert(short.to_string());
+            }
         }
 
         let mut engine = Self {
@@ -425,6 +729,7 @@ impl ReplEngine {
             result_metas: Vec::new(),
             symbols,
             docs,
+            signatures,
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
             reload_seed: ReplReloadSeed::Empty,
@@ -433,6 +738,9 @@ impl ReplEngine {
             binding_records: Vec::new(),
             import_records: Vec::new(),
             def_records: Vec::new(),
+            completion_context_cache: RefCell::new(None),
+            #[cfg(test)]
+            completion_context_builds: Cell::new(0),
             startup_results: Vec::new(),
             error_display_mode: ErrorDisplayMode::Full,
         };
@@ -466,6 +774,38 @@ impl ReplEngine {
         let mut engine = Self::from_preloaded_state(state)?;
         engine.reload_seed = ReplReloadSeed::ProjectModuleStages(module_input_stages.to_vec());
         Ok(engine)
+    }
+
+    pub fn from_project_runner_source(
+        input: surtr_analysis::ProjectRunnerSourceInput,
+    ) -> Result<Self, ReplLoadError> {
+        let project_file = input.project_file.to_string_lossy().into_owned();
+        let module_input_stages =
+            crate::project_runner_module_input_stages(input).map_err(|error| {
+                ReplLoadError::Runtime {
+                    file_name: project_file,
+                    message: error.to_string(),
+                }
+            })?;
+        Self::from_project_module_stages(&module_input_stages)
+    }
+
+    pub fn from_project_runner_file(
+        path: &str,
+        profile: Option<&str>,
+    ) -> Result<Self, ReplLoadError> {
+        let selected_profile = profile.unwrap_or("main").to_string();
+        let source = fs::read_to_string(path).map_err(|e| ReplLoadError::SourceReadFailed {
+            file_name: path.to_string(),
+            message: e.to_string(),
+        })?;
+        Self::from_project_runner_source(surtr_analysis::ProjectRunnerSourceInput {
+            project_file: path.into(),
+            selected_profile: selected_profile.clone(),
+            normalized_args: vec![("profile".to_string(), selected_profile)],
+            active_file: None,
+            source,
+        })
     }
 
     pub fn from_preload_files(
@@ -540,6 +880,7 @@ impl ReplEngine {
             result_metas: Vec::new(),
             symbols: state.symbols,
             docs: state.docs,
+            signatures: state.signatures,
             process_metadata: state.process_metadata,
             auto_import_modules: state.auto_import_modules,
             reload_seed: ReplReloadSeed::Empty,
@@ -548,11 +889,15 @@ impl ReplEngine {
             binding_records: Vec::new(),
             import_records: state.import_records.clone(),
             def_records: state.def_records.clone(),
+            completion_context_cache: RefCell::new(None),
+            #[cfg(test)]
+            completion_context_builds: Cell::new(0),
             startup_results: Vec::new(),
             error_display_mode: ErrorDisplayMode::Full,
         })
         .map(|mut engine| {
             engine.append_docs(state.script_preload_docs.clone());
+            engine.append_signatures(state.script_preload_signatures.clone());
             engine.sync_scar_fun_index_with_vm();
             engine
         })
@@ -685,6 +1030,7 @@ impl ReplEngine {
         };
 
         let docs = crate::collect_doc_entries(&module_stages, &[], None);
+        let signatures = crate::collect_signature_entries(&module_stages, &[], None);
         self.process_metadata = collect_process_metadata(&module_stages);
         let (mut chunk, mut meta) = match self.forge_session.codegen_chunk(typed) {
             Ok(c) => c,
@@ -744,9 +1090,10 @@ impl ReplEngine {
             .replace_scope_with_declarations(scope, &declaration_index);
 
         for name in &meta.function_defs {
-            self.symbols.insert(name.clone());
+            self.insert_surface_symbol(name);
         }
         self.append_docs(docs);
+        self.append_signatures(signatures);
         Ok(())
     }
 
@@ -763,7 +1110,6 @@ impl ReplEngine {
                 self.declaration_index = snapshot.declaration_index.clone();
                 self.scar_session.rollback(snapshot.scar_checkpoint.clone());
                 self.sync_scar_fun_index_with_vm();
-                self.append_docs(snapshot.docs.clone());
                 self.process_metadata = collect_process_metadata(&snapshot.module_stages);
 
                 let scope = match sigil::build_scope_for_module(
@@ -867,7 +1213,8 @@ impl ReplEngine {
         }
         self.sync_scar_fun_index_with_vm();
         self.process_metadata = collect_process_metadata(&module_stages);
-        self.append_docs(crate::collect_doc_entries(&module_stages, &[], None));
+        // `.eldr` sessions read docs/signatures from persisted chunks rather than
+        // recollecting them from source during scope-only bootstrap.
 
         let scope = match sigil::build_scope_for_module(
             &module_stages,
@@ -1088,6 +1435,511 @@ impl ReplEngine {
         self.symbols.iter().cloned().collect()
     }
 
+    pub fn semantic_index(&self) -> surtr_analysis::SemanticIndex {
+        let mut symbols = Vec::new();
+
+        for entry in self.docs.iter().rev() {
+            if entry.kind != DocKind::Function {
+                continue;
+            }
+            let label = crate::surface_path_name(&entry.qualified_name).to_string();
+            if !self.doc_entry_is_completion_surface(entry, &label) {
+                continue;
+            }
+            let tail = label.rsplit("::").next().unwrap_or(label.as_str());
+            let detail = self
+                .find_signature(tail)
+                .map(|(qualified_name, signature)| {
+                    Self::render_signature_with_qualified_name(&qualified_name, signature)
+                })
+                .or_else(|| {
+                    Self::display_signature_for_doc_entry(entry).map(|signature| {
+                        Self::render_signature_with_qualified_name(&entry.qualified_name, signature)
+                    })
+                });
+            symbols.push(surtr_analysis::CompletionSymbol {
+                label: label.clone(),
+                replacement: label,
+                kind: surtr_analysis::CompletionKind::FunctionCall,
+                detail,
+                documentation: Some(entry.doc.clone()),
+                sort_text: None,
+                origin: None,
+                definition: None,
+            });
+            if let Some(tail) = crate::surface_path_name(&entry.qualified_name)
+                .rsplit("::")
+                .next()
+                .filter(|tail| self.visible_uid_matches(tail, &entry.qualified_name))
+            {
+                symbols.push(surtr_analysis::CompletionSymbol {
+                    label: tail.to_string(),
+                    replacement: tail.to_string(),
+                    kind: surtr_analysis::CompletionKind::FunctionCall,
+                    detail: self
+                        .find_signature(tail)
+                        .map(|(qualified_name, signature)| {
+                            Self::render_signature_with_qualified_name(&qualified_name, signature)
+                        }),
+                    documentation: Some(entry.doc.clone()),
+                    sort_text: None,
+                    origin: None,
+                    definition: None,
+                });
+            }
+        }
+
+        for decl in self.declaration_index.values() {
+            if let Some(label) = self.completion_visible_owner_label(decl) {
+                symbols.push(surtr_analysis::CompletionSymbol {
+                    label: label.clone(),
+                    replacement: label,
+                    kind: surtr_analysis::CompletionKind::TypeConstructor,
+                    detail: self.declaration_signature(decl),
+                    documentation: None,
+                    sort_text: None,
+                    origin: None,
+                    definition: None,
+                });
+            }
+
+            if Self::declaration_is_function_completion_surface(decl) {
+                let label = crate::surface_path_name(&decl.fq_name).to_string();
+                let detail = self.declaration_signature(decl).or_else(|| {
+                    self.find_signature(&label)
+                        .map(|(qualified_name, signature)| {
+                            Self::render_signature_with_qualified_name(&qualified_name, signature)
+                        })
+                });
+                symbols.push(surtr_analysis::CompletionSymbol {
+                    label: label.clone(),
+                    replacement: label,
+                    kind: surtr_analysis::CompletionKind::FunctionCall,
+                    detail,
+                    documentation: None,
+                    sort_text: None,
+                    origin: None,
+                    definition: None,
+                });
+                if let Some(tail) = crate::surface_path_name(&decl.fq_name)
+                    .rsplit("::")
+                    .next()
+                    .filter(|tail| self.visible_uid_matches(tail, &decl.fq_name))
+                {
+                    symbols.push(surtr_analysis::CompletionSymbol {
+                        label: tail.to_string(),
+                        replacement: tail.to_string(),
+                        kind: surtr_analysis::CompletionKind::FunctionCall,
+                        detail: self
+                            .find_signature(tail)
+                            .map(|(qualified_name, signature)| {
+                                Self::render_signature_with_qualified_name(
+                                    &qualified_name,
+                                    signature,
+                                )
+                            }),
+                        documentation: None,
+                        sort_text: None,
+                        origin: None,
+                        definition: None,
+                    });
+                }
+            }
+        }
+
+        for label in self.completion_visible_module_labels() {
+            symbols.push(surtr_analysis::CompletionSymbol {
+                label: label.clone(),
+                replacement: label,
+                kind: surtr_analysis::CompletionKind::TypeConstructor,
+                detail: None,
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+            });
+        }
+
+        let mut seen_bindings = BTreeSet::new();
+        for binding in self.binding_records.iter().rev() {
+            if !seen_bindings.insert(binding.name.as_str()) {
+                continue;
+            }
+            symbols.push(surtr_analysis::CompletionSymbol {
+                label: binding.name.clone(),
+                replacement: binding.name.clone(),
+                kind: surtr_analysis::CompletionKind::Variable,
+                detail: Some(binding.ty.clone()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+            });
+        }
+
+        for entry in self.vm.function_entries().iter().rev() {
+            if entry.flags.generated {
+                continue;
+            }
+            let Some(qualified_name) = entry.qualified_name.as_deref() else {
+                continue;
+            };
+            if !self.function_entry_is_top_level_repl_surface(qualified_name) {
+                continue;
+            }
+            let label = crate::surface_path_name(qualified_name).to_string();
+            symbols.push(surtr_analysis::CompletionSymbol {
+                label: label.clone(),
+                replacement: label,
+                kind: surtr_analysis::CompletionKind::FunctionCall,
+                detail: entry.signature.clone().map(|signature| {
+                    Self::render_signature_with_qualified_name(qualified_name, signature)
+                }),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+            });
+            if let Some(tail) = crate::surface_path_name(qualified_name).rsplit("::").next() {
+                symbols.push(surtr_analysis::CompletionSymbol {
+                    label: tail.to_string(),
+                    replacement: tail.to_string(),
+                    kind: surtr_analysis::CompletionKind::FunctionCall,
+                    detail: entry.signature.clone().map(|signature| {
+                        Self::render_signature_with_qualified_name(qualified_name, signature)
+                    }),
+                    documentation: None,
+                    sort_text: None,
+                    origin: None,
+                    definition: None,
+                });
+            }
+        }
+
+        surtr_analysis::SemanticIndex::from_symbols(symbols)
+    }
+
+    pub fn completion_context(&self) -> ReplCompletionContext {
+        if let Some(cached) = self.completion_context_cache.borrow().clone() {
+            return cached;
+        }
+
+        let mut callable_signatures = BTreeMap::new();
+        let mut insert_signature = |label: &str, qualified_name: String, signature: String| {
+            callable_signatures
+                .entry(label.to_string())
+                .or_insert((qualified_name.clone(), signature.clone()));
+            if let Some(tail) = label.rsplit("::").next() {
+                callable_signatures
+                    .entry(tail.to_string())
+                    .or_insert((qualified_name, signature));
+            }
+        };
+
+        for entry in self.docs.iter().rev() {
+            if entry.kind != DocKind::Function {
+                continue;
+            }
+            let label = crate::surface_path_name(&entry.qualified_name).to_string();
+            if !self.doc_entry_is_completion_surface(entry, &label) {
+                continue;
+            }
+            if let Some((qualified_name, signature)) = self
+                .find_signature(label.rsplit("::").next().unwrap_or(label.as_str()))
+                .or_else(|| {
+                    Self::display_signature_for_doc_entry(entry)
+                        .map(|signature| (entry.qualified_name.clone(), signature))
+                })
+            {
+                insert_signature(&label, qualified_name, signature);
+            }
+        }
+
+        for decl in self.declaration_index.values() {
+            if let Some(label) = self.completion_visible_owner_label(decl) {
+                if let Some((qualified_name, signature)) = self.constructor_signature_entry(decl) {
+                    insert_signature(&label, qualified_name.clone(), signature.clone());
+                    insert_signature(
+                        crate::surface_path_name(&decl.fq_name),
+                        qualified_name,
+                        signature,
+                    );
+                }
+            }
+
+            if Self::declaration_is_function_completion_surface(decl) {
+                let label = crate::surface_path_name(&decl.fq_name).to_string();
+                if let Some((qualified_name, signature)) = self
+                    .find_signature(&label)
+                    .or_else(|| self.declaration_signature_entry(decl))
+                {
+                    insert_signature(&label, qualified_name, signature);
+                }
+            }
+        }
+
+        for entry in self.vm.function_entries().iter().rev() {
+            if entry.flags.generated {
+                continue;
+            }
+            let Some(qualified_name) = entry.qualified_name.as_deref() else {
+                continue;
+            };
+            if !self.function_entry_is_top_level_repl_surface(qualified_name) {
+                continue;
+            }
+            let Some(signature) = entry.signature.as_ref() else {
+                continue;
+            };
+            let label = crate::surface_path_name(qualified_name).to_string();
+            insert_signature(&label, qualified_name.to_string(), signature.clone());
+        }
+
+        let mut seen_bindings = BTreeSet::new();
+        for binding in self.binding_records.iter().rev() {
+            if !seen_bindings.insert(binding.name.as_str()) {
+                continue;
+            }
+            if let Some(signature) =
+                Self::callable_binding_signature_from_type(&binding.name, &binding.ty)
+            {
+                insert_signature(&binding.name, binding.name.clone(), signature);
+            }
+        }
+
+        let context = ReplCompletionContext {
+            index: self.semantic_index(),
+            callable_signatures,
+        };
+        #[cfg(test)]
+        self.completion_context_builds
+            .set(self.completion_context_builds.get() + 1);
+        *self.completion_context_cache.borrow_mut() = Some(context.clone());
+        context
+    }
+
+    fn insert_completion_symbol(&mut self, symbol: String) {
+        self.symbols.insert(symbol);
+    }
+
+    fn insert_surface_symbol(&mut self, name: &str) {
+        let surface_name = crate::surface_rendered_name(name);
+        self.insert_completion_symbol(surface_name.clone());
+        if let Some(short) = surface_name.rsplit("::").next() {
+            self.insert_completion_symbol(short.to_string());
+        }
+    }
+
+    pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
+        self.completion_context().completions(input, cursor)
+    }
+
+    pub fn cached_completion_context(&self) -> Option<ReplCompletionContext> {
+        self.completion_context_cache.borrow().clone()
+    }
+
+    #[cfg(test)]
+    fn completion_context_build_count(&self) -> usize {
+        self.completion_context_builds.get()
+    }
+
+    fn repl_completion_candidate_from_analysis(
+        candidate: surtr_analysis::CompletionCandidate,
+    ) -> ReplCompletionCandidate {
+        let label = Self::repl_completion_label(
+            &candidate.label,
+            &candidate.replacement,
+            candidate.detail.as_deref(),
+        );
+        let kind = match candidate.kind {
+            surtr_analysis::CompletionKind::Variable => ReplCompletionKind::Variable,
+            surtr_analysis::CompletionKind::TypeConstructor => ReplCompletionKind::TypeConstructor,
+            surtr_analysis::CompletionKind::TypePath => ReplCompletionKind::TypePath,
+            surtr_analysis::CompletionKind::FunctionCall => ReplCompletionKind::FunctionCall,
+        };
+
+        ReplCompletionCandidate {
+            label,
+            replacement: candidate.replacement,
+            kind,
+            detail: candidate.detail,
+            documentation: candidate.documentation,
+            replace_start: candidate.replace_start,
+            replace_end: candidate.replace_end,
+        }
+    }
+
+    fn repl_completion_label(label: &str, replacement: &str, detail: Option<&str>) -> String {
+        if label != replacement {
+            return label.to_string();
+        }
+
+        if !matches!(replacement, "True" | "False") {
+            return label.to_string();
+        }
+
+        if detail.is_some_and(|detail| detail.contains(&format!("Result::{replacement}("))) {
+            label.to_string()
+        } else {
+            label.to_string()
+        }
+    }
+
+    fn callable_binding_signature_from_type(binding_name: &str, ty: &str) -> Option<String> {
+        let AstTy::Func(_, params, ret) = parse_signature_type(ty)? else {
+            return None;
+        };
+        let params = params
+            .iter()
+            .map(format_query_ty)
+            .collect::<Vec<_>>()
+            .join(", ");
+        Some(format!(
+            "{binding_name}({params}) -> {}",
+            format_query_ty(ret.as_ref())
+        ))
+    }
+
+    fn cached_completion_symbol_for_name(
+        &self,
+        name: &str,
+    ) -> Option<surtr_analysis::CompletionSymbol> {
+        if let Some(binding) = self
+            .binding_records
+            .iter()
+            .rev()
+            .find(|binding| binding.name == name)
+        {
+            return Some(surtr_analysis::CompletionSymbol {
+                label: binding.name.clone(),
+                replacement: binding.name.clone(),
+                kind: surtr_analysis::CompletionKind::Variable,
+                detail: Some(binding.ty.clone()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+            });
+        }
+
+        let decl = self.visible_declaration(name)?;
+        if let Some(label) = self.completion_visible_owner_label(decl) {
+            if label == name {
+                return Some(surtr_analysis::CompletionSymbol {
+                    label: label.clone(),
+                    replacement: label,
+                    kind: surtr_analysis::CompletionKind::TypeConstructor,
+                    detail: self.declaration_signature(decl),
+                    documentation: None,
+                    sort_text: None,
+                    origin: None,
+                    definition: None,
+                });
+            }
+        }
+        if Self::declaration_is_function_completion_surface(decl) {
+            let detail = self.declaration_signature(decl).or_else(|| {
+                self.find_signature(name)
+                    .map(|(qualified_name, signature)| {
+                        Self::render_signature_with_qualified_name(&qualified_name, signature)
+                    })
+            });
+            return Some(surtr_analysis::CompletionSymbol {
+                label: name.to_string(),
+                replacement: name.to_string(),
+                kind: surtr_analysis::CompletionKind::FunctionCall,
+                detail,
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+            });
+        }
+        None
+    }
+
+    fn sync_cached_completion_context_after_commit(
+        &self,
+        imported_symbols: &[String],
+        bindings: &[forge::BindingInfo],
+        function_defs: &[String],
+    ) {
+        let Some(mut context) = self.completion_context_cache.borrow().clone() else {
+            return;
+        };
+
+        let mut seen = BTreeSet::new();
+        for name in imported_symbols
+            .iter()
+            .chain(bindings.iter().map(|binding| &binding.name))
+            .chain(function_defs.iter())
+        {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            if let Some(symbol) = self.cached_completion_symbol_for_name(name) {
+                context.index.upsert_symbol(symbol);
+            }
+            if let Some(binding) = self
+                .binding_records
+                .iter()
+                .rev()
+                .find(|binding| binding.name == *name)
+            {
+                if let Some(signature) =
+                    Self::callable_binding_signature_from_type(&binding.name, &binding.ty)
+                {
+                    context
+                        .callable_signatures
+                        .entry(binding.name.clone())
+                        .or_insert((binding.name.clone(), signature));
+                }
+                continue;
+            }
+            if let Some((qualified_name, signature)) = self.find_signature(name) {
+                context
+                    .callable_signatures
+                    .entry(name.clone())
+                    .or_insert((qualified_name.clone(), signature.clone()));
+                if let Some(tail) = name.rsplit("::").next() {
+                    context
+                        .callable_signatures
+                        .entry(tail.to_string())
+                        .or_insert((qualified_name, signature));
+                }
+            }
+        }
+
+        *self.completion_context_cache.borrow_mut() = Some(context);
+    }
+
+    fn declaration_is_function_completion_surface(entry: &sigil::DeclarationEntry) -> bool {
+        Self::declaration_is_completion_surface(entry)
+            && matches!(
+                entry.kind,
+                sigil::DeclarationKind::Def
+                    | sigil::DeclarationKind::Extractor
+                    | sigil::DeclarationKind::TraitMethod
+                    | sigil::DeclarationKind::EnumVariant
+                    | sigil::DeclarationKind::ResultCtor
+                    | sigil::DeclarationKind::ImplMethod
+                    | sigil::DeclarationKind::ImplCtorNew
+            )
+    }
+
+    fn doc_entry_is_completion_surface(&self, entry: &DocEntry, lookup: &str) -> bool {
+        if let Some(decl) = self.qualified_declaration(&entry.qualified_name) {
+            return Self::declaration_is_completion_surface(decl);
+        }
+        if Self::is_qualified_symbol(lookup) {
+            self.qualified_declaration(lookup)
+                .is_some_and(Self::declaration_is_completion_surface)
+        } else {
+            self.sigil_session.lookup_uid(lookup).is_some()
+                || self.visible_helper_doc_alias(lookup).is_some()
+        }
+    }
+
     pub fn prompt(&self) -> String {
         if self.pending.is_empty() {
             format!("xldr({})> ", self.next_line)
@@ -1148,14 +2000,14 @@ impl ReplEngine {
         vec![
             "REPL commands:".to_string(),
             ":help, :h [command]  Show REPL help".to_string(),
-            ":quit, :exit         Exit the REPL".to_string(),
+            ":quit, :exit, :q     Exit the REPL".to_string(),
             ":doc <symbol|query>  Show documentation for visible symbols, including process surfaces".to_string(),
             ":sig <function|query> Show the signature for visible functions, including process surfaces".to_string(),
             ":info <query>        Show derived information for visible symbols, queries, or process handles"
                 .to_string(),
             ":type <binding>      Show the type for a visible binding or singleton process owner".to_string(),
             "                      Unresolved generic bindings must be annotated before persistence.".to_string(),
-            ":facet <binding|expr> Inspect a FacetPath and its API boundaries".to_string(),
+            ":facet <FacetPath|$binding> Inspect a FacetPath and its API boundaries".to_string(),
             ":error [full|summary]  Show or change error display mode".to_string(),
             ":save <path.eldr>    Save the current session as .eldr".to_string(),
             ":vars                List visible value bindings".to_string(),
@@ -1206,7 +2058,7 @@ impl ReplEngine {
 
     fn facet_help_lines() -> Vec<String> {
         vec![
-            "Usage: :facet <binding|expr>".to_string(),
+            "Usage: :facet <FacetPath|$binding>".to_string(),
             "Examples: :facet path, :facet Tuple._1, :facet BitWidth.Any".to_string(),
             "Shows canonical path, API availability, segment details, and where the path may stop."
                 .to_string(),
@@ -1541,6 +2393,17 @@ impl ReplEngine {
         symbol.contains("::")
     }
 
+    fn function_entry_is_top_level_repl_surface(&self, qualified_name: &str) -> bool {
+        let qualified_name = crate::surface_path_name(qualified_name);
+        qualified_name.starts_with("__Script::")
+            || qualified_name.starts_with("REPL::")
+            || qualified_name.starts_with("__Repl::Session::")
+            || qualified_name.starts_with(&format!(
+                "{}::",
+                crate::surface_path_name(&self.repl_module_path)
+            ))
+    }
+
     fn visible_doc_entries<'a>(&'a self, symbol: &str, kind: Option<DocKind>) -> Vec<&'a DocEntry> {
         let mut matches = self
             .docs
@@ -1639,6 +2502,14 @@ impl ReplEngine {
 
     fn undocumented_doc_output(&self, symbol: &str) -> Option<ReplOutput> {
         let decl = self.visible_declaration(symbol)?;
+        if self.function_entry_is_top_level_repl_surface(&decl.fq_name)
+            && matches!(
+                decl.kind,
+                sigil::DeclarationKind::Def | sigil::DeclarationKind::Extractor
+            )
+        {
+            return None;
+        }
         let signature = self.declaration_signature(decl);
         let display_fq_name = crate::surface_path_name(&decl.fq_name);
         let display_name = crate::surface_path_name(&decl.name);
@@ -1664,6 +2535,81 @@ impl ReplEngine {
 
     fn declaration_is_public_surface(entry: &sigil::DeclarationEntry) -> bool {
         entry.visibility == spire::ast::Visibility::Public
+    }
+
+    fn declaration_is_completion_surface(entry: &sigil::DeclarationEntry) -> bool {
+        Self::declaration_is_public_surface(entry) && !entry.hidden && entry.user_callable
+    }
+
+    fn completion_visible_owner_label(&self, entry: &sigil::DeclarationEntry) -> Option<String> {
+        if !Self::declaration_is_public_surface(entry) || entry.hidden {
+            return None;
+        }
+        if !matches!(
+            entry.kind,
+            sigil::DeclarationKind::Struct
+                | sigil::DeclarationKind::Record
+                | sigil::DeclarationKind::Enum
+                | sigil::DeclarationKind::BuiltinType
+        ) {
+            return None;
+        }
+        let label = self
+            .visible_completion_label(entry)
+            .unwrap_or_else(|| crate::surface_path_name(&entry.fq_name).to_string());
+        Self::completion_visible_owner_name(&label).then_some(label)
+    }
+
+    fn visible_completion_label(&self, entry: &sigil::DeclarationEntry) -> Option<String> {
+        let qualified_uid = self.sigil_session.lookup_uid(&entry.fq_name).or_else(|| {
+            self.sigil_session
+                .lookup_uid(crate::surface_path_name(&entry.fq_name))
+        })?;
+        let mut labels = Vec::new();
+        labels.push(crate::surface_path_name(&entry.name).to_string());
+        if let Some(tail) = entry.name.rsplit("::").next() {
+            labels.push(tail.to_string());
+        }
+        labels.push(crate::surface_path_name(&entry.fq_name).to_string());
+        labels
+            .into_iter()
+            .find(|label| self.sigil_session.lookup_uid(label) == Some(qualified_uid))
+    }
+
+    fn completion_visible_owner_name(label: &str) -> bool {
+        !matches!(
+            crate::surface_path_name(label),
+            "MatchResult"
+                | "MatchArms"
+                | "CondClauses"
+                | "BulkUpdateEntries"
+                | "Hole"
+                | "Lazy"
+                | "TypeRef"
+                | "ProcessInit"
+                | "Closure"
+        )
+    }
+
+    fn completion_visible_module_labels(&self) -> Vec<String> {
+        let mut labels = BTreeSet::new();
+        for entry in self.declaration_index.values() {
+            if !Self::declaration_is_public_surface(entry) || entry.hidden {
+                continue;
+            }
+            let module_label = crate::surface_path_name(&entry.module_path);
+            if Self::completion_visible_module_name(module_label) {
+                labels.insert(module_label.to_string());
+            }
+        }
+        labels.into_iter().collect()
+    }
+
+    fn completion_visible_module_name(label: &str) -> bool {
+        !label.is_empty()
+            && !label.contains("::")
+            && !label.starts_with("__")
+            && Self::completion_visible_owner_name(label)
     }
 
     fn parse_pid_type_name(ty: &str) -> Option<&str> {
@@ -2104,13 +3050,62 @@ impl ReplEngine {
             sigil::DeclarationKind::Enum => {
                 Some(format!("defenum {}", crate::surface_path_name(&decl.name)))
             }
+            sigil::DeclarationKind::EnumVariant => {
+                self.enum_variant_signature_entry(decl)
+                    .map(|(qualified_name, signature)| {
+                        Self::render_signature_with_qualified_name(&qualified_name, signature)
+                    })
+            }
             sigil::DeclarationKind::BuiltinType => {
                 Some(format!("type {}", crate::surface_path_name(&decl.name)))
             }
             _ => self
                 .find_signature(&decl.fq_name)
-                .map(|(_, signature)| signature),
+                .map(|(qualified_name, signature)| {
+                    Self::render_signature_with_qualified_name(&qualified_name, signature)
+                }),
         }
+    }
+
+    fn declaration_signature_entry(
+        &self,
+        decl: &sigil::DeclarationEntry,
+    ) -> Option<(String, String)> {
+        match decl.kind {
+            sigil::DeclarationKind::EnumVariant => self.enum_variant_signature_entry(decl),
+            _ => self.find_signature(&decl.fq_name),
+        }
+    }
+
+    fn enum_variant_signature_entry(
+        &self,
+        decl: &sigil::DeclarationEntry,
+    ) -> Option<(String, String)> {
+        if decl.kind != sigil::DeclarationKind::EnumVariant {
+            return None;
+        }
+        let (owner, _) = decl.fq_name.rsplit_once("::")?;
+        let variant = self
+            .scar_session
+            .enum_variants_of(owner)?
+            .iter()
+            .find(|variant| {
+                variant.short_name == decl.name
+                    || variant.constructor_name == decl.name
+                    || decl.name.ends_with(&format!("::{}", variant.short_name))
+            })?;
+        let params = variant
+            .payload
+            .iter()
+            .map(Self::ty_to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let signature = format!(
+            "{}({params}) -> {}",
+            crate::surface_path_name(&decl.fq_name),
+            Self::ty_to_string(&variant.enum_ty)
+        );
+        Some((decl.fq_name.clone(), signature))
     }
 
     fn doc_resolved_output(entry: &DocEntry) -> ReplOutput {
@@ -2303,6 +3298,20 @@ impl ReplEngine {
         rendered
     }
 
+    fn ambiguous_signature_lines(symbol: &str, entries: &[&SignatureEntry]) -> Vec<String> {
+        let mut rendered = vec![format!("{symbol} has multiple signatures:")];
+        rendered.extend(
+            entries
+                .iter()
+                .map(|entry| format!("  {}", crate::surface_path_name(&entry.qualified_name))),
+        );
+        rendered.push(
+            "Use a qualified name or add type annotations, for example `:sig compare(Int, Int)`."
+                .to_string(),
+        );
+        rendered
+    }
+
     fn handle_doc_typed_call(&self, source_query: &str, query: &TypedCallQuery) -> ReplResult {
         if let Some(message) = self.invalid_attached_extractor_query_message(query) {
             return Self::plain(vec![message]);
@@ -2393,6 +3402,69 @@ impl ReplEngine {
         matches
     }
 
+    fn match_typed_call_signatures<'a>(
+        &'a self,
+        query: &TypedCallQuery,
+    ) -> Vec<&'a SignatureEntry> {
+        if let Some(matches) = self.match_special_form_typed_call_signatures(query) {
+            return matches;
+        }
+        if let Some(matches) = self.match_owner_typed_call_signatures(query) {
+            return matches;
+        }
+
+        let Ok(arg_types) = self.query_arg_types(query.args.as_slice()) else {
+            return Vec::new();
+        };
+        let Some(receiver_ty) = arg_types.first() else {
+            return Vec::new();
+        };
+        let preferred_trait = METHOD_DOC_TRAIT_ALIASES
+            .iter()
+            .find_map(|(method, trait_name)| (*method == query.callee).then_some(*trait_name))
+            .or_else(|| {
+                OPERATOR_DOC_TRAIT_ALIASES
+                    .iter()
+                    .find_map(|(alias, trait_name)| (*alias == query.callee).then_some(*trait_name))
+            });
+        let callee_tail = Self::callee_tail(&query.callee);
+        let callee_is_qualified = Self::is_qualified_symbol(&query.callee);
+        let mut matches = self
+            .signatures
+            .iter()
+            .filter(|entry| entry.kind == DocKind::Function)
+            .filter(|entry| Self::doc_method_tail(&entry.qualified_name) == callee_tail)
+            .filter(|entry| {
+                if !callee_is_qualified {
+                    return true;
+                }
+                entry.qualified_name == query.callee
+                    || entry.signature.starts_with(&format!("{}(", query.callee))
+            })
+            .filter(|entry| {
+                let sig = entry.signature.as_str();
+                if sig.starts_with("impl ") {
+                    return sig.contains(&format!(" for {receiver_ty}::{callee_tail}"));
+                }
+                Self::signature_matches_callee(sig, &query.callee)
+            })
+            .filter(|entry| self.signature_accepts_arg_types(&entry.signature, &arg_types))
+            .collect::<Vec<_>>();
+        matches.sort_by_key(|entry| {
+            self.typed_call_signature_rank(entry, preferred_trait, receiver_ty, callee_tail)
+        });
+        if let Some(best_rank) = matches.first().map(|entry| {
+            self.typed_call_signature_rank(entry, preferred_trait, receiver_ty, callee_tail)
+        }) {
+            matches.retain(|entry| {
+                self.typed_call_signature_rank(entry, preferred_trait, receiver_ty, callee_tail)
+                    == best_rank
+            });
+        }
+        matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+        matches
+    }
+
     fn typed_call_doc_rank(
         &self,
         entry: &DocEntry,
@@ -2422,6 +3494,33 @@ impl ReplEngine {
         3
     }
 
+    fn typed_call_signature_rank(
+        &self,
+        entry: &SignatureEntry,
+        preferred_trait: Option<&str>,
+        receiver_ty: &str,
+        callee_tail: &str,
+    ) -> u8 {
+        let signature = entry.signature.as_str();
+        let Some(trait_name) = preferred_trait else {
+            return if signature.starts_with("impl ") { 0 } else { 1 };
+        };
+        if signature.starts_with(&format!(
+            "impl {trait_name} for {receiver_ty}::{callee_tail}"
+        )) {
+            return 0;
+        }
+        if crate::surface_path_name(&entry.qualified_name) == format!("{trait_name}::{callee_tail}")
+            || signature.starts_with(&format!("{trait_name}::{callee_tail}("))
+        {
+            return 1;
+        }
+        if signature.starts_with(&format!("impl {trait_name} for ")) {
+            return 2;
+        }
+        3
+    }
+
     fn match_special_form_typed_call_docs<'a>(
         &'a self,
         query: &TypedCallQuery,
@@ -2430,6 +3529,25 @@ impl ReplEngine {
             "dbg!" => {
                 let mut matches = self
                     .docs
+                    .iter()
+                    .filter(|entry| entry.kind == DocKind::Function)
+                    .filter(|entry| Self::doc_method_tail(&entry.qualified_name) == "dbg!")
+                    .collect::<Vec<_>>();
+                matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+                Some(matches)
+            }
+            _ => None,
+        }
+    }
+
+    fn match_special_form_typed_call_signatures<'a>(
+        &'a self,
+        query: &TypedCallQuery,
+    ) -> Option<Vec<&'a SignatureEntry>> {
+        match query.callee.as_str() {
+            "dbg!" => {
+                let mut matches = self
+                    .signatures
                     .iter()
                     .filter(|entry| entry.kind == DocKind::Function)
                     .filter(|entry| Self::doc_method_tail(&entry.qualified_name) == "dbg!")
@@ -2499,6 +3617,58 @@ impl ReplEngine {
         Some(matches)
     }
 
+    fn match_owner_typed_call_signatures<'a>(
+        &'a self,
+        query: &TypedCallQuery,
+    ) -> Option<Vec<&'a SignatureEntry>> {
+        if let Some(owner) = query.callee.strip_suffix('!') {
+            let decl = self.visible_declaration(owner)?;
+            if decl.kind != sigil::DeclarationKind::Struct {
+                return Some(Vec::new());
+            }
+            let qualified_name = format!("{}::deconstruct", decl.fq_name);
+            let Ok(arg_types) = self.query_arg_types(query.args.as_slice()) else {
+                return Some(Vec::new());
+            };
+            let mut matches = self
+                .signatures
+                .iter()
+                .filter(|entry| entry.kind == DocKind::Function)
+                .filter(|entry| {
+                    crate::surface_path_name(&entry.qualified_name)
+                        == crate::surface_path_name(&qualified_name)
+                })
+                .filter(|entry| {
+                    arg_types.is_empty()
+                        || self.signature_accepts_arg_types(&entry.signature, &arg_types)
+                })
+                .collect::<Vec<_>>();
+            matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+            return Some(matches);
+        }
+
+        let decl = self.visible_declaration(&query.callee)?;
+        if decl.kind != sigil::DeclarationKind::Struct {
+            return None;
+        }
+        let Ok(arg_types) = self.query_arg_types(query.args.as_slice()) else {
+            return Some(Vec::new());
+        };
+        let qualified_name = format!("{}::new", decl.fq_name);
+        let mut matches = self
+            .signatures
+            .iter()
+            .filter(|entry| entry.kind == DocKind::Function)
+            .filter(|entry| {
+                crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(&qualified_name)
+            })
+            .filter(|entry| self.signature_accepts_arg_types(&entry.signature, &arg_types))
+            .collect::<Vec<_>>();
+        matches.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
+        Some(matches)
+    }
+
     fn invalid_attached_extractor_query_message(&self, query: &TypedCallQuery) -> Option<String> {
         query.callee.strip_suffix('!')?;
         None
@@ -2519,6 +3689,13 @@ impl ReplEngine {
         })
     }
 
+    fn special_form_signature_entry(&self, symbol: &str) -> Option<&SignatureEntry> {
+        self.signatures.iter().find(|entry| {
+            entry.kind == DocKind::Function
+                && entry.qualified_name == format!("Bootstrap::{symbol}")
+        })
+    }
+
     fn signature_matches_callee(signature: &str, callee: &str) -> bool {
         signature.starts_with(&format!("{callee}("))
             || signature.contains(&format!("::{callee}("))
@@ -2531,8 +3708,15 @@ impl ReplEngine {
             return None;
         }
         if let Some(entry) = self.special_form_doc_entry(symbol) {
-            return Self::display_signature_for_doc_entry(entry)
-                .map(|signature| (entry.qualified_name.clone(), signature));
+            if let Some(signature) = Self::display_signature_for_doc_entry(entry) {
+                return Some((entry.qualified_name.clone(), signature));
+            }
+        }
+        if let Some(entry) = self.special_form_signature_entry(symbol) {
+            return Some((
+                entry.qualified_name.clone(),
+                crate::surface_rendered_name(&entry.signature),
+            ));
         }
         let canonical = self
             .visible_helper_doc_alias(symbol)
@@ -2548,6 +3732,27 @@ impl ReplEngine {
         let visible_uid = (!qualified_lookup)
             .then(|| self.sigil_session.lookup_uid(&canonical))
             .flatten();
+
+        if let Some(entry) = self.docs.iter().rev().find(|entry| {
+            if entry.kind != DocKind::Function {
+                return false;
+            }
+            if !Self::symbol_matches(&entry.qualified_name, &canonical) {
+                return false;
+            }
+            if qualified_lookup {
+                crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(&canonical)
+            } else if let Some(uid) = visible_uid {
+                self.sigil_session.lookup_uid(&entry.qualified_name) == Some(uid)
+            } else {
+                false
+            }
+        }) {
+            if let Some(signature) = Self::display_signature_for_doc_entry(entry) {
+                return Some((entry.qualified_name.clone(), signature));
+            }
+        }
 
         if canonical == symbol {
             if let Some(found) = self
@@ -2582,17 +3787,45 @@ impl ReplEngine {
             }
         }
 
-        if let Some(entry) = self.docs.iter().rev().find(|entry| {
+        if let Some(found) = self
+            .vm
+            .function_entries()
+            .iter()
+            .rev()
+            .filter(|entry| !entry.flags.generated)
+            .find_map(|entry| {
+                let qualified_name = entry.qualified_name.as_ref()?;
+                if !self.function_entry_is_top_level_repl_surface(qualified_name) {
+                    return None;
+                }
+                let surface_qualified = crate::surface_path_name(qualified_name);
+                if qualified_lookup {
+                    if surface_qualified != crate::surface_path_name(&canonical) {
+                        return None;
+                    }
+                } else if surface_qualified
+                    .rsplit("::")
+                    .next()
+                    .is_none_or(|tail| tail != crate::surface_path_name(&canonical))
+                {
+                    return None;
+                }
+                let signature = entry.signature.clone()?;
+                Some((qualified_name.clone(), signature))
+            })
+        {
+            return Some(found);
+        }
+
+        if let Some(entry) = self.signatures.iter().rev().find(|entry| {
             qualified_lookup
                 && crate::surface_path_name(&entry.qualified_name)
                     == crate::surface_path_name(&canonical)
         }) {
-            if let Some(signature) = entry.signature.clone() {
-                return Some((entry.qualified_name.clone(), signature));
-            }
+            return Some((entry.qualified_name.clone(), entry.signature.clone()));
         }
 
-        if let Some(entry) = self.docs.iter().rev().find(|entry| {
+        if let Some(entry) = self.signatures.iter().rev().find(|entry| {
             if !Self::symbol_matches(&entry.qualified_name, &canonical) {
                 return false;
             }
@@ -2605,9 +3838,7 @@ impl ReplEngine {
                 false
             }
         }) {
-            if let Some(signature) = entry.signature.clone() {
-                return Some((entry.qualified_name.clone(), signature));
-            }
+            return Some((entry.qualified_name.clone(), entry.signature.clone()));
         }
 
         None
@@ -2617,7 +3848,10 @@ impl ReplEngine {
         let qualified_name = crate::surface_path_name(qualified_name);
         let signature = crate::surface_rendered_name(&signature);
         if let Some((module, tail)) = qualified_name.rsplit_once("::") {
-            if signature == tail || signature.starts_with(&format!("{tail}(")) {
+            if signature == tail
+                || signature.starts_with(&format!("{tail}("))
+                || signature.starts_with(&format!("{tail}<"))
+            {
                 return format!("{module}::{signature}");
             }
         }
@@ -4094,15 +5328,12 @@ impl ReplEngine {
                 return rendered;
             }
         }
-        let matches = self.match_typed_call_docs(query);
+        let matches = self.match_typed_call_signatures(query);
         match matches.as_slice() {
             [entry] => {
                 let defined = Self::render_signature_with_qualified_name(
                     &entry.qualified_name,
-                    entry
-                        .signature
-                        .clone()
-                        .unwrap_or_else(|| entry.qualified_name.clone()),
+                    entry.signature.clone(),
                 );
                 let arg_types = match self.query_arg_ast_types(query.args.as_slice()) {
                     Ok(arg_types) => arg_types,
@@ -4116,6 +5347,18 @@ impl ReplEngine {
                     let specialized_return = self
                         .specialize_signature_return(&defined, &arg_types)
                         .map(|ty| format_query_ty(&ty))
+                        .map(|ret| {
+                            if ret == "Self" {
+                                arg_types.first().map(format_query_ty).unwrap_or(ret)
+                            } else {
+                                ret
+                            }
+                        })
+                        .or_else(|| {
+                            signature_return_type(&defined)
+                                .filter(|ret| *ret == "Self")
+                                .and_then(|_| arg_types.first().map(format_query_ty))
+                        })
                         .unwrap_or_else(|| {
                             signature_return_type(&defined).unwrap_or("_").to_string()
                         });
@@ -4138,7 +5381,7 @@ impl ReplEngine {
                 .unwrap_or_else(|| {
                     Self::plain(vec![format!("No signature found for {}", source_query)])
                 }),
-            entries => Self::plain(Self::ambiguous_doc_lines(source_query, entries)),
+            entries => Self::plain(Self::ambiguous_signature_lines(source_query, entries)),
         }
     }
 
@@ -4174,7 +5417,12 @@ impl ReplEngine {
 
     fn enum_sig_extra_input_message(&self, owner: &str, source: &str) -> Option<String> {
         let decl = self.visible_declaration(owner)?;
-        (decl.kind == sigil::DeclarationKind::Enum).then(|| {
+        (decl.kind == sigil::DeclarationKind::Enum
+            && !matches!(
+                crate::surface_path_name(&decl.fq_name),
+                "Result" | "Boolean"
+            ))
+        .then(|| {
             format!(
                 "Enum signatures are only available for bare type owners: use `:sig {}` instead of `:sig {}`.",
                 crate::surface_path_name(&decl.fq_name),
@@ -4197,66 +5445,82 @@ impl ReplEngine {
     }
 
     fn constructor_signature_lines(&self, decl: &sigil::DeclarationEntry) -> Option<Vec<String>> {
+        if let Some((qualified_name, signature)) = self.constructor_signature_entry(decl) {
+            return Some(vec![Self::render_signature_with_qualified_name(
+                &qualified_name,
+                signature,
+            )]);
+        }
+
+        None
+    }
+
+    fn constructor_signature_entry(
+        &self,
+        decl: &sigil::DeclarationEntry,
+    ) -> Option<(String, String)> {
         let qualified_name = format!("{}::new", decl.fq_name);
+        if let Some(signature) = self.find_signature(&qualified_name) {
+            return Some(signature);
+        }
+
         let mut matches = self
-            .docs
+            .signatures
             .iter()
             .filter(|entry| entry.kind == DocKind::Function)
             .filter(|entry| {
                 crate::surface_path_name(&entry.qualified_name)
                     == crate::surface_path_name(&qualified_name)
             })
-            .filter_map(|entry| {
-                entry.signature.clone().map(|signature| {
-                    Self::render_signature_with_qualified_name(&entry.qualified_name, signature)
-                })
-            })
+            .map(|entry| (entry.qualified_name.clone(), entry.signature.clone()))
             .collect::<Vec<_>>();
-        matches.sort();
-        if !matches.is_empty() {
-            return Some(matches);
+        matches.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+        if let Some(first) = matches.into_iter().next() {
+            return Some(first);
         }
 
-        if decl.kind == sigil::DeclarationKind::Record {
-            return self
-                .scar_session
-                .lookup_type_def(&decl.fq_name)
-                .filter(|def| def.kind == scar::env::TypeKind::Record)
-                .map(|def| {
-                    let params = def
-                        .fields
-                        .iter()
-                        .map(|(name, ty)| format!("{name}: {}", Self::ty_to_string(ty)))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    vec![format!(
-                        "{}::new({params}) -> Self",
+        self.scar_session
+            .lookup_type_def(&decl.fq_name)
+            .filter(|def| {
+                matches!(
+                    def.kind,
+                    scar::env::TypeKind::Struct | scar::env::TypeKind::Record
+                )
+            })
+            .map(|def| {
+                let params = def
+                    .fields
+                    .iter()
+                    .map(|(name, ty)| format!("{name}: {}", Self::ty_to_string(ty)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (
+                    qualified_name,
+                    format!(
+                        "{}::new({params}) -> {}",
+                        crate::surface_path_name(&decl.fq_name),
                         crate::surface_path_name(&decl.fq_name)
-                    )]
-                });
-        }
-
-        None
+                    ),
+                )
+            })
     }
 
     fn enum_variant_signature_lines(&self, decl: &sigil::DeclarationEntry) -> Option<Vec<String>> {
-        let entry = self.docs.iter().rev().find(|entry| {
+        let entry = self.signatures.iter().rev().find(|entry| {
             entry.kind == DocKind::Type
                 && crate::surface_path_name(&entry.qualified_name)
                     == crate::surface_path_name(&decl.fq_name)
         });
         if let Some(entry) = entry {
-            if let Some(signature) = entry.signature.as_deref() {
-                if let Some((_owner_surface, variants_src)) =
-                    Self::parse_defenum_signature(signature)
-                {
-                    let variants = Self::split_top_level_items(variants_src)
-                        .into_iter()
-                        .map(|variant| Self::render_enum_variant_listing(&decl.fq_name, &variant))
-                        .collect::<Vec<_>>();
-                    if !variants.is_empty() {
-                        return Some(variants);
-                    }
+            if let Some((_owner_surface, variants_src)) =
+                Self::parse_defenum_signature(&entry.signature)
+            {
+                let variants = Self::split_top_level_items(variants_src)
+                    .into_iter()
+                    .map(|variant| Self::render_enum_variant_listing(&decl.fq_name, &variant))
+                    .collect::<Vec<_>>();
+                if !variants.is_empty() {
+                    return Some(variants);
                 }
             }
         }
@@ -4690,7 +5954,7 @@ impl ReplEngine {
                     ))
                 }
                 _ => Err(
-                    "`/` currently models Facet composition. Use `safe_div(...)` for division."
+                    "`/` currently models Facet composition. Use `Int::safe_div(...)` or `Float::safe_div(...)` for division."
                         .to_string(),
                 ),
             },
@@ -4899,8 +6163,14 @@ impl ReplEngine {
         let (param_types, return_ty) = Self::signature_param_asts_and_return(signature)?;
         let self_ty = Self::self_type_from_signature(signature)
             .or_else(|| Self::implicit_self_type_from_args(&param_types, arg_types));
-        let substitutions =
-            Self::build_type_substitutions(&param_types, arg_types, self_ty.as_ref())?;
+        let Some(substitutions) =
+            Self::build_type_substitutions(&param_types, arg_types, self_ty.as_ref())
+        else {
+            return match &return_ty {
+                AstTy::Named(_, name) if name == "Self" => self_ty,
+                _ => None,
+            };
+        };
         Some(Self::substitute_query_ty(
             &return_ty,
             &substitutions,
@@ -5562,6 +6832,18 @@ impl ReplEngine {
         }
     }
 
+    fn append_signatures(&mut self, signatures: Vec<SignatureEntry>) {
+        for signature in signatures {
+            let exists = self
+                .signatures
+                .iter()
+                .any(|existing| existing == &signature);
+            if !exists {
+                self.signatures.push(signature);
+            }
+        }
+    }
+
     /// Evaluate one line and return a structured `ReplResult`.
     ///
     /// The unified entry point used by both CLI and TUI.
@@ -5729,6 +7011,8 @@ impl ReplEngine {
         };
 
         let docs = crate::collect_doc_entries(&[], &ast, Some(self.repl_module_path.as_str()));
+        let signatures =
+            crate::collect_signature_entries(&[], &ast, Some(self.repl_module_path.as_str()));
         let resolved = match self.sigil_session.resolve(ast.clone()) {
             Ok(r) => r,
             Err(e) => {
@@ -5932,15 +7216,16 @@ impl ReplEngine {
                     }
                 }
                 for imported in &import_result.imported_symbols {
-                    self.symbols.insert(imported.clone());
+                    self.insert_completion_symbol(imported.clone());
                 }
                 for b in &meta.bindings {
-                    self.symbols.insert(b.name.clone());
+                    self.insert_completion_symbol(b.name.clone());
                 }
                 for name in &meta.function_defs {
-                    self.symbols.insert(name.clone());
+                    self.insert_surface_symbol(name);
                 }
                 self.append_docs(docs);
+                self.append_signatures(signatures);
                 self.history_entries.push(ReplHistoryEntry {
                     line: committed_line,
                     source: committed_source.clone(),
@@ -5955,6 +7240,11 @@ impl ReplEngine {
                     .extend(Self::collect_import_records(&ast, committed_line));
                 self.def_records
                     .extend(Self::collect_def_records(&ast, committed_line));
+                self.sync_cached_completion_context_after_commit(
+                    &import_result.imported_symbols,
+                    &meta.bindings,
+                    &meta.function_defs,
+                );
                 if Self::chunk_is_replayable(&ast) {
                     self.replay_inputs.push(committed_source);
                 }
@@ -5971,6 +7261,9 @@ impl ReplEngine {
             }
             Err(e) => {
                 let committed_source = self.pending.clone();
+                self.sigil_session.rollback(sigil_cp);
+                self.scar_session.rollback(scar_cp);
+                self.forge_session.rollback(forge_cp);
                 let location = e
                     .context
                     .call_site
@@ -6119,6 +7412,7 @@ impl ReplEngine {
 
         let mut bytecode = self.vm.snapshot_bytecode();
         bytecode.docs = self.docs.clone();
+        bytecode.signatures = self.signatures.clone();
         match bytecode.encode() {
             Err(e) => Self::plain(vec![format!("Error encoding bytecode: {}", e)]),
             Ok(bytes) => match fs::write(&path, bytes) {
@@ -6182,7 +7476,7 @@ fn compile_preloaded_repl_chunk(
         module_input_stages.push(vec![crate::ModuleInput {
             file_name: file_name.to_string(),
             source: source.to_string(),
-            module_path: preload_module_path(file_name, source),
+            module_path: crate::module_path_from_source_or_file_name(file_name, source),
         }]);
     }
     if let Some(script) = prepared_script.as_ref() {
@@ -6236,12 +7530,18 @@ fn compile_repl_preload_from_module_stages(
         builtin_source_id: repl_sources.builtin_source_id,
         builtin_module_path: Some("Bootstrap".to_string()),
         module_stages: repl_sources.module_stages.clone(),
+        stdlib_variant: crate::StdlibVariant::Default,
     };
     let snapshot = crate::default_stdlib_semantic_snapshot().map_err(ReplLoadError::Load)?;
     let (module_stage_asts, raw_module_stages, user_ast, script_runtime_inputs) =
         parse_preload_sources(&compile_sources, &snapshot, mode.compile_unit_kind)?;
 
     let script_preload_docs = crate::collect_doc_entries(
+        &[],
+        &user_ast,
+        Some(compile_sources.user_module_path.as_str()),
+    );
+    let script_preload_signatures = crate::collect_signature_entries(
         &[],
         &user_ast,
         Some(compile_sources.user_module_path.as_str()),
@@ -6257,8 +7557,18 @@ fn compile_repl_preload_from_module_stages(
         &user_ast,
         Some(compile_sources.user_module_path.as_str()),
     );
+    let signatures = crate::collect_signature_entries_with_base(
+        &snapshot.signatures,
+        if module_stage_asts.len() > snapshot.default_stage_count {
+            &module_stage_asts[snapshot.default_stage_count..]
+        } else {
+            &[]
+        },
+        &user_ast,
+        Some(compile_sources.user_module_path.as_str()),
+    );
 
-    let declaration_index = if module_stage_asts.len() == snapshot.default_stage_count {
+    let mut declaration_index = if module_stage_asts.len() == snapshot.default_stage_count {
         snapshot.declaration_index.clone()
     } else {
         sigil::precollect_declaration_index(&module_stage_asts).map_err(|e| {
@@ -6271,6 +7581,14 @@ fn compile_repl_preload_from_module_stages(
             }
         })?
     };
+    merge_user_preload_declarations(
+        &mut declaration_index,
+        &user_ast,
+        &compile_sources.user_module_path,
+        module_stage_asts.len(),
+        &compile_sources.sources,
+        compile_sources.user_source_id,
+    )?;
 
     let mut staged_program = sigil::resolve_staged_program_from_state(
         &module_stage_asts,
@@ -6367,6 +7685,7 @@ fn compile_repl_preload_from_module_stages(
             ),
         })?;
     chunk.docs = docs.clone();
+    chunk.signatures = signatures.clone();
     for stage in &raw_module_stages {
         for module in stage {
             if let Some(source) = compile_sources.sources.source(module.source_id) {
@@ -6408,15 +7727,17 @@ fn compile_repl_preload_from_module_stages(
         .collect();
     for entry in vm.bytecode().functions.iter() {
         if let Some(name) = &entry.qualified_name {
-            symbols.insert(name.clone());
-            if let Some(short) = name.rsplit("::").next() {
+            let surface_name = crate::surface_rendered_name(name);
+            symbols.insert(surface_name.clone());
+            if let Some(short) = surface_name.rsplit("::").next() {
                 symbols.insert(short.to_string());
             }
         }
     }
     for entry in vm.bytecode().type_registry.entries().iter() {
-        symbols.insert(entry.name.clone());
-        if let Some(short) = entry.name.rsplit("::").next() {
+        let surface_name = crate::surface_rendered_name(&entry.name);
+        symbols.insert(surface_name.clone());
+        if let Some(short) = surface_name.rsplit("::").next() {
             symbols.insert(short.to_string());
         }
     }
@@ -6447,11 +7768,13 @@ fn compile_repl_preload_from_module_stages(
         scar_checkpoint: scar_session.checkpoint(),
         vm,
         docs,
+        signatures,
         process_metadata,
         symbols,
         auto_import_modules,
         script_runtime_inputs,
         script_preload_docs,
+        script_preload_signatures,
         import_records,
         def_records,
     })
@@ -6518,27 +7841,6 @@ fn parse_preload_sources(
         preload_ast,
         script_runtime_inputs,
     ))
-}
-
-fn preload_module_path(file_name: &str, source: &str) -> String {
-    crate::derive_primary_module_path(source)
-        .filter(|module_path| !module_path.is_empty())
-        .unwrap_or_else(|| {
-            let normalized = file_name.replace('\\', "/");
-            let mut body = normalized.trim().trim_start_matches("./").to_string();
-            if let Some(stripped) = body.strip_suffix(".srt") {
-                body = stripped.to_string();
-            }
-            let segments = body
-                .split('/')
-                .filter(|segment| !segment.is_empty())
-                .collect::<Vec<_>>();
-            if segments.is_empty() {
-                "Main".to_string()
-            } else {
-                segments.join("::")
-            }
-        })
 }
 
 fn collect_process_metadata(
@@ -6633,6 +7935,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::ListNil(span)
         | Ast::ListCons(span, _, _)
         | Ast::ListLiteral(span, _)
+        | Ast::HashMapLiteral(span, _)
         | Ast::RangeLiteral(span, _, _)
         | Ast::TupleLiteral(span, _)
         | Ast::Grouped(span, _)
@@ -6684,107 +7987,68 @@ fn prepare_script_preload(
         return Ok(None);
     };
 
-    let (source_for_parse, directives) = collect_preload_include_directives(file_name, source)?;
-    let mut include_modules = Vec::with_capacity(directives.len());
-    for directive in directives {
-        include_modules.push(resolve_preload_include_module_input(
-            file_name, source, &directive,
-        )?);
-    }
+    let prepared = crate::prepare_script_sources(file_name, source, SourceKind::Script)
+        .map_err(|e| preload_script_prepare_error(file_name, source, e))?;
 
     Ok(Some(PreparedScriptPreload {
         file_name: file_name.to_string(),
-        source_for_parse,
-        include_modules,
+        source_for_parse: prepared.source_for_parse,
+        include_modules: prepared.include_modules,
     }))
 }
 
-fn collect_preload_include_directives(
+fn merge_user_preload_declarations(
+    declaration_index: &mut sigil::DeclarationIndex,
+    user_ast: &[Ast],
+    user_module_path: &str,
+    stage_index: usize,
+    sources: &SourceRegistry,
+    source_id: SourceId,
+) -> Result<(), ReplLoadError> {
+    if user_ast.is_empty() {
+        return Ok(());
+    }
+
+    let stage = vec![sigil::StagedModuleAst {
+        module_path: user_module_path.to_string(),
+        doc_module_path: Some(user_module_path.to_string()),
+        ast: user_ast.to_vec(),
+        module_doc: None,
+        auto_import: false,
+        process_spec: None,
+    }];
+    let user_index = sigil::precollect_declaration_index(&[stage]).map_err(|e| {
+        let spec = diagnostics::simple_error("ResolveError", &e.message, e.span, None);
+        ReplLoadError::Diagnostic {
+            phase: "resolve".to_string(),
+            sources: sources.clone(),
+            source_id,
+            spec,
+        }
+    })?;
+
+    for (fq_name, mut entry) in user_index {
+        entry.stage_index = stage_index;
+        declaration_index.insert(fq_name, entry);
+    }
+    Ok(())
+}
+
+fn preload_script_prepare_error(
     file_name: &str,
     source: &str,
-) -> Result<(String, Vec<PreloadIncludeDirective>), ReplLoadError> {
-    let ast = spire::parse_with_context(
-        source,
-        spire::ParserContext::script(0).with_rules(derive_parse_rules(SourceKind::Script)),
-    )
-    .map_err(|e| preload_script_parse_error(file_name, source, &e))?;
-
-    let mut chars = source.chars().collect::<Vec<_>>();
-    let mut directives = Vec::new();
-    for stmt in &ast {
-        if let Ast::Include(span, file_path) = stmt {
-            directives.push(PreloadIncludeDirective {
-                file_path: file_path.clone(),
-                span: span.clone(),
-            });
-            for ch in chars.iter_mut().take(span.end).skip(span.start) {
-                if *ch != '\n' {
-                    *ch = ' ';
-                }
-            }
+    error: crate::ScriptSourcePrepareError,
+) -> ReplLoadError {
+    match error {
+        crate::ScriptSourcePrepareError::Parse { message, span } => preload_script_diagnostic(
+            file_name,
+            source,
+            diagnostics::parse_error_spec(source, &message, span),
+        ),
+        crate::ScriptSourcePrepareError::IncludeRead { message, span } => {
+            preload_script_load_error(file_name, source, span, message)
         }
     }
-
-    Ok((chars.into_iter().collect(), directives))
-}
-
-fn resolve_preload_include_module_input(
-    script_file_path: &str,
-    script_source: &str,
-    directive: &PreloadIncludeDirective,
-) -> Result<crate::ModuleInput, ReplLoadError> {
-    let resolved_path = resolve_preload_include_file_path(script_file_path, &directive.file_path);
-    let display_path = normalize_preload_display_path(&resolved_path);
-    let module_source = fs::read_to_string(&resolved_path).map_err(|e| {
-        preload_script_load_error(
-            script_file_path,
-            script_source,
-            directive.span.clone(),
-            format!(
-                "include failed to read `{}`: {}",
-                resolved_path.display(),
-                e
-            ),
-        )
-    })?;
-    let module_path = crate::derive_primary_module_path(&module_source)
-        .filter(|module_path| !module_path.is_empty())
-        .unwrap_or_else(|| preload_module_path(&display_path, &module_source));
-
-    Ok(crate::ModuleInput {
-        file_name: display_path,
-        source: module_source,
-        module_path,
-    })
-}
-
-fn resolve_preload_include_file_path(script_file_path: &str, raw_path: &str) -> PathBuf {
-    let candidate = Path::new(raw_path);
-    if candidate.is_absolute() {
-        return candidate.to_path_buf();
-    }
-
-    let base_dir = Path::new(script_file_path)
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    base_dir.join(candidate)
-}
-
-fn normalize_preload_display_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
-fn preload_script_parse_error(
-    file_name: &str,
-    source: &str,
-    error: &spire::error::ParseError,
-) -> ReplLoadError {
-    preload_script_diagnostic(
-        file_name,
-        source,
-        diagnostics::parse_error_spec(source, error.message(), error.span().clone()),
-    )
 }
 
 fn preload_script_load_error(
@@ -6941,6 +8205,7 @@ fn collect_unresolved_pattern_binding_names(pat: &TypedPattern, names: &mut Vec<
         }
         TypedPattern::ResultOk(_, inner) => collect_unresolved_pattern_binding_names(inner, names),
         TypedPattern::Wildcard(_)
+        | TypedPattern::Pin(_, _, _)
         | TypedPattern::ListNil(_)
         | TypedPattern::IntLit(_, _)
         | TypedPattern::StrLit(_, _)
@@ -7172,12 +8437,13 @@ impl ReplEngine {
                         entry
                             .qualified_name
                             .as_deref()
-                            .and_then(|qualified_name| qualified_name.rsplit("::").next())
-                            == Some(name.as_str())
-                            || entry
-                                .signature
-                                .as_deref()
-                                .is_some_and(|signature| signature.starts_with(&format!("{name}(")))
+                            .is_some_and(|qualified_name| {
+                                self.sigil_session.lookup_uid(qualified_name) == Some(uid)
+                                    || (Self::symbol_matches(qualified_name, name)
+                                        && entry.signature.as_deref().is_some_and(|signature| {
+                                            signature.starts_with(&format!("{name}("))
+                                        }))
+                            })
                     })
                     .map(|entry| entry.fun_idx)?;
                 Some((uid, fun_idx))
@@ -7385,6 +8651,217 @@ pub(crate) fn xldr_version() -> &'static str {
     XLDR_VERSION
 }
 
+fn clamp_to_char_boundary(input: &str, mut cursor: usize) -> usize {
+    cursor = cursor.min(input.len());
+    while cursor > 0 && !input.is_char_boundary(cursor) {
+        cursor -= 1;
+    }
+    cursor
+}
+
+pub(crate) fn completion_token(input: &str, cursor: usize) -> (usize, usize, String) {
+    let cursor = clamp_to_char_boundary(input, cursor);
+    let before = &input[..cursor];
+    let start = before
+        .char_indices()
+        .rev()
+        .find_map(|(idx, ch)| (!completion_token_char(ch)).then_some(idx + ch.len_utf8()))
+        .unwrap_or(0);
+    (start, cursor, input[start..cursor].to_string())
+}
+
+fn completion_token_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':')
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompletionLexState {
+    Code,
+    String { escaped: bool },
+    Interpolation { brace_depth: usize },
+    InterpolationString { brace_depth: usize, escaped: bool },
+}
+
+pub(crate) fn completion_allowed_at_cursor(input: &str, cursor: usize) -> bool {
+    let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
+    let before = &input[..cursor];
+    let mut state = CompletionLexState::Code;
+    let mut chars = before.char_indices().peekable();
+
+    while let Some((_idx, ch)) = chars.next() {
+        state = match state {
+            CompletionLexState::Code => match ch {
+                '"' => CompletionLexState::String { escaped: false },
+                _ => CompletionLexState::Code,
+            },
+            CompletionLexState::String { escaped } => {
+                if escaped {
+                    CompletionLexState::String { escaped: false }
+                } else if ch == '\\' {
+                    CompletionLexState::String { escaped: true }
+                } else if ch == '"' {
+                    CompletionLexState::Code
+                } else if ch == '#' && chars.peek().is_some_and(|(_, next)| *next == '{') {
+                    chars.next();
+                    CompletionLexState::Interpolation { brace_depth: 1 }
+                } else {
+                    CompletionLexState::String { escaped: false }
+                }
+            }
+            CompletionLexState::Interpolation { brace_depth } => match ch {
+                '"' => CompletionLexState::InterpolationString {
+                    brace_depth,
+                    escaped: false,
+                },
+                '{' => CompletionLexState::Interpolation {
+                    brace_depth: brace_depth + 1,
+                },
+                '}' if brace_depth <= 1 => CompletionLexState::String { escaped: false },
+                '}' => CompletionLexState::Interpolation {
+                    brace_depth: brace_depth - 1,
+                },
+                _ => CompletionLexState::Interpolation { brace_depth },
+            },
+            CompletionLexState::InterpolationString {
+                brace_depth,
+                escaped,
+            } => {
+                if escaped {
+                    CompletionLexState::InterpolationString {
+                        brace_depth,
+                        escaped: false,
+                    }
+                } else if ch == '\\' {
+                    CompletionLexState::InterpolationString {
+                        brace_depth,
+                        escaped: true,
+                    }
+                } else if ch == '"' {
+                    CompletionLexState::Interpolation { brace_depth }
+                } else {
+                    CompletionLexState::InterpolationString {
+                        brace_depth,
+                        escaped: false,
+                    }
+                }
+            }
+        };
+    }
+
+    matches!(
+        state,
+        CompletionLexState::Code | CompletionLexState::Interpolation { .. }
+    )
+}
+
+fn completion_call_context(input: &str, cursor: usize) -> Option<CompletionCallContext> {
+    let cursor = clamp_to_char_boundary(input, cursor);
+    let before = &input[..cursor];
+    let open = innermost_unclosed_lparen(before)?;
+    let callee_end = before[..open].trim_end().len();
+    let callee_start = before[..callee_end]
+        .char_indices()
+        .rev()
+        .find_map(|(idx, ch)| (!completion_token_char(ch)).then_some(idx + ch.len_utf8()))
+        .unwrap_or(0);
+    let callee = before[callee_start..callee_end].trim();
+    if callee.is_empty() {
+        return None;
+    }
+    let args = &before[open + 1..];
+    Some(CompletionCallContext {
+        callee: callee.to_string(),
+        active_parameter: active_call_parameter(args),
+    })
+}
+
+fn innermost_unclosed_lparen(input: &str) -> Option<usize> {
+    let mut stack = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (idx, ch) in input.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '(' => stack.push(idx),
+            ')' => {
+                stack.pop();
+            }
+            _ => {}
+        }
+    }
+
+    stack.pop()
+}
+
+fn active_call_parameter(args: &str) -> usize {
+    let mut active = 0usize;
+    let mut paren_depth = 0usize;
+    let mut angle_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for ch in args.chars() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '<' => angle_depth += 1,
+            '>' => angle_depth = angle_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            ',' if paren_depth == 0 && angle_depth == 0 && bracket_depth == 0 => active += 1,
+            _ => {}
+        }
+    }
+
+    active
+}
+
+fn highlight_signature_parameter(signature: &str, active_parameter: usize) -> String {
+    let Some((head, rest)) = signature.split_once('(') else {
+        return signature.to_string();
+    };
+    let Some((params_src, tail)) = rest.rsplit_once(')') else {
+        return signature.to_string();
+    };
+    let mut params = split_top_level_commas(params_src)
+        .into_iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if let Some(param) = params.get_mut(active_parameter) {
+        if let Some((name, ty)) = param.split_once(':') {
+            *param = format!("{}: [{}]", name.trim(), ty.trim());
+        } else {
+            *param = format!("[{}]", param.trim());
+        }
+    }
+    format!("{head}({}){tail}", params.join(", "))
+}
+
 fn split_top_level_commas(input: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0;
@@ -7447,6 +8924,7 @@ mod tests {
             const_base: 0,
             constants: vec![Constant::Int(sindr::primitives::int(1))],
             new_locals: 0,
+            type_registry_base: 0,
             type_entries: Vec::new(),
             error_template_base: 0,
             error_templates: Vec::new(),
@@ -7455,6 +8933,7 @@ mod tests {
             callable_templates: Vec::new(),
             functions: Vec::new(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         }
@@ -7495,6 +8974,7 @@ mod tests {
                 .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
                 .collect(),
             docs: Vec::new(),
+            signatures: Vec::new(),
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
             reload_seed: ReplReloadSeed::Empty,
@@ -7503,6 +8983,9 @@ mod tests {
             binding_records: Vec::new(),
             import_records: Vec::new(),
             def_records: Vec::new(),
+            completion_context_cache: RefCell::new(None),
+            #[cfg(test)]
+            completion_context_builds: Cell::new(0),
             error_display_mode: ErrorDisplayMode::Full,
         }
     }
@@ -7542,6 +9025,16 @@ mod tests {
     }
 
     #[test]
+    fn repl_help_lists_q_quit_alias() {
+        let mut engine = ReplEngine::new().expect("engine should initialize");
+
+        let help = engine.handle_line(":help");
+        let rendered = ReplEngine::repl_result_text(&help);
+
+        assert!(rendered.contains(":quit, :exit, :q"), "{rendered}");
+    }
+
+    #[test]
     fn bootstrap_std_modules_returns_resolve_failure() {
         expect_bootstrap_failure(
             "defmod Broken { def nope() -> Int { missing } }",
@@ -7573,6 +9066,7 @@ mod tests {
                     const_base: 0,
                     constants: vec![sindr::ir::Constant::Int(sindr::primitives::int(1))],
                     new_locals: 0,
+                    type_registry_base: 0,
                     type_entries: Vec::new(),
                     dbg_template_base: 0,
                     dbg_templates: Vec::new(),
@@ -7581,6 +9075,7 @@ mod tests {
                     callable_templates: Vec::new(),
                     functions: Vec::new(),
                     docs: Vec::new(),
+                    signatures: Vec::new(),
                     runtime_process_specs: Vec::new(),
                     runtime_boot_plan: Default::default(),
                 },
@@ -7723,6 +9218,57 @@ mod tests {
     }
 
     #[test]
+    fn completion_context_is_memoized_until_repl_state_changes() {
+        let mut engine = ReplEngine::new().expect("engine should initialize");
+
+        let baseline = engine.completion_context_build_count();
+        let first = engine.completion_context();
+        let second = engine.completion_context();
+
+        assert_eq!(first, second);
+        assert_eq!(engine.completion_context_build_count(), baseline + 1);
+
+        let bind = engine.handle_line("value = 1");
+        assert!(!bind.should_exit, "{}", ReplEngine::repl_result_text(&bind));
+
+        let after_mutation = engine
+            .cached_completion_context()
+            .expect("completion cache should stay available after commit");
+        assert!(
+            after_mutation.callable_signatures.get("value").is_none(),
+            "plain value bindings should not become callable signatures"
+        );
+        assert_eq!(engine.completion_context_build_count(), baseline + 1);
+
+        let after_cached_reuse = engine.completion_context();
+        assert_eq!(after_mutation, after_cached_reuse);
+        assert_eq!(engine.completion_context_build_count(), baseline + 1);
+    }
+
+    #[test]
+    fn cached_completion_context_keeps_new_binding_after_commit() {
+        let mut engine = ReplEngine::new().expect("engine should initialize");
+        let _ = engine.completion_context();
+
+        let bind = engine.handle_line("value = 1");
+        assert!(!bind.should_exit, "{}", ReplEngine::repl_result_text(&bind));
+
+        let cached = engine
+            .cached_completion_context()
+            .expect("completion cache should remain available after commit");
+        let labels = cached
+            .completions("val", 3)
+            .candidates
+            .into_iter()
+            .map(|candidate| candidate.label)
+            .collect::<Vec<_>>();
+        assert!(
+            labels.iter().any(|label| label == "value"),
+            "cached completion context should include new binding: {labels:?}"
+        );
+    }
+
+    #[test]
     fn repl_session_rejects_top_level_def_capturing_existing_value_binding() {
         let mut engine = ReplEngine::new().expect("engine should initialize");
 
@@ -7765,6 +9311,7 @@ mod tests {
         let mut chunk = interactive_test_chunk();
         chunk.const_base = engine.vm.bytecode().constants.len() as u32;
         chunk.error_template_base = engine.vm.bytecode().error_templates.len() as u32;
+        chunk.type_registry_base = engine.vm.bytecode().type_registry.entries().len() as u32;
         let next_tag = engine
             .vm
             .bytecode()

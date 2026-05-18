@@ -7,6 +7,12 @@ test("Range") {
       normalized = Range::normalized(3, 1)
       assert_eq(((3, 1), (1, 3)), ((raw.min, raw.max), (normalized.min, normalized.max)))
     }
+
+    it("keeps constructor polymorphism across different endpoint types in one scope") {
+      raw = Range(3, 1)
+      dur = Range(10ms, 20ms)
+      assert_eq(((3, 1), ("10ms", "20ms")), ((raw.min, raw.max), (to_string(dur.min), to_string(dur.max))))
+    }
   }
 
   describe("ordering helpers") {
@@ -22,6 +28,20 @@ test("Range") {
           compare(left, same),
           left == same,
           left != different,
+        ),
+      )
+    }
+
+    it("specializes generic ordering helpers for Range<Duration>") {
+      left = Range(10ms, 20ms)
+      right = Range(10ms, 30ms)
+      same = Range(10ms, 20ms)
+      assert_eq(
+        (Ordering::Less, True, True),
+        (
+          compare(left, right),
+          left == same,
+          left != right,
         ),
       )
     }

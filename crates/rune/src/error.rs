@@ -13,7 +13,7 @@ Usage:\n\
   surtr test [--quiet|-q] <lib-relative-name|--all>\n\
   surtr repl [--quiet] [--banner] [--version] [--module <file.srt>] [--script <file.srt>]\n\
   surtr build <file.srt> [output.eldr]\n\
-  surtr dump <file.eldr|entry.srt> [--format json] [--entry <name>] [--opcode-histogram] [--peephole-candidates]\n\
+  surtr dump <file.eldr|entry.srt> [--format json|viewer-json] [--entry <name>] [--opcode-histogram] [--peephole-candidates]\n\
   surtr tui [file.eldr]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
