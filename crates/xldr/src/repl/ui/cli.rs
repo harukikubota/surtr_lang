@@ -24,11 +24,12 @@ use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 #[cfg(feature = "line-editor")]
 use rustyline::{Context, Helper};
 
-use crate::repl::logic::core::{xldr_version, CompletionTelemetry, ReplEngine};
 #[cfg(feature = "line-editor")]
 use crate::repl::logic::core::{
-    ReplCompletion, ReplCompletionCandidate, ReplCompletionContext, ReplCompletionKind,
+    completion_allowed_at_cursor, completion_token, ReplCompletion, ReplCompletionCandidate,
+    ReplCompletionContext, ReplCompletionKind,
 };
+use crate::repl::logic::core::{xldr_version, CompletionTelemetry, ReplEngine};
 use crate::repl::logic::{present_for_cli, styled, ReplResult};
 #[cfg(feature = "line-editor")]
 use crate::repl::ui::completion::{
@@ -130,6 +131,9 @@ impl Completer for ReplHelper {
         pos: usize,
         _ctx: &Context<'_>,
     ) -> Result<(usize, Vec<Pair>), ReadlineError> {
+        if !completion_allowed_at_cursor(line, pos) {
+            return Ok((pos, Vec::new()));
+        }
         const COMMANDS: &[&str] = &[
             ":help",
             ":h",
@@ -151,15 +155,11 @@ impl Completer for ReplHelper {
             ":clear",
             ":v",
         ];
-        let start = line[..pos]
-            .rfind(char::is_whitespace)
-            .map(|idx| idx + 1)
-            .unwrap_or(0);
-        let word = &line[start..pos];
+        let (start, _end, word) = completion_token(line, pos);
 
         let mut matches = Vec::new();
         for cmd in COMMANDS {
-            if cmd.starts_with(word) {
+            if cmd.starts_with(&word) {
                 matches.push(Pair {
                     display: cmd.to_string(),
                     replacement: cmd.to_string(),
@@ -167,7 +167,7 @@ impl Completer for ReplHelper {
             }
         }
         for symbol in &self.symbols {
-            if symbol.starts_with(word) {
+            if symbol.starts_with(&word) {
                 matches.push(Pair {
                     display: symbol.clone(),
                     replacement: symbol.clone(),
@@ -1024,6 +1024,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use rustyline::completion::Completer;
+    use rustyline::history::DefaultHistory;
 
     use crate::repl::logic::core::{
         CompletionTelemetry, ReplCompletion, ReplCompletionCandidate, ReplCompletionKind,
@@ -1241,6 +1243,34 @@ mod tests {
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
         );
         assert_eq!(action, super::TerminalAction::ExitCompletionMode);
+    }
+
+    #[test]
+    fn rustyline_helper_completes_only_inside_string_interpolation() {
+        let mut helper = super::ReplHelper::new();
+        helper.set_symbols(vec!["String".to_string()]);
+        let history = DefaultHistory::new();
+        let ctx = rustyline::Context::new(&history);
+
+        let plain = r#""plain Str"#;
+        let (_start, matches) = helper
+            .complete(plain, plain.len(), &ctx)
+            .expect("rustyline completion should succeed");
+        assert!(
+            matches.is_empty(),
+            "rustyline fallback completion should stay disabled in string text"
+        );
+
+        let interpolation = r#""plain #{Str"#;
+        let (_start, matches) = helper
+            .complete(interpolation, interpolation.len(), &ctx)
+            .expect("rustyline completion should succeed");
+        assert!(
+            matches
+                .iter()
+                .any(|candidate| candidate.replacement == "String"),
+            "rustyline fallback completion should run inside interpolation"
+        );
     }
 
     #[test]

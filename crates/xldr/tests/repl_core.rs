@@ -315,6 +315,31 @@ fn core_completion_returns_type_constructors_and_type_paths() {
 }
 
 #[test]
+fn core_completion_is_enabled_inside_string_interpolation_only() {
+    let engine = engine();
+    let string_body = r#""plain Str"#;
+    assert!(
+        engine
+            .completions(string_body, string_body.len())
+            .candidates
+            .is_empty(),
+        "completion should stay disabled in ordinary string text"
+    );
+
+    let interpolation = r#""plain #{Str"#;
+    let labels = engine
+        .completions(interpolation, interpolation.len())
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"String".to_string()),
+        "completion should be enabled inside string interpolation: {labels:?}"
+    );
+}
+
+#[test]
 fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
     let engine = engine();
     let completion_context = engine.completion_context();

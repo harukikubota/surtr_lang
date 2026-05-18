@@ -366,6 +366,15 @@ impl ReplCompletionContext {
     pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
         let started = Instant::now();
         let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
+        if !completion_allowed_at_cursor(input, cursor) {
+            let mut telemetry = CompletionTelemetry::default();
+            telemetry.record_completion_compute(started.elapsed());
+            return ReplCompletion {
+                candidates: Vec::new(),
+                signature: None,
+                telemetry,
+            };
+        }
         let (_replace_start, _replace_end, prefix) = completion_token(input, cursor);
         let call_context = completion_call_context(input, cursor);
         let signature = call_context
@@ -432,6 +441,9 @@ impl ReplCompletionContext {
 
     pub fn should_request(input: &str, cursor: usize) -> bool {
         let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
+        if !completion_allowed_at_cursor(input, cursor) {
+            return false;
+        }
         let (_, _, prefix) = completion_token(input, cursor);
         completion_call_context(input, cursor).is_some() || !prefix.is_empty()
     }
@@ -8253,7 +8265,7 @@ fn clamp_to_char_boundary(input: &str, mut cursor: usize) -> usize {
     cursor
 }
 
-fn completion_token(input: &str, cursor: usize) -> (usize, usize, String) {
+pub(crate) fn completion_token(input: &str, cursor: usize) -> (usize, usize, String) {
     let cursor = clamp_to_char_boundary(input, cursor);
     let before = &input[..cursor];
     let start = before
@@ -8266,6 +8278,86 @@ fn completion_token(input: &str, cursor: usize) -> (usize, usize, String) {
 
 fn completion_token_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':')
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompletionLexState {
+    Code,
+    String { escaped: bool },
+    Interpolation { brace_depth: usize },
+    InterpolationString { brace_depth: usize, escaped: bool },
+}
+
+pub(crate) fn completion_allowed_at_cursor(input: &str, cursor: usize) -> bool {
+    let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
+    let before = &input[..cursor];
+    let mut state = CompletionLexState::Code;
+    let mut chars = before.char_indices().peekable();
+
+    while let Some((_idx, ch)) = chars.next() {
+        state = match state {
+            CompletionLexState::Code => match ch {
+                '"' => CompletionLexState::String { escaped: false },
+                _ => CompletionLexState::Code,
+            },
+            CompletionLexState::String { escaped } => {
+                if escaped {
+                    CompletionLexState::String { escaped: false }
+                } else if ch == '\\' {
+                    CompletionLexState::String { escaped: true }
+                } else if ch == '"' {
+                    CompletionLexState::Code
+                } else if ch == '#' && chars.peek().is_some_and(|(_, next)| *next == '{') {
+                    chars.next();
+                    CompletionLexState::Interpolation { brace_depth: 1 }
+                } else {
+                    CompletionLexState::String { escaped: false }
+                }
+            }
+            CompletionLexState::Interpolation { brace_depth } => match ch {
+                '"' => CompletionLexState::InterpolationString {
+                    brace_depth,
+                    escaped: false,
+                },
+                '{' => CompletionLexState::Interpolation {
+                    brace_depth: brace_depth + 1,
+                },
+                '}' if brace_depth <= 1 => CompletionLexState::String { escaped: false },
+                '}' => CompletionLexState::Interpolation {
+                    brace_depth: brace_depth - 1,
+                },
+                _ => CompletionLexState::Interpolation { brace_depth },
+            },
+            CompletionLexState::InterpolationString {
+                brace_depth,
+                escaped,
+            } => {
+                if escaped {
+                    CompletionLexState::InterpolationString {
+                        brace_depth,
+                        escaped: false,
+                    }
+                } else if ch == '\\' {
+                    CompletionLexState::InterpolationString {
+                        brace_depth,
+                        escaped: true,
+                    }
+                } else if ch == '"' {
+                    CompletionLexState::Interpolation { brace_depth }
+                } else {
+                    CompletionLexState::InterpolationString {
+                        brace_depth,
+                        escaped: false,
+                    }
+                }
+            }
+        };
+    }
+
+    matches!(
+        state,
+        CompletionLexState::Code | CompletionLexState::Interpolation { .. }
+    )
 }
 
 fn completion_call_context(input: &str, cursor: usize) -> Option<CompletionCallContext> {
