@@ -1405,6 +1405,170 @@ fn core_completion_hides_trait_impl_members_from_qualified_type_paths() {
 }
 
 #[test]
+fn core_completion_shows_facet_path_candidates_for_type_root() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord User(name: String, age: Int)
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let completion = engine.completions("User.", "User.".len());
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"name"),
+        "type-root facet completion should include record fields: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"age"),
+        "type-root facet completion should include record fields: {labels:?}"
+    );
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("type-root facet completion should show signature help");
+    let rendered = signature.lines.join("\n");
+    assert!(
+        rendered.contains("User.[field] -> Facet<User, _>"),
+        "unexpected facet signature help: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_shows_facet_path_candidates_for_value_root() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord User(name: String, age: Int)
+"#,
+    )
+    .expect("script preload should bootstrap");
+    assert!(
+        rendered_text(&engine.handle_line(r#"user = User("alice", 42)"#)).contains("user: User")
+    );
+
+    let completion = engine.completions("user.", "user.".len());
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"name"),
+        "value-root facet completion should include record fields: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"age"),
+        "value-root facet completion should include record fields: {labels:?}"
+    );
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("value-root facet completion should show signature help");
+    let rendered = signature.lines.join("\n");
+    assert!(
+        rendered.contains("user.[field] -> _"),
+        "unexpected value-root facet signature help: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_shows_facet_view_closure_candidates() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord User(name: String, age: Int)
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let completion = engine.completions("&User.", "&User.".len());
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"name"),
+        "facet view-closure completion should include record fields: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"age"),
+        "facet view-closure completion should include record fields: {labels:?}"
+    );
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("facet view-closure completion should show signature help");
+    let rendered = signature.lines.join("\n");
+    assert!(
+        rendered.contains("&User.[field] -> (User -> _)"),
+        "unexpected facet view-closure signature help: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_shows_result_focus_api_help_for_facet_paths() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord User(score: Result<Int>)
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let completion = engine.completions("User.score.", "User.score.".len());
+    let rendered = completion
+        .signature
+        .as_ref()
+        .expect("result focus facet completion should show signature help")
+        .lines
+        .join("\n");
+    assert!(
+        rendered.contains("Facet::view(User.score, User) -> Result<Int>"),
+        "result focus should use view-based return help: {rendered:?}"
+    );
+    assert!(
+        rendered.contains(
+            "Facet::over_result(User.score, User, (Result<Int> -> Result<Result<Int>>)) -> Result<User>"
+        ),
+        "result focus should expose over_result help: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_shows_combined_list_tuple_result_help() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord User(scores: List<(String, Result<Int>)>)
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let completion = engine.completions("User.scores.[0]._1.", "User.scores.[0]._1.".len());
+    let rendered = completion
+        .signature
+        .as_ref()
+        .expect("combined facet path completion should show signature help")
+        .lines
+        .join("\n");
+    assert!(
+        rendered.contains("Facet::view(User.scores.[0]._1, User) -> Result<Result<Int>>"),
+        "combined facet path should keep list-index fallibility in view help: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Facet::over_result(User.scores.[0]._1, User, (Result<Int> -> Result<Result<Int>>)) -> Result<User>"),
+        "combined facet path should preserve result-focus API help: {rendered:?}"
+    );
+}
+
+#[test]
 fn core_completion_uses_argument_position_for_variable_candidates_and_signature_help() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line("n = 3")).contains("n: Int"));

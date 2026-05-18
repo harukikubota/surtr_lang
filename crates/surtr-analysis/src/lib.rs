@@ -22,11 +22,11 @@ pub use project_runner::{
     ProjectRunnerProfile, ProjectRunnerResult, ProjectRunnerSourceInput,
 };
 pub use semantic::{
-    complete_prefix, complete_repl_prefix, lookup_symbol_at_cursor,
+    complete_prefix, complete_repl_prefix, facet_path_context_at_cursor, lookup_symbol_at_cursor,
     rank_completion_candidates_by_expected_type, repl_assist_at_cursor, signature_help_at_cursor,
     CompletionCandidate, CompletionKind, CompletionOrigin, CompletionRequest, CompletionResponse,
-    CompletionScope, CompletionSymbol, ReplAssist, SemanticIndex, SignatureLookup, SourceLocation,
-    SymbolLookup,
+    CompletionScope, CompletionSymbol, FacetPathCompletionContext, FacetPathRootKind, ReplAssist,
+    SemanticIndex, SignatureLookup, SourceLocation, SymbolLookup,
 };
 pub use service::{
     AnalysisDiagnostic, AnalysisDiagnosticKind, AnalysisHost, AnalysisRange, AnalysisService,

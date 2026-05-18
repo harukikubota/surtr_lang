@@ -280,6 +280,25 @@ pub struct ReplAssist {
     pub active_parameter: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FacetPathRootKind {
+    TypeRoot,
+    ValueRoot,
+    ViewClosureRoot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FacetPathCompletionContext {
+    pub root_kind: FacetPathRootKind,
+    pub root: String,
+    pub completed_segments: Vec<String>,
+    pub prefix: String,
+    pub current_path: String,
+    pub replace_start: usize,
+    pub replace_end: usize,
+    pub token_start: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolLookup {
     pub symbol: CompletionSymbol,
@@ -320,6 +339,61 @@ pub fn repl_assist_at_cursor(request: CompletionRequest<'_>, scope: CompletionSc
         signature,
         active_parameter,
     }
+}
+
+pub fn facet_path_context_at_cursor(
+    source: &str,
+    cursor: usize,
+) -> Option<FacetPathCompletionContext> {
+    let cursor = clamp_to_char_boundary(source, cursor);
+    let before = &source[..cursor];
+    let start = before
+        .char_indices()
+        .rev()
+        .find_map(|(idx, ch)| (!facet_path_token_char(ch)).then_some(idx + ch.len_utf8()))
+        .unwrap_or(0);
+    let token = &source[start..cursor];
+    let (root_kind, body) = if let Some(rest) = token.strip_prefix('&') {
+        (FacetPathRootKind::ViewClosureRoot, rest)
+    } else {
+        (FacetPathRootKind::ValueRoot, token)
+    };
+    let mut parts = split_facet_path_segments(body)?;
+    if parts.len() < 2 {
+        return None;
+    }
+    let prefix = parts.pop()?;
+    let root = parts.first()?.to_string();
+    if root.is_empty() || parts.iter().any(|segment| segment.is_empty()) {
+        return None;
+    }
+    let root_kind = match root_kind {
+        FacetPathRootKind::ViewClosureRoot => {
+            if !facet_type_root_name(&root) {
+                return None;
+            }
+            FacetPathRootKind::ViewClosureRoot
+        }
+        FacetPathRootKind::ValueRoot if facet_type_root_name(&root) => FacetPathRootKind::TypeRoot,
+        FacetPathRootKind::ValueRoot if facet_value_root_name(&root) => {
+            FacetPathRootKind::ValueRoot
+        }
+        _ => return None,
+    };
+    Some(FacetPathCompletionContext {
+        root_kind,
+        root,
+        completed_segments: parts
+            .iter()
+            .skip(1)
+            .map(|segment| segment.to_string())
+            .collect(),
+        current_path: parts.join("."),
+        replace_start: cursor.saturating_sub(prefix.len()),
+        replace_end: cursor,
+        prefix,
+        token_start: start,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -576,6 +650,71 @@ fn symbol_token(input: &str, cursor: usize) -> Option<(usize, usize, String)> {
 
 fn completion_token_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':')
+}
+
+fn facet_path_token_char(ch: char) -> bool {
+    completion_token_char(ch) || matches!(ch, '.' | '&' | '[' | ']' | '"' | '?' | '-' | '+')
+}
+
+fn facet_type_root_name(name: &str) -> bool {
+    name.rsplit("::")
+        .next()
+        .and_then(|segment| segment.chars().next())
+        .is_some_and(char::is_uppercase)
+}
+
+fn facet_value_root_name(name: &str) -> bool {
+    name.chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_lowercase() || ch == '_')
+}
+
+fn split_facet_path_segments(input: &str) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut bracket_depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for ch in input.chars() {
+        if in_string {
+            current.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => {
+                in_string = true;
+                current.push(ch);
+            }
+            '[' => {
+                bracket_depth += 1;
+                current.push(ch);
+            }
+            ']' => {
+                bracket_depth = bracket_depth.checked_sub(1)?;
+                current.push(ch);
+            }
+            '.' if bracket_depth == 0 => {
+                out.push(current.trim().to_string());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if bracket_depth != 0 || in_string {
+        return None;
+    }
+    out.push(current.trim().to_string());
+    Some(out)
 }
 
 fn innermost_unclosed_lparen(input: &str) -> Option<usize> {

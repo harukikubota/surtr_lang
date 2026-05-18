@@ -473,7 +473,8 @@ impl ReplCompletionContext {
             return false;
         }
         let (_, _, prefix) = completion_token(input, cursor);
-        completion_call_context(input, cursor).is_some()
+        surtr_analysis::facet_path_context_at_cursor(input, cursor).is_some()
+            || completion_call_context(input, cursor).is_some()
             || spire::parse_operator_completion_context(input, cursor).is_some()
             || !prefix.is_empty()
     }
@@ -1160,6 +1161,19 @@ struct OperatorCompletionAssist {
     expected_type: Option<String>,
     expected_callable_return_context: Option<String>,
     candidate_mode: OperatorCompletionCandidateMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FacetCompletionAssist {
+    candidates: Vec<ReplCompletionCandidate>,
+    signature: ReplSignatureHelp,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct FacetStep {
+    ty: AstTy,
+    fallible: bool,
+    variant: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2334,6 +2348,13 @@ impl ReplEngine {
     }
 
     pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
+        if let Some(assist) = self.facet_completion_assist(input, cursor) {
+            return ReplCompletion {
+                candidates: assist.candidates,
+                signature: Some(assist.signature),
+                telemetry: CompletionTelemetry::default(),
+            };
+        }
         self.completion_context().completions(input, cursor)
     }
 
@@ -2369,6 +2390,397 @@ impl ReplEngine {
             documentation: candidate.documentation,
             replace_start: candidate.replace_start,
             replace_end: candidate.replace_end,
+        }
+    }
+
+    fn facet_completion_assist(&self, input: &str, cursor: usize) -> Option<FacetCompletionAssist> {
+        let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
+        if !completion_allowed_at_cursor(input, cursor) {
+            return None;
+        }
+        let context = surtr_analysis::facet_path_context_at_cursor(input, cursor)?;
+        let (root_ty, mut focus_ty, source_is_result) = self.facet_root_ast_ty(&context)?;
+        let mut path_is_variant = false;
+        let mut path_is_fallible = false;
+        for segment in &context.completed_segments {
+            let step = self.facet_next_ast_ty(&focus_ty, segment)?;
+            path_is_variant |= step.variant;
+            path_is_fallible |= step.fallible;
+            focus_ty = step.ty;
+        }
+        let placeholder = if matches!(focus_ty, AstTy::Tuple(_, _)) {
+            "[segment]"
+        } else {
+            "[field]"
+        };
+        let candidates = self
+            .facet_candidate_segments(&focus_ty, context.replace_start, context.replace_end)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|candidate| candidate.label.starts_with(&context.prefix))
+            .collect::<Vec<_>>();
+        let path_display = if context.completed_segments.is_empty() {
+            format!(
+                "{}{}",
+                &input[context.token_start..context.replace_start],
+                placeholder
+            )
+        } else {
+            context.current_path.clone()
+        };
+        let signature = ReplSignatureHelp {
+            lines: self.facet_api_help_lines(
+                &path_display,
+                &root_ty,
+                &focus_ty,
+                source_is_result || path_is_fallible,
+                path_is_variant,
+                context.completed_segments.is_empty(),
+                context.root_kind,
+                context.root_kind == surtr_analysis::FacetPathRootKind::ViewClosureRoot,
+            ),
+            active_parameter: Some(0),
+        };
+        Some(FacetCompletionAssist {
+            candidates,
+            signature,
+        })
+    }
+
+    fn facet_root_ast_ty(
+        &self,
+        context: &surtr_analysis::FacetPathCompletionContext,
+    ) -> Option<(AstTy, AstTy, bool)> {
+        match context.root_kind {
+            surtr_analysis::FacetPathRootKind::TypeRoot
+            | surtr_analysis::FacetPathRootKind::ViewClosureRoot => Some((
+                AstTy::Named(Span { start: 0, end: 0 }, context.root.clone()),
+                AstTy::Named(Span { start: 0, end: 0 }, context.root.clone()),
+                false,
+            )),
+            surtr_analysis::FacetPathRootKind::ValueRoot => self
+                .binding_type(&context.root)
+                .as_deref()
+                .and_then(parse_signature_type)
+                .or_else(|| {
+                    self.semantic_index()
+                        .find_symbol(&context.root)
+                        .and_then(|symbol| symbol.detail.as_deref())
+                        .and_then(parse_signature_type)
+                })
+                .map(|root_ty| {
+                    if let Some(inner) = Self::result_inner_ast_ty(&root_ty) {
+                        (root_ty.clone(), inner.clone(), true)
+                    } else {
+                        (root_ty.clone(), root_ty, false)
+                    }
+                }),
+        }
+    }
+
+    fn facet_candidate_segments(
+        &self,
+        ty: &AstTy,
+        replace_start: usize,
+        replace_end: usize,
+    ) -> Option<Vec<ReplCompletionCandidate>> {
+        match ty {
+            AstTy::Named(_, name) => {
+                if let Some(def) = self.scar_session.lookup_type_def(name) {
+                    let mut candidates = def
+                        .fields
+                        .iter()
+                        .filter(|(field, _)| !def.private_fields.contains(field))
+                        .map(|(field, field_ty)| ReplCompletionCandidate {
+                            label: field.clone(),
+                            replacement: field.clone(),
+                            kind: ReplCompletionKind::TypePath,
+                            detail: Some(format!("{}: {}", field, Self::ty_to_string(field_ty))),
+                            documentation: None,
+                            replace_start,
+                            replace_end,
+                        })
+                        .collect::<Vec<_>>();
+                    if matches!(def.kind, scar::env::TypeKind::Enum) {
+                        candidates.extend(
+                            self.scar_session
+                                .enum_variants_of(name)
+                                .into_iter()
+                                .flatten()
+                                .map(|variant| ReplCompletionCandidate {
+                                    label: variant.short_name.clone(),
+                                    replacement: variant.short_name.clone(),
+                                    kind: ReplCompletionKind::TypePath,
+                                    detail: Some(if variant.payload.is_empty() {
+                                        format!(
+                                            "{}::{}",
+                                            crate::surface_path_name(name),
+                                            variant.short_name
+                                        )
+                                    } else {
+                                        format!(
+                                            "{}::{}({})",
+                                            crate::surface_path_name(name),
+                                            variant.short_name,
+                                            variant
+                                                .payload
+                                                .iter()
+                                                .map(Self::ty_to_string)
+                                                .collect::<Vec<_>>()
+                                                .join(", ")
+                                        )
+                                    }),
+                                    documentation: None,
+                                    replace_start,
+                                    replace_end,
+                                }),
+                        );
+                    }
+                    candidates.sort_by(|left, right| left.label.cmp(&right.label));
+                    return Some(candidates);
+                }
+                None
+            }
+            AstTy::Tuple(_, items) => Some(
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, item)| ReplCompletionCandidate {
+                        label: format!("_{idx}"),
+                        replacement: format!("_{idx}"),
+                        kind: ReplCompletionKind::TypePath,
+                        detail: Some(format!("_{idx}: {}", format_query_ty(item))),
+                        documentation: None,
+                        replace_start,
+                        replace_end,
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+
+    fn facet_next_ast_ty(&self, ty: &AstTy, segment: &str) -> Option<FacetStep> {
+        match ty {
+            AstTy::Named(_, name) => {
+                let def = self.scar_session.lookup_type_def(name)?;
+                if let Some((_, field_ty)) = def
+                    .fields
+                    .iter()
+                    .find(|(field, _)| field == segment && !def.private_fields.contains(field))
+                {
+                    return parse_signature_type(&Self::ty_to_string(field_ty)).map(|ty| {
+                        FacetStep {
+                            ty,
+                            fallible: false,
+                            variant: false,
+                        }
+                    });
+                }
+                if matches!(def.kind, scar::env::TypeKind::Enum) {
+                    let variant = self
+                        .scar_session
+                        .enum_variants_of(name)?
+                        .iter()
+                        .find(|variant| variant.short_name == segment.trim_end_matches('?'))?;
+                    return match variant.payload.as_slice() {
+                        [] => Some(FacetStep {
+                            ty: AstTy::Named(
+                                Span { start: 0, end: 0 },
+                                crate::surface_path_name(name).to_string(),
+                            ),
+                            fallible: true,
+                            variant: true,
+                        }),
+                        [single] => {
+                            parse_signature_type(&Self::ty_to_string(single)).map(|ty| FacetStep {
+                                ty,
+                                fallible: true,
+                                variant: true,
+                            })
+                        }
+                        many => Some(FacetStep {
+                            ty: AstTy::Tuple(
+                                Span { start: 0, end: 0 },
+                                many.iter()
+                                    .map(|item| parse_signature_type(&Self::ty_to_string(item)))
+                                    .collect::<Option<Vec<_>>>()?,
+                            ),
+                            fallible: true,
+                            variant: true,
+                        }),
+                    };
+                }
+                None
+            }
+            AstTy::Tuple(_, items) => segment
+                .strip_prefix('_')
+                .and_then(|value| value.parse::<usize>().ok())
+                .and_then(|idx| items.get(idx).cloned())
+                .map(|ty| FacetStep {
+                    ty,
+                    fallible: false,
+                    variant: false,
+                }),
+            AstTy::Generic(_, name, args) if segment.starts_with('[') && segment.ends_with(']') => {
+                match name.as_str() {
+                    "List" if args.len() == 1 => Some(FacetStep {
+                        ty: args[0].clone(),
+                        fallible: true,
+                        variant: false,
+                    }),
+                    "HashMap" if args.len() == 1 => Some(FacetStep {
+                        ty: args[0].clone(),
+                        fallible: true,
+                        variant: false,
+                    }),
+                    _ => None,
+                }
+            }
+            AstTy::Generic(_, name, args) => match (name.as_str(), segment.trim_end_matches('?')) {
+                ("Option", "Some") if args.len() == 1 => Some(FacetStep {
+                    ty: args[0].clone(),
+                    fallible: true,
+                    variant: true,
+                }),
+                ("Result", "Ok") if args.len() == 1 => Some(FacetStep {
+                    ty: args[0].clone(),
+                    fallible: true,
+                    variant: true,
+                }),
+                ("Result", "Err") => Some(FacetStep {
+                    ty: AstTy::Named(Span { start: 0, end: 0 }, "Error".to_string()),
+                    fallible: true,
+                    variant: true,
+                }),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn result_inner_ast_ty(ty: &AstTy) -> Option<&AstTy> {
+        match ty {
+            AstTy::Generic(_, name, args) if name == "Result" && !args.is_empty() => args.first(),
+            _ => None,
+        }
+    }
+
+    fn facet_api_help_lines(
+        &self,
+        path_display: &str,
+        source_ty: &AstTy,
+        focus_ty: &AstTy,
+        path_is_fallible: bool,
+        path_is_variant: bool,
+        root_only: bool,
+        root_kind: surtr_analysis::FacetPathRootKind,
+        is_view_closure: bool,
+    ) -> Vec<String> {
+        let source = Self::facet_help_ty_display(source_ty);
+        let focus = Self::facet_help_ty_display(focus_ty);
+        let view_result = if path_is_fallible {
+            format!("Result<{focus}>")
+        } else {
+            focus.clone()
+        };
+        let mut lines = if root_only && is_view_closure {
+            vec![format!("{path_display} -> ({source} -> _)")]
+        } else if root_only && root_kind == surtr_analysis::FacetPathRootKind::TypeRoot {
+            vec![format!("{path_display} -> Facet<{source}, _>")]
+        } else if root_only && root_kind == surtr_analysis::FacetPathRootKind::ValueRoot {
+            vec![format!("{path_display} -> _")]
+        } else if is_view_closure {
+            vec![format!("&{path_display} -> ({source} -> {view_result})")]
+        } else {
+            vec![format!(
+                "Facet::view({path_display}, {source}) -> {view_result}"
+            )]
+        };
+        lines.push(format!(
+            "Facet::set({path_display}, {source}, {}) -> Result<{source}>",
+            self.facet_set_value_display(focus_ty)
+        ));
+        let over_input = self.facet_over_input_display(focus_ty);
+        lines.push(format!(
+            "Facet::over({path_display}, {source}, ({over_input} -> Result<{over_input}>)) -> Result<{source}>"
+        ));
+        if Self::result_inner_ast_ty(focus_ty).is_some() {
+            lines.push(format!(
+                "Facet::over_result({path_display}, {source}, ({focus} -> Result<{focus}>)) -> Result<{source}>"
+            ));
+        }
+        if path_is_variant {
+            lines.push(format!(
+                "Facet::preview({path_display}, {source}) -> {view_result}"
+            ));
+            lines.push(format!(
+                "Facet::case_set({path_display}, {source}, {}) -> Result<{source}>",
+                self.facet_set_value_display(focus_ty)
+            ));
+            lines.push(format!(
+                "Facet::case_over({path_display}, {source}, ({over_input} -> Result<{over_input}>)) -> Result<{source}>"
+            ));
+        }
+        lines
+    }
+
+    fn facet_set_value_display(&self, focus_ty: &AstTy) -> String {
+        if let Some(inner) = Self::result_inner_ast_ty(focus_ty) {
+            format!(
+                "{} or {}",
+                Self::facet_help_ty_display(inner),
+                Self::facet_help_ty_display(focus_ty)
+            )
+        } else {
+            Self::facet_help_ty_display(focus_ty)
+        }
+    }
+
+    fn facet_over_input_display(&self, focus_ty: &AstTy) -> String {
+        Self::result_inner_ast_ty(focus_ty)
+            .map(Self::facet_help_ty_display)
+            .unwrap_or_else(|| Self::facet_help_ty_display(focus_ty))
+    }
+
+    fn facet_help_ty_display(ty: &AstTy) -> String {
+        match ty {
+            AstTy::Generic(_, name, args)
+                if name == "Result"
+                    && args.len() == 2
+                    && matches!(
+                        args.get(1),
+                        Some(AstTy::Named(_, error)) if error == "Error"
+                    ) =>
+            {
+                format!("Result<{}>", Self::facet_help_ty_display(&args[0]))
+            }
+            AstTy::Generic(_, name, args) => format!(
+                "{}<{}>",
+                name,
+                args.iter()
+                    .map(Self::facet_help_ty_display)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Tuple(_, items) => format!(
+                "({})",
+                items
+                    .iter()
+                    .map(Self::facet_help_ty_display)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Func(_, params, ret) => format!(
+                "({} -> {})",
+                params
+                    .iter()
+                    .map(Self::facet_help_ty_display)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                Self::facet_help_ty_display(ret)
+            ),
+            _ => format_query_ty(ty),
         }
     }
 
