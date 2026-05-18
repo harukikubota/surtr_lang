@@ -370,18 +370,29 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
                 }
             }
             TerminalAction::EnterCompletionMode => {
-                tab_completion_mode = true;
-                let cursor_byte = byte_index_for_char_position(&buffer, cursor_chars);
-                if ReplCompletionContext::should_request(&buffer, cursor_byte) {
-                    completion_controller.submit_if_changed(
-                        &mut completion_provider,
-                        &buffer,
-                        cursor_byte,
-                        Some(event_received_at),
-                    );
-                } else {
+                if tab_completion_mode
+                    && apply_top_terminal_completion(
+                        &mut buffer,
+                        &mut cursor_chars,
+                        &rendered_completion,
+                    )
+                {
                     completion_controller.cancel_pending();
                     rendered_completion = ReplCompletion::default();
+                } else {
+                    tab_completion_mode = true;
+                    let cursor_byte = byte_index_for_char_position(&buffer, cursor_chars);
+                    if ReplCompletionContext::should_request(&buffer, cursor_byte) {
+                        completion_controller.submit_if_changed(
+                            &mut completion_provider,
+                            &buffer,
+                            cursor_byte,
+                            Some(event_received_at),
+                        );
+                    } else {
+                        completion_controller.cancel_pending();
+                        rendered_completion = ReplCompletion::default();
+                    }
                 }
                 redraw_terminal_prompt(
                     &mut stdout,
@@ -856,6 +867,34 @@ fn apply_terminal_completion_result(
 }
 
 #[cfg(feature = "line-editor")]
+fn apply_top_terminal_completion(
+    buffer: &mut String,
+    cursor_chars: &mut usize,
+    completion: &ReplCompletion,
+) -> bool {
+    let Some(candidate) = completion.candidates.first() else {
+        return false;
+    };
+
+    let replace_start = previous_char_boundary(buffer, candidate.replace_start.min(buffer.len()));
+    let replace_end =
+        previous_char_boundary(buffer, candidate.replace_end.min(buffer.len())).max(replace_start);
+    buffer.replace_range(replace_start..replace_end, &candidate.replacement);
+    let cursor_byte = replace_start + candidate.replacement.len();
+    *cursor_chars = buffer[..cursor_byte].chars().count();
+    true
+}
+
+#[cfg(feature = "line-editor")]
+fn previous_char_boundary(text: &str, mut idx: usize) -> usize {
+    idx = idx.min(text.len());
+    while idx > 0 && !text.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
+#[cfg(feature = "line-editor")]
 fn terminal_rows_for_line(line: &str) -> usize {
     let width = terminal_width();
     let columns = visible_line_width(line).max(1);
@@ -1243,6 +1282,33 @@ mod tests {
             KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
         );
         assert_eq!(action, super::TerminalAction::ExitCompletionMode);
+    }
+
+    #[test]
+    fn terminal_completion_applies_top_candidate_to_input_buffer() {
+        let mut buffer = "a".to_string();
+        let mut cursor_chars = buffer.chars().count();
+        let completion = ReplCompletion {
+            candidates: vec![ReplCompletionCandidate {
+                label: "add".to_string(),
+                replacement: "add".to_string(),
+                kind: ReplCompletionKind::FunctionCall,
+                detail: Some("Add::add(left: Int, right: Int) -> Int".to_string()),
+                documentation: None,
+                replace_start: 0,
+                replace_end: 1,
+            }],
+            signature: None,
+            telemetry: CompletionTelemetry::default(),
+        };
+
+        assert!(super::apply_top_terminal_completion(
+            &mut buffer,
+            &mut cursor_chars,
+            &completion
+        ));
+        assert_eq!(buffer, "add");
+        assert_eq!(cursor_chars, "add".chars().count());
     }
 
     #[test]
