@@ -356,6 +356,64 @@ fn core_completion_only_shows_unqualified_importable_functions_after_import() {
 }
 
 #[test]
+fn core_completion_and_sig_prefer_authored_signatures_for_imported_helpers() {
+    let mut engine = engine();
+
+    let with_completion = engine
+        .completions("wi", 2)
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "with")
+        .expect("Result::with should be suggested");
+    assert_eq!(
+        with_completion.detail.as_deref(),
+        Some("Result::with(value: Result<$A>, f: Result<($A -> $B)>) -> Result<$B>")
+    );
+
+    let list_at_completion = engine
+        .completions("List::a", "List::a".len())
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "List::at")
+        .expect("List::at should be suggested");
+    assert_eq!(
+        list_at_completion.detail.as_deref(),
+        Some("List::at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds>")
+    );
+
+    let imported = rendered_text(&engine.handle_line("import List::{at}"));
+    assert!(imported.contains("Imported List::at"), "{imported}");
+
+    let at_completion = engine
+        .completions("at", 2)
+        .candidates
+        .into_iter()
+        .find(|candidate| candidate.label == "at")
+        .expect("imported at helper should be suggested");
+    assert_eq!(
+        at_completion.detail.as_deref(),
+        Some("List::at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds>")
+    );
+
+    assert_eq!(
+        signature_text(&engine.handle_line(":sig at")).trim(),
+        "List::at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds>"
+    );
+    assert_eq!(
+        signature_text(&engine.handle_line(":sig with")).trim(),
+        "Result::with(value: Result<$A>, f: Result<($A -> $B)>) -> Result<$B>"
+    );
+    assert_eq!(
+        signature_text(&engine.handle_line(":sig List::at")).trim(),
+        "List::at(values: List<$A>, index: Int) -> Result<$A, IndexOutOfBounds>"
+    );
+    assert_eq!(
+        signature_text(&engine.handle_line(":sig Result::with")).trim(),
+        "Result::with(value: Result<$A>, f: Result<($A -> $B)>) -> Result<$B>"
+    );
+}
+
+#[test]
 fn core_completion_is_enabled_inside_string_interpolation_only() {
     let engine = engine();
     let string_body = r#""plain Str"#;

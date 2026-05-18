@@ -103,7 +103,10 @@ impl BackgroundReplCompletionProvider {
             .name("xldr-repl-completion".to_string())
             .spawn(move || worker_loop(worker_mailbox, context))
             .expect("completion worker thread should start");
-        Self { mailbox, worker: Some(worker) }
+        Self {
+            mailbox,
+            worker: Some(worker),
+        }
     }
 }
 
@@ -143,10 +146,7 @@ impl Drop for BackgroundReplCompletionProvider {
     }
 }
 
-fn worker_loop(
-    mailbox: Arc<(Mutex<WorkerMailbox>, Condvar)>,
-    mut context: ReplCompletionContext,
-) {
+fn worker_loop(mailbox: Arc<(Mutex<WorkerMailbox>, Condvar)>, mut context: ReplCompletionContext) {
     loop {
         let request = {
             let (lock, wake) = &*mailbox;

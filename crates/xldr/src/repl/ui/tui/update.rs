@@ -516,7 +516,10 @@ mod tests {
         submit_input(&mut app, &mut engine, &mut provider);
 
         assert_eq!(provider.scheduled_refreshes, 1);
-        assert!(app.input.text.is_empty(), "submit should return input immediately");
+        assert!(
+            app.input.text.is_empty(),
+            "submit should return input immediately"
+        );
     }
 
     #[test]

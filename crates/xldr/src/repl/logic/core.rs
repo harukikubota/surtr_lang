@@ -1,6 +1,6 @@
-use std::cell::RefCell;
 #[cfg(test)]
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::panic;
@@ -1717,7 +1717,12 @@ impl ReplEngine {
         &self,
         name: &str,
     ) -> Option<surtr_analysis::CompletionSymbol> {
-        if let Some(binding) = self.binding_records.iter().rev().find(|binding| binding.name == name) {
+        if let Some(binding) = self
+            .binding_records
+            .iter()
+            .rev()
+            .find(|binding| binding.name == name)
+        {
             return Some(surtr_analysis::CompletionSymbol {
                 label: binding.name.clone(),
                 replacement: binding.name.clone(),
@@ -1747,9 +1752,10 @@ impl ReplEngine {
         }
         if Self::declaration_is_function_completion_surface(decl) {
             let detail = self.declaration_signature(decl).or_else(|| {
-                self.find_signature(name).map(|(qualified_name, signature)| {
-                    Self::render_signature_with_qualified_name(&qualified_name, signature)
-                })
+                self.find_signature(name)
+                    .map(|(qualified_name, signature)| {
+                        Self::render_signature_with_qualified_name(&qualified_name, signature)
+                    })
             });
             return Some(surtr_analysis::CompletionSymbol {
                 label: name.to_string(),
@@ -3567,8 +3573,16 @@ impl ReplEngine {
         if symbol == "Tuple" {
             return None;
         }
+        if let Some(entry) = self.special_form_doc_entry(symbol) {
+            if let Some(signature) = Self::display_signature_for_doc_entry(entry) {
+                return Some((entry.qualified_name.clone(), signature));
+            }
+        }
         if let Some(entry) = self.special_form_signature_entry(symbol) {
-            return Some((entry.qualified_name.clone(), entry.signature.clone()));
+            return Some((
+                entry.qualified_name.clone(),
+                crate::surface_rendered_name(&entry.signature),
+            ));
         }
         let canonical = self
             .visible_helper_doc_alias(symbol)
@@ -3584,6 +3598,27 @@ impl ReplEngine {
         let visible_uid = (!qualified_lookup)
             .then(|| self.sigil_session.lookup_uid(&canonical))
             .flatten();
+
+        if let Some(entry) = self.docs.iter().rev().find(|entry| {
+            if entry.kind != DocKind::Function {
+                return false;
+            }
+            if !Self::symbol_matches(&entry.qualified_name, &canonical) {
+                return false;
+            }
+            if qualified_lookup {
+                crate::surface_path_name(&entry.qualified_name)
+                    == crate::surface_path_name(&canonical)
+            } else if let Some(uid) = visible_uid {
+                self.sigil_session.lookup_uid(&entry.qualified_name) == Some(uid)
+            } else {
+                false
+            }
+        }) {
+            if let Some(signature) = Self::display_signature_for_doc_entry(entry) {
+                return Some((entry.qualified_name.clone(), signature));
+            }
+        }
 
         if canonical == symbol {
             if let Some(found) = self
@@ -9060,10 +9095,7 @@ mod tests {
             .cached_completion_context()
             .expect("completion cache should stay available after commit");
         assert!(
-            after_mutation
-                .callable_signatures
-                .get("value")
-                .is_none(),
+            after_mutation.callable_signatures.get("value").is_none(),
             "plain value bindings should not become callable signatures"
         );
         assert_eq!(engine.completion_context_build_count(), baseline + 1);

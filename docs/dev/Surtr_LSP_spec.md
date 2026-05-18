@@ -450,6 +450,7 @@ REPL と共有する semantic resolver は次を担う。
 - public / private / hidden / user-callable 判定
 - `Global::` を user-facing 表示から隠す surface name 変換
 - `Self` を concrete owner type へ正規化した signature 表示
+- completion item `detail` / REPL `:sig` では source-written signature を優先し、source 不在時だけ synthesized fallback を使う
 - type constructor、module owner、qualified member、function、operator/helper の候補収集
 - `@doc` と signature metadata の lookup
 - call context から active parameter と expected type を出す signature help
