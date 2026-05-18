@@ -105,8 +105,6 @@ const COMPARE_METHOD_DOC_TARGETS: &[(&str, &str)] = &[
 const REPL_UNRESOLVED_TYPE_MESSAGE: &str = "Cannot persist binding with unresolved type variable.";
 const REPL_UNRESOLVED_TYPE_HINT: &str =
     "Add a type annotation or use the value in a context that determines the success type.";
-const COMPLETION_DEFAULT_LIMIT: usize = 5;
-
 const STAGE_PARSE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 fn duration_to_nanos(elapsed: Duration) -> u64 {
@@ -427,12 +425,11 @@ impl ReplCompletionContext {
             )
         };
 
-        let mut candidates = completion
+        let candidates = completion
             .candidates
             .into_iter()
             .map(ReplEngine::repl_completion_candidate_from_analysis)
             .collect::<Vec<_>>();
-        candidates.truncate(COMPLETION_DEFAULT_LIMIT);
         let mut telemetry = CompletionTelemetry::default();
         telemetry.record_completion_compute(started.elapsed());
         ReplCompletion {

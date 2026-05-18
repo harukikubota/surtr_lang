@@ -1,6 +1,8 @@
 //! CLI REPL — text-mode entry point.
 
+use std::env;
 use std::io::{self, IsTerminal, Write};
+use std::path::Path;
 use std::sync::mpsc;
 #[cfg(feature = "line-editor")]
 use std::time::{Duration, Instant};
@@ -39,6 +41,7 @@ use crate::{CommandError, CommandResult};
 
 #[cfg(feature = "line-editor")]
 const TERMINAL_POLL_QUANTUM: Duration = Duration::from_millis(25);
+const DEFAULT_COMPLETION_CANDIDATE_COUNT: usize = 5;
 
 // ── Options ───────────────────────────────────────────────────────────────────
 
@@ -71,6 +74,64 @@ impl Default for ReplOptions {
             project_profile: None,
         }
     }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Deserialize)]
+struct CliUserConfig {
+    #[serde(default)]
+    repl: ReplUserConfig,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Deserialize)]
+struct ReplUserConfig {
+    #[serde(default)]
+    cli: ReplCliUserConfig,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Deserialize)]
+struct ReplCliUserConfig {
+    completion_candidates: Option<usize>,
+}
+
+impl CliUserConfig {
+    fn completion_candidate_count(&self) -> usize {
+        self.repl
+            .cli
+            .completion_candidates
+            .unwrap_or(DEFAULT_COMPLETION_CANDIDATE_COUNT)
+    }
+}
+
+fn load_cli_user_config(cwd: &Path) -> Result<CliUserConfig, CommandError> {
+    let path = cwd.join(".xldr.yaml");
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(CliUserConfig::default());
+        }
+        Err(error) => {
+            return Err(CommandError::message(
+                1,
+                format!("repl: failed to read {}: {}", path.display(), error),
+            ));
+        }
+    };
+    let config = serde_yaml::from_str::<CliUserConfig>(&contents).map_err(|error| {
+        CommandError::message(
+            1,
+            format!("repl: failed to parse {}: {}", path.display(), error),
+        )
+    })?;
+    if config.repl.cli.completion_candidates == Some(0) {
+        return Err(CommandError::message(
+            1,
+            format!(
+                "repl: {} must set repl.cli.completion_candidates to 1 or more",
+                path.display()
+            ),
+        ));
+    }
+    Ok(config)
 }
 
 // ── Line editor helper ────────────────────────────────────────────────────────
@@ -206,6 +267,14 @@ pub fn cli_command(options: ReplOptions) -> CommandResult<()> {
         ));
     }
 
+    let cli_config = load_cli_user_config(&env::current_dir().map_err(|error| {
+        CommandError::message(
+            1,
+            format!("repl: failed to resolve current directory: {}", error),
+        )
+    })?)?;
+    let completion_candidate_count = cli_config.completion_candidate_count();
+
     let mut engine = match (
         &options.project_path,
         &options.module_path,
@@ -237,7 +306,7 @@ pub fn cli_command(options: ReplOptions) -> CommandResult<()> {
     }
 
     if io::stdin().is_terminal() {
-        run_terminal_repl(&mut engine)?;
+        run_terminal_repl(&mut engine, completion_candidate_count)?;
     } else {
         run_plain_repl(&mut engine)?;
     }
@@ -246,7 +315,10 @@ pub fn cli_command(options: ReplOptions) -> CommandResult<()> {
 }
 
 #[cfg(feature = "line-editor")]
-fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
+fn run_terminal_repl(
+    engine: &mut ReplEngine,
+    completion_candidate_count: usize,
+) -> CommandResult<()> {
     struct RawModeGuard;
 
     impl Drop for RawModeGuard {
@@ -278,6 +350,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
         &buffer,
         cursor_chars,
         Some(&rendered_completion),
+        completion_candidate_count,
         None,
     )
     .map_err(|_| CommandError::message(1, "repl: failed to redraw prompt"))?;
@@ -292,6 +365,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
             &mut completion_controller,
             &mut rendered_completion,
             &mut rendered_completion_key,
+            completion_candidate_count,
         )
         .map_err(|_| CommandError::message(1, "repl: failed to redraw prompt"))?
         {
@@ -310,6 +384,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
                 &buffer,
                 cursor_chars,
                 &rendered_completion,
+                completion_candidate_count,
             )
             .map_err(|_| CommandError::message(1, "repl: failed to print terminal result"))?;
         }
@@ -331,6 +406,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
                 &mut completion_controller,
                 &mut rendered_completion,
                 &mut rendered_completion_key,
+                completion_candidate_count,
             );
             continue;
         }
@@ -368,6 +444,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
                         &buffer,
                         cursor_chars,
                         Some(&rendered_completion),
+                        completion_candidate_count,
                         None,
                     )
                     .map_err(|_| CommandError::message(1, "repl: failed to redraw prompt"))?;
@@ -412,6 +489,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
                     &buffer,
                     cursor_chars,
                     Some(&rendered_completion),
+                    completion_candidate_count,
                     None,
                 )
                 .map_err(|_| CommandError::message(1, "repl: failed to redraw prompt"))?;
@@ -427,6 +505,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
                     &buffer,
                     cursor_chars,
                     Some(&rendered_completion),
+                    completion_candidate_count,
                     None,
                 )
                 .map_err(|_| CommandError::message(1, "repl: failed to redraw prompt"))?;
@@ -454,6 +533,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
                         &buffer,
                         cursor_chars,
                         &rendered_completion,
+                        completion_candidate_count,
                     )
                     .map_err(|_| {
                         CommandError::message(1, "repl: failed to print terminal result")
@@ -465,6 +545,7 @@ fn run_terminal_repl(engine: &mut ReplEngine) -> CommandResult<()> {
                         &buffer,
                         cursor_chars,
                         Some(&rendered_completion),
+                        completion_candidate_count,
                         None,
                     )
                     .map_err(|_| CommandError::message(1, "repl: failed to redraw prompt"))?;
@@ -780,13 +861,23 @@ fn print_terminal_result(
     buffer: &str,
     cursor_chars: usize,
     completion: &ReplCompletion,
+    completion_candidate_count: usize,
 ) -> io::Result<()> {
     let lines = repl_result_lines(result, color);
     for line in lines {
         write!(stdout, "\r\x1b[L\r\x1b[2K{line}\r\n")?;
     }
     stdout.flush()?;
-    redraw_terminal_prompt(stdout, engine, buffer, cursor_chars, Some(completion), None).map(|_| ())
+    redraw_terminal_prompt(
+        stdout,
+        engine,
+        buffer,
+        cursor_chars,
+        Some(completion),
+        completion_candidate_count,
+        None,
+    )
+    .map(|_| ())
 }
 
 #[cfg(feature = "line-editor")]
@@ -808,6 +899,7 @@ fn redraw_terminal_prompt(
     buffer: &str,
     cursor_chars: usize,
     completion: Option<&ReplCompletion>,
+    completion_candidate_count: usize,
     event_received_at: Option<Instant>,
 ) -> io::Result<CompletionTelemetry> {
     let color = styled::color_enabled_from_env();
@@ -819,7 +911,7 @@ fn redraw_terminal_prompt(
         .unwrap_or_default();
     let render_started = Instant::now();
     let completion_lines = completion
-        .map(|completion| render_completion_lines(completion, color))
+        .map(|completion| render_completion_lines(completion, color, completion_candidate_count))
         .unwrap_or_default();
     let completion_rows = completion_lines
         .iter()
@@ -852,6 +944,7 @@ fn apply_terminal_completion_result(
     controller: &mut ReplCompletionController,
     rendered_completion: &mut ReplCompletion,
     rendered_completion_key: &mut Option<(String, usize)>,
+    completion_candidate_count: usize,
 ) -> io::Result<bool> {
     let Some(result) = provider.poll_ready() else {
         return Ok(false);
@@ -876,6 +969,7 @@ fn apply_terminal_completion_result(
         buffer,
         cursor_chars,
         Some(&completion),
+        completion_candidate_count,
         result.event_received_at,
     )?;
     completion.telemetry = telemetry;
@@ -929,7 +1023,11 @@ fn terminal_width() -> usize {
 }
 
 #[cfg(feature = "line-editor")]
-fn render_completion_lines(completion: &ReplCompletion, color: bool) -> Vec<String> {
+fn render_completion_lines(
+    completion: &ReplCompletion,
+    color: bool,
+    completion_candidate_count: usize,
+) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(signature) = &completion.signature {
         lines.extend(signature.lines.iter().map(|line| {
@@ -944,6 +1042,7 @@ fn render_completion_lines(completion: &ReplCompletion, color: bool) -> Vec<Stri
         completion
             .candidates
             .iter()
+            .take(completion_candidate_count)
             .map(|candidate| render_completion_candidate(candidate, color)),
     );
     lines
@@ -1078,6 +1177,8 @@ mod command_error_tests {
 
 #[cfg(all(test, feature = "line-editor"))]
 mod tests {
+    use std::fs;
+    use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -1376,7 +1477,7 @@ mod tests {
             telemetry: CompletionTelemetry::default(),
         };
 
-        let rendered = super::render_completion_lines(&completion, false);
+        let rendered = super::render_completion_lines(&completion, false, 5);
         assert_eq!(
             rendered,
             vec![
@@ -1416,7 +1517,7 @@ mod tests {
             telemetry: CompletionTelemetry::default(),
         };
 
-        let rendered = super::render_completion_lines(&completion, true);
+        let rendered = super::render_completion_lines(&completion, true, 5);
         assert!(rendered[0].contains("\x1b["), "{rendered:?}");
         assert!(
             rendered[1].contains("\x1b[1;90mvar \x1b[0m"),
@@ -1428,6 +1529,70 @@ mod tests {
             "{rendered:?}"
         );
         assert!(rendered[2].contains("\x1b[1;35mprint"), "{rendered:?}");
+    }
+
+    #[test]
+    fn render_completion_lines_shows_only_configured_candidate_count() {
+        let completion = ReplCompletion {
+            signature: Some(ReplSignatureHelp {
+                lines: vec!["Kernel::print(a: [String]) -> Unit".to_string()],
+                active_parameter: Some(0),
+            }),
+            candidates: vec![
+                ReplCompletionCandidate {
+                    label: "one".to_string(),
+                    replacement: "one".to_string(),
+                    kind: ReplCompletionKind::Variable,
+                    detail: Some("Int".to_string()),
+                    documentation: None,
+                    replace_start: 0,
+                    replace_end: 0,
+                },
+                ReplCompletionCandidate {
+                    label: "two".to_string(),
+                    replacement: "two".to_string(),
+                    kind: ReplCompletionKind::Variable,
+                    detail: Some("Int".to_string()),
+                    documentation: None,
+                    replace_start: 0,
+                    replace_end: 0,
+                },
+                ReplCompletionCandidate {
+                    label: "three".to_string(),
+                    replacement: "three".to_string(),
+                    kind: ReplCompletionKind::Variable,
+                    detail: Some("Int".to_string()),
+                    documentation: None,
+                    replace_start: 0,
+                    replace_end: 0,
+                },
+            ],
+            telemetry: CompletionTelemetry::default(),
+        };
+
+        let rendered = super::render_completion_lines(&completion, false, 2);
+        assert_eq!(rendered.len(), 3, "{rendered:?}");
+        assert!(rendered[1].contains("one"), "{rendered:?}");
+        assert!(rendered[2].contains("two"), "{rendered:?}");
+        assert!(
+            !rendered.iter().any(|line| line.contains("three")),
+            "{rendered:?}"
+        );
+    }
+
+    #[test]
+    fn load_cli_config_reads_completion_limit_from_xldr_yaml() {
+        let temp_root = temp_root("xldr-cli-config");
+        let config_path = temp_root.join(".xldr.yaml");
+        fs::write(
+            &config_path,
+            "repl:\n  cli:\n    completion_candidates: 7\n",
+        )
+        .expect("config file should be written");
+
+        let config =
+            super::load_cli_user_config(&temp_root).expect("config should load successfully");
+        assert_eq!(config.repl.cli.completion_candidates, Some(7));
     }
 
     #[test]
@@ -1445,6 +1610,7 @@ mod tests {
             "String::re",
             "String::re".chars().count(),
             Some(&completion),
+            5,
             Some(Instant::now()),
         )
         .expect("prompt redraw should succeed");
@@ -1467,5 +1633,19 @@ mod tests {
                 .is_some_and(|value| value > 0),
             "telemetry should include end-to-end redraw timing: {telemetry:?}"
         );
+    }
+
+    fn temp_root(prefix: &str) -> PathBuf {
+        let unique = format!(
+            "{prefix}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after unix epoch")
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&path).expect("temp dir should be created");
+        path
     }
 }

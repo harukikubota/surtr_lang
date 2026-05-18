@@ -226,6 +226,8 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - TTY モードでは行編集、履歴、補完を提供する
 - 補完対象は REPL コマンドと現在スコープで見えるシンボルである
 - 補完候補は入力済み接頭辞に基づいて抽出する
+- REPL core は matching completion candidate を全件保持する。CLI UI は表示件数だけを制限し、将来のページャ導入時にも同じ候補集合を再利用できる構成を保つ
+- CLI REPL は実行ディレクトリの `.xldr.yaml` を読み、`repl.cli.completion_candidates` でユーザに表示する補完候補件数を上書きできる。既定値は `5`
 - preload script の入力行も REPL 履歴の一部として扱い、`vars` と `history` は同じ行番号体系を共有する
 
 候補一覧表示の改善や型文脈つき補完は `doc/open-issues.md` の将来課題として扱う。

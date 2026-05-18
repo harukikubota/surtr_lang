@@ -168,7 +168,7 @@ fn signature_text(result: &ReplResult) -> String {
 }
 
 #[test]
-fn core_completion_returns_limited_global_candidates_with_details() {
+fn core_completion_returns_global_candidates_with_details() {
     let mut engine = engine();
     assert!(
         engine.completions("", 0).candidates.is_empty(),
@@ -177,11 +177,6 @@ fn core_completion_returns_limited_global_candidates_with_details() {
     assert!(rendered_text(&engine.handle_line("answer = 42")).contains("answer: Int"));
 
     let completion = engine.completions("ans", 3);
-    assert!(
-        completion.candidates.len() <= 5,
-        "completion should default to five rows: {:?}",
-        completion.candidates
-    );
     let answer = completion
         .candidates
         .iter()
@@ -217,6 +212,26 @@ fn core_completion_returns_limited_global_candidates_with_details() {
             .is_some_and(|value| value > 0),
         "completion telemetry should be positive: {:?}",
         completion.telemetry
+    );
+}
+
+#[test]
+fn core_completion_keeps_all_matching_candidates() {
+    let mut engine = engine();
+    for idx in 0..6 {
+        let result = engine.handle_line(&format!("value_{idx} = {idx}"));
+        assert!(
+            rendered_text(&result).contains(&format!("value_{idx}: Int")),
+            "{}",
+            rendered_text(&result)
+        );
+    }
+
+    let completion = engine.completions("value_", "value_".len());
+    assert!(
+        completion.candidates.len() >= 6,
+        "core completion should retain all matching candidates for paging: {:?}",
+        completion.candidates
     );
 }
 
