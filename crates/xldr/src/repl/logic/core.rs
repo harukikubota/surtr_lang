@@ -7490,6 +7490,7 @@ fn compile_repl_preload_from_module_stages(
         builtin_source_id: repl_sources.builtin_source_id,
         builtin_module_path: Some("Bootstrap".to_string()),
         module_stages: repl_sources.module_stages.clone(),
+        stdlib_variant: crate::StdlibVariant::Default,
     };
     let snapshot = crate::default_stdlib_semantic_snapshot().map_err(ReplLoadError::Load)?;
     let (module_stage_asts, raw_module_stages, user_ast, script_runtime_inputs) =

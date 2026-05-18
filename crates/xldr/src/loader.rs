@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use diagnostics::{SourceId, SourceRegistry};
+use serde::{Deserialize, Serialize};
 use sindr::policy::SourceKind;
 use spire::ast::{Ast, Span};
 
@@ -793,6 +794,13 @@ pub struct CompileSources {
     pub builtin_module_path: Option<String>,
     pub module_source_ids: Vec<SourceId>,
     pub module_stages: Vec<Vec<StagedModule>>,
+    pub stdlib_variant: StdlibVariant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StdlibVariant {
+    Default,
+    TestEnabled,
 }
 
 pub fn collect_module_sources_with_modules(
@@ -833,6 +841,18 @@ pub fn collect_module_sources_with_extra_std_sources(
     extra_std_sources: &[SourceDescriptor],
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<ModuleSources, LoadError> {
+    collect_module_sources_with_stdlib_variant(
+        StdlibVariant::Default,
+        extra_std_sources,
+        module_input_stages,
+    )
+}
+
+pub fn collect_module_sources_with_stdlib_variant(
+    stdlib_variant: StdlibVariant,
+    extra_std_sources: &[SourceDescriptor],
+    module_input_stages: &[Vec<ModuleInput>],
+) -> Result<ModuleSources, LoadError> {
     // Stage 0/1 are reserved for the built-in standard layers. User-provided
     // modules are appended afterwards so they can depend on
     // `Bootstrap -> [SpecialTypes + Function + Kernel + other std modules]` but never precede them.
@@ -869,11 +889,15 @@ pub fn collect_module_sources_with_extra_std_sources(
             STYLED_DOC_SOURCE,
             STYLED_DOC_MODULE_PATH,
         )))
-        .chain(std::iter::once(SourceDescriptor::std_module(
-            TEST_STD_FILE,
-            TEST_STD_SOURCE,
-            TEST_STD_MODULE_PATH,
-        )))
+        .chain(
+            (stdlib_variant == StdlibVariant::TestEnabled)
+                .then_some(SourceDescriptor::std_module(
+                    TEST_STD_FILE,
+                    TEST_STD_SOURCE,
+                    TEST_STD_MODULE_PATH,
+                ))
+                .into_iter(),
+        )
         .collect(),
     ];
 
@@ -901,7 +925,17 @@ pub fn collect_module_sources_with_extra_std_sources(
 pub fn collect_module_sources_with_module_stages(
     module_input_stages: &[Vec<ModuleInput>],
 ) -> Result<ModuleSources, LoadError> {
-    collect_module_sources_with_extra_std_sources(&[], module_input_stages)
+    collect_module_sources_with_stdlib_variant(StdlibVariant::Default, &[], module_input_stages)
+}
+
+pub fn collect_test_module_sources_with_module_stages(
+    module_input_stages: &[Vec<ModuleInput>],
+) -> Result<ModuleSources, LoadError> {
+    collect_module_sources_with_stdlib_variant(
+        StdlibVariant::TestEnabled,
+        &[],
+        module_input_stages,
+    )
 }
 
 pub fn compose_script_compile_sources(
@@ -918,6 +952,26 @@ pub fn compose_script_compile_sources(
         builtin_module_path: module_sources.builtin_module_path,
         module_source_ids: module_sources.module_source_ids,
         module_stages: module_sources.module_stages,
+        stdlib_variant: StdlibVariant::Default,
+    }
+}
+
+pub fn compose_script_compile_sources_with_stdlib_variant(
+    user_file_name: &str,
+    user_source: &str,
+    mut module_sources: ModuleSources,
+    stdlib_variant: StdlibVariant,
+) -> CompileSources {
+    let user_source_id = module_sources.sources.register(user_file_name, user_source);
+    CompileSources {
+        sources: module_sources.sources,
+        user_source_id,
+        user_module_path: script_pseudo_module_path(user_file_name),
+        builtin_source_id: module_sources.builtin_source_id,
+        builtin_module_path: module_sources.builtin_module_path,
+        module_source_ids: module_sources.module_source_ids,
+        module_stages: module_sources.module_stages,
+        stdlib_variant,
     }
 }
 
@@ -1046,12 +1100,12 @@ mod tests {
         );
         assert_eq!(
             loaded.module_source_ids.len(),
-            6 + DEFAULT_STD_MODULES.len()
+            5 + DEFAULT_STD_MODULES.len()
         );
         assert_eq!(loaded.module_source_ids[0], loaded.builtin_source_id);
         assert_eq!(loaded.module_stages.len(), 2);
         assert_eq!(loaded.module_stages[0][0].module_path, "Bootstrap");
-        assert_eq!(loaded.module_stages[1].len(), 5 + DEFAULT_STD_MODULES.len());
+        assert_eq!(loaded.module_stages[1].len(), 4 + DEFAULT_STD_MODULES.len());
         let std_paths = loaded.module_stages[1]
             .iter()
             .map(|module| module.module_path.as_str())
@@ -1107,9 +1161,31 @@ mod tests {
                 "IO",
                 "Shell",
                 "StyledDoc",
-                "Test",
             ]
         );
+    }
+
+    #[test]
+    fn test_enabled_compile_sources_include_test_module() {
+        let module_sources = collect_test_module_sources_with_module_stages(&[])
+            .expect("test-enabled module collection must succeed");
+        let loaded = compose_script_compile_sources_with_stdlib_variant(
+            "main.srt",
+            "print(\"hi\")",
+            module_sources,
+            StdlibVariant::TestEnabled,
+        );
+
+        assert_eq!(
+            loaded.module_source_ids.len(),
+            6 + DEFAULT_STD_MODULES.len()
+        );
+        assert_eq!(loaded.module_stages[1].len(), 5 + DEFAULT_STD_MODULES.len());
+        let std_paths = loaded.module_stages[1]
+            .iter()
+            .map(|module| module.module_path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(std_paths.last().copied(), Some("Test"));
     }
 
     #[test]
@@ -1169,7 +1245,7 @@ mod tests {
 
         assert_eq!(loaded.module_stages.len(), 4);
         assert_eq!(loaded.module_stages[0].len(), 1); // bootstrap
-        assert_eq!(loaded.module_stages[1].len(), 5 + DEFAULT_STD_MODULES.len()); // special types + Function + Kernel + other std modules + StyledDoc + Test
+        assert_eq!(loaded.module_stages[1].len(), 4 + DEFAULT_STD_MODULES.len()); // special types + Function + Kernel + other std modules + StyledDoc
         assert_eq!(loaded.module_stages[2].len(), 1);
         assert_eq!(loaded.module_stages[3].len(), 2);
         assert_eq!(
@@ -1255,7 +1331,6 @@ mod tests {
                 "IO",
                 "Shell",
                 "StyledDoc",
-                "Test",
             ]
         );
         assert_eq!(loaded.module_stages[2][0].module_path, "Std::Math");

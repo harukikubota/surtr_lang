@@ -550,6 +550,31 @@ fn test_nested_lib_tests_are_ignored_by_normal_script_run() {
 }
 
 #[test]
+fn normal_script_run_rejects_import_test() {
+    let temp = unique_temp_dir("surtr_run_rejects_test_module");
+    write_source(
+        &temp.join("main.srt"),
+        r#"import Test;
+
+print("ok")
+"#,
+    );
+
+    let output = run_surtr(&temp, &["run", "main.srt"]);
+    assert!(
+        !output.status.success(),
+        "normal script run should reject Test module\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(stderr.contains("Unknown module import: Test"), "{stderr}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn test_command_allows_asserting_captured_stdout_in_surtr_test_code() {
     let temp = unique_temp_dir("surtr_test_command_capture_stdout_assert");
     write_source(

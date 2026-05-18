@@ -17,11 +17,14 @@ pub use loader::{
     collect_additional_default_std_module_inputs, collect_lib_module_inputs,
     collect_module_sources_with_extra_std_sources, collect_module_sources_with_module_file_stages,
     collect_module_sources_with_module_stages, collect_module_sources_with_modules,
-    collect_script_include_directives, compose_script_compile_sources, derive_primary_module_path,
+    collect_module_sources_with_stdlib_variant, collect_test_module_sources_with_module_stages,
+    collect_script_include_directives, compose_script_compile_sources,
+    compose_script_compile_sources_with_stdlib_variant, derive_primary_module_path,
     is_default_std_module_file_name, is_default_std_module_path,
     module_path_from_source_or_file_name, prepare_script_sources, script_pseudo_module_path,
     CompileSources, LoadError, ModuleInput, ModuleSources, PreparedScriptSources,
     ScriptIncludeDirective, ScriptSourcePrepareError, SourceDescriptor, StagedModule,
+    StdlibVariant,
 };
 pub use project_runner::{
     execute_project_runner_source, project_runner_module_input_stages, ProjectRunnerVmError,
@@ -61,6 +64,13 @@ fn stable_hash_bytes(bytes: &[u8]) -> String {
         hash = hash.wrapping_mul(FNV_PRIME);
     }
     format!("{hash:016x}")
+}
+
+fn stdlib_variant_cache_key(stdlib_variant: StdlibVariant) -> &'static str {
+    match stdlib_variant {
+        StdlibVariant::Default => "default",
+        StdlibVariant::TestEnabled => "test-enabled",
+    }
 }
 
 pub fn module_span_base_for_source(source_id: SourceId) -> usize {
@@ -1652,7 +1662,10 @@ pub fn test_semantic_prefix_cache_key(
     compile_sources: &CompileSources,
 ) -> Result<String, String> {
     let fingerprint = current_exe_fingerprint()?;
-    let stdlib_fingerprint = default_stdlib_source_fingerprint()?;
+    let stdlib_fingerprint = match compile_sources.stdlib_variant {
+        StdlibVariant::Default => default_stdlib_source_fingerprint()?,
+        StdlibVariant::TestEnabled => test_enabled_stdlib_source_fingerprint()?,
+    };
     Ok(test_semantic_prefix_cache_key_with_fingerprint(
         &fingerprint,
         &stdlib_fingerprint,
@@ -1685,6 +1698,8 @@ pub fn test_semantic_prefix_cache_key_with_fingerprint(
     key.push_str(stdlib_fingerprint);
     key.push('\x1f');
     key.push_str(&STDLIB_SEMANTIC_CACHE_SCHEMA.to_string());
+    key.push('\x1f');
+    key.push_str(stdlib_variant_cache_key(compile_sources.stdlib_variant));
     key.push('\x1f');
     key.push_str(match compile_unit_kind {
         CompileUnitKind::Script => "script",
@@ -1727,6 +1742,12 @@ pub fn test_semantic_prefix_cache_key_with_fingerprint(
 fn default_stdlib_source_fingerprint() -> Result<String, String> {
     let module_sources =
         collect_module_sources_with_module_stages(&[]).map_err(|err| err.to_string())?;
+    Ok(stdlib_semantic_cache_key(&module_sources))
+}
+
+fn test_enabled_stdlib_source_fingerprint() -> Result<String, String> {
+    let module_sources =
+        collect_test_module_sources_with_module_stages(&[]).map_err(|err| err.to_string())?;
     Ok(stdlib_semantic_cache_key(&module_sources))
 }
 
@@ -1782,8 +1803,22 @@ pub fn default_stdlib_semantic_snapshot() -> Result<Arc<DefaultStdlibSnapshot>, 
         .clone()
 }
 
+pub fn test_enabled_stdlib_semantic_snapshot() -> Result<Arc<DefaultStdlibSnapshot>, LoadError> {
+    static SNAPSHOT: OnceLock<Result<Arc<DefaultStdlibSnapshot>, LoadError>> = OnceLock::new();
+    SNAPSHOT
+        .get_or_init(|| build_stdlib_snapshot(StdlibVariant::TestEnabled).map(Arc::new))
+        .clone()
+}
+
 fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
-    let module_sources = collect_module_sources_with_module_stages(&[])?;
+    build_stdlib_snapshot(StdlibVariant::Default)
+}
+
+fn build_stdlib_snapshot(stdlib_variant: StdlibVariant) -> Result<DefaultStdlibSnapshot, LoadError> {
+    let module_sources = match stdlib_variant {
+        StdlibVariant::Default => collect_module_sources_with_module_stages(&[])?,
+        StdlibVariant::TestEnabled => collect_test_module_sources_with_module_stages(&[])?,
+    };
     let cache_key = stdlib_semantic_cache_key(&module_sources);
     let module_stages = repl::logic::core::parse_module_stages_from_sources(
         &module_sources.sources,
@@ -1809,8 +1844,10 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
         .collect::<BTreeSet<_>>();
     let default_stage_count = module_stages.len();
 
-    if let Some(payload) =
-        load_cached_stdlib_semantic_snapshot(&stdlib_semantic_cache_path(), &cache_key)
+    if let Some(payload) = load_cached_stdlib_semantic_snapshot(
+        &stdlib_semantic_cache_path(stdlib_variant),
+        &cache_key,
+    )
     {
         if payload.default_stage_count == default_stage_count {
             return Ok(DefaultStdlibSnapshot {
@@ -1897,7 +1934,7 @@ fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
         module_stages,
     };
     store_cached_stdlib_semantic_snapshot(
-        &stdlib_semantic_cache_path(),
+        &stdlib_semantic_cache_path(stdlib_variant),
         &cache_key,
         CachedStdlibSemanticPayload {
             declaration_index: snapshot.declaration_index.clone(),
@@ -1958,17 +1995,17 @@ fn store_cached_stdlib_semantic_snapshot(
     }
 }
 
-fn stdlib_semantic_cache_path() -> PathBuf {
+fn stdlib_semantic_cache_path(stdlib_variant: StdlibVariant) -> PathBuf {
+    let file_name = match stdlib_variant {
+        StdlibVariant::Default => "std.semantic",
+        StdlibVariant::TestEnabled => "std.test.semantic",
+    };
     if let Some(path) = env::var_os("SURTR_STDLIB_CACHE_DIR") {
-        return PathBuf::from(path).join("std.semantic");
+        return PathBuf::from(path).join(file_name);
     }
     target_root_from_current_exe()
-        .map(|root| root.join("surtr-stdlib-cache").join("std.semantic"))
-        .unwrap_or_else(|| {
-            env::temp_dir()
-                .join("surtr-stdlib-cache")
-                .join("std.semantic")
-        })
+        .map(|root| root.join("surtr-stdlib-cache").join(file_name))
+        .unwrap_or_else(|| env::temp_dir().join("surtr-stdlib-cache").join(file_name))
 }
 
 pub fn target_root_from_current_exe() -> Option<PathBuf> {
@@ -2093,7 +2130,22 @@ defmod B {
         assert!(!snapshot
             .declaration_index
             .values()
+            .any(|entry| entry.fq_name.starts_with("Global::Test::")));
+        assert!(!snapshot
+            .declaration_index
+            .values()
             .any(|entry| entry.module_path == "TestOnly"));
+    }
+
+    #[test]
+    fn test_enabled_stdlib_snapshot_contains_test_module() {
+        let snapshot = test_enabled_stdlib_semantic_snapshot()
+            .expect("test-enabled stdlib snapshot should build");
+
+        assert!(snapshot
+            .declaration_index
+            .values()
+            .any(|entry| entry.fq_name.starts_with("Global::Test::")));
     }
 
     #[test]

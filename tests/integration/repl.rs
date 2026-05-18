@@ -932,6 +932,20 @@ fn repl_human_diagnostic_stays_on_stderr() {
 }
 
 #[test]
+fn repl_rejects_test_module_usage() {
+    let output = run_repl_session("Test::it(\"a\", {Ok(())})\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl should remain alive after compile error\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    assert!(stderr.contains("Undefined function Test::it/2"), "{stderr}");
+}
+
+#[test]
 fn repl_script_preload_flag_exposes_preloaded_docs_and_defs() {
     let temp = unique_temp_dir("repl-script-preload");
     let source_path = temp.join("preload.srt");

@@ -239,6 +239,7 @@ pub(crate) fn collect_default_script_compile_sources(
     file_path: &str,
     source: &str,
     include_modules: &[xldr::ModuleInput],
+    stdlib_variant: xldr::StdlibVariant,
 ) -> RuneResult<xldr::CompileSources> {
     let module_inputs = xldr::cached_additional_default_std_module_inputs().map_err(|e| {
         module_source_collection_error_as_rune_error(
@@ -257,22 +258,27 @@ pub(crate) fn collect_default_script_compile_sources(
         module_input_stages.push(vec![module_input.clone()]);
     }
 
-    let module_sources = xldr::collect_module_sources_with_module_stages(&module_input_stages)
-        .map_err(|e| {
-            module_source_collection_error_as_rune_error(
-                file_path,
-                source,
-                format!(
-                    "{}: failed to collect definition sources: {}",
-                    env.command_name(),
-                    e
-                ),
-            )
-        })?;
-    Ok(xldr::compose_script_compile_sources(
+    let module_sources = xldr::collect_module_sources_with_stdlib_variant(
+        stdlib_variant,
+        &[],
+        &module_input_stages,
+    )
+    .map_err(|e| {
+        module_source_collection_error_as_rune_error(
+            file_path,
+            source,
+            format!(
+                "{}: failed to collect definition sources: {}",
+                env.command_name(),
+                e
+            ),
+        )
+    })?;
+    Ok(xldr::compose_script_compile_sources_with_stdlib_variant(
         file_path,
         source,
         module_sources,
+        stdlib_variant,
     ))
 }
 
@@ -281,7 +287,11 @@ fn load_default_stdlib_snapshot(
     sources: &xldr::CompileSources,
 ) -> RuneResult<std::sync::Arc<xldr::DefaultStdlibSnapshot>> {
     let user_source_id = sources.user_source_id;
-    xldr::default_stdlib_semantic_snapshot().map_err(|e| {
+    let snapshot = match sources.stdlib_variant {
+        xldr::StdlibVariant::Default => xldr::default_stdlib_semantic_snapshot(),
+        xldr::StdlibVariant::TestEnabled => xldr::test_enabled_stdlib_semantic_snapshot(),
+    };
+    snapshot.map_err(|e| {
         module_source_collection_error_as_rune_error(
             sources
                 .sources
@@ -951,6 +961,7 @@ print(to_string(1))
                 module_path: "MahjongCli".into(),
                 source_kind: SourceKind::DefinitionSource,
             }]],
+            stdlib_variant: xldr::StdlibVariant::Default,
         };
         let base = xldr::module_span_base_for_source(module_source_id);
         let span = Span {
@@ -986,6 +997,7 @@ print(to_string(1))
                 module_path: "MahjongCli".into(),
                 source_kind: SourceKind::DefinitionSource,
             }]],
+            stdlib_variant: xldr::StdlibVariant::Default,
         };
         let span = Span { start: 50, end: 51 };
         let source_id = source_id_for_span(&compile_sources, &span);
@@ -1049,6 +1061,7 @@ pid: PID<MyWorker> =? MySup::spawn(MyWorker::init(1))
             "process_pid_annotation.srt",
             &plan.source_for_parse,
             &plan.include_modules,
+            xldr::StdlibVariant::Default,
         )
         .unwrap();
 

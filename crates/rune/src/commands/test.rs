@@ -390,6 +390,7 @@ fn compile_test_script(script: &TestScript, env: ExecutionEnv) -> RuneResult<Byt
         &script.file_path,
         &compile_plan.source_for_parse,
         &compile_plan.include_modules,
+        xldr::StdlibVariant::TestEnabled,
     )?;
     let bytecode = compile_source(env, &compile_sources, &compile_plan)?;
     store_cached_bytecode(&cache_path, &bytecode)?;
