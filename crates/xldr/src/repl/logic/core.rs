@@ -2684,13 +2684,9 @@ impl ReplEngine {
     }
 
     fn symbol_matches(qualified_name: &str, symbol: &str) -> bool {
-        let qualified_name = crate::surface_path_name(qualified_name);
-        let symbol = crate::surface_path_name(symbol);
-        qualified_name == symbol
-            || qualified_name
-                .rsplit("::")
-                .next()
-                .is_some_and(|tail| tail == symbol)
+        let qualified_name = sindr::names::CanonicalSymbolName::new(qualified_name);
+        let symbol = sindr::names::VisibleSymbolRef::new(symbol);
+        symbol.matches_qualified_name(&qualified_name)
     }
 
     fn is_qualified_symbol(symbol: &str) -> bool {

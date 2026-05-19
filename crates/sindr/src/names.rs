@@ -84,6 +84,16 @@ impl VisibleSymbolRef {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub fn matches_qualified_name(&self, qualified_name: &CanonicalSymbolName) -> bool {
+        let qualified = surface_path_name(qualified_name.as_str());
+        let visible = surface_path_name(&self.0);
+        qualified == visible
+            || qualified
+                .rsplit("::")
+                .next()
+                .is_some_and(|tail| tail == visible)
+    }
 }
 
 /// Marker for the compiler's implicit root namespace.
@@ -456,6 +466,8 @@ mod tests {
         assert_eq!(canonical.as_str(), "Trait::Global::User::method");
         assert_eq!(surface.as_str(), "Trait::User::method");
         assert_eq!(visible.as_str(), "Trait::User::method");
+        let tail_visible = VisibleSymbolRef::new("method");
+        assert!(tail_visible.matches_qualified_name(&canonical));
         assert_eq!(ImplicitRootNamespace::hide("Global::User"), "User");
     }
 
