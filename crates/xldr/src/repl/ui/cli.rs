@@ -2,7 +2,7 @@
 
 use std::env;
 use std::io::{self, IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 #[cfg(feature = "line-editor")]
 use std::time::{Duration, Instant};
@@ -60,6 +60,8 @@ pub struct ReplOptions {
     pub module_path: Option<String>,
     pub project_path: Option<String>,
     pub project_profile: Option<String>,
+    pub no_local_config: bool,
+    pub config_path: Option<String>,
 }
 
 impl Default for ReplOptions {
@@ -72,8 +74,16 @@ impl Default for ReplOptions {
             module_path: None,
             project_path: None,
             project_profile: None,
+            no_local_config: false,
+            config_path: None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoadedCliUserConfig {
+    config: CliUserConfig,
+    loaded_from: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -102,21 +112,8 @@ impl CliUserConfig {
     }
 }
 
-fn load_cli_user_config(cwd: &Path) -> Result<CliUserConfig, CommandError> {
-    let path = cwd.join(".xldr.yaml");
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok(CliUserConfig::default());
-        }
-        Err(error) => {
-            return Err(CommandError::message(
-                1,
-                format!("repl: failed to read {}: {}", path.display(), error),
-            ));
-        }
-    };
-    let config = serde_yaml::from_str::<CliUserConfig>(&contents).map_err(|error| {
+fn parse_cli_user_config(path: &Path, contents: &str) -> Result<CliUserConfig, CommandError> {
+    let config = serde_yaml::from_str::<CliUserConfig>(contents).map_err(|error| {
         CommandError::message(
             1,
             format!("repl: failed to parse {}: {}", path.display(), error),
@@ -132,6 +129,42 @@ fn load_cli_user_config(cwd: &Path) -> Result<CliUserConfig, CommandError> {
         ));
     }
     Ok(config)
+}
+
+fn load_cli_user_config(cwd: &Path) -> Result<LoadedCliUserConfig, CommandError> {
+    let path = cwd.join(".xldr.yaml");
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(LoadedCliUserConfig {
+                config: CliUserConfig::default(),
+                loaded_from: None,
+            });
+        }
+        Err(error) => {
+            return Err(CommandError::message(
+                1,
+                format!("repl: failed to read {}: {}", path.display(), error),
+            ));
+        }
+    };
+    Ok(LoadedCliUserConfig {
+        config: parse_cli_user_config(&path, &contents)?,
+        loaded_from: Some(path),
+    })
+}
+
+fn load_cli_user_config_from_path(path: &Path) -> Result<LoadedCliUserConfig, CommandError> {
+    let contents = std::fs::read_to_string(path).map_err(|error| {
+        CommandError::message(
+            1,
+            format!("repl: failed to read {}: {}", path.display(), error),
+        )
+    })?;
+    Ok(LoadedCliUserConfig {
+        config: parse_cli_user_config(path, &contents)?,
+        loaded_from: Some(path.to_path_buf()),
+    })
 }
 
 // ── Line editor helper ────────────────────────────────────────────────────────
@@ -267,13 +300,23 @@ pub fn cli_command(options: ReplOptions) -> CommandResult<()> {
         ));
     }
 
-    let cli_config = load_cli_user_config(&env::current_dir().map_err(|error| {
+    let current_dir = env::current_dir().map_err(|error| {
         CommandError::message(
             1,
             format!("repl: failed to resolve current directory: {}", error),
         )
-    })?)?;
-    let completion_candidate_count = cli_config.completion_candidate_count();
+    })?;
+    let cli_config = if let Some(path) = &options.config_path {
+        load_cli_user_config_from_path(Path::new(path))?
+    } else if options.no_local_config {
+        LoadedCliUserConfig {
+            config: CliUserConfig::default(),
+            loaded_from: None,
+        }
+    } else {
+        load_cli_user_config(&current_dir)?
+    };
+    let completion_candidate_count = cli_config.config.completion_candidate_count();
 
     let mut engine = match (
         &options.project_path,
@@ -1167,6 +1210,8 @@ mod command_error_tests {
             module_path: None,
             project_path: None,
             project_profile: None,
+            no_local_config: true,
+            config_path: None,
         })
         .expect_err("missing preload script must fail");
 
@@ -1632,9 +1677,36 @@ mod tests {
         )
         .expect("config file should be written");
 
-        let config =
+        let loaded =
             super::load_cli_user_config(&temp_root).expect("config should load successfully");
-        assert_eq!(config.repl.cli.completion_candidates, Some(7));
+        assert_eq!(loaded.config.repl.cli.completion_candidates, Some(7));
+        assert_eq!(loaded.loaded_from.as_deref(), Some(config_path.as_path()));
+    }
+
+    #[test]
+    fn load_cli_config_returns_loaded_from_for_implicit_xldr_yaml() {
+        let temp_root = temp_root("xldr-cli-config-loaded-from");
+        let config_path = temp_root.join(".xldr.yaml");
+        fs::write(&config_path, "repl:\n  cli: {}\n").expect("config file should be written");
+
+        let loaded = super::load_cli_user_config(&temp_root).expect("config should load");
+        assert_eq!(loaded.loaded_from.as_deref(), Some(config_path.as_path()));
+    }
+
+    #[test]
+    fn load_cli_config_reads_explicit_config_path() {
+        let temp_root = temp_root("xldr-cli-explicit-config");
+        let config_path = temp_root.join("custom-xldr.yaml");
+        fs::write(
+            &config_path,
+            "repl:\n  cli:\n    completion_candidates: 3\n",
+        )
+        .expect("config file should be written");
+
+        let loaded = super::load_cli_user_config_from_path(&config_path)
+            .expect("explicit config should load successfully");
+        assert_eq!(loaded.config.repl.cli.completion_candidates, Some(3));
+        assert_eq!(loaded.loaded_from.as_deref(), Some(config_path.as_path()));
     }
 
     #[test]

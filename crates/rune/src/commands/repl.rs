@@ -33,6 +33,26 @@ fn parse_repl_options(args: &[String]) -> RuneResult<xldr::ReplOptions> {
                 }
                 options.version = true;
             }
+            "--no-local-config" => {
+                if options.no_local_config {
+                    return Err(RuneError::usage(
+                        "repl: --no-local-config may only be specified once",
+                    ));
+                }
+                options.no_local_config = true;
+            }
+            "--config" => {
+                i += 1;
+                if i >= args.len() || args[i].starts_with('-') {
+                    return Err(RuneError::usage("repl: missing value for --config"));
+                }
+                if options.config_path.is_some() {
+                    return Err(RuneError::usage(
+                        "repl: --config may only be specified once",
+                    ));
+                }
+                options.config_path = Some(args[i].clone());
+            }
             "--script" => {
                 i += 1;
                 if i >= args.len() || args[i].starts_with('-') {
@@ -101,6 +121,11 @@ fn parse_repl_options(args: &[String]) -> RuneResult<xldr::ReplOptions> {
     if options.project_profile.is_some() && options.project_path.is_none() {
         return Err(RuneError::usage("repl: --profile requires --project"));
     }
+    if options.config_path.is_some() && options.no_local_config {
+        return Err(RuneError::usage(
+            "repl: --config cannot be combined with --no-local-config",
+        ));
+    }
 
     Ok(options)
 }
@@ -139,6 +164,25 @@ mod tests {
 
         assert_eq!(options.project_path.as_deref(), Some("project.srt"));
         assert_eq!(options.project_profile.as_deref(), Some("test"));
+    }
+
+    #[test]
+    fn parse_repl_options_accepts_no_local_config() {
+        let options = parse_repl_options(&["--no-local-config".to_string()])
+            .expect("options should parse");
+
+        assert!(options.no_local_config);
+    }
+
+    #[test]
+    fn parse_repl_options_accepts_explicit_config_path() {
+        let options = parse_repl_options(&[
+            "--config".to_string(),
+            "custom-xldr.yaml".to_string(),
+        ])
+        .expect("options should parse");
+
+        assert_eq!(options.config_path.as_deref(), Some("custom-xldr.yaml"));
     }
 
     #[test]
@@ -231,6 +275,38 @@ mod tests {
     }
 
     #[test]
+    fn parse_repl_options_rejects_duplicate_no_local_config() {
+        let err = parse_repl_options(&[
+            "--no-local-config".to_string(),
+            "--no-local-config".to_string(),
+        ])
+        .expect_err("duplicate no-local-config flag must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("--no-local-config may only be specified once"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_duplicate_config_flag() {
+        let err = parse_repl_options(&[
+            "--config".to_string(),
+            "first.yaml".to_string(),
+            "--config".to_string(),
+            "second.yaml".to_string(),
+        ])
+        .expect_err("duplicate config flag must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("--config may only be specified once"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn parse_repl_options_rejects_missing_module_value() {
         let err = parse_repl_options(&["--module".to_string()])
             .expect_err("missing module value must fail");
@@ -264,6 +340,15 @@ mod tests {
             rendered.contains("missing value for --profile"),
             "{rendered}"
         );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_missing_config_value() {
+        let err = parse_repl_options(&["--config".to_string()])
+            .expect_err("missing config value must fail");
+
+        let rendered = format!("{err:?}");
+        assert!(rendered.contains("missing value for --config"), "{rendered}");
     }
 
     #[test]
@@ -326,6 +411,22 @@ mod tests {
         assert!(
             format!("{module_err:?}").contains("--project cannot be combined"),
             "{module_err:?}"
+        );
+    }
+
+    #[test]
+    fn parse_repl_options_rejects_config_with_no_local_config() {
+        let err = parse_repl_options(&[
+            "--config".to_string(),
+            "custom.yaml".to_string(),
+            "--no-local-config".to_string(),
+        ])
+        .expect_err("config and no-local-config must not be combined");
+
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("--config cannot be combined with --no-local-config"),
+            "{rendered}"
         );
     }
 }

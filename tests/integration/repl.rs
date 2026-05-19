@@ -46,10 +46,11 @@ fn run_repl_session_with_args(args: &[&str], input: &str) -> Output {
 }
 
 fn run_repl_session_with_args_in_dir(args: &[&str], input: &str, cwd: Option<&PathBuf>) -> Output {
+    let args = repl_args_with_default_no_local_config(args);
     let mut command = surtr_command();
     command
         .arg("repl")
-        .args(args)
+        .args(args.iter().map(String::as_str))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -64,10 +65,37 @@ fn run_repl_session(input: &str) -> Output {
 }
 
 fn run_repl_session_with_color(input: &str) -> Output {
+    let args = repl_args_with_default_no_local_config(&[]);
     let mut command = surtr_command();
     command
         .arg("repl")
+        .args(args.iter().map(String::as_str))
         .env("SURTR_REPL_COLOR", "always")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    run_repl_command(command, input)
+}
+
+fn repl_args_with_default_no_local_config(args: &[&str]) -> Vec<String> {
+    let mut merged = Vec::with_capacity(args.len() + 1);
+    if !args.iter().any(|arg| *arg == "--no-local-config" || *arg == "--config") {
+        merged.push("--no-local-config".to_string());
+    }
+    merged.extend(args.iter().map(|arg| (*arg).to_string()));
+    merged
+}
+
+fn run_repl_session_allowing_implicit_local_config_in_dir(
+    args: &[&str],
+    input: &str,
+    cwd: &PathBuf,
+) -> Output {
+    let mut command = surtr_command();
+    command
+        .arg("repl")
+        .args(args)
+        .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -397,7 +425,7 @@ fn repl_completion_candidates_render_over_pty() {
     }
 
     let mut command = surtr_command();
-    command.arg("repl").arg("--quiet");
+    command.arg("repl").arg("--no-local-config").arg("--quiet");
     let session = PtyGuard::spawn(&mut command);
     let mut buffer = Vec::new();
     pump_until(&session, &mut buffer, b"xldr(1)> ", Duration::from_secs(30));
@@ -411,6 +439,73 @@ fn repl_completion_candidates_render_over_pty() {
         "PTY output should contain completion candidates:\n{}",
         String::from_utf8_lossy(&buffer)
     );
+
+    session.write_all(b":q\r");
+}
+
+#[test]
+fn repl_implicit_local_config_loads_workspace_file_without_asserting_value_effect() {
+    let dir = unique_temp_dir("repl-implicit-local-config");
+    fs::write(dir.join(".xldr.yaml"), "repl:\n  cli: {}\n")
+        .expect("config file should be written");
+
+    let output = run_repl_session_allowing_implicit_local_config_in_dir(&["--version"], "", &dir);
+    assert!(
+        output.status.success(),
+        "repl should exit successfully\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout.trim(), "xldr 0.1.0");
+}
+
+#[cfg(unix)]
+#[test]
+fn repl_explicit_config_applies_completion_candidate_limit() {
+    const COMPLETION_WAIT: Duration = Duration::from_secs(10);
+
+    fn pump_until(session: &PtyGuard, buffer: &mut Vec<u8>, needle: &[u8], timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            buffer.extend(session.read_available());
+            if buffer.windows(needle.len()).any(|window| window == needle) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "did not observe {:?} in PTY output:\n{}",
+            String::from_utf8_lossy(needle),
+            String::from_utf8_lossy(buffer)
+        );
+    }
+
+    let dir = unique_temp_dir("repl-explicit-local-config");
+    let config_path = dir.join("explicit-xldr.yaml");
+    fs::write(
+        &config_path,
+        "repl:\n  cli:\n    completion_candidates: 1\n",
+    )
+    .expect("config file should be written");
+
+    let mut command = surtr_command();
+    command
+        .arg("repl")
+        .arg("--quiet")
+        .arg("--config")
+        .arg(&config_path);
+    let session = PtyGuard::spawn(&mut command);
+    let mut buffer = Vec::new();
+    pump_until(&session, &mut buffer, b"xldr(1)> ", Duration::from_secs(30));
+
+    session.write_all(b"String::re\t");
+    pump_until(&session, &mut buffer, b"String::repeat", COMPLETION_WAIT);
+
+    let rendered = String::from_utf8_lossy(&buffer);
+    assert!(rendered.contains("String::repeat"), "{rendered}");
+    assert!(!rendered.contains("String::replace"), "{rendered}");
 
     session.write_all(b":q\r");
 }
