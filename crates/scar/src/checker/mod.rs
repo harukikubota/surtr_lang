@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use sigil::resolved::*;
 use sindr::builtin::{
-    builtin_type_meta_by_name, builtin_uid, BuiltinMeta, BUILTIN_METAS, BUILTIN_TYPE_METAS,
+    builtin_function_metas, builtin_type_head_metas, builtin_type_meta_by_name, builtin_uid,
+    BuiltinMeta,
 };
 use sindr::names::builtin_type_usage_policy;
 use sindr::policy::{ExitCodePolicy, RuntimeSourcePolicy};
@@ -623,7 +624,7 @@ fn initialize_env() -> TypeEnv {
         },
     );
 
-    for (idx, meta) in BUILTIN_METAS.iter().enumerate() {
+    for (idx, meta) in builtin_function_metas().iter().enumerate() {
         let uid = builtin_uid(idx as u16);
         let ty = builtin_ty_from_meta(meta, &mut env);
         env.bind_var(uid, ty);
@@ -912,12 +913,12 @@ fn pid_marker_name_from_ty(ty: &Ty) -> String {
 mod builtin_signature_tests {
     use super::{builtin_ty_from_meta, TypeEnv};
     use crate::types::Ty;
-    use sindr::builtin::BUILTIN_METAS;
+    use sindr::builtin::builtin_function_metas;
 
     #[test]
     fn builtin_meta_signatures_bootstrap_into_type_env() {
         let mut env = TypeEnv::new();
-        for meta in BUILTIN_METAS {
+        for meta in builtin_function_metas() {
             let ty = builtin_ty_from_meta(meta, &mut env);
             match ty {
                 Ty::BuiltinFunc { name, params, .. } => {

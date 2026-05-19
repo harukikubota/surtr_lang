@@ -18,7 +18,7 @@ use scar::typed::{
 use scar::types::Ty;
 use serde::{Deserialize, Serialize};
 use sigil::error::ResolveError;
-use sindr::builtin::BUILTIN_METAS;
+use sindr::builtin::builtin_function_metas;
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
 use sindr::names::SymbolCapabilities;
 use sindr::policy::CompileUnitKind;
@@ -518,7 +518,7 @@ impl ReplEngine {
             symbols: ["Ok", "Err"]
                 .into_iter()
                 .map(str::to_string)
-                .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
+                .chain(builtin_function_metas().iter().map(|meta| meta.name.to_string()))
                 .collect(),
             docs: Vec::new(),
             signatures: Vec::new(),
@@ -569,7 +569,7 @@ impl ReplEngine {
         let mut symbols: BTreeSet<String> = ["Ok", "Err"]
             .into_iter()
             .map(str::to_string)
-            .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
+            .chain(builtin_function_metas().iter().map(|meta| meta.name.to_string()))
             .collect();
         for entry in vm.bytecode().functions.iter() {
             if let Some(name) = &entry.qualified_name {
@@ -4681,7 +4681,7 @@ impl ReplEngine {
     fn origin_for_name(name: &str) -> &'static str {
         if name.contains("REPL::") {
             "repl"
-        } else if BUILTIN_METAS
+        } else if builtin_function_metas()
             .iter()
             .any(|meta| name == meta.name || name.ends_with(&format!("::{}", meta.name)))
         {
@@ -8124,7 +8124,7 @@ fn compile_repl_preload_from_module_stages(
     let mut symbols: BTreeSet<String> = ["Ok", "Err"]
         .into_iter()
         .map(str::to_string)
-        .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
+        .chain(builtin_function_metas().iter().map(|meta| meta.name.to_string()))
         .collect();
     for entry in vm.bytecode().functions.iter() {
         if let Some(name) = &entry.qualified_name {
@@ -9260,7 +9260,7 @@ mod tests {
             symbols: ["Ok", "Err"]
                 .into_iter()
                 .map(str::to_string)
-                .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
+                .chain(builtin_function_metas().iter().map(|meta| meta.name.to_string()))
                 .collect(),
             docs: Vec::new(),
             signatures: Vec::new(),

@@ -1043,6 +1043,10 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
 /// builtin dispatch/signature information, not type-head or surface policy.
 pub const BUILTIN_FUNCTION_METAS: &[BuiltinFunctionMeta] = BUILTIN_METAS;
 
+pub fn builtin_function_metas() -> &'static [BuiltinFunctionMeta] {
+    BUILTIN_FUNCTION_METAS
+}
+
 /// Canonical builtin type declarations accepted from standard definition sources.
 ///
 /// These entries define the exact source-level heads the compiler accepts,
@@ -1162,6 +1166,10 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
 /// declarations, not runtime builtin dispatch or surface capabilities.
 pub const BUILTIN_TYPE_HEAD_METAS: &[BuiltinTypeHeadMeta] = BUILTIN_TYPE_METAS;
 
+pub fn builtin_type_head_metas() -> &'static [BuiltinTypeHeadMeta] {
+    BUILTIN_TYPE_HEAD_METAS
+}
+
 pub fn builtin_function_meta_by_name(name: &str) -> Option<&'static BuiltinFunctionMeta> {
     BUILTIN_FUNCTION_METAS.iter().find(|meta| meta.name == name)
 }
@@ -1255,14 +1263,14 @@ pub fn builtin_meta_for_decl(
 }
 
 pub fn builtin_id_by_name(name: &str) -> Option<u16> {
-    BUILTIN_METAS
+    builtin_function_metas()
         .iter()
         .position(|meta| meta.name == name)
         .and_then(|idx| (idx <= u16::MAX as usize).then_some(idx as u16))
 }
 
 pub fn builtin_meta_by_id(builtin_id: u16) -> Option<&'static BuiltinMeta> {
-    BUILTIN_METAS.get(builtin_id as usize)
+    builtin_function_metas().get(builtin_id as usize)
 }
 
 pub fn builtin_type_head_meta_by_name(name: &str) -> Option<&'static BuiltinTypeHeadMeta> {
@@ -1284,9 +1292,9 @@ pub fn builtin_uid(builtin_id: u16) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name, builtin_meta_for_decl,
-        builtin_runtime_name, builtin_uid, BUILTIN_FUNCTION_METAS, BUILTIN_METAS,
-        BUILTIN_TYPE_HEAD_METAS, BUILTIN_TYPE_METAS,
+        builtin_function_metas, builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name,
+        builtin_meta_for_decl, builtin_runtime_name, builtin_type_head_metas, builtin_uid,
+        BUILTIN_FUNCTION_METAS, BUILTIN_METAS, BUILTIN_TYPE_HEAD_METAS, BUILTIN_TYPE_METAS,
     };
 
     #[test]
@@ -1304,6 +1312,14 @@ mod tests {
         assert_eq!(BUILTIN_FUNCTION_METAS[0].name, "print");
         assert_eq!(BUILTIN_TYPE_HEAD_METAS.len(), BUILTIN_TYPE_METAS.len());
         assert!(BUILTIN_TYPE_HEAD_METAS.iter().any(|meta| meta.name == "ProcessInit"));
+    }
+
+    #[test]
+    fn builtin_table_accessors_expose_split_metadata_views() {
+        assert_eq!(builtin_function_metas()[0].name, "print");
+        assert!(builtin_type_head_metas()
+            .iter()
+            .any(|meta| meta.name == "ProcessInit"));
     }
 
     #[test]

@@ -577,7 +577,7 @@ impl Checker {
             return Ok(());
         }
 
-        for meta in BUILTIN_TYPE_METAS {
+        for meta in builtin_type_head_metas() {
             if !self.seen_builtin_type_decls.contains_key(meta.name) {
                 return Err(TypeError {
                     message: format!(

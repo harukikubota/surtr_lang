@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::panic;
 
 use serde::{Deserialize, Serialize};
-use sindr::builtin::{builtin_uid, BUILTIN_METAS};
+use sindr::builtin::{builtin_function_metas, builtin_uid};
 use sindr::names::{
     builtin_symbol_identity_info, FacetRootKind, SymbolCapabilities, SymbolIdentityInfo,
     TypeIdentity,

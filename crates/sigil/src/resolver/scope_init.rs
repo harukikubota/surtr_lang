@@ -15,12 +15,12 @@ fn initialize_base_scope() -> Scope {
 
 pub(super) fn initialize_scope() -> Scope {
     let mut scope = initialize_base_scope();
-    for (idx, meta) in BUILTIN_METAS.iter().enumerate() {
+    for (idx, meta) in builtin_function_metas().iter().enumerate() {
         if is_global_runtime_builtin(meta.name) {
             scope.define_with_id(meta.name, builtin_uid(idx as u16));
         }
     }
-    if let Some(hidden_boundary_idx) = BUILTIN_METAS
+    if let Some(hidden_boundary_idx) = builtin_function_metas()
         .iter()
         .position(|meta| meta.name == "__workers_broadcast_timeout")
     {
@@ -49,7 +49,7 @@ pub(super) fn resolve_decl_attrs(attrs: &DeclAttrs) -> ResolvedDeclAttrs {
 }
 
 pub(super) fn is_runtime_builtin_decl(name: &str) -> bool {
-    BUILTIN_METAS.iter().any(|meta| meta.name == name)
+    builtin_function_metas().iter().any(|meta| meta.name == name)
 }
 
 pub(super) fn is_special_form_builtin_decl(name: &str) -> bool {

@@ -40,7 +40,7 @@ pub use repl::ui::completion::{
     ReplCompletionProvider, ReplCompletionRequest, ReplCompletionResult,
 };
 use serde::{Deserialize, Serialize};
-use sindr::builtin::{BUILTIN_METAS, BUILTIN_TYPE_METAS};
+use sindr::builtin::{builtin_function_metas, builtin_type_head_metas};
 use sindr::ir::{stable_hash_hex, DocEntry, SignatureEntry};
 pub use sindr::policy::SourceKind;
 use sindr::policy::{
@@ -843,7 +843,7 @@ fn stdlib_semantic_cache_material(module_sources: &ModuleSources) -> String {
     key.push_str("symbol-capability-schema-v");
     key.push_str(&sindr::names::SYMBOL_CAPABILITY_SCHEMA_VERSION.to_string());
     key.push('\x1f');
-    for meta in BUILTIN_METAS {
+    for meta in builtin_function_metas() {
         key.push_str(meta.name);
         key.push('\x1e');
         key.push_str(meta.sig_str);
@@ -852,7 +852,7 @@ fn stdlib_semantic_cache_material(module_sources: &ModuleSources) -> String {
         key.push('\x1f');
     }
     key.push('\x1d');
-    for meta in BUILTIN_TYPE_METAS {
+    for meta in builtin_type_head_metas() {
         key.push_str(meta.name);
         key.push('\x1e');
         key.push_str(&meta.params.join(","));

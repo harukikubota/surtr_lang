@@ -1993,7 +1993,7 @@ impl Resolver {
             .lookup(&name)
             .or_else(|| {
                 if compiler_generated && is_runtime_builtin_decl(&name) {
-                    BUILTIN_METAS
+                    builtin_function_metas()
                         .iter()
                         .position(|meta| meta.name == name)
                         .map(|idx| builtin_uid(idx as u16))
