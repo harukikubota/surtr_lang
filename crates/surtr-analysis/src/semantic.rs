@@ -338,8 +338,7 @@ fn semantic_info_from_declaration_index(
 
         if let Some(kind) = completion_kind_for_declaration_kind(&entry.kind) {
             let qualified_name = surface_name(&entry.fq_name);
-            let capabilities = declaration_symbol_identity_info(&entry.name, &entry.kind)
-                .map(|info| info.capabilities);
+            let capabilities = symbol_capabilities_for_declaration_entry(entry);
             infos.push(SymbolSemanticInfo {
                 label: qualified_name.clone(),
                 replacement: qualified_name,
@@ -432,6 +431,17 @@ pub fn facet_root_capabilities(kind: FacetRootKind) -> SymbolCapabilities {
 
 pub fn facet_type_root_capabilities() -> SymbolCapabilities {
     facet_root_capabilities(FacetRootKind::TypeRoot)
+}
+
+pub fn symbol_capabilities_for_declaration_entry(
+    entry: &sigil::DeclarationEntry,
+) -> Option<SymbolCapabilities> {
+    symbol_capabilities_for_builtin_surface(&entry.name)
+        .or_else(|| symbol_capabilities_for_builtin_surface(&entry.fq_name))
+        .or_else(|| {
+            declaration_symbol_identity_info(&entry.name, &entry.kind)
+                .map(|info| info.capabilities)
+        })
 }
 
 pub fn completion_symbol_for_effective_visible_entry(

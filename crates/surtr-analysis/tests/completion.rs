@@ -1153,6 +1153,34 @@ fn shared_builtin_surface_capability_query_excludes_runtime_aliases() {
 }
 
 #[test]
+fn shared_declaration_capability_query_handles_user_and_builtin_surfaces() {
+    let user = declaration_entry(
+        "Global",
+        "User",
+        "Global::User",
+        DeclarationKind::Struct,
+        true,
+        false,
+    );
+    let user_caps =
+        surtr_analysis::symbol_capabilities_for_declaration_entry(&user).expect("user caps");
+    assert_eq!(user_caps.facet_root_path, Some(FacetRootKind::TypeRoot));
+
+    let builtin = declaration_entry(
+        "Global",
+        "String",
+        "Global::String",
+        DeclarationKind::BuiltinType,
+        true,
+        false,
+    );
+    let builtin_caps =
+        surtr_analysis::symbol_capabilities_for_declaration_entry(&builtin).expect("builtin caps");
+    assert!(builtin_caps.type_annotation);
+    assert_eq!(builtin_caps.facet_root_path, None);
+}
+
+#[test]
 fn effective_visible_entry_projection_reuses_qualified_symbol_metadata() {
     let source_location = surtr_analysis::SourceLocation {
         path: "/repo/helper.srt".into(),

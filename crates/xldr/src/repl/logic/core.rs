@@ -2209,19 +2209,7 @@ impl ReplEngine {
     fn completion_capabilities_for_declaration(
         entry: &sigil::DeclarationEntry,
     ) -> Option<SymbolCapabilities> {
-        if let Some(capabilities) = Self::completion_capabilities_for_builtin(&entry.name)
-            .or_else(|| Self::completion_capabilities_for_builtin(&entry.fq_name))
-        {
-            return Some(capabilities);
-        }
-
-        match entry.kind {
-            sigil::DeclarationKind::Struct
-            | sigil::DeclarationKind::Record
-            | sigil::DeclarationKind::Enum => Some(surtr_analysis::facet_type_root_capabilities()),
-            sigil::DeclarationKind::BuiltinType => None,
-            _ => None,
-        }
+        surtr_analysis::symbol_capabilities_for_declaration_entry(entry)
     }
 
     pub fn prompt(&self) -> String {
