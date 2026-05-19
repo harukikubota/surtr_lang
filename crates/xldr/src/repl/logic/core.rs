@@ -6739,6 +6739,7 @@ impl ReplEngine {
     ) -> Vec<ReplImportRecord> {
         let mut seen = BTreeSet::new();
         let mut records = Vec::new();
+        let mut member_auto_import_modules = BTreeSet::new();
 
         for stage in module_stages {
             for module in stage {
@@ -6750,34 +6751,11 @@ impl ReplEngine {
                     .iter()
                     .find(|stmt| !matches!(stmt, Ast::Import(_, _, _)));
                 match first_non_import {
-                    Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _, _, _)) => {
-                        for entry in declaration_index.values() {
-                            if entry.module_path != module.module_path
-                                || entry.hidden
-                                || !entry.user_importable
-                                || entry.visibility != spire::ast::Visibility::Public
-                                || !matches!(
-                                    entry.kind,
-                                    sigil::DeclarationKind::Def
-                                        | sigil::DeclarationKind::Extractor
-                                        | sigil::DeclarationKind::TraitMethod
-                                        | sigil::DeclarationKind::ImplMethod
-                                        | sigil::DeclarationKind::ImplCtorNew
-                                )
-                            {
-                                continue;
-                            }
-                            let item = crate::surface_rendered_name(&entry.fq_name);
-                            if seen.insert((0usize, "auto".to_string(), item.clone(), "@autoimport".to_string()))
-                            {
-                                records.push(ReplImportRecord {
-                                    line: 0,
-                                    src: "auto".to_string(),
-                                    item,
-                                    via: "@autoimport".to_string(),
-                                });
-                            }
-                        }
+                    Some(
+                        Ast::ImplDef(_, _, _, _)
+                        | Ast::TraitImplDef(_, _, _, _, _, _),
+                    ) => {
+                        member_auto_import_modules.insert(module.module_path.clone());
                     }
                     _ => {
                         let item = crate::surface_rendered_name(&module.module_path);
@@ -6814,7 +6792,31 @@ impl ReplEngine {
                 {
                     continue;
                 }
-                let item = crate::surface_rendered_name(&method_entry.fq_name);
+                let item = crate::surface_rendered_name(&method_entry.name);
+                if seen.insert((0usize, "auto".to_string(), item.clone(), "@autoimport".to_string()))
+                {
+                    records.push(ReplImportRecord {
+                        line: 0,
+                        src: "auto".to_string(),
+                        item,
+                        via: "@autoimport".to_string(),
+                    });
+                }
+            }
+        }
+
+        let current_stage_index = module_stages.len().saturating_sub(1);
+        if let Ok(entries) =
+            sigil::effective_auto_import_entries(module_stages, None, current_stage_index)
+        {
+            for entry in entries {
+                if !member_auto_import_modules.contains(&entry.module_path) {
+                    continue;
+                }
+                let item = match entry.kind {
+                    sigil::DeclarationKind::TraitMethod => crate::surface_rendered_name(&entry.name),
+                    _ => crate::surface_rendered_name(&entry.fq_name),
+                };
                 if seen.insert((0usize, "auto".to_string(), item.clone(), "@autoimport".to_string()))
                 {
                     records.push(ReplImportRecord {

@@ -764,6 +764,33 @@ pub fn build_scope_for_module(
     )
 }
 
+pub fn effective_auto_import_entries(
+    module_stages: &[Vec<StagedModuleAst>],
+    current_module_path: Option<&str>,
+    current_stage_index: usize,
+) -> Result<Vec<DeclarationEntry>, ResolveError> {
+    let declaration_index = precollect_declaration_index(module_stages)?;
+    let declaration_uids = assign_declaration_uids(&declaration_index);
+    let declaration_uid_kinds = declaration_uid_kind_map(&declaration_index, &declaration_uids);
+    let global_scope = build_global_scope(&declaration_index, &declaration_uids);
+    let auto_import_modules = auto_import_module_names(module_stages);
+    let build = build_module_scope_with_imports(
+        &global_scope,
+        &auto_import_modules,
+        &declaration_index,
+        &declaration_uids,
+        &declaration_uid_kinds,
+        &[],
+        current_module_path,
+        current_stage_index,
+    )?;
+    Ok(build
+        .effective_auto_import_fq_names
+        .into_iter()
+        .filter_map(|fq_name| declaration_index.get(&fq_name).cloned())
+        .collect())
+}
+
 struct Resolver {
     scope: Scope,
     /// Fresh IDs reserved in predeclaration order for each top-level declaration name.

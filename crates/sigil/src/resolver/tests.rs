@@ -3423,6 +3423,36 @@ deftrait Fake {
 }
 
 #[test]
+fn test_effective_auto_import_entries_include_autoimport_trait_methods_only() {
+    let module_stages = vec![vec![staged_module(
+        "Show",
+        parse_module_ast(
+            r#"@autoimport
+deftrait Show {
+  def to_string(self: Self) -> String
+}"#,
+            "Show",
+        ),
+    )]];
+
+    let entries = crate::effective_auto_import_entries(&module_stages, None, 0)
+        .expect("effective auto-import query should succeed");
+    let names = entries
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect::<Vec<_>>();
+
+    assert!(
+        names.iter().any(|name| name == "Show::to_string"),
+        "actual entries: {names:?}"
+    );
+    assert!(
+        names.iter().all(|name| name != "Show"),
+        "trait owner should not be reported as imported member: {names:?}"
+    );
+}
+
+#[test]
 fn test_duplicate_module_import_is_rejected() {
     let module_stages = vec![vec![staged_module(
         "Helper",
