@@ -1086,6 +1086,54 @@ fn semantic_index_builds_completion_symbols_from_doc_and_signature_metadata() {
 }
 
 #[test]
+fn semantic_index_compile_metadata_joins_declaration_docs_and_signatures() {
+    let mut declarations = DeclarationIndex::new();
+    declarations.insert(
+        "Global::Helper::User".to_string(),
+        declaration_entry(
+            "Global::Helper",
+            "User",
+            "Global::Helper::User",
+            DeclarationKind::Struct,
+            true,
+            false,
+        ),
+    );
+    let docs = vec![DocEntry {
+        qualified_name: "Global::Helper::User".to_string(),
+        kind: DocKind::Type,
+        module_path: "Global::Helper".to_string(),
+        signature: Some("User(name: String)".to_string()),
+        doc: "User type.".to_string(),
+    }];
+    let signatures = vec![SignatureEntry {
+        qualified_name: "Global::Helper::User".to_string(),
+        kind: DocKind::Type,
+        module_path: "Global::Helper".to_string(),
+        signature: "User(name: String)".to_string(),
+    }];
+
+    let index = SemanticIndex::from_compile_metadata(&declarations, &docs, &signatures);
+    let symbol = index
+        .symbols()
+        .iter()
+        .find(|symbol| symbol.label == "Helper::User")
+        .expect("user symbol should exist");
+
+    assert_eq!(symbol.detail.as_deref(), Some("User(name: String)"));
+    assert_eq!(symbol.documentation.as_deref(), Some("User type."));
+    assert!(matches!(
+        symbol.origin.as_ref(),
+        Some(CompletionOrigin::Declaration { qualified_name, .. })
+            if qualified_name == "Global::Helper::User"
+    ));
+    assert!(
+        symbol.capabilities.is_some(),
+        "joined declaration metadata should preserve capabilities: {symbol:?}"
+    );
+}
+
+#[test]
 fn call_argument_completion_ranks_self_trait_constraint_candidates_from_impl_signatures() {
     let index = SemanticIndex::from_symbols(vec![
         completion_symbol(

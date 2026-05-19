@@ -36,6 +36,39 @@ pub struct CompletionSymbol {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct SymbolSemanticInfo {
+    label: String,
+    replacement: String,
+    kind: CompletionKind,
+    detail: Option<String>,
+    documentation: Option<String>,
+    sort_text: Option<String>,
+    origin: Option<CompletionOrigin>,
+    definition: Option<SourceLocation>,
+    capabilities: Option<SymbolCapabilities>,
+}
+
+impl SymbolSemanticInfo {
+    fn completion_key(&self) -> (String, u8) {
+        (self.label.clone(), completion_kind_rank(&self.kind))
+    }
+
+    fn into_completion_symbol(self) -> CompletionSymbol {
+        CompletionSymbol {
+            label: self.label,
+            replacement: self.replacement,
+            kind: self.kind,
+            detail: self.detail,
+            documentation: self.documentation,
+            sort_text: self.sort_text,
+            origin: self.origin,
+            definition: self.definition,
+            capabilities: self.capabilities,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceLocation {
     pub path: PathBuf,
     pub start: usize,
@@ -66,6 +99,14 @@ pub struct SemanticIndex {
 }
 
 impl SemanticIndex {
+    fn from_semantic_infos(infos: Vec<SymbolSemanticInfo>) -> Self {
+        Self::from_symbols(
+            infos.into_iter()
+                .map(SymbolSemanticInfo::into_completion_symbol)
+                .collect(),
+        )
+    }
+
     pub fn from_symbols(symbols: Vec<CompletionSymbol>) -> Self {
         let mut deduped = Vec::new();
         for symbol in symbols {
@@ -104,52 +145,7 @@ impl SemanticIndex {
     }
 
     pub fn from_metadata(docs: &[DocEntry], signatures: &[SignatureEntry]) -> Self {
-        let signature_by_name = signatures
-            .iter()
-            .map(|entry| (entry.qualified_name.as_str(), entry.signature.as_str()))
-            .collect::<BTreeMap<_, _>>();
-
-        let mut symbols = Vec::new();
-        for entry in signatures {
-            let qualified_name = surface_name(&entry.qualified_name);
-            symbols.push(CompletionSymbol {
-                label: qualified_name.clone(),
-                replacement: qualified_name,
-                kind: completion_kind_for_doc_kind(&entry.kind),
-                detail: Some(entry.signature.clone()),
-                documentation: None,
-                sort_text: None,
-                origin: Some(CompletionOrigin::Metadata {
-                    qualified_name: entry.qualified_name.clone(),
-                    module_path: entry.module_path.clone(),
-                }),
-                definition: None,
-                capabilities: completion_capabilities_for_builtin(&entry.qualified_name),
-            });
-        }
-        for entry in docs {
-            let detail = signature_by_name
-                .get(entry.qualified_name.as_str())
-                .map(|signature| (*signature).to_string())
-                .or_else(|| entry.signature.clone());
-            let qualified_name = surface_name(&entry.qualified_name);
-            symbols.push(CompletionSymbol {
-                label: qualified_name.clone(),
-                replacement: qualified_name,
-                kind: completion_kind_for_doc_kind(&entry.kind),
-                detail,
-                documentation: Some(entry.doc.clone()),
-                sort_text: None,
-                origin: Some(CompletionOrigin::Metadata {
-                    qualified_name: entry.qualified_name.clone(),
-                    module_path: entry.module_path.clone(),
-                }),
-                definition: None,
-                capabilities: completion_capabilities_for_builtin(&entry.qualified_name),
-            });
-        }
-
-        Self::from_symbols(symbols)
+        Self::from_semantic_infos(semantic_info_from_metadata(docs, signatures))
     }
 
     pub fn from_compile_metadata(
@@ -157,9 +153,12 @@ impl SemanticIndex {
         docs: &[DocEntry],
         signatures: &[SignatureEntry],
     ) -> Self {
-        let mut symbols = Self::from_declaration_index(declarations).symbols().to_vec();
-        symbols.extend(Self::from_metadata(docs, signatures).symbols().iter().cloned());
-        Self::from_symbols(symbols)
+        let mut infos = semantic_info_from_declaration_index(declarations);
+        merge_semantic_info(
+            &mut infos,
+            semantic_info_from_metadata(docs, signatures),
+        );
+        Self::from_semantic_infos(infos)
     }
 
     pub fn enrich_symbols_with_compile_metadata(
@@ -210,52 +209,7 @@ impl SemanticIndex {
     }
 
     pub fn from_declaration_index(declarations: &DeclarationIndex) -> Self {
-        let mut symbols = Vec::new();
-        for entry in declarations
-            .values()
-            .filter(|entry| !entry.hidden && (entry.user_importable || entry.user_callable))
-        {
-            if !entry.module_path.is_empty() {
-                symbols.push(CompletionSymbol {
-                    label: surface_name(&entry.module_path),
-                    replacement: surface_name(&entry.module_path),
-                    kind: CompletionKind::TypePath,
-                    detail: None,
-                    documentation: None,
-                    sort_text: None,
-                    origin: None,
-                    definition: None,
-                    capabilities: completion_capabilities_for_builtin(&entry.module_path),
-                });
-            }
-
-            if let Some(kind) = completion_kind_for_declaration_kind(&entry.kind) {
-                let qualified_name = surface_name(&entry.fq_name);
-                let capabilities = declaration_symbol_identity_info(&entry.name, &entry.kind)
-                    .map(|info| info.capabilities);
-                symbols.push(CompletionSymbol {
-                    label: qualified_name.clone(),
-                    replacement: qualified_name,
-                    kind,
-                    detail: None,
-                    documentation: None,
-                    sort_text: None,
-                    origin: Some(CompletionOrigin::Declaration {
-                        qualified_name: entry.fq_name.clone(),
-                        module_path: entry.module_path.clone(),
-                        name: entry.name.clone(),
-                        stage_index: entry.stage_index,
-                        auto_import: entry.auto_import,
-                        visibility: entry.visibility,
-                        user_importable: entry.user_importable,
-                        user_callable: entry.user_callable,
-                    }),
-                    definition: None,
-                    capabilities,
-                });
-            }
-        }
-        Self::from_symbols(symbols)
+        Self::from_semantic_infos(semantic_info_from_declaration_index(declarations))
     }
 
     pub fn symbols(&self) -> &[CompletionSymbol] {
@@ -310,6 +264,141 @@ impl SemanticIndex {
                 })
                 .then_with(|| left.replacement.cmp(&right.replacement))
         });
+    }
+}
+
+fn semantic_info_from_metadata(
+    docs: &[DocEntry],
+    signatures: &[SignatureEntry],
+) -> Vec<SymbolSemanticInfo> {
+        let signature_by_name = signatures
+            .iter()
+            .map(|entry| (entry.qualified_name.as_str(), entry.signature.as_str()))
+            .collect::<BTreeMap<_, _>>();
+
+    let mut infos = Vec::new();
+    for entry in signatures {
+        let qualified_name = surface_name(&entry.qualified_name);
+        infos.push(SymbolSemanticInfo {
+            label: qualified_name.clone(),
+            replacement: qualified_name,
+            kind: completion_kind_for_doc_kind(&entry.kind),
+            detail: Some(entry.signature.clone()),
+            documentation: None,
+            sort_text: None,
+            origin: Some(CompletionOrigin::Metadata {
+                qualified_name: entry.qualified_name.clone(),
+                module_path: entry.module_path.clone(),
+            }),
+            definition: None,
+            capabilities: completion_capabilities_for_builtin(&entry.qualified_name),
+        });
+    }
+    for entry in docs {
+        let detail = signature_by_name
+            .get(entry.qualified_name.as_str())
+            .map(|signature| (*signature).to_string())
+            .or_else(|| entry.signature.clone());
+        let qualified_name = surface_name(&entry.qualified_name);
+        infos.push(SymbolSemanticInfo {
+            label: qualified_name.clone(),
+            replacement: qualified_name,
+            kind: completion_kind_for_doc_kind(&entry.kind),
+            detail,
+            documentation: Some(entry.doc.clone()),
+            sort_text: None,
+            origin: Some(CompletionOrigin::Metadata {
+                qualified_name: entry.qualified_name.clone(),
+                module_path: entry.module_path.clone(),
+            }),
+            definition: None,
+            capabilities: completion_capabilities_for_builtin(&entry.qualified_name),
+        });
+    }
+    infos
+}
+
+fn semantic_info_from_declaration_index(
+    declarations: &DeclarationIndex,
+) -> Vec<SymbolSemanticInfo> {
+    let mut infos = Vec::new();
+    for entry in declarations
+        .values()
+        .filter(|entry| !entry.hidden && (entry.user_importable || entry.user_callable))
+    {
+        if !entry.module_path.is_empty() {
+            infos.push(SymbolSemanticInfo {
+                label: surface_name(&entry.module_path),
+                replacement: surface_name(&entry.module_path),
+                kind: CompletionKind::TypePath,
+                detail: None,
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: completion_capabilities_for_builtin(&entry.module_path),
+            });
+        }
+
+        if let Some(kind) = completion_kind_for_declaration_kind(&entry.kind) {
+            let qualified_name = surface_name(&entry.fq_name);
+            let capabilities =
+                declaration_symbol_identity_info(&entry.name, &entry.kind).map(|info| info.capabilities);
+            infos.push(SymbolSemanticInfo {
+                label: qualified_name.clone(),
+                replacement: qualified_name,
+                kind,
+                detail: None,
+                documentation: None,
+                sort_text: None,
+                origin: Some(CompletionOrigin::Declaration {
+                    qualified_name: entry.fq_name.clone(),
+                    module_path: entry.module_path.clone(),
+                    name: entry.name.clone(),
+                    stage_index: entry.stage_index,
+                    auto_import: entry.auto_import,
+                    visibility: entry.visibility,
+                    user_importable: entry.user_importable,
+                    user_callable: entry.user_callable,
+                }),
+                definition: None,
+                capabilities,
+            });
+        }
+    }
+    infos
+}
+
+fn merge_semantic_info(base: &mut Vec<SymbolSemanticInfo>, incoming: Vec<SymbolSemanticInfo>) {
+    let mut base_by_key = base
+        .iter()
+        .enumerate()
+        .map(|(idx, info)| (info.completion_key(), idx))
+        .collect::<HashMap<_, _>>();
+    for info in incoming {
+        if let Some(existing_idx) = base_by_key.get(&info.completion_key()).copied() {
+            let existing = &mut base[existing_idx];
+            if existing.detail.is_none() {
+                existing.detail = info.detail;
+            }
+            if existing.documentation.is_none() {
+                existing.documentation = info.documentation;
+            }
+            if existing.sort_text.is_none() {
+                existing.sort_text = info.sort_text;
+            }
+            if existing.origin.is_none() {
+                existing.origin = info.origin;
+            }
+            if existing.definition.is_none() {
+                existing.definition = info.definition;
+            }
+            merge_symbol_capabilities(&mut existing.capabilities, info.capabilities);
+        } else {
+            let next_idx = base.len();
+            base_by_key.insert(info.completion_key(), next_idx);
+            base.push(info);
+        }
     }
 }
 
