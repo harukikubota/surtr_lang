@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use sindr::builtin::{BUILTIN_METAS, BUILTIN_TYPE_METAS};
 use sindr::ir::{stable_hash_hex, Bytecode, DocEntry, DocKind, SignatureEntry};
 pub use sindr::policy::SourceKind;
-use sindr::policy::{CompileUnitKind, EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
+use sindr::policy::{CompileUnitKind, EntryPoint, RuntimeSourcePolicy};
 
 pub const MODULE_SPAN_STRIDE: usize = 1_000_000;
 
@@ -1347,30 +1347,7 @@ pub fn derive_runtime_policy(
     source_kind: SourceKind,
     entrypoint: Option<&EntryPoint>,
 ) -> RuntimeSourcePolicy {
-    let base = match source_kind {
-        SourceKind::Script => RuntimeSourcePolicy::script(),
-        SourceKind::DefinitionSource => RuntimeSourcePolicy::module(),
-        SourceKind::StdDefinitionSource => RuntimeSourcePolicy::std_module(),
-        SourceKind::ProjectConfigSource => RuntimeSourcePolicy::module(),
-        SourceKind::ReplChunk => RuntimeSourcePolicy::repl_chunk(),
-    };
-
-    let policy = match source_kind {
-        SourceKind::Script => ExitCodePolicy::Anywhere,
-        SourceKind::ReplChunk => ExitCodePolicy::Forbidden,
-        SourceKind::DefinitionSource
-        | SourceKind::StdDefinitionSource
-        | SourceKind::ProjectConfigSource
-            if compile_unit_kind == CompileUnitKind::Project =>
-        {
-            ExitCodePolicy::EntryOnly
-        }
-        SourceKind::DefinitionSource
-        | SourceKind::StdDefinitionSource
-        | SourceKind::ProjectConfigSource => ExitCodePolicy::Forbidden,
-    };
-
-    base.with_exit_code_policy(policy, entrypoint)
+    source_kind.runtime_policy(compile_unit_kind, entrypoint)
 }
 
 pub fn lower_module_source_ast(

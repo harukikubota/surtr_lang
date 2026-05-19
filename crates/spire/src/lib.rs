@@ -16,11 +16,11 @@ pub use parser::{
 };
 
 pub fn parse_rules_for_source_kind(source_kind: sindr::policy::SourceKind) -> ParseRules {
-    match source_kind {
-        sindr::policy::SourceKind::Script => ParseRules::script(),
-        sindr::policy::SourceKind::DefinitionSource => ParseRules::module(),
-        sindr::policy::SourceKind::StdDefinitionSource => ParseRules::std_module(),
-        sindr::policy::SourceKind::ProjectConfigSource => ParseRules::project(),
-        sindr::policy::SourceKind::ReplChunk => ParseRules::repl_chunk(),
+    match source_kind.parse_profile() {
+        sindr::policy::ParseProfile::Script => ParseRules::script(),
+        sindr::policy::ParseProfile::Module => ParseRules::module(),
+        sindr::policy::ParseProfile::StdModule => ParseRules::std_module(),
+        sindr::policy::ParseProfile::Project => ParseRules::project(),
+        sindr::policy::ParseProfile::ReplChunk => ParseRules::repl_chunk(),
     }
 }
