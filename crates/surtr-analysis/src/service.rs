@@ -1197,7 +1197,7 @@ fn build_staged_modules(
                 Ok(ast) => {
                     *semantic_index =
                         semantic_index_with_source_locations(semantic_index, &file.path, &ast);
-                    staged_modules.extend(lower_module_ast(ast, None));
+                    staged_modules.extend(sigil::staged_modules_from_source_ast(ast, None));
                 }
                 Err(error) => {
                     let span = error.span();
@@ -1228,16 +1228,6 @@ fn source_for_module_file(service: &AnalysisService, path: &Path) -> Option<Stri
         .get(path)
         .map(|document| document.text.clone())
         .or_else(|| service.host.read_to_string(path))
-}
-
-fn lower_module_ast(
-    ast: Vec<Ast>,
-    fallback_module_path: Option<&str>,
-) -> Vec<sigil::StagedModuleAst> {
-    sigil::lower_module_source_ast(ast, fallback_module_path)
-        .into_iter()
-        .map(sigil::StagedModuleAst::from)
-        .collect()
 }
 
 fn diagnostic_from_span(
@@ -1485,8 +1475,6 @@ fn _text_position_for_byte(line_index: &LineIndex, byte_offset: usize) -> TextPo
 
 #[cfg(test)]
 mod tests {
-    use super::lower_module_ast;
-
     #[test]
     fn lower_module_ast_hoists_impl_local_imports_like_xldr() {
         let ast = spire::parse_with_context(
@@ -1500,7 +1488,7 @@ impl User {
         )
         .expect("module source should parse");
 
-        let lowered = lower_module_ast(ast, Some("User"));
+        let lowered = sigil::staged_modules_from_source_ast(ast, Some("User"));
         let module = lowered.first().expect("impl owner module should exist");
 
         assert!(matches!(

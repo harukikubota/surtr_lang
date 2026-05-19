@@ -245,6 +245,16 @@ pub fn lower_module_source_ast(
     lowered
 }
 
+pub fn staged_modules_from_source_ast(
+    ast: Vec<Ast>,
+    fallback_module_path: Option<&str>,
+) -> Vec<StagedModuleAst> {
+    lower_module_source_ast(ast, fallback_module_path)
+        .into_iter()
+        .map(StagedModuleAst::from)
+        .collect()
+}
+
 pub fn lowered_module_is_impl_owner(lowered: &LoweredModuleAst) -> bool {
     matches!(
         lowered

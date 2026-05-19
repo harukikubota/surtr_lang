@@ -57,6 +57,31 @@ defmod App {
 }
 
 #[test]
+fn staged_modules_from_source_ast_projects_lowered_modules() {
+    let ast = spire::parse_with_context(
+        r#"
+import Helper::help
+impl User {
+  def use() -> Int { help() }
+}
+"#,
+        spire::ParserContext::module(0, Some("User".to_string()))
+            .with_rules(spire::ParseRules::std_module()),
+    )
+    .expect("definition source should parse");
+
+    let staged = staged_modules_from_source_ast(ast, Some("User"));
+
+    assert_eq!(staged.len(), 1);
+    assert_eq!(staged[0].module_path, "Global::User");
+    assert!(matches!(staged[0].ast.first(), Some(Ast::Import(_, _, _))));
+    assert!(matches!(
+        staged[0].ast.get(1),
+        Some(Ast::ImplDef(_, _, _, _))
+    ));
+}
+
+#[test]
 fn test_dbg_special_form_resolves_without_name_lookup() {
     let resolved = parse_and_resolve(
         r#"dbg = {|x| x}
