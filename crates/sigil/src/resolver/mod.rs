@@ -63,7 +63,7 @@ fn define_global_surface_alias(scope: &mut Scope, canonical_name: &str, uid: u32
     }
 }
 
-fn user_type_symbol_identity_info(kind: &DeclarationKind) -> Option<SymbolIdentityInfo> {
+pub fn user_type_symbol_identity_info(kind: &DeclarationKind) -> Option<SymbolIdentityInfo> {
     let (identity, capabilities) = match kind {
         DeclarationKind::Struct => (
             TypeIdentity::Struct,
@@ -86,7 +86,7 @@ fn user_type_symbol_identity_info(kind: &DeclarationKind) -> Option<SymbolIdenti
     Some(SymbolIdentityInfo::new(identity, capabilities))
 }
 
-fn declaration_symbol_identity_info(
+pub fn declaration_symbol_identity_info(
     name: &str,
     kind: &DeclarationKind,
 ) -> Option<SymbolIdentityInfo> {

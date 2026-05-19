@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
-use sigil::{DeclarationIndex, DeclarationKind};
+use sigil::{declaration_symbol_identity_info, DeclarationIndex, DeclarationKind};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
 use sindr::names::{builtin_symbol_identity_info, FacetRootKind, SymbolCapabilities};
 use spire::ast::{AstTy, Visibility};
@@ -174,8 +174,8 @@ impl SemanticIndex {
 
             if let Some(kind) = completion_kind_for_declaration_kind(&entry.kind) {
                 let qualified_name = surface_name(&entry.fq_name);
-                let capabilities =
-                    completion_capabilities_for_declaration(&entry.kind, &entry.name);
+                let capabilities = declaration_symbol_identity_info(&entry.name, &entry.kind)
+                    .map(|info| info.capabilities);
                 symbols.push(CompletionSymbol {
                     label: qualified_name.clone(),
                     replacement: qualified_name,
@@ -277,23 +277,6 @@ fn merge_symbol_capabilities(
 pub(crate) fn completion_capabilities_for_builtin(name: &str) -> Option<SymbolCapabilities> {
     let surface_name = surface_name(name);
     builtin_symbol_identity_info(&surface_name).map(|info| info.capabilities)
-}
-
-pub(crate) fn completion_capabilities_for_declaration(
-    kind: &DeclarationKind,
-    name: &str,
-) -> Option<SymbolCapabilities> {
-    if let Some(capabilities) = completion_capabilities_for_builtin(name) {
-        return Some(capabilities);
-    }
-
-    match kind {
-        DeclarationKind::Struct | DeclarationKind::Record | DeclarationKind::Enum => {
-            Some(facet_root_capabilities(FacetRootKind::TypeRoot))
-        }
-        DeclarationKind::BuiltinType => completion_capabilities_for_builtin(name),
-        _ => None,
-    }
 }
 
 pub(crate) fn facet_root_capabilities(kind: FacetRootKind) -> SymbolCapabilities {
