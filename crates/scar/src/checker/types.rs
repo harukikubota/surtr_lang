@@ -1,5 +1,5 @@
 use super::*;
-use sindr::names::{builtin_type_name, TypeName};
+use sindr::names::{builtin_type_name, builtin_type_usage_policy, TypeName};
 
 #[derive(Clone, Copy)]
 enum SignatureTyMode<'a> {
@@ -559,7 +559,10 @@ impl Checker {
                     }
                 }
             }
-            AstTy::Generic(span, name, _) if Self::surface_name(name) == "TypeRef" => {
+            AstTy::Generic(span, name, _)
+                if builtin_type_usage_policy(Self::surface_name(name))
+                    .is_some_and(|policy| policy.type_ref_witness_allowed) =>
+            {
                 Err(self.type_ref_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _)
@@ -946,7 +949,10 @@ impl Checker {
                 }
                 Ok(fresh)
             }
-            AstTy::Generic(span, name, _) if Self::surface_name(name) == "TypeRef" => {
+            AstTy::Generic(span, name, _)
+                if builtin_type_usage_policy(Self::surface_name(name))
+                    .is_some_and(|policy| policy.type_ref_witness_allowed) =>
+            {
                 Err(self.type_ref_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _)

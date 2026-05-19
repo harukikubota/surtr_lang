@@ -164,6 +164,45 @@ impl SymbolIdentityInfo {
     }
 }
 
+/// Compile-space usage policy for builtin type heads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuiltinTypeUsagePolicy {
+    pub type_annotation_allowed: bool,
+    pub signature_allowed: bool,
+    pub runtime_value_allowed: bool,
+    pub type_ref_witness_allowed: bool,
+    pub process_boundary_allowed: bool,
+    pub facet_value_forbidden_in_stage1: bool,
+}
+
+impl BuiltinTypeUsagePolicy {
+    pub const fn new(
+        type_annotation_allowed: bool,
+        signature_allowed: bool,
+        runtime_value_allowed: bool,
+        type_ref_witness_allowed: bool,
+        process_boundary_allowed: bool,
+        facet_value_forbidden_in_stage1: bool,
+    ) -> Self {
+        Self {
+            type_annotation_allowed,
+            signature_allowed,
+            runtime_value_allowed,
+            type_ref_witness_allowed,
+            process_boundary_allowed,
+            facet_value_forbidden_in_stage1,
+        }
+    }
+
+    pub const fn ordinary_runtime_type() -> Self {
+        Self::new(true, true, true, false, true, false)
+    }
+
+    pub const fn compiler_surface_only() -> Self {
+        Self::new(false, false, false, false, false, true)
+    }
+}
+
 /// Canonical builtin type heads reserved by the compiler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TypeName {
@@ -252,6 +291,26 @@ impl TypeName {
                 | Self::FileHandle
         )
     }
+
+    pub const fn usage_policy(self) -> BuiltinTypeUsagePolicy {
+        match self {
+            Self::TypeRef => BuiltinTypeUsagePolicy::new(false, false, false, true, false, false),
+            Self::ProcessInit => {
+                BuiltinTypeUsagePolicy::new(false, false, false, false, true, false)
+            }
+            Self::Lazy
+            | Self::Hole
+            | Self::Closure
+            | Self::MatchArms
+            | Self::CondClauses
+            | Self::BulkUpdateEntries => BuiltinTypeUsagePolicy::compiler_surface_only(),
+            Self::Facet => BuiltinTypeUsagePolicy::new(true, true, true, false, true, true),
+            Self::Pid | Self::Workers | Self::WorkerLease | Self::TaskHandle => {
+                BuiltinTypeUsagePolicy::new(true, true, true, false, true, false)
+            }
+            _ => BuiltinTypeUsagePolicy::ordinary_runtime_type(),
+        }
+    }
 }
 
 pub fn builtin_type_name(name: &str) -> Option<TypeName> {
@@ -287,6 +346,10 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "TaskHandle" => Some(TypeName::TaskHandle),
         _ => None,
     }
+}
+
+pub fn builtin_type_usage_policy(name: &str) -> Option<BuiltinTypeUsagePolicy> {
+    builtin_type_name(surface_path_name(name)).map(TypeName::usage_policy)
 }
 
 /// Return compile-space identity/capability metadata for builtin surface roots.
@@ -409,5 +472,24 @@ mod tests {
             hash_map.capabilities.facet_root_path,
             Some(FacetRootKind::HashMap)
         );
+    }
+
+    #[test]
+    fn builtin_type_usage_policy_separates_annotation_and_witness_capabilities() {
+        let string = builtin_type_usage_policy("String").expect("String should be known");
+        assert!(string.type_annotation_allowed);
+        assert!(string.signature_allowed);
+        assert!(string.runtime_value_allowed);
+        assert!(!string.type_ref_witness_allowed);
+
+        let type_ref = builtin_type_usage_policy("TypeRef").expect("TypeRef should be known");
+        assert!(!type_ref.type_annotation_allowed);
+        assert!(!type_ref.runtime_value_allowed);
+        assert!(type_ref.type_ref_witness_allowed);
+
+        let process_init =
+            builtin_type_usage_policy("ProcessInit").expect("ProcessInit should be known");
+        assert!(!process_init.type_annotation_allowed);
+        assert!(process_init.process_boundary_allowed);
     }
 }
