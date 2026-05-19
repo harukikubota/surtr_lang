@@ -795,11 +795,19 @@ pub fn effective_auto_import_entries(
 pub struct EffectiveVisibleEntry {
     pub visible_name: String,
     pub entry: DeclarationEntry,
+    pub via_import: bool,
+    pub via_auto_import: bool,
+    pub shadowed_auto_import: bool,
+    pub importable: bool,
+    pub callable: bool,
 }
 
 fn collect_effective_visible_entries(
     scope: &Scope,
     entries_by_uid: &HashMap<u32, DeclarationEntry>,
+    explicit_imports: &[ExplicitFunctionImport],
+    effective_auto_import_fq_names: &[String],
+    shadowed_auto_import_bindings: &[(String, u32)],
 ) -> Vec<EffectiveVisibleEntry> {
     let mut visible = Vec::new();
     let mut seen = HashSet::new();
@@ -814,8 +822,24 @@ fn collect_effective_visible_entries(
         if !seen.insert((visible_name.clone(), entry.fq_name.clone())) {
             continue;
         }
+        let via_import = explicit_imports
+            .iter()
+            .any(|import| import.uid == uid && import.alias == visible_name);
+        let via_auto_import = !via_import
+            && effective_auto_import_fq_names
+                .iter()
+                .any(|fq_name| fq_name == &entry.fq_name)
+            && visible_name == global_surface_name(&entry.name);
+        let shadowed_auto_import = shadowed_auto_import_bindings
+            .iter()
+            .any(|(shadow_name, shadow_uid)| shadow_name == &visible_name && *shadow_uid == uid);
         visible.push(EffectiveVisibleEntry {
             visible_name,
+            via_import,
+            via_auto_import,
+            shadowed_auto_import,
+            importable: entry.user_importable,
+            callable: entry.user_callable,
             entry: entry.clone(),
         });
     }
@@ -860,6 +884,9 @@ pub fn effective_visible_entries(
     Ok(collect_effective_visible_entries(
         &build.scope,
         &entries_by_uid,
+        &build.explicit_function_imports,
+        &build.effective_auto_import_fq_names,
+        &build.shadowed_auto_import_bindings,
     ))
 }
 

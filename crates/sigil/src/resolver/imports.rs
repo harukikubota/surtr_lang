@@ -145,6 +145,7 @@ pub(super) struct ModuleScopeBuild {
     pub scope: Scope,
     pub explicit_function_imports: Vec<ExplicitFunctionImport>,
     pub effective_auto_import_fq_names: Vec<String>,
+    pub shadowed_auto_import_bindings: Vec<(String, u32)>,
 }
 
 pub(super) fn build_module_scope_with_imports(
@@ -161,6 +162,7 @@ pub(super) fn build_module_scope_with_imports(
     let mut import_state = ImportState::default();
     let mut explicit_function_imports = Vec::new();
     let mut effective_auto_import_fq_names = Vec::new();
+    let mut shadowed_auto_import_bindings = Vec::new();
     let auto_import_traits = auto_import_trait_names(declaration_index);
     let auto_import_module_set = auto_import_modules
         .iter()
@@ -176,6 +178,7 @@ pub(super) fn build_module_scope_with_imports(
         import_state: &mut import_state,
         explicit_function_imports: &mut explicit_function_imports,
         effective_auto_import_fq_names: &mut effective_auto_import_fq_names,
+        shadowed_auto_import_bindings: &mut shadowed_auto_import_bindings,
     };
 
     for stmt in stmts {
@@ -233,6 +236,7 @@ pub(super) fn build_module_scope_with_imports(
         scope,
         explicit_function_imports,
         effective_auto_import_fq_names,
+        shadowed_auto_import_bindings,
     })
 }
 
@@ -246,6 +250,7 @@ struct ImportContext<'a> {
     import_state: &'a mut ImportState,
     explicit_function_imports: &'a mut Vec<ExplicitFunctionImport>,
     effective_auto_import_fq_names: &'a mut Vec<String>,
+    shadowed_auto_import_bindings: &'a mut Vec<(String, u32)>,
 }
 
 fn lookup_trait_entry<'a>(
@@ -958,6 +963,9 @@ fn bind_import_name(
             let existing_is_auto_imported =
                 declaration_is_auto_imported(import_context, &existing_name);
             if !existing_is_auto_imported {
+                import_context
+                    .shadowed_auto_import_bindings
+                    .push((short_name.to_string(), existing_uid));
                 return Ok(());
             }
             let incoming_name = import_context
@@ -990,6 +998,9 @@ fn bind_import_name(
             declaration_is_auto_imported(import_context, &existing_name);
         if existing_is_auto_imported {
             scope.define_with_id(short_name, uid);
+            import_context
+                .shadowed_auto_import_bindings
+                .push((short_name.to_string(), uid));
             record_effective_auto_import_binding(import_context, uid, short_name);
             return Ok(());
         }

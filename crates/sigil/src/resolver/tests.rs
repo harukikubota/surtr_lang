@@ -3495,6 +3495,36 @@ fn test_effective_visible_entries_include_explicit_imported_short_name() {
         .expect("explicit import should expose short name");
 
     assert_eq!(imported.entry.name, "helper");
+    assert!(imported.via_import);
+    assert!(!imported.via_auto_import);
+    assert!(imported.importable);
+    assert!(imported.callable);
+}
+
+#[test]
+fn test_effective_visible_entries_mark_explicit_import_shadowing_auto_import() {
+    let module_stages = vec![vec![
+        staged_auto_import_module(
+            "Kernel",
+            parse_module_ast(r#"def helper() -> Int { 1 }"#, "Kernel"),
+        ),
+        staged_module(
+            "UserHelpers",
+            parse_module_ast(r#"def helper() -> Int { 2 }"#, "UserHelpers"),
+        ),
+    ]];
+    let ast = parse("import UserHelpers::helper\nhelper").expect("parse should succeed");
+
+    let visible = crate::effective_visible_entries(&module_stages, &ast, None, 0)
+        .expect("effective visible query should succeed");
+    let imported = visible
+        .iter()
+        .find(|entry| entry.visible_name == "helper" && entry.entry.module_path == "UserHelpers")
+        .expect("explicit import should expose short name");
+
+    assert!(imported.via_import);
+    assert!(!imported.via_auto_import);
+    assert!(imported.shadowed_auto_import);
 }
 
 #[test]

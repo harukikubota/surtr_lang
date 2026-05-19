@@ -169,7 +169,7 @@ impl SigilSession {
                     .map(|entry| (*uid, entry))
             })
             .collect::<HashMap<_, _>>();
-        collect_effective_visible_entries(&self.scope, &entries_by_uid)
+        collect_effective_visible_entries(&self.scope, &entries_by_uid, &[], &[], &[])
     }
 }
 

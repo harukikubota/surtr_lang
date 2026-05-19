@@ -1142,6 +1142,11 @@ fn effective_visible_entry_projection_reuses_qualified_symbol_metadata() {
     };
     let visible = sigil::EffectiveVisibleEntry {
         visible_name: "helper".to_string(),
+        via_import: true,
+        via_auto_import: false,
+        shadowed_auto_import: false,
+        importable: true,
+        callable: true,
         entry: declaration_entry(
             "Global::Helper",
             "helper",
