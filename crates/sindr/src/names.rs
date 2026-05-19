@@ -182,6 +182,7 @@ pub struct BuiltinTypeUsagePolicy {
     pub process_boundary_allowed: bool,
     pub facet_value_forbidden_in_stage1: bool,
     pub clause_block_surface_only: bool,
+    pub lazy_signature_surface_only: bool,
 }
 
 impl BuiltinTypeUsagePolicy {
@@ -193,6 +194,7 @@ impl BuiltinTypeUsagePolicy {
         process_boundary_allowed: bool,
         facet_value_forbidden_in_stage1: bool,
         clause_block_surface_only: bool,
+        lazy_signature_surface_only: bool,
     ) -> Self {
         Self {
             type_annotation_allowed,
@@ -202,19 +204,24 @@ impl BuiltinTypeUsagePolicy {
             process_boundary_allowed,
             facet_value_forbidden_in_stage1,
             clause_block_surface_only,
+            lazy_signature_surface_only,
         }
     }
 
     pub const fn ordinary_runtime_type() -> Self {
-        Self::new(true, true, true, false, true, false, false)
+        Self::new(true, true, true, false, true, false, false, false)
     }
 
     pub const fn compiler_surface_only() -> Self {
-        Self::new(false, false, false, false, false, true, false)
+        Self::new(false, false, false, false, false, true, false, false)
     }
 
     pub const fn clause_block_surface_only() -> Self {
-        Self::new(false, false, false, false, false, true, true)
+        Self::new(false, false, false, false, false, true, true, false)
+    }
+
+    pub const fn lazy_signature_surface_only() -> Self {
+        Self::new(false, false, false, false, false, true, false, true)
     }
 }
 
@@ -310,20 +317,21 @@ impl TypeName {
     pub const fn usage_policy(self) -> BuiltinTypeUsagePolicy {
         match self {
             Self::TypeRef => {
-                BuiltinTypeUsagePolicy::new(false, false, false, true, false, false, false)
+                BuiltinTypeUsagePolicy::new(false, false, false, true, false, false, false, false)
             }
             Self::ProcessInit => {
-                BuiltinTypeUsagePolicy::new(false, false, false, false, true, false, false)
+                BuiltinTypeUsagePolicy::new(false, false, false, false, true, false, false, false)
             }
-            Self::Lazy | Self::Hole | Self::Closure => {
-                BuiltinTypeUsagePolicy::compiler_surface_only()
-            }
+            Self::Lazy => BuiltinTypeUsagePolicy::lazy_signature_surface_only(),
+            Self::Hole | Self::Closure => BuiltinTypeUsagePolicy::compiler_surface_only(),
             Self::MatchArms | Self::CondClauses | Self::BulkUpdateEntries => {
                 BuiltinTypeUsagePolicy::clause_block_surface_only()
             }
-            Self::Facet => BuiltinTypeUsagePolicy::new(true, true, true, false, true, true, false),
+            Self::Facet => {
+                BuiltinTypeUsagePolicy::new(true, true, true, false, true, true, false, false)
+            }
             Self::Pid | Self::Workers | Self::WorkerLease | Self::TaskHandle => {
-                BuiltinTypeUsagePolicy::new(true, true, true, false, true, false, false)
+                BuiltinTypeUsagePolicy::new(true, true, true, false, true, false, false, false)
             }
             _ => BuiltinTypeUsagePolicy::ordinary_runtime_type(),
         }
@@ -541,5 +549,7 @@ mod tests {
 
         let lazy = builtin_type_usage_policy("Lazy").expect("Lazy should be known");
         assert!(!lazy.clause_block_surface_only);
+        assert!(lazy.lazy_signature_surface_only);
+        assert!(!match_arms.lazy_signature_surface_only);
     }
 }

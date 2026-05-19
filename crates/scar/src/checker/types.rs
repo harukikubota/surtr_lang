@@ -48,6 +48,11 @@ impl Checker {
             .is_some_and(|policy| policy.clause_block_surface_only)
     }
 
+    fn builtin_type_is_lazy_signature_surface_only(name: &str) -> bool {
+        builtin_type_usage_policy(Self::surface_name(name))
+            .is_some_and(|policy| policy.lazy_signature_surface_only)
+    }
+
     fn builtin_special_enum_ty(name: &str, args: &[Ty]) -> Option<Ty> {
         match Self::surface_name(name) {
             "Boolean" if args.is_empty() => Some(Ty::Bool),
@@ -583,7 +588,9 @@ impl Checker {
             {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
             }
-            AstTy::Generic(span, name, _) if Self::surface_name(name) == "Lazy" => {
+            AstTy::Generic(span, name, _)
+                if Self::builtin_type_is_lazy_signature_surface_only(name) =>
+            {
                 Err(self.lazy_type_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _) if Self::surface_name(name) == "Seq" => {
@@ -970,7 +977,7 @@ impl Checker {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
             }
             AstTy::Generic(span, name, args)
-                if Self::surface_name(name) == "Lazy" && mode.allows_lazy() =>
+                if Self::builtin_type_is_lazy_signature_surface_only(name) && mode.allows_lazy() =>
             {
                 let args = self.require_type_arg_count(
                     span,
@@ -2569,5 +2576,17 @@ mod tests {
         assert!(!Checker::builtin_type_is_clause_block_surface_only("String"));
         assert!(!Checker::builtin_type_is_clause_block_surface_only("ProcessInit"));
         assert!(!Checker::builtin_type_is_clause_block_surface_only("Lazy"));
+    }
+
+    #[test]
+    fn lazy_signature_surface_type_query_uses_builtin_type_usage_policy() {
+        assert!(Checker::builtin_type_is_lazy_signature_surface_only("Lazy"));
+        assert!(Checker::builtin_type_is_lazy_signature_surface_only(
+            "Global::Lazy"
+        ));
+        assert!(!Checker::builtin_type_is_lazy_signature_surface_only(
+            "MatchArms"
+        ));
+        assert!(!Checker::builtin_type_is_lazy_signature_surface_only("String"));
     }
 }
