@@ -1942,6 +1942,38 @@ impl User {
     }
 
     #[test]
+    fn parse_module_stages_rejects_normal_duplicate_after_impl_owner_extension() {
+        let module_sources = collect_module_sources_with_module_stages(&[vec![
+            ModuleInput {
+                file_name: "a.srt".into(),
+                source: "defmod Shared { def a() -> Int { 1 } }".into(),
+                module_path: "A".into(),
+            },
+            ModuleInput {
+                file_name: "impl.srt".into(),
+                source: "impl Shared { def new() -> Self { Shared } }".into(),
+                module_path: "Shared".into(),
+            },
+            ModuleInput {
+                file_name: "b.srt".into(),
+                source: "defmod Shared { def b() -> Int { 2 } }".into(),
+                module_path: "B".into(),
+            },
+        ]])
+        .expect("module collection should succeed");
+        let compile_sources =
+            compose_script_compile_sources("entry.srt", "print(\"hi\")", module_sources);
+
+        let err =
+            parse_module_stages_from_compile_sources(&compile_sources, CompileUnitKind::Script)
+                .expect_err("normal duplicate after impl owner must fail");
+        assert!(matches!(
+            err.kind,
+            ModuleStageParseErrorKind::DuplicateModulePath { ref module_path, .. } if module_path == "Global::Shared"
+        ));
+    }
+
+    #[test]
     fn parse_module_stages_preserves_same_stage_file_order_after_parallel_parse() {
         let module_sources = collect_module_sources_with_module_stages(&[vec![
             ModuleInput {

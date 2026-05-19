@@ -8884,7 +8884,7 @@ pub(crate) fn parse_module_stages_from_sources(
     compile_unit_kind: CompileUnitKind,
 ) -> Result<Vec<Vec<sigil::StagedModuleAst>>, ModuleStageParseError> {
     let mut staged_module_asts = Vec::with_capacity(module_stages.len());
-    let mut seen_module_paths: HashMap<String, (String, bool)> = HashMap::new();
+    let mut seen_module_paths: HashMap<String, SeenModulePath> = HashMap::new();
 
     for stage in module_stages {
         let mut stage_ast = Vec::new();
@@ -8897,15 +8897,16 @@ pub(crate) fn parse_module_stages_from_sources(
                         .file_name(module.source_id)
                         .unwrap_or("<unknown>")
                         .to_string();
-                    if let Some((first_file_name, first_is_impl_owner)) =
-                        seen_module_paths.get(&lowered.module_path)
-                    {
-                        if !(*first_is_impl_owner || is_impl_owner) {
+                    if let Some(seen) = seen_module_paths.get(&lowered.module_path) {
+                        if !is_impl_owner && seen.has_normal_module() {
                             return Err(ModuleStageParseError {
                                 source_id: module.source_id,
                                 kind: ModuleStageParseErrorKind::DuplicateModulePath {
                                     module_path: lowered.module_path.clone(),
-                                    first_file_name: first_file_name.clone(),
+                                    first_file_name: seen
+                                        .first_normal_file_name()
+                                        .unwrap_or_else(|| seen.first_file_name())
+                                        .to_string(),
                                     second_file_name,
                                     span: lowered
                                         .declared_span
@@ -8914,10 +8915,10 @@ pub(crate) fn parse_module_stages_from_sources(
                             });
                         }
                     }
-                    seen_module_paths.insert(
-                        lowered.module_path.clone(),
-                        (second_file_name, is_impl_owner),
-                    );
+                    seen_module_paths
+                        .entry(lowered.module_path.clone())
+                        .and_modify(|seen| seen.record(second_file_name.clone(), is_impl_owner))
+                        .or_insert_with(|| SeenModulePath::new(second_file_name, is_impl_owner));
                 }
 
                 stage_ast.push(sigil::StagedModuleAst {
@@ -8934,6 +8935,39 @@ pub(crate) fn parse_module_stages_from_sources(
     }
 
     Ok(staged_module_asts)
+}
+
+#[derive(Debug, Clone)]
+struct SeenModulePath {
+    first_file_name: String,
+    first_normal_file_name: Option<String>,
+}
+
+impl SeenModulePath {
+    fn new(file_name: String, is_impl_owner: bool) -> Self {
+        Self {
+            first_normal_file_name: (!is_impl_owner).then(|| file_name.clone()),
+            first_file_name: file_name,
+        }
+    }
+
+    fn record(&mut self, file_name: String, is_impl_owner: bool) {
+        if !is_impl_owner && self.first_normal_file_name.is_none() {
+            self.first_normal_file_name = Some(file_name);
+        }
+    }
+
+    fn has_normal_module(&self) -> bool {
+        self.first_normal_file_name.is_some()
+    }
+
+    fn first_file_name(&self) -> &str {
+        &self.first_file_name
+    }
+
+    fn first_normal_file_name(&self) -> Option<&str> {
+        self.first_normal_file_name.as_deref()
+    }
 }
 
 fn parse_stage_modules_parallel(
