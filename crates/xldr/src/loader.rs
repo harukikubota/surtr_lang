@@ -45,6 +45,7 @@ pub(crate) struct StdlibModuleSpec {
     pub module_path: &'static str,
     pub source: &'static str,
     pub stage: StdlibStage,
+    pub variant: StdlibVariant,
 }
 
 const STDLIB_MODULE_SPECS: &[StdlibModuleSpec] = &[
@@ -53,300 +54,350 @@ const STDLIB_MODULE_SPECS: &[StdlibModuleSpec] = &[
         module_path: BUILTIN_PRELUDE_MODULE_PATH,
         source: BUILTIN_PRELUDE_SOURCE,
         stage: StdlibStage::Bootstrap,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: SPECIAL_TYPES_FILE,
         module_path: SPECIAL_TYPES_MODULE_PATH,
         source: SPECIAL_TYPES_SOURCE,
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: FUNCTION_PRELUDE_FILE,
         module_path: FUNCTION_PRELUDE_MODULE_PATH,
         source: FUNCTION_PRELUDE_SOURCE,
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: KERNEL_PRELUDE_FILE,
         module_path: KERNEL_PRELUDE_MODULE_PATH,
         source: KERNEL_PRELUDE_SOURCE,
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/operator/add.srt",
         module_path: "Add",
         source: include_str!("../../../lib/traits/operator/add.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/operator/sub.srt",
         module_path: "Sub",
         source: include_str!("../../../lib/traits/operator/sub.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/operator/mul.srt",
         module_path: "Mul",
         source: include_str!("../../../lib/traits/operator/mul.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/operator/eq.srt",
         module_path: "Eq",
         source: include_str!("../../../lib/traits/operator/eq.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/operator/neq.srt",
         module_path: "Neq",
         source: include_str!("../../../lib/traits/operator/neq.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/operator/compare.srt",
         module_path: "Compare",
         source: include_str!("../../../lib/traits/operator/compare.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/operator/concat.srt",
         module_path: "Concat",
         source: include_str!("../../../lib/traits/operator/concat.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/show.srt",
         module_path: "Show",
         source: include_str!("../../../lib/traits/show.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "types/ordering.srt",
         module_path: "Ordering",
         source: include_str!("../../../lib/types/ordering.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "types/tuple.srt",
         module_path: "Tuple",
         source: include_str!("../../../lib/types/tuple.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/from.srt",
         module_path: "From",
         source: include_str!("../../../lib/traits/from.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/try_from.srt",
         module_path: "TryFrom",
         source: include_str!("../../../lib/traits/try_from.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/encode.srt",
         module_path: "Encode",
         source: include_str!("../../../lib/traits/encode.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/decode.srt",
         module_path: "Decode",
         source: include_str!("../../../lib/traits/decode.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/operator/functor.srt",
         module_path: "Functor",
         source: include_str!("../../../lib/traits/operator/functor.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/operator/chainable.srt",
         module_path: "Chainable",
         source: include_str!("../../../lib/traits/operator/chainable.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/operator/pipe_apply.srt",
         module_path: "PipeApply",
         source: include_str!("../../../lib/traits/operator/pipe_apply.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/operator/compose.srt",
         module_path: "Compose",
         source: include_str!("../../../lib/traits/operator/compose.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/operator/composable.srt",
         module_path: "Composable",
         source: include_str!("../../../lib/traits/operator/composable.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/operator/lift_composable.srt",
         module_path: "LiftComposable",
         source: include_str!("../../../lib/traits/operator/lift_composable.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "traits/operator/kleisli_composable.srt",
         module_path: "KleisliComposable",
         source: include_str!("../../../lib/traits/operator/kleisli_composable.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "types/int.srt",
         module_path: "Int",
         source: include_str!("../../../lib/types/int.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "types/string.srt",
         module_path: "String",
         source: include_str!("../../../lib/types/string.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "types/regex.srt",
         module_path: "Regex",
         source: include_str!("../../../lib/types/regex.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "types/boolean.srt",
         module_path: "Boolean",
         source: include_str!("../../../lib/types/boolean.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "types/error.srt",
         module_path: "Error",
         source: include_str!("../../../lib/types/error.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "types/list.srt",
         module_path: "List",
         source: include_str!("../../../lib/types/list.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "types/generator.srt",
         module_path: "Generator",
         source: include_str!("../../../lib/types/generator.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "types/hash_map.srt",
         module_path: "HashMap",
         source: include_str!("../../../lib/types/hash_map.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "types/result.srt",
         module_path: "Result",
         source: include_str!("../../../lib/types/result.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "types/duration.srt",
         module_path: "Duration",
         source: include_str!("../../../lib/types/duration.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "types/range.srt",
         module_path: "Range",
         source: include_str!("../../../lib/types/range.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "types/option.srt",
         module_path: "Option",
         source: include_str!("../../../lib/types/option.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "process.srt",
         module_path: "Task",
         source: include_str!("../../../lib/process.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "facet.srt",
         module_path: "Facet",
         source: include_str!("../../../lib/facet.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "types/float.srt",
         module_path: "Float",
         source: include_str!("../../../lib/types/float.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "types/json.srt",
         module_path: "Json",
         source: include_str!("../../../lib/types/json.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "Config.srt",
         module_path: "Config",
         source: include_str!("../../../lib/Config.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "Project.srt",
         module_path: "Project",
         source: include_str!("../../../lib/Project.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "Random.srt",
         module_path: "Random",
         source: include_str!("../../../lib/Random.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "file.srt",
         module_path: "File",
         source: include_str!("../../../lib/file.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "FileSystem.srt",
         module_path: "FS",
         source: include_str!("../../../lib/FileSystem.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "IO.srt",
         module_path: "IO",
         source: include_str!("../../../lib/IO.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: "Shell.srt",
         module_path: "Shell",
         source: include_str!("../../../lib/Shell.srt"),
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: STYLED_DOC_FILE,
         module_path: STYLED_DOC_MODULE_PATH,
         source: STYLED_DOC_SOURCE,
         stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
         file_name: TEST_STD_FILE,
         module_path: TEST_STD_MODULE_PATH,
         source: TEST_STD_SOURCE,
         stage: StdlibStage::TestExtension,
+        variant: StdlibVariant::TestEnabled,
     },
 ];
 
@@ -920,8 +971,7 @@ pub(crate) fn stdlib_module_specs(
     stdlib_variant: StdlibVariant,
 ) -> impl Iterator<Item = &'static StdlibModuleSpec> {
     STDLIB_MODULE_SPECS.iter().filter(move |spec| {
-        !matches!(spec.stage, StdlibStage::TestExtension)
-            || stdlib_variant == StdlibVariant::TestEnabled
+        spec.variant == StdlibVariant::Default || stdlib_variant == StdlibVariant::TestEnabled
     })
 }
 
@@ -936,6 +986,11 @@ pub(crate) fn stdlib_module_spec_cache_key(stdlib_variant: StdlibVariant) -> Str
             StdlibStage::Bootstrap => "bootstrap",
             StdlibStage::Main => "main",
             StdlibStage::TestExtension => "test-extension",
+        });
+        key.push('\x1e');
+        key.push_str(match spec.variant {
+            StdlibVariant::Default => "variant=default",
+            StdlibVariant::TestEnabled => "variant=test-enabled",
         });
         key.push('\x1e');
         key.push_str(spec.source);
@@ -1147,6 +1202,21 @@ mod tests {
         stdlib_module_specs(stdlib_variant)
             .filter(|spec| spec.stage == stage)
             .count()
+    }
+
+    #[test]
+    fn stdlib_module_specs_expose_variant_metadata() {
+        let default_specs = stdlib_module_specs(StdlibVariant::Default).collect::<Vec<_>>();
+        let test_specs = stdlib_module_specs(StdlibVariant::TestEnabled).collect::<Vec<_>>();
+
+        assert!(default_specs
+            .iter()
+            .all(|spec| spec.variant == StdlibVariant::Default));
+        assert!(test_specs.iter().any(|spec| {
+            spec.module_path == TEST_STD_MODULE_PATH && spec.variant == StdlibVariant::TestEnabled
+        }));
+        assert!(stdlib_module_spec_cache_key(StdlibVariant::TestEnabled)
+            .contains("variant=test-enabled"));
     }
 
     #[test]
