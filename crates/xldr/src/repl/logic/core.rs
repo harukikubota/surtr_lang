@@ -1350,7 +1350,7 @@ impl ReplEngine {
         let compile_symbols = symbols.clone();
         let compile_semantic_infos = compile_symbols
             .iter()
-            .map(surtr_analysis::SymbolSemanticInfo::from_completion_symbol)
+            .map(|symbol| self.symbol_semantic_info_from_completion_symbol(symbol))
             .collect::<Vec<_>>();
         let visible_symbols = self
             .sigil_session
@@ -1462,7 +1462,7 @@ impl ReplEngine {
 
         symbols
             .into_iter()
-            .map(|symbol| surtr_analysis::SymbolSemanticInfo::from_completion_symbol(&symbol))
+            .map(|symbol| self.symbol_semantic_info_from_completion_symbol(&symbol))
             .collect()
     }
 
@@ -1568,6 +1568,20 @@ impl ReplEngine {
             }
             _ => self.qualified_declaration(&symbol.label),
         }
+    }
+
+    fn symbol_semantic_info_from_completion_symbol(
+        &self,
+        symbol: &surtr_analysis::CompletionSymbol,
+    ) -> surtr_analysis::SymbolSemanticInfo {
+        let mut info = surtr_analysis::SymbolSemanticInfo::from_completion_symbol(symbol);
+        if info.identity.is_none() {
+            info.identity = self
+                .completion_symbol_declaration(symbol)
+                .and_then(surtr_analysis::symbol_identity_for_declaration_entry)
+                .or_else(|| surtr_analysis::symbol_identity_for_builtin_surface(&symbol.label));
+        }
+        info
     }
 
     fn build_completion_context(&self) -> ReplCompletionContext {

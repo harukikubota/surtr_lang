@@ -479,6 +479,12 @@ fn core_exposes_symbol_semantic_infos_before_completion_projection() {
         .expect("stdlib function should be visible as semantic info");
     assert_eq!(print.kind, surtr_analysis::CompletionKind::FunctionCall);
     assert!(print.documentation.is_some());
+
+    let duration = infos
+        .iter()
+        .find(|info| info.surface_name == "Duration")
+        .expect("stdlib type should be visible as semantic info");
+    assert_eq!(duration.identity, Some(sindr::names::TypeIdentity::Type));
 }
 
 #[test]
