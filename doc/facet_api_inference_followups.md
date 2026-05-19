@@ -44,7 +44,7 @@ Covered Facet APIs:
 
 ## Follow-ups
 
-- Improve primitive-root diagnostics so `Facet::view(String.len, "abc")` reports a Facet/path-root error instead of a generic undefined-variable-style error.
+- Done: primitive-root diagnostics now make `Facet::view(String.len, "abc")` report a Facet/path-root error instead of a generic undefined-variable-style error.
 - Consider making `PathConstructable` an explicit Scar/query capability instead of deriving completion candidates from declaration signatures.
-- Extend shared analysis completion beyond Facet APIs so ordinary call arguments can carry constraints such as `Self: Compare`.
-- Next turn: implement trait-aware completion for `compare(` and `Function::on` inference without listing all impl target types.
+- Done: shared analysis completion ranks ordinary call arguments with trait constraints such as `Self: Compare`; `compare(` uses visible `impl Compare for ...` signatures instead of a builtin type whitelist.
+- Done: `Function::on` inference was verified to rely on same-expression evidence from the expected function type and key function, not on enumerating all impl target types.

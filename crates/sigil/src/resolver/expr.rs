@@ -14,12 +14,28 @@ use spire::ast::{
 const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
 const LIST_TYPE_ROOT_UID: u32 = u32::MAX - 8;
 const HASH_MAP_TYPE_ROOT_UID: u32 = u32::MAX - 9;
+const STRING_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 10;
+const INT_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 11;
+const FLOAT_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 12;
+const BOOLEAN_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 13;
+const FUNCTION_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 14;
 
 fn special_facet_root_uid(name: &str) -> Option<u32> {
     match name {
         "Tuple" => Some(TUPLE_TYPE_ROOT_UID),
         "List" => Some(LIST_TYPE_ROOT_UID),
         "HashMap" => Some(HASH_MAP_TYPE_ROOT_UID),
+        _ => None,
+    }
+}
+
+fn primitive_facet_root_uid(name: &str) -> Option<u32> {
+    match name {
+        "String" => Some(STRING_PRIMITIVE_ROOT_UID),
+        "Int" => Some(INT_PRIMITIVE_ROOT_UID),
+        "Float" => Some(FLOAT_PRIMITIVE_ROOT_UID),
+        "Boolean" => Some(BOOLEAN_PRIMITIVE_ROOT_UID),
+        "Function" => Some(FUNCTION_PRIMITIVE_ROOT_UID),
         _ => None,
     }
 }
@@ -2595,6 +2611,21 @@ impl Resolver {
                 }
                 if matches!(expr.as_ref(), Ast::Var(_, name) if name == "ctx") {
                     return Ok(Resolved::ProcessContextHandler(span, field));
+                }
+                if let Ast::Var(root_span, name) = expr.as_ref() {
+                    if let Some(unique_id) = primitive_facet_root_uid(name) {
+                        let root = Resolved::Var(
+                            root_span.clone(),
+                            ResolvedId {
+                                name: name.clone(),
+                                qualified_name: None,
+                                unique_id,
+                                compiler_generated: true,
+                                span: root_span.clone(),
+                            },
+                        );
+                        return Ok(Resolved::FieldAccess(span, Box::new(root), field));
+                    }
                 }
                 let resolved_expr = self.resolve_node(*expr)?;
                 Ok(Resolved::FieldAccess(span, Box::new(resolved_expr), field))

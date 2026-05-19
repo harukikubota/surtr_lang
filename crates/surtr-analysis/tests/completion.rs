@@ -2,10 +2,11 @@ use sigil::{DeclarationEntry, DeclarationIndex, DeclarationKind};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
 use spire::ast::Visibility;
 use surtr_analysis::{
-    complete_prefix, lookup_symbol_at_cursor, rank_completion_candidates_by_expected_type,
-    repl_assist_at_cursor, signature_help_at_cursor, CallableSignature, CompletionCandidate,
-    CompletionKind, CompletionOrigin, CompletionRequest, CompletionScope, CompletionSymbol,
-    ReplInputSupportContext, ReplInputSupportUpdate, SemanticIndex,
+    complete_call_argument, complete_prefix, lookup_symbol_at_cursor,
+    rank_completion_candidates_by_expected_type, repl_assist_at_cursor, signature_help_at_cursor,
+    CallableSignature, CompletionCandidate, CompletionKind, CompletionOrigin, CompletionRequest,
+    CompletionScope, CompletionSymbol, ReplInputSupportContext, ReplInputSupportUpdate,
+    SemanticIndex,
 };
 
 #[test]
@@ -1008,6 +1009,74 @@ fn semantic_index_builds_completion_symbols_from_doc_and_signature_metadata() {
 }
 
 #[test]
+fn call_argument_completion_ranks_self_trait_constraint_candidates_from_impl_signatures() {
+    let index = SemanticIndex::from_symbols(vec![
+        completion_symbol(
+            "compare",
+            CompletionKind::FunctionCall,
+            "Compare::compare(self: Self, rhs: Self) -> Ordering",
+        ),
+        completion_symbol(
+            "impl Compare for Int",
+            CompletionKind::TypeConstructor,
+            "impl Compare for Int",
+        ),
+        completion_symbol("count", CompletionKind::Variable, "Int"),
+        completion_symbol("flag", CompletionKind::Variable, "Boolean"),
+    ]);
+
+    let completion = complete_call_argument(CompletionRequest {
+        index: &index,
+        source: "compare(",
+        cursor: "compare(".len(),
+    })
+    .expect("compare call argument should use signature context");
+
+    assert_eq!(
+        completion
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["count", "flag"]
+    );
+}
+
+#[test]
+fn call_argument_completion_uses_trait_impl_signature_not_builtin_type_whitelist() {
+    let index = SemanticIndex::from_symbols(vec![
+        completion_symbol(
+            "compare",
+            CompletionKind::FunctionCall,
+            "Compare::compare(self: Self, rhs: Self) -> Ordering",
+        ),
+        completion_symbol(
+            "impl Compare for UserRank",
+            CompletionKind::TypeConstructor,
+            "impl Compare for UserRank",
+        ),
+        completion_symbol("rank", CompletionKind::Variable, "UserRank"),
+        completion_symbol("name", CompletionKind::Variable, "String"),
+    ]);
+
+    let completion = complete_call_argument(CompletionRequest {
+        index: &index,
+        source: "compare(",
+        cursor: "compare(".len(),
+    })
+    .expect("compare call argument should use signature context");
+
+    assert_eq!(
+        completion
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["rank", "name"]
+    );
+}
+
+#[test]
 fn completion_candidates_are_sorted_by_label_for_stable_lsp_output() {
     let index = SemanticIndex::from_symbols(vec![
         CompletionSymbol {
@@ -1042,6 +1111,19 @@ fn completion_candidates_are_sorted_by_label_for_stable_lsp_output() {
 
     assert_eq!(completion.candidates[0].label, "alpha");
     assert_eq!(completion.candidates[1].label, "atom");
+}
+
+fn completion_symbol(label: &str, kind: CompletionKind, detail: &str) -> CompletionSymbol {
+    CompletionSymbol {
+        label: label.to_string(),
+        replacement: label.to_string(),
+        kind,
+        detail: Some(detail.to_string()),
+        documentation: None,
+        sort_text: None,
+        origin: None,
+        definition: None,
+    }
 }
 
 fn completion_candidate(label: &str, ty: &str) -> CompletionCandidate {

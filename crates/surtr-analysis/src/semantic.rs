@@ -1199,19 +1199,45 @@ fn complete_call_argument_with_presentation(
     let signature = signature_help_at_cursor(request.index, request.source, request.cursor)?;
     let expected_ty_src =
         signature_expected_param_type(&signature.signature, signature.active_parameter)?;
-    let expected_ty = parse_signature_type(&expected_ty_src)?;
-    if let Some(completion) = complete_facet_path_arg(request, &expected_ty) {
-        return Some(completion);
+    if let Some(expected_ty) = parse_signature_type(&expected_ty_src) {
+        if let Some(completion) = complete_facet_path_arg(request, &expected_ty) {
+            return Some(completion);
+        }
     }
 
-    let mut completion =
-        complete_prefix_with_options(request, CompletionScope::VariablesOnly, presentation);
-    completion.candidates = rank_completion_candidates_by_expected_type(
-        completion.candidates,
-        Some(&expected_ty_src),
-        parameter_type_accepts_arg_type,
-    );
-    Some(completion)
+    if let Some(trait_name) =
+        signature_trait_constraint_for_param(&signature.signature, signature.active_parameter)
+    {
+        let mut completion =
+            complete_prefix_with_options(request, CompletionScope::VariablesOnly, presentation);
+        if completion.candidates.is_empty() {
+            let cursor = clamp_to_char_boundary(request.source, request.cursor);
+            let (replace_start, replace_end, prefix) = completion_token(request.source, cursor);
+            if prefix.is_empty() {
+                completion = complete_variable_candidates_for_empty_prefix(
+                    request.index,
+                    replace_start,
+                    replace_end,
+                    presentation,
+                );
+            }
+        }
+        completion.candidates = rank_completion_candidates_by_trait_constraint(
+            request.index,
+            completion.candidates,
+            &trait_name,
+        );
+        Some(completion)
+    } else {
+        let mut completion =
+            complete_prefix_with_options(request, CompletionScope::VariablesOnly, presentation);
+        completion.candidates = rank_completion_candidates_by_expected_type(
+            completion.candidates,
+            Some(&expected_ty_src),
+            parameter_type_accepts_arg_type,
+        );
+        Some(completion)
+    }
 }
 
 pub fn complete_facet_path_arg(
@@ -1355,6 +1381,33 @@ fn complete_prefix_with_options(
     }
     sort_completion_candidates(&mut candidates, presentation);
 
+    CompletionResponse {
+        candidates,
+        replace_start,
+        replace_end,
+    }
+}
+
+fn complete_variable_candidates_for_empty_prefix(
+    index: &SemanticIndex,
+    replace_start: usize,
+    replace_end: usize,
+    presentation: CompletionPresentation,
+) -> CompletionResponse {
+    let mut candidates = Vec::new();
+    for symbol in index
+        .symbols()
+        .iter()
+        .filter(|symbol| completion_scope_accepts(CompletionScope::VariablesOnly, symbol))
+    {
+        let mut candidate = completion_candidate_from_symbol(symbol, replace_start, replace_end);
+        apply_completion_presentation(&mut candidate, presentation, "");
+        if candidate.sort_text.is_none() {
+            candidate.sort_text = Some(default_sort_text_for_candidate(&candidate));
+        }
+        push_completion_candidate(&mut candidates, candidate);
+    }
+    sort_completion_candidates(&mut candidates, presentation);
     CompletionResponse {
         candidates,
         replace_start,
@@ -2032,6 +2085,40 @@ fn signature_expected_param_type(signature: &str, active_parameter: usize) -> Op
         .cloned()
 }
 
+fn signature_trait_constraint_for_param(
+    signature: &str,
+    active_parameter: usize,
+) -> Option<String> {
+    let expected = signature_expected_param_type(signature, active_parameter)?;
+    let expected = expected.trim();
+    if let Some(trait_name) = signature_type_param_bound(signature, expected) {
+        return Some(trait_name);
+    }
+    if expected == "Self" {
+        return signature
+            .split_once("::")
+            .map(|(trait_name, _)| trait_name.trim().to_string())
+            .filter(|trait_name| !trait_name.is_empty());
+    }
+    None
+}
+
+fn signature_type_param_bound(signature: &str, param_name: &str) -> Option<String> {
+    if !param_name.starts_with('$') {
+        return None;
+    }
+    let params_start = signature.find('<')?;
+    let params_end = signature[params_start + 1..].find('>')? + params_start + 1;
+    split_top_level_commas(&signature[params_start + 1..params_end])
+        .into_iter()
+        .find_map(|param| {
+            let (name, bound) = param.split_once(':')?;
+            (name.trim() == param_name)
+                .then(|| bound.trim().to_string())
+                .filter(|bound| !bound.is_empty())
+        })
+}
+
 fn facet_path_arg_type(ty: &AstTy) -> bool {
     matches!(ty, AstTy::Generic(_, name, args) if name == "Facet" && args.len() == 2)
 }
@@ -2045,6 +2132,60 @@ fn parameter_type_accepts_arg_type(param: &str, arg: &str) -> bool {
         return inner == arg || inner.starts_with('$');
     }
     false
+}
+
+fn rank_completion_candidates_by_trait_constraint(
+    index: &SemanticIndex,
+    candidates: Vec<CompletionCandidate>,
+    trait_name: &str,
+) -> Vec<CompletionCandidate> {
+    let mut ranked = candidates
+        .into_iter()
+        .enumerate()
+        .map(|(idx, candidate)| {
+            let matches_constraint = candidate
+                .detail
+                .as_deref()
+                .is_some_and(|detail| type_satisfies_trait_constraint(index, detail, trait_name));
+            (idx, matches_constraint, candidate)
+        })
+        .collect::<Vec<_>>();
+
+    ranked.sort_by(
+        |(left_idx, left_matches, _), (right_idx, right_matches, _)| {
+            right_matches
+                .cmp(left_matches)
+                .then_with(|| left_idx.cmp(right_idx))
+        },
+    );
+    ranked
+        .into_iter()
+        .map(|(_, _, candidate)| candidate)
+        .collect()
+}
+
+fn type_satisfies_trait_constraint(index: &SemanticIndex, ty: &str, trait_name: &str) -> bool {
+    index.symbols().iter().any(|symbol| {
+        symbol
+            .detail
+            .as_deref()
+            .or(Some(symbol.label.as_str()))
+            .and_then(|text| trait_impl_target(text, trait_name))
+            .is_some_and(|target| target == ty)
+    })
+}
+
+fn trait_impl_target<'a>(text: &'a str, trait_name: &str) -> Option<&'a str> {
+    let text = text.trim();
+    let rest = text.strip_prefix("impl ")?;
+    let rest = rest.strip_prefix(trait_name)?;
+    let rest = rest.strip_prefix(" for ")?;
+    let target = rest
+        .split_once("::")
+        .map(|(target, _)| target)
+        .unwrap_or(rest)
+        .trim();
+    (!target.is_empty()).then_some(target)
 }
 
 fn facet_api_path_arg_candidate(

@@ -8689,6 +8689,30 @@ impl Checker {
         }))
     }
 
+    fn primitive_facet_root_name(expr: &Resolved) -> Option<&str> {
+        let Resolved::Var(_, id) = expr else {
+            return None;
+        };
+        matches!(
+            id.name.as_str(),
+            "String" | "Int" | "Float" | "Boolean" | "Function"
+        )
+        .then_some(id.name.as_str())
+    }
+
+    fn primitive_facet_root_error(root: &str, span: &Span) -> TypeError {
+        TypeError {
+            message: format!(
+                "{root} is not a Facet path root; primitive types are not path-constructable"
+            ),
+            span: span.clone(),
+            hint: Some(
+                "Use a defstruct/defrecord/defenum root, Tuple._N, List.[N], HashMap.[\"key\"], or a visible Facet binding."
+                    .into(),
+            ),
+        }
+    }
+
     fn check_field_access_with_expected(
         &mut self,
         span: &Span,
@@ -8730,6 +8754,9 @@ impl Checker {
             {
                 return Ok(tuple_root_path);
             }
+        }
+        if let Some(root) = Self::primitive_facet_root_name(expr) {
+            return Err(Self::primitive_facet_root_error(root, span));
         }
         let typed_expr = self.check_node(expr)?;
 
