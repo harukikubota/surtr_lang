@@ -1509,6 +1509,7 @@ impl ReplEngine {
     }
 
     fn build_completion_context(&self) -> ReplCompletionContext {
+        let semantic_index = self.semantic_index();
         let mut callable_signatures = BTreeMap::new();
         let mut insert_signature = |label: &str, qualified_name: String, signature: String| {
             callable_signatures
@@ -1521,59 +1522,20 @@ impl ReplEngine {
             }
         };
 
-        for entry in self.docs.iter().rev() {
-            if entry.kind != DocKind::Function {
+        for symbol in semantic_index.symbols() {
+            if !matches!(
+                symbol.kind,
+                surtr_analysis::CompletionKind::FunctionCall
+                    | surtr_analysis::CompletionKind::TypeConstructor
+            ) {
                 continue;
             }
-            let label = crate::surface_path_name(&entry.qualified_name).to_string();
-            if !self.doc_entry_is_completion_surface(entry, &label) {
+            let Some((qualified_name, signature)) =
+                self.completion_symbol_signature_entry(symbol)
+            else {
                 continue;
-            }
-            if let Some((qualified_name, signature)) = self
-                .find_signature(label.rsplit("::").next().unwrap_or(label.as_str()))
-                .or_else(|| {
-                    Self::display_signature_for_doc_entry(entry)
-                        .map(|signature| (entry.qualified_name.clone(), signature))
-                })
-            {
-                insert_signature(&label, qualified_name, signature);
-            }
-        }
-
-        for decl in self.declaration_index.values() {
-            if let Some(label) = self.completion_visible_owner_label(decl) {
-                if let Some((qualified_name, signature)) = self.constructor_signature_entry(decl) {
-                    insert_signature(&label, qualified_name.clone(), signature.clone());
-                    insert_signature(
-                        crate::surface_path_name(&decl.fq_name),
-                        qualified_name,
-                        signature,
-                    );
-                }
-            }
-
-            if Self::declaration_is_function_completion_surface(decl) {
-                let label = crate::surface_path_name(&decl.fq_name).to_string();
-                if let Some((qualified_name, signature)) = self
-                    .find_signature(&label)
-                    .or_else(|| self.declaration_signature_entry(decl))
-                {
-                    insert_signature(&label, qualified_name, signature);
-                }
-            }
-        }
-
-        for visible in self.sigil_session.visible_declaration_entries() {
-            if !Self::declaration_is_function_completion_surface(&visible.entry) {
-                continue;
-            }
-            if let Some((qualified_name, signature)) = self
-                .find_signature(&visible.visible_name)
-                .or_else(|| self.find_signature(crate::surface_path_name(&visible.entry.fq_name)))
-                .or_else(|| self.declaration_signature_entry(&visible.entry))
-            {
-                insert_signature(&visible.visible_name, qualified_name, signature);
-            }
+            };
+            insert_signature(&symbol.label, qualified_name, signature);
         }
 
         for entry in self.vm.function_entries().iter().rev() {
@@ -1607,10 +1569,43 @@ impl ReplEngine {
 
         ReplCompletionContext {
             input_support: surtr_analysis::ReplInputSupportContext::from_parts(
-                self.semantic_index(),
+                semantic_index,
                 callable_signatures,
             ),
         }
+    }
+
+    fn completion_symbol_qualified_name(
+        symbol: &surtr_analysis::CompletionSymbol,
+    ) -> Option<String> {
+        match symbol.origin.as_ref()? {
+            surtr_analysis::CompletionOrigin::Metadata { qualified_name, .. }
+            | surtr_analysis::CompletionOrigin::Declaration { qualified_name, .. } => {
+                Some(qualified_name.clone())
+            }
+        }
+    }
+
+    fn completion_symbol_signature_entry(
+        &self,
+        symbol: &surtr_analysis::CompletionSymbol,
+    ) -> Option<(String, String)> {
+        let qualified_name = Self::completion_symbol_qualified_name(symbol)?;
+        if symbol.kind == surtr_analysis::CompletionKind::TypeConstructor {
+            if let Some(decl) = self.qualified_declaration(&qualified_name) {
+                if let Some(signature) = self.constructor_signature_entry(decl) {
+                    return Some(signature);
+                }
+            }
+        }
+        symbol
+            .detail
+            .clone()
+            .map(|signature| (qualified_name.clone(), signature))
+            .or_else(|| {
+                self.qualified_declaration(&qualified_name)
+                    .and_then(|decl| self.declaration_signature_entry(decl))
+            })
     }
 
     pub fn completion_context(&self) -> ReplCompletionContext {
