@@ -65,6 +65,11 @@ Xldr は少なくとも次の session phase を区別する。
 
 phase ごとの VM 実行ポリシーは Xldr が決め、Eldr へは `InteractiveChunkPolicy` として渡す。`Bootstrap` と `Preload` は `Preload` policy、`Live` は `ReplAppendOnly` policy を使う。
 
+Xldr の compile-time prefix は `StagedCompilationSnapshot` / `CompilationPrefixSnapshot` として扱う。
+これは標準定義、preload module/script/project stage、REPL live chunk の compile metadata を束ねる
+aggregate であり、Eldr の runtime append policy とは別責務である。REPL command / completion は
+この snapshot から得た `SymbolSemanticInfo` を query し、表示候補へ投影する。
+
 ### 3.2 初期化
 
 - セッション開始時に標準 definition source を `Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test]` の順で読み込む
@@ -103,7 +108,7 @@ phase ごとの VM 実行ポリシーは Xldr が決め、Eldr へは `Interacti
 - セッションは `.eldr` と live compile の両方から doc metadata を保持し、`:doc` 表示へ利用する
 - `.eldr` から初期化した場合、標準 library の compile-time context は source から復元する
 - `.eldr` に含まれる user-defined function は VM には常駐するが、新しい REPL 入力の名前解決対象としては復元されない
-- したがって `.eldr` 復元は現時点では部分復元であり、完全な semantic restore は後続課題とする
+- したがって `.eldr` 復元は現時点では部分復元であり、compile semantic aggregate の復元欠落を通知する。完全な semantic restore は後続課題とする
 
 `Bootstrap` / `Kernel` と、`@autoimport` が付いた標準 trait / 標準 `impl Type` owner helper surface は REPL でも auto import 対象とし、`Bootstrap` / `Kernel` への明示 `import` は compile error とする。
 
