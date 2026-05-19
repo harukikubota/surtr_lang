@@ -8485,6 +8485,51 @@ impl Checker {
                     true,
                 ))
             }
+            Ty::Bool => {
+                let Some(variant) = self.lookup_enum_variant_by_short_name("Boolean", field) else {
+                    return Err(TypeError {
+                        message: format!(
+                            "No variant selector '{}' on Boolean (use True or False)",
+                            field
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                };
+                let variant = self.instantiate_enum_variant(&variant);
+                if !self.types_compatible(&variant.enum_ty, source_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Variant selector Boolean.{} does not match {}",
+                            field,
+                            self.ty_name(source_ty)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let payload_arity = variant.payload.len() as u32;
+                let focus_ty = match variant.payload.len() {
+                    0 => Ty::Unit,
+                    1 => variant.payload[0].clone(),
+                    _ => Ty::Tuple(variant.payload.clone()),
+                };
+                Ok((
+                    TypedFacetSegment::Variant {
+                        enum_name: variant.enum_name,
+                        variant_name: variant.short_name,
+                        variant_tag: variant.tag,
+                        discriminant: variant.discriminant,
+                        payload_arity,
+                        optional: *optional,
+                        focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
+                        focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
+                            .map(str::to_string),
+                    },
+                    focus_ty,
+                    true,
+                ))
+            }
             other => {
                 let message = if field.starts_with('_')
                     && field
@@ -8697,12 +8742,14 @@ impl Checker {
         segment: &PendingFacetSegment,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        let typed_expr = self.check_node(expr)?;
         let (source_ty, expected_focus_ty) = match expected.map(|ty| self.resolve_ty(ty)) {
             Some(Ty::Facet(source, focus)) => {
                 (source.as_ref().clone(), Some(focus.as_ref().clone()))
             }
-            _ => (self.resolve_ty(&typed_expr.ty), None),
+            _ => {
+                let typed_expr = self.check_node(expr)?;
+                (self.resolve_ty(&typed_expr.ty), None)
+            }
         };
         let (segment, focus_ty, may_fail) =
             self.resolve_facet_segment_for_source_ty(&source_ty, segment, span, true)?;

@@ -29,7 +29,9 @@ fn synthetic_builtin_symbol_uid(name: &str, info: &SymbolIdentityInfo) -> Option
         ("String", None) if info.capabilities.module_owner => Some(STRING_PRIMITIVE_ROOT_UID),
         ("Int", None) if info.capabilities.module_owner => Some(INT_PRIMITIVE_ROOT_UID),
         ("Float", None) if info.capabilities.module_owner => Some(FLOAT_PRIMITIVE_ROOT_UID),
-        ("Boolean", None) if info.capabilities.module_owner => Some(BOOLEAN_PRIMITIVE_ROOT_UID),
+        ("Boolean", Some(FacetRootKind::TypeRoot)) if info.capabilities.module_owner => {
+            Some(BOOLEAN_PRIMITIVE_ROOT_UID)
+        }
         ("Function", None) if info.capabilities.module_owner => Some(FUNCTION_PRIMITIVE_ROOT_UID),
         _ => None,
     }

@@ -4370,6 +4370,19 @@ fn test_primitive_facet_roots_carry_symbol_identity_info_without_facet_path() {
 }
 
 #[test]
+fn test_boolean_variant_facet_root_carries_type_root_symbol_identity_info() {
+    let resolved = parse_and_resolve("true_facet = Boolean.True").unwrap();
+
+    match bind_rhs(&resolved[0]) {
+        Resolved::FieldAccess(_, expr, field) => {
+            assert_eq!(field, "True");
+            assert_symbol_info_facet_root(resolved_var_id(expr), Some(FacetRootKind::TypeRoot));
+        }
+        other => panic!("Expected Boolean FieldAccess, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_user_type_declarations_carry_symbol_identity_info() {
     let resolved = parse_and_resolve(
         r#"defstruct User { name: String }

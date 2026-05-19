@@ -3939,6 +3939,14 @@ fn parses_optional_enum_facet_segment() {
 }
 
 #[test]
+fn parses_boolean_variant_facet_segment() {
+    let ast = parse("print(inspect(Facet::preview(Boolean.True, flag)))").unwrap();
+    let rendered = format!("{ast:?}");
+    assert!(rendered.contains("FieldAccess"), "{rendered}");
+    assert!(rendered.contains("\"True\""), "{rendered}");
+}
+
+#[test]
 fn parses_bulk_update_index_key_optional_and_case_actions() {
     let ast = parse(
         r#"user2 =? Facet::bulk_update(user) {

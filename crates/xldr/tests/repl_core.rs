@@ -1654,10 +1654,14 @@ defenum Slot { Some(String), None }
             "{api} first argument should suggest path-constructable enum roots: {labels:?}"
         );
         assert!(
+            labels.contains(&"Boolean"),
+            "{api} first argument should suggest Boolean variant root: {labels:?}"
+        );
+        assert!(
             labels.contains(&"name_path"),
             "{api} first argument should suggest Facet bindings: {labels:?}"
         );
-        for primitive in ["String", "Int", "Float", "Boolean", "Function"] {
+        for primitive in ["String", "Int", "Float", "Function"] {
             assert!(
                 !labels.contains(&primitive),
                 "{api} first argument should not suggest primitive root {primitive}: {labels:?}"

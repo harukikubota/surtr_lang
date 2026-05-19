@@ -1689,6 +1689,25 @@ Facet::preview(Option.Some, value)"#,
     ));
 }
 
+#[test]
+fn facet_preview_accepts_boolean_variant_root() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"flag = True
+Facet::preview(Boolean.True, flag)"#,
+    );
+    let last = typed.last().expect("typed program should not be empty");
+    let TypedInner::FacetView { path, .. } = &last.node else {
+        panic!("expected Boolean.True to lower as a variant Facet view");
+    };
+    assert_eq!(path.path_kind, TypedFacetPathKind::Variant);
+    assert!(matches!(
+        &last.ty,
+        scar::types::Ty::Result(ok, err)
+            if matches!(ok.as_ref(), scar::types::Ty::Unit)
+                && matches!(err.as_ref(), scar::types::Ty::Error)
+    ));
+}
+
 fn facet_list_and_map_segments_are_fallible_structural_paths() {
     let typed = typecheck_with_builtin_prelude(
         r#"scores = [10, 20, 30]

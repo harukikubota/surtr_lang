@@ -415,6 +415,7 @@ pub fn builtin_symbol_surface_meta(name: &str) -> Option<BuiltinSymbolSurfaceMet
 
     let type_name = builtin_type_name(name)?;
     let facet_root_path = match type_name {
+        TypeName::Boolean => Some(FacetRootKind::TypeRoot),
         TypeName::List => Some(FacetRootKind::List),
         TypeName::HashMap => Some(FacetRootKind::HashMap),
         _ => None,
@@ -493,6 +494,16 @@ mod tests {
         assert!(facet.capabilities.module_owner);
         assert!(facet.capabilities.impl_target);
         assert_eq!(facet.capabilities.facet_root_path, None);
+
+        let boolean = builtin_symbol_identity_info("Boolean").expect("Boolean should be known");
+        assert_eq!(boolean.identity, TypeIdentity::Type);
+        assert!(boolean.capabilities.type_annotation);
+        assert!(boolean.capabilities.module_owner);
+        assert!(boolean.capabilities.impl_target);
+        assert_eq!(
+            boolean.capabilities.facet_root_path,
+            Some(FacetRootKind::TypeRoot)
+        );
     }
 
     #[test]

@@ -1377,6 +1377,13 @@ fn shared_builtin_surface_capability_query_excludes_runtime_aliases() {
     assert!(string_caps.impl_target);
     assert_eq!(string_caps.facet_root_path, None);
 
+    let boolean_caps =
+        surtr_analysis::symbol_capabilities_for_builtin_surface("Boolean").expect("Boolean caps");
+    assert!(boolean_caps.type_annotation);
+    assert!(boolean_caps.module_owner);
+    assert!(boolean_caps.impl_target);
+    assert_eq!(boolean_caps.facet_root_path, Some(FacetRootKind::TypeRoot));
+
     assert!(
         surtr_analysis::symbol_capabilities_for_builtin_surface("String::len").is_none(),
         "runtime builtin aliases are not compile-space symbol surfaces"
@@ -1649,6 +1656,7 @@ fn facet_arg_completion_includes_builtin_path_roots_and_excludes_plain_builtin_t
         ("Global::Tuple", "Tuple path root."),
         ("Global::List", "List path root."),
         ("Global::HashMap", "HashMap path root."),
+        ("Global::Boolean", "Boolean variant path root."),
         ("Global::String", "Plain string type."),
         ("Global::Result", "Plain result type."),
         ("Global::Facet", "Facet type."),
@@ -1691,7 +1699,7 @@ fn facet_arg_completion_includes_builtin_path_roots_and_excludes_plain_builtin_t
             .iter()
             .map(|candidate| candidate.label.as_str())
             .collect::<Vec<_>>(),
-        vec!["HashMap", "List", "Tuple"]
+        vec!["Boolean", "HashMap", "List", "Tuple"]
     );
 }
 
