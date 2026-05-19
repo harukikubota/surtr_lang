@@ -50,11 +50,35 @@ pub struct SymbolSemanticInfo {
 }
 
 impl SymbolSemanticInfo {
+    pub fn from_completion_symbol(symbol: &CompletionSymbol) -> Self {
+        Self {
+            canonical_name: symbol
+                .origin
+                .as_ref()
+                .map(|origin| match origin {
+                    CompletionOrigin::Metadata { qualified_name, .. }
+                    | CompletionOrigin::Declaration { qualified_name, .. } => {
+                        qualified_name.clone()
+                    }
+                })
+                .unwrap_or_else(|| symbol.label.clone()),
+            surface_name: symbol.label.clone(),
+            replacement: symbol.replacement.clone(),
+            kind: symbol.kind.clone(),
+            detail: symbol.detail.clone(),
+            documentation: symbol.documentation.clone(),
+            sort_text: symbol.sort_text.clone(),
+            origin: symbol.origin.clone(),
+            definition: symbol.definition.clone(),
+            capabilities: symbol.capabilities.clone(),
+        }
+    }
+
     fn completion_key(&self) -> (String, u8) {
         (self.surface_name.clone(), completion_kind_rank(&self.kind))
     }
 
-    fn into_completion_symbol(self) -> CompletionSymbol {
+    pub fn into_completion_symbol(self) -> CompletionSymbol {
         CompletionSymbol {
             label: self.surface_name,
             replacement: self.replacement,
@@ -466,6 +490,18 @@ pub fn completion_symbol_for_effective_visible_entry(
     existing_symbols: &[CompletionSymbol],
     visible: &sigil::EffectiveVisibleEntry,
 ) -> Option<CompletionSymbol> {
+    let existing_infos = existing_symbols
+        .iter()
+        .map(SymbolSemanticInfo::from_completion_symbol)
+        .collect::<Vec<_>>();
+    symbol_semantic_info_for_effective_visible_entry(&existing_infos, visible)
+        .map(SymbolSemanticInfo::into_completion_symbol)
+}
+
+pub fn symbol_semantic_info_for_effective_visible_entry(
+    existing_infos: &[SymbolSemanticInfo],
+    visible: &sigil::EffectiveVisibleEntry,
+) -> Option<SymbolSemanticInfo> {
     let kind = match visible.entry.kind {
         DeclarationKind::BuiltinType => return None,
         _ => completion_kind_for_declaration_kind(&visible.entry.kind)?,
@@ -476,29 +512,30 @@ pub fn completion_symbol_for_effective_visible_entry(
     let mut sort_text = None;
     let mut definition = None;
     let mut inherited_capabilities = None;
-    for symbol in existing_symbols
+    for info in existing_infos
         .iter()
-        .filter(|symbol| symbol.label == qualified_label && symbol.kind == kind)
+        .filter(|info| info.surface_name == qualified_label && info.kind == kind)
     {
         if detail.is_none() {
-            detail = symbol.detail.clone();
+            detail = info.detail.clone();
         }
         if documentation.is_none() {
-            documentation = symbol.documentation.clone();
+            documentation = info.documentation.clone();
         }
         if sort_text.is_none() {
-            sort_text = symbol.sort_text.clone();
+            sort_text = info.sort_text.clone();
         }
         if definition.is_none() {
-            definition = symbol.definition.clone();
+            definition = info.definition.clone();
         }
-        merge_symbol_capabilities(&mut inherited_capabilities, symbol.capabilities.clone());
+        merge_symbol_capabilities(&mut inherited_capabilities, info.capabilities.clone());
     }
     let capabilities = declaration_symbol_identity_info(&visible.entry.name, &visible.entry.kind)
         .map(|info| info.capabilities)
         .or(inherited_capabilities);
-    Some(CompletionSymbol {
-        label: visible.visible_name.clone(),
+    Some(SymbolSemanticInfo {
+        canonical_name: visible.entry.fq_name.clone(),
+        surface_name: visible.visible_name.clone(),
         replacement: visible.visible_name.clone(),
         kind,
         detail,

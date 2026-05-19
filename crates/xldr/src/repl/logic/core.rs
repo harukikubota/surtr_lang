@@ -1344,15 +1344,20 @@ impl ReplEngine {
         self.enrich_compile_symbol_details(&mut symbols);
 
         let compile_symbols = symbols.clone();
+        let compile_semantic_infos = compile_symbols
+            .iter()
+            .map(surtr_analysis::SymbolSemanticInfo::from_completion_symbol)
+            .collect::<Vec<_>>();
         let visible_symbols = self
             .sigil_session
             .visible_declaration_entries()
             .into_iter()
             .filter_map(|visible| {
-                surtr_analysis::semantic::completion_symbol_for_effective_visible_entry(
-                    &compile_symbols,
+                surtr_analysis::symbol_semantic_info_for_effective_visible_entry(
+                    &compile_semantic_infos,
                     &visible,
                 )
+                .map(surtr_analysis::SymbolSemanticInfo::into_completion_symbol)
             })
             .filter(|symbol| {
                 symbol.kind == surtr_analysis::CompletionKind::FunctionCall

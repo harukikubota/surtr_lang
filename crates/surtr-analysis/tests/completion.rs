@@ -1301,6 +1301,81 @@ fn effective_visible_entry_projection_reuses_qualified_symbol_metadata() {
 }
 
 #[test]
+fn effective_visible_entry_semantic_info_reuses_qualified_symbol_metadata() {
+    let source_location = surtr_analysis::SourceLocation {
+        path: "/repo/helper.srt".into(),
+        start: 4,
+        end: 10,
+    };
+    let visible = sigil::EffectiveVisibleEntry {
+        visible_name: "helper".to_string(),
+        via_import: true,
+        via_auto_import: false,
+        shadowed_auto_import: false,
+        importable: true,
+        callable: true,
+        entry: declaration_entry(
+            "Global::Helper",
+            "helper",
+            "Global::Helper::helper",
+            DeclarationKind::Def,
+            true,
+            true,
+        ),
+    };
+
+    let projected = surtr_analysis::symbol_semantic_info_for_effective_visible_entry(
+        &[surtr_analysis::SymbolSemanticInfo {
+            canonical_name: "Global::Helper::helper".to_string(),
+            surface_name: "Helper::helper".to_string(),
+            replacement: "Helper::helper".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("Helper::helper(value: Int) -> Int".to_string()),
+            documentation: Some("Increment a number.".to_string()),
+            sort_text: Some("1:Helper::helper".to_string()),
+            origin: None,
+            definition: Some(source_location.clone()),
+            capabilities: Some(SymbolCapabilities::new(
+                true,
+                true,
+                true,
+                Some(FacetRootKind::TypeRoot),
+            )),
+        }],
+        &visible,
+    )
+    .expect("visible helper should project");
+
+    assert_eq!(projected.canonical_name, "Global::Helper::helper");
+    assert_eq!(projected.surface_name, "helper");
+    assert_eq!(projected.replacement, "helper");
+    assert_eq!(
+        projected.detail.as_deref(),
+        Some("Helper::helper(value: Int) -> Int")
+    );
+    assert_eq!(
+        projected.documentation.as_deref(),
+        Some("Increment a number.")
+    );
+    assert_eq!(projected.sort_text.as_deref(), Some("1:Helper::helper"));
+    assert_eq!(projected.definition, Some(source_location));
+    assert!(matches!(
+        projected.origin.as_ref(),
+        Some(CompletionOrigin::Declaration { qualified_name, .. })
+            if qualified_name == "Global::Helper::helper"
+    ));
+    assert_eq!(
+        projected.capabilities,
+        Some(SymbolCapabilities::new(
+            true,
+            true,
+            true,
+            Some(FacetRootKind::TypeRoot),
+        ))
+    );
+}
+
+#[test]
 fn call_argument_completion_ranks_self_trait_constraint_candidates_from_impl_signatures() {
     let index = SemanticIndex::from_symbols(vec![
         completion_symbol(
