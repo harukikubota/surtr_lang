@@ -782,9 +782,15 @@ fn semantic_index_with_source_locations(
     path: &Path,
     ast: &[Ast],
 ) -> SemanticIndex {
-    let mut symbols = existing.symbols().to_vec();
+    let mut symbols = Vec::new();
     collect_source_location_symbols(ast, None, path, &mut symbols);
-    SemanticIndex::from_symbols(symbols)
+    let mut infos = existing.symbol_semantic_infos().to_vec();
+    infos.extend(
+        symbols
+            .into_iter()
+            .map(|symbol| crate::semantic::SymbolSemanticInfo::from_completion_symbol(&symbol)),
+    );
+    SemanticIndex::from_symbol_semantic_infos(infos)
 }
 
 fn collect_source_location_symbols(
@@ -1093,11 +1099,7 @@ fn semantic_index_with_declarations(
     current_module_path: Option<&str>,
     current_stage_index: usize,
 ) -> SemanticIndex {
-    let mut infos = existing
-        .symbols()
-        .iter()
-        .map(crate::semantic::SymbolSemanticInfo::from_completion_symbol)
-        .collect::<Vec<_>>();
+    let mut infos = existing.symbol_semantic_infos().to_vec();
     infos.extend(crate::semantic::symbol_semantic_infos_from_compile_metadata(
         declaration_index,
         docs,

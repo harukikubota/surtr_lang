@@ -7,7 +7,7 @@ use surtr_analysis::{
     resolve_context, AnalysisContextRequest, AnalysisDiagnosticKind, AnalysisHost, AnalysisMode,
     AnalysisService, CompletionKind, CompletionScope, CompletionSymbol, ProjectRunnerInput,
     ProjectRunnerSourceInput, RunnerContext, RunnerSelection, SelectedContext, SemanticIndex,
-    Utf16Position,
+    SymbolDisplayMetadata, SymbolSemanticInfo, Utf16Position,
 };
 
 #[derive(Debug)]
@@ -712,6 +712,87 @@ Project::config({|config|
             )
         }),
         "effective import should expose short declaration symbol: {helper_symbols:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn analysis_service_project_context_preserves_existing_semantic_infos() {
+    let root = temp_root("project-existing-semantic-infos");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let main_path = src.join("main.srt");
+    let project_file = root.join("project.srt");
+    std::fs::write(&main_path, "defmod Main { def main() -> Int { 1 } }").expect("write main");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/main.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.set_semantic_index(SemanticIndex::from_symbol_semantic_infos(vec![
+        SymbolSemanticInfo {
+            canonical_name: "Global::External::helper".to_string(),
+            surface_name: "External::helper".to_string(),
+            replacement: "External::helper".to_string(),
+            kind: CompletionKind::FunctionCall,
+            identity: None,
+            detail: Some("External::helper() -> Int".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: None,
+            display_metadata: Some(SymbolDisplayMetadata {
+                qualified_name: "Global::External::helper".to_string(),
+                module_path: "Global::External".to_string(),
+                has_doc: false,
+                has_signature: true,
+            }),
+        },
+    ]));
+    service.update_document(main_path.clone(), Some(1), "defmod Main { def main() -> Int { 1 } }".to_string());
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: main_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(main_path),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+
+    let snapshot = service.analyze(context);
+    let external = snapshot
+        .semantic_index
+        .symbol_semantic_infos()
+        .iter()
+        .find(|info| info.surface_name == "External::helper")
+        .expect("existing semantic info should survive project context enrichment");
+    assert_eq!(
+        external
+            .display_metadata
+            .as_ref()
+            .map(|metadata| (metadata.qualified_name.as_str(), metadata.has_signature)),
+        Some(("Global::External::helper", true))
     );
 
     let _ = std::fs::remove_dir_all(root);

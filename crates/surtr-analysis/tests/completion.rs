@@ -1404,7 +1404,12 @@ fn effective_visible_entry_semantic_info_reuses_qualified_symbol_metadata() {
                 true,
                 Some(FacetRootKind::TypeRoot),
             )),
-            display_metadata: None,
+            display_metadata: Some(SymbolDisplayMetadata {
+                qualified_name: "Global::Helper::helper".to_string(),
+                module_path: "Global::Helper".to_string(),
+                has_doc: true,
+                has_signature: true,
+            }),
         }],
         &visible,
     )
@@ -1444,6 +1449,13 @@ fn effective_visible_entry_semantic_info_reuses_qualified_symbol_metadata() {
             true,
             Some(FacetRootKind::TypeRoot),
         ))
+    );
+    assert_eq!(
+        projected
+            .display_metadata
+            .as_ref()
+            .map(|metadata| (metadata.qualified_name.as_str(), metadata.has_doc)),
+        Some(("Global::Helper::helper", true))
     );
 }
 

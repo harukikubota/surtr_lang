@@ -649,6 +649,7 @@ pub fn symbol_semantic_info_for_effective_visible_entry(
     let mut definition = None;
     let mut inherited_identity = None;
     let mut inherited_capabilities = None;
+    let mut display_metadata = None;
     for info in existing_infos
         .iter()
         .filter(|info| info.surface_name == qualified_label && info.kind == kind)
@@ -669,6 +670,7 @@ pub fn symbol_semantic_info_for_effective_visible_entry(
             inherited_identity = info.identity;
         }
         merge_symbol_capabilities(&mut inherited_capabilities, info.capabilities.clone());
+        merge_symbol_display_metadata(&mut display_metadata, info.display_metadata.clone());
     }
     let identity = symbol_identity_for_declaration_entry(&visible.entry).or(inherited_identity);
     let capabilities = declaration_symbol_identity_info(&visible.entry.name, &visible.entry.kind)
@@ -698,7 +700,7 @@ pub fn symbol_semantic_info_for_effective_visible_entry(
         }),
         definition,
         capabilities,
-        display_metadata: None,
+        display_metadata,
     })
 }
 
