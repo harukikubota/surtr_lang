@@ -488,18 +488,6 @@ pub fn symbol_capabilities_for_declaration_entry(
         })
 }
 
-pub fn completion_symbol_for_effective_visible_entry(
-    existing_symbols: &[CompletionSymbol],
-    visible: &sigil::EffectiveVisibleEntry,
-) -> Option<CompletionSymbol> {
-    let existing_infos = existing_symbols
-        .iter()
-        .map(SymbolSemanticInfo::from_completion_symbol)
-        .collect::<Vec<_>>();
-    symbol_semantic_info_for_effective_visible_entry(&existing_infos, visible)
-        .map(SymbolSemanticInfo::into_completion_symbol)
-}
-
 pub fn symbol_semantic_info_for_effective_visible_entry(
     existing_infos: &[SymbolSemanticInfo],
     visible: &sigil::EffectiveVisibleEntry,
