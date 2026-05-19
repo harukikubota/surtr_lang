@@ -8386,7 +8386,8 @@ impl Checker {
                         ),
                     });
                 }
-                if self.env.is_private_field(&name, field) {
+                let field_policy = self.env.field_policy(&name, field);
+                if field_policy.is_some_and(|policy| policy.private) {
                     let display_name = Self::surface_name(&name);
                     let outside_impl =
                         self.current_impl_struct_target.as_deref() != Some(display_name);
@@ -8417,7 +8418,7 @@ impl Checker {
                         field_index,
                         container_field_count: fields.len() as u32,
                         container_type_name: Self::surface_name(&name).to_string(),
-                        readonly: self.env.is_readonly_field(&name, field),
+                        readonly: field_policy.is_some_and(|policy| policy.readonly),
                         focus_readonly_root: self.ty_is_readonly_root(&field_ty),
                         focus_type_name: Self::readonly_type_name(&self.resolve_ty(&field_ty))
                             .map(str::to_string),
