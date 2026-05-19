@@ -417,7 +417,7 @@ fn completion_uses_project_stage_declarations_through_lsp_host() {
         .expect("write helper source");
 
     let uri = path_to_file_uri(&main_path);
-    let source = "defmod Main { def main() -> Int { he } }";
+    let source = "defmod Main { def main() -> Int { Helper::he } }";
     let project_source = r#"
 Project::config({|config|
   Project::entrypoint(config, "dev", {|c|
@@ -451,7 +451,10 @@ Project::config({|config|
         &uri,
         LspPosition {
             line: 0,
-            character: source.find("he }").expect("completion token exists") as u32 + 2,
+            character: source
+                .find("Helper::he }")
+                .expect("completion token exists") as u32
+                + "Helper::he".len() as u32,
         },
     );
 
@@ -477,7 +480,7 @@ fn completion_uses_injected_project_runner_executor() {
         .expect("write helper source");
 
     let uri = path_to_file_uri(&main_path);
-    let source = "he";
+    let source = "Helper::he";
     let mut host = LspAnalysisHost::new(workspace.clone());
     let helper_path_for_executor = helper_path.clone();
     host.set_project_runner_executor(Some(
@@ -522,7 +525,7 @@ fn completion_uses_injected_project_runner_executor() {
         &uri,
         LspPosition {
             line: 0,
-            character: 2,
+            character: "Helper::he".len() as u32,
         },
     );
 
@@ -562,7 +565,7 @@ Project::config({|config|
     let uri = path_to_file_uri(&script_path);
     let source = r#"load_project("../project.srt", profile: "dev")
 
-he
+Helper::he
 "#;
     let mut host = LspAnalysisHost::new(workspace.clone());
     host.did_open(uri.clone(), Some(1), source.to_string());
@@ -573,7 +576,7 @@ he
         &uri,
         LspPosition {
             line: 2,
-            character: 2,
+            character: "Helper::he".len() as u32,
         },
     );
 
