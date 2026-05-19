@@ -36,8 +36,8 @@ use super::{eval, render, session};
 use crate::loader::{self, StagedModule};
 use crate::ErrorDisplayMode;
 use crate::{
-    collect_additional_default_std_module_inputs, derive_runtime_policy, error_display, LoadError,
-    ModuleStageParseError, ModuleStageParseErrorKind, SourceKind,
+    collect_additional_default_std_module_inputs, error_display, LoadError, ModuleStageParseError,
+    ModuleStageParseErrorKind, SourceKind,
 };
 
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -894,15 +894,7 @@ impl ReplEngine {
 
         let typed = match self.scar_session.typecheck_with_context(
             resolved,
-            scar::TypecheckContext {
-                runtime_policy: derive_runtime_policy(
-                    CompileUnitKind::Repl,
-                    SourceKind::StdDefinitionSource,
-                    None,
-                ),
-                enforce_builtin_type_contracts: true,
-                allow_error_function_params: true,
-            },
+            Self::std_definition_typecheck_context(),
         ) {
             Ok(t) => t,
             Err(e) => {
@@ -1087,15 +1079,7 @@ impl ReplEngine {
         // Type-check to populate scar session; discard typed nodes (no codegen).
         if let Err(e) = self.scar_session.typecheck_with_context(
             resolved,
-            scar::TypecheckContext {
-                runtime_policy: derive_runtime_policy(
-                    CompileUnitKind::Repl,
-                    SourceKind::StdDefinitionSource,
-                    None,
-                ),
-                enforce_builtin_type_contracts: true,
-                allow_error_function_params: true,
-            },
+            Self::std_definition_typecheck_context(),
         ) {
             return Err(load_error_from_span_failure(
                 &self.sources,
@@ -1464,6 +1448,17 @@ impl ReplEngine {
             .into_iter()
             .map(|symbol| self.symbol_semantic_info_from_completion_symbol(&symbol))
             .collect()
+    }
+
+    fn typecheck_context_for_source(source_kind: SourceKind) -> scar::TypecheckContext {
+        scar::TypecheckContext::from_source_policy(source_kind.policy(CompileUnitKind::Repl, None))
+    }
+
+    fn std_definition_typecheck_context() -> scar::TypecheckContext {
+        let mut context = Self::typecheck_context_for_source(SourceKind::StdDefinitionSource);
+        context.enforce_builtin_type_contracts = true;
+        context.allow_error_function_params = true;
+        context
     }
 
     fn compile_symbol_is_repl_completion_surface(
@@ -4469,15 +4464,7 @@ impl ReplEngine {
 
         let typed = match self.scar_session.typecheck_with_context(
             resolved,
-            scar::TypecheckContext {
-                runtime_policy: derive_runtime_policy(
-                    CompileUnitKind::Repl,
-                    SourceKind::ReplChunk,
-                    None,
-                ),
-                enforce_builtin_type_contracts: false,
-                allow_error_function_params: false,
-            },
+            Self::typecheck_context_for_source(SourceKind::ReplChunk),
         ) {
             Ok(t) => t,
             Err(e) => {
@@ -4833,15 +4820,7 @@ impl ReplEngine {
 
         let typed = match self.scar_session.typecheck_with_context(
             resolved,
-            scar::TypecheckContext {
-                runtime_policy: derive_runtime_policy(
-                    CompileUnitKind::Repl,
-                    SourceKind::ReplChunk,
-                    None,
-                ),
-                enforce_builtin_type_contracts: false,
-                allow_error_function_params: false,
-            },
+            Self::typecheck_context_for_source(SourceKind::ReplChunk),
         ) {
             Ok(t) => t,
             Err(e) => {
@@ -7469,15 +7448,7 @@ impl ReplEngine {
 
         let typed = match self.scar_session.typecheck_with_context(
             resolved,
-            scar::TypecheckContext {
-                runtime_policy: derive_runtime_policy(
-                    CompileUnitKind::Repl,
-                    SourceKind::ReplChunk,
-                    None,
-                ),
-                enforce_builtin_type_contracts: false,
-                allow_error_function_params: false,
-            },
+            Self::typecheck_context_for_source(SourceKind::ReplChunk),
         ) {
             Ok(t) => t,
             Err(e) => {
@@ -8056,15 +8027,9 @@ fn compile_repl_preload_from_module_stages(
     let typed = scar_session
         .typecheck_staged_program_with_context(
             staged_program,
-            scar::TypecheckContext {
-                runtime_policy: derive_runtime_policy(
-                    mode.compile_unit_kind,
-                    mode.runtime_source_kind,
-                    None,
-                ),
-                enforce_builtin_type_contracts: false,
-                allow_error_function_params: false,
-            },
+            scar::TypecheckContext::from_source_policy(
+                mode.runtime_source_kind.policy(mode.compile_unit_kind, None),
+            ),
         )
         .map_err(|e| ReplLoadError::Diagnostic {
             phase: "typecheck".to_string(),

@@ -79,15 +79,9 @@ pub fn execute_project_runner_source(
     let typed = scar_session
         .typecheck_staged_program_with_context(
             resolved,
-            scar::TypecheckContext {
-                runtime_policy: crate::derive_runtime_policy(
-                    CompileUnitKind::Project,
-                    SourceKind::ProjectConfigSource,
-                    None,
-                ),
-                enforce_builtin_type_contracts: false,
-                allow_error_function_params: false,
-            },
+            scar::TypecheckContext::from_source_policy(
+                SourceKind::ProjectConfigSource.policy(CompileUnitKind::Project, None),
+            ),
         )
         .map_err(|error| ProjectRunnerVmError::new("typecheck", error.message))?;
 

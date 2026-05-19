@@ -307,15 +307,10 @@ fn cached_test_prefix_root() -> PathBuf {
 fn script_prefix_typecheck_context(
     compile_unit_kind: sindr::policy::CompileUnitKind,
 ) -> scar::TypecheckContext {
-    scar::TypecheckContext {
-        runtime_policy: xldr::derive_runtime_policy(
-            compile_unit_kind,
-            xldr::SourceKind::Script,
-            None,
-        ),
-        enforce_builtin_type_contracts: false,
-        allow_error_function_params: false,
-    }
+    scar::TypecheckContext::from_source_policy(xldr::SourceKind::Script.policy(
+        compile_unit_kind,
+        None,
+    ))
 }
 
 fn build_cached_script_compile_prefix(
@@ -599,15 +594,9 @@ pub(crate) fn compile_source(
     let typed = scar_session
         .typecheck_staged_program_with_context(
             resolved,
-            scar::TypecheckContext {
-                runtime_policy: xldr::derive_runtime_policy(
-                    compile_unit_kind,
-                    source_kind,
-                    compile_plan.normalized_entrypoint.as_ref(),
-                ),
-                enforce_builtin_type_contracts: false,
-                allow_error_function_params: false,
-            },
+            scar::TypecheckContext::from_source_policy(
+                source_kind.policy(compile_unit_kind, compile_plan.normalized_entrypoint.as_ref()),
+            ),
         )
         .map_err(|e| {
             let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);

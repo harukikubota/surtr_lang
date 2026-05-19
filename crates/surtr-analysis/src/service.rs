@@ -1462,13 +1462,12 @@ fn typecheck_context_for_analysis(context: &ResolvedAnalysisContext) -> scar::Ty
         .as_ref()
         .map(|runner| sindr::policy::EntryPoint::qualified(runner.entrypoint.clone()));
 
-    scar::TypecheckContext {
-        runtime_policy: context
+    scar::TypecheckContext::from_source_policy(
+        context
             .context
             .source_kind
-            .runtime_policy(compile_unit_kind, entrypoint.as_ref()),
-        ..scar::TypecheckContext::default()
-    }
+            .policy(compile_unit_kind, entrypoint.as_ref()),
+    )
 }
 
 fn module_path_for_document(mode: AnalysisMode, path: &Path) -> Option<String> {

@@ -54,6 +54,7 @@ enum ProfileEvent {
 #[cfg(test)]
 mod process_boundary_policy_tests {
     use super::*;
+    use sindr::policy::{CompileUnitKind, ExitCodePolicy, SourceKind};
 
     #[test]
     fn process_boundary_only_type_query_uses_builtin_usage_policy() {
@@ -63,6 +64,19 @@ mod process_boundary_policy_tests {
         ));
         assert!(!Checker::builtin_type_is_process_boundary_only("PID"));
         assert!(!Checker::builtin_type_is_process_boundary_only("String"));
+    }
+
+    #[test]
+    fn typecheck_context_can_be_derived_from_source_policy() {
+        let source_policy = SourceKind::DefinitionSource.policy(CompileUnitKind::Project, None);
+        let context = TypecheckContext::from_source_policy(source_policy);
+
+        assert_eq!(
+            context.runtime_policy.exit_code_policy,
+            ExitCodePolicy::EntryOnly
+        );
+        assert!(!context.enforce_builtin_type_contracts);
+        assert!(!context.allow_error_function_params);
     }
 }
 
@@ -570,6 +584,16 @@ impl Default for TypecheckContext {
     fn default() -> Self {
         Self {
             runtime_policy: RuntimeSourcePolicy::script(),
+            enforce_builtin_type_contracts: false,
+            allow_error_function_params: false,
+        }
+    }
+}
+
+impl TypecheckContext {
+    pub fn from_source_policy(policy: sindr::policy::SourcePolicy) -> Self {
+        Self {
+            runtime_policy: policy.runtime_policy,
             enforce_builtin_type_contracts: false,
             allow_error_function_params: false,
         }

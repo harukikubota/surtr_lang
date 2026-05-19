@@ -691,14 +691,15 @@ fn build_stdlib_snapshot(
     })?;
     let resume_state = resolved.resume_state;
     let mut scar_session = scar::ScarSession::new();
+    let mut typecheck_context = scar::TypecheckContext::from_source_policy(
+        SourceKind::StdDefinitionSource.policy(CompileUnitKind::DefinitionCheck, None),
+    );
+    typecheck_context.enforce_builtin_type_contracts = true;
+    typecheck_context.allow_error_function_params = true;
     let typed = scar_session
         .typecheck_staged_program_with_context(
             resolved,
-            scar::TypecheckContext {
-                runtime_policy: RuntimeSourcePolicy::std_module(),
-                enforce_builtin_type_contracts: true,
-                allow_error_function_params: true,
-            },
+            typecheck_context,
         )
         .map_err(|e| LoadError::BootstrapFailed {
             phase: "typecheck".into(),
