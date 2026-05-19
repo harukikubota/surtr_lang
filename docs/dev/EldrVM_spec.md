@@ -93,6 +93,7 @@ current working directory 基準で解決し、存在しない path や open/rea
 - `InteractiveVm` は `VM` を内包し、`BytecodeChunk` の原子的 append 実行、interactive policy 検証、REPL host I/O buffering、`last_result`、`.eldr` 保存用 `snapshot_bytecode()` を担う
 - Xldr は source-level REPL policy を持つが、Eldr は `SourceKind::ReplChunk` や暗黙モジュールを解釈しない
 - `InteractiveVm` の公開 API は `push_chunk(chunk, policy)` の 1 入口とし、policy は少なくとも `ReplAppendOnly` と `Preload` を持つ
+- `InteractiveChunkPolicy` は Eldr 内で `RuntimeAppendPolicy` に写像し、関数 table prefix、type registry entry、runtime process metadata、boot plan の append 可否だけを扱う。これは staged compile prefix/suffix aggregate や compile-space symbol capability とは別の runtime 境界である
 - `BytecodeChunk` の `LoadConst` / `MakeError` は chunk-local index で生成される
 - `push_chunk()` は `const_base` / `error_template_base` / `dbg_template_base` により絶対 index へ再配置する
 - `push_chunk()` は jump 先も append 後の opcode 位置へ再配置する
