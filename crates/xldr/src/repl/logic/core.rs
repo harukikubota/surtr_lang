@@ -1413,28 +1413,18 @@ impl ReplEngine {
             }
         }
 
-        for visible in self.sigil_session.visible_declaration_entries() {
-            if Self::declaration_is_function_completion_surface(&visible.entry) {
-                let detail = self
-                    .find_signature(&visible.visible_name)
-                    .or_else(|| self.find_signature(crate::surface_path_name(&visible.entry.fq_name)))
-                    .or_else(|| self.declaration_signature_entry(&visible.entry))
-                    .map(|(qualified_name, signature)| {
-                        Self::render_signature_with_qualified_name(&qualified_name, signature)
-                    });
-                symbols.push(surtr_analysis::CompletionSymbol {
-                    label: visible.visible_name,
-                    replacement: crate::surface_rendered_name(&visible.entry.name),
-                    kind: surtr_analysis::CompletionKind::FunctionCall,
-                    detail,
-                    documentation: None,
-                    sort_text: None,
-                    origin: None,
-                    definition: None,
-                    capabilities: Self::completion_capabilities_for_builtin(&visible.entry.fq_name),
-                });
-            }
-        }
+        let visible_symbols = self
+            .sigil_session
+            .visible_declaration_entries()
+            .into_iter()
+            .filter_map(|visible| {
+                surtr_analysis::semantic::completion_symbol_for_effective_visible_entry(
+                    &symbols, &visible,
+                )
+            })
+            .filter(|symbol| symbol.kind == surtr_analysis::CompletionKind::FunctionCall)
+            .collect::<Vec<_>>();
+        symbols.extend(visible_symbols);
 
         for label in self.completion_visible_module_labels() {
             let capabilities = Self::completion_capabilities_for_builtin(&label);
