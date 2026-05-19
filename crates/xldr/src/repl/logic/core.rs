@@ -2668,16 +2668,13 @@ impl ReplEngine {
             return false;
         }
         if entry.kind == DocKind::Module {
-            return crate::surface_path_name(&entry.qualified_name)
-                == crate::surface_path_name(symbol);
+            return sindr::names::surface_path_eq(&entry.qualified_name, symbol);
         }
         if Self::is_qualified_symbol(symbol) {
             let Some(decl) = self.qualified_declaration(symbol) else {
-                return crate::surface_path_name(&entry.qualified_name)
-                    == crate::surface_path_name(symbol);
+                return sindr::names::surface_path_eq(&entry.qualified_name, symbol);
             };
-            return crate::surface_path_name(&entry.qualified_name)
-                == crate::surface_path_name(&decl.fq_name)
+            return sindr::names::surface_path_eq(&entry.qualified_name, &decl.fq_name)
                 && Self::declaration_is_public_surface(decl);
         }
         self.visible_uid_matches(symbol, &entry.qualified_name)
@@ -2689,7 +2686,7 @@ impl ReplEngine {
         self.declaration_index.get(symbol).or_else(|| {
             self.declaration_index
                 .values()
-                .find(|entry| crate::surface_path_name(&entry.fq_name) == symbol)
+                .find(|entry| sindr::names::surface_path_eq(&entry.fq_name, symbol))
         })
     }
 

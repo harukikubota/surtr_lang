@@ -21,6 +21,16 @@ pub fn surface_rendered_name(name: &str) -> String {
     surface_path_name(name).replace("::Global::", "::")
 }
 
+/// Compare two names after hiding a leading implicit root namespace.
+pub fn surface_path_eq(left: &str, right: &str) -> bool {
+    surface_path_name(left) == surface_path_name(right)
+}
+
+/// Compare two names after applying the full user-facing surface rendering.
+pub fn surface_rendered_eq(left: &str, right: &str) -> bool {
+    surface_rendered_name(left) == surface_rendered_name(right)
+}
+
 /// Surface-level type identity defined by the language spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeIdentity {
@@ -252,6 +262,16 @@ mod tests {
             surface_rendered_name("Trait::Global::User::method"),
             "Trait::User::method"
         );
+    }
+
+    #[test]
+    fn surface_name_equality_normalizes_canonical_and_rendered_forms() {
+        assert!(surface_path_eq("Global::User", "User"));
+        assert!(surface_rendered_eq(
+            "Trait::Global::User::method",
+            "Trait::User::method"
+        ));
+        assert!(!surface_rendered_eq("Trait::User::method", "User::method"));
     }
 
     #[test]
