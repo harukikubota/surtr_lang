@@ -953,6 +953,9 @@ fn semantic_index_adds_module_owner_symbols_from_declarations() {
             visibility: Visibility::Public,
             user_importable: true,
             user_callable: true,
+            via_import: false,
+            via_auto_import: false,
+            shadowed_auto_import: false,
         })
     );
 }
@@ -1105,6 +1108,9 @@ fn semantic_index_builds_from_symbol_semantic_infos() {
             visibility: spire::ast::Visibility::Public,
             user_importable: true,
             user_callable: true,
+            via_import: false,
+            via_auto_import: false,
+            shadowed_auto_import: false,
         }),
         definition: None,
         capabilities: None,
@@ -1340,8 +1346,16 @@ fn effective_visible_entry_semantic_info_reuses_qualified_symbol_metadata() {
     assert_eq!(projected.definition, Some(source_location));
     assert!(matches!(
         projected.origin.as_ref(),
-        Some(CompletionOrigin::Declaration { qualified_name, .. })
-            if qualified_name == "Global::Helper::helper"
+        Some(CompletionOrigin::Declaration {
+            qualified_name,
+            via_import,
+            via_auto_import,
+            shadowed_auto_import,
+            ..
+        }) if qualified_name == "Global::Helper::helper"
+            && *via_import
+            && !*via_auto_import
+            && !*shadowed_auto_import
     ));
     assert_eq!(
         projected.capabilities,
