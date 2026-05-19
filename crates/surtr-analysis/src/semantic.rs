@@ -138,16 +138,30 @@ pub enum CompletionOrigin {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SemanticIndex {
     symbols: Vec<CompletionSymbol>,
+    symbol_semantic_infos: Vec<SymbolSemanticInfo>,
 }
 
 impl SemanticIndex {
     pub fn from_symbol_semantic_infos(infos: Vec<SymbolSemanticInfo>) -> Self {
-        Self::from_symbols(
-            infos
-                .into_iter()
-                .map(SymbolSemanticInfo::into_completion_symbol)
-                .collect(),
-        )
+        let mut infos = infos;
+        merge_duplicate_symbol_semantic_infos(&mut infos);
+        infos.sort_by(|left, right| {
+            left.surface_name
+                .cmp(&right.surface_name)
+                .then_with(|| {
+                    completion_kind_rank(&left.kind).cmp(&completion_kind_rank(&right.kind))
+                })
+                .then_with(|| left.replacement.cmp(&right.replacement))
+        });
+        let symbols = infos
+            .iter()
+            .cloned()
+            .map(SymbolSemanticInfo::into_completion_symbol)
+            .collect();
+        Self {
+            symbols,
+            symbol_semantic_infos: infos,
+        }
     }
 
     pub fn from_symbols(symbols: Vec<CompletionSymbol>) -> Self {
@@ -184,7 +198,14 @@ impl SemanticIndex {
                 })
                 .then_with(|| left.replacement.cmp(&right.replacement))
         });
-        Self { symbols: deduped }
+        let symbol_semantic_infos = deduped
+            .iter()
+            .map(SymbolSemanticInfo::from_completion_symbol)
+            .collect();
+        Self {
+            symbols: deduped,
+            symbol_semantic_infos,
+        }
     }
 
     pub fn from_metadata(docs: &[DocEntry], signatures: &[SignatureEntry]) -> Self {
@@ -258,6 +279,10 @@ impl SemanticIndex {
         &self.symbols
     }
 
+    pub fn symbol_semantic_infos(&self) -> &[SymbolSemanticInfo] {
+        &self.symbol_semantic_infos
+    }
+
     pub fn find_symbol(&self, name: &str) -> Option<&CompletionSymbol> {
         if let Some(symbol) = self.symbols.iter().find(|symbol| symbol.label == name) {
             return Some(symbol);
@@ -274,6 +299,7 @@ impl SemanticIndex {
     }
 
     pub fn upsert_symbol(&mut self, symbol: CompletionSymbol) {
+        let incoming_info = SymbolSemanticInfo::from_completion_symbol(&symbol);
         if let Some(existing) = self
             .symbols
             .iter_mut()
@@ -306,7 +332,50 @@ impl SemanticIndex {
                 })
                 .then_with(|| left.replacement.cmp(&right.replacement))
         });
+        self.symbol_semantic_infos.push(incoming_info);
+        merge_duplicate_symbol_semantic_infos(&mut self.symbol_semantic_infos);
+        self.symbol_semantic_infos.sort_by(|left, right| {
+            left.surface_name
+                .cmp(&right.surface_name)
+                .then_with(|| {
+                    completion_kind_rank(&left.kind).cmp(&completion_kind_rank(&right.kind))
+                })
+                .then_with(|| left.replacement.cmp(&right.replacement))
+        });
     }
+}
+
+fn merge_duplicate_symbol_semantic_infos(infos: &mut Vec<SymbolSemanticInfo>) {
+    let mut deduped = Vec::new();
+    for info in std::mem::take(infos) {
+        if let Some(existing) = deduped.iter_mut().find(|existing: &&mut SymbolSemanticInfo| {
+            existing.surface_name == info.surface_name && existing.kind == info.kind
+        }) {
+            if existing.identity.is_none() {
+                existing.identity = info.identity;
+            }
+            if existing.detail.is_none() {
+                existing.detail = info.detail;
+            }
+            if existing.documentation.is_none() {
+                existing.documentation = info.documentation;
+            }
+            if existing.sort_text.is_none() {
+                existing.sort_text = info.sort_text;
+            }
+            if existing.origin.is_none() {
+                existing.origin = info.origin;
+            }
+            if existing.definition.is_none() {
+                existing.definition = info.definition;
+            }
+            merge_symbol_capabilities(&mut existing.capabilities, info.capabilities);
+            merge_symbol_display_metadata(&mut existing.display_metadata, info.display_metadata);
+            continue;
+        }
+        deduped.push(info);
+    }
+    *infos = deduped;
 }
 
 pub fn symbol_semantic_infos_from_metadata(

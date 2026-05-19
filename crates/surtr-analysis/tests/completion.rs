@@ -1114,7 +1114,12 @@ fn semantic_index_builds_from_symbol_semantic_infos() {
         }),
         definition: None,
         capabilities: None,
-        display_metadata: None,
+        display_metadata: Some(SymbolDisplayMetadata {
+            qualified_name: "Global::Helper::helper".to_string(),
+            module_path: "Global::Helper".to_string(),
+            has_doc: true,
+            has_signature: true,
+        }),
     }]);
 
     let symbol = index
@@ -1122,6 +1127,11 @@ fn semantic_index_builds_from_symbol_semantic_infos() {
         .iter()
         .find(|symbol| symbol.label == "Helper::helper")
         .expect("semantic info should project to completion symbol");
+    let info = index
+        .symbol_semantic_infos()
+        .iter()
+        .find(|info| info.surface_name == "Helper::helper")
+        .expect("semantic index should preserve aggregate info");
 
     assert_eq!(
         symbol.detail.as_deref(),
@@ -1130,6 +1140,65 @@ fn semantic_index_builds_from_symbol_semantic_infos() {
     assert_eq!(
         symbol.documentation.as_deref(),
         Some("Increment a number.")
+    );
+    assert_eq!(
+        info.display_metadata.as_ref().map(|metadata| (
+            metadata.qualified_name.as_str(),
+            metadata.has_doc,
+            metadata.has_signature
+        )),
+        Some(("Global::Helper::helper", true, true))
+    );
+}
+
+#[test]
+fn semantic_index_upsert_preserves_existing_symbol_semantic_info() {
+    let mut index =
+        SemanticIndex::from_symbol_semantic_infos(vec![surtr_analysis::SymbolSemanticInfo {
+            canonical_name: "Global::Helper::helper".to_string(),
+            surface_name: "helper".to_string(),
+            replacement: "helper".to_string(),
+            kind: CompletionKind::FunctionCall,
+            identity: None,
+            detail: Some("helper() -> Int".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: None,
+            display_metadata: Some(SymbolDisplayMetadata {
+                qualified_name: "Global::Helper::helper".to_string(),
+                module_path: "Global::Helper".to_string(),
+                has_doc: false,
+                has_signature: true,
+            }),
+        }]);
+
+    index.upsert_symbol(CompletionSymbol {
+        label: "helper".to_string(),
+        replacement: "helper".to_string(),
+        kind: CompletionKind::FunctionCall,
+        detail: None,
+        documentation: Some("Imported helper.".to_string()),
+        sort_text: None,
+        origin: None,
+        definition: None,
+        capabilities: None,
+    });
+
+    let info = index
+        .symbol_semantic_infos()
+        .iter()
+        .find(|info| info.surface_name == "helper")
+        .expect("upserted helper should remain visible");
+    assert_eq!(info.documentation.as_deref(), Some("Imported helper."));
+    assert_eq!(
+        info.display_metadata.as_ref().map(|metadata| (
+            metadata.qualified_name.as_str(),
+            metadata.has_doc,
+            metadata.has_signature
+        )),
+        Some(("Global::Helper::helper", false, true))
     );
 }
 
