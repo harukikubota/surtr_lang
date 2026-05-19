@@ -370,6 +370,22 @@ impl StagedCompilationSnapshot {
     pub fn bytecode(&self) -> &forge::bytecode::Bytecode {
         &self.compile_prefix.bytecode
     }
+
+    pub fn symbol_semantic_infos(&self) -> Vec<surtr_analysis::SymbolSemanticInfo> {
+        surtr_analysis::symbol_semantic_infos_from_compile_metadata(
+            self.declaration_index(),
+            &self.docs,
+            &self.signatures,
+        )
+    }
+
+    pub fn semantic_index(&self) -> surtr_analysis::SemanticIndex {
+        surtr_analysis::SemanticIndex::from_compile_metadata(
+            self.declaration_index(),
+            &self.docs,
+            &self.signatures,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -967,6 +983,27 @@ defmod B {
 
         assert_eq!(staged.default_stage_count, staged.module_stages.len());
         assert!(!staged.compile_prefix.declaration_index.is_empty());
+    }
+
+    #[test]
+    fn stdlib_snapshot_exposes_joined_symbol_semantic_info() {
+        let snapshot =
+            default_stdlib_semantic_snapshot().expect("default stdlib snapshot should build");
+
+        let infos = snapshot.symbol_semantic_infos();
+        let index = snapshot.semantic_index();
+
+        assert!(infos.iter().any(|info| {
+            info.canonical_name == "Global::Kernel::print"
+                && info.surface_name == "Kernel::print"
+                && info.detail.is_some()
+                && info.documentation.is_some()
+        }));
+        assert!(index.symbols().iter().any(|symbol| {
+            symbol.label == "Kernel::print"
+                && symbol.detail.is_some()
+                && symbol.documentation.is_some()
+        }));
     }
 
     #[test]
