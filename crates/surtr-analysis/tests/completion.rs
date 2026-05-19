@@ -1134,6 +1134,54 @@ fn semantic_index_compile_metadata_joins_declaration_docs_and_signatures() {
 }
 
 #[test]
+fn compile_metadata_exposes_symbol_semantic_info_before_completion_projection() {
+    let mut declarations = DeclarationIndex::new();
+    declarations.insert(
+        "Global::Helper::User".to_string(),
+        declaration_entry(
+            "Global::Helper",
+            "User",
+            "Global::Helper::User",
+            DeclarationKind::Struct,
+            true,
+            false,
+        ),
+    );
+    let docs = vec![DocEntry {
+        qualified_name: "Global::Helper::User".to_string(),
+        kind: DocKind::Type,
+        module_path: "Global::Helper".to_string(),
+        signature: Some("User(name: String)".to_string()),
+        doc: "User type.".to_string(),
+    }];
+    let signatures = vec![SignatureEntry {
+        qualified_name: "Global::Helper::User".to_string(),
+        kind: DocKind::Type,
+        module_path: "Global::Helper".to_string(),
+        signature: "User(name: String)".to_string(),
+    }];
+
+    let infos = surtr_analysis::symbol_semantic_infos_from_compile_metadata(
+        &declarations,
+        &docs,
+        &signatures,
+    );
+    let info = infos
+        .iter()
+        .find(|info| info.canonical_name == "Global::Helper::User")
+        .expect("semantic info should preserve canonical symbol identity");
+
+    assert_eq!(info.surface_name, "Helper::User");
+    assert_eq!(info.kind, CompletionKind::TypeConstructor);
+    assert_eq!(info.detail.as_deref(), Some("User(name: String)"));
+    assert_eq!(info.documentation.as_deref(), Some("User type."));
+    assert!(
+        info.capabilities.is_some(),
+        "semantic info should preserve capabilities before completion projection: {info:?}"
+    );
+}
+
+#[test]
 fn shared_builtin_surface_capability_query_excludes_runtime_aliases() {
     let string_caps =
         surtr_analysis::symbol_capabilities_for_builtin_surface("String").expect("String caps");

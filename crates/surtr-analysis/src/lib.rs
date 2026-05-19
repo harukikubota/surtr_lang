@@ -28,11 +28,12 @@ pub use semantic::{
     facet_path_context_at_cursor, facet_type_root_capabilities, lookup_symbol_at_cursor,
     rank_completion_candidates_by_expected_type, repl_assist_at_cursor, signature_help_at_cursor,
     symbol_capabilities_for_builtin_surface, symbol_capabilities_for_declaration_entry,
-    CallableSignature, CompletionCandidate, CompletionKind, CompletionOrigin, CompletionRequest,
-    CompletionResponse, CompletionScope, CompletionSymbol, FacetPathCompletionContext,
-    FacetPathRootKind, InputSignatureHelp, ReplAssist, ReplInputSupport,
-    ReplInputSupportContext, ReplInputSupportUpdate, SemanticIndex, SignatureLookup,
-    SourceLocation, SymbolLookup,
+    symbol_semantic_infos_from_compile_metadata, symbol_semantic_infos_from_declaration_index,
+    symbol_semantic_infos_from_metadata, CallableSignature, CompletionCandidate, CompletionKind,
+    CompletionOrigin, CompletionRequest, CompletionResponse, CompletionScope, CompletionSymbol,
+    FacetPathCompletionContext, FacetPathRootKind, InputSignatureHelp, ReplAssist,
+    ReplInputSupport, ReplInputSupportContext, ReplInputSupportUpdate, SemanticIndex,
+    SignatureLookup, SourceLocation, SymbolLookup, SymbolSemanticInfo,
 };
 pub use service::{
     AnalysisDiagnostic, AnalysisDiagnosticKind, AnalysisHost, AnalysisRange, AnalysisService,

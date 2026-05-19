@@ -36,26 +36,27 @@ pub struct CompletionSymbol {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct SymbolSemanticInfo {
-    label: String,
-    replacement: String,
-    kind: CompletionKind,
-    detail: Option<String>,
-    documentation: Option<String>,
-    sort_text: Option<String>,
-    origin: Option<CompletionOrigin>,
-    definition: Option<SourceLocation>,
-    capabilities: Option<SymbolCapabilities>,
+pub struct SymbolSemanticInfo {
+    pub canonical_name: String,
+    pub surface_name: String,
+    pub replacement: String,
+    pub kind: CompletionKind,
+    pub detail: Option<String>,
+    pub documentation: Option<String>,
+    pub sort_text: Option<String>,
+    pub origin: Option<CompletionOrigin>,
+    pub definition: Option<SourceLocation>,
+    pub capabilities: Option<SymbolCapabilities>,
 }
 
 impl SymbolSemanticInfo {
     fn completion_key(&self) -> (String, u8) {
-        (self.label.clone(), completion_kind_rank(&self.kind))
+        (self.surface_name.clone(), completion_kind_rank(&self.kind))
     }
 
     fn into_completion_symbol(self) -> CompletionSymbol {
         CompletionSymbol {
-            label: self.label,
+            label: self.surface_name,
             replacement: self.replacement,
             kind: self.kind,
             detail: self.detail,
@@ -146,7 +147,7 @@ impl SemanticIndex {
     }
 
     pub fn from_metadata(docs: &[DocEntry], signatures: &[SignatureEntry]) -> Self {
-        Self::from_semantic_infos(semantic_info_from_metadata(docs, signatures))
+        Self::from_semantic_infos(symbol_semantic_infos_from_metadata(docs, signatures))
     }
 
     pub fn from_compile_metadata(
@@ -154,9 +155,11 @@ impl SemanticIndex {
         docs: &[DocEntry],
         signatures: &[SignatureEntry],
     ) -> Self {
-        let mut infos = semantic_info_from_declaration_index(declarations);
-        merge_semantic_info(&mut infos, semantic_info_from_metadata(docs, signatures));
-        Self::from_semantic_infos(infos)
+        Self::from_semantic_infos(symbol_semantic_infos_from_compile_metadata(
+            declarations,
+            docs,
+            signatures,
+        ))
     }
 
     pub fn enrich_symbols_with_compile_metadata(
@@ -205,7 +208,7 @@ impl SemanticIndex {
     }
 
     pub fn from_declaration_index(declarations: &DeclarationIndex) -> Self {
-        Self::from_semantic_infos(semantic_info_from_declaration_index(declarations))
+        Self::from_semantic_infos(symbol_semantic_infos_from_declaration_index(declarations))
     }
 
     pub fn symbols(&self) -> &[CompletionSymbol] {
@@ -263,7 +266,7 @@ impl SemanticIndex {
     }
 }
 
-fn semantic_info_from_metadata(
+pub fn symbol_semantic_infos_from_metadata(
     docs: &[DocEntry],
     signatures: &[SignatureEntry],
 ) -> Vec<SymbolSemanticInfo> {
@@ -276,7 +279,8 @@ fn semantic_info_from_metadata(
     for entry in signatures {
         let qualified_name = surface_name(&entry.qualified_name);
         infos.push(SymbolSemanticInfo {
-            label: qualified_name.clone(),
+            canonical_name: entry.qualified_name.clone(),
+            surface_name: qualified_name.clone(),
             replacement: qualified_name,
             kind: completion_kind_for_doc_kind(&entry.kind),
             detail: Some(entry.signature.clone()),
@@ -297,7 +301,8 @@ fn semantic_info_from_metadata(
             .or_else(|| entry.signature.clone());
         let qualified_name = surface_name(&entry.qualified_name);
         infos.push(SymbolSemanticInfo {
-            label: qualified_name.clone(),
+            canonical_name: entry.qualified_name.clone(),
+            surface_name: qualified_name.clone(),
             replacement: qualified_name,
             kind: completion_kind_for_doc_kind(&entry.kind),
             detail,
@@ -314,7 +319,7 @@ fn semantic_info_from_metadata(
     infos
 }
 
-fn semantic_info_from_declaration_index(
+pub fn symbol_semantic_infos_from_declaration_index(
     declarations: &DeclarationIndex,
 ) -> Vec<SymbolSemanticInfo> {
     let mut infos = Vec::new();
@@ -323,9 +328,11 @@ fn semantic_info_from_declaration_index(
         .filter(|entry| !entry.hidden && (entry.user_importable || entry.user_callable))
     {
         if !entry.module_path.is_empty() {
+            let surface_module_name = surface_name(&entry.module_path);
             infos.push(SymbolSemanticInfo {
-                label: surface_name(&entry.module_path),
-                replacement: surface_name(&entry.module_path),
+                canonical_name: entry.module_path.clone(),
+                surface_name: surface_module_name.clone(),
+                replacement: surface_module_name,
                 kind: CompletionKind::TypePath,
                 detail: None,
                 documentation: None,
@@ -340,7 +347,8 @@ fn semantic_info_from_declaration_index(
             let qualified_name = surface_name(&entry.fq_name);
             let capabilities = symbol_capabilities_for_declaration_entry(entry);
             infos.push(SymbolSemanticInfo {
-                label: qualified_name.clone(),
+                canonical_name: entry.fq_name.clone(),
+                surface_name: qualified_name.clone(),
                 replacement: qualified_name,
                 kind,
                 detail: None,
@@ -361,6 +369,16 @@ fn semantic_info_from_declaration_index(
             });
         }
     }
+    infos
+}
+
+pub fn symbol_semantic_infos_from_compile_metadata(
+    declarations: &DeclarationIndex,
+    docs: &[DocEntry],
+    signatures: &[SignatureEntry],
+) -> Vec<SymbolSemanticInfo> {
+    let mut infos = symbol_semantic_infos_from_declaration_index(declarations);
+    merge_semantic_info(&mut infos, symbol_semantic_infos_from_metadata(docs, signatures));
     infos
 }
 
