@@ -377,16 +377,7 @@ fn build_cached_script_compile_prefix(
             RuneError::diagnostic(1, sources, source_id, "resolve", spec)
         })?;
         let resume_state = resolved.resume_state;
-        let mut scar_session = scar::ScarSession::new();
-        scar_session.rollback(std_snapshot.scar_checkpoint().clone());
-        let next_fun_idx = std_snapshot
-            .bytecode()
-            .functions
-            .iter()
-            .map(|entry| entry.fun_idx.saturating_add(1))
-            .max()
-            .unwrap_or(0);
-        scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
+        let mut scar_session = std_snapshot.compile_prefix().restored_scar_session();
         let typed = scar_session
             .typecheck_staged_program_with_context(
                 resolved,
@@ -403,7 +394,7 @@ fn build_cached_script_compile_prefix(
                     diagnostics::type_error_spec_by_id(sources, source_id, &local_error),
                 )
             })?;
-        let mut forge_session = forge::ForgeSession::from_bytecode(std_snapshot.bytecode());
+        let mut forge_session = std_snapshot.compile_prefix().forge_session();
         let (chunk, _) = forge_session
             .codegen_chunk_typed_program(typed)
             .map_err(|e| {
@@ -605,23 +596,15 @@ pub(crate) fn compile_source(
         RuneError::diagnostic(1, sources, source_id, "resolve", spec)
     })?;
 
-    let mut scar_session = scar::ScarSession::new();
     let prefix_bytecode = cached_prefix
         .as_ref()
         .map(|prefix| prefix.bytecode.clone())
         .unwrap_or_else(|| std_snapshot.bytecode().clone());
-    let prefix_checkpoint = cached_prefix
+    let active_prefix = cached_prefix
         .as_ref()
-        .map(|prefix| prefix.scar_checkpoint.clone())
-        .unwrap_or_else(|| std_snapshot.scar_checkpoint().clone());
-    scar_session.rollback(prefix_checkpoint);
-    let next_fun_idx = prefix_bytecode
-        .functions
-        .iter()
-        .map(|entry| entry.fun_idx.saturating_add(1))
-        .max()
-        .unwrap_or(0);
-    scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
+        .map(|prefix| prefix.as_ref())
+        .unwrap_or_else(|| std_snapshot.compile_prefix());
+    let mut scar_session = active_prefix.restored_scar_session();
     let typed = scar_session
         .typecheck_staged_program_with_context(
             resolved,
@@ -647,7 +630,7 @@ pub(crate) fn compile_source(
             )
         })?;
 
-    let mut forge_session = forge::ForgeSession::from_bytecode(&prefix_bytecode);
+    let mut forge_session = active_prefix.forge_session();
     let (chunk, _) = forge_session
         .codegen_chunk_typed_program(typed)
         .map_err(|e| {

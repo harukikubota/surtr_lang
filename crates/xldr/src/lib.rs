@@ -348,6 +348,10 @@ pub struct DefaultStdlibSnapshot {
 }
 
 impl DefaultStdlibSnapshot {
+    pub fn compile_prefix(&self) -> &CompilationPrefixSnapshot {
+        &self.compile_prefix
+    }
+
     pub fn declaration_index(&self) -> &sigil::DeclarationIndex {
         &self.compile_prefix.declaration_index
     }
@@ -371,6 +375,32 @@ pub struct CompilationPrefixSnapshot {
     pub resolve_state: sigil::ResolveResumeState,
     pub scar_checkpoint: scar::ScarCheckpoint,
     pub bytecode: forge::bytecode::Bytecode,
+}
+
+impl CompilationPrefixSnapshot {
+    pub fn bytecode(&self) -> &forge::bytecode::Bytecode {
+        &self.bytecode
+    }
+
+    pub fn next_fun_idx(&self) -> u32 {
+        self.bytecode
+            .functions
+            .iter()
+            .map(|entry| entry.fun_idx.saturating_add(1))
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn restored_scar_session(&self) -> scar::ScarSession {
+        let mut scar_session = scar::ScarSession::new();
+        scar_session.rollback(self.scar_checkpoint.clone());
+        scar_session.ensure_next_fun_idx_at_least(self.next_fun_idx());
+        scar_session
+    }
+
+    pub fn forge_session(&self) -> forge::ForgeSession {
+        forge::ForgeSession::from_bytecode(&self.bytecode)
+    }
 }
 
 const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 10;
@@ -1020,6 +1050,31 @@ defmod B {
 
         assert!(loaded.is_none());
         let _ = std::fs::remove_file(cache_path);
+    }
+
+    #[test]
+    fn compilation_prefix_snapshot_derives_next_fun_idx_from_bytecode() {
+        let mut bytecode = forge::bytecode::Bytecode::default();
+        bytecode.functions.push(sindr::ir::FunctionEntry {
+            fun_idx: 4,
+            entry_pc: 0,
+            num_locals: 0,
+            arity: 0,
+            qualified_name: Some("Global::prefix".to_string()),
+            signature: None,
+            end_pc: 0,
+            span_start: 0,
+            span_end: 0,
+            flags: Default::default(),
+        });
+        let snapshot = CompilationPrefixSnapshot {
+            declaration_index: sigil::DeclarationIndex::new(),
+            resolve_state: sigil::ResolveResumeState { next_local_id: 0 },
+            scar_checkpoint: scar::ScarSession::new().checkpoint(),
+            bytecode,
+        };
+
+        assert_eq!(snapshot.next_fun_idx(), 5);
     }
 
     #[test]

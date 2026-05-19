@@ -8000,16 +8000,7 @@ fn compile_repl_preload_from_module_stages(
         staged_program.resolved.extend(user_resolved);
     }
 
-    let mut scar_session = scar::ScarSession::new();
-    scar_session.rollback(snapshot.scar_checkpoint().clone());
-    let next_fun_idx = snapshot
-        .bytecode()
-        .functions
-        .iter()
-        .map(|entry| entry.fun_idx.saturating_add(1))
-        .max()
-        .unwrap_or(0);
-    scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
+    let mut scar_session = snapshot.compile_prefix().restored_scar_session();
     let typed = scar_session
         .typecheck_staged_program_with_context(
             staged_program,
@@ -8038,7 +8029,7 @@ fn compile_repl_preload_from_module_stages(
             ),
         })?;
 
-    let mut forge_session = forge::ForgeSession::from_bytecode(snapshot.bytecode());
+    let mut forge_session = snapshot.compile_prefix().forge_session();
     let (mut chunk, meta) = forge_session
         .codegen_chunk_typed_program(typed)
         .map_err(|e| ReplLoadError::Diagnostic {
