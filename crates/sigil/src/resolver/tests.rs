@@ -581,6 +581,55 @@ fn declaration_uid_order_is_stage_then_fq_name() {
 }
 
 #[test]
+fn declaration_ordering_exposes_stage_metadata() {
+    let module_stages = vec![
+        vec![staged_module(
+            "User::B",
+            parse_module_ast(r#"def beta() -> Int { 1 }"#, "User::B"),
+        )],
+        vec![
+            staged_module(
+                "User::Z",
+                parse_module_ast(r#"def zeta() -> Int { 1 }"#, "User::Z"),
+            ),
+            staged_module(
+                "User::A",
+                parse_module_ast(r#"def alpha() -> Int { 1 }"#, "User::A"),
+            ),
+        ],
+    ];
+
+    let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
+    let ordering = declaration_stage_ordering(&index);
+
+    assert_eq!(
+        ordering.entries(),
+        &[
+            StageOrderedDeclaration {
+                stage_index: 0,
+                fq_name: "User::B::beta".to_string(),
+            },
+            StageOrderedDeclaration {
+                stage_index: 1,
+                fq_name: "User::A::alpha".to_string(),
+            },
+            StageOrderedDeclaration {
+                stage_index: 1,
+                fq_name: "User::Z::zeta".to_string(),
+            },
+        ]
+    );
+    assert_eq!(
+        ordering.fq_names(),
+        vec![
+            "User::B::beta".to_string(),
+            "User::A::alpha".to_string(),
+            "User::Z::zeta".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn test_precollect_impl_methods_as_type_namespace_members() {
     let module_stages = vec![vec![staged_module(
         "",

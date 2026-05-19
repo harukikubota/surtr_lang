@@ -331,6 +331,30 @@ pub struct DeclarationEntry {
 
 pub type DeclarationIndex = BTreeMap<String, DeclarationEntry>;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StageOrderedDeclaration {
+    pub stage_index: usize,
+    pub fq_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeclarationOrdering {
+    entries: Vec<StageOrderedDeclaration>,
+}
+
+impl DeclarationOrdering {
+    pub fn entries(&self) -> &[StageOrderedDeclaration] {
+        &self.entries
+    }
+
+    pub fn fq_names(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .map(|entry| entry.fq_name.clone())
+            .collect()
+    }
+}
+
 fn duplicate_fq_declaration_error(
     fq_name: &str,
     prev: &DeclarationEntry,
@@ -1038,17 +1062,26 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
     }
 }
 
-pub fn declaration_uid_order(index: &DeclarationIndex) -> Vec<String> {
+pub fn declaration_stage_ordering(index: &DeclarationIndex) -> DeclarationOrdering {
     let mut entries = index.values().collect::<Vec<_>>();
     entries.sort_by(|left, right| {
         left.stage_index
             .cmp(&right.stage_index)
             .then_with(|| left.fq_name.cmp(&right.fq_name))
     });
-    entries
-        .into_iter()
-        .map(|entry| entry.fq_name.clone())
-        .collect()
+    DeclarationOrdering {
+        entries: entries
+            .into_iter()
+            .map(|entry| StageOrderedDeclaration {
+                stage_index: entry.stage_index,
+                fq_name: entry.fq_name.clone(),
+            })
+            .collect(),
+    }
+}
+
+pub fn declaration_uid_order(index: &DeclarationIndex) -> Vec<String> {
+    declaration_stage_ordering(index).fq_names()
 }
 
 pub(super) fn assign_declaration_uids(index: &DeclarationIndex) -> HashMap<String, u32> {
