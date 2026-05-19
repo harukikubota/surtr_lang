@@ -150,29 +150,6 @@ pub enum ReplLoadError {
     },
 }
 
-impl ReplLoadError {
-    pub fn emit(&self) {
-        match self {
-            Self::SourceReadFailed { file_name, message } => {
-                eprintln!("repl: cannot read {}: {}", file_name, message);
-            }
-            Self::Diagnostic {
-                phase: _,
-                sources,
-                source_id,
-                spec,
-            } => diagnostics::report_error_by_id(sources, *source_id, spec.clone()),
-            Self::Load(error) => eprintln!("repl: {}", error),
-            Self::Runtime { file_name, message } => {
-                eprintln!(
-                    "repl: runtime error while preloading {}: {}",
-                    file_name, message
-                );
-            }
-        }
-    }
-}
-
 impl std::fmt::Display for ReplLoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -2307,7 +2284,6 @@ impl ReplEngine {
                         self.vm.source_file(),
                         self.vm.runtime_error_location(),
                     );
-                    error_display::emit_text(&text, self.error_display_mode);
                     Some(error_display::lines_for_mode(
                         &text,
                         self.error_display_mode,
@@ -2319,13 +2295,6 @@ impl ReplEngine {
     }
 
     fn report_error_value(&self, value: &Value) -> Vec<String> {
-        error_display::emit_runtime_value_error_with_registry(
-            self.vm.as_vm(),
-            value,
-            &self.sources,
-            self.repl_source_id,
-            self.error_display_mode,
-        );
         error_display::runtime_value_error_lines_with_registry(
             self.vm.as_vm(),
             value,
@@ -2465,11 +2434,6 @@ impl ReplEngine {
         }
         let rendered =
             error_display::diagnostic_lines("REPL", source, &spec, self.error_display_mode);
-        error_display::emit_diagnostic("REPL", source, &spec, self.error_display_mode);
-        if matches!(self.error_display_mode, ErrorDisplayMode::Summary) && !summary_tail.is_empty()
-        {
-            error_display::emit_text(&summary_tail.join("\n"), self.error_display_mode);
-        }
         ReplResult::diagnostic(rendered, summary_tail)
     }
 
@@ -2486,7 +2450,6 @@ impl ReplEngine {
         }
         let rendered =
             error_display::diagnostic_lines("REPL", source, &spec, self.error_display_mode);
-        error_display::emit_diagnostic("REPL", source, &spec, self.error_display_mode);
         ReplResult::diagnostic(rendered, Vec::new())
     }
 
@@ -7392,12 +7355,6 @@ impl ReplEngine {
                     &spec,
                     self.error_display_mode,
                 );
-                error_display::emit_diagnostic_by_id(
-                    &self.sources,
-                    self.repl_source_id,
-                    &spec,
-                    self.error_display_mode,
-                );
                 self.history_entries.push(ReplHistoryEntry {
                     line: committed_line,
                     source: self.pending.clone(),
@@ -7435,12 +7392,6 @@ impl ReplEngine {
                     &spec,
                     self.error_display_mode,
                 );
-                error_display::emit_diagnostic_by_id(
-                    &self.sources,
-                    self.repl_source_id,
-                    &spec,
-                    self.error_display_mode,
-                );
                 self.history_entries.push(ReplHistoryEntry {
                     line: committed_line,
                     source: self.pending.clone(),
@@ -7467,12 +7418,6 @@ impl ReplEngine {
                 let spec =
                     diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None);
                 let rendered = error_display::diagnostic_lines_by_id(
-                    &self.sources,
-                    self.repl_source_id,
-                    &spec,
-                    self.error_display_mode,
-                );
-                error_display::emit_diagnostic_by_id(
                     &self.sources,
                     self.repl_source_id,
                     &spec,
@@ -7505,12 +7450,6 @@ impl ReplEngine {
                 let spec =
                     diagnostics::type_error_spec_by_id(&self.sources, self.repl_source_id, &error);
                 let rendered = error_display::diagnostic_lines_by_id(
-                    &self.sources,
-                    self.repl_source_id,
-                    &spec,
-                    self.error_display_mode,
-                );
-                error_display::emit_diagnostic_by_id(
                     &self.sources,
                     self.repl_source_id,
                     &spec,
@@ -7556,12 +7495,6 @@ impl ReplEngine {
                 &spec,
                 self.error_display_mode,
             );
-            error_display::emit_diagnostic_by_id(
-                &self.sources,
-                self.repl_source_id,
-                &spec,
-                self.error_display_mode,
-            );
             self.history_entries.push(ReplHistoryEntry {
                 line: committed_line,
                 source: self.pending.clone(),
@@ -7584,12 +7517,6 @@ impl ReplEngine {
                 let spec =
                     diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None);
                 let rendered = error_display::diagnostic_lines_by_id(
-                    &self.sources,
-                    self.repl_source_id,
-                    &spec,
-                    self.error_display_mode,
-                );
-                error_display::emit_diagnostic_by_id(
                     &self.sources,
                     self.repl_source_id,
                     &spec,
@@ -7714,13 +7641,6 @@ impl ReplEngine {
                     self.error_display_mode,
                 );
                 let (stdout, stderr) = self.take_repl_host_io_lines();
-                error_display::emit_runtime_error_with_registry(
-                    &e,
-                    &self.sources,
-                    self.repl_source_id,
-                    location,
-                    self.error_display_mode,
-                );
                 self.history_entries.push(ReplHistoryEntry {
                     line: committed_line,
                     source: committed_source,
@@ -9226,6 +9146,49 @@ mod tests {
         BootEntrySource, BytecodeChunk, Constant, Opcode, RuntimeBootPlan, SingletonBootEntry,
     };
     use sindr::runtime::{TypeEntry, TypeKind};
+    #[cfg(unix)]
+    use std::io::{Read, Write};
+    #[cfg(unix)]
+    use std::os::fd::FromRawFd;
+    #[cfg(unix)]
+    use std::sync::Mutex;
+
+    #[cfg(unix)]
+    static STDERR_CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+
+    #[cfg(unix)]
+    extern "C" {
+        fn close(fd: i32) -> i32;
+        fn dup(fd: i32) -> i32;
+        fn dup2(src: i32, dst: i32) -> i32;
+        fn pipe(fds: *mut i32) -> i32;
+    }
+
+    #[cfg(unix)]
+    fn capture_process_stderr<T>(f: impl FnOnce() -> T) -> (T, String) {
+        let _guard = STDERR_CAPTURE_LOCK.lock().expect("stderr capture lock");
+        let mut pipe_fds = [0_i32; 2];
+        unsafe {
+            assert_eq!(pipe(pipe_fds.as_mut_ptr()), 0, "pipe should succeed");
+            let saved_stderr = dup(2);
+            assert!(saved_stderr >= 0, "dup stderr should succeed");
+            assert_eq!(dup2(pipe_fds[1], 2), 2, "redirect stderr should succeed");
+            assert_eq!(close(pipe_fds[1]), 0, "close write pipe should succeed");
+
+            let result = f();
+            std::io::stderr().flush().expect("flush stderr");
+
+            assert_eq!(dup2(saved_stderr, 2), 2, "restore stderr should succeed");
+            assert_eq!(close(saved_stderr), 0, "close saved stderr should succeed");
+
+            let mut stderr = String::new();
+            let mut reader = std::fs::File::from_raw_fd(pipe_fds[0]);
+            reader
+                .read_to_string(&mut stderr)
+                .expect("read captured stderr");
+            (result, stderr)
+        }
+    }
 
     fn interactive_test_chunk() -> BytecodeChunk {
         BytecodeChunk {
@@ -9343,6 +9306,23 @@ mod tests {
         let rendered = ReplEngine::repl_result_text(&help);
 
         assert!(rendered.contains(":quit, :exit, :q"), "{rendered}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn handle_line_type_error_returns_diagnostic_without_writing_process_stderr() {
+        let mut engine = ReplEngine::new().expect("engine should initialize");
+
+        let (result, stderr) =
+            capture_process_stderr(|| engine.handle_line("bad: Int = \"oops\""));
+        let rendered = ReplEngine::repl_result_text(&result);
+
+        assert!(
+            stderr.is_empty(),
+            "REPL core wrote directly to process stderr:\n{stderr}"
+        );
+        assert!(matches!(result.output, ReplOutput::EvalError { .. }));
+        assert!(rendered.contains("expected Int"), "{rendered}");
     }
 
     #[test]

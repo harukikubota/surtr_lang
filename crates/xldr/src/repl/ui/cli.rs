@@ -32,7 +32,7 @@ use crate::repl::logic::core::{
     ReplCompletionContext, ReplCompletionKind,
 };
 use crate::repl::logic::core::{xldr_version, CompletionTelemetry, ReplEngine};
-use crate::repl::logic::{present_for_cli, styled, ReplResult};
+use crate::repl::logic::{present_for_cli, styled, ReplOutput, ReplResult};
 #[cfg(feature = "line-editor")]
 use crate::repl::ui::completion::{
     BackgroundReplCompletionProvider, ReplCompletionController, ReplCompletionProvider,
@@ -931,6 +931,7 @@ fn repl_result_has_visible_output(result: &ReplResult, color: bool) -> bool {
 #[cfg(feature = "line-editor")]
 fn repl_result_lines(result: &ReplResult, color: bool) -> Vec<String> {
     let mut lines = present_for_cli(result, color);
+    lines.extend(repl_result_diagnostic_lines(result));
     lines.extend(result.stderr.iter().cloned());
     lines
 }
@@ -1191,8 +1192,26 @@ fn print_result(result: &ReplResult, color: bool) {
     for line in present_for_cli(result, color) {
         println!("{line}");
     }
+    for line in repl_result_diagnostic_lines(result) {
+        eprintln!("{line}");
+    }
     for line in &result.stderr {
         eprintln!("{line}");
+    }
+}
+
+fn repl_result_diagnostic_lines(result: &ReplResult) -> Vec<String> {
+    match &result.output {
+        ReplOutput::EvalError { rendered, .. } => rendered.clone(),
+        ReplOutput::Diagnostic {
+            rendered,
+            summary_tail,
+        } => {
+            let mut lines = rendered.clone();
+            lines.extend(summary_tail.iter().cloned());
+            lines
+        }
+        _ => Vec::new(),
     }
 }
 
