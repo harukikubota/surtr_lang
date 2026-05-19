@@ -3,7 +3,9 @@ use std::path::PathBuf;
 
 use sigil::{declaration_symbol_identity_info, DeclarationIndex, DeclarationKind};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
-use sindr::names::{builtin_symbol_identity_info, FacetRootKind, SymbolCapabilities};
+use sindr::names::{
+    builtin_symbol_identity_info, FacetRootKind, SymbolCapabilities, TypeIdentity,
+};
 use spire::ast::{AstTy, Visibility};
 
 use crate::query::{format_query_ty, parse_signature_type};
@@ -41,6 +43,7 @@ pub struct SymbolSemanticInfo {
     pub surface_name: String,
     pub replacement: String,
     pub kind: CompletionKind,
+    pub identity: Option<TypeIdentity>,
     pub detail: Option<String>,
     pub documentation: Option<String>,
     pub sort_text: Option<String>,
@@ -65,6 +68,7 @@ impl SymbolSemanticInfo {
             surface_name: symbol.label.clone(),
             replacement: symbol.replacement.clone(),
             kind: symbol.kind.clone(),
+            identity: None,
             detail: symbol.detail.clone(),
             documentation: symbol.documentation.clone(),
             sort_text: symbol.sort_text.clone(),
@@ -309,6 +313,7 @@ pub fn symbol_semantic_infos_from_metadata(
             surface_name: qualified_name.clone(),
             replacement: qualified_name,
             kind: completion_kind_for_doc_kind(&entry.kind),
+            identity: symbol_identity_for_builtin_surface(&entry.qualified_name),
             detail: Some(entry.signature.clone()),
             documentation: None,
             sort_text: None,
@@ -331,6 +336,7 @@ pub fn symbol_semantic_infos_from_metadata(
             surface_name: qualified_name.clone(),
             replacement: qualified_name,
             kind: completion_kind_for_doc_kind(&entry.kind),
+            identity: symbol_identity_for_builtin_surface(&entry.qualified_name),
             detail,
             documentation: Some(entry.doc.clone()),
             sort_text: None,
@@ -360,6 +366,7 @@ pub fn symbol_semantic_infos_from_declaration_index(
                 surface_name: surface_module_name.clone(),
                 replacement: surface_module_name,
                 kind: CompletionKind::TypePath,
+                identity: Some(TypeIdentity::Mod),
                 detail: None,
                 documentation: None,
                 sort_text: None,
@@ -372,11 +379,13 @@ pub fn symbol_semantic_infos_from_declaration_index(
         if let Some(kind) = completion_kind_for_declaration_kind(&entry.kind) {
             let qualified_name = surface_name(&entry.fq_name);
             let capabilities = symbol_capabilities_for_declaration_entry(entry);
+            let identity = symbol_identity_for_declaration_entry(entry);
             infos.push(SymbolSemanticInfo {
                 canonical_name: entry.fq_name.clone(),
                 surface_name: qualified_name.clone(),
                 replacement: qualified_name,
                 kind,
+                identity,
                 detail: None,
                 documentation: None,
                 sort_text: None,
@@ -417,6 +426,9 @@ fn merge_semantic_info(base: &mut Vec<SymbolSemanticInfo>, incoming: Vec<SymbolS
     for info in incoming {
         if let Some(existing_idx) = base_by_key.get(&info.completion_key()).copied() {
             let existing = &mut base[existing_idx];
+            if existing.identity.is_none() {
+                existing.identity = info.identity;
+            }
             if existing.detail.is_none() {
                 existing.detail = info.detail;
             }
@@ -465,8 +477,27 @@ pub fn symbol_capabilities_for_builtin_surface(name: &str) -> Option<SymbolCapab
     builtin_symbol_identity_info(&surface_name).map(|info| info.capabilities)
 }
 
+pub fn symbol_identity_for_builtin_surface(name: &str) -> Option<TypeIdentity> {
+    let surface_name = surface_name(name);
+    builtin_symbol_identity_info(&surface_name).map(|info| info.identity)
+}
+
 pub(crate) fn completion_capabilities_for_builtin(name: &str) -> Option<SymbolCapabilities> {
     symbol_capabilities_for_builtin_surface(name)
+}
+
+pub fn symbol_identity_for_declaration_entry(
+    entry: &sigil::DeclarationEntry,
+) -> Option<TypeIdentity> {
+    symbol_identity_for_builtin_surface(&entry.name)
+        .or_else(|| symbol_identity_for_builtin_surface(&entry.fq_name))
+        .or_else(|| {
+            declaration_symbol_identity_info(&entry.name, &entry.kind).map(|info| info.identity)
+        })
+        .or(match entry.kind {
+            DeclarationKind::Const => Some(TypeIdentity::Const),
+            _ => None,
+        })
 }
 
 pub fn facet_root_capabilities(kind: FacetRootKind) -> SymbolCapabilities {
@@ -501,6 +532,7 @@ pub fn symbol_semantic_info_for_effective_visible_entry(
     let mut documentation = None;
     let mut sort_text = None;
     let mut definition = None;
+    let mut inherited_identity = None;
     let mut inherited_capabilities = None;
     for info in existing_infos
         .iter()
@@ -518,8 +550,12 @@ pub fn symbol_semantic_info_for_effective_visible_entry(
         if definition.is_none() {
             definition = info.definition.clone();
         }
+        if inherited_identity.is_none() {
+            inherited_identity = info.identity;
+        }
         merge_symbol_capabilities(&mut inherited_capabilities, info.capabilities.clone());
     }
+    let identity = symbol_identity_for_declaration_entry(&visible.entry).or(inherited_identity);
     let capabilities = declaration_symbol_identity_info(&visible.entry.name, &visible.entry.kind)
         .map(|info| info.capabilities)
         .or(inherited_capabilities);
@@ -528,6 +564,7 @@ pub fn symbol_semantic_info_for_effective_visible_entry(
         surface_name: visible.visible_name.clone(),
         replacement: visible.visible_name.clone(),
         kind,
+        identity,
         detail,
         documentation,
         sort_text,

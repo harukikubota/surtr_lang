@@ -1,6 +1,6 @@
 use sigil::{DeclarationEntry, DeclarationIndex, DeclarationKind};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
-use sindr::names::{FacetRootKind, SymbolCapabilities};
+use sindr::names::{FacetRootKind, SymbolCapabilities, TypeIdentity};
 use spire::ast::Visibility;
 use surtr_analysis::{
     complete_call_argument, complete_prefix, lookup_symbol_at_cursor,
@@ -1092,6 +1092,7 @@ fn semantic_index_builds_from_symbol_semantic_infos() {
         surface_name: "Helper::helper".to_string(),
         replacement: "Helper::helper".to_string(),
         kind: CompletionKind::FunctionCall,
+        identity: None,
         detail: Some("Helper::helper(value: Int) -> Int".to_string()),
         documentation: Some("Increment a number.".to_string()),
         sort_text: Some("1:Helper::helper".to_string()),
@@ -1213,6 +1214,7 @@ fn compile_metadata_exposes_symbol_semantic_info_before_completion_projection() 
 
     assert_eq!(info.surface_name, "Helper::User");
     assert_eq!(info.kind, CompletionKind::TypeConstructor);
+    assert_eq!(info.identity, Some(TypeIdentity::Struct));
     assert_eq!(info.detail.as_deref(), Some("User(name: String)"));
     assert_eq!(info.documentation.as_deref(), Some("User type."));
     assert!(
@@ -1253,6 +1255,10 @@ fn shared_declaration_capability_query_handles_user_and_builtin_surfaces() {
     let user_caps =
         surtr_analysis::symbol_capabilities_for_declaration_entry(&user).expect("user caps");
     assert_eq!(user_caps.facet_root_path, Some(FacetRootKind::TypeRoot));
+    assert_eq!(
+        surtr_analysis::symbol_identity_for_declaration_entry(&user),
+        Some(TypeIdentity::Struct)
+    );
 
     let builtin = declaration_entry(
         "Global",
@@ -1266,6 +1272,10 @@ fn shared_declaration_capability_query_handles_user_and_builtin_surfaces() {
         surtr_analysis::symbol_capabilities_for_declaration_entry(&builtin).expect("builtin caps");
     assert!(builtin_caps.type_annotation);
     assert_eq!(builtin_caps.facet_root_path, None);
+    assert_eq!(
+        surtr_analysis::symbol_identity_for_declaration_entry(&builtin),
+        Some(TypeIdentity::Type)
+    );
 }
 
 #[test]
@@ -1298,6 +1308,7 @@ fn effective_visible_entry_semantic_info_reuses_qualified_symbol_metadata() {
             surface_name: "Helper::helper".to_string(),
             replacement: "Helper::helper".to_string(),
             kind: CompletionKind::FunctionCall,
+            identity: None,
             detail: Some("Helper::helper(value: Int) -> Int".to_string()),
             documentation: Some("Increment a number.".to_string()),
             sort_text: Some("1:Helper::helper".to_string()),
