@@ -255,6 +255,41 @@ pub fn staged_modules_from_source_ast(
         .collect()
 }
 
+pub fn extract_process_modules_from_user_ast(ast: Vec<Ast>) -> (Vec<StagedModuleAst>, Vec<Ast>) {
+    let shared_imports = ast
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Ast::Import(_, _, _) => Some(stmt.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut process_modules = Vec::new();
+    let mut remaining_ast = Vec::new();
+
+    for stmt in ast {
+        match stmt {
+            Ast::Defagent(_, module_path, body, process_spec, attrs)
+            | Ast::Defgenserver(_, module_path, body, process_spec, attrs)
+            | Ast::Defsupervisor(_, module_path, body, process_spec, attrs)
+            | Ast::DefdynamicSupervisor(_, module_path, body, process_spec, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                process_modules.push(StagedModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: Some(process_spec),
+                });
+            }
+            other => remaining_ast.push(other),
+        }
+    }
+
+    (process_modules, remaining_ast)
+}
+
 pub fn lowered_module_is_impl_owner(lowered: &LoweredModuleAst) -> bool {
     matches!(
         lowered

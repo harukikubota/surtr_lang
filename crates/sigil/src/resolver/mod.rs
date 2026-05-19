@@ -30,10 +30,10 @@ mod tests;
 mod warnings;
 
 pub use self::declarations::{
-    declaration_stage_ordering, declaration_uid_order, lower_module_source_ast,
-    lowered_module_is_impl_owner, precollect_declaration_index, staged_modules_from_source_ast,
-    DeclarationEntry, DeclarationIndex, DeclarationKind, DeclarationOrdering, LoweredModuleAst,
-    StageOrderedDeclaration, StagedModuleAst,
+    declaration_stage_ordering, declaration_uid_order, extract_process_modules_from_user_ast,
+    lower_module_source_ast, lowered_module_is_impl_owner, precollect_declaration_index,
+    staged_modules_from_source_ast, DeclarationEntry, DeclarationIndex, DeclarationKind,
+    DeclarationOrdering, LoweredModuleAst, StageOrderedDeclaration, StagedModuleAst,
 };
 pub use self::session::{SigilCheckpoint, SigilSession};
 

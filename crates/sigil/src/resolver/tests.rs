@@ -82,6 +82,51 @@ impl User {
 }
 
 #[test]
+fn extract_process_modules_from_user_ast_hoists_shared_imports_and_removes_process_defs() {
+    let ast = spire::parse_with_context(
+        r#"
+import Helper::help
+defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int) -> Result<Int> { Ok(state) }
+}
+
+def main() -> Int { help() }
+"#,
+        spire::ParserContext::script(0).with_rules(permissive_module_rules()),
+    )
+    .expect("script source should parse");
+
+    let (process_modules, remaining_ast) = extract_process_modules_from_user_ast(ast);
+
+    assert_eq!(process_modules.len(), 1);
+    assert_eq!(process_modules[0].module_path, "Global::Counter");
+    assert!(matches!(
+        process_modules[0].ast.first(),
+        Some(Ast::Import(_, _, _))
+    ));
+    assert!(process_modules[0].process_spec.is_some());
+    assert!(remaining_ast
+        .iter()
+        .all(|stmt| !matches!(stmt, Ast::Defagent(_, _, _, _, _))));
+    assert!(remaining_ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::Import(_, _, _))));
+    assert!(remaining_ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::Def(_, _, _, _, _, _, _))));
+}
+
+#[test]
 fn test_dbg_special_form_resolves_without_name_lookup() {
     let resolved = parse_and_resolve(
         r#"dbg = {|x| x}
