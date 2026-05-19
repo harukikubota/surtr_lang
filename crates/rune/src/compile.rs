@@ -440,16 +440,7 @@ fn build_cached_script_compile_prefix(
             scar_session.checkpoint(),
             bytecode,
         ));
-        xldr::store_cached_test_semantic_prefix(
-            &cache_path,
-            &cache_key,
-            xldr::CachedTestSemanticPrefixPayload {
-                declaration_index: prefix.declaration_index.clone(),
-                resolve_state: prefix.resolve_state,
-                scar_checkpoint: prefix.scar_checkpoint.clone(),
-                bytecode: prefix.bytecode.clone(),
-            },
-        );
+        xldr::store_cached_test_semantic_prefix_snapshot(&cache_path, &cache_key, &prefix);
         prefix
     };
 

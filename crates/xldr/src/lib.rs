@@ -628,6 +628,14 @@ pub fn store_cached_test_semantic_prefix(
     }
 }
 
+pub fn store_cached_test_semantic_prefix_snapshot(
+    cache_path: &Path,
+    key: &str,
+    snapshot: &CompilationPrefixSnapshot,
+) {
+    store_cached_test_semantic_prefix(cache_path, key, snapshot.clone());
+}
+
 pub fn default_stdlib_semantic_snapshot() -> Result<Arc<DefaultStdlibSnapshot>, LoadError> {
     static SNAPSHOT: OnceLock<Result<Arc<DefaultStdlibSnapshot>, LoadError>> = OnceLock::new();
     SNAPSHOT
@@ -1080,25 +1088,25 @@ defmod B {
     }
 
     #[test]
-    fn test_semantic_prefix_cache_roundtrips_payload() {
+    fn test_semantic_prefix_cache_roundtrips_snapshot() {
         let cache_path = std::env::temp_dir().join(format!(
             "surtr-test-prefix-cache-{}.semantic",
             std::process::id()
         ));
-        let payload = CachedTestSemanticPrefixPayload {
-            declaration_index: sigil::DeclarationIndex::new(),
-            resolve_state: sigil::ResolveResumeState { next_local_id: 7 },
-            scar_checkpoint: scar::ScarSession::new().checkpoint(),
-            bytecode: forge::bytecode::Bytecode::default(),
-        };
+        let snapshot = CompilationPrefixSnapshot::from_parts(
+            sigil::DeclarationIndex::new(),
+            sigil::ResolveResumeState { next_local_id: 7 },
+            scar::ScarSession::new().checkpoint(),
+            forge::bytecode::Bytecode::default(),
+        );
 
-        store_cached_test_semantic_prefix(&cache_path, "expected-key", payload.clone());
+        store_cached_test_semantic_prefix_snapshot(&cache_path, "expected-key", &snapshot);
 
         let loaded = load_cached_test_semantic_prefix(&cache_path, "expected-key")
             .expect("payload should roundtrip");
 
         assert_eq!(loaded.resolve_state.next_local_id, 7);
-        assert_eq!(loaded.declaration_index, payload.declaration_index);
+        assert_eq!(loaded.declaration_index, snapshot.declaration_index);
         let _ = std::fs::remove_file(cache_path);
     }
 
