@@ -835,14 +835,23 @@ fn facet_api_callee(callee: &str) -> bool {
     matches!(
         callee,
         "Facet::view"
+            | "view"
             | "Facet::preview"
+            | "preview"
             | "Facet::put"
+            | "put"
             | "Facet::set"
+            | "set"
             | "Facet::over"
+            | "over"
             | "Facet::over_result"
+            | "over_result"
             | "Facet::case_set"
+            | "case_set"
             | "Facet::case_over"
+            | "case_over"
             | "Facet::chain"
+            | "chain"
     )
 }
 

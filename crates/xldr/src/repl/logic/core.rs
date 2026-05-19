@@ -2473,6 +2473,9 @@ impl ReplEngine {
                         .and_then(parse_signature_type)
                 })
                 .map(|root_ty| {
+                    if let Some((source, focus)) = Self::facet_source_and_focus_ast_ty(&root_ty) {
+                        return (source, focus, false);
+                    }
                     if let Some(inner) = Self::result_inner_ast_ty(&root_ty) {
                         (root_ty.clone(), inner.clone(), true)
                     } else {
@@ -2666,6 +2669,15 @@ impl ReplEngine {
     fn result_inner_ast_ty(ty: &AstTy) -> Option<&AstTy> {
         match ty {
             AstTy::Generic(_, name, args) if name == "Result" && !args.is_empty() => args.first(),
+            _ => None,
+        }
+    }
+
+    fn facet_source_and_focus_ast_ty(ty: &AstTy) -> Option<(AstTy, AstTy)> {
+        match ty {
+            AstTy::Generic(_, name, args) if name == "Facet" && args.len() == 2 => {
+                Some((args[0].clone(), args[1].clone()))
+            }
             _ => None,
         }
     }

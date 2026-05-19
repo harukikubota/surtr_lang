@@ -1620,6 +1620,72 @@ defenum Slot { Some(String), None }
             );
         }
     }
+
+    for api in [
+        "view",
+        "preview",
+        "put",
+        "set",
+        "over",
+        "over_result",
+        "case_set",
+        "case_over",
+        "chain",
+    ] {
+        let input = format!("{api}(");
+        let completion = engine.completions(&input, input.len());
+        let labels = completion
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            labels.contains(&"User"),
+            "{api} short-form first argument should suggest path roots: {labels:?}"
+        );
+        assert!(
+            labels.contains(&"name_path"),
+            "{api} short-form first argument should suggest Facet bindings: {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"String"),
+            "{api} short-form first argument should not suggest primitive roots: {labels:?}"
+        );
+    }
+}
+
+#[test]
+fn core_completion_derives_facet_segments_from_facet_binding_focus() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord Profile(first: String, last: String)
+defrecord User(profile: Profile, age: Int)
+"#,
+    )
+    .expect("script preload should bootstrap");
+    assert!(rendered_text(&engine.handle_line("p = User.profile")).contains("Facet<User, Profile>"));
+
+    let completion = engine.completions("p.", "p.".len());
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(
+        labels.contains(&"first"),
+        "Facet binding focus should expose Profile fields: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"last"),
+        "Facet binding focus should expose Profile fields: {labels:?}"
+    );
+    assert!(
+        !labels.contains(&"age"),
+        "Facet binding completion should use focus type, not original source type: {labels:?}"
+    );
 }
 
 #[test]
