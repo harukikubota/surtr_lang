@@ -127,6 +127,21 @@ def main() -> Int { help() }
 }
 
 #[test]
+fn const_only_fallback_module_path_requires_const_only_source() {
+    let const_only = parse_module_ast("import Env::env\nconst VERSION: Int = 1", "Config");
+    assert_eq!(
+        const_only_fallback_module_path(&const_only, Some("Config")),
+        Some("Config")
+    );
+
+    let with_def = parse_module_ast(
+        "const VERSION: Int = 1\ndef version() -> Int { VERSION }",
+        "Config",
+    );
+    assert_eq!(const_only_fallback_module_path(&with_def, Some("Config")), None);
+}
+
+#[test]
 fn test_dbg_special_form_resolves_without_name_lookup() {
     let resolved = parse_and_resolve(
         r#"dbg = {|x| x}

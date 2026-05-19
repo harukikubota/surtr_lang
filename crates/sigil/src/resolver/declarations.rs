@@ -290,6 +290,24 @@ pub fn extract_process_modules_from_user_ast(ast: Vec<Ast>) -> (Vec<StagedModule
     (process_modules, remaining_ast)
 }
 
+pub fn const_only_fallback_module_path<'a>(
+    ast: &[Ast],
+    fallback_module_path: Option<&'a str>,
+) -> Option<&'a str> {
+    let has_const = ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::ConstDef(_, _, _, _, _)));
+    let const_only = ast.iter().all(|stmt| {
+        matches!(
+            stmt,
+            Ast::Import(_, _, _) | Ast::ConstDef(_, _, _, _, _)
+        )
+    });
+    (has_const && const_only)
+        .then_some(fallback_module_path)
+        .flatten()
+}
+
 pub fn lowered_module_is_impl_owner(lowered: &LoweredModuleAst) -> bool {
     matches!(
         lowered

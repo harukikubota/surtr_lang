@@ -523,6 +523,68 @@ Project::config({|config|
 }
 
 #[test]
+fn analysis_service_project_context_lowers_const_only_file_under_file_module_path() {
+    let root = temp_root("project-const-only-module");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let config_path = src.join("Config.srt");
+    let main_path = src.join("main.srt");
+    let project_file = root.join("project.srt");
+    std::fs::write(&config_path, "const VERSION: Int = 1").expect("write config");
+    let main_source = "defmod Main { def main() -> Int { Config::VERSION } }";
+    std::fs::write(&main_path, main_source).expect("write main");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/Config.srt")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.update_document(main_path.clone(), Some(1), main_source.to_string());
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: main_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(main_path),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+
+    let snapshot = service.analyze(context);
+    let diagnostics = service.diagnostics(&snapshot);
+
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.kind != AnalysisDiagnosticKind::Resolve),
+        "const-only project file should lower under Config module path: {diagnostics:?}"
+    );
+    assert!(
+        snapshot.typed.is_some(),
+        "const-only project stage should typecheck: {diagnostics:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn analysis_service_project_context_builds_completion_index_from_runner_module_stage() {
     let root = temp_root("project-completion");
     let src = root.join("src");

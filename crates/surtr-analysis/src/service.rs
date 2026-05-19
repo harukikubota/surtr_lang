@@ -1197,7 +1197,12 @@ fn build_staged_modules(
                 Ok(ast) => {
                     *semantic_index =
                         semantic_index_with_source_locations(semantic_index, &file.path, &ast);
-                    staged_modules.extend(sigil::staged_modules_from_source_ast(ast, None));
+                    let fallback_module_path =
+                        fallback_module_path_for_const_only_project_file(&file.path, &ast);
+                    staged_modules.extend(sigil::staged_modules_from_source_ast(
+                        ast,
+                        fallback_module_path.as_deref(),
+                    ));
                 }
                 Err(error) => {
                     let span = error.span();
@@ -1228,6 +1233,14 @@ fn source_for_module_file(service: &AnalysisService, path: &Path) -> Option<Stri
         .get(path)
         .map(|document| document.text.clone())
         .or_else(|| service.host.read_to_string(path))
+}
+
+fn fallback_module_path_for_const_only_project_file(path: &Path, ast: &[Ast]) -> Option<String> {
+    let fallback = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty());
+    sigil::const_only_fallback_module_path(ast, fallback).map(str::to_string)
 }
 
 fn diagnostic_from_span(
