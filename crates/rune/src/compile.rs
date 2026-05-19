@@ -357,12 +357,12 @@ fn build_cached_script_compile_prefix(
     let prefix = if let Some(payload) =
         xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key)
     {
-        Arc::new(xldr::CompilationPrefixSnapshot {
-            declaration_index: rebuilt_declaration_index.clone(),
-            resolve_state: payload.resolve_state,
-            scar_checkpoint: payload.scar_checkpoint,
-            bytecode: payload.bytecode,
-        })
+        Arc::new(xldr::CompilationPrefixSnapshot::from_parts(
+            rebuilt_declaration_index.clone(),
+            payload.resolve_state,
+            payload.scar_checkpoint,
+            payload.bytecode,
+        ))
     } else {
         let resolved = sigil::resolve_staged_program_from_state(
             module_stages,
@@ -434,12 +434,12 @@ fn build_cached_script_compile_prefix(
                     .unwrap_or(0),
             ),
         };
-        let prefix = Arc::new(xldr::CompilationPrefixSnapshot {
-            declaration_index: rebuilt_declaration_index.clone(),
+        let prefix = Arc::new(xldr::CompilationPrefixSnapshot::from_parts(
+            rebuilt_declaration_index.clone(),
             resolve_state,
-            scar_checkpoint: scar_session.checkpoint(),
+            scar_session.checkpoint(),
             bytecode,
-        });
+        ));
         xldr::store_cached_test_semantic_prefix(
             &cache_path,
             &cache_key,

@@ -397,6 +397,20 @@ pub struct CompilationPrefixSnapshot {
 }
 
 impl CompilationPrefixSnapshot {
+    pub fn from_parts(
+        declaration_index: sigil::DeclarationIndex,
+        resolve_state: sigil::ResolveResumeState,
+        scar_checkpoint: scar::ScarCheckpoint,
+        bytecode: forge::bytecode::Bytecode,
+    ) -> Self {
+        Self {
+            declaration_index,
+            resolve_state,
+            scar_checkpoint,
+            bytecode,
+        }
+    }
+
     pub fn bytecode(&self) -> &forge::bytecode::Bytecode {
         &self.bytecode
     }
@@ -740,12 +754,12 @@ fn build_stdlib_snapshot(
 
     let snapshot = DefaultStdlibSnapshot {
         default_stage_count,
-        compile_prefix: CompilationPrefixSnapshot {
+        compile_prefix: CompilationPrefixSnapshot::from_parts(
             declaration_index,
             resolve_state,
-            scar_checkpoint: scar_session.checkpoint(),
+            scar_session.checkpoint(),
             bytecode,
-        },
+        ),
         docs,
         signatures,
         auto_import_modules,
@@ -1117,12 +1131,12 @@ defmod B {
             span_end: 0,
             flags: Default::default(),
         });
-        let snapshot = CompilationPrefixSnapshot {
-            declaration_index: sigil::DeclarationIndex::new(),
-            resolve_state: sigil::ResolveResumeState { next_local_id: 0 },
-            scar_checkpoint: scar::ScarSession::new().checkpoint(),
+        let snapshot = CompilationPrefixSnapshot::from_parts(
+            sigil::DeclarationIndex::new(),
+            sigil::ResolveResumeState { next_local_id: 0 },
+            scar::ScarSession::new().checkpoint(),
             bytecode,
-        };
+        );
 
         assert_eq!(snapshot.next_fun_idx(), 5);
     }
