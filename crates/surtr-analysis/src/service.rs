@@ -1,7 +1,7 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use sindr::names::FacetRootKind;
+use sindr::names::{surface_path_name, FacetRootKind};
 use sindr::policy::{CompileUnitKind, SourceKind};
 use spire::ast::{Ast, Lit, RecordLitArg, Span};
 use spire::{SyntaxOutlineItem, SyntaxOutlineKind};
@@ -1153,12 +1153,15 @@ fn lower_module_ast(
             _ => None,
         })
         .collect::<Vec<_>>();
+
     let mut lowered = Vec::new();
     let mut shared_global_defs = Vec::new();
+    let mut shared_namespace_consts = Vec::new();
+    let mut shared_result_ctor_contracts = Vec::new();
 
     for stmt in ast {
         match stmt {
-            Ast::Defmod(_, module_path, body, attrs) => {
+            Ast::Defmod(_span, module_path, body, attrs) => {
                 let mut module_ast = shared_imports.clone();
                 module_ast.extend(body);
                 lowered.push(sigil::StagedModuleAst {
@@ -1170,10 +1173,11 @@ fn lower_module_ast(
                     process_spec: None,
                 });
             }
-            Ast::Defagent(_, module_path, body, process_spec, attrs)
-            | Ast::Defgenserver(_, module_path, body, process_spec, attrs)
-            | Ast::Defsupervisor(_, module_path, body, process_spec, attrs)
-            | Ast::DefdynamicSupervisor(_, module_path, body, process_spec, attrs) => {
+            Ast::Defagent(span, module_path, body, process_spec, attrs)
+            | Ast::Defgenserver(span, module_path, body, process_spec, attrs)
+            | Ast::Defsupervisor(span, module_path, body, process_spec, attrs)
+            | Ast::DefdynamicSupervisor(span, module_path, body, process_spec, attrs) => {
+                let _ = span;
                 let mut module_ast = shared_imports.clone();
                 module_ast.extend(body);
                 lowered.push(sigil::StagedModuleAst {
@@ -1186,7 +1190,10 @@ fn lower_module_ast(
                 });
             }
             Ast::ImplDef(span, target, methods, attrs) => {
+                let _ = span;
                 let mut module_ast = shared_imports.clone();
+                let (local_imports, methods) = partition_nested_imports(methods);
+                module_ast.extend(local_imports);
                 module_ast.push(Ast::ImplDef(span, target.clone(), methods, attrs.clone()));
                 lowered.push(sigil::StagedModuleAst {
                     module_path: target,
@@ -1197,18 +1204,98 @@ fn lower_module_ast(
                     process_spec: None,
                 });
             }
+            Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
+                let module_path = match &target_ty {
+                    spire::ast::AstTy::Named(_, name)
+                    | spire::ast::AstTy::ImplTrait(_, name)
+                    | spire::ast::AstTy::Generic(_, name, _) => name.clone(),
+                    _ => fallback_module_path.unwrap_or_default().to_string(),
+                };
+                let mut module_ast = shared_imports.clone();
+                let (local_imports, methods) = partition_nested_imports(methods);
+                module_ast.extend(local_imports);
+                module_ast.push(Ast::TraitImplDef(
+                    span,
+                    trait_name,
+                    trait_args,
+                    target_ty,
+                    methods,
+                    attrs.clone(),
+                ));
+                lowered.push(sigil::StagedModuleAst {
+                    module_path,
+                    doc_module_path: fallback_module_path.map(str::to_string),
+                    ast: module_ast,
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: None,
+                });
+            }
             Ast::Import(_, _, _) => {}
-            other => shared_global_defs.push(other),
+            Ast::ResultCtorDecl(_, _, _, _, _) => shared_result_ctor_contracts.push(stmt),
+            Ast::ConstDef(_, _, _, _, _) => shared_namespace_consts.push(stmt),
+            Ast::StructDef(..)
+            | Ast::RecordDef(..)
+            | Ast::DeferrorDef(_, _, _, _, _)
+            | Ast::EnumDef(_, _, _, _, _)
+            | Ast::BuiltinDecl(_, _, _, _, _)
+            | Ast::IntrinsicDecl(_, _, _, _)
+            | Ast::BuiltinTypeDecl(_, _, _) => shared_global_defs.push(stmt),
+            _ => shared_global_defs.push(stmt),
+        }
+    }
+
+    if !shared_namespace_consts.is_empty() {
+        if let Some(idx) = find_fallback_namespace_module(&lowered, fallback_module_path)
+            .or_else(|| (lowered.len() == 1).then_some(0))
+        {
+            let insert_at = first_non_import_index(&lowered[idx].ast);
+            lowered[idx]
+                .ast
+                .splice(insert_at..insert_at, shared_namespace_consts);
+        } else {
+            let mut shared_ast = shared_imports.clone();
+            shared_ast.extend(shared_namespace_consts);
+            lowered.push(sigil::StagedModuleAst {
+                module_path: fallback_module_path.unwrap_or_default().to_string(),
+                doc_module_path: None,
+                ast: shared_ast,
+                module_doc: None,
+                auto_import: false,
+                process_spec: None,
+            });
+        }
+    }
+
+    if !shared_result_ctor_contracts.is_empty() {
+        if let Some(idx) =
+            find_result_owner_module(&lowered).or_else(|| (lowered.len() == 1).then_some(0))
+        {
+            let insert_at = first_non_import_index(&lowered[idx].ast);
+            lowered[idx]
+                .ast
+                .splice(insert_at..insert_at, shared_result_ctor_contracts);
+        } else {
+            let mut shared_ast = shared_imports.clone();
+            shared_ast.extend(shared_result_ctor_contracts);
+            lowered.push(sigil::StagedModuleAst {
+                module_path: fallback_module_path.unwrap_or_default().to_string(),
+                doc_module_path: None,
+                ast: shared_ast,
+                module_doc: None,
+                auto_import: false,
+                process_spec: None,
+            });
         }
     }
 
     if !shared_global_defs.is_empty() {
-        let mut module_ast = shared_imports;
-        module_ast.extend(shared_global_defs);
+        let mut shared_ast = shared_imports;
+        shared_ast.extend(shared_global_defs);
         lowered.push(sigil::StagedModuleAst {
             module_path: fallback_module_path.unwrap_or_default().to_string(),
             doc_module_path: None,
-            ast: module_ast,
+            ast: shared_ast,
             module_doc: None,
             auto_import: false,
             process_spec: None,
@@ -1216,6 +1303,58 @@ fn lower_module_ast(
     }
 
     lowered
+}
+
+fn partition_nested_imports(body: Vec<Ast>) -> (Vec<Ast>, Vec<Ast>) {
+    let mut imports = Vec::new();
+    let mut rest = Vec::new();
+    for stmt in body {
+        if matches!(stmt, Ast::Import(_, _, _)) {
+            imports.push(stmt);
+        } else {
+            rest.push(stmt);
+        }
+    }
+    (imports, rest)
+}
+
+fn first_non_import_index(ast: &[Ast]) -> usize {
+    ast.iter()
+        .take_while(|stmt| matches!(stmt, Ast::Import(_, _, _)))
+        .count()
+}
+
+fn lowered_module_is_impl_owner(lowered: &sigil::StagedModuleAst) -> bool {
+    matches!(
+        lowered
+            .ast
+            .iter()
+            .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
+        Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _, _, _))
+    )
+}
+
+fn find_result_owner_module(lowered: &[sigil::StagedModuleAst]) -> Option<usize> {
+    lowered.iter().position(|module| {
+        surface_path_name(&module.module_path) == "Result"
+            && matches!(
+                module
+                    .ast
+                    .iter()
+                    .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
+                Some(Ast::ImplDef(_, target, _, _)) if surface_path_name(target) == "Result"
+            )
+    })
+}
+
+fn find_fallback_namespace_module(
+    lowered: &[sigil::StagedModuleAst],
+    fallback_module_path: Option<&str>,
+) -> Option<usize> {
+    let fallback = fallback_module_path?;
+    lowered
+        .iter()
+        .position(|module| module.module_path == fallback && !lowered_module_is_impl_owner(module))
 }
 
 fn diagnostic_from_span(
@@ -1459,4 +1598,35 @@ fn module_path_for_document(mode: AnalysisMode, path: &Path) -> Option<String> {
 #[allow(dead_code)]
 fn _text_position_for_byte(line_index: &LineIndex, byte_offset: usize) -> TextPosition {
     line_index.byte_to_text_position(byte_offset)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lower_module_ast;
+
+    #[test]
+    fn lower_module_ast_hoists_impl_local_imports_like_xldr() {
+        let ast = spire::parse_with_context(
+            r#"
+impl User {
+  import Helper::help
+  def use() -> Int { help() }
+}
+"#,
+            spire::ParserContext::module(0, Some("User".to_string())),
+        )
+        .expect("module source should parse");
+
+        let lowered = lower_module_ast(ast, Some("User"));
+        let module = lowered.first().expect("impl owner module should exist");
+
+        assert!(matches!(
+            module.ast.first(),
+            Some(spire::ast::Ast::Import(_, _, _))
+        ));
+        assert!(matches!(
+            module.ast.get(1),
+            Some(spire::ast::Ast::ImplDef(_, _, _, _))
+        ));
+    }
 }
