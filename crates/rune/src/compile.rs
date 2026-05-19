@@ -489,13 +489,9 @@ fn parse_program_with_module_sources<'a>(
     let source_kind = env.source_kind();
     let sources = &compile_sources.sources;
     let user_source_id = compile_sources.user_source_id;
-    let mut staged_module_asts = std::borrow::Cow::Borrowed(std_snapshot.module_stages.as_slice());
-    let mut suffix_module_asts = xldr::parse_module_stages_from_compile_sources_suffix(
-        compile_sources,
-        compile_unit_kind,
-        std_snapshot.default_stage_count,
-    )
-    .map_err(|e| {
+    let expanded =
+        xldr::expand_snapshot_module_stages(compile_sources, std_snapshot, compile_unit_kind)
+            .map_err(|e| {
         RuneError::diagnostic(
             1,
             sources,
@@ -508,9 +504,6 @@ fn parse_program_with_module_sources<'a>(
             ),
         )
     })?;
-    if !suffix_module_asts.is_empty() {
-        staged_module_asts.to_mut().append(&mut suffix_module_asts);
-    }
 
     let user_source = sources.source(user_source_id).unwrap_or("");
     let user_ast = parse_script_ast_for_compile(user_source, user_source_id.0, source_kind)
@@ -528,7 +521,7 @@ fn parse_program_with_module_sources<'a>(
             )
         })?;
 
-    Ok((staged_module_asts, user_ast))
+    Ok((expanded.module_stages, user_ast))
 }
 
 pub(crate) fn compile_source(

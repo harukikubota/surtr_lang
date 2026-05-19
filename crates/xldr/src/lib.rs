@@ -1619,6 +1619,41 @@ pub fn parse_module_stages_from_compile_sources_suffix(
     )
 }
 
+pub struct ExpandedSnapshotModuleStages<'a> {
+    pub module_stages: std::borrow::Cow<'a, [Vec<sigil::StagedModuleAst>]>,
+    default_stage_count: usize,
+}
+
+impl<'a> ExpandedSnapshotModuleStages<'a> {
+    pub fn suffix_module_stages(&self) -> &[Vec<sigil::StagedModuleAst>] {
+        if self.module_stages.len() > self.default_stage_count {
+            &self.module_stages[self.default_stage_count..]
+        } else {
+            &[]
+        }
+    }
+}
+
+pub fn expand_snapshot_module_stages<'a>(
+    compile_sources: &CompileSources,
+    snapshot: &'a DefaultStdlibSnapshot,
+    compile_unit_kind: CompileUnitKind,
+) -> Result<ExpandedSnapshotModuleStages<'a>, ModuleStageParseError> {
+    let mut module_stages = std::borrow::Cow::Borrowed(snapshot.module_stages.as_slice());
+    let mut suffix_module_stages = parse_module_stages_from_compile_sources_suffix(
+        compile_sources,
+        compile_unit_kind,
+        snapshot.default_stage_count,
+    )?;
+    if !suffix_module_stages.is_empty() {
+        module_stages.to_mut().append(&mut suffix_module_stages);
+    }
+    Ok(ExpandedSnapshotModuleStages {
+        module_stages,
+        default_stage_count: snapshot.default_stage_count,
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct DefaultStdlibSnapshot {
     pub module_stages: Vec<Vec<sigil::StagedModuleAst>>,
@@ -3049,5 +3084,51 @@ impl User {
 
         assert_eq!(user_stage[0].module_path, "Global::First");
         assert_eq!(user_stage[1].module_path, "Global::Second");
+    }
+
+    #[test]
+    fn expanded_snapshot_module_stages_borrow_prefix_when_no_suffix_exists() {
+        let snapshot =
+            default_stdlib_semantic_snapshot().expect("default stdlib snapshot should build");
+        let module_sources =
+            collect_module_sources_with_module_stages(&[]).expect("module collection should work");
+        let compile_sources =
+            compose_script_compile_sources("entry.srt", "print(\"hi\")", module_sources);
+
+        let expanded = expand_snapshot_module_stages(
+            &compile_sources,
+            &snapshot,
+            CompileUnitKind::Script,
+        )
+        .expect("snapshot expansion should succeed");
+
+        assert!(matches!(expanded.module_stages, std::borrow::Cow::Borrowed(_)));
+        assert!(expanded.suffix_module_stages().is_empty());
+    }
+
+    #[test]
+    fn expanded_snapshot_module_stages_append_parsed_suffix_stages() {
+        let snapshot =
+            default_stdlib_semantic_snapshot().expect("default stdlib snapshot should build");
+        let module_sources = collect_module_sources_with_module_stages(&[vec![ModuleInput {
+            file_name: "extra.srt".into(),
+            source: "defmod Extra { def value() -> Int { 1 } }".into(),
+            module_path: "Extra".into(),
+        }]])
+        .expect("module collection should succeed");
+        let compile_sources =
+            compose_script_compile_sources("entry.srt", "print(\"hi\")", module_sources);
+
+        let expanded = expand_snapshot_module_stages(
+            &compile_sources,
+            &snapshot,
+            CompileUnitKind::Script,
+        )
+        .expect("snapshot expansion should succeed");
+
+        assert!(matches!(expanded.module_stages, std::borrow::Cow::Owned(_)));
+        let suffix = expanded.suffix_module_stages();
+        assert_eq!(suffix.len(), 1);
+        assert_eq!(suffix[0][0].module_path, "Global::Extra");
     }
 }

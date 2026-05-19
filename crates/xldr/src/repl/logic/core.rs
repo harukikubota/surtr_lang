@@ -8008,26 +8008,20 @@ fn parse_preload_sources(
     ),
     ReplLoadError,
 > {
-    let mut module_stage_asts = snapshot.module_stages.clone();
+    let expanded =
+        crate::expand_snapshot_module_stages(compile_sources, snapshot, compile_unit_kind)
+            .map_err(|e| ReplLoadError::Diagnostic {
+                phase: "parse".to_string(),
+                sources: compile_sources.sources.clone(),
+                source_id: e.source_id,
+                spec: diagnostics::parse_error_spec(
+                    compile_sources.sources.source(e.source_id).unwrap_or(""),
+                    e.message(),
+                    e.span(),
+                ),
+            })?;
+    let mut module_stage_asts = expanded.module_stages.into_owned();
     let raw_module_stages = compile_sources.module_stages.clone();
-    let mut suffix_stages = crate::parse_module_stages_from_compile_sources_suffix(
-        compile_sources,
-        compile_unit_kind,
-        snapshot.default_stage_count,
-    )
-    .map_err(|e| ReplLoadError::Diagnostic {
-        phase: "parse".to_string(),
-        sources: compile_sources.sources.clone(),
-        source_id: e.source_id,
-        spec: diagnostics::parse_error_spec(
-            compile_sources.sources.source(e.source_id).unwrap_or(""),
-            e.message(),
-            e.span(),
-        ),
-    })?;
-    if !suffix_stages.is_empty() {
-        module_stage_asts.append(&mut suffix_stages);
-    }
 
     let user_source = compile_sources
         .sources
