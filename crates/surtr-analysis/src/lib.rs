@@ -22,7 +22,7 @@ pub use project_runner::{
     ProjectRunnerProfile, ProjectRunnerResult, ProjectRunnerSourceInput,
 };
 pub use semantic::{
-    complete_facet_api_path_arg, complete_prefix, complete_repl_prefix,
+    complete_call_argument, complete_facet_path_arg, complete_prefix, complete_repl_prefix,
     facet_path_context_at_cursor, lookup_symbol_at_cursor,
     rank_completion_candidates_by_expected_type, repl_assist_at_cursor, signature_help_at_cursor,
     CallableSignature, CompletionCandidate, CompletionKind, CompletionOrigin, CompletionRequest,

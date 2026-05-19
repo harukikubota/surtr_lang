@@ -1591,7 +1591,6 @@ defenum Slot { Some(String), None }
         "over_result",
         "case_set",
         "case_over",
-        "chain",
     ] {
         let input = format!("Facet::{api}(");
         let completion = engine.completions(&input, input.len());
@@ -1630,7 +1629,6 @@ defenum Slot { Some(String), None }
         "over_result",
         "case_set",
         "case_over",
-        "chain",
     ] {
         let input = format!("{api}(");
         let completion = engine.completions(&input, input.len());
@@ -1685,6 +1683,38 @@ defrecord User(profile: Profile, age: Int)
     assert!(
         !labels.contains(&"age"),
         "Facet binding completion should use focus type, not original source type: {labels:?}"
+    );
+}
+
+#[test]
+fn core_completion_respects_shadowed_facet_api_names() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord User(name: String)
+def view(value: Int) -> Int { value }
+"#,
+    )
+    .expect("script preload should bootstrap");
+    assert!(
+        rendered_text(&engine.handle_line("name_path = User.name")).contains("Facet<User, String>")
+    );
+    assert!(rendered_text(&engine.handle_line("n = 1")).contains("n: Int"));
+
+    let completion = engine.completions("view(", "view(".len());
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(
+        !labels.contains(&"User"),
+        "shadowed view(Int) should not trigger Facet path roots: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"n"),
+        "ordinary argument inference should still offer Int variables: {labels:?}"
     );
 }
 

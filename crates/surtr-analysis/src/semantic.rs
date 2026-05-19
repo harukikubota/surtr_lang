@@ -387,22 +387,24 @@ impl ReplInputSupportContext {
             source: input,
             cursor,
         };
-        let completion = if let Some(completion) = complete_facet_api_path_arg(request) {
-            completion
-        } else if let Some(context) = call_context.as_ref() {
-            let expected_ty = signature
-                .as_ref()
-                .and_then(|_| self.expected_param_type_for_call(context));
-            let mut completion = complete_repl_prefix(request, CompletionScope::VariablesOnly);
-            completion.candidates = rank_completion_candidates_by_expected_type(
-                completion.candidates,
-                expected_ty.as_deref(),
-                Self::parameter_type_accepts_arg_type,
-            );
-            if completion.candidates.is_empty() && expected_ty.is_none() && !prefix.is_empty() {
-                complete_repl_prefix(request, scope)
-            } else {
+        let completion = if let Some(context) = call_context.as_ref() {
+            let expected_ty = self.expected_param_type_for_call(context);
+            if let Some(completion) =
+                complete_call_argument_with_presentation(request, CompletionPresentation::Repl)
+            {
                 completion
+            } else {
+                let mut completion = complete_repl_prefix(request, CompletionScope::VariablesOnly);
+                completion.candidates = rank_completion_candidates_by_expected_type(
+                    completion.candidates,
+                    expected_ty.as_deref(),
+                    parameter_type_accepts_arg_type,
+                );
+                if completion.candidates.is_empty() && expected_ty.is_none() && !prefix.is_empty() {
+                    complete_repl_prefix(request, scope)
+                } else {
+                    completion
+                }
             }
         } else if let Some(assist) = operator_assist.as_ref() {
             self.operator_completion_candidates(
@@ -468,9 +470,8 @@ impl ReplInputSupportContext {
         &self,
         context: &CompletionCallContext,
     ) -> Option<InputSignatureHelp> {
-        let (qualified_name, signature) =
-            self.callable_signature_for_completion(&context.callee)?;
-        let rendered = render_signature_with_qualified_name(qualified_name, signature.clone());
+        let (qualified_name, signature) = self.signature_for_call_completion(&context.callee)?;
+        let rendered = render_signature_with_qualified_name(&qualified_name, signature);
         Some(InputSignatureHelp {
             lines: vec![highlight_signature_parameter(
                 &rendered,
@@ -634,7 +635,7 @@ impl ReplInputSupportContext {
             OperatorCompletionCandidateMode::Variables => candidate
                 .detail
                 .as_deref()
-                .is_some_and(|actual| Self::parameter_type_accepts_arg_type(expected_type, actual)),
+                .is_some_and(|actual| parameter_type_accepts_arg_type(expected_type, actual)),
             OperatorCompletionCandidateMode::Callables => self.callable_candidate_matches(
                 candidate,
                 expected_type,
@@ -659,9 +660,7 @@ impl ReplInputSupportContext {
                 };
                 let input_matches = signature_param_types(signature)
                     .and_then(|params| params.into_iter().next())
-                    .is_some_and(|param| {
-                        Self::parameter_type_accepts_arg_type(&param, expected_input)
-                    });
+                    .is_some_and(|param| parameter_type_accepts_arg_type(&param, expected_input));
                 if !input_matches {
                     return false;
                 }
@@ -692,7 +691,7 @@ impl ReplInputSupportContext {
     fn completion_param_accepts_expected_input(param: &AstTy, expected_input: &str) -> bool {
         match param {
             AstTy::Named(_, name) if name == "Self" || name.starts_with('$') => true,
-            _ => Self::parameter_type_accepts_arg_type(&format_query_ty(param), expected_input),
+            _ => parameter_type_accepts_arg_type(&format_query_ty(param), expected_input),
         }
     }
 
@@ -1065,33 +1064,44 @@ impl ReplInputSupportContext {
     }
 
     fn expected_param_type_for_call(&self, context: &CompletionCallContext) -> Option<String> {
-        let (_qualified_name, signature) =
-            self.callable_signature_for_completion(&context.callee)?;
-        let types = signature_param_types(signature)?;
+        let (_qualified_name, signature) = self.signature_for_call_completion(&context.callee)?;
+        let types = signature_param_types(&signature)?;
         types.get(context.active_parameter).cloned()
     }
 
-    fn callable_signature_for_completion(&self, symbol: &str) -> Option<&(String, String)> {
-        self.callable_signatures
-            .get(symbol)
-            .or_else(|| self.callable_signatures.get(&canonical_symbol(symbol)))
+    fn signature_for_call_completion(&self, symbol: &str) -> Option<(String, String)> {
+        self.callable_signature_for_completion(symbol)
+            .map(|(qualified_name, signature)| (qualified_name.clone(), signature.clone()))
             .or_else(|| {
-                symbol
-                    .rsplit("::")
-                    .next()
-                    .and_then(|tail| self.callable_signatures.get(tail))
+                let found = if symbol.contains("::") {
+                    self.index
+                        .symbols()
+                        .iter()
+                        .find(|candidate| candidate.label == symbol)
+                } else {
+                    self.index.find_symbol(symbol)
+                };
+                found.and_then(|symbol| {
+                    symbol
+                        .detail
+                        .as_ref()
+                        .map(|signature| (symbol.label.clone(), signature.clone()))
+                })
             })
     }
 
-    fn parameter_type_accepts_arg_type(param: &str, arg: &str) -> bool {
-        if param == arg || param == "Self" || param.starts_with('$') {
-            return true;
+    fn callable_signature_for_completion(&self, symbol: &str) -> Option<&(String, String)> {
+        let direct = self
+            .callable_signatures
+            .get(symbol)
+            .or_else(|| self.callable_signatures.get(&canonical_symbol(symbol)));
+        if direct.is_some() || symbol.contains("::") {
+            return direct;
         }
-        if param.starts_with("TypeRef<") && param.ends_with('>') {
-            let inner = &param["TypeRef<".len()..param.len() - 1];
-            return inner == arg || inner.starts_with('$');
-        }
-        false
+        symbol
+            .rsplit("::")
+            .next()
+            .and_then(|tail| self.callable_signatures.get(tail))
     }
 }
 
@@ -1178,13 +1188,41 @@ pub fn repl_assist_at_cursor(request: CompletionRequest<'_>, scope: CompletionSc
     }
 }
 
-pub fn complete_facet_api_path_arg(request: CompletionRequest<'_>) -> Option<CompletionResponse> {
-    let cursor = clamp_to_char_boundary(request.source, request.cursor);
-    let call = call_context_at_cursor(request.source, cursor)?;
-    if call.active_parameter != 0 || !facet_api_callee(&call.callee) {
+pub fn complete_call_argument(request: CompletionRequest<'_>) -> Option<CompletionResponse> {
+    complete_call_argument_with_presentation(request, CompletionPresentation::Full)
+}
+
+fn complete_call_argument_with_presentation(
+    request: CompletionRequest<'_>,
+    presentation: CompletionPresentation,
+) -> Option<CompletionResponse> {
+    let signature = signature_help_at_cursor(request.index, request.source, request.cursor)?;
+    let expected_ty_src =
+        signature_expected_param_type(&signature.signature, signature.active_parameter)?;
+    let expected_ty = parse_signature_type(&expected_ty_src)?;
+    if let Some(completion) = complete_facet_path_arg(request, &expected_ty) {
+        return Some(completion);
+    }
+
+    let mut completion =
+        complete_prefix_with_options(request, CompletionScope::VariablesOnly, presentation);
+    completion.candidates = rank_completion_candidates_by_expected_type(
+        completion.candidates,
+        Some(&expected_ty_src),
+        parameter_type_accepts_arg_type,
+    );
+    Some(completion)
+}
+
+pub fn complete_facet_path_arg(
+    request: CompletionRequest<'_>,
+    expected_ty: &AstTy,
+) -> Option<CompletionResponse> {
+    if !facet_path_arg_type(expected_ty) {
         return None;
     }
 
+    let cursor = clamp_to_char_boundary(request.source, request.cursor);
     let (replace_start, replace_end, prefix) = completion_token(request.source, cursor);
     let mut candidates = Vec::new();
     for symbol in request.index.symbols() {
@@ -1767,7 +1805,14 @@ fn signature_param_types(signature: &str) -> Option<Vec<String>> {
         .map(|params| {
             split_top_level_commas(params)
                 .into_iter()
-                .filter_map(|param| param.split_once(':').map(|(_, ty)| ty.trim().to_string()))
+                .map(|param| {
+                    param
+                        .split_once(':')
+                        .map(|(_, ty)| ty)
+                        .unwrap_or(param)
+                        .trim()
+                        .to_string()
+                })
                 .collect()
         })
 }
@@ -1981,28 +2026,25 @@ fn substitute_query_ty(
     }
 }
 
-fn facet_api_callee(callee: &str) -> bool {
-    matches!(
-        callee,
-        "Facet::view"
-            | "view"
-            | "Facet::preview"
-            | "preview"
-            | "Facet::put"
-            | "put"
-            | "Facet::set"
-            | "set"
-            | "Facet::over"
-            | "over"
-            | "Facet::over_result"
-            | "over_result"
-            | "Facet::case_set"
-            | "case_set"
-            | "Facet::case_over"
-            | "case_over"
-            | "Facet::chain"
-            | "chain"
-    )
+fn signature_expected_param_type(signature: &str, active_parameter: usize) -> Option<String> {
+    signature_param_types(signature)?
+        .get(active_parameter)
+        .cloned()
+}
+
+fn facet_path_arg_type(ty: &AstTy) -> bool {
+    matches!(ty, AstTy::Generic(_, name, args) if name == "Facet" && args.len() == 2)
+}
+
+fn parameter_type_accepts_arg_type(param: &str, arg: &str) -> bool {
+    if param == arg || param == "Self" || param.starts_with('$') {
+        return true;
+    }
+    if param.starts_with("TypeRef<") && param.ends_with('>') {
+        let inner = &param["TypeRef<".len()..param.len() - 1];
+        return inner == arg || inner.starts_with('$');
+    }
+    false
 }
 
 fn facet_api_path_arg_candidate(

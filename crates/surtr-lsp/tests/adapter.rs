@@ -125,6 +125,16 @@ fn completion_uses_facet_api_first_argument_constraints_through_lsp() {
     host.set_selected_context(Some(SelectedContext::ScriptEntry(path)));
     host.set_semantic_index(SemanticIndex::from_symbols(vec![
         CompletionSymbol {
+            label: "Facet::view".to_string(),
+            replacement: "Facet::view".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("view(facet: Facet<$S, $A>, source: $S) -> Result<$A>".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
             label: "User".to_string(),
             replacement: "User".to_string(),
             kind: CompletionKind::TypeConstructor,
