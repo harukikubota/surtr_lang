@@ -620,7 +620,7 @@ impl ReplEngine {
             completion_context_cache: RefCell::new(None),
             #[cfg(test)]
             completion_context_builds: Cell::new(0),
-            startup_results: Vec::new(),
+            startup_results: vec![Self::eldr_partial_semantic_restore_notice()],
             error_display_mode: ErrorDisplayMode::Full,
         };
         // Set up sigil / scar scope for stdlib without re-executing bytecode.
@@ -827,6 +827,12 @@ impl ReplEngine {
 
     pub fn take_startup_results(&mut self) -> Vec<ReplResult> {
         std::mem::take(&mut self.startup_results)
+    }
+
+    fn eldr_partial_semantic_restore_notice() -> ReplResult {
+        Self::plain(vec![
+            ".eldr runtime image loaded; compile semantic metadata for user definitions is not restored yet.".to_string(),
+        ])
     }
 
     fn bootstrap_std_modules(&mut self) -> Result<(), LoadError> {

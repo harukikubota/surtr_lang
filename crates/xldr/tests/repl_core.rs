@@ -3886,6 +3886,30 @@ fn core_eldr_sig_queries_do_not_depend_on_docs_chunk() {
 }
 
 #[test]
+fn core_eldr_restore_reports_partial_semantic_restore_notice() {
+    let mut engine = engine();
+    let dir = tempfile_dir("xldr-repl-core-eldr-partial-restore");
+    let path = dir.join("session.eldr");
+
+    let save = engine.handle_line(&format!(":save {}", path.display()));
+    assert!(rendered_text(&save).contains("saved to"));
+
+    let bytes = fs::read(&path).expect("saved .eldr should exist");
+    let mut restored = ReplEngine::from_eldr(&bytes).expect("restored engine should load");
+    let startup = restored.take_startup_results();
+    assert!(
+        startup
+            .iter()
+            .any(|result| rendered_text(result).contains("compile semantic metadata")),
+        "startup results should report partial semantic restore: {:?}",
+        startup
+            .iter()
+            .map(rendered_text)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn core_quit_command_sets_exit_without_ui_work() {
     let mut engine = engine();
 
