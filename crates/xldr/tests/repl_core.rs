@@ -2711,6 +2711,8 @@ import Math::add2
 
     let imported = rendered_text(&engine.handle_line(":imported"));
     assert!(imported.contains("auto"), "{imported}");
+    assert!(imported.contains("Kernel"), "{imported}");
+    assert!(imported.contains("Show::to_string"), "{imported}");
     assert!(imported.contains("Math::add2"), "{imported}");
 
     let defs = rendered_text(&engine.handle_line(":defs"));

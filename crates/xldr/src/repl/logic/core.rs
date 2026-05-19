@@ -215,6 +215,7 @@ struct PreloadedChunkState {
     process_metadata: BTreeMap<String, ReplProcessMetadata>,
     symbols: BTreeSet<String>,
     auto_import_modules: BTreeSet<String>,
+    auto_import_records: Vec<ReplImportRecord>,
     script_runtime_inputs: Vec<String>,
     script_preload_docs: Vec<DocEntry>,
     script_preload_signatures: Vec<SignatureEntry>,
@@ -443,6 +444,7 @@ pub struct ReplEngine {
     signatures: Vec<SignatureEntry>,
     process_metadata: BTreeMap<String, ReplProcessMetadata>,
     auto_import_modules: BTreeSet<String>,
+    auto_import_records: Vec<ReplImportRecord>,
     reload_seed: ReplReloadSeed,
     replay_inputs: Vec<String>,
     history_entries: Vec<ReplHistoryEntry>,
@@ -497,6 +499,7 @@ impl ReplEngine {
             signatures: Vec::new(),
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
+            auto_import_records: Vec::new(),
             reload_seed: ReplReloadSeed::Empty,
             replay_inputs: Vec::new(),
             history_entries: Vec::new(),
@@ -582,6 +585,7 @@ impl ReplEngine {
             signatures,
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
+            auto_import_records: Vec::new(),
             reload_seed: ReplReloadSeed::Empty,
             replay_inputs: Vec::new(),
             history_entries: Vec::new(),
@@ -733,6 +737,7 @@ impl ReplEngine {
             signatures: state.signatures,
             process_metadata: state.process_metadata,
             auto_import_modules: state.auto_import_modules,
+            auto_import_records: state.auto_import_records,
             reload_seed: ReplReloadSeed::Empty,
             replay_inputs: Vec::new(),
             history_entries: Vec::new(),
@@ -834,6 +839,8 @@ impl ReplEngine {
             }
         };
         self.declaration_index = declaration_index.clone();
+        self.auto_import_records =
+            Self::collect_auto_import_records(&module_stages, &declaration_index);
 
         let resolved = match sigil::resolve_staged_program(
             &module_stages,
@@ -958,6 +965,8 @@ impl ReplEngine {
             if self.module_stages.len() == snapshot.default_stage_count {
                 self.auto_import_modules = snapshot.auto_import_modules.clone();
                 self.declaration_index = snapshot.declaration_index.clone();
+                self.auto_import_records =
+                    Self::collect_auto_import_records(&snapshot.module_stages, &self.declaration_index);
                 self.scar_session.rollback(snapshot.scar_checkpoint.clone());
                 self.sync_scar_fun_index_with_vm();
                 self.process_metadata = collect_process_metadata(&snapshot.module_stages);
@@ -1019,6 +1028,8 @@ impl ReplEngine {
             }
         };
         self.declaration_index = declaration_index.clone();
+        self.auto_import_records =
+            Self::collect_auto_import_records(&module_stages, &declaration_index);
 
         let resolved = match sigil::resolve_staged_program(
             &module_stages,
@@ -6720,6 +6731,110 @@ impl ReplEngine {
         records
     }
 
+    fn collect_auto_import_records(
+        module_stages: &[Vec<sigil::StagedModuleAst>],
+        declaration_index: &sigil::DeclarationIndex,
+    ) -> Vec<ReplImportRecord> {
+        let mut seen = BTreeSet::new();
+        let mut records = Vec::new();
+
+        for stage in module_stages {
+            for module in stage {
+                if !module.auto_import {
+                    continue;
+                }
+                let first_non_import = module
+                    .ast
+                    .iter()
+                    .find(|stmt| !matches!(stmt, Ast::Import(_, _, _)));
+                match first_non_import {
+                    Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _, _, _)) => {
+                        for entry in declaration_index.values() {
+                            if entry.module_path != module.module_path
+                                || entry.hidden
+                                || !entry.user_importable
+                                || entry.visibility != spire::ast::Visibility::Public
+                                || !matches!(
+                                    entry.kind,
+                                    sigil::DeclarationKind::Def
+                                        | sigil::DeclarationKind::Extractor
+                                        | sigil::DeclarationKind::TraitMethod
+                                        | sigil::DeclarationKind::ImplMethod
+                                        | sigil::DeclarationKind::ImplCtorNew
+                                )
+                            {
+                                continue;
+                            }
+                            let item = crate::surface_rendered_name(&entry.fq_name);
+                            if seen.insert((0usize, "auto".to_string(), item.clone(), "@autoimport".to_string()))
+                            {
+                                records.push(ReplImportRecord {
+                                    line: 0,
+                                    src: "auto".to_string(),
+                                    item,
+                                    via: "@autoimport".to_string(),
+                                });
+                            }
+                        }
+                    }
+                    _ => {
+                        let item = crate::surface_rendered_name(&module.module_path);
+                        if seen.insert((0usize, "auto".to_string(), item.clone(), "@autoimport".to_string()))
+                        {
+                            records.push(ReplImportRecord {
+                                line: 0,
+                                src: "auto".to_string(),
+                                item,
+                                via: "@autoimport".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        for entry in declaration_index.values() {
+            if entry.kind != sigil::DeclarationKind::Trait
+                || !entry.auto_import
+                || entry.hidden
+                || !entry.user_importable
+                || entry.visibility != spire::ast::Visibility::Public
+            {
+                continue;
+            }
+            let method_prefix = format!("{}::", entry.fq_name);
+            for method_entry in declaration_index.values() {
+                if method_entry.kind != sigil::DeclarationKind::TraitMethod
+                    || !method_entry.fq_name.starts_with(&method_prefix)
+                    || method_entry.hidden
+                    || !method_entry.user_importable
+                    || method_entry.visibility != spire::ast::Visibility::Public
+                {
+                    continue;
+                }
+                let item = crate::surface_rendered_name(&method_entry.fq_name);
+                if seen.insert((0usize, "auto".to_string(), item.clone(), "@autoimport".to_string()))
+                {
+                    records.push(ReplImportRecord {
+                        line: 0,
+                        src: "auto".to_string(),
+                        item,
+                        via: "@autoimport".to_string(),
+                    });
+                }
+            }
+        }
+
+        records.sort_by(|left, right| {
+            left.line
+                .cmp(&right.line)
+                .then_with(|| left.src.cmp(&right.src))
+                .then_with(|| left.item.cmp(&right.item))
+                .then_with(|| left.via.cmp(&right.via))
+        });
+        records
+    }
+
     fn handle_vars(&self) -> ReplResult {
         if self.binding_records.is_empty() {
             return Self::plain(vec!["No visible value bindings.".to_string()]);
@@ -6735,11 +6850,12 @@ impl ReplEngine {
 
     fn handle_imported(&self) -> ReplResult {
         let mut lines = vec!["line | src | item | via".to_string()];
-        lines.extend(
-            self.auto_import_modules
-                .iter()
-                .map(|module| format!("0 | auto | {} | @autoimport", module)),
-        );
+        lines.extend(self.auto_import_records.iter().map(|record| {
+            format!(
+                "{} | {} | {} | {}",
+                record.line, record.src, record.item, record.via
+            )
+        }));
         lines.extend(self.import_records.iter().map(|record| {
             format!(
                 "{} | {} | {} | {}",
@@ -7969,6 +8085,8 @@ fn compile_repl_preload_from_module_stages(
         .filter(|module| module.auto_import)
         .map(|module| module.module_path.clone())
         .collect();
+    let auto_import_records =
+        ReplEngine::collect_auto_import_records(&module_stage_asts, &declaration_index);
     let import_records = ReplEngine::collect_import_records(&user_ast, 0);
     let def_records = ReplEngine::collect_def_records(&user_ast, 0);
 
@@ -7987,6 +8105,7 @@ fn compile_repl_preload_from_module_stages(
         process_metadata,
         symbols,
         auto_import_modules,
+        auto_import_records,
         script_runtime_inputs,
         script_preload_docs,
         script_preload_signatures,
@@ -9078,6 +9197,7 @@ mod tests {
             signatures: Vec::new(),
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
+            auto_import_records: Vec::new(),
             reload_seed: ReplReloadSeed::Empty,
             replay_inputs: Vec::new(),
             history_entries: Vec::new(),
