@@ -208,8 +208,17 @@ impl ModuleStageParseError {
     }
 }
 
+pub fn derive_source_policy(
+    compile_unit_kind: CompileUnitKind,
+    source_kind: SourceKind,
+    entrypoint: Option<&EntryPoint>,
+) -> sindr::policy::SourcePolicy {
+    source_kind.policy(compile_unit_kind, entrypoint)
+}
+
 pub fn derive_parse_rules(source_kind: SourceKind) -> spire::ParseRules {
-    spire::parse_rules_for_source_kind(source_kind)
+    let policy = derive_source_policy(CompileUnitKind::DefinitionCheck, source_kind, None);
+    spire::parse_rules_for_source_policy(&policy)
 }
 
 pub fn derive_parser_context(
@@ -218,7 +227,11 @@ pub fn derive_parser_context(
     compile_unit_kind: CompileUnitKind,
     module_path: Option<String>,
 ) -> spire::ParserContext {
-    spire::parser_context_for_source_kind(source_id, source_kind, compile_unit_kind, module_path)
+    spire::parser_context_for_source_policy(
+        source_id,
+        derive_source_policy(compile_unit_kind, source_kind, None),
+        module_path,
+    )
 }
 
 pub fn derive_runtime_policy(
@@ -226,7 +239,7 @@ pub fn derive_runtime_policy(
     source_kind: SourceKind,
     entrypoint: Option<&EntryPoint>,
 ) -> RuntimeSourcePolicy {
-    source_kind.runtime_policy(compile_unit_kind, entrypoint)
+    derive_source_policy(compile_unit_kind, source_kind, entrypoint).runtime_policy
 }
 
 pub fn lower_module_source_ast(
@@ -1055,6 +1068,27 @@ defmod B {
             "symbol-capability-schema-v{}",
             sindr::names::SYMBOL_CAPABILITY_SCHEMA_VERSION
         )));
+    }
+
+    #[test]
+    fn derive_source_policy_carries_parse_and_runtime_policy() {
+        let entrypoint = EntryPoint::qualified("App::main");
+
+        let policy = derive_source_policy(
+            CompileUnitKind::Project,
+            SourceKind::ProjectConfigSource,
+            Some(&entrypoint),
+        );
+
+        assert_eq!(policy.parse_profile, sindr::policy::ParseProfile::Project);
+        assert_eq!(
+            policy.runtime_policy.exit_code_policy,
+            sindr::policy::ExitCodePolicy::EntryOnly
+        );
+        assert_eq!(
+            policy.runtime_policy.normalized_entrypoint.as_deref(),
+            Some("App::main")
+        );
     }
 
     #[test]
