@@ -685,5 +685,9 @@ fn parser_context_for_document(
     compile_unit_kind: CompileUnitKind,
     module_path: Option<String>,
 ) -> spire::ParserContext {
-    spire::parser_context_for_source_kind(source_id, source_kind, compile_unit_kind, module_path)
+    spire::parser_context_for_source_policy(
+        source_id,
+        source_kind.policy(compile_unit_kind, None),
+        module_path,
+    )
 }
