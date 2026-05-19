@@ -43,6 +43,11 @@ impl Checker {
             .is_some_and(|policy| policy.type_ref_witness_allowed)
     }
 
+    fn builtin_type_is_clause_block_surface_only(name: &str) -> bool {
+        builtin_type_usage_policy(Self::surface_name(name))
+            .is_some_and(|policy| policy.clause_block_surface_only)
+    }
+
     fn builtin_special_enum_ty(name: &str, args: &[Ty]) -> Option<Ty> {
         match Self::surface_name(name) {
             "Boolean" if args.is_empty() => Some(Ty::Bool),
@@ -465,8 +470,12 @@ impl Checker {
                             ),
                         }),
                     "_" | "Hole" => self.resolve_hole_surface_ty(span, context),
-                    "MatchArms" | "CondClauses" | "BulkUpdateEntries" => Err(self
-                        .clause_block_type_not_allowed_error(span, Self::surface_name(name))),
+                    builtin_name if Self::builtin_type_is_clause_block_surface_only(builtin_name) => {
+                        Err(self.clause_block_type_not_allowed_error(
+                            span,
+                            Self::surface_name(name),
+                        ))
+                    }
                     "Seq" => Err(self.seq_not_allowed_error(span)),
                     builtin_name => {
                         if let Some(def) = self.env.lookup_type_def(name) {
@@ -570,7 +579,7 @@ impl Checker {
                 Err(self.type_ref_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _)
-                if matches!(Self::surface_name(name), "MatchArms" | "CondClauses" | "BulkUpdateEntries") =>
+                if Self::builtin_type_is_clause_block_surface_only(name) =>
             {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
             }
@@ -922,10 +931,7 @@ impl Checker {
                 self.resolve_hole_surface_ty(span, context)
             }
             AstTy::Named(span, name)
-                if matches!(
-                    Self::surface_name(name),
-                    "MatchArms" | "CondClauses" | "BulkUpdateEntries"
-                ) =>
+                if Self::builtin_type_is_clause_block_surface_only(name) =>
             {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
             }
@@ -959,10 +965,7 @@ impl Checker {
                 Err(self.type_ref_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _)
-                if matches!(
-                    Self::surface_name(name),
-                    "MatchArms" | "CondClauses" | "BulkUpdateEntries"
-                ) =>
+                if Self::builtin_type_is_clause_block_surface_only(name) =>
             {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
             }
@@ -2552,5 +2555,19 @@ mod tests {
     fn type_ref_witness_gate_uses_builtin_type_usage_policy() {
         assert!(Checker::builtin_type_ref_witness_allowed("TypeRef"));
         assert!(!Checker::builtin_type_ref_witness_allowed("String"));
+    }
+
+    #[test]
+    fn clause_block_surface_type_query_uses_builtin_type_usage_policy() {
+        assert!(Checker::builtin_type_is_clause_block_surface_only("MatchArms"));
+        assert!(Checker::builtin_type_is_clause_block_surface_only(
+            "Global::CondClauses"
+        ));
+        assert!(Checker::builtin_type_is_clause_block_surface_only(
+            "BulkUpdateEntries"
+        ));
+        assert!(!Checker::builtin_type_is_clause_block_surface_only("String"));
+        assert!(!Checker::builtin_type_is_clause_block_surface_only("ProcessInit"));
+        assert!(!Checker::builtin_type_is_clause_block_surface_only("Lazy"));
     }
 }

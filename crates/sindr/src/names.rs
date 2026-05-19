@@ -181,6 +181,7 @@ pub struct BuiltinTypeUsagePolicy {
     pub type_ref_witness_allowed: bool,
     pub process_boundary_allowed: bool,
     pub facet_value_forbidden_in_stage1: bool,
+    pub clause_block_surface_only: bool,
 }
 
 impl BuiltinTypeUsagePolicy {
@@ -191,6 +192,7 @@ impl BuiltinTypeUsagePolicy {
         type_ref_witness_allowed: bool,
         process_boundary_allowed: bool,
         facet_value_forbidden_in_stage1: bool,
+        clause_block_surface_only: bool,
     ) -> Self {
         Self {
             type_annotation_allowed,
@@ -199,15 +201,20 @@ impl BuiltinTypeUsagePolicy {
             type_ref_witness_allowed,
             process_boundary_allowed,
             facet_value_forbidden_in_stage1,
+            clause_block_surface_only,
         }
     }
 
     pub const fn ordinary_runtime_type() -> Self {
-        Self::new(true, true, true, false, true, false)
+        Self::new(true, true, true, false, true, false, false)
     }
 
     pub const fn compiler_surface_only() -> Self {
-        Self::new(false, false, false, false, false, true)
+        Self::new(false, false, false, false, false, true, false)
+    }
+
+    pub const fn clause_block_surface_only() -> Self {
+        Self::new(false, false, false, false, false, true, true)
     }
 }
 
@@ -302,19 +309,21 @@ impl TypeName {
 
     pub const fn usage_policy(self) -> BuiltinTypeUsagePolicy {
         match self {
-            Self::TypeRef => BuiltinTypeUsagePolicy::new(false, false, false, true, false, false),
-            Self::ProcessInit => {
-                BuiltinTypeUsagePolicy::new(false, false, false, false, true, false)
+            Self::TypeRef => {
+                BuiltinTypeUsagePolicy::new(false, false, false, true, false, false, false)
             }
-            Self::Lazy
-            | Self::Hole
-            | Self::Closure
-            | Self::MatchArms
-            | Self::CondClauses
-            | Self::BulkUpdateEntries => BuiltinTypeUsagePolicy::compiler_surface_only(),
-            Self::Facet => BuiltinTypeUsagePolicy::new(true, true, true, false, true, true),
+            Self::ProcessInit => {
+                BuiltinTypeUsagePolicy::new(false, false, false, false, true, false, false)
+            }
+            Self::Lazy | Self::Hole | Self::Closure => {
+                BuiltinTypeUsagePolicy::compiler_surface_only()
+            }
+            Self::MatchArms | Self::CondClauses | Self::BulkUpdateEntries => {
+                BuiltinTypeUsagePolicy::clause_block_surface_only()
+            }
+            Self::Facet => BuiltinTypeUsagePolicy::new(true, true, true, false, true, true, false),
             Self::Pid | Self::Workers | Self::WorkerLease | Self::TaskHandle => {
-                BuiltinTypeUsagePolicy::new(true, true, true, false, true, false)
+                BuiltinTypeUsagePolicy::new(true, true, true, false, true, false, false)
             }
             _ => BuiltinTypeUsagePolicy::ordinary_runtime_type(),
         }
@@ -526,5 +535,11 @@ mod tests {
             builtin_type_usage_policy("ProcessInit").expect("ProcessInit should be known");
         assert!(!process_init.type_annotation_allowed);
         assert!(process_init.process_boundary_allowed);
+
+        let match_arms = builtin_type_usage_policy("MatchArms").expect("MatchArms should be known");
+        assert!(match_arms.clause_block_surface_only);
+
+        let lazy = builtin_type_usage_policy("Lazy").expect("Lazy should be known");
+        assert!(!lazy.clause_block_surface_only);
     }
 }
