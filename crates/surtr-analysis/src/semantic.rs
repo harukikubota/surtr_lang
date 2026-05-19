@@ -50,6 +50,7 @@ pub struct SymbolSemanticInfo {
     pub origin: Option<CompletionOrigin>,
     pub definition: Option<SourceLocation>,
     pub capabilities: Option<SymbolCapabilities>,
+    pub display_metadata: Option<SymbolDisplayMetadata>,
 }
 
 impl SymbolSemanticInfo {
@@ -75,6 +76,7 @@ impl SymbolSemanticInfo {
             origin: symbol.origin.clone(),
             definition: symbol.definition.clone(),
             capabilities: symbol.capabilities.clone(),
+            display_metadata: None,
         }
     }
 
@@ -95,6 +97,14 @@ impl SymbolSemanticInfo {
             capabilities: self.capabilities,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolDisplayMetadata {
+    pub qualified_name: String,
+    pub module_path: String,
+    pub has_doc: bool,
+    pub has_signature: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -326,6 +336,12 @@ pub fn symbol_semantic_infos_from_metadata(
             }),
             definition: None,
             capabilities: completion_capabilities_for_builtin(&entry.qualified_name),
+            display_metadata: Some(SymbolDisplayMetadata {
+                qualified_name: entry.qualified_name.clone(),
+                module_path: entry.module_path.clone(),
+                has_doc: false,
+                has_signature: true,
+            }),
         });
     }
     for entry in docs {
@@ -333,6 +349,7 @@ pub fn symbol_semantic_infos_from_metadata(
             .get(entry.qualified_name.as_str())
             .map(|signature| (*signature).to_string())
             .or_else(|| entry.signature.clone());
+        let has_signature = detail.is_some();
         let qualified_name = surface_name(&entry.qualified_name);
         infos.push(SymbolSemanticInfo {
             canonical_name: entry.qualified_name.clone(),
@@ -349,6 +366,12 @@ pub fn symbol_semantic_infos_from_metadata(
             }),
             definition: None,
             capabilities: completion_capabilities_for_builtin(&entry.qualified_name),
+            display_metadata: Some(SymbolDisplayMetadata {
+                qualified_name: entry.qualified_name.clone(),
+                module_path: entry.module_path.clone(),
+                has_doc: true,
+                has_signature,
+            }),
         });
     }
     infos
@@ -376,6 +399,7 @@ pub fn symbol_semantic_infos_from_declaration_index(
                 origin: None,
                 definition: None,
                 capabilities: completion_capabilities_for_builtin(&entry.module_path),
+                display_metadata: None,
             });
         }
 
@@ -407,6 +431,7 @@ pub fn symbol_semantic_infos_from_declaration_index(
                 }),
                 definition: None,
                 capabilities,
+                display_metadata: None,
             });
         }
     }
@@ -451,6 +476,7 @@ fn merge_semantic_info(base: &mut Vec<SymbolSemanticInfo>, incoming: Vec<SymbolS
                 existing.definition = info.definition;
             }
             merge_symbol_capabilities(&mut existing.capabilities, info.capabilities);
+            merge_symbol_display_metadata(&mut existing.display_metadata, info.display_metadata);
         } else {
             let next_idx = base.len();
             base_by_key.insert(info.completion_key(), next_idx);
@@ -474,6 +500,20 @@ fn merge_symbol_capabilities(
             *existing = Some(incoming);
         }
         Some(_) => {}
+    }
+}
+
+fn merge_symbol_display_metadata(
+    existing: &mut Option<SymbolDisplayMetadata>,
+    incoming: Option<SymbolDisplayMetadata>,
+) {
+    match (existing.as_mut(), incoming) {
+        (Some(existing), Some(incoming)) => {
+            existing.has_doc |= incoming.has_doc;
+            existing.has_signature |= incoming.has_signature;
+        }
+        (None, incoming) => *existing = incoming,
+        _ => {}
     }
 }
 
@@ -589,6 +629,7 @@ pub fn symbol_semantic_info_for_effective_visible_entry(
         }),
         definition,
         capabilities,
+        display_metadata: None,
     })
 }
 

@@ -1114,6 +1114,7 @@ fn semantic_index_builds_from_symbol_semantic_infos() {
         }),
         definition: None,
         capabilities: None,
+        display_metadata: None,
     }]);
 
     let symbol = index
@@ -1223,6 +1224,13 @@ fn compile_metadata_exposes_symbol_semantic_info_before_completion_projection() 
     assert_eq!(info.identity, Some(TypeIdentity::Struct));
     assert_eq!(info.detail.as_deref(), Some("User(name: String)"));
     assert_eq!(info.documentation.as_deref(), Some("User type."));
+    let display_metadata = info
+        .display_metadata
+        .as_ref()
+        .expect("compile semantic info should retain display metadata origin");
+    assert_eq!(display_metadata.qualified_name, "Global::Helper::User");
+    assert!(display_metadata.has_doc);
+    assert!(display_metadata.has_signature);
     assert!(
         info.capabilities.is_some(),
         "semantic info should preserve capabilities before completion projection: {info:?}"
@@ -1326,6 +1334,7 @@ fn effective_visible_entry_semantic_info_reuses_qualified_symbol_metadata() {
                 true,
                 Some(FacetRootKind::TypeRoot),
             )),
+            display_metadata: None,
         }],
         &visible,
     )
