@@ -1487,7 +1487,12 @@ impl ReplEngine {
             }
         }
 
-        surtr_analysis::SemanticIndex::from_symbols(symbols)
+        surtr_analysis::SemanticIndex::enrich_symbols_with_compile_metadata(
+            symbols,
+            &self.declaration_index,
+            &self.docs,
+            &self.signatures,
+        )
     }
 
     fn build_completion_context(&self) -> ReplCompletionContext {

@@ -152,6 +152,63 @@ impl SemanticIndex {
         Self::from_symbols(symbols)
     }
 
+    pub fn from_compile_metadata(
+        declarations: &DeclarationIndex,
+        docs: &[DocEntry],
+        signatures: &[SignatureEntry],
+    ) -> Self {
+        let mut symbols = Self::from_declaration_index(declarations).symbols().to_vec();
+        symbols.extend(Self::from_metadata(docs, signatures).symbols().iter().cloned());
+        Self::from_symbols(symbols)
+    }
+
+    pub fn enrich_symbols_with_compile_metadata(
+        symbols: Vec<CompletionSymbol>,
+        declarations: &DeclarationIndex,
+        docs: &[DocEntry],
+        signatures: &[SignatureEntry],
+    ) -> Self {
+        let metadata = Self::from_compile_metadata(declarations, docs, signatures);
+        let mut metadata_by_key = BTreeMap::new();
+        for symbol in metadata.symbols {
+            metadata_by_key.insert(
+                (symbol.label.clone(), completion_kind_rank(&symbol.kind)),
+                symbol,
+            );
+        }
+
+        let mut enriched = Vec::with_capacity(symbols.len());
+        for mut symbol in symbols {
+            if let Some(metadata_symbol) = metadata_by_key.get(&(
+                symbol.label.clone(),
+                completion_kind_rank(&symbol.kind),
+            ))
+            {
+                if symbol.detail.is_none() {
+                    symbol.detail = metadata_symbol.detail.clone();
+                }
+                if symbol.documentation.is_none() {
+                    symbol.documentation = metadata_symbol.documentation.clone();
+                }
+                if symbol.sort_text.is_none() {
+                    symbol.sort_text = metadata_symbol.sort_text.clone();
+                }
+                if symbol.origin.is_none() {
+                    symbol.origin = metadata_symbol.origin.clone();
+                }
+                if symbol.definition.is_none() {
+                    symbol.definition = metadata_symbol.definition.clone();
+                }
+                if symbol.capabilities.is_none() {
+                    symbol.capabilities = metadata_symbol.capabilities.clone();
+                }
+            }
+            enriched.push(symbol);
+        }
+
+        Self::from_symbols(enriched)
+    }
+
     pub fn from_declaration_index(declarations: &DeclarationIndex) -> Self {
         let mut symbols = Vec::new();
         for entry in declarations

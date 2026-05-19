@@ -1064,7 +1064,7 @@ fn semantic_index_with_declarations(
 ) -> SemanticIndex {
     let mut symbols = existing.symbols().to_vec();
     symbols.extend(
-        SemanticIndex::from_declaration_index(declaration_index)
+        SemanticIndex::from_compile_metadata(declaration_index, &[], &[])
             .symbols()
             .iter()
             .cloned(),

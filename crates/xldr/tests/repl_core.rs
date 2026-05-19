@@ -444,6 +444,19 @@ fn core_exposes_shared_semantic_index_for_repl_and_lsp_lookup() {
         .as_deref()
         .is_some_and(|detail| detail.contains("print(")));
     assert!(print.documentation.is_some());
+
+    let duration = index
+        .find_symbol("Duration")
+        .expect("stdlib type should be visible through shared semantic index");
+    assert_eq!(duration.kind, surtr_analysis::CompletionKind::TypeConstructor);
+    assert!(duration
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("Duration")));
+    assert!(
+        duration.documentation.is_some(),
+        "type constructors should retain shared doc metadata: {duration:?}"
+    );
 }
 
 #[test]
