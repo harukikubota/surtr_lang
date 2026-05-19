@@ -3,7 +3,9 @@ use std::path::PathBuf;
 
 use sigil::{DeclarationIndex, DeclarationKind};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
-use spire::ast::Visibility;
+use spire::ast::{AstTy, Visibility};
+
+use crate::query::parse_signature_type;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompletionKind {
@@ -341,6 +343,33 @@ pub fn repl_assist_at_cursor(request: CompletionRequest<'_>, scope: CompletionSc
     }
 }
 
+pub fn complete_facet_api_path_arg(request: CompletionRequest<'_>) -> Option<CompletionResponse> {
+    let cursor = clamp_to_char_boundary(request.source, request.cursor);
+    let call = call_context_at_cursor(request.source, cursor)?;
+    if call.active_parameter != 0 || !facet_api_callee(&call.callee) {
+        return None;
+    }
+
+    let (replace_start, replace_end, prefix) = completion_token(request.source, cursor);
+    let mut candidates = Vec::new();
+    for symbol in request.index.symbols() {
+        if !facet_path_arg_candidate_matches_prefix(symbol, &prefix) {
+            continue;
+        }
+        let Some(candidate) = facet_api_path_arg_candidate(symbol, replace_start, replace_end)
+        else {
+            continue;
+        };
+        push_completion_candidate(&mut candidates, candidate);
+    }
+    sort_completion_candidates(&mut candidates, CompletionPresentation::Full);
+    Some(CompletionResponse {
+        candidates,
+        replace_start,
+        replace_end,
+    })
+}
+
 pub fn facet_path_context_at_cursor(
     source: &str,
     cursor: usize,
@@ -592,6 +621,27 @@ pub fn signature_help_at_cursor(
     cursor: usize,
 ) -> Option<SignatureLookup> {
     let cursor = clamp_to_char_boundary(source, cursor);
+    let call = call_context_at_cursor(source, cursor)?;
+
+    let symbol = index.find_symbol(&call.callee)?;
+    let signature = symbol.detail.clone()?;
+    Some(SignatureLookup {
+        signature,
+        active_parameter: call.active_parameter,
+        callee_start: call.callee_start,
+        callee_end: call.callee_end,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompletionCallContext {
+    callee: String,
+    active_parameter: usize,
+    callee_start: usize,
+    callee_end: usize,
+}
+
+fn call_context_at_cursor(source: &str, cursor: usize) -> Option<CompletionCallContext> {
     let before = &source[..cursor];
     let open = innermost_unclosed_lparen(before)?;
     let callee_end = before[..open].trim_end().len();
@@ -605,10 +655,8 @@ pub fn signature_help_at_cursor(
         return None;
     }
 
-    let symbol = index.find_symbol(callee)?;
-    let signature = symbol.detail.clone()?;
-    Some(SignatureLookup {
-        signature,
+    Some(CompletionCallContext {
+        callee: callee.to_string(),
         active_parameter: active_call_parameter(&before[open + 1..]),
         callee_start,
         callee_end,
@@ -781,6 +829,97 @@ fn active_call_parameter(args: &str) -> usize {
     }
 
     active
+}
+
+fn facet_api_callee(callee: &str) -> bool {
+    matches!(
+        callee,
+        "Facet::view"
+            | "Facet::preview"
+            | "Facet::put"
+            | "Facet::set"
+            | "Facet::over"
+            | "Facet::over_result"
+            | "Facet::case_set"
+            | "Facet::case_over"
+            | "Facet::chain"
+    )
+}
+
+fn facet_api_path_arg_candidate(
+    symbol: &CompletionSymbol,
+    replace_start: usize,
+    replace_end: usize,
+) -> Option<CompletionCandidate> {
+    match symbol.kind {
+        CompletionKind::Variable if symbol.detail.as_deref().is_some_and(facet_binding_type) => {
+            Some(completion_candidate_from_symbol(
+                symbol,
+                replace_start,
+                replace_end,
+            ))
+        }
+        CompletionKind::TypeConstructor if path_constructable_type_root(symbol) => Some(
+            completion_candidate_from_symbol(symbol, replace_start, replace_end),
+        ),
+        _ => None,
+    }
+}
+
+fn completion_candidate_from_symbol(
+    symbol: &CompletionSymbol,
+    replace_start: usize,
+    replace_end: usize,
+) -> CompletionCandidate {
+    CompletionCandidate {
+        label: symbol.label.clone(),
+        replacement: symbol.replacement.clone(),
+        kind: symbol.kind.clone(),
+        detail: symbol.detail.clone(),
+        documentation: symbol.documentation.clone(),
+        sort_text: symbol.sort_text.clone(),
+        origin: symbol.origin.clone(),
+        replace_start,
+        replace_end,
+    }
+}
+
+fn facet_binding_type(detail: &str) -> bool {
+    matches!(
+        parse_signature_type(detail),
+        Some(AstTy::Generic(_, name, args)) if name == "Facet" && args.len() == 2
+    )
+}
+
+fn path_constructable_type_root(symbol: &CompletionSymbol) -> bool {
+    if symbol.label.contains("::") {
+        return false;
+    }
+    let name = symbol.label.as_str();
+    if matches!(
+        name,
+        "String" | "Int" | "Float" | "Boolean" | "Function" | "Result" | "Facet"
+    ) {
+        return false;
+    }
+    if matches!(name, "Tuple" | "List" | "HashMap") {
+        return true;
+    }
+
+    symbol.detail.as_deref().is_some_and(|detail| {
+        detail.starts_with("defstruct ")
+            || detail.starts_with("defrecord ")
+            || detail.starts_with("defenum ")
+    })
+}
+
+fn facet_path_arg_candidate_matches_prefix(symbol: &CompletionSymbol, prefix: &str) -> bool {
+    prefix.is_empty()
+        || symbol.label.starts_with(prefix)
+        || symbol
+            .label
+            .rsplit_once("::")
+            .is_some_and(|(_, tail)| tail.starts_with(prefix))
 }
 
 fn completion_symbol_matches_prefix(

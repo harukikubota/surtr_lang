@@ -1569,6 +1569,60 @@ defrecord User(scores: List<(String, Result<Int>)>)
 }
 
 #[test]
+fn core_completion_suggests_facet_path_roots_for_facet_api_first_argument() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord User(name: String, age: Int)
+defenum Slot { Some(String), None }
+"#,
+    )
+    .expect("script preload should bootstrap");
+    assert!(
+        rendered_text(&engine.handle_line("name_path = User.name")).contains("Facet<User, String>")
+    );
+
+    for api in [
+        "view",
+        "preview",
+        "put",
+        "set",
+        "over",
+        "over_result",
+        "case_set",
+        "case_over",
+        "chain",
+    ] {
+        let input = format!("Facet::{api}(");
+        let completion = engine.completions(&input, input.len());
+        let labels = completion
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            labels.contains(&"User"),
+            "{api} first argument should suggest path-constructable record roots: {labels:?}"
+        );
+        assert!(
+            labels.contains(&"Slot"),
+            "{api} first argument should suggest path-constructable enum roots: {labels:?}"
+        );
+        assert!(
+            labels.contains(&"name_path"),
+            "{api} first argument should suggest Facet bindings: {labels:?}"
+        );
+        for primitive in ["String", "Int", "Float", "Boolean", "Function"] {
+            assert!(
+                !labels.contains(&primitive),
+                "{api} first argument should not suggest primitive root {primitive}: {labels:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn core_completion_uses_argument_position_for_variable_candidates_and_signature_help() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line("n = 3")).contains("n: Int"));

@@ -625,6 +625,81 @@ fn analysis_service_completions_use_snapshot_semantic_index_and_utf16_position()
 }
 
 #[test]
+fn analysis_service_completions_use_facet_api_first_argument_constraints() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    service.update_document(path.clone(), Some(1), "Facet::set(".to_string());
+    service.set_semantic_index(SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "User".to_string(),
+            replacement: "User".to_string(),
+            kind: CompletionKind::TypeConstructor,
+            detail: Some("defrecord User".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "String".to_string(),
+            replacement: "String".to_string(),
+            kind: CompletionKind::TypeConstructor,
+            detail: Some("type String".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "name_path".to_string(),
+            replacement: "name_path".to_string(),
+            kind: CompletionKind::Variable,
+            detail: Some("Facet<User, String>".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "user".to_string(),
+            replacement: "user".to_string(),
+            kind: CompletionKind::Variable,
+            detail: Some("User".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+    ]));
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(path)),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let completion = service.completions(
+        &snapshot,
+        Utf16Position {
+            line: 0,
+            character: "Facet::set(".len() as u32,
+        },
+    );
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(labels.contains(&"User"), "{labels:?}");
+    assert!(labels.contains(&"name_path"), "{labels:?}");
+    assert!(!labels.contains(&"String"), "{labels:?}");
+    assert!(!labels.contains(&"user"), "{labels:?}");
+}
+
+#[test]
 fn analysis_service_repl_assist_uses_repl_scope_and_signature_help() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");

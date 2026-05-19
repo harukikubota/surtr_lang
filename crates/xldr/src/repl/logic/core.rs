@@ -408,7 +408,11 @@ impl ReplCompletionContext {
             source: input,
             cursor,
         };
-        let completion = if let Some(context) = call_context.as_ref() {
+        let completion = if let Some(completion) =
+            surtr_analysis::complete_facet_api_path_arg(completion_request)
+        {
+            completion
+        } else if let Some(context) = call_context.as_ref() {
             let expected_ty = signature
                 .as_ref()
                 .and_then(|_| self.expected_param_type_for_call(context));

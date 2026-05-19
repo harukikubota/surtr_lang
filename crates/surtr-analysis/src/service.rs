@@ -295,11 +295,12 @@ impl AnalysisService {
             return CompletionResponse::default();
         };
 
-        complete_prefix(CompletionRequest {
+        let request = CompletionRequest {
             index: &snapshot.semantic_index,
             source: &document.text,
             cursor,
-        })
+        };
+        crate::complete_facet_api_path_arg(request).unwrap_or_else(|| complete_prefix(request))
     }
 
     pub fn repl_assist(

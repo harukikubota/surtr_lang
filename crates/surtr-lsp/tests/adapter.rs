@@ -116,6 +116,65 @@ fn completion_maps_utf16_position_to_lsp_text_edits() {
 }
 
 #[test]
+fn completion_uses_facet_api_first_argument_constraints_through_lsp() {
+    let workspace = PathBuf::from("/repo");
+    let path = workspace.join("main.srt");
+    let uri = path_to_file_uri(&path);
+    let mut host = LspAnalysisHost::new(workspace);
+    host.did_open(uri.clone(), Some(1), "Facet::view(".to_string());
+    host.set_selected_context(Some(SelectedContext::ScriptEntry(path)));
+    host.set_semantic_index(SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "User".to_string(),
+            replacement: "User".to_string(),
+            kind: CompletionKind::TypeConstructor,
+            detail: Some("defrecord User".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "Int".to_string(),
+            replacement: "Int".to_string(),
+            kind: CompletionKind::TypeConstructor,
+            detail: Some("type Int".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "name_path".to_string(),
+            replacement: "name_path".to_string(),
+            kind: CompletionKind::Variable,
+            detail: Some("Facet<User, String>".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        },
+    ]));
+
+    let items = completion_items(
+        &host,
+        &uri,
+        LspPosition {
+            line: 0,
+            character: "Facet::view(".len() as u32,
+        },
+    );
+    let labels = items
+        .iter()
+        .map(|item| item.label.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(labels.contains(&"User"), "{labels:?}");
+    assert!(labels.contains(&"name_path"), "{labels:?}");
+    assert!(!labels.contains(&"Int"), "{labels:?}");
+}
+
+#[test]
 fn completion_exposes_shared_result_ctors_and_bool_variants_through_lsp() {
     let workspace = PathBuf::from("/repo");
     let path = workspace.join("main.srt");
