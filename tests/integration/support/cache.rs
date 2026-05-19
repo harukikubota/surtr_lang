@@ -303,9 +303,9 @@ fn cached_script_compile_prefix(
         return Ok(Arc::new(CachedCompilePrefix {
             module_asts: cached_modules.module_asts,
             declaration_index: cached_modules.declaration_index,
-            resolve_state: std_snapshot.resolve_state,
-            scar_checkpoint: std_snapshot.scar_checkpoint.clone(),
-            bytecode: std_snapshot.bytecode.clone(),
+            resolve_state: std_snapshot.resolve_state(),
+            scar_checkpoint: std_snapshot.scar_checkpoint().clone(),
+            bytecode: std_snapshot.bytecode().clone(),
         }));
     }
 
@@ -343,14 +343,14 @@ fn cached_script_compile_prefix(
         &cached_modules.declaration_index,
         None,
         std_snapshot.default_stage_count,
-        std_snapshot.resolve_state,
+        std_snapshot.resolve_state(),
     )
     .map_err(|e| format!("phase=resolve; message={}", e))?;
     let resume_state = resolved.resume_state;
 
     let mut scar_session = scar::ScarSession::new();
-    scar_session.rollback(std_snapshot.scar_checkpoint.clone());
-    scar_session.ensure_next_fun_idx_at_least(next_fun_idx(&std_snapshot.bytecode));
+    scar_session.rollback(std_snapshot.scar_checkpoint().clone());
+    scar_session.ensure_next_fun_idx_at_least(next_fun_idx(std_snapshot.bytecode()));
     let typed = scar_session
         .typecheck_staged_program_with_context(
             resolved,
@@ -358,11 +358,11 @@ fn cached_script_compile_prefix(
         )
         .map_err(|e| format!("phase=typecheck; message={}", e))?;
 
-    let mut forge_session = forge::ForgeSession::from_bytecode(&std_snapshot.bytecode);
+    let mut forge_session = forge::ForgeSession::from_bytecode(std_snapshot.bytecode());
     let (chunk, _) = forge_session
         .codegen_chunk_typed_program(typed)
         .map_err(|e| format!("phase=codegen; message={}", e))?;
-    let bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode.clone(), chunk)
+    let bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode().clone(), chunk)
         .map_err(|e| format!("phase=codegen; message={}", e))?;
     scar_session.reconcile_function_indices(bytecode.functions.iter().filter_map(|entry| {
         entry

@@ -41,7 +41,7 @@ pub use repl::ui::completion::{
 };
 use serde::{Deserialize, Serialize};
 use sindr::builtin::{BUILTIN_METAS, BUILTIN_TYPE_METAS};
-use sindr::ir::{stable_hash_hex, Bytecode, DocEntry, DocKind, SignatureEntry};
+use sindr::ir::{stable_hash_hex, DocEntry, DocKind, SignatureEntry};
 pub use sindr::policy::SourceKind;
 use sindr::policy::{CompileUnitKind, EntryPoint, RuntimeSourcePolicy};
 
@@ -1658,14 +1658,37 @@ pub fn expand_snapshot_module_stages<'a>(
 #[derive(Debug, Clone)]
 pub struct DefaultStdlibSnapshot {
     pub module_stages: Vec<Vec<sigil::StagedModuleAst>>,
-    pub declaration_index: sigil::DeclarationIndex,
-    pub resolve_state: sigil::ResolveResumeState,
-    pub scar_checkpoint: scar::ScarCheckpoint,
-    pub bytecode: forge::bytecode::Bytecode,
+    pub compile_prefix: CompilationPrefixSnapshot,
     pub docs: Vec<DocEntry>,
     pub signatures: Vec<SignatureEntry>,
     pub auto_import_modules: BTreeSet<String>,
     pub default_stage_count: usize,
+}
+
+impl DefaultStdlibSnapshot {
+    pub fn declaration_index(&self) -> &sigil::DeclarationIndex {
+        &self.compile_prefix.declaration_index
+    }
+
+    pub fn resolve_state(&self) -> sigil::ResolveResumeState {
+        self.compile_prefix.resolve_state
+    }
+
+    pub fn scar_checkpoint(&self) -> &scar::ScarCheckpoint {
+        &self.compile_prefix.scar_checkpoint
+    }
+
+    pub fn bytecode(&self) -> &forge::bytecode::Bytecode {
+        &self.compile_prefix.bytecode
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompilationPrefixSnapshot {
+    pub declaration_index: sigil::DeclarationIndex,
+    pub resolve_state: sigil::ResolveResumeState,
+    pub scar_checkpoint: scar::ScarCheckpoint,
+    pub bytecode: forge::bytecode::Bytecode,
 }
 
 const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 10;
@@ -1680,10 +1703,7 @@ struct CachedStdlibSemanticEnvelope {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedStdlibSemanticPayload {
-    declaration_index: sigil::DeclarationIndex,
-    resolve_state: sigil::ResolveResumeState,
-    scar_checkpoint: scar::ScarCheckpoint,
-    bytecode: Bytecode,
+    compile_prefix: CompilationPrefixSnapshot,
     docs: Vec<DocEntry>,
     signatures: Vec<SignatureEntry>,
     auto_import_modules: BTreeSet<String>,
@@ -1697,13 +1717,7 @@ struct CachedTestSemanticPrefixEnvelope {
     payload: CachedTestSemanticPrefixPayload,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CachedTestSemanticPrefixPayload {
-    pub declaration_index: sigil::DeclarationIndex,
-    pub resolve_state: sigil::ResolveResumeState,
-    pub scar_checkpoint: scar::ScarCheckpoint,
-    pub bytecode: Bytecode,
-}
+pub type CachedTestSemanticPrefixPayload = CompilationPrefixSnapshot;
 
 pub fn cached_lib_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
     static CACHE: OnceLock<Result<Vec<ModuleInput>, LoadError>> = OnceLock::new();
@@ -1926,10 +1940,7 @@ fn build_stdlib_snapshot(
         if payload.default_stage_count == default_stage_count {
             return Ok(DefaultStdlibSnapshot {
                 module_stages,
-                declaration_index: payload.declaration_index,
-                resolve_state: payload.resolve_state,
-                scar_checkpoint: payload.scar_checkpoint,
-                bytecode: payload.bytecode,
+                compile_prefix: payload.compile_prefix,
                 docs: payload.docs,
                 signatures: payload.signatures,
                 auto_import_modules: payload.auto_import_modules,
@@ -1998,10 +2009,12 @@ fn build_stdlib_snapshot(
 
     let snapshot = DefaultStdlibSnapshot {
         default_stage_count,
-        declaration_index,
-        resolve_state,
-        scar_checkpoint: scar_session.checkpoint(),
-        bytecode,
+        compile_prefix: CompilationPrefixSnapshot {
+            declaration_index,
+            resolve_state,
+            scar_checkpoint: scar_session.checkpoint(),
+            bytecode,
+        },
         docs,
         signatures,
         auto_import_modules,
@@ -2011,10 +2024,7 @@ fn build_stdlib_snapshot(
         &stdlib_semantic_cache_path(stdlib_variant),
         &cache_key,
         CachedStdlibSemanticPayload {
-            declaration_index: snapshot.declaration_index.clone(),
-            resolve_state: snapshot.resolve_state,
-            scar_checkpoint: snapshot.scar_checkpoint.clone(),
-            bytecode: snapshot.bytecode.clone(),
+            compile_prefix: snapshot.compile_prefix.clone(),
             docs: snapshot.docs.clone(),
             signatures: snapshot.signatures.clone(),
             auto_import_modules: snapshot.auto_import_modules.clone(),
@@ -2210,15 +2220,15 @@ defmod B {
 
         assert_eq!(snapshot.default_stage_count, snapshot.module_stages.len());
         assert!(snapshot
-            .declaration_index
+            .declaration_index()
             .values()
             .any(|entry| entry.fq_name == "Global::Kernel::print"));
         assert!(!snapshot
-            .declaration_index
+            .declaration_index()
             .values()
             .any(|entry| entry.fq_name.starts_with("Global::Test::")));
         assert!(!snapshot
-            .declaration_index
+            .declaration_index()
             .values()
             .any(|entry| entry.module_path == "TestOnly"));
     }
@@ -2229,7 +2239,7 @@ defmod B {
             .expect("test-enabled stdlib snapshot should build");
 
         assert!(snapshot
-            .declaration_index
+            .declaration_index()
             .values()
             .any(|entry| entry.fq_name.starts_with("Global::Test::")));
     }

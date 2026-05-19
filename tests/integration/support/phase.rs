@@ -27,7 +27,7 @@ fn resolve_sources_in_compile_order(
     };
     let (start_stage_index, resume_state) = if matches!(mode, TestCompileMode::Script) {
         let std_snapshot = default_stdlib_snapshot()?;
-        (std_snapshot.default_stage_count, std_snapshot.resolve_state)
+        (std_snapshot.default_stage_count, std_snapshot.resolve_state())
     } else {
         let std_resolved = sigil::resolve_staged_program_with_state(
             &cached_modules.module_asts,

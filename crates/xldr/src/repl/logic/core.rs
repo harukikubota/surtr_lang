@@ -964,10 +964,10 @@ impl ReplEngine {
         if let Ok(snapshot) = crate::default_stdlib_semantic_snapshot() {
             if self.module_stages.len() == snapshot.default_stage_count {
                 self.auto_import_modules = snapshot.auto_import_modules.clone();
-                self.declaration_index = snapshot.declaration_index.clone();
+                self.declaration_index = snapshot.declaration_index().clone();
                 self.auto_import_records =
                     Self::collect_auto_import_records(&snapshot.module_stages, &self.declaration_index);
-                self.scar_session.rollback(snapshot.scar_checkpoint.clone());
+                self.scar_session.rollback(snapshot.scar_checkpoint().clone());
                 self.sync_scar_fun_index_with_vm();
                 self.process_metadata = collect_process_metadata(&snapshot.module_stages);
 
@@ -7946,7 +7946,7 @@ fn compile_repl_preload_from_module_stages(
     );
 
     let mut declaration_index = if module_stage_asts.len() == snapshot.default_stage_count {
-        snapshot.declaration_index.clone()
+        snapshot.declaration_index().clone()
     } else {
         sigil::precollect_declaration_index(&module_stage_asts).map_err(|e| {
             let spec = diagnostics::simple_error("ResolveError", &e.message, e.span, None);
@@ -7973,7 +7973,7 @@ fn compile_repl_preload_from_module_stages(
         &declaration_index,
         Some(compile_sources.user_module_path.clone()),
         snapshot.default_stage_count,
-        snapshot.resolve_state,
+        snapshot.resolve_state(),
     )
     .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
 
@@ -8010,9 +8010,9 @@ fn compile_repl_preload_from_module_stages(
     }
 
     let mut scar_session = scar::ScarSession::new();
-    scar_session.rollback(snapshot.scar_checkpoint.clone());
+    scar_session.rollback(snapshot.scar_checkpoint().clone());
     let next_fun_idx = snapshot
-        .bytecode
+        .bytecode()
         .functions
         .iter()
         .map(|entry| entry.fun_idx.saturating_add(1))
@@ -8047,7 +8047,7 @@ fn compile_repl_preload_from_module_stages(
             ),
         })?;
 
-    let mut forge_session = forge::ForgeSession::from_bytecode(&snapshot.bytecode);
+    let mut forge_session = forge::ForgeSession::from_bytecode(snapshot.bytecode());
     let (mut chunk, meta) = forge_session
         .codegen_chunk_typed_program(typed)
         .map_err(|e| ReplLoadError::Diagnostic {
@@ -8083,9 +8083,9 @@ fn compile_repl_preload_from_module_stages(
                 .owned_context(compile_sources.builtin_source_id)
         });
     let mut vm = match source_context {
-        Some((source, file_name)) => session::bytecode_interactive_vm(snapshot.bytecode.clone())
+        Some((source, file_name)) => session::bytecode_interactive_vm(snapshot.bytecode().clone())
             .with_source(source, file_name),
-        None => session::bytecode_interactive_vm(snapshot.bytecode.clone()),
+        None => session::bytecode_interactive_vm(snapshot.bytecode().clone()),
     };
     vm.push_chunk(chunk, ReplSessionPhase::Preload.execution_policy())
         .map_err(|e| ReplLoadError::Runtime {

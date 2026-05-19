@@ -13,15 +13,7 @@ use spire::error::ParseError;
 
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
 
-#[derive(Clone)]
-struct CachedScriptCompilePrefix {
-    declaration_index: sigil::DeclarationIndex,
-    resolve_state: sigil::ResolveResumeState,
-    scar_checkpoint: scar::ScarCheckpoint,
-    bytecode: forge::bytecode::Bytecode,
-}
-
-type SharedScriptCompilePrefix = Arc<CachedScriptCompilePrefix>;
+type SharedScriptCompilePrefix = Arc<xldr::CompilationPrefixSnapshot>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ScriptCompilePlan {
@@ -365,7 +357,7 @@ fn build_cached_script_compile_prefix(
     let prefix = if let Some(payload) =
         xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key)
     {
-        Arc::new(CachedScriptCompilePrefix {
+        Arc::new(xldr::CompilationPrefixSnapshot {
             declaration_index: rebuilt_declaration_index.clone(),
             resolve_state: payload.resolve_state,
             scar_checkpoint: payload.scar_checkpoint,
@@ -378,7 +370,7 @@ fn build_cached_script_compile_prefix(
             &rebuilt_declaration_index,
             None,
             std_snapshot.default_stage_count,
-            std_snapshot.resolve_state,
+            std_snapshot.resolve_state(),
         )
         .map_err(|e| {
             let (source_id, spec) = resolve_spec_for_error(compile_sources, &e);
@@ -386,9 +378,9 @@ fn build_cached_script_compile_prefix(
         })?;
         let resume_state = resolved.resume_state;
         let mut scar_session = scar::ScarSession::new();
-        scar_session.rollback(std_snapshot.scar_checkpoint.clone());
+        scar_session.rollback(std_snapshot.scar_checkpoint().clone());
         let next_fun_idx = std_snapshot
-            .bytecode
+            .bytecode()
             .functions
             .iter()
             .map(|entry| entry.fun_idx.saturating_add(1))
@@ -411,7 +403,7 @@ fn build_cached_script_compile_prefix(
                     diagnostics::type_error_spec_by_id(sources, source_id, &local_error),
                 )
             })?;
-        let mut forge_session = forge::ForgeSession::from_bytecode(&std_snapshot.bytecode);
+        let mut forge_session = forge::ForgeSession::from_bytecode(std_snapshot.bytecode());
         let (chunk, _) = forge_session
             .codegen_chunk_typed_program(typed)
             .map_err(|e| {
@@ -424,7 +416,7 @@ fn build_cached_script_compile_prefix(
                     diagnostics::simple_error("CodegenError", &e.message, span, None),
                 )
             })?;
-        let bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode.clone(), chunk)
+        let bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode().clone(), chunk)
             .map_err(|e| {
                 let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
                 RuneError::diagnostic(
@@ -451,7 +443,7 @@ fn build_cached_script_compile_prefix(
                     .unwrap_or(0),
             ),
         };
-        let prefix = Arc::new(CachedScriptCompilePrefix {
+        let prefix = Arc::new(xldr::CompilationPrefixSnapshot {
             declaration_index: rebuilt_declaration_index.clone(),
             resolve_state,
             scar_checkpoint: scar_session.checkpoint(),
@@ -569,7 +561,7 @@ pub(crate) fn compile_source(
     let mut cached_prefix: Option<SharedScriptCompilePrefix> = None;
     let rebuilt_declaration_index;
     let declaration_index = if module_stages.len() == std_snapshot.default_stage_count {
-        &std_snapshot.declaration_index
+        std_snapshot.declaration_index()
     } else if matches!(env, ExecutionEnv::Test) && !has_script_process_stage {
         cached_prefix = Some(build_cached_script_compile_prefix(
             env,
@@ -594,7 +586,7 @@ pub(crate) fn compile_source(
     let resume_state = cached_prefix
         .as_ref()
         .map(|prefix| prefix.resolve_state)
-        .unwrap_or(std_snapshot.resolve_state);
+        .unwrap_or(std_snapshot.resolve_state());
     let start_stage_index = if cached_prefix.is_some() {
         module_stages.len()
     } else {
@@ -617,11 +609,11 @@ pub(crate) fn compile_source(
     let prefix_bytecode = cached_prefix
         .as_ref()
         .map(|prefix| prefix.bytecode.clone())
-        .unwrap_or_else(|| std_snapshot.bytecode.clone());
+        .unwrap_or_else(|| std_snapshot.bytecode().clone());
     let prefix_checkpoint = cached_prefix
         .as_ref()
         .map(|prefix| prefix.scar_checkpoint.clone())
-        .unwrap_or_else(|| std_snapshot.scar_checkpoint.clone());
+        .unwrap_or_else(|| std_snapshot.scar_checkpoint().clone());
     scar_session.rollback(prefix_checkpoint);
     let next_fun_idx = prefix_bytecode
         .functions
