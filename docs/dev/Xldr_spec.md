@@ -83,6 +83,7 @@ aggregate であり、Eldr の runtime append policy とは別責務である。
 - loader は追加標準定義ソースも `./lib/**/*.srt` から収集し、`lib/tests/**` と built-in 標準定義ソースと重複するものはデフォルト入力から除外する
 - definition source の primary module path は parse 後 AST と namespace lowering 結果から導出し、loader / Xldr は token 走査で `defmod` head を推定しない
 - qualified `defmod A::B` と `namespace A { defmod B { ... } }` は同じ canonical module path `A::B` として扱う
+- 通常 module source 同士の同一 canonical module path は常に compile error とする。`impl` owner module は既存通常 module への拡張としてのみ同一 path を許可し、`normal A -> impl A -> normal A` のような通常 module 再定義は拒否する
 - internal module path は `Global::Name` または `Namespace::Name` の canonical string を使うが、user-facing 表示では `Global::` を省略する
 - REPL user chunk は標準定義ソース読み込み後に `SourceKind::ReplChunk` として追加される
 - `surtr repl --module <file>` は追加の definition source を 1 件だけ preload し、`Std + 単品 definition` として成立する場合に限って受理する
@@ -128,6 +129,7 @@ REPL 実装は次の 3 層に分ける。
 - core: `ReplEngine` が入力処理、checkpoint/rollback、command 解決、doc/sig/save を担う
 - presenter: `ReplResult` を CLI/TUI が消費しやすい表示単位へ変換する
 - UI adapter: CLI/TUI が terminal I/O と color on/off、pane state を担当する
+- core は process stderr/stdout へ直接出力しない。compile / runtime diagnostic は `ReplResult` / `ReplOutput` の rendered lines と structured diagnostic として返し、CLI/TUI adapter が必要に応じて stderr へ投影する
 
 ### 4.1 入力源
 
@@ -156,7 +158,7 @@ REPL 実装は次の 3 層に分ける。
 - 型定義評価は `> TypeName` 形式で表示する
 - 表示対象のない `Unit` は表示しない
 - `:doc` / `:sig` は evaluator result と同じ `> ` プレフィクスを付けず、presenter が専用レイアウトで表示する
-- compile error / runtime diagnostic の人間向け表示は stderr に流し、structured result 側には UI テスト用の rendered lines を保持する
+- compile error / runtime diagnostic の人間向け表示は UI adapter が stderr に流し、structured result 側には UI テスト用の rendered lines を保持する
 
 ---
 
