@@ -164,6 +164,14 @@ impl SymbolIdentityInfo {
     }
 }
 
+/// Builtin symbol surface metadata for compile-space name/capability queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuiltinSymbolSurfaceMeta {
+    pub name: &'static str,
+    pub identity: TypeIdentity,
+    pub capabilities: SymbolCapabilities,
+}
+
 /// Compile-space usage policy for builtin type heads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuiltinTypeUsagePolicy {
@@ -352,21 +360,28 @@ pub fn builtin_type_usage_policy(name: &str) -> Option<BuiltinTypeUsagePolicy> {
     builtin_type_name(surface_path_name(name)).map(TypeName::usage_policy)
 }
 
-/// Return compile-space identity/capability metadata for builtin surface roots.
-pub fn builtin_symbol_identity_info(name: &str) -> Option<SymbolIdentityInfo> {
+/// Return builtin surface metadata for compile-space name/capability queries.
+pub fn builtin_symbol_surface_meta(name: &str) -> Option<BuiltinSymbolSurfaceMeta> {
     let name = surface_path_name(name);
     match name {
         "Tuple" => {
-            return Some(SymbolIdentityInfo::new(
-                TypeIdentity::Type,
-                SymbolCapabilities::new(false, true, false, Some(FacetRootKind::Tuple)),
-            ));
+            return Some(BuiltinSymbolSurfaceMeta {
+                name: "Tuple",
+                identity: TypeIdentity::Type,
+                capabilities: SymbolCapabilities::new(
+                    false,
+                    true,
+                    false,
+                    Some(FacetRootKind::Tuple),
+                ),
+            });
         }
         "Function" => {
-            return Some(SymbolIdentityInfo::new(
-                TypeIdentity::Type,
-                SymbolCapabilities::new(false, true, false, None),
-            ));
+            return Some(BuiltinSymbolSurfaceMeta {
+                name: "Function",
+                identity: TypeIdentity::Type,
+                capabilities: SymbolCapabilities::new(false, true, false, None),
+            });
         }
         _ => {}
     }
@@ -378,10 +393,17 @@ pub fn builtin_symbol_identity_info(name: &str) -> Option<SymbolIdentityInfo> {
         _ => None,
     };
     let impl_target = type_name.supports_inherent_impl();
-    Some(SymbolIdentityInfo::new(
-        type_name.identity(),
-        SymbolCapabilities::new(true, impl_target, impl_target, facet_root_path),
-    ))
+    Some(BuiltinSymbolSurfaceMeta {
+        name: type_name.as_str(),
+        identity: type_name.identity(),
+        capabilities: SymbolCapabilities::new(true, impl_target, impl_target, facet_root_path),
+    })
+}
+
+/// Return compile-space identity/capability metadata for builtin surface roots.
+pub fn builtin_symbol_identity_info(name: &str) -> Option<SymbolIdentityInfo> {
+    builtin_symbol_surface_meta(name)
+        .map(|meta| SymbolIdentityInfo::new(meta.identity, meta.capabilities))
 }
 
 #[cfg(test)]
@@ -471,6 +493,19 @@ mod tests {
         assert_eq!(
             hash_map.capabilities.facet_root_path,
             Some(FacetRootKind::HashMap)
+        );
+    }
+
+    #[test]
+    fn builtin_symbol_surface_meta_is_separate_from_runtime_aliases() {
+        let string = builtin_symbol_surface_meta("String").expect("String should be known");
+        assert_eq!(string.name, "String");
+        assert_eq!(string.identity, TypeIdentity::Type);
+        assert!(string.capabilities.module_owner);
+
+        assert!(
+            builtin_symbol_surface_meta("String::len").is_none(),
+            "runtime dispatch aliases must not become symbol surface metadata"
         );
     }
 
