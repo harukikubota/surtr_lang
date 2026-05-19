@@ -648,8 +648,28 @@ fn display_path(path: &Path) -> String {
 
 pub fn module_path_from_source_or_file_name(file_name: &str, source: &str) -> String {
     derive_primary_module_path(source)
+        .or_else(|| const_only_module_path_from_file_stem(file_name, source))
         .filter(|module_path| !module_path.is_empty())
         .unwrap_or_else(|| module_path_from_file_name_lossy(file_name))
+}
+
+fn const_only_module_path_from_file_stem(file_name: &str, source: &str) -> Option<String> {
+    let ast = spire::parse_with_context(
+        source,
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::module()),
+    )
+    .or_else(|_| {
+        spire::parse_with_context(
+            source,
+            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+        )
+    })
+    .ok()?;
+    let fallback = Path::new(file_name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty());
+    sigil::const_only_fallback_module_path(&ast, fallback).map(str::to_string)
 }
 
 fn module_path_from_file_name_lossy(file_name: &str) -> String {

@@ -2202,6 +2202,44 @@ Project::config({|project|
 }
 
 #[test]
+fn core_from_project_runner_source_exposes_const_only_file_by_stem_module() {
+    let root = tempfile_dir("xldr-project-runner-repl-const-only");
+    let src = root.join("src");
+    fs::create_dir_all(&src).expect("src dir should be created");
+    let project_file = root.join("project.srt");
+    let config_file = src.join("AppConfig.srt");
+    fs::write(
+        &config_file,
+        r#"
+const APP_NAME = "surtr"
+"#,
+    )
+    .expect("config source should be writable");
+    let project_source = r#"
+Project::config({|project|
+  Project::entrypoint(project, "dev", {|config|
+    Config::add_path(config, "./src/AppConfig.srt")
+  })
+})
+"#;
+
+    let mut engine =
+        ReplEngine::from_project_runner_source(surtr_analysis::ProjectRunnerSourceInput {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: Vec::new(),
+            active_file: None,
+            source: project_source.to_string(),
+        })
+        .expect("project runner source should preload const-only file");
+
+    let output = engine.handle_line("AppConfig::APP_NAME");
+    assert!(rendered_text(&output).contains("surtr"));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn core_from_module_source_rejects_include_directive() {
     let result = ReplEngine::from_module_source(
         "math.srt",
