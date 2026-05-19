@@ -124,7 +124,7 @@ pub struct SemanticIndex {
 }
 
 impl SemanticIndex {
-    fn from_semantic_infos(infos: Vec<SymbolSemanticInfo>) -> Self {
+    pub fn from_symbol_semantic_infos(infos: Vec<SymbolSemanticInfo>) -> Self {
         Self::from_symbols(
             infos
                 .into_iter()
@@ -171,7 +171,7 @@ impl SemanticIndex {
     }
 
     pub fn from_metadata(docs: &[DocEntry], signatures: &[SignatureEntry]) -> Self {
-        Self::from_semantic_infos(symbol_semantic_infos_from_metadata(docs, signatures))
+        Self::from_symbol_semantic_infos(symbol_semantic_infos_from_metadata(docs, signatures))
     }
 
     pub fn from_compile_metadata(
@@ -179,7 +179,7 @@ impl SemanticIndex {
         docs: &[DocEntry],
         signatures: &[SignatureEntry],
     ) -> Self {
-        Self::from_semantic_infos(symbol_semantic_infos_from_compile_metadata(
+        Self::from_symbol_semantic_infos(symbol_semantic_infos_from_compile_metadata(
             declarations,
             docs,
             signatures,
@@ -232,7 +232,9 @@ impl SemanticIndex {
     }
 
     pub fn from_declaration_index(declarations: &DeclarationIndex) -> Self {
-        Self::from_semantic_infos(symbol_semantic_infos_from_declaration_index(declarations))
+        Self::from_symbol_semantic_infos(symbol_semantic_infos_from_declaration_index(
+            declarations,
+        ))
     }
 
     pub fn symbols(&self) -> &[CompletionSymbol] {

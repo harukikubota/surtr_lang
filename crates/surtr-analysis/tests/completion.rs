@@ -1086,6 +1086,46 @@ fn semantic_index_builds_completion_symbols_from_doc_and_signature_metadata() {
 }
 
 #[test]
+fn semantic_index_builds_from_symbol_semantic_infos() {
+    let index = SemanticIndex::from_symbol_semantic_infos(vec![surtr_analysis::SymbolSemanticInfo {
+        canonical_name: "Global::Helper::helper".to_string(),
+        surface_name: "Helper::helper".to_string(),
+        replacement: "Helper::helper".to_string(),
+        kind: CompletionKind::FunctionCall,
+        detail: Some("Helper::helper(value: Int) -> Int".to_string()),
+        documentation: Some("Increment a number.".to_string()),
+        sort_text: Some("1:Helper::helper".to_string()),
+        origin: Some(CompletionOrigin::Declaration {
+            qualified_name: "Global::Helper::helper".to_string(),
+            module_path: "Global::Helper".to_string(),
+            name: "helper".to_string(),
+            stage_index: 1,
+            auto_import: false,
+            visibility: spire::ast::Visibility::Public,
+            user_importable: true,
+            user_callable: true,
+        }),
+        definition: None,
+        capabilities: None,
+    }]);
+
+    let symbol = index
+        .symbols()
+        .iter()
+        .find(|symbol| symbol.label == "Helper::helper")
+        .expect("semantic info should project to completion symbol");
+
+    assert_eq!(
+        symbol.detail.as_deref(),
+        Some("Helper::helper(value: Int) -> Int")
+    );
+    assert_eq!(
+        symbol.documentation.as_deref(),
+        Some("Increment a number.")
+    );
+}
+
+#[test]
 fn semantic_index_compile_metadata_joins_declaration_docs_and_signatures() {
     let mut declarations = DeclarationIndex::new();
     declarations.insert(

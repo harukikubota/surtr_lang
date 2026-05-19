@@ -1093,33 +1093,31 @@ fn semantic_index_with_declarations(
     current_module_path: Option<&str>,
     current_stage_index: usize,
 ) -> SemanticIndex {
-    let mut symbols = existing.symbols().to_vec();
-    symbols.extend(
-        SemanticIndex::from_compile_metadata(declaration_index, docs, signatures)
-            .symbols()
-            .iter()
-            .cloned(),
-    );
+    let mut infos = existing
+        .symbols()
+        .iter()
+        .map(crate::semantic::SymbolSemanticInfo::from_completion_symbol)
+        .collect::<Vec<_>>();
+    infos.extend(crate::semantic::symbol_semantic_infos_from_compile_metadata(
+        declaration_index,
+        docs,
+        signatures,
+    ));
     if let Ok(visible_entries) = sigil::effective_visible_entries(
         module_stages,
         active_ast,
         current_module_path,
         current_stage_index,
     ) {
-        let visible_symbols = visible_entries
+        let visible_infos = visible_entries
             .into_iter()
-            .filter_map(|visible| completion_symbol_for_effective_visible_entry(&symbols, visible))
+            .filter_map(|visible| {
+                crate::semantic::symbol_semantic_info_for_effective_visible_entry(&infos, &visible)
+            })
             .collect::<Vec<_>>();
-        symbols.extend(visible_symbols);
+        infos.extend(visible_infos);
     }
-    SemanticIndex::from_symbols(symbols)
-}
-
-fn completion_symbol_for_effective_visible_entry(
-    existing_symbols: &[CompletionSymbol],
-    visible: sigil::EffectiveVisibleEntry,
-) -> Option<CompletionSymbol> {
-    crate::semantic::completion_symbol_for_effective_visible_entry(existing_symbols, &visible)
+    SemanticIndex::from_symbol_semantic_infos(infos)
 }
 
 fn active_stage_index_for_document(
