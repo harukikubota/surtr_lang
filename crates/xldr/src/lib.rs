@@ -26,6 +26,7 @@ pub use loader::{
     ScriptIncludeDirective, ScriptSourcePrepareError, SourceDescriptor, StagedModule,
     StdlibVariant,
 };
+use loader::stdlib_module_spec_cache_key;
 pub use project_runner::{
     execute_project_runner_source, project_runner_module_input_stages, ProjectRunnerVmError,
 };
@@ -2116,6 +2117,18 @@ fn stdlib_semantic_cache_key(module_sources: &ModuleSources) -> String {
         key.push('\x1f');
     }
     key.push('\x1d');
+    let stdlib_variant = if module_sources
+        .module_stages
+        .iter()
+        .flatten()
+        .any(|module| module.module_path == "Test")
+    {
+        StdlibVariant::TestEnabled
+    } else {
+        StdlibVariant::Default
+    };
+    key.push_str(&stdlib_module_spec_cache_key(stdlib_variant));
+    key.push('\x1d');
     for stage in &module_sources.module_stages {
         key.push('|');
         for module in stage {
@@ -2233,6 +2246,23 @@ defmod B {
 
         assert!(loaded.is_none());
         let _ = std::fs::remove_file(cache_path);
+    }
+
+    #[test]
+    fn stdlib_semantic_cache_key_tracks_stdlib_module_spec_variant() {
+        let default_sources =
+            collect_module_sources_with_module_stages(&[]).expect("default stdlib should load");
+        let test_sources = collect_test_module_sources_with_module_stages(&[])
+            .expect("test-enabled stdlib should load");
+
+        assert_ne!(
+            crate::loader::stdlib_module_spec_cache_key(StdlibVariant::Default),
+            crate::loader::stdlib_module_spec_cache_key(StdlibVariant::TestEnabled)
+        );
+        assert_ne!(
+            stdlib_semantic_cache_key(&default_sources),
+            stdlib_semantic_cache_key(&test_sources)
+        );
     }
 
     #[test]
