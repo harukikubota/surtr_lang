@@ -38,6 +38,11 @@ impl Checker {
         }
     }
 
+    fn builtin_type_ref_witness_allowed(name: &str) -> bool {
+        builtin_type_usage_policy(Self::surface_name(name))
+            .is_some_and(|policy| policy.type_ref_witness_allowed)
+    }
+
     fn builtin_special_enum_ty(name: &str, args: &[Ty]) -> Option<Ty> {
         match Self::surface_name(name) {
             "Boolean" if args.is_empty() => Some(Ty::Bool),
@@ -560,8 +565,7 @@ impl Checker {
                 }
             }
             AstTy::Generic(span, name, _)
-                if builtin_type_usage_policy(Self::surface_name(name))
-                    .is_some_and(|policy| policy.type_ref_witness_allowed) =>
+                if Self::builtin_type_ref_witness_allowed(name) =>
             {
                 Err(self.type_ref_not_allowed_error(span))
             }
@@ -950,8 +954,7 @@ impl Checker {
                 Ok(fresh)
             }
             AstTy::Generic(span, name, _)
-                if builtin_type_usage_policy(Self::surface_name(name))
-                    .is_some_and(|policy| policy.type_ref_witness_allowed) =>
+                if Self::builtin_type_ref_witness_allowed(name) =>
             {
                 Err(self.type_ref_not_allowed_error(span))
             }
@@ -2538,5 +2541,16 @@ impl Checker {
             ),
             _ => Some(node.span.clone()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Checker;
+
+    #[test]
+    fn type_ref_witness_gate_uses_builtin_type_usage_policy() {
+        assert!(Checker::builtin_type_ref_witness_allowed("TypeRef"));
+        assert!(!Checker::builtin_type_ref_witness_allowed("String"));
     }
 }
