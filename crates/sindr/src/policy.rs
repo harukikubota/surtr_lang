@@ -6,6 +6,10 @@ pub enum CompileUnitKind {
     Repl,
 }
 
+/// Bump when source policy semantics change in a way that invalidates staged
+/// semantic snapshots.
+pub const SOURCE_POLICY_SCHEMA_VERSION: u32 = 1;
+
 /// Logical source categories that drive parser/typechecker policy selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceKind {

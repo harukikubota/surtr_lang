@@ -31,6 +31,10 @@ pub fn surface_rendered_eq(left: &str, right: &str) -> bool {
     surface_rendered_name(left) == surface_rendered_name(right)
 }
 
+/// Bump when compile-space symbol capability semantics change in a way that
+/// invalidates staged semantic snapshots.
+pub const SYMBOL_CAPABILITY_SCHEMA_VERSION: u32 = 1;
+
 /// Surface-level type identity defined by the language spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeIdentity {

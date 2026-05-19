@@ -43,7 +43,9 @@ use serde::{Deserialize, Serialize};
 use sindr::builtin::{BUILTIN_METAS, BUILTIN_TYPE_METAS};
 use sindr::ir::{stable_hash_hex, DocEntry, SignatureEntry};
 pub use sindr::policy::SourceKind;
-use sindr::policy::{CompileUnitKind, EntryPoint, RuntimeSourcePolicy};
+use sindr::policy::{
+    CompileUnitKind, EntryPoint, RuntimeSourcePolicy, SOURCE_POLICY_SCHEMA_VERSION,
+};
 
 pub const MODULE_SPAN_STRIDE: usize = 1_000_000;
 
@@ -785,11 +787,21 @@ pub fn target_root_from_current_exe() -> Option<PathBuf> {
 }
 
 fn stdlib_semantic_cache_key(module_sources: &ModuleSources) -> String {
+    stable_hash_hex(&stdlib_semantic_cache_material(module_sources))
+}
+
+fn stdlib_semantic_cache_material(module_sources: &ModuleSources) -> String {
     let mut key = String::new();
     key.push_str("surtr-stdlib-semantic-cache-v");
     key.push_str(&STDLIB_SEMANTIC_CACHE_SCHEMA.to_string());
     key.push('\x1f');
     key.push_str(env!("CARGO_PKG_VERSION"));
+    key.push('\x1f');
+    key.push_str("source-policy-schema-v");
+    key.push_str(&SOURCE_POLICY_SCHEMA_VERSION.to_string());
+    key.push('\x1f');
+    key.push_str("symbol-capability-schema-v");
+    key.push_str(&sindr::names::SYMBOL_CAPABILITY_SCHEMA_VERSION.to_string());
     key.push('\x1f');
     for meta in BUILTIN_METAS {
         key.push_str(meta.name);
@@ -840,7 +852,7 @@ fn stdlib_semantic_cache_key(module_sources: &ModuleSources) -> String {
             key.push('\x1f');
         }
     }
-    stable_hash_hex(&key)
+    key
 }
 
 pub fn source_kind_cache_key(kind: SourceKind) -> &'static str {
@@ -954,6 +966,23 @@ defmod B {
             stdlib_semantic_cache_key(&default_sources),
             stdlib_semantic_cache_key(&test_sources)
         );
+    }
+
+    #[test]
+    fn stdlib_semantic_cache_material_tracks_shared_semantic_schemas() {
+        let module_sources =
+            collect_module_sources_with_module_stages(&[]).expect("default stdlib should load");
+
+        let material = stdlib_semantic_cache_material(&module_sources);
+
+        assert!(material.contains(&format!(
+            "source-policy-schema-v{}",
+            sindr::policy::SOURCE_POLICY_SCHEMA_VERSION
+        )));
+        assert!(material.contains(&format!(
+            "symbol-capability-schema-v{}",
+            sindr::names::SYMBOL_CAPABILITY_SCHEMA_VERSION
+        )));
     }
 
     #[test]
