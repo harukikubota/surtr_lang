@@ -210,6 +210,15 @@ pub fn derive_parse_rules(source_kind: SourceKind) -> spire::ParseRules {
     spire::parse_rules_for_source_kind(source_kind)
 }
 
+pub fn derive_parser_context(
+    source_id: u32,
+    source_kind: SourceKind,
+    compile_unit_kind: CompileUnitKind,
+    module_path: Option<String>,
+) -> spire::ParserContext {
+    spire::parser_context_for_source_kind(source_id, source_kind, compile_unit_kind, module_path)
+}
+
 pub fn derive_runtime_policy(
     compile_unit_kind: CompileUnitKind,
     source_kind: SourceKind,

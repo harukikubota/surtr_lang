@@ -762,8 +762,12 @@ fn parse_script_ast_for_compile(
     source_id: u32,
     source_kind: xldr::SourceKind,
 ) -> Result<Vec<Ast>, ParseError> {
-    let strict_context =
-        spire::ParserContext::script(source_id).with_rules(xldr::derive_parse_rules(source_kind));
+    let strict_context = xldr::derive_parser_context(
+        source_id,
+        source_kind,
+        sindr::policy::CompileUnitKind::Script,
+        None,
+    );
     spire::parse_with_context(source, strict_context)
 }
 

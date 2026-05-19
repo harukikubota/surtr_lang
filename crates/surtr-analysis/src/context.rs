@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use sindr::policy::{CompileUnitKind, ParserContextKind, SourceKind};
+use sindr::policy::{CompileUnitKind, SourceKind};
 
 use crate::project_runner::{
     extract_project_runner_input, project_runner_input_from_result, resolve_project_runner,
@@ -685,13 +685,5 @@ fn parser_context_for_document(
     compile_unit_kind: CompileUnitKind,
     module_path: Option<String>,
 ) -> spire::ParserContext {
-    let context = match source_kind.parser_context_kind(compile_unit_kind) {
-        ParserContextKind::Project => spire::ParserContext::project(source_id),
-        ParserContextKind::Script => spire::ParserContext::script(source_id),
-        ParserContextKind::Repl => spire::ParserContext::repl(source_id),
-        ParserContextKind::Module => spire::ParserContext::module(source_id, module_path)
-            .with_rules(spire::parse_rules_for_source_kind(source_kind)),
-    };
-
-    context
+    spire::parser_context_for_source_kind(source_id, source_kind, compile_unit_kind, module_path)
 }

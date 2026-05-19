@@ -624,7 +624,7 @@ pub fn collect_script_include_directives(
 ) -> Result<(String, Vec<ScriptIncludeDirective>), ScriptSourcePrepareError> {
     let ast = spire::parse_with_context(
         source,
-        spire::ParserContext::script(0).with_rules(crate::derive_parse_rules(source_kind)),
+        crate::derive_parser_context(0, source_kind, sindr::policy::CompileUnitKind::Script, None),
     )
     .map_err(|e| ScriptSourcePrepareError::Parse {
         message: e.message().to_string(),

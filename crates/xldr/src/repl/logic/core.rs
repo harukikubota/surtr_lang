@@ -36,8 +36,8 @@ use super::{eval, render, session};
 use crate::loader::{self, StagedModule};
 use crate::ErrorDisplayMode;
 use crate::{
-    collect_additional_default_std_module_inputs, derive_parse_rules, derive_runtime_policy,
-    error_display, LoadError, ModuleStageParseError, ModuleStageParseErrorKind, SourceKind,
+    collect_additional_default_std_module_inputs, derive_runtime_policy, error_display, LoadError,
+    ModuleStageParseError, ModuleStageParseErrorKind, SourceKind,
 };
 
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -4383,8 +4383,12 @@ impl ReplEngine {
     ) -> ReplResult {
         let ast = match spire::parse_with_context(
             query_source,
-            spire::ParserContext::repl(self.repl_source_id.0)
-                .with_rules(derive_parse_rules(SourceKind::ReplChunk)),
+            crate::derive_parser_context(
+                self.repl_source_id.0,
+                SourceKind::ReplChunk,
+                CompileUnitKind::Repl,
+                None,
+            ),
         ) {
             Ok(ast) => ast,
             Err(e) => {
@@ -4735,8 +4739,12 @@ impl ReplEngine {
     ) -> ReplResult {
         let ast = match spire::parse_with_context(
             query_source,
-            spire::ParserContext::repl(self.repl_source_id.0)
-                .with_rules(derive_parse_rules(SourceKind::ReplChunk)),
+            crate::derive_parser_context(
+                self.repl_source_id.0,
+                SourceKind::ReplChunk,
+                CompileUnitKind::Repl,
+                None,
+            ),
         ) {
             Ok(ast) => ast,
             Err(e) => {
@@ -7287,8 +7295,12 @@ impl ReplEngine {
 
         let ast = match spire::parse_with_context(
             &self.pending,
-            spire::ParserContext::repl(self.repl_source_id.0)
-                .with_rules(derive_parse_rules(SourceKind::ReplChunk)),
+            crate::derive_parser_context(
+                self.repl_source_id.0,
+                SourceKind::ReplChunk,
+                CompileUnitKind::Repl,
+                None,
+            ),
         ) {
             Ok(ast) => ast,
             Err(e) if e.is_incomplete() => {
@@ -8173,8 +8185,12 @@ fn parse_preload_sources(
         .unwrap_or("");
     let user_ast = spire::parse_with_context(
         user_source,
-        spire::ParserContext::script(compile_sources.user_source_id.0)
-            .with_rules(derive_parse_rules(SourceKind::Script)),
+        crate::derive_parser_context(
+            compile_sources.user_source_id.0,
+            SourceKind::Script,
+            CompileUnitKind::Script,
+            None,
+        ),
     )
     .map_err(|e| ReplLoadError::Diagnostic {
         phase: "parse".to_string(),
@@ -8891,14 +8907,14 @@ fn load_error_from_span_failure(
 pub(crate) fn parse_module_stages_from_sources(
     sources: &SourceRegistry,
     module_stages: &[Vec<StagedModule>],
-    _compile_unit_kind: CompileUnitKind,
+    compile_unit_kind: CompileUnitKind,
 ) -> Result<Vec<Vec<sigil::StagedModuleAst>>, ModuleStageParseError> {
     let mut staged_module_asts = Vec::with_capacity(module_stages.len());
     let mut seen_module_paths: HashMap<String, (String, bool)> = HashMap::new();
 
     for stage in module_stages {
         let mut stage_ast = Vec::new();
-        let parsed_stage = parse_stage_modules_parallel(sources, stage);
+        let parsed_stage = parse_stage_modules_parallel(sources, stage, compile_unit_kind);
         for (module, lowered_modules) in stage.iter().zip(parsed_stage) {
             for lowered in lowered_modules? {
                 if !lowered.module_path.is_empty() {
@@ -8949,6 +8965,7 @@ pub(crate) fn parse_module_stages_from_sources(
 fn parse_stage_modules_parallel(
     sources: &SourceRegistry,
     stage: &[StagedModule],
+    compile_unit_kind: CompileUnitKind,
 ) -> Vec<Result<Vec<crate::LoweredModuleAst>, ModuleStageParseError>> {
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(stage.len());
@@ -8960,8 +8977,12 @@ fn parse_stage_modules_parallel(
                         let module_source = sources.source(module.source_id).unwrap_or("");
                         let parsed = spire::parse_with_context(
                             module_source,
-                            spire::ParserContext::module(module.source_id.0, None)
-                                .with_rules(derive_parse_rules(module.source_kind)),
+                            crate::derive_parser_context(
+                                module.source_id.0,
+                                module.source_kind,
+                                compile_unit_kind,
+                                None,
+                            ),
                         )
                         .map_err(|e| ModuleStageParseError {
                             source_id: module.source_id,
