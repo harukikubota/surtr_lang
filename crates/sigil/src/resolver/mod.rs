@@ -30,8 +30,9 @@ mod tests;
 mod warnings;
 
 pub use self::declarations::{
-    lower_module_source_ast, lowered_module_is_impl_owner, precollect_declaration_index,
-    DeclarationEntry, DeclarationIndex, DeclarationKind, LoweredModuleAst, StagedModuleAst,
+    declaration_uid_order, lower_module_source_ast, lowered_module_is_impl_owner,
+    precollect_declaration_index, DeclarationEntry, DeclarationIndex, DeclarationKind,
+    LoweredModuleAst, StagedModuleAst,
 };
 pub use self::session::{SigilCheckpoint, SigilSession};
 

@@ -1038,17 +1038,24 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
     }
 }
 
-pub(super) fn assign_declaration_uids(index: &DeclarationIndex) -> HashMap<String, u32> {
-    let mut scope = initialize_scope();
-    let mut declaration_uids = HashMap::with_capacity(index.len());
+pub fn declaration_uid_order(index: &DeclarationIndex) -> Vec<String> {
     let mut entries = index.values().collect::<Vec<_>>();
     entries.sort_by(|left, right| {
         left.stage_index
             .cmp(&right.stage_index)
             .then_with(|| left.fq_name.cmp(&right.fq_name))
     });
-    for entry in entries {
-        declaration_uids.insert(entry.fq_name.clone(), scope.reserve_id());
+    entries
+        .into_iter()
+        .map(|entry| entry.fq_name.clone())
+        .collect()
+}
+
+pub(super) fn assign_declaration_uids(index: &DeclarationIndex) -> HashMap<String, u32> {
+    let mut scope = initialize_scope();
+    let mut declaration_uids = HashMap::with_capacity(index.len());
+    for fq_name in declaration_uid_order(index) {
+        declaration_uids.insert(fq_name, scope.reserve_id());
     }
     declaration_uids
 }

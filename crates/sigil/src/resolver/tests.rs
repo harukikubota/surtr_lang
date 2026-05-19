@@ -550,6 +550,37 @@ fn test_precollect_declaration_index_tracks_bootstrap_std_user_stage_split() {
 }
 
 #[test]
+fn declaration_uid_order_is_stage_then_fq_name() {
+    let module_stages = vec![
+        vec![staged_module(
+            "User::B",
+            parse_module_ast(r#"def beta() -> Int { 1 }"#, "User::B"),
+        )],
+        vec![
+            staged_module(
+                "User::Z",
+                parse_module_ast(r#"def zeta() -> Int { 1 }"#, "User::Z"),
+            ),
+            staged_module(
+                "User::A",
+                parse_module_ast(r#"def alpha() -> Int { 1 }"#, "User::A"),
+            ),
+        ],
+    ];
+
+    let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
+
+    assert_eq!(
+        declaration_uid_order(&index),
+        vec![
+            "User::B::beta".to_string(),
+            "User::A::alpha".to_string(),
+            "User::Z::zeta".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn test_precollect_impl_methods_as_type_namespace_members() {
     let module_stages = vec![vec![staged_module(
         "",
