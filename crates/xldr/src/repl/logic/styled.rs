@@ -180,9 +180,9 @@ pub fn info_line(line: &str) -> String {
             source_doc(rest),
         ]);
     }
-    if let Some(rest) = line.strip_prefix("identity: ") {
+    if let Some(rest) = line.strip_prefix("display: ") {
         return concat([
-            styled("identity", Style::fg(Color::BrightBlack).bold()),
+            styled("display", Style::fg(Color::BrightBlack).bold()),
             styled(": ", Style::fg(Color::BrightBlack)),
             source_doc(rest),
         ]);

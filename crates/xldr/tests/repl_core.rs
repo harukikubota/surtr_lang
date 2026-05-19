@@ -2535,7 +2535,7 @@ fn core_type_command_looks_up_visible_bindings_only() {
     let list_type_text = rendered_text(&list_type);
     assert_eq!(
         list_type_text,
-        "list\ntype: List<Int>\nidentity: TypeIdentity::Type"
+        "list\ntype: List<Int>\ndisplay: RuntimeTypeDisplay::Type"
     );
 
     let closure = engine.handle_line("captured = 1");
@@ -2552,7 +2552,7 @@ fn core_type_command_looks_up_visible_bindings_only() {
     let closure_fun_type_text = rendered_text(&closure_fun_type);
     assert_eq!(
         closure_fun_type_text,
-        "pure\ntype: (Int -> Int)\nidentity: TypeIdentity::Closure"
+        "pure\ntype: (Int -> Int)\ndisplay: RuntimeTypeDisplay::Closure"
     );
 
     let capture_fun = engine.handle_line("inc = {|n: Int| n + captured}");
@@ -2573,7 +2573,7 @@ fn core_type_command_looks_up_visible_bindings_only() {
     let capture_fun_type_text = rendered_text(&capture_fun_type);
     assert_eq!(
         capture_fun_type_text,
-        "inc\ntype: (Int -> Int)\nidentity: TypeIdentity::Closure"
+        "inc\ntype: (Int -> Int)\ndisplay: RuntimeTypeDisplay::Closure"
     );
 
     let builtin_capture = engine.handle_line("p = &print");
@@ -2588,7 +2588,7 @@ fn core_type_command_looks_up_visible_bindings_only() {
     let builtin_capture_type_text = rendered_text(&builtin_capture_type);
     assert_eq!(
         builtin_capture_type_text,
-        "p\ntype: (String -> Unit)\nidentity: TypeIdentity::Capture"
+        "p\ntype: (String -> Unit)\ndisplay: RuntimeTypeDisplay::Capture"
     );
 
     let partial_capture = engine.handle_line("f = &Add::add(&1, 4)");
@@ -2602,7 +2602,7 @@ fn core_type_command_looks_up_visible_bindings_only() {
     let partial_capture_type_text = rendered_text(&partial_capture_type);
     assert_eq!(
         partial_capture_type_text,
-        "f\ntype: (Int -> Int)\nidentity: TypeIdentity::Capture"
+        "f\ntype: (Int -> Int)\ndisplay: RuntimeTypeDisplay::Capture"
     );
 
     for invalid in [":type if", ":type String::is_empty()"] {
@@ -2636,7 +2636,7 @@ fn core_repl_surfaces_keep_generic_arguments_for_bindings() {
     let ty = engine.handle_line(":type maybe");
     assert_eq!(
         rendered_text(&ty),
-        "maybe\ntype: Option<Int>\nidentity: TypeIdentity::Enum"
+        "maybe\ntype: Option<Int>\ndisplay: RuntimeTypeDisplay::Enum"
     );
 
     let info = engine.handle_line(":info maybe");
