@@ -231,6 +231,31 @@ struct ReplProcessMetadata {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplTypeDisplayCategory {
+    Type,
+    Struct,
+    Record,
+    Enum,
+    Closure,
+    Capture,
+    FacetPath,
+}
+
+impl ReplTypeDisplayCategory {
+    fn identity_label(self) -> &'static str {
+        match self {
+            Self::Type => "TypeIdentity::Type",
+            Self::Struct => "TypeIdentity::Struct",
+            Self::Record => "TypeIdentity::Record",
+            Self::Enum => "TypeIdentity::Enum",
+            Self::Closure => "TypeIdentity::Closure",
+            Self::Capture => "TypeIdentity::Capture",
+            Self::FacetPath => "TypeIdentity::FacetPath",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReplSessionPhase {
     Bootstrap,
     Preload,
@@ -7124,35 +7149,43 @@ impl ReplEngine {
 
     fn render_type_identity(&self, binding: &forge::BindingInfo, value: Option<&Value>) -> String {
         if binding.facet_info.is_some() {
-            return "TypeIdentity::FacetPath".to_string();
+            return ReplTypeDisplayCategory::FacetPath
+                .identity_label()
+                .to_string();
         }
         if let Some(kind) = binding.callable_kind {
-            return match kind {
-                forge::ReplCallableKind::Closure => "TypeIdentity::Closure".to_string(),
-                forge::ReplCallableKind::Capture => "TypeIdentity::Capture".to_string(),
-            };
+            return Self::callable_display_category(kind)
+                .identity_label()
+                .to_string();
         }
-        match value {
-            None => "TypeIdentity::Type".to_string(),
+        let category = match value {
+            None => ReplTypeDisplayCategory::Type,
             Some(Value::Callable(callable)) => match callable.metadata.origin {
-                sindr::runtime::CallableOrigin::Closure => "TypeIdentity::Closure".to_string(),
-                sindr::runtime::CallableOrigin::Capture => "TypeIdentity::Capture".to_string(),
-                sindr::runtime::CallableOrigin::Unknown => "TypeIdentity::Closure".to_string(),
+                sindr::runtime::CallableOrigin::Closure => ReplTypeDisplayCategory::Closure,
+                sindr::runtime::CallableOrigin::Capture => ReplTypeDisplayCategory::Capture,
+                sindr::runtime::CallableOrigin::Unknown => ReplTypeDisplayCategory::Closure,
             },
             Some(Value::Tagged { tag, .. }) => {
-                let identity = self
+                self
                     .vm
                     .type_registry()
                     .lookup(*tag)
                     .map(|entry| match entry.kind {
-                        TypeKind::Struct => "Struct",
-                        TypeKind::Record => "Record",
-                        TypeKind::EnumVariant => "Enum",
+                        TypeKind::Struct => ReplTypeDisplayCategory::Struct,
+                        TypeKind::Record => ReplTypeDisplayCategory::Record,
+                        TypeKind::EnumVariant => ReplTypeDisplayCategory::Enum,
                     })
-                    .unwrap_or("Type");
-                format!("TypeIdentity::{}", identity)
+                    .unwrap_or(ReplTypeDisplayCategory::Type)
             }
-            Some(_) => "TypeIdentity::Type".to_string(),
+            Some(_) => ReplTypeDisplayCategory::Type,
+        };
+        category.identity_label().to_string()
+    }
+
+    fn callable_display_category(kind: forge::ReplCallableKind) -> ReplTypeDisplayCategory {
+        match kind {
+            forge::ReplCallableKind::Closure => ReplTypeDisplayCategory::Closure,
+            forge::ReplCallableKind::Capture => ReplTypeDisplayCategory::Capture,
         }
     }
 
@@ -9716,6 +9749,22 @@ supervisor_init {
             ),
             "{}",
             ReplEngine::repl_result_text(&tick)
+        );
+    }
+
+    #[test]
+    fn core_type_display_category_keeps_runtime_display_out_of_compile_identity() {
+        assert_eq!(
+            ReplTypeDisplayCategory::FacetPath.identity_label(),
+            "TypeIdentity::FacetPath"
+        );
+        assert_eq!(
+            ReplTypeDisplayCategory::Closure.identity_label(),
+            "TypeIdentity::Closure"
+        );
+        assert_eq!(
+            ReplTypeDisplayCategory::Struct.identity_label(),
+            "TypeIdentity::Struct"
         );
     }
 }
