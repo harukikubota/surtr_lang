@@ -1414,9 +1414,6 @@ impl ReplEngine {
         }
 
         for visible in self.sigil_session.visible_declaration_entries() {
-            if visible.entry.visibility != spire::ast::Visibility::Public || visible.entry.hidden {
-                continue;
-            }
             if Self::declaration_is_function_completion_surface(&visible.entry) {
                 let detail = self
                     .find_signature(&visible.visible_name)
@@ -1577,10 +1574,7 @@ impl ReplEngine {
         }
 
         for visible in self.sigil_session.visible_declaration_entries() {
-            if visible.entry.visibility != spire::ast::Visibility::Public
-                || visible.entry.hidden
-                || !Self::declaration_is_function_completion_surface(&visible.entry)
-            {
+            if !Self::declaration_is_function_completion_surface(&visible.entry) {
                 continue;
             }
             if let Some((qualified_name, signature)) = self

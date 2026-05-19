@@ -3940,6 +3940,74 @@ fn test_sigil_session_allows_top_level_shadowing_of_imported_name() {
     assert_ne!(def_id, 99);
 }
 
+#[test]
+fn test_sigil_session_visible_entries_filter_hidden_surfaces_and_keep_visible_aliases() {
+    let mut declaration_index = DeclarationIndex::new();
+    declaration_index.insert(
+        "Global::Helper::helper".to_string(),
+        DeclarationEntry {
+            module_path: "Global::Helper".to_string(),
+            name: "helper".to_string(),
+            fq_name: "Global::Helper::helper".to_string(),
+            kind: DeclarationKind::Def,
+            stage_index: 0,
+            auto_import: false,
+            hidden: false,
+            visibility: Visibility::Public,
+            user_importable: true,
+            user_callable: true,
+        },
+    );
+    declaration_index.insert(
+        "Global::Kernel::hidden_pid".to_string(),
+        DeclarationEntry {
+            module_path: "Global::Kernel".to_string(),
+            name: "hidden_pid".to_string(),
+            fq_name: "Global::Kernel::hidden_pid".to_string(),
+            kind: DeclarationKind::Def,
+            stage_index: 0,
+            auto_import: false,
+            hidden: true,
+            visibility: Visibility::Public,
+            user_importable: true,
+            user_callable: true,
+        },
+    );
+
+    let declaration_uids = assign_declaration_uids(&declaration_index);
+    let mut scope = Scope::new();
+    scope.define_with_id(
+        "helper",
+        *declaration_uids
+            .get("Global::Helper::helper")
+            .expect("helper uid should exist"),
+    );
+    scope.define_with_id(
+        "hidden_pid",
+        *declaration_uids
+            .get("Global::Kernel::hidden_pid")
+            .expect("hidden uid should exist"),
+    );
+
+    let mut session = SigilSession::new();
+    session.replace_scope_with_declarations(scope, &declaration_index);
+
+    let visible = session.visible_declaration_entries();
+
+    assert!(
+        visible.iter().any(|entry| {
+            entry.visible_name == "helper" && entry.entry.fq_name == "Global::Helper::helper"
+        }),
+        "visible entries should preserve the visible alias: {visible:?}"
+    );
+    assert!(
+        visible
+            .iter()
+            .all(|entry| entry.entry.fq_name != "Global::Kernel::hidden_pid"),
+        "hidden surfaces should not be exposed: {visible:?}"
+    );
+}
+
 // --- Expression resolution tests ---
 
 #[test]

@@ -797,6 +797,36 @@ pub struct EffectiveVisibleEntry {
     pub entry: DeclarationEntry,
 }
 
+fn collect_effective_visible_entries(
+    scope: &Scope,
+    entries_by_uid: &HashMap<u32, DeclarationEntry>,
+) -> Vec<EffectiveVisibleEntry> {
+    let mut visible = Vec::new();
+    let mut seen = HashSet::new();
+    for (name, uid) in scope.bindings() {
+        let Some(entry) = entries_by_uid.get(&uid) else {
+            continue;
+        };
+        if entry.hidden || (!entry.user_importable && !entry.user_callable) {
+            continue;
+        }
+        let visible_name = global_surface_name(name).to_string();
+        if !seen.insert((visible_name.clone(), entry.fq_name.clone())) {
+            continue;
+        }
+        visible.push(EffectiveVisibleEntry {
+            visible_name,
+            entry: entry.clone(),
+        });
+    }
+    visible.sort_by(|left, right| {
+        left.visible_name
+            .cmp(&right.visible_name)
+            .then_with(|| left.entry.fq_name.cmp(&right.entry.fq_name))
+    });
+    visible
+}
+
 pub fn effective_visible_entries(
     module_stages: &[Vec<StagedModuleAst>],
     stmts: &[Ast],
@@ -822,30 +852,7 @@ pub fn effective_visible_entries(
         .iter()
         .filter_map(|(fq_name, uid)| declaration_index.get(fq_name).cloned().map(|entry| (*uid, entry)))
         .collect::<HashMap<_, _>>();
-    let mut visible = Vec::new();
-    let mut seen = HashSet::new();
-    for (name, uid) in build.scope.bindings() {
-        let Some(entry) = entries_by_uid.get(&uid) else {
-            continue;
-        };
-        if entry.hidden || (!entry.user_importable && !entry.user_callable) {
-            continue;
-        }
-        let visible_name = global_surface_name(name).to_string();
-        if !seen.insert((visible_name.clone(), entry.fq_name.clone())) {
-            continue;
-        }
-        visible.push(EffectiveVisibleEntry {
-            visible_name,
-            entry: entry.clone(),
-        });
-    }
-    visible.sort_by(|left, right| {
-        left.visible_name
-            .cmp(&right.visible_name)
-            .then_with(|| left.entry.fq_name.cmp(&right.entry.fq_name))
-    });
-    Ok(visible)
+    Ok(collect_effective_visible_entries(&build.scope, &entries_by_uid))
 }
 
 struct Resolver {
