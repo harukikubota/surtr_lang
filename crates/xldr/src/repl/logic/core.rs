@@ -1331,6 +1331,10 @@ impl ReplEngine {
     }
 
     pub fn semantic_index(&self) -> surtr_analysis::SemanticIndex {
+        surtr_analysis::SemanticIndex::from_symbol_semantic_infos(self.symbol_semantic_infos())
+    }
+
+    pub fn symbol_semantic_infos(&self) -> Vec<surtr_analysis::SymbolSemanticInfo> {
         let mut symbols = surtr_analysis::SemanticIndex::from_compile_metadata(
             &self.declaration_index,
             &self.docs,
@@ -1456,7 +1460,10 @@ impl ReplEngine {
             }
         }
 
-        surtr_analysis::SemanticIndex::from_symbols(symbols)
+        symbols
+            .into_iter()
+            .map(|symbol| surtr_analysis::SymbolSemanticInfo::from_completion_symbol(&symbol))
+            .collect()
     }
 
     fn compile_symbol_is_repl_completion_surface(

@@ -460,6 +460,28 @@ fn core_exposes_shared_semantic_index_for_repl_and_lsp_lookup() {
 }
 
 #[test]
+fn core_exposes_symbol_semantic_infos_before_completion_projection() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("answer = 42")).contains("answer: Int"));
+
+    let infos = engine.symbol_semantic_infos();
+
+    let answer = infos
+        .iter()
+        .find(|info| info.surface_name == "answer")
+        .expect("REPL binding should be visible as semantic info");
+    assert_eq!(answer.kind, surtr_analysis::CompletionKind::Variable);
+    assert_eq!(answer.detail.as_deref(), Some("Int"));
+
+    let print = infos
+        .iter()
+        .find(|info| info.surface_name == "print")
+        .expect("stdlib function should be visible as semantic info");
+    assert_eq!(print.kind, surtr_analysis::CompletionKind::FunctionCall);
+    assert!(print.documentation.is_some());
+}
+
+#[test]
 fn core_shared_repl_completion_helper_preserves_repl_visibility_and_presentation() {
     let engine = engine();
     let index = engine.semantic_index();
