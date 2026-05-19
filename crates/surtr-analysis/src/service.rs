@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use sindr::names::{surface_path_name, FacetRootKind};
+use sindr::names::FacetRootKind;
 use sindr::policy::{CompileUnitKind, SourceKind};
 use spire::ast::{Ast, Lit, RecordLitArg, Span};
 use spire::{SyntaxOutlineItem, SyntaxOutlineKind};
@@ -987,9 +987,13 @@ fn analyze_project_stages(
         active_ast.unwrap_or(&[]).to_vec()
     };
     let current_module_path = completion_module_path_for_ast(&visible_ast);
-    let docs = sigil::collect_doc_entries(&module_stages, &visible_ast, current_module_path.as_deref());
-    let signatures =
-        sigil::collect_signature_entries(&module_stages, &visible_ast, current_module_path.as_deref());
+    let docs =
+        sigil::collect_doc_entries(&module_stages, &visible_ast, current_module_path.as_deref());
+    let signatures = sigil::collect_signature_entries(
+        &module_stages,
+        &visible_ast,
+        current_module_path.as_deref(),
+    );
 
     match sigil::precollect_declaration_index(&module_stages) {
         Ok(declaration_index) => {
@@ -1127,7 +1131,11 @@ fn active_stage_index_for_document(
         .iter()
         .enumerate()
         .find_map(|(stage_index, stage)| {
-            stage.files.iter().any(|file| file.path == active_document.path).then_some(stage_index)
+            stage
+                .files
+                .iter()
+                .any(|file| file.path == active_document.path)
+                .then_some(stage_index)
         })
         .unwrap_or_else(|| runner.module_stages.len().saturating_sub(1))
 }
@@ -1185,13 +1193,7 @@ fn build_staged_modules(
                     None,
                 )
             } else {
-                parse_document(
-                    &source,
-                    0,
-                    file.source_kind,
-                    compile_unit_kind,
-                    None,
-                )
+                parse_document(&source, 0, file.source_kind, compile_unit_kind, None)
             };
             match ast {
                 Ok(ast) => {
@@ -1234,215 +1236,10 @@ fn lower_module_ast(
     ast: Vec<Ast>,
     fallback_module_path: Option<&str>,
 ) -> Vec<sigil::StagedModuleAst> {
-    let shared_imports = ast
-        .iter()
-        .filter_map(|stmt| match stmt {
-            Ast::Import(_, _, _) => Some(stmt.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    let mut lowered = Vec::new();
-    let mut shared_global_defs = Vec::new();
-    let mut shared_namespace_consts = Vec::new();
-    let mut shared_result_ctor_contracts = Vec::new();
-
-    for stmt in ast {
-        match stmt {
-            Ast::Defmod(_span, module_path, body, attrs) => {
-                let mut module_ast = shared_imports.clone();
-                module_ast.extend(body);
-                lowered.push(sigil::StagedModuleAst {
-                    module_path,
-                    doc_module_path: None,
-                    ast: module_ast,
-                    module_doc: attrs.doc,
-                    auto_import: attrs.auto_import,
-                    process_spec: None,
-                });
-            }
-            Ast::Defagent(span, module_path, body, process_spec, attrs)
-            | Ast::Defgenserver(span, module_path, body, process_spec, attrs)
-            | Ast::Defsupervisor(span, module_path, body, process_spec, attrs)
-            | Ast::DefdynamicSupervisor(span, module_path, body, process_spec, attrs) => {
-                let _ = span;
-                let mut module_ast = shared_imports.clone();
-                module_ast.extend(body);
-                lowered.push(sigil::StagedModuleAst {
-                    module_path,
-                    doc_module_path: None,
-                    ast: module_ast,
-                    module_doc: attrs.doc,
-                    auto_import: attrs.auto_import,
-                    process_spec: Some(process_spec),
-                });
-            }
-            Ast::ImplDef(span, target, methods, attrs) => {
-                let _ = span;
-                let mut module_ast = shared_imports.clone();
-                let (local_imports, methods) = partition_nested_imports(methods);
-                module_ast.extend(local_imports);
-                module_ast.push(Ast::ImplDef(span, target.clone(), methods, attrs.clone()));
-                lowered.push(sigil::StagedModuleAst {
-                    module_path: target,
-                    doc_module_path: None,
-                    ast: module_ast,
-                    module_doc: attrs.doc,
-                    auto_import: attrs.auto_import,
-                    process_spec: None,
-                });
-            }
-            Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
-                let module_path = match &target_ty {
-                    spire::ast::AstTy::Named(_, name)
-                    | spire::ast::AstTy::ImplTrait(_, name)
-                    | spire::ast::AstTy::Generic(_, name, _) => name.clone(),
-                    _ => fallback_module_path.unwrap_or_default().to_string(),
-                };
-                let mut module_ast = shared_imports.clone();
-                let (local_imports, methods) = partition_nested_imports(methods);
-                module_ast.extend(local_imports);
-                module_ast.push(Ast::TraitImplDef(
-                    span,
-                    trait_name,
-                    trait_args,
-                    target_ty,
-                    methods,
-                    attrs.clone(),
-                ));
-                lowered.push(sigil::StagedModuleAst {
-                    module_path,
-                    doc_module_path: fallback_module_path.map(str::to_string),
-                    ast: module_ast,
-                    module_doc: attrs.doc,
-                    auto_import: attrs.auto_import,
-                    process_spec: None,
-                });
-            }
-            Ast::Import(_, _, _) => {}
-            Ast::ResultCtorDecl(_, _, _, _, _) => shared_result_ctor_contracts.push(stmt),
-            Ast::ConstDef(_, _, _, _, _) => shared_namespace_consts.push(stmt),
-            Ast::StructDef(..)
-            | Ast::RecordDef(..)
-            | Ast::DeferrorDef(_, _, _, _, _)
-            | Ast::EnumDef(_, _, _, _, _)
-            | Ast::BuiltinDecl(_, _, _, _, _)
-            | Ast::IntrinsicDecl(_, _, _, _)
-            | Ast::BuiltinTypeDecl(_, _, _) => shared_global_defs.push(stmt),
-            _ => shared_global_defs.push(stmt),
-        }
-    }
-
-    if !shared_namespace_consts.is_empty() {
-        if let Some(idx) = find_fallback_namespace_module(&lowered, fallback_module_path)
-            .or_else(|| (lowered.len() == 1).then_some(0))
-        {
-            let insert_at = first_non_import_index(&lowered[idx].ast);
-            lowered[idx]
-                .ast
-                .splice(insert_at..insert_at, shared_namespace_consts);
-        } else {
-            let mut shared_ast = shared_imports.clone();
-            shared_ast.extend(shared_namespace_consts);
-            lowered.push(sigil::StagedModuleAst {
-                module_path: fallback_module_path.unwrap_or_default().to_string(),
-                doc_module_path: None,
-                ast: shared_ast,
-                module_doc: None,
-                auto_import: false,
-                process_spec: None,
-            });
-        }
-    }
-
-    if !shared_result_ctor_contracts.is_empty() {
-        if let Some(idx) =
-            find_result_owner_module(&lowered).or_else(|| (lowered.len() == 1).then_some(0))
-        {
-            let insert_at = first_non_import_index(&lowered[idx].ast);
-            lowered[idx]
-                .ast
-                .splice(insert_at..insert_at, shared_result_ctor_contracts);
-        } else {
-            let mut shared_ast = shared_imports.clone();
-            shared_ast.extend(shared_result_ctor_contracts);
-            lowered.push(sigil::StagedModuleAst {
-                module_path: fallback_module_path.unwrap_or_default().to_string(),
-                doc_module_path: None,
-                ast: shared_ast,
-                module_doc: None,
-                auto_import: false,
-                process_spec: None,
-            });
-        }
-    }
-
-    if !shared_global_defs.is_empty() {
-        let mut shared_ast = shared_imports;
-        shared_ast.extend(shared_global_defs);
-        lowered.push(sigil::StagedModuleAst {
-            module_path: fallback_module_path.unwrap_or_default().to_string(),
-            doc_module_path: None,
-            ast: shared_ast,
-            module_doc: None,
-            auto_import: false,
-            process_spec: None,
-        });
-    }
-
-    lowered
-}
-
-fn partition_nested_imports(body: Vec<Ast>) -> (Vec<Ast>, Vec<Ast>) {
-    let mut imports = Vec::new();
-    let mut rest = Vec::new();
-    for stmt in body {
-        if matches!(stmt, Ast::Import(_, _, _)) {
-            imports.push(stmt);
-        } else {
-            rest.push(stmt);
-        }
-    }
-    (imports, rest)
-}
-
-fn first_non_import_index(ast: &[Ast]) -> usize {
-    ast.iter()
-        .take_while(|stmt| matches!(stmt, Ast::Import(_, _, _)))
-        .count()
-}
-
-fn lowered_module_is_impl_owner(lowered: &sigil::StagedModuleAst) -> bool {
-    matches!(
-        lowered
-            .ast
-            .iter()
-            .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
-        Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _, _, _))
-    )
-}
-
-fn find_result_owner_module(lowered: &[sigil::StagedModuleAst]) -> Option<usize> {
-    lowered.iter().position(|module| {
-        surface_path_name(&module.module_path) == "Result"
-            && matches!(
-                module
-                    .ast
-                    .iter()
-                    .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
-                Some(Ast::ImplDef(_, target, _, _)) if surface_path_name(target) == "Result"
-            )
-    })
-}
-
-fn find_fallback_namespace_module(
-    lowered: &[sigil::StagedModuleAst],
-    fallback_module_path: Option<&str>,
-) -> Option<usize> {
-    let fallback = fallback_module_path?;
-    lowered
-        .iter()
-        .position(|module| module.module_path == fallback && !lowered_module_is_impl_owner(module))
+    sigil::lower_module_source_ast(ast, fallback_module_path)
+        .into_iter()
+        .map(sigil::StagedModuleAst::from)
+        .collect()
 }
 
 fn diagnostic_from_span(
@@ -1665,10 +1462,10 @@ fn typecheck_context_for_analysis(context: &ResolvedAnalysisContext) -> scar::Ty
         .map(|runner| sindr::policy::EntryPoint::qualified(runner.entrypoint.clone()));
 
     scar::TypecheckContext {
-        runtime_policy: context.context.source_kind.runtime_policy(
-            compile_unit_kind,
-            entrypoint.as_ref(),
-        ),
+        runtime_policy: context
+            .context
+            .source_kind
+            .runtime_policy(compile_unit_kind, entrypoint.as_ref()),
         ..scar::TypecheckContext::default()
     }
 }

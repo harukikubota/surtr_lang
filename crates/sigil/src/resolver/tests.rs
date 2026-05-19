@@ -34,6 +34,29 @@ fn parse_and_resolve_with_warnings(
 }
 
 #[test]
+fn lower_module_source_ast_attaches_namespace_consts_to_fallback_module() {
+    let ast = spire::parse_with_context(
+        r#"
+const APP_NAME: String = "surtr"
+defmod App {
+  def main() -> Int { 1 }
+}
+"#,
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+    )
+    .expect("definition source should parse");
+
+    let lowered = lower_module_source_ast(ast, Some("App"));
+
+    assert_eq!(lowered.len(), 1);
+    assert_eq!(lowered[0].module_path, "Global::App");
+    assert!(matches!(
+        lowered[0].ast.first(),
+        Some(Ast::ConstDef(_, name, _, _, _)) if name == "APP_NAME"
+    ));
+}
+
+#[test]
 fn test_dbg_special_form_resolves_without_name_lookup() {
     let resolved = parse_and_resolve(
         r#"dbg = {|x| x}

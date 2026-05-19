@@ -2,6 +2,7 @@ use super::scope_init::initialize_scope;
 use super::scope_init::is_doc_only_builtin_decl;
 use super::*;
 use sindr::builtin::{builtin_type_meta_by_name, builtin_type_supports_inherent_impl};
+use sindr::names::surface_path_name;
 use spire::ast::FacetPathSegment;
 
 use serde::{Deserialize, Serialize};
@@ -39,6 +40,261 @@ pub struct StagedModuleAst {
     pub module_doc: Option<String>,
     pub auto_import: bool,
     pub process_spec: Option<spire::ast::ProcessSpec>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoweredModuleAst {
+    pub module_path: String,
+    pub doc_module_path: Option<String>,
+    pub ast: Vec<Ast>,
+    pub declared_span: Option<Span>,
+    pub module_doc: Option<String>,
+    pub auto_import: bool,
+    pub process_spec: Option<spire::ast::ProcessSpec>,
+}
+
+impl From<LoweredModuleAst> for StagedModuleAst {
+    fn from(lowered: LoweredModuleAst) -> Self {
+        Self {
+            module_path: lowered.module_path,
+            doc_module_path: lowered.doc_module_path,
+            ast: lowered.ast,
+            module_doc: lowered.module_doc,
+            auto_import: lowered.auto_import,
+            process_spec: lowered.process_spec,
+        }
+    }
+}
+
+pub fn lower_module_source_ast(
+    ast: Vec<Ast>,
+    fallback_module_path: Option<&str>,
+) -> Vec<LoweredModuleAst> {
+    let shared_imports = ast
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Ast::Import(_, _, _) => Some(stmt.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let mut lowered = Vec::new();
+    let mut shared_global_defs = Vec::new();
+    let mut shared_namespace_consts = Vec::new();
+    let mut shared_result_ctor_contracts = Vec::new();
+
+    for stmt in ast {
+        match stmt {
+            Ast::Defmod(span, module_path, body, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                lowered.push(LoweredModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    declared_span: Some(span),
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: None,
+                });
+            }
+            Ast::Defagent(span, module_path, body, process_spec, attrs)
+            | Ast::Defgenserver(span, module_path, body, process_spec, attrs)
+            | Ast::Defsupervisor(span, module_path, body, process_spec, attrs)
+            | Ast::DefdynamicSupervisor(span, module_path, body, process_spec, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                lowered.push(LoweredModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    declared_span: Some(span),
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: Some(process_spec),
+                });
+            }
+            Ast::ImplDef(span, target, methods, attrs) => {
+                let declared_span = span.clone();
+                let module_path = target.clone();
+                let mut module_ast = shared_imports.clone();
+                let (local_imports, methods) = partition_nested_imports(methods);
+                module_ast.extend(local_imports);
+                module_ast.push(Ast::ImplDef(span, target, methods, attrs.clone()));
+                lowered.push(LoweredModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    declared_span: Some(declared_span),
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: None,
+                });
+            }
+            Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
+                let declared_span = span.clone();
+                let module_path = match &target_ty {
+                    AstTy::Named(_, name)
+                    | AstTy::ImplTrait(_, name)
+                    | AstTy::Generic(_, name, _) => name.clone(),
+                    _ => fallback_module_path.unwrap_or_default().to_string(),
+                };
+                let mut module_ast = shared_imports.clone();
+                let (local_imports, methods) = partition_nested_imports(methods);
+                module_ast.extend(local_imports);
+                module_ast.push(Ast::TraitImplDef(
+                    span,
+                    trait_name,
+                    trait_args,
+                    target_ty,
+                    methods,
+                    attrs.clone(),
+                ));
+                lowered.push(LoweredModuleAst {
+                    module_path,
+                    doc_module_path: fallback_module_path.map(str::to_string),
+                    ast: module_ast,
+                    declared_span: Some(declared_span),
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: None,
+                });
+            }
+            Ast::Import(_, _, _) => {}
+            Ast::ResultCtorDecl(_, _, _, _, _) => {
+                shared_result_ctor_contracts.push(stmt);
+            }
+            Ast::ConstDef(_, _, _, _, _) => {
+                shared_namespace_consts.push(stmt);
+            }
+            Ast::StructDef(..)
+            | Ast::RecordDef(..)
+            | Ast::DeferrorDef(_, _, _, _, _)
+            | Ast::EnumDef(_, _, _, _, _)
+            | Ast::BuiltinDecl(_, _, _, _, _)
+            | Ast::IntrinsicDecl(_, _, _, _)
+            | Ast::BuiltinTypeDecl(_, _, _) => {
+                shared_global_defs.push(stmt);
+            }
+            _ => {
+                shared_global_defs.push(stmt);
+            }
+        }
+    }
+
+    if !shared_namespace_consts.is_empty() {
+        if let Some(idx) = find_fallback_namespace_module(&lowered, fallback_module_path)
+            .or_else(|| (lowered.len() == 1).then_some(0))
+        {
+            let insert_at = first_non_import_index(&lowered[idx].ast);
+            lowered[idx]
+                .ast
+                .splice(insert_at..insert_at, shared_namespace_consts);
+        } else {
+            let mut shared_ast = shared_imports.clone();
+            shared_ast.extend(shared_namespace_consts);
+            lowered.push(LoweredModuleAst {
+                module_path: fallback_module_path.unwrap_or_default().to_string(),
+                doc_module_path: None,
+                ast: shared_ast,
+                declared_span: None,
+                module_doc: None,
+                auto_import: false,
+                process_spec: None,
+            });
+        }
+    }
+
+    if !shared_result_ctor_contracts.is_empty() {
+        if let Some(idx) =
+            find_result_owner_module(&lowered).or_else(|| (lowered.len() == 1).then_some(0))
+        {
+            let insert_at = first_non_import_index(&lowered[idx].ast);
+            lowered[idx]
+                .ast
+                .splice(insert_at..insert_at, shared_result_ctor_contracts);
+        } else {
+            let mut shared_ast = shared_imports.clone();
+            shared_ast.extend(shared_result_ctor_contracts);
+            lowered.push(LoweredModuleAst {
+                module_path: fallback_module_path.unwrap_or_default().to_string(),
+                doc_module_path: None,
+                ast: shared_ast,
+                declared_span: None,
+                module_doc: None,
+                auto_import: false,
+                process_spec: None,
+            });
+        }
+    }
+
+    if !shared_global_defs.is_empty() {
+        let mut shared_ast = shared_imports;
+        shared_ast.extend(shared_global_defs);
+        lowered.push(LoweredModuleAst {
+            module_path: fallback_module_path.unwrap_or_default().to_string(),
+            doc_module_path: None,
+            ast: shared_ast,
+            declared_span: None,
+            module_doc: None,
+            auto_import: false,
+            process_spec: None,
+        });
+    }
+
+    lowered
+}
+
+pub fn lowered_module_is_impl_owner(lowered: &LoweredModuleAst) -> bool {
+    matches!(
+        lowered
+            .ast
+            .iter()
+            .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
+        Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _, _, _))
+    )
+}
+
+fn partition_nested_imports(body: Vec<Ast>) -> (Vec<Ast>, Vec<Ast>) {
+    let mut imports = Vec::new();
+    let mut rest = Vec::new();
+    for stmt in body {
+        if matches!(stmt, Ast::Import(_, _, _)) {
+            imports.push(stmt);
+        } else {
+            rest.push(stmt);
+        }
+    }
+    (imports, rest)
+}
+
+fn first_non_import_index(ast: &[Ast]) -> usize {
+    ast.iter()
+        .take_while(|stmt| matches!(stmt, Ast::Import(_, _, _)))
+        .count()
+}
+
+fn find_result_owner_module(lowered: &[LoweredModuleAst]) -> Option<usize> {
+    lowered.iter().position(|module| {
+        surface_path_name(&module.module_path) == "Result"
+            && matches!(
+                module
+                    .ast
+                    .iter()
+                    .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
+                Some(Ast::ImplDef(_, target, _, _)) if surface_path_name(target) == "Result"
+            )
+    })
+}
+
+fn find_fallback_namespace_module(
+    lowered: &[LoweredModuleAst],
+    fallback_module_path: Option<&str>,
+) -> Option<usize> {
+    let fallback = fallback_module_path?;
+    lowered
+        .iter()
+        .position(|module| module.module_path == fallback && !lowered_module_is_impl_owner(module))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

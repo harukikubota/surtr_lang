@@ -13,6 +13,7 @@ use std::sync::{Arc, OnceLock};
 
 pub use command_error::{CommandDiagnostic, CommandError, CommandResult};
 pub use error_display::ErrorDisplayMode;
+use loader::stdlib_module_spec_cache_key;
 pub use loader::{
     collect_additional_default_std_module_inputs, collect_lib_module_inputs,
     collect_module_sources_with_extra_std_sources, collect_module_sources_with_module_file_stages,
@@ -26,7 +27,6 @@ pub use loader::{
     ScriptIncludeDirective, ScriptSourcePrepareError, SourceDescriptor, StagedModule,
     StdlibVariant,
 };
-use loader::stdlib_module_spec_cache_key;
 pub use project_runner::{
     execute_project_runner_source, project_runner_module_input_stages, ProjectRunnerVmError,
 };
@@ -105,71 +105,10 @@ pub fn decode_rebased_module_span(span: &spire::ast::Span) -> Option<(SourceId, 
 
 // ── Public types used by other crates ────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct LoweredModuleAst {
-    pub module_path: String,
-    pub doc_module_path: Option<String>,
-    pub ast: Vec<spire::ast::Ast>,
-    pub declared_span: Option<spire::ast::Span>,
-    pub module_doc: Option<String>,
-    pub auto_import: bool,
-    pub process_spec: Option<spire::ast::ProcessSpec>,
-}
+pub use sigil::LoweredModuleAst;
 
 pub(crate) fn lowered_module_is_impl_owner(lowered: &LoweredModuleAst) -> bool {
-    matches!(
-        lowered
-            .ast
-            .iter()
-            .find(|stmt| !matches!(stmt, spire::ast::Ast::Import(_, _, _))),
-        Some(
-            spire::ast::Ast::ImplDef(_, _, _, _) | spire::ast::Ast::TraitImplDef(_, _, _, _, _, _)
-        )
-    )
-}
-
-fn partition_nested_imports(
-    body: Vec<spire::ast::Ast>,
-) -> (Vec<spire::ast::Ast>, Vec<spire::ast::Ast>) {
-    let mut imports = Vec::new();
-    let mut rest = Vec::new();
-    for stmt in body {
-        if matches!(stmt, spire::ast::Ast::Import(_, _, _)) {
-            imports.push(stmt);
-        } else {
-            rest.push(stmt);
-        }
-    }
-    (imports, rest)
-}
-
-fn first_non_import_index(ast: &[spire::ast::Ast]) -> usize {
-    ast.iter()
-        .take_while(|stmt| matches!(stmt, spire::ast::Ast::Import(_, _, _)))
-        .count()
-}
-
-fn find_result_owner_module(lowered: &[LoweredModuleAst]) -> Option<usize> {
-    lowered.iter().position(|module| {
-        surface_path_name(&module.module_path) == "Result"
-            && matches!(
-                module
-                    .ast
-                    .iter()
-                    .find(|stmt| !matches!(stmt, spire::ast::Ast::Import(_, _, _))),
-                Some(spire::ast::Ast::ImplDef(_, target, _, _)) if surface_path_name(target) == "Result"
-            )
-    })
-}
-
-fn find_fallback_namespace_module(
-    lowered: &[LoweredModuleAst],
-    fallback_module_path: Option<&str>,
-) -> Option<usize> {
-    let fallback = fallback_module_path?;
-    lowered
-        .iter()
-        .position(|module| module.module_path == fallback && !lowered_module_is_impl_owner(module))
+    sigil::lowered_module_is_impl_owner(lowered)
 }
 
 fn format_struct_signature(name: &str) -> String {
@@ -283,203 +222,7 @@ pub fn lower_module_source_ast(
     ast: Vec<spire::ast::Ast>,
     fallback_module_path: Option<&str>,
 ) -> Vec<LoweredModuleAst> {
-    let shared_imports = ast
-        .iter()
-        .filter_map(|stmt| match stmt {
-            spire::ast::Ast::Import(_, _, _) => Some(stmt.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    let mut lowered = Vec::new();
-    let mut shared_global_defs = Vec::new();
-    let mut shared_namespace_consts = Vec::new();
-    let mut shared_result_ctor_contracts = Vec::new();
-
-    for stmt in ast {
-        match stmt {
-            spire::ast::Ast::Defmod(span, module_path, body, attrs) => {
-                let mut module_ast = shared_imports.clone();
-                module_ast.extend(body);
-                lowered.push(LoweredModuleAst {
-                    module_path,
-                    doc_module_path: None,
-                    ast: module_ast,
-                    declared_span: Some(span),
-                    module_doc: attrs.doc,
-                    auto_import: attrs.auto_import,
-                    process_spec: None,
-                });
-            }
-            spire::ast::Ast::Defagent(span, module_path, body, process_spec, attrs)
-            | spire::ast::Ast::Defgenserver(span, module_path, body, process_spec, attrs)
-            | spire::ast::Ast::Defsupervisor(span, module_path, body, process_spec, attrs)
-            | spire::ast::Ast::DefdynamicSupervisor(span, module_path, body, process_spec, attrs) =>
-            {
-                let mut module_ast = shared_imports.clone();
-                module_ast.extend(body);
-                lowered.push(LoweredModuleAst {
-                    module_path,
-                    doc_module_path: None,
-                    ast: module_ast,
-                    declared_span: Some(span),
-                    module_doc: attrs.doc,
-                    auto_import: attrs.auto_import,
-                    process_spec: Some(process_spec),
-                });
-            }
-            spire::ast::Ast::ImplDef(span, target, methods, attrs) => {
-                let declared_span = span.clone();
-                let module_path = target.clone();
-                let mut module_ast = shared_imports.clone();
-                let (local_imports, methods) = partition_nested_imports(methods);
-                module_ast.extend(local_imports);
-                module_ast.push(spire::ast::Ast::ImplDef(
-                    span,
-                    target,
-                    methods,
-                    attrs.clone(),
-                ));
-                lowered.push(LoweredModuleAst {
-                    module_path,
-                    doc_module_path: None,
-                    ast: module_ast,
-                    declared_span: Some(declared_span),
-                    module_doc: attrs.doc,
-                    auto_import: attrs.auto_import,
-                    process_spec: None,
-                });
-            }
-            spire::ast::Ast::TraitImplDef(
-                span,
-                trait_name,
-                trait_args,
-                target_ty,
-                methods,
-                attrs,
-            ) => {
-                let declared_span = span.clone();
-                let module_path = match &target_ty {
-                    spire::ast::AstTy::Named(_, name)
-                    | spire::ast::AstTy::ImplTrait(_, name)
-                    | spire::ast::AstTy::Generic(_, name, _) => name.clone(),
-                    _ => fallback_module_path.unwrap_or_default().to_string(),
-                };
-                let mut module_ast = shared_imports.clone();
-                let (local_imports, methods) = partition_nested_imports(methods);
-                module_ast.extend(local_imports);
-                module_ast.push(spire::ast::Ast::TraitImplDef(
-                    span,
-                    trait_name,
-                    trait_args,
-                    target_ty,
-                    methods,
-                    attrs.clone(),
-                ));
-                lowered.push(LoweredModuleAst {
-                    module_path,
-                    doc_module_path: fallback_module_path.map(str::to_string),
-                    ast: module_ast,
-                    declared_span: Some(declared_span),
-                    module_doc: attrs.doc,
-                    auto_import: attrs.auto_import,
-                    process_spec: None,
-                });
-            }
-            spire::ast::Ast::Import(_, _, _) => {}
-            // `Ok` / `Err` are the one top-level std declaration we want to
-            // associate with the `Result` module proper. They are surface
-            // contracts for the runtime constructors, so keeping them under the
-            // `Result` module path lets later phases validate
-            // `Result::Ok` / `Result::Err` explicitly.
-            spire::ast::Ast::ResultCtorDecl(_, _, _, _, _) => {
-                shared_result_ctor_contracts.push(stmt);
-            }
-            spire::ast::Ast::ConstDef(_, _, _, _, _) => {
-                shared_namespace_consts.push(stmt);
-            }
-            spire::ast::Ast::StructDef(..)
-            | spire::ast::Ast::RecordDef(..)
-            | spire::ast::Ast::DeferrorDef(_, _, _, _, _)
-            | spire::ast::Ast::EnumDef(_, _, _, _, _)
-            | spire::ast::Ast::BuiltinDecl(_, _, _, _, _)
-            | spire::ast::Ast::IntrinsicDecl(_, _, _, _)
-            | spire::ast::Ast::BuiltinTypeDecl(_, _, _) => {
-                // Std-module files are allowed to carry top-level declarations
-                // alongside their `defmod`. We deliberately keep these in the
-                // global declaration layer so source organization by file does
-                // not silently change the public surface from `print(...)` to
-                // `Kernel::print(...)`, etc.
-                shared_global_defs.push(stmt);
-            }
-            _ => {
-                // Defensive fallback. Parser policy should keep this unreachable for definition sources.
-                shared_global_defs.push(stmt);
-            }
-        }
-    }
-
-    if !shared_namespace_consts.is_empty() {
-        if let Some(idx) = find_fallback_namespace_module(&lowered, fallback_module_path)
-            .or_else(|| (lowered.len() == 1).then_some(0))
-        {
-            let insert_at = first_non_import_index(&lowered[idx].ast);
-            lowered[idx]
-                .ast
-                .splice(insert_at..insert_at, shared_namespace_consts);
-        } else {
-            let mut shared_ast = shared_imports.clone();
-            shared_ast.extend(shared_namespace_consts);
-            lowered.push(LoweredModuleAst {
-                module_path: fallback_module_path.unwrap_or_default().to_string(),
-                doc_module_path: None,
-                ast: shared_ast,
-                declared_span: None,
-                module_doc: None,
-                auto_import: false,
-                process_spec: None,
-            });
-        }
-    }
-
-    if !shared_result_ctor_contracts.is_empty() {
-        if let Some(idx) =
-            find_result_owner_module(&lowered).or_else(|| (lowered.len() == 1).then_some(0))
-        {
-            let insert_at = first_non_import_index(&lowered[idx].ast);
-            lowered[idx]
-                .ast
-                .splice(insert_at..insert_at, shared_result_ctor_contracts);
-        } else {
-            let mut shared_ast = shared_imports.clone();
-            shared_ast.extend(shared_result_ctor_contracts);
-            lowered.push(LoweredModuleAst {
-                module_path: fallback_module_path.unwrap_or_default().to_string(),
-                doc_module_path: None,
-                ast: shared_ast,
-                declared_span: None,
-                module_doc: None,
-                auto_import: false,
-                process_spec: None,
-            });
-        }
-    }
-
-    if !shared_global_defs.is_empty() {
-        let mut shared_ast = shared_imports;
-        shared_ast.extend(shared_global_defs);
-        lowered.push(LoweredModuleAst {
-            module_path: fallback_module_path.unwrap_or_default().to_string(),
-            doc_module_path: None,
-            ast: shared_ast,
-            declared_span: None,
-            module_doc: None,
-            auto_import: false,
-            process_spec: None,
-        });
-    }
-
-    lowered
+    sigil::lower_module_source_ast(ast, fallback_module_path)
 }
 
 pub fn extract_process_modules_from_user_ast(
@@ -2064,14 +1807,14 @@ impl User {
         let compile_sources =
             compose_script_compile_sources("entry.srt", "print(\"hi\")", module_sources);
 
-        let expanded = expand_snapshot_module_stages(
-            &compile_sources,
-            &snapshot,
-            CompileUnitKind::Script,
-        )
-        .expect("snapshot expansion should succeed");
+        let expanded =
+            expand_snapshot_module_stages(&compile_sources, &snapshot, CompileUnitKind::Script)
+                .expect("snapshot expansion should succeed");
 
-        assert!(matches!(expanded.module_stages, std::borrow::Cow::Borrowed(_)));
+        assert!(matches!(
+            expanded.module_stages,
+            std::borrow::Cow::Borrowed(_)
+        ));
         assert!(expanded.suffix_module_stages().is_empty());
     }
 
@@ -2088,12 +1831,9 @@ impl User {
         let compile_sources =
             compose_script_compile_sources("entry.srt", "print(\"hi\")", module_sources);
 
-        let expanded = expand_snapshot_module_stages(
-            &compile_sources,
-            &snapshot,
-            CompileUnitKind::Script,
-        )
-        .expect("snapshot expansion should succeed");
+        let expanded =
+            expand_snapshot_module_stages(&compile_sources, &snapshot, CompileUnitKind::Script)
+                .expect("snapshot expansion should succeed");
 
         assert!(matches!(expanded.module_stages, std::borrow::Cow::Owned(_)));
         let suffix = expanded.suffix_module_stages();

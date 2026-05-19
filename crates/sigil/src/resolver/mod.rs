@@ -30,8 +30,8 @@ mod tests;
 mod warnings;
 
 pub use self::declarations::{
-    precollect_declaration_index, DeclarationEntry, DeclarationIndex, DeclarationKind,
-    StagedModuleAst,
+    lower_module_source_ast, lowered_module_is_impl_owner, precollect_declaration_index,
+    DeclarationEntry, DeclarationIndex, DeclarationKind, LoweredModuleAst, StagedModuleAst,
 };
 pub use self::session::{SigilCheckpoint, SigilSession};
 
@@ -850,9 +850,17 @@ pub fn effective_visible_entries(
     )?;
     let entries_by_uid = declaration_uids
         .iter()
-        .filter_map(|(fq_name, uid)| declaration_index.get(fq_name).cloned().map(|entry| (*uid, entry)))
+        .filter_map(|(fq_name, uid)| {
+            declaration_index
+                .get(fq_name)
+                .cloned()
+                .map(|entry| (*uid, entry))
+        })
         .collect::<HashMap<_, _>>();
-    Ok(collect_effective_visible_entries(&build.scope, &entries_by_uid))
+    Ok(collect_effective_visible_entries(
+        &build.scope,
+        &entries_by_uid,
+    ))
 }
 
 struct Resolver {
