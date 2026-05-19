@@ -338,7 +338,7 @@ pub fn expand_snapshot_module_stages<'a>(
 }
 
 #[derive(Debug, Clone)]
-pub struct DefaultStdlibSnapshot {
+pub struct StagedCompilationSnapshot {
     pub module_stages: Vec<Vec<sigil::StagedModuleAst>>,
     pub compile_prefix: CompilationPrefixSnapshot,
     pub docs: Vec<DocEntry>,
@@ -347,7 +347,10 @@ pub struct DefaultStdlibSnapshot {
     pub default_stage_count: usize,
 }
 
-impl DefaultStdlibSnapshot {
+/// Backward-compatible name for the default standard-library staged snapshot.
+pub type DefaultStdlibSnapshot = StagedCompilationSnapshot;
+
+impl StagedCompilationSnapshot {
     pub fn compile_prefix(&self) -> &CompilationPrefixSnapshot {
         &self.compile_prefix
     }
@@ -954,6 +957,16 @@ defmod B {
             .declaration_index()
             .values()
             .any(|entry| entry.module_path == "TestOnly"));
+    }
+
+    #[test]
+    fn stdlib_snapshot_is_a_staged_compilation_snapshot() {
+        let snapshot =
+            default_stdlib_semantic_snapshot().expect("default stdlib snapshot should build");
+        let staged: &StagedCompilationSnapshot = snapshot.as_ref();
+
+        assert_eq!(staged.default_stage_count, staged.module_stages.len());
+        assert!(!staged.compile_prefix.declaration_index.is_empty());
     }
 
     #[test]
