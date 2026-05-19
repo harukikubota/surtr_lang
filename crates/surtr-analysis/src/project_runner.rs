@@ -22,6 +22,7 @@ pub struct DeclaredProjectPath {
 pub struct ProjectRunnerInput {
     pub project_file: PathBuf,
     pub selected_profile: String,
+    pub entrypoint: String,
     pub normalized_args: Vec<(String, String)>,
     pub declared_paths: Vec<DeclaredProjectPath>,
     pub active_file_profiles: Vec<String>,
@@ -194,6 +195,12 @@ pub fn project_runner_input_from_result(
                 .collect()
         });
 
+    let selected_profile_result = result
+        .profiles
+        .iter()
+        .find(|profile| profile.name == selected_profile)
+        .expect("selected profile must exist after validation");
+
     let declared_paths = result
         .profiles
         .iter()
@@ -205,6 +212,7 @@ pub fn project_runner_input_from_result(
     Ok(ProjectRunnerInput {
         project_file,
         selected_profile,
+        entrypoint: selected_profile_result.entrypoint.clone(),
         normalized_args,
         declared_paths,
         active_file_profiles,
@@ -260,6 +268,7 @@ where
     RunnerContext {
         project_file: input.project_file,
         selected_profile: input.selected_profile,
+        entrypoint: input.entrypoint,
         normalized_args: input.normalized_args,
         resolved_paths,
         active_file_profiles: input.active_file_profiles,

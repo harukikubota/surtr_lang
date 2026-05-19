@@ -132,6 +132,7 @@ pub struct ReplAnalysisContext {
 pub struct RunnerContext {
     pub project_file: PathBuf,
     pub selected_profile: String,
+    pub entrypoint: String,
     pub normalized_args: Vec<(String, String)>,
     pub resolved_paths: Vec<ResolvedProjectPath>,
     pub active_file_profiles: Vec<String>,
@@ -448,6 +449,7 @@ fn empty_runner_context(project_file: PathBuf, selection: RunnerSelection) -> Ru
     resolve_project_runner(ProjectRunnerInput {
         project_file,
         selected_profile: selection.selected_profile,
+        entrypoint: "Main::main".to_string(),
         normalized_args: selection.normalized_args,
         declared_paths: Vec::new(),
         active_file_profiles: Vec::new(),

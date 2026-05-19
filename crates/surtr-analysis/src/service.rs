@@ -930,7 +930,7 @@ fn analyze_single_document(
         Ok(resolved_nodes) => {
             match scar::typecheck_with_context(
                 resolved_nodes.clone(),
-                typecheck_context_for_mode(&context.context.mode),
+                typecheck_context_for_analysis(context),
             ) {
                 Ok(typed_nodes) => *typed = Some(typed_nodes),
                 Err(error) => diagnostics.push(diagnostic_from_span(
@@ -970,6 +970,7 @@ fn analyze_project_stages(
     };
     let Some(module_stages) = build_staged_modules(
         service,
+        context,
         runner,
         active_document,
         diagnostics,
@@ -992,7 +993,7 @@ fn analyze_project_stages(
                     let resolved_nodes = resolved_program.resolved.clone();
                     match scar::typecheck_staged_program_with_context(
                         resolved_program,
-                        typecheck_context_for_mode(&context.context.mode),
+                        typecheck_context_for_analysis(context),
                     ) {
                         Ok(typed_program) => *typed = Some(typed_program.nodes),
                         Err(error) => diagnostics.push(diagnostic_from_span(
@@ -1073,11 +1074,13 @@ fn semantic_index_with_declarations(
 
 fn build_staged_modules(
     service: &AnalysisService,
+    context: &ResolvedAnalysisContext,
     runner: &crate::RunnerContext,
     active_document: &DocumentSnapshot,
     diagnostics: &mut Vec<AnalysisDiagnostic>,
     semantic_index: &mut SemanticIndex,
 ) -> Option<Vec<Vec<sigil::StagedModuleAst>>> {
+    let compile_unit_kind = compile_unit_kind_for_mode(&context.context.mode);
     let mut module_stages = Vec::new();
     for stage in &runner.module_stages {
         let mut staged_modules = Vec::new();
@@ -1089,8 +1092,8 @@ fn build_staged_modules(
                 parse_document(
                     &active_document.text,
                     0,
-                    SourceKind::DefinitionSource,
-                    CompileUnitKind::DefinitionCheck,
+                    file.source_kind,
+                    compile_unit_kind,
                     None,
                 )
             } else {
@@ -1098,7 +1101,7 @@ fn build_staged_modules(
                     &source,
                     0,
                     file.source_kind,
-                    CompileUnitKind::DefinitionCheck,
+                    compile_unit_kind,
                     None,
                 )
             };
@@ -1427,12 +1430,20 @@ fn should_analyze_project_stages(context: &ResolvedAnalysisContext) -> bool {
             .is_some_and(|entry| entry == &context.context.active_file)
 }
 
-fn typecheck_context_for_mode(mode: &AnalysisMode) -> scar::TypecheckContext {
-    let mut context = scar::TypecheckContext::default();
-    if matches!(mode, AnalysisMode::ReplPreview) {
-        context.runtime_policy = sindr::policy::RuntimeSourcePolicy::repl_chunk();
+fn typecheck_context_for_analysis(context: &ResolvedAnalysisContext) -> scar::TypecheckContext {
+    let compile_unit_kind = compile_unit_kind_for_mode(&context.context.mode);
+    let entrypoint = context
+        .runner
+        .as_ref()
+        .map(|runner| sindr::policy::EntryPoint::qualified(runner.entrypoint.clone()));
+
+    scar::TypecheckContext {
+        runtime_policy: context.context.source_kind.runtime_policy(
+            compile_unit_kind,
+            entrypoint.as_ref(),
+        ),
+        ..scar::TypecheckContext::default()
     }
-    context
 }
 
 fn module_path_for_document(mode: AnalysisMode, path: &Path) -> Option<String> {
