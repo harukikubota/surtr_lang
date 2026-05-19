@@ -545,13 +545,13 @@ pub(crate) fn compile_source(
     } else {
         &[]
     };
-    let docs = xldr::collect_doc_entries_with_base(
+    let docs = sigil::collect_doc_entries_with_base(
         &std_snapshot.docs,
         suffix_module_stages,
         &user_ast,
         Some(compile_sources.user_module_path.as_str()),
     );
-    let signatures = xldr::collect_signature_entries_with_base(
+    let signatures = sigil::collect_signature_entries_with_base(
         &std_snapshot.signatures,
         suffix_module_stages,
         &user_ast,
