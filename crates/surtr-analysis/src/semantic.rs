@@ -429,6 +429,63 @@ pub(crate) fn facet_root_capabilities(kind: FacetRootKind) -> SymbolCapabilities
     SymbolCapabilities::new(true, true, true, Some(kind))
 }
 
+pub fn completion_symbol_for_effective_visible_entry(
+    existing_symbols: &[CompletionSymbol],
+    visible: &sigil::EffectiveVisibleEntry,
+) -> Option<CompletionSymbol> {
+    let kind = match visible.entry.kind {
+        DeclarationKind::BuiltinType => return None,
+        _ => completion_kind_for_declaration_kind(&visible.entry.kind)?,
+    };
+    let qualified_label = surface_name(&visible.entry.fq_name);
+    let mut detail = None;
+    let mut documentation = None;
+    let mut sort_text = None;
+    let mut definition = None;
+    let mut inherited_capabilities = None;
+    for symbol in existing_symbols
+        .iter()
+        .filter(|symbol| symbol.label == qualified_label && symbol.kind == kind)
+    {
+        if detail.is_none() {
+            detail = symbol.detail.clone();
+        }
+        if documentation.is_none() {
+            documentation = symbol.documentation.clone();
+        }
+        if sort_text.is_none() {
+            sort_text = symbol.sort_text.clone();
+        }
+        if definition.is_none() {
+            definition = symbol.definition.clone();
+        }
+        merge_symbol_capabilities(&mut inherited_capabilities, symbol.capabilities.clone());
+    }
+    let capabilities = declaration_symbol_identity_info(&visible.entry.name, &visible.entry.kind)
+        .map(|info| info.capabilities)
+        .or(inherited_capabilities);
+    Some(CompletionSymbol {
+        label: visible.visible_name.clone(),
+        replacement: visible.visible_name.clone(),
+        kind,
+        detail,
+        documentation,
+        sort_text,
+        origin: Some(CompletionOrigin::Declaration {
+            qualified_name: visible.entry.fq_name.clone(),
+            module_path: visible.entry.module_path.clone(),
+            name: visible.entry.name.clone(),
+            stage_index: visible.entry.stage_index,
+            auto_import: visible.entry.auto_import,
+            visibility: visible.entry.visibility,
+            user_importable: visible.entry.user_importable,
+            user_callable: visible.entry.user_callable,
+        }),
+        definition,
+        capabilities,
+    })
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct CompletionRequest<'a> {
     pub index: &'a SemanticIndex,

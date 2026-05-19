@@ -1107,48 +1107,7 @@ fn completion_symbol_for_effective_visible_entry(
     existing_symbols: &[CompletionSymbol],
     visible: sigil::EffectiveVisibleEntry,
 ) -> Option<CompletionSymbol> {
-    let kind = match visible.entry.kind {
-        sigil::DeclarationKind::Def
-        | sigil::DeclarationKind::Extractor
-        | sigil::DeclarationKind::TraitMethod
-        | sigil::DeclarationKind::ImplMethod
-        | sigil::DeclarationKind::ImplCtorNew
-        | sigil::DeclarationKind::ResultCtor => CompletionKind::FunctionCall,
-        sigil::DeclarationKind::Struct
-        | sigil::DeclarationKind::Record
-        | sigil::DeclarationKind::Deferror
-        | sigil::DeclarationKind::Enum
-        | sigil::DeclarationKind::EnumVariant => CompletionKind::TypeConstructor,
-        sigil::DeclarationKind::Trait | sigil::DeclarationKind::Const => CompletionKind::TypePath,
-        sigil::DeclarationKind::BuiltinType => return None,
-    };
-    let capabilities = sigil::declaration_symbol_identity_info(&visible.entry.name, &visible.entry.kind)
-        .map(|info| info.capabilities);
-    let qualified_label = sindr::names::surface_rendered_name(&visible.entry.fq_name);
-    let definition = existing_symbols
-        .iter()
-        .find(|symbol| symbol.label == qualified_label && symbol.kind == kind)
-        .and_then(|symbol| symbol.definition.clone());
-    Some(CompletionSymbol {
-        label: visible.visible_name.clone(),
-        replacement: visible.visible_name,
-        kind,
-        detail: None,
-        documentation: None,
-        sort_text: None,
-        origin: Some(crate::CompletionOrigin::Declaration {
-            qualified_name: visible.entry.fq_name.clone(),
-            module_path: visible.entry.module_path.clone(),
-            name: visible.entry.name.clone(),
-            stage_index: visible.entry.stage_index,
-            auto_import: visible.entry.auto_import,
-            visibility: visible.entry.visibility,
-            user_importable: visible.entry.user_importable,
-            user_callable: visible.entry.user_callable,
-        }),
-        definition,
-        capabilities,
-    })
+    crate::semantic::completion_symbol_for_effective_visible_entry(existing_symbols, &visible)
 }
 
 fn active_stage_index_for_document(
