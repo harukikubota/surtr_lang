@@ -1413,6 +1413,32 @@ impl ReplEngine {
             }
         }
 
+        for visible in self.sigil_session.visible_declaration_entries() {
+            if visible.entry.visibility != spire::ast::Visibility::Public || visible.entry.hidden {
+                continue;
+            }
+            if Self::declaration_is_function_completion_surface(&visible.entry) {
+                let detail = self
+                    .find_signature(&visible.visible_name)
+                    .or_else(|| self.find_signature(crate::surface_path_name(&visible.entry.fq_name)))
+                    .or_else(|| self.declaration_signature_entry(&visible.entry))
+                    .map(|(qualified_name, signature)| {
+                        Self::render_signature_with_qualified_name(&qualified_name, signature)
+                    });
+                symbols.push(surtr_analysis::CompletionSymbol {
+                    label: visible.visible_name,
+                    replacement: crate::surface_rendered_name(&visible.entry.name),
+                    kind: surtr_analysis::CompletionKind::FunctionCall,
+                    detail,
+                    documentation: None,
+                    sort_text: None,
+                    origin: None,
+                    definition: None,
+                    capabilities: Self::completion_capabilities_for_builtin(&visible.entry.fq_name),
+                });
+            }
+        }
+
         for label in self.completion_visible_module_labels() {
             let capabilities = Self::completion_capabilities_for_builtin(&label);
             symbols.push(surtr_analysis::CompletionSymbol {
@@ -1547,6 +1573,22 @@ impl ReplEngine {
                 {
                     insert_signature(&label, qualified_name, signature);
                 }
+            }
+        }
+
+        for visible in self.sigil_session.visible_declaration_entries() {
+            if visible.entry.visibility != spire::ast::Visibility::Public
+                || visible.entry.hidden
+                || !Self::declaration_is_function_completion_surface(&visible.entry)
+            {
+                continue;
+            }
+            if let Some((qualified_name, signature)) = self
+                .find_signature(&visible.visible_name)
+                .or_else(|| self.find_signature(crate::surface_path_name(&visible.entry.fq_name)))
+                .or_else(|| self.declaration_signature_entry(&visible.entry))
+            {
+                insert_signature(&visible.visible_name, qualified_name, signature);
             }
         }
 
@@ -9493,6 +9535,59 @@ mod tests {
         assert!(
             labels.iter().any(|label| label == "value"),
             "cached completion context should include new binding: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn core_completion_uses_live_imported_short_names_from_session_scope() {
+        let mut engine = ReplEngine::from_module_source(
+            "helper.srt",
+            r#"defmod Helper {
+  def helper() -> Int { 1 }
+}"#,
+        )
+        .expect("module source should initialize");
+
+        let imported = engine.handle_line("import Helper::helper");
+        assert!(
+            !imported.should_exit,
+            "{}",
+            ReplEngine::repl_result_text(&imported)
+        );
+
+        let semantic_labels = engine
+            .semantic_index()
+            .symbols()
+            .iter()
+            .map(|symbol| symbol.label.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            semantic_labels.iter().any(|label| label == "helper"),
+            "semantic index should include imported short symbol: {semantic_labels:?}"
+        );
+
+        let completion_labels = engine
+            .completions("hel", 3)
+            .candidates
+            .into_iter()
+            .map(|candidate| candidate.label)
+            .collect::<Vec<_>>();
+        assert!(
+            completion_labels.iter().any(|label| label == "helper"),
+            "completion should expose imported short symbol: {completion_labels:?}"
+        );
+
+        let signature_lines = engine
+            .completion_context()
+            .completions("helper(", "helper(".len())
+            .signature
+            .map(|signature| signature.lines)
+            .unwrap_or_default();
+        assert!(
+            signature_lines
+                .iter()
+                .any(|line| line.contains("helper() -> Int")),
+            "signature help should resolve imported short callable: {signature_lines:?}"
         );
     }
 
