@@ -3,8 +3,9 @@ use sindr::ir::{DocEntry, DocKind, SignatureEntry};
 use spire::ast::Visibility;
 use surtr_analysis::{
     complete_prefix, lookup_symbol_at_cursor, rank_completion_candidates_by_expected_type,
-    repl_assist_at_cursor, signature_help_at_cursor, CompletionCandidate, CompletionKind,
-    CompletionOrigin, CompletionRequest, CompletionScope, CompletionSymbol, SemanticIndex,
+    repl_assist_at_cursor, signature_help_at_cursor, CallableSignature, CompletionCandidate,
+    CompletionKind, CompletionOrigin, CompletionRequest, CompletionScope, CompletionSymbol,
+    ReplInputSupportContext, ReplInputSupportUpdate, SemanticIndex,
 };
 
 #[test]
@@ -745,6 +746,92 @@ fn repl_assist_preserves_repl_tail_presentation() {
     assert_eq!(assist.candidates.len(), 1);
     assert_eq!(assist.candidates[0].label, "repeat");
     assert_eq!(assist.candidates[0].replacement, "repeat");
+}
+
+#[test]
+fn repl_input_support_context_accepts_session_updates() {
+    let mut context = ReplInputSupportContext::default();
+    context.apply_update(ReplInputSupportUpdate {
+        symbols: vec![CompletionSymbol {
+            label: "value".to_string(),
+            replacement: "value".to_string(),
+            kind: CompletionKind::Variable,
+            detail: Some("Int".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+        }],
+        callable_signatures: vec![CallableSignature {
+            label: "fresh".to_string(),
+            qualified_name: "Fresh::fresh".to_string(),
+            signature: "fresh(value: String) -> Unit".to_string(),
+        }],
+    });
+
+    let completion = context.input_support("val", 3, CompletionScope::All);
+    assert_eq!(completion.candidates.len(), 1);
+    assert_eq!(completion.candidates[0].label, "value");
+    assert_eq!(completion.candidates[0].detail.as_deref(), Some("Int"));
+
+    let support = context.input_support("fresh(", "fresh(".len(), CompletionScope::All);
+    let signature = support
+        .signature
+        .expect("call signature should be produced by input support core");
+    assert_eq!(
+        signature.lines,
+        vec!["Fresh::fresh(value: [String]) -> Unit".to_string()]
+    );
+    assert_eq!(signature.active_parameter, Some(0));
+}
+
+#[test]
+fn repl_input_support_context_produces_operator_assist_and_ranked_candidates() {
+    let context = ReplInputSupportContext::from_update(ReplInputSupportUpdate {
+        symbols: vec![
+            CompletionSymbol {
+                label: "answer".to_string(),
+                replacement: "answer".to_string(),
+                kind: CompletionKind::Variable,
+                detail: Some("Int".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+            },
+            CompletionSymbol {
+                label: "name".to_string(),
+                replacement: "name".to_string(),
+                kind: CompletionKind::Variable,
+                detail: Some("String".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+            },
+        ],
+        callable_signatures: Vec::new(),
+    });
+
+    assert!(ReplInputSupportContext::should_request(
+        "1 + ",
+        "1 + ".len()
+    ));
+
+    let support = context.input_support("1 + ", "1 + ".len(), CompletionScope::All);
+    let signature = support
+        .signature
+        .expect("operator rhs should show signature help");
+    assert_eq!(signature.lines, vec!["Int + [Int]".to_string()]);
+
+    assert_eq!(
+        support
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["answer", "name"]
+    );
 }
 
 #[test]
