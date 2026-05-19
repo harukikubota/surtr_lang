@@ -8,6 +8,7 @@ use sigil::resolved::*;
 use sindr::builtin::{
     builtin_type_meta_by_name, builtin_uid, BuiltinMeta, BUILTIN_METAS, BUILTIN_TYPE_METAS,
 };
+use sindr::names::builtin_type_usage_policy;
 use sindr::policy::{ExitCodePolicy, RuntimeSourcePolicy};
 use sindr::warning::{
     CompilerWarning, PhaseOutput, WarningBuffer, WarningKind, WarningPhase, WarningSpan,
@@ -47,6 +48,21 @@ enum ProfileEvent {
     MatchArm,
     ClosureBody,
     NormalizeEnvBindings,
+}
+
+#[cfg(test)]
+mod process_boundary_policy_tests {
+    use super::*;
+
+    #[test]
+    fn process_boundary_only_type_query_uses_builtin_usage_policy() {
+        assert!(Checker::builtin_type_is_process_boundary_only("ProcessInit"));
+        assert!(Checker::builtin_type_is_process_boundary_only(
+            "Global::ProcessInit"
+        ));
+        assert!(!Checker::builtin_type_is_process_boundary_only("PID"));
+        assert!(!Checker::builtin_type_is_process_boundary_only("String"));
+    }
 }
 
 #[derive(Default)]
@@ -2304,8 +2320,7 @@ impl Checker {
     pub(super) fn ty_contains_process_init(&self, ty: &Ty) -> bool {
         match self.resolve_ty(ty) {
             Ty::Enum(name, args) => {
-                name == "ProcessInit"
-                    || name.ends_with("::ProcessInit")
+                Self::builtin_type_is_process_boundary_only(&name)
                     || args.iter().any(|arg| self.ty_contains_process_init(arg))
             }
             Ty::Result(ok, err) => {
@@ -2345,11 +2360,17 @@ impl Checker {
 
     fn process_init_state_ty(&self, ty: &Ty) -> Option<Ty> {
         match self.resolve_ty(ty) {
-            Ty::Enum(name, args) if name == "ProcessInit" || name.ends_with("::ProcessInit") => {
+            Ty::Enum(name, args) if Self::builtin_type_is_process_boundary_only(&name) => {
                 args.into_iter().next()
             }
             _ => None,
         }
+    }
+
+    fn builtin_type_is_process_boundary_only(name: &str) -> bool {
+        builtin_type_usage_policy(Self::surface_name(name)).is_some_and(|policy| {
+            policy.process_boundary_allowed && !policy.type_annotation_allowed
+        })
     }
 
     fn process_handler_function_ty(&self, uid: u32) -> Option<(Vec<Ty>, Ty)> {
