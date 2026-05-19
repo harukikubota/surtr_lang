@@ -1,4 +1,5 @@
 use super::*;
+use sindr::names::FacetRootKind;
 use sindr::primitives::int;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -1517,6 +1518,7 @@ impl Checker {
         let param_id = ResolvedId {
             name: "__inferred_facet_capture_arg".to_string(),
             qualified_name: None,
+            symbol_info: None,
             unique_id: Self::next_synthetic_range_uid(),
             compiler_generated: true,
             span: span.clone(),
@@ -2813,6 +2815,7 @@ impl Checker {
         let param_id = ResolvedId {
             name: "__pipe_trait_helper_arg".into(),
             qualified_name: None,
+            symbol_info: None,
             unique_id: Self::next_synthetic_range_uid(),
             compiler_generated: true,
             span: span.clone(),
@@ -6599,6 +6602,7 @@ impl Checker {
                     ResolvedId {
                         name: internal_name.clone(),
                         qualified_name: Some(format!("{}::{}", process_name, internal_name)),
+                        symbol_info: None,
                         unique_id: init_uid,
                         compiler_generated: true,
                         span: span.clone(),
@@ -6870,6 +6874,7 @@ impl Checker {
                 let param_id = ResolvedId {
                     name: format!("__trait_helper_arg_{}", index),
                     qualified_name: None,
+                    symbol_info: None,
                     unique_id: Self::next_synthetic_range_uid(),
                     compiler_generated: true,
                     span: span.clone(),
@@ -6906,6 +6911,7 @@ impl Checker {
                         let param_id = ResolvedId {
                             name: "__facet_capture_arg".to_string(),
                             qualified_name: None,
+                            symbol_info: None,
                             unique_id: param_uid,
                             compiler_generated: true,
                             span: span.clone(),
@@ -6944,6 +6950,7 @@ impl Checker {
             let param_id = ResolvedId {
                 name: param_name.clone(),
                 qualified_name: None,
+                symbol_info: None,
                 unique_id: param_uid,
                 compiler_generated: true,
                 span: span.clone(),
@@ -7689,6 +7696,7 @@ impl Checker {
             return Ok(ResolvedId {
                 name: local_name,
                 qualified_name: Some(qualified_name.to_string()),
+                symbol_info: None,
                 unique_id: *uid,
                 compiler_generated: true,
                 span: span.clone(),
@@ -7740,6 +7748,7 @@ impl Checker {
         let gen_id = ResolvedId {
             name: "__range_gen".into(),
             qualified_name: None,
+            symbol_info: None,
             unique_id: gen_uid,
             compiler_generated: true,
             span: span.clone(),
@@ -7764,6 +7773,7 @@ impl Checker {
                     ResolvedId {
                         name: "Ok".into(),
                         qualified_name: None,
+                        symbol_info: None,
                         unique_id: 0,
                         compiler_generated: true,
                         span: span.clone(),
@@ -8500,16 +8510,9 @@ impl Checker {
     fn try_check_tuple_type_root_facet_path(
         &mut self,
         span: &Span,
-        expr: &Resolved,
         field: &str,
         expected: Option<&Ty>,
     ) -> Result<Option<TypedNode>, TypeError> {
-        let Resolved::Var(_, id) = expr else {
-            return Ok(None);
-        };
-        if id.name != "Tuple" {
-            return Ok(None);
-        }
         let Some(index) = Self::parse_tuple_index_name(field) else {
             return Ok(None);
         };
@@ -8613,19 +8616,16 @@ impl Checker {
     fn try_check_container_type_root_facet_path(
         &mut self,
         span: &Span,
-        expr: &Resolved,
+        root_kind: FacetRootKind,
         segment: &PendingFacetSegment,
         expected: Option<&Ty>,
     ) -> Result<Option<TypedNode>, TypeError> {
-        let Resolved::Var(_, id) = expr else {
-            return Ok(None);
-        };
-        let root_path_name = match (id.name.as_str(), segment) {
+        let root_path_name = match (root_kind, segment) {
             (
-                "List",
+                FacetRootKind::List,
                 PendingFacetSegment::Bracket { .. } | PendingFacetSegment::RangeBracket { .. },
             ) => "List",
-            ("HashMap", PendingFacetSegment::Bracket { .. }) => "HashMap",
+            (FacetRootKind::HashMap, PendingFacetSegment::Bracket { .. }) => "HashMap",
             _ => return Ok(None),
         };
 
@@ -8689,18 +8689,71 @@ impl Checker {
         }))
     }
 
-    fn primitive_facet_root_name(expr: &Resolved) -> Option<&str> {
+    fn check_type_root_facet_path_with_expected(
+        &mut self,
+        span: &Span,
+        expr: &Resolved,
+        segment: &PendingFacetSegment,
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let typed_expr = self.check_node(expr)?;
+        let (source_ty, expected_focus_ty) = match expected.map(|ty| self.resolve_ty(ty)) {
+            Some(Ty::Facet(source, focus)) => {
+                (source.as_ref().clone(), Some(focus.as_ref().clone()))
+            }
+            _ => (self.resolve_ty(&typed_expr.ty), None),
+        };
+        let (segment, focus_ty, may_fail) =
+            self.resolve_facet_segment_for_source_ty(&source_ty, segment, span, true)?;
+        let focus_ty = self.resolve_ty(&focus_ty);
+        if let Some(expected_focus_ty) = expected_focus_ty {
+            if !self.types_compatible(&focus_ty, &expected_focus_ty) {
+                return Err(TypeError {
+                    message: format!(
+                        "Facet path focus type mismatch: expected {}, got {}",
+                        self.ty_name(&expected_focus_ty),
+                        self.ty_name(&focus_ty)
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+        }
+        let path = TypedFacetPath {
+            source_ty: source_ty.clone(),
+            focus_ty: focus_ty.clone(),
+            path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&segment)),
+            may_fail,
+            source_readonly_root: self.ty_is_readonly_root(&source_ty),
+            segments: vec![segment],
+        };
+        Ok(TypedNode {
+            ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
+            span: span.clone(),
+            node: TypedInner::FacetPath(path),
+        })
+    }
+
+    fn facet_root_kind(expr: &Resolved) -> Option<FacetRootKind> {
         let Resolved::Var(_, id) = expr else {
             return None;
         };
-        matches!(
-            id.name.as_str(),
-            "String" | "Int" | "Float" | "Boolean" | "Function"
-        )
-        .then_some(id.name.as_str())
+        id.symbol_info
+            .as_ref()
+            .and_then(|info| info.capabilities.facet_root_path.clone())
     }
 
-    fn primitive_facet_root_error(root: &str, span: &Span) -> TypeError {
+    fn known_non_facet_root_name(expr: &Resolved) -> Option<&str> {
+        let Resolved::Var(_, id) = expr else {
+            return None;
+        };
+        id.symbol_info
+            .as_ref()
+            .filter(|info| info.capabilities.facet_root_path.is_none())
+            .map(|_| id.name.as_str())
+    }
+
+    fn known_non_facet_root_error(root: &str, span: &Span) -> TypeError {
         TypeError {
             message: format!(
                 "{root} is not a Facet path root; primitive types are not path-constructable"
@@ -8743,20 +8796,53 @@ impl Checker {
             _ => None,
         };
 
-        if let Some(container_root_path) =
-            self.try_check_container_type_root_facet_path(span, expr, &pending_segment, expected)?
-        {
-            return Ok(container_root_path);
-        }
-        if let Some(field) = field {
-            if let Some(tuple_root_path) =
-                self.try_check_tuple_type_root_facet_path(span, expr, field, expected)?
-            {
-                return Ok(tuple_root_path);
+        if let Some(root_kind) = Self::facet_root_kind(expr) {
+            match root_kind {
+                FacetRootKind::TypeRoot => {
+                    return self.check_type_root_facet_path_with_expected(
+                        span,
+                        expr,
+                        &pending_segment,
+                        expected,
+                    );
+                }
+                FacetRootKind::Tuple => {
+                    if let Some(field) = field {
+                        if let Some(tuple_root_path) =
+                            self.try_check_tuple_type_root_facet_path(span, field, expected)?
+                        {
+                            return Ok(tuple_root_path);
+                        }
+                    }
+                }
+                FacetRootKind::List => {
+                    if let Some(container_root_path) = self
+                        .try_check_container_type_root_facet_path(
+                            span,
+                            FacetRootKind::List,
+                            &pending_segment,
+                            expected,
+                        )?
+                    {
+                        return Ok(container_root_path);
+                    }
+                }
+                FacetRootKind::HashMap => {
+                    if let Some(container_root_path) = self
+                        .try_check_container_type_root_facet_path(
+                            span,
+                            FacetRootKind::HashMap,
+                            &pending_segment,
+                            expected,
+                        )?
+                    {
+                        return Ok(container_root_path);
+                    }
+                }
             }
         }
-        if let Some(root) = Self::primitive_facet_root_name(expr) {
-            return Err(Self::primitive_facet_root_error(root, span));
+        if let Some(root) = Self::known_non_facet_root_name(expr) {
+            return Err(Self::known_non_facet_root_error(root, span));
         }
         let typed_expr = self.check_node(expr)?;
 
@@ -8785,50 +8871,6 @@ impl Checker {
                 span: span.clone(),
                 node: TypedInner::FacetPath(combined),
             });
-        }
-
-        if let TypedInner::Var(id) = &typed_expr.node {
-            if self.env.is_type_constructor_id(id.unique_id) {
-                let (source_ty, expected_focus_ty) = match expected.map(|ty| self.resolve_ty(ty)) {
-                    Some(Ty::Facet(source, focus)) => {
-                        (source.as_ref().clone(), Some(focus.as_ref().clone()))
-                    }
-                    _ => (self.resolve_ty(&typed_expr.ty), None),
-                };
-                let (segment, focus_ty, may_fail) = self.resolve_facet_segment_for_source_ty(
-                    &source_ty,
-                    &pending_segment,
-                    span,
-                    true,
-                )?;
-                let focus_ty = self.resolve_ty(&focus_ty);
-                if let Some(expected_focus_ty) = expected_focus_ty {
-                    if !self.types_compatible(&focus_ty, &expected_focus_ty) {
-                        return Err(TypeError {
-                            message: format!(
-                                "Facet path focus type mismatch: expected {}, got {}",
-                                self.ty_name(&expected_focus_ty),
-                                self.ty_name(&focus_ty)
-                            ),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                }
-                let path = TypedFacetPath {
-                    source_ty: source_ty.clone(),
-                    focus_ty: focus_ty.clone(),
-                    path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&segment)),
-                    may_fail,
-                    source_readonly_root: self.ty_is_readonly_root(&source_ty),
-                    segments: vec![segment],
-                };
-                return Ok(TypedNode {
-                    ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
-                    span: span.clone(),
-                    node: TypedInner::FacetPath(path),
-                });
-            }
         }
 
         let (source_is_result, source_focus_ty) = match self.resolve_ty(&typed_expr.ty) {

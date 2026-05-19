@@ -1768,6 +1768,7 @@ mod specialization_state_tests {
         ResolvedId {
             name: name.to_string(),
             qualified_name: Some(qualified_name.to_string()),
+            symbol_info: None,
             unique_id,
             compiler_generated: false,
             span: test_span(),

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use sindr::names::{FacetRootKind, SymbolCapabilities};
 use surtr_analysis::{
     resolve_context, AnalysisContextRequest, AnalysisDiagnosticKind, AnalysisHost, AnalysisMode,
     AnalysisService, CompletionKind, CompletionScope, CompletionSymbol, ProjectRunnerInput,
@@ -362,6 +363,7 @@ fn analysis_service_definition_uses_injected_host_sources_for_line_index() {
             start: 4,
             end: 10,
         }),
+        capabilities: None,
     }]);
     service.set_semantic_index(index);
 
@@ -600,6 +602,8 @@ fn analysis_service_completions_use_snapshot_semantic_index_and_utf16_position()
         origin: None,
 
         definition: None,
+
+        capabilities: None,
     }]));
 
     let context = resolve_context(AnalysisContextRequest {
@@ -641,16 +645,23 @@ fn analysis_service_completions_use_facet_api_first_argument_constraints() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "User".to_string(),
             replacement: "User".to_string(),
             kind: CompletionKind::TypeConstructor,
-            detail: Some("defrecord User".to_string()),
+            detail: None,
             documentation: None,
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: Some(SymbolCapabilities::new(
+                true,
+                true,
+                true,
+                Some(FacetRootKind::TypeRoot),
+            )),
         },
         CompletionSymbol {
             label: "String".to_string(),
@@ -661,6 +672,7 @@ fn analysis_service_completions_use_facet_api_first_argument_constraints() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "name_path".to_string(),
@@ -671,6 +683,7 @@ fn analysis_service_completions_use_facet_api_first_argument_constraints() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "user".to_string(),
@@ -681,6 +694,7 @@ fn analysis_service_completions_use_facet_api_first_argument_constraints() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]));
 
@@ -712,6 +726,48 @@ fn analysis_service_completions_use_facet_api_first_argument_constraints() {
 }
 
 #[test]
+fn analysis_service_facet_arg_completion_uses_source_location_root_capabilities() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    let source = "defrecord User(name: String)\nFacet::view(User.name, user)";
+    service.update_document(path.clone(), Some(1), source.to_string());
+    service.set_semantic_index(SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "Facet::view".to_string(),
+        replacement: "Facet::view".to_string(),
+        kind: CompletionKind::FunctionCall,
+        detail: Some("view(facet: Facet<$S, $A>, source: $S) -> $A".to_string()),
+        documentation: None,
+        sort_text: None,
+        origin: None,
+        definition: None,
+        capabilities: None,
+    }]));
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(path)),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let completion = service.completions(
+        &snapshot,
+        Utf16Position {
+            line: 1,
+            character: "Facet::view(".len() as u32,
+        },
+    );
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(labels.contains(&"User"), "{labels:?}");
+}
+
+#[test]
 fn analysis_service_facet_arg_completion_uses_call_signature_not_name() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");
@@ -726,6 +782,7 @@ fn analysis_service_facet_arg_completion_uses_call_signature_not_name() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "User".to_string(),
@@ -736,6 +793,7 @@ fn analysis_service_facet_arg_completion_uses_call_signature_not_name() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "name_path".to_string(),
@@ -746,6 +804,7 @@ fn analysis_service_facet_arg_completion_uses_call_signature_not_name() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]));
 
@@ -789,6 +848,7 @@ fn analysis_service_repl_assist_uses_repl_scope_and_signature_help() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "name".to_string(),
@@ -799,6 +859,7 @@ fn analysis_service_repl_assist_uses_repl_scope_and_signature_help() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]));
 
@@ -846,6 +907,8 @@ fn analysis_service_hover_uses_snapshot_semantic_index_and_token_range() {
         origin: None,
 
         definition: None,
+
+        capabilities: None,
     }]));
 
     let context = resolve_context(AnalysisContextRequest {
@@ -888,6 +951,8 @@ fn analysis_service_signature_help_uses_snapshot_semantic_index() {
         origin: None,
 
         definition: None,
+
+        capabilities: None,
     }]));
 
     let context = resolve_context(AnalysisContextRequest {

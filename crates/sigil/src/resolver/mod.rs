@@ -3,6 +3,10 @@ use std::panic;
 
 use serde::{Deserialize, Serialize};
 use sindr::builtin::{builtin_uid, BUILTIN_METAS};
+use sindr::names::{
+    builtin_symbol_identity_info, FacetRootKind, SymbolCapabilities, SymbolIdentityInfo,
+    TypeIdentity,
+};
 use sindr::warning::PhaseOutput;
 use spire::ast::{
     Ast, AstMatchArm, AstPattern, AstTy, ClosureParam, DeclAttrs, ExtractorParam, FunParam, Lit,
@@ -56,6 +60,40 @@ fn define_global_surface_alias(scope: &mut Scope, canonical_name: &str, uid: u32
     let surface_name = global_surface_name(canonical_name);
     if surface_name != canonical_name {
         scope.define_with_id(surface_name, uid);
+    }
+}
+
+fn user_type_symbol_identity_info(kind: &DeclarationKind) -> Option<SymbolIdentityInfo> {
+    let (identity, capabilities) = match kind {
+        DeclarationKind::Struct => (
+            TypeIdentity::Struct,
+            SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot)),
+        ),
+        DeclarationKind::Record => (
+            TypeIdentity::Record,
+            SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot)),
+        ),
+        DeclarationKind::Enum => (
+            TypeIdentity::Enum,
+            SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot)),
+        ),
+        DeclarationKind::Deferror => (
+            TypeIdentity::ConcreteError,
+            SymbolCapabilities::new(true, false, false, None),
+        ),
+        _ => return None,
+    };
+    Some(SymbolIdentityInfo::new(identity, capabilities))
+}
+
+fn declaration_symbol_identity_info(
+    name: &str,
+    kind: &DeclarationKind,
+) -> Option<SymbolIdentityInfo> {
+    if matches!(kind, DeclarationKind::BuiltinType) {
+        builtin_symbol_identity_info(global_surface_name(name))
+    } else {
+        user_type_symbol_identity_info(kind)
     }
 }
 

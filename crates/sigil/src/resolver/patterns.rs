@@ -32,6 +32,7 @@ impl Resolver {
             qualified_name: None,
             unique_id: uid,
             compiler_generated: false,
+            symbol_info: None,
             span,
         })
     }
@@ -70,6 +71,7 @@ impl Resolver {
                     qualified_name: None,
                     unique_id: uid,
                     compiler_generated: false,
+                    symbol_info: None,
                     span,
                 }))
             }
@@ -89,12 +91,14 @@ impl Resolver {
                     span: span.clone(),
                     related_labels: Vec::new(),
                 })?;
+                let symbol_info = self.symbol_info_for_uid(&ctor_name, ctor_uid);
                 Ok(ResolvedPattern::Constructor(
                     ResolvedId {
                         name: ctor_name,
                         qualified_name: None,
                         unique_id: ctor_uid,
                         compiler_generated: false,
+                        symbol_info,
                         span,
                     },
                     inners
@@ -136,6 +140,7 @@ impl Resolver {
                     qualified_name: None,
                     unique_id: head_uid,
                     compiler_generated: false,
+                    symbol_info: self.symbol_info_for_uid(&head_name, head_uid),
                     span: span.clone(),
                 };
                 let resolved_inners = inners
@@ -188,6 +193,10 @@ impl Resolver {
                                 qualified_name: extractor_qualified_name,
                                 unique_id: extractor_uid,
                                 compiler_generated: false,
+                                symbol_info: self.symbol_info_for_uid(
+                                    &format!("{}::deconstruct", head_name),
+                                    extractor_uid,
+                                ),
                                 span,
                             },
                             resolved_inners,

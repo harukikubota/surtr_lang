@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use sigil::{DeclarationIndex, DeclarationKind};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
+use sindr::names::{builtin_symbol_identity_info, FacetRootKind, SymbolCapabilities};
 use spire::ast::{AstTy, Visibility};
 
 use crate::query::{format_query_ty, parse_signature_type};
@@ -31,6 +32,7 @@ pub struct CompletionSymbol {
     pub sort_text: Option<String>,
     pub origin: Option<CompletionOrigin>,
     pub definition: Option<SourceLocation>,
+    pub capabilities: Option<SymbolCapabilities>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +87,7 @@ impl SemanticIndex {
                 if existing.definition.is_none() {
                     existing.definition = symbol.definition;
                 }
+                merge_symbol_capabilities(&mut existing.capabilities, symbol.capabilities);
                 continue;
             }
             deduped.push(symbol);
@@ -121,6 +124,7 @@ impl SemanticIndex {
                     module_path: entry.module_path.clone(),
                 }),
                 definition: None,
+                capabilities: completion_capabilities_for_builtin(&entry.qualified_name),
             });
         }
         for entry in docs {
@@ -141,6 +145,7 @@ impl SemanticIndex {
                     module_path: entry.module_path.clone(),
                 }),
                 definition: None,
+                capabilities: completion_capabilities_for_builtin(&entry.qualified_name),
             });
         }
 
@@ -163,11 +168,14 @@ impl SemanticIndex {
                     sort_text: None,
                     origin: None,
                     definition: None,
+                    capabilities: completion_capabilities_for_builtin(&entry.module_path),
                 });
             }
 
             if let Some(kind) = completion_kind_for_declaration_kind(&entry.kind) {
                 let qualified_name = surface_name(&entry.fq_name);
+                let capabilities =
+                    completion_capabilities_for_declaration(&entry.kind, &entry.name);
                 symbols.push(CompletionSymbol {
                     label: qualified_name.clone(),
                     replacement: qualified_name,
@@ -186,6 +194,7 @@ impl SemanticIndex {
                         user_callable: entry.user_callable,
                     }),
                     definition: None,
+                    capabilities,
                 });
             }
         }
@@ -232,6 +241,7 @@ impl SemanticIndex {
             if existing.definition.is_none() {
                 existing.definition = symbol.definition;
             }
+            merge_symbol_capabilities(&mut existing.capabilities, symbol.capabilities);
         } else {
             self.symbols.push(symbol);
         }
@@ -244,6 +254,50 @@ impl SemanticIndex {
                 .then_with(|| left.replacement.cmp(&right.replacement))
         });
     }
+}
+
+fn merge_symbol_capabilities(
+    existing: &mut Option<SymbolCapabilities>,
+    incoming: Option<SymbolCapabilities>,
+) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+    match existing.as_ref() {
+        None => *existing = Some(incoming),
+        Some(current)
+            if current.facet_root_path.is_none() && incoming.facet_root_path.is_some() =>
+        {
+            *existing = Some(incoming);
+        }
+        Some(_) => {}
+    }
+}
+
+pub(crate) fn completion_capabilities_for_builtin(name: &str) -> Option<SymbolCapabilities> {
+    let surface_name = surface_name(name);
+    builtin_symbol_identity_info(&surface_name).map(|info| info.capabilities)
+}
+
+pub(crate) fn completion_capabilities_for_declaration(
+    kind: &DeclarationKind,
+    name: &str,
+) -> Option<SymbolCapabilities> {
+    if let Some(capabilities) = completion_capabilities_for_builtin(name) {
+        return Some(capabilities);
+    }
+
+    match kind {
+        DeclarationKind::Struct | DeclarationKind::Record | DeclarationKind::Enum => {
+            Some(facet_root_capabilities(FacetRootKind::TypeRoot))
+        }
+        DeclarationKind::BuiltinType => completion_capabilities_for_builtin(name),
+        _ => None,
+    }
+}
+
+pub(crate) fn facet_root_capabilities(kind: FacetRootKind) -> SymbolCapabilities {
+    SymbolCapabilities::new(true, true, true, Some(kind))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -262,6 +316,7 @@ pub struct CompletionCandidate {
     pub documentation: Option<String>,
     pub sort_text: Option<String>,
     pub origin: Option<CompletionOrigin>,
+    pub capabilities: Option<SymbolCapabilities>,
     pub replace_start: usize,
     pub replace_end: usize,
 }
@@ -554,6 +609,7 @@ impl ReplInputSupportContext {
                     documentation: symbol.documentation.clone(),
                     sort_text: symbol.sort_text.clone(),
                     origin: symbol.origin.clone(),
+                    capabilities: symbol.capabilities.clone(),
                     replace_start,
                     replace_end,
                 },
@@ -1043,6 +1099,7 @@ impl ReplInputSupportContext {
                 documentation: None,
                 sort_text: None,
                 origin: None,
+                capabilities: None,
                 replace_start,
                 replace_end,
             });
@@ -1082,6 +1139,9 @@ impl ReplInputSupportContext {
                     self.index.find_symbol(symbol)
                 };
                 found.and_then(|symbol| {
+                    if symbol.kind == CompletionKind::Variable {
+                        return None;
+                    }
                     symbol
                         .detail
                         .as_ref()
@@ -1370,6 +1430,7 @@ fn complete_prefix_with_options(
             documentation: symbol.documentation.clone(),
             sort_text: symbol.sort_text.clone(),
             origin: symbol.origin.clone(),
+            capabilities: symbol.capabilities.clone(),
             replace_start,
             replace_end,
         };
@@ -1478,6 +1539,7 @@ fn push_completion_candidate(
         if existing.origin.is_none() {
             existing.origin = candidate.origin;
         }
+        merge_symbol_capabilities(&mut existing.capabilities, candidate.capabilities);
         return;
     }
     candidates.push(candidate);
@@ -2221,6 +2283,7 @@ fn completion_candidate_from_symbol(
         documentation: symbol.documentation.clone(),
         sort_text: symbol.sort_text.clone(),
         origin: symbol.origin.clone(),
+        capabilities: symbol.capabilities.clone(),
         replace_start,
         replace_end,
     }
@@ -2234,25 +2297,10 @@ fn facet_binding_type(detail: &str) -> bool {
 }
 
 fn path_constructable_type_root(symbol: &CompletionSymbol) -> bool {
-    if symbol.label.contains("::") {
-        return false;
-    }
-    let name = symbol.label.as_str();
-    if matches!(
-        name,
-        "String" | "Int" | "Float" | "Boolean" | "Function" | "Result" | "Facet"
-    ) {
-        return false;
-    }
-    if matches!(name, "Tuple" | "List" | "HashMap") {
-        return true;
-    }
-
-    symbol.detail.as_deref().is_some_and(|detail| {
-        detail.starts_with("defstruct ")
-            || detail.starts_with("defrecord ")
-            || detail.starts_with("defenum ")
-    })
+    symbol
+        .capabilities
+        .as_ref()
+        .is_some_and(|capabilities| capabilities.facet_root_path.is_some())
 }
 
 fn facet_path_arg_candidate_matches_prefix(symbol: &CompletionSymbol, prefix: &str) -> bool {

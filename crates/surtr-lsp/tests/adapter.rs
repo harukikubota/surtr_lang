@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use surtr_analysis::{
-    CompletionKind, CompletionSymbol, ProjectBootSummary, ProjectRunnerPath, ProjectRunnerProfile,
-    ProjectRunnerResult, RunnerSelection, SelectedContext, SemanticIndex,
+    CompletionKind, CompletionSymbol, FacetRootKind, ProjectBootSummary, ProjectRunnerPath,
+    ProjectRunnerProfile, ProjectRunnerResult, RunnerSelection, SelectedContext, SemanticIndex,
+    SymbolCapabilities,
 };
 use surtr_lsp::{
     completion_items, definition, diagnostics, document_symbols, file_uri_to_path, hover,
@@ -80,7 +81,7 @@ fn completion_maps_utf16_position_to_lsp_text_edits() {
         documentation: None,
         sort_text: None,
         origin: None,
-
+        capabilities: None,
         definition: None,
     }]));
 
@@ -132,6 +133,7 @@ fn completion_uses_facet_api_first_argument_constraints_through_lsp() {
             documentation: None,
             sort_text: None,
             origin: None,
+            capabilities: None,
             definition: None,
         },
         CompletionSymbol {
@@ -142,6 +144,12 @@ fn completion_uses_facet_api_first_argument_constraints_through_lsp() {
             documentation: None,
             sort_text: None,
             origin: None,
+            capabilities: Some(SymbolCapabilities::new(
+                true,
+                true,
+                true,
+                Some(FacetRootKind::TypeRoot),
+            )),
             definition: None,
         },
         CompletionSymbol {
@@ -152,6 +160,7 @@ fn completion_uses_facet_api_first_argument_constraints_through_lsp() {
             documentation: None,
             sort_text: None,
             origin: None,
+            capabilities: None,
             definition: None,
         },
         CompletionSymbol {
@@ -162,6 +171,7 @@ fn completion_uses_facet_api_first_argument_constraints_through_lsp() {
             documentation: None,
             sort_text: None,
             origin: None,
+            capabilities: None,
             definition: None,
         },
     ]));
@@ -201,6 +211,7 @@ fn completion_exposes_shared_result_ctors_and_bool_variants_through_lsp() {
             documentation: None,
             sort_text: None,
             origin: None,
+            capabilities: None,
             definition: None,
         },
         CompletionSymbol {
@@ -211,6 +222,7 @@ fn completion_exposes_shared_result_ctors_and_bool_variants_through_lsp() {
             documentation: None,
             sort_text: None,
             origin: None,
+            capabilities: None,
             definition: None,
         },
         CompletionSymbol {
@@ -221,6 +233,7 @@ fn completion_exposes_shared_result_ctors_and_bool_variants_through_lsp() {
             documentation: None,
             sort_text: None,
             origin: None,
+            capabilities: None,
             definition: None,
         },
         CompletionSymbol {
@@ -231,6 +244,7 @@ fn completion_exposes_shared_result_ctors_and_bool_variants_through_lsp() {
             documentation: None,
             sort_text: None,
             origin: None,
+            capabilities: None,
             definition: None,
         },
     ]));
@@ -291,7 +305,7 @@ fn hover_maps_semantic_detail_and_documentation_to_lsp_dto() {
         documentation: Some("Writes a line.".to_string()),
         sort_text: None,
         origin: None,
-
+        capabilities: None,
         definition: None,
     }]));
 
@@ -338,7 +352,7 @@ fn signature_help_maps_semantic_call_context_to_lsp_dto() {
         documentation: Some("Writes a line.".to_string()),
         sort_text: None,
         origin: None,
-
+        capabilities: None,
         definition: None,
     }]));
 

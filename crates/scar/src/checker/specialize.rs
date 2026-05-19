@@ -2316,6 +2316,7 @@ mod tests {
         ResolvedId {
             name: name.to_string(),
             qualified_name: qualified_name.map(str::to_string),
+            symbol_info: None,
             unique_id,
             compiler_generated: false,
             span: test_span(),

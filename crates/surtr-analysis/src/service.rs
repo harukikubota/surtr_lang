@@ -1,6 +1,7 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+use sindr::names::FacetRootKind;
 use sindr::policy::{CompileUnitKind, SourceKind};
 use spire::ast::{Ast, Lit, RecordLitArg, Span};
 use spire::{SyntaxOutlineItem, SyntaxOutlineKind};
@@ -808,35 +809,51 @@ fn source_location_symbol_for_ast(
     owner: Option<&str>,
     path: &Path,
 ) -> Option<CompletionSymbol> {
-    let (name, kind, span) = match node {
+    let (name, kind, span, capabilities) = match node {
         Ast::Def(span, name, ..) | Ast::ExtractorDef(span, name, ..) => (
             qualify_symbol(owner, name),
             CompletionKind::FunctionCall,
             span,
+            None,
         ),
-        Ast::ConstDef(span, name, ..) => {
-            (qualify_symbol(owner, name), CompletionKind::Variable, span)
-        }
+        Ast::ConstDef(span, name, ..) => (
+            qualify_symbol(owner, name),
+            CompletionKind::Variable,
+            span,
+            None,
+        ),
         Ast::StructDef(span, name, ..)
         | Ast::RecordDef(span, name, ..)
-        | Ast::DeferrorDef(span, name, ..)
         | Ast::EnumDef(span, name, ..) => (
             qualify_symbol(owner, name),
             CompletionKind::TypeConstructor,
             span,
+            Some(crate::semantic::facet_root_capabilities(
+                FacetRootKind::TypeRoot,
+            )),
+        ),
+        Ast::DeferrorDef(span, name, ..) => (
+            qualify_symbol(owner, name),
+            CompletionKind::TypeConstructor,
+            span,
+            None,
         ),
         Ast::Defmod(span, name, ..)
         | Ast::Defagent(span, name, ..)
         | Ast::Defgenserver(span, name, ..)
         | Ast::Defsupervisor(span, name, ..)
         | Ast::DefdynamicSupervisor(span, name, ..)
-        | Ast::TraitDef(span, name, ..) => {
-            (qualify_symbol(owner, name), CompletionKind::TypePath, span)
-        }
+        | Ast::TraitDef(span, name, ..) => (
+            qualify_symbol(owner, name),
+            CompletionKind::TypePath,
+            span,
+            None,
+        ),
         Ast::ImplDef(span, target, ..) => (
             qualify_symbol(owner, target),
             CompletionKind::TypePath,
             span,
+            None,
         ),
         _ => return None,
     };
@@ -854,6 +871,7 @@ fn source_location_symbol_for_ast(
             start: span.start,
             end: span.end,
         }),
+        capabilities,
     })
 }
 

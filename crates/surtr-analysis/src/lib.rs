@@ -5,6 +5,8 @@ pub mod query;
 pub mod semantic;
 pub mod service;
 
+pub use sindr::names::{FacetRootKind, SymbolCapabilities};
+
 pub use context::{
     parse_document, parse_document_tolerant, resolve_context, AnalysisCacheInput, AnalysisCacheKey,
     AnalysisContext, AnalysisContextRequest, AnalysisContextStatus, AnalysisMode,

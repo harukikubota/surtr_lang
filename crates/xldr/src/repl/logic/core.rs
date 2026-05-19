@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use sigil::error::ResolveError;
 use sindr::builtin::BUILTIN_METAS;
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
+use sindr::names::{builtin_symbol_identity_info, FacetRootKind, SymbolCapabilities};
 use sindr::policy::CompileUnitKind;
 use spire::ast::{Ast, AstTy, BinOp, ImportSpec, RecordLitArg, Span};
 
@@ -1315,6 +1316,7 @@ impl ReplEngine {
                 sort_text: None,
                 origin: None,
                 definition: None,
+                capabilities: Self::completion_capabilities_for_builtin(&entry.qualified_name),
             });
             if let Some(tail) = crate::surface_path_name(&entry.qualified_name)
                 .rsplit("::")
@@ -1334,6 +1336,7 @@ impl ReplEngine {
                     sort_text: None,
                     origin: None,
                     definition: None,
+                    capabilities: Self::completion_capabilities_for_builtin(&entry.qualified_name),
                 });
             }
         }
@@ -1349,6 +1352,7 @@ impl ReplEngine {
                     sort_text: None,
                     origin: None,
                     definition: None,
+                    capabilities: Self::completion_capabilities_for_declaration(decl),
                 });
             }
 
@@ -1369,6 +1373,7 @@ impl ReplEngine {
                     sort_text: None,
                     origin: None,
                     definition: None,
+                    capabilities: Self::completion_capabilities_for_builtin(&decl.fq_name),
                 });
                 if let Some(tail) = crate::surface_path_name(&decl.fq_name)
                     .rsplit("::")
@@ -1391,12 +1396,14 @@ impl ReplEngine {
                         sort_text: None,
                         origin: None,
                         definition: None,
+                        capabilities: Self::completion_capabilities_for_builtin(&decl.fq_name),
                     });
                 }
             }
         }
 
         for label in self.completion_visible_module_labels() {
+            let capabilities = Self::completion_capabilities_for_builtin(&label);
             symbols.push(surtr_analysis::CompletionSymbol {
                 label: label.clone(),
                 replacement: label,
@@ -1406,6 +1413,7 @@ impl ReplEngine {
                 sort_text: None,
                 origin: None,
                 definition: None,
+                capabilities,
             });
         }
 
@@ -1423,6 +1431,7 @@ impl ReplEngine {
                 sort_text: None,
                 origin: None,
                 definition: None,
+                capabilities: None,
             });
         }
 
@@ -1448,6 +1457,7 @@ impl ReplEngine {
                 sort_text: None,
                 origin: None,
                 definition: None,
+                capabilities: None,
             });
             if let Some(tail) = crate::surface_path_name(qualified_name).rsplit("::").next() {
                 symbols.push(surtr_analysis::CompletionSymbol {
@@ -1461,6 +1471,7 @@ impl ReplEngine {
                     sort_text: None,
                     origin: None,
                     definition: None,
+                    capabilities: Self::completion_capabilities_for_builtin(qualified_name),
                 });
             }
         }
@@ -1468,11 +1479,7 @@ impl ReplEngine {
         surtr_analysis::SemanticIndex::from_symbols(symbols)
     }
 
-    pub fn completion_context(&self) -> ReplCompletionContext {
-        if let Some(cached) = self.completion_context_cache.borrow().clone() {
-            return cached;
-        }
-
+    fn build_completion_context(&self) -> ReplCompletionContext {
         let mut callable_signatures = BTreeMap::new();
         let mut insert_signature = |label: &str, qualified_name: String, signature: String| {
             callable_signatures
@@ -1556,12 +1563,20 @@ impl ReplEngine {
             }
         }
 
-        let context = ReplCompletionContext {
+        ReplCompletionContext {
             input_support: surtr_analysis::ReplInputSupportContext::from_parts(
                 self.semantic_index(),
                 callable_signatures,
             ),
-        };
+        }
+    }
+
+    pub fn completion_context(&self) -> ReplCompletionContext {
+        if let Some(cached) = self.completion_context_cache.borrow().clone() {
+            return cached;
+        }
+
+        let context = self.build_completion_context();
         #[cfg(test)]
         self.completion_context_builds
             .set(self.completion_context_builds.get() + 1);
@@ -2061,121 +2076,45 @@ impl ReplEngine {
         ))
     }
 
-    fn cached_completion_symbol_for_name(
-        &self,
-        name: &str,
-    ) -> Option<surtr_analysis::CompletionSymbol> {
-        if let Some(binding) = self
-            .binding_records
-            .iter()
-            .rev()
-            .find(|binding| binding.name == name)
-        {
-            return Some(surtr_analysis::CompletionSymbol {
-                label: binding.name.clone(),
-                replacement: binding.name.clone(),
-                kind: surtr_analysis::CompletionKind::Variable,
-                detail: Some(binding.ty.clone()),
-                documentation: None,
-                sort_text: None,
-                origin: None,
-                definition: None,
-            });
-        }
-
-        let decl = self.visible_declaration(name)?;
-        if let Some(label) = self.completion_visible_owner_label(decl) {
-            if label == name {
-                return Some(surtr_analysis::CompletionSymbol {
-                    label: label.clone(),
-                    replacement: label,
-                    kind: surtr_analysis::CompletionKind::TypeConstructor,
-                    detail: self.declaration_signature(decl),
-                    documentation: None,
-                    sort_text: None,
-                    origin: None,
-                    definition: None,
-                });
-            }
-        }
-        if Self::declaration_is_function_completion_surface(decl) {
-            let detail = self.declaration_signature(decl).or_else(|| {
-                self.find_signature(name)
-                    .map(|(qualified_name, signature)| {
-                        Self::render_signature_with_qualified_name(&qualified_name, signature)
-                    })
-            });
-            return Some(surtr_analysis::CompletionSymbol {
-                label: name.to_string(),
-                replacement: name.to_string(),
-                kind: surtr_analysis::CompletionKind::FunctionCall,
-                detail,
-                documentation: None,
-                sort_text: None,
-                origin: None,
-                definition: None,
-            });
-        }
-        None
-    }
-
     fn sync_cached_completion_context_after_commit(
         &self,
         imported_symbols: &[String],
         bindings: &[forge::BindingInfo],
         function_defs: &[String],
     ) {
-        let Some(mut context) = self.completion_context_cache.borrow().clone() else {
+        if self.completion_context_cache.borrow().is_none() {
             return;
-        };
-
-        let mut seen = BTreeSet::new();
-        let mut symbols = Vec::new();
-        let mut callable_signatures = Vec::new();
-        for name in imported_symbols
-            .iter()
-            .chain(bindings.iter().map(|binding| &binding.name))
-            .chain(function_defs.iter())
-        {
-            if !seen.insert(name.clone()) {
-                continue;
-            }
-            if let Some(symbol) = self.cached_completion_symbol_for_name(name) {
-                symbols.push(symbol);
-            }
-            if let Some(binding) = self
-                .binding_records
-                .iter()
-                .rev()
-                .find(|binding| binding.name == *name)
-            {
-                if let Some(signature) =
-                    Self::callable_binding_signature_from_type(&binding.name, &binding.ty)
-                {
-                    callable_signatures.push(surtr_analysis::CallableSignature {
-                        label: binding.name.clone(),
-                        qualified_name: binding.name.clone(),
-                        signature,
-                    });
-                }
-                continue;
-            }
-            if let Some((qualified_name, signature)) = self.find_signature(name) {
-                callable_signatures.push(surtr_analysis::CallableSignature {
-                    label: name.clone(),
-                    qualified_name,
-                    signature,
-                });
-            }
         }
-        context
-            .input_support
-            .apply_update(surtr_analysis::ReplInputSupportUpdate {
-                symbols,
-                callable_signatures,
-            });
 
-        *self.completion_context_cache.borrow_mut() = Some(context);
+        let _ = (imported_symbols, bindings, function_defs);
+        *self.completion_context_cache.borrow_mut() = Some(self.build_completion_context());
+    }
+
+    fn completion_capabilities_for_builtin(name: &str) -> Option<SymbolCapabilities> {
+        let surface_name = crate::surface_rendered_name(name);
+        builtin_symbol_identity_info(&surface_name).map(|info| info.capabilities)
+    }
+
+    fn completion_capabilities_for_declaration(
+        entry: &sigil::DeclarationEntry,
+    ) -> Option<SymbolCapabilities> {
+        if let Some(capabilities) = Self::completion_capabilities_for_builtin(&entry.name)
+            .or_else(|| Self::completion_capabilities_for_builtin(&entry.fq_name))
+        {
+            return Some(capabilities);
+        }
+
+        match entry.kind {
+            sigil::DeclarationKind::Struct
+            | sigil::DeclarationKind::Record
+            | sigil::DeclarationKind::Enum => Some(Self::facet_type_root_capabilities()),
+            sigil::DeclarationKind::BuiltinType => None,
+            _ => None,
+        }
+    }
+
+    fn facet_type_root_capabilities() -> SymbolCapabilities {
+        SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot))
     }
 
     fn declaration_is_function_completion_surface(entry: &sigil::DeclarationEntry) -> bool {

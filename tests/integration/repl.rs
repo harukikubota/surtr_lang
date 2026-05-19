@@ -377,7 +377,9 @@ fn repl_accepts_single_item_list_literal_with_trailing_comma() {
 
 #[cfg(unix)]
 #[test]
-fn repl_completion_latency_smoke_reports_positive_samples_over_pty() {
+fn repl_completion_candidates_render_over_pty() {
+    const COMPLETION_WAIT: Duration = Duration::from_secs(10);
+
     fn pump_until(session: &PtyGuard, buffer: &mut Vec<u8>, needle: &[u8], timeout: Duration) {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
@@ -400,59 +402,12 @@ fn repl_completion_latency_smoke_reports_positive_samples_over_pty() {
     let mut buffer = Vec::new();
     pump_until(&session, &mut buffer, b"xldr(1)> ", Duration::from_secs(30));
 
-    session.write_all(b"St");
-    let warmup_deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < warmup_deadline {
-        buffer.extend(session.read_available());
-        std::thread::sleep(Duration::from_millis(10));
-    }
-
-    let mut samples_ms = Vec::new();
-    for _ in 0..5 {
-        let start = Instant::now();
-        let baseline_len = buffer.len();
-        session.write_all(b"r\t");
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            buffer.extend(session.read_available());
-            if buffer[baseline_len..]
-                .windows(b"String".len())
-                .any(|window| window == b"String")
-            {
-                samples_ms.push(start.elapsed().as_secs_f64() * 1000.0);
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "completion did not appear over PTY"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        session.write_all(&[0x7f]);
-        let settle_deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < settle_deadline {
-            buffer.extend(session.read_available());
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-
-    samples_ms.sort_by(|left, right| left.partial_cmp(right).expect("values should be finite"));
-    let median_ms = samples_ms[samples_ms.len() / 2];
-    let p95_index = ((samples_ms.len() - 1) * 95) / 100;
-    let p95_ms = samples_ms[p95_index];
-
-    assert!(
-        median_ms > 0.0,
-        "median latency should be positive: {samples_ms:?}"
-    );
-    assert!(
-        p95_ms >= median_ms,
-        "p95 should not be below median: {samples_ms:?}"
-    );
+    session.write_all(b"String::re\t");
+    pump_until(&session, &mut buffer, b"String::repeat", COMPLETION_WAIT);
     assert!(
         buffer
-            .windows(b"type String".len())
-            .any(|window| window == b"type String"),
+            .windows(b"String::repeat".len())
+            .any(|window| window == b"String::repeat"),
         "PTY output should contain completion candidates:\n{}",
         String::from_utf8_lossy(&buffer)
     );

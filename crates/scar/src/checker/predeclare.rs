@@ -46,6 +46,7 @@ impl Checker {
         ResolvedId {
             name: method_name.to_string(),
             qualified_name: Some(qualified_name),
+            symbol_info: None,
             unique_id: Self::next_synthetic_default_method_uid(),
             compiler_generated: true,
             span: span.clone(),

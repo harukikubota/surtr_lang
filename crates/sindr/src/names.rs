@@ -33,6 +33,56 @@ pub enum TypeIdentity {
     Const,
 }
 
+/// Compile-space root kind used when a symbol can serve as a Facet path root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FacetRootKind {
+    TypeRoot,
+    Tuple,
+    List,
+    HashMap,
+}
+
+/// Compile-space capability flags attached to a resolved symbol identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SymbolCapabilities {
+    pub type_annotation: bool,
+    pub module_owner: bool,
+    pub impl_target: bool,
+    pub facet_root_path: Option<FacetRootKind>,
+}
+
+impl SymbolCapabilities {
+    pub const fn new(
+        type_annotation: bool,
+        module_owner: bool,
+        impl_target: bool,
+        facet_root_path: Option<FacetRootKind>,
+    ) -> Self {
+        Self {
+            type_annotation,
+            module_owner,
+            impl_target,
+            facet_root_path,
+        }
+    }
+}
+
+/// Compile-space identity plus capabilities for a resolved symbol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SymbolIdentityInfo {
+    pub identity: TypeIdentity,
+    pub capabilities: SymbolCapabilities,
+}
+
+impl SymbolIdentityInfo {
+    pub const fn new(identity: TypeIdentity, capabilities: SymbolCapabilities) -> Self {
+        Self {
+            identity,
+            capabilities,
+        }
+    }
+}
+
 /// Canonical builtin type heads reserved by the compiler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TypeName {
@@ -158,6 +208,38 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
     }
 }
 
+/// Return compile-space identity/capability metadata for builtin surface roots.
+pub fn builtin_symbol_identity_info(name: &str) -> Option<SymbolIdentityInfo> {
+    let name = surface_path_name(name);
+    match name {
+        "Tuple" => {
+            return Some(SymbolIdentityInfo::new(
+                TypeIdentity::Type,
+                SymbolCapabilities::new(false, true, false, Some(FacetRootKind::Tuple)),
+            ));
+        }
+        "Function" => {
+            return Some(SymbolIdentityInfo::new(
+                TypeIdentity::Type,
+                SymbolCapabilities::new(false, true, false, None),
+            ));
+        }
+        _ => {}
+    }
+
+    let type_name = builtin_type_name(name)?;
+    let facet_root_path = match type_name {
+        TypeName::List => Some(FacetRootKind::List),
+        TypeName::HashMap => Some(FacetRootKind::HashMap),
+        _ => None,
+    };
+    let impl_target = type_name.supports_inherent_impl();
+    Some(SymbolIdentityInfo::new(
+        type_name.identity(),
+        SymbolCapabilities::new(true, impl_target, impl_target, facet_root_path),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,6 +251,60 @@ mod tests {
         assert_eq!(
             surface_rendered_name("Trait::Global::User::method"),
             "Trait::User::method"
+        );
+    }
+
+    #[test]
+    fn builtin_symbol_identity_info_marks_core_type_capabilities() {
+        let string = builtin_symbol_identity_info("String").expect("String should be known");
+        assert_eq!(string.identity, TypeIdentity::Type);
+        assert!(string.capabilities.type_annotation);
+        assert!(string.capabilities.module_owner);
+        assert!(string.capabilities.impl_target);
+        assert_eq!(string.capabilities.facet_root_path, None);
+
+        let result = builtin_symbol_identity_info("Result").expect("Result should be known");
+        assert_eq!(result.identity, TypeIdentity::Type);
+        assert!(result.capabilities.type_annotation);
+        assert!(result.capabilities.module_owner);
+        assert!(result.capabilities.impl_target);
+        assert_eq!(result.capabilities.facet_root_path, None);
+
+        let facet = builtin_symbol_identity_info("Facet").expect("Facet should be known");
+        assert_eq!(facet.identity, TypeIdentity::Type);
+        assert!(facet.capabilities.type_annotation);
+        assert!(facet.capabilities.module_owner);
+        assert!(facet.capabilities.impl_target);
+        assert_eq!(facet.capabilities.facet_root_path, None);
+    }
+
+    #[test]
+    fn builtin_symbol_identity_info_marks_container_facet_roots() {
+        let tuple = builtin_symbol_identity_info("Tuple").expect("Tuple should be known");
+        assert_eq!(tuple.identity, TypeIdentity::Type);
+        assert!(!tuple.capabilities.type_annotation);
+        assert!(tuple.capabilities.module_owner);
+        assert!(!tuple.capabilities.impl_target);
+        assert_eq!(
+            tuple.capabilities.facet_root_path,
+            Some(FacetRootKind::Tuple)
+        );
+
+        let list = builtin_symbol_identity_info("List").expect("List should be known");
+        assert_eq!(list.identity, TypeIdentity::Type);
+        assert!(list.capabilities.type_annotation);
+        assert!(list.capabilities.module_owner);
+        assert!(list.capabilities.impl_target);
+        assert_eq!(list.capabilities.facet_root_path, Some(FacetRootKind::List));
+
+        let hash_map = builtin_symbol_identity_info("HashMap").expect("HashMap should be known");
+        assert_eq!(hash_map.identity, TypeIdentity::Type);
+        assert!(hash_map.capabilities.type_annotation);
+        assert!(hash_map.capabilities.module_owner);
+        assert!(hash_map.capabilities.impl_target);
+        assert_eq!(
+            hash_map.capabilities.facet_root_path,
+            Some(FacetRootKind::HashMap)
         );
     }
 }

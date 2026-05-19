@@ -1177,6 +1177,7 @@ mod command_error_tests {
 
 #[cfg(all(test, feature = "line-editor"))]
 mod tests {
+    use std::collections::VecDeque;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
@@ -1186,10 +1187,51 @@ mod tests {
     use rustyline::history::DefaultHistory;
 
     use crate::repl::logic::core::{
-        CompletionTelemetry, ReplCompletion, ReplCompletionCandidate, ReplCompletionKind,
-        ReplSignatureHelp,
+        CompletionTelemetry, ReplCompletion, ReplCompletionCandidate, ReplCompletionContext,
+        ReplCompletionKind, ReplSignatureHelp,
+    };
+    use crate::repl::ui::completion::{
+        ReplCompletionController, ReplCompletionProvider, ReplCompletionRequest,
+        ReplCompletionResult,
     };
     use crate::ReplEngine;
+
+    struct ReadyCompletionProvider {
+        context: ReplCompletionContext,
+        ready: VecDeque<ReplCompletionResult>,
+    }
+
+    impl ReadyCompletionProvider {
+        fn new(engine: &ReplEngine) -> Self {
+            Self {
+                context: engine.completion_context(),
+                ready: VecDeque::new(),
+            }
+        }
+    }
+
+    impl ReplCompletionProvider for ReadyCompletionProvider {
+        fn submit(&mut self, request: ReplCompletionRequest) {
+            let mut completion = self.context.completions(&request.input, request.cursor);
+            completion
+                .telemetry
+                .record_completion_queue(Duration::from_nanos(1));
+            self.ready.push_back(ReplCompletionResult {
+                input: request.input,
+                cursor: request.cursor,
+                generation: request.generation,
+                completion,
+                enqueued_at: request.enqueued_at,
+                event_received_at: request.event_received_at,
+            });
+        }
+
+        fn poll_ready(&mut self) -> Option<ReplCompletionResult> {
+            self.ready.pop_front()
+        }
+
+        fn schedule_context_refresh(&mut self, _context: ReplCompletionContext) {}
+    }
 
     #[test]
     fn submitted_terminal_line_keeps_prompt_and_input_together() {
@@ -1632,6 +1674,85 @@ mod tests {
                 .total_key_to_visible_response_ns
                 .is_some_and(|value| value > 0),
             "telemetry should include end-to-end redraw timing: {telemetry:?}"
+        );
+    }
+
+    #[test]
+    fn apply_terminal_completion_result_records_positive_latency_samples() {
+        let engine = ReplEngine::new().expect("REPL engine should bootstrap");
+        let mut stdout = std::io::stdout();
+        let mut provider = ReadyCompletionProvider::new(&engine);
+        let mut controller = ReplCompletionController::default();
+        let event_received_at = Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .expect("test event timestamp should fit");
+
+        assert!(controller.submit_if_changed(
+            &mut provider,
+            "String::re",
+            "String::re".len(),
+            Some(event_received_at),
+        ));
+
+        let mut rendered_completion = ReplCompletion::default();
+        let mut rendered_completion_key = None;
+        let applied = super::apply_terminal_completion_result(
+            &mut stdout,
+            &engine,
+            "String::re",
+            "String::re".chars().count(),
+            &mut provider,
+            &mut controller,
+            &mut rendered_completion,
+            &mut rendered_completion_key,
+            5,
+        )
+        .expect("completion result should apply");
+
+        assert!(applied, "completion should be rendered");
+        assert_eq!(
+            rendered_completion_key,
+            Some(("String::re".to_string(), "String::re".len()))
+        );
+        assert!(
+            rendered_completion
+                .telemetry
+                .completion_queue_ns
+                .is_some_and(|value| value > 0),
+            "telemetry should include queue timing: {:?}",
+            rendered_completion.telemetry
+        );
+        assert!(
+            rendered_completion
+                .telemetry
+                .completion_compute_ns
+                .is_some(),
+            "telemetry should include compute timing: {:?}",
+            rendered_completion.telemetry
+        );
+        assert!(
+            rendered_completion
+                .telemetry
+                .completion_apply_ns
+                .is_some(),
+            "telemetry should include apply timing: {:?}",
+            rendered_completion.telemetry
+        );
+        assert!(
+            rendered_completion
+                .telemetry
+                .completion_render_ns
+                .is_some(),
+            "telemetry should include render timing: {:?}",
+            rendered_completion.telemetry
+        );
+        assert!(
+            rendered_completion
+                .telemetry
+                .total_key_to_visible_response_ns
+                .is_some_and(|value| value > 0),
+            "telemetry should include end-to-end timing: {:?}",
+            rendered_completion.telemetry
         );
     }
 

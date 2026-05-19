@@ -2221,6 +2221,7 @@ mod tests {
             qualified_name: qualified_name.map(str::to_string),
             unique_id,
             compiler_generated: false,
+            symbol_info: None,
             span: span(0, 0),
         }
     }
@@ -2622,6 +2623,7 @@ mod tests {
                         qualified_name: Some("NoneError".into()),
                         unique_id: 99,
                         compiler_generated: false,
+                        symbol_info: None,
                         span: span(10, 19),
                     }),
                 }),
@@ -2653,6 +2655,7 @@ mod tests {
             qualified_name: None,
             unique_id: 7,
             compiler_generated: false,
+            symbol_info: None,
             span: span(8, 16),
         };
         let err_id = sigil::resolved::ResolvedId {
@@ -2660,6 +2663,7 @@ mod tests {
             qualified_name: Some("NoneError".into()),
             unique_id: 8,
             compiler_generated: false,
+            symbol_info: None,
             span: span(18, 27),
         };
         gene.state.slot_map.insert(8, 0);
@@ -2724,6 +2728,7 @@ mod tests {
             qualified_name: None,
             unique_id: 70,
             compiler_generated: false,
+            symbol_info: None,
             span: span(8, 16),
         };
         let err_id = sigil::resolved::ResolvedId {
@@ -2731,6 +2736,7 @@ mod tests {
             qualified_name: Some("NoneError".into()),
             unique_id: 71,
             compiler_generated: false,
+            symbol_info: None,
             span: span(18, 27),
         };
         gene.state.slot_map.insert(err_id.unique_id, 0);
@@ -3144,6 +3150,7 @@ mod tests {
             qualified_name: None,
             unique_id: 10,
             compiler_generated: false,
+            symbol_info: None,
             span: span(1, 7),
         };
         gene.state.slot_map.insert(source_id.unique_id, 0);
@@ -10769,6 +10776,7 @@ mod process_runtime_v2_tests {
                         qualified_name: Some(qualified_name.to_string()),
                         unique_id: 2,
                         compiler_generated: true,
+                        symbol_info: None,
                         span: span(10, 21),
                     }),
                 }),
@@ -10810,6 +10818,7 @@ mod process_runtime_v2_tests {
                 qualified_name: Some("MyWorker::init".into()),
                 unique_id: 701,
                 compiler_generated: true,
+                symbol_info: None,
                 span: span(30, 42),
             }),
         };
@@ -10837,6 +10846,7 @@ mod process_runtime_v2_tests {
                 qualified_name: None,
                 unique_id: 702,
                 compiler_generated: false,
+                symbol_info: None,
                 span: span(50, 58),
             }),
         }

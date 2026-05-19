@@ -1,5 +1,6 @@
 use sigil::{DeclarationEntry, DeclarationIndex, DeclarationKind};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
+use sindr::names::{FacetRootKind, SymbolCapabilities};
 use spire::ast::Visibility;
 use surtr_analysis::{
     complete_call_argument, complete_prefix, lookup_symbol_at_cursor,
@@ -21,6 +22,8 @@ fn completion_request_clamps_cursor_to_char_boundary_and_returns_byte_replacemen
         origin: None,
 
         definition: None,
+
+        capabilities: None,
     }]);
     let source = "値.pr";
     let cursor_inside_multibyte = 1;
@@ -49,6 +52,8 @@ fn completion_request_filters_symbols_by_token_prefix() {
             origin: None,
 
             definition: None,
+
+            capabilities: None,
         },
         CompletionSymbol {
             label: "Process::sleep".to_string(),
@@ -60,6 +65,8 @@ fn completion_request_filters_symbols_by_token_prefix() {
             origin: None,
 
             definition: None,
+
+            capabilities: None,
         },
         CompletionSymbol {
             label: "String".to_string(),
@@ -71,6 +78,8 @@ fn completion_request_filters_symbols_by_token_prefix() {
             origin: None,
 
             definition: None,
+
+            capabilities: None,
         },
     ]);
 
@@ -84,6 +93,36 @@ fn completion_request_filters_symbols_by_token_prefix() {
     assert_eq!(completion.replace_end, 3);
     assert_eq!(completion.candidates.len(), 1);
     assert_eq!(completion.candidates[0].label, "print");
+}
+
+#[test]
+fn completion_candidates_preserve_symbol_capabilities() {
+    let capabilities = SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot));
+    let index = SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "User".to_string(),
+        replacement: "User".to_string(),
+        kind: CompletionKind::TypeConstructor,
+        detail: None,
+        documentation: None,
+        sort_text: None,
+        origin: None,
+        definition: None,
+        capabilities: Some(capabilities),
+    }]);
+
+    let completion = complete_prefix(CompletionRequest {
+        index: &index,
+        source: "Us",
+        cursor: 2,
+    });
+
+    assert_eq!(
+        completion.candidates[0]
+            .capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.facet_root_path),
+        Some(FacetRootKind::TypeRoot)
+    );
 }
 
 #[test]
@@ -141,6 +180,8 @@ fn completion_request_matches_qualified_symbol_tail_for_unqualified_prefix() {
         origin: None,
 
         definition: None,
+
+        capabilities: None,
     }]);
 
     let completion = complete_prefix(CompletionRequest {
@@ -164,6 +205,7 @@ fn repl_completion_requires_unqualified_symbols_for_unqualified_prefix() {
         sort_text: None,
         origin: None,
         definition: None,
+        capabilities: None,
     }]);
 
     let unqualified = surtr_analysis::complete_repl_prefix(
@@ -191,6 +233,7 @@ fn repl_completion_requires_unqualified_symbols_for_unqualified_prefix() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "repeat".to_string(),
@@ -201,6 +244,7 @@ fn repl_completion_requires_unqualified_symbols_for_unqualified_prefix() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]);
 
@@ -249,6 +293,7 @@ fn repl_completion_prefers_type_owners_before_members_for_pascal_case_prefix() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "IntBase".to_string(),
@@ -259,6 +304,7 @@ fn repl_completion_prefers_type_owners_before_members_for_pascal_case_prefix() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "IntBase::label".to_string(),
@@ -269,6 +315,7 @@ fn repl_completion_prefers_type_owners_before_members_for_pascal_case_prefix() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]);
 
@@ -303,6 +350,7 @@ fn repl_completion_hides_qualified_enum_variants_until_owner_path_is_confirmed()
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "IntBase::Bin".to_string(),
@@ -313,6 +361,7 @@ fn repl_completion_hides_qualified_enum_variants_until_owner_path_is_confirmed()
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "IntBase::Dec".to_string(),
@@ -323,6 +372,7 @@ fn repl_completion_hides_qualified_enum_variants_until_owner_path_is_confirmed()
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]);
 
@@ -372,6 +422,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "Ok".to_string(),
@@ -382,6 +433,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "Result::Err".to_string(),
@@ -392,6 +444,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "Err".to_string(),
@@ -402,6 +455,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "Boolean::True".to_string(),
@@ -412,6 +466,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "True".to_string(),
@@ -422,6 +477,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "Boolean::False".to_string(),
@@ -432,6 +488,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "False".to_string(),
@@ -442,6 +499,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]);
 
@@ -532,6 +590,7 @@ fn repl_completion_scope_can_limit_candidates_to_variables() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "normalize".to_string(),
@@ -542,6 +601,7 @@ fn repl_completion_scope_can_limit_candidates_to_variables() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]);
 
@@ -575,6 +635,7 @@ fn repl_variable_scope_allows_empty_prefix_for_call_argument_completion() {
         sort_text: None,
         origin: None,
         definition: None,
+        capabilities: None,
     }]);
 
     let completion = surtr_analysis::complete_repl_prefix(
@@ -604,6 +665,8 @@ fn semantic_index_finds_symbol_at_cursor_for_shared_hover_and_completion_detail(
         origin: None,
 
         definition: None,
+
+        capabilities: None,
     }]);
 
     let lookup = lookup_symbol_at_cursor(&index, "value = helper()", "value = hel".len())
@@ -631,6 +694,8 @@ fn semantic_index_returns_signature_help_from_call_context() {
         origin: None,
 
         definition: None,
+
+        capabilities: None,
     }]);
 
     let help = signature_help_at_cursor(&index, "print(\"hello\", Tr", "print(\"hello\", Tr".len())
@@ -657,6 +722,7 @@ fn repl_assist_combines_call_signature_and_argument_variable_completion() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "name".to_string(),
@@ -667,6 +733,7 @@ fn repl_assist_combines_call_signature_and_argument_variable_completion() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "normalize".to_string(),
@@ -677,6 +744,7 @@ fn repl_assist_combines_call_signature_and_argument_variable_completion() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]);
 
@@ -721,6 +789,7 @@ fn repl_assist_preserves_repl_tail_presentation() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "repeat".to_string(),
@@ -731,6 +800,7 @@ fn repl_assist_preserves_repl_tail_presentation() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]);
 
@@ -762,6 +832,7 @@ fn repl_input_support_context_accepts_session_updates() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         }],
         callable_signatures: vec![CallableSignature {
             label: "fresh".to_string(),
@@ -799,6 +870,7 @@ fn repl_input_support_context_produces_operator_assist_and_ranked_candidates() {
                 sort_text: None,
                 origin: None,
                 definition: None,
+                capabilities: None,
             },
             CompletionSymbol {
                 label: "name".to_string(),
@@ -809,6 +881,7 @@ fn repl_input_support_context_produces_operator_assist_and_ranked_candidates() {
                 sort_text: None,
                 origin: None,
                 definition: None,
+                capabilities: None,
             },
         ],
         callable_signatures: Vec::new(),
@@ -897,6 +970,8 @@ fn semantic_index_deduplicates_completion_symbols() {
             origin: None,
 
             definition: None,
+
+            capabilities: None,
         },
         CompletionSymbol {
             label: "print".to_string(),
@@ -908,6 +983,8 @@ fn semantic_index_deduplicates_completion_symbols() {
             origin: None,
 
             definition: None,
+
+            capabilities: None,
         },
     ]);
 
@@ -1077,6 +1154,113 @@ fn call_argument_completion_uses_trait_impl_signature_not_builtin_type_whitelist
 }
 
 #[test]
+fn facet_arg_completion_includes_capability_declared_roots_without_detail_heuristics() {
+    let mut declarations = DeclarationIndex::new();
+    declarations.insert(
+        "User".to_string(),
+        declaration_entry("", "User", "User", DeclarationKind::Struct, true, true),
+    );
+    declarations.insert(
+        "Config".to_string(),
+        declaration_entry("", "Config", "Config", DeclarationKind::Record, true, true),
+    );
+    declarations.insert(
+        "Choice".to_string(),
+        declaration_entry("", "Choice", "Choice", DeclarationKind::Enum, true, true),
+    );
+    declarations.insert(
+        "Problem".to_string(),
+        declaration_entry(
+            "",
+            "Problem",
+            "Problem",
+            DeclarationKind::Deferror,
+            true,
+            true,
+        ),
+    );
+
+    let mut symbols = vec![completion_symbol(
+        "Facet::view",
+        CompletionKind::FunctionCall,
+        "Facet::view(path: Facet<$S, $A>, source: $S) -> $A",
+    )];
+    symbols.extend(
+        SemanticIndex::from_declaration_index(&declarations)
+            .symbols()
+            .iter()
+            .cloned(),
+    );
+    let index = SemanticIndex::from_symbols(symbols);
+
+    let completion = complete_call_argument(CompletionRequest {
+        index: &index,
+        source: "Facet::view(",
+        cursor: "Facet::view(".len(),
+    })
+    .expect("Facet first argument should use facet-root capabilities");
+
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(labels, vec!["Choice", "Config", "User"]);
+}
+
+#[test]
+fn facet_arg_completion_includes_builtin_path_roots_and_excludes_plain_builtin_types() {
+    let docs = [
+        ("Global::Tuple", "Tuple path root."),
+        ("Global::List", "List path root."),
+        ("Global::HashMap", "HashMap path root."),
+        ("Global::String", "Plain string type."),
+        ("Global::Result", "Plain result type."),
+        ("Global::Facet", "Facet type."),
+    ]
+    .into_iter()
+    .map(|(qualified_name, doc)| DocEntry {
+        qualified_name: qualified_name.to_string(),
+        kind: DocKind::Type,
+        module_path: "Global".to_string(),
+        signature: Some(format!(
+            "type {}",
+            qualified_name.rsplit("::").next().unwrap()
+        )),
+        doc: doc.to_string(),
+    })
+    .collect::<Vec<_>>();
+    let mut symbols = vec![completion_symbol(
+        "Facet::view",
+        CompletionKind::FunctionCall,
+        "Facet::view(path: Facet<$S, $A>, source: $S) -> $A",
+    )];
+    symbols.extend(
+        SemanticIndex::from_metadata(&docs, &[])
+            .symbols()
+            .iter()
+            .cloned(),
+    );
+    let index = SemanticIndex::from_symbols(symbols);
+
+    let completion = complete_call_argument(CompletionRequest {
+        index: &index,
+        source: "Facet::view(",
+        cursor: "Facet::view(".len(),
+    })
+    .expect("Facet first argument should include builtin facet path roots");
+
+    assert_eq!(
+        completion
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["HashMap", "List", "Tuple"]
+    );
+}
+
+#[test]
 fn completion_candidates_are_sorted_by_label_for_stable_lsp_output() {
     let index = SemanticIndex::from_symbols(vec![
         CompletionSymbol {
@@ -1089,6 +1273,8 @@ fn completion_candidates_are_sorted_by_label_for_stable_lsp_output() {
             origin: None,
 
             definition: None,
+
+            capabilities: None,
         },
         CompletionSymbol {
             label: "alpha".to_string(),
@@ -1100,6 +1286,8 @@ fn completion_candidates_are_sorted_by_label_for_stable_lsp_output() {
             origin: None,
 
             definition: None,
+
+            capabilities: None,
         },
     ]);
 
@@ -1123,6 +1311,7 @@ fn completion_symbol(label: &str, kind: CompletionKind, detail: &str) -> Complet
         sort_text: None,
         origin: None,
         definition: None,
+        capabilities: None,
     }
 }
 
@@ -1135,6 +1324,7 @@ fn completion_candidate(label: &str, ty: &str) -> CompletionCandidate {
         documentation: None,
         sort_text: None,
         origin: None,
+        capabilities: None,
         replace_start: 0,
         replace_end: 0,
     }

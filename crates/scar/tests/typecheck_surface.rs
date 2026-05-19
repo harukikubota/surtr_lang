@@ -3,7 +3,13 @@ use scar::typed::{
     TypedPattern, TypedProgram,
 };
 use scar::types::Ty;
+use sigil::resolved::{
+    Resolved, ResolvedFacetBracketExpr, ResolvedFacetPathSegment, ResolvedHashMapLiteralEntry,
+    ResolvedId, ResolvedPattern,
+};
 use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
+use sindr::primitives::int;
+use spire::ast::{Lit, Span};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -1163,6 +1169,24 @@ fn typed_bind_rhs<'a>(typed: &'a [TypedNode], name: &str) -> &'a TypedNode {
         .unwrap_or_else(|| panic!("expected binding `{name}`"))
 }
 
+fn resolved_test_id(name: &str, unique_id: u32, span: &Span) -> ResolvedId {
+    ResolvedId {
+        name: name.into(),
+        qualified_name: None,
+        symbol_info: None,
+        unique_id,
+        compiler_generated: false,
+        span: span.clone(),
+    }
+}
+
+fn resolved_bracket_segment(expr: Resolved, display: &str) -> ResolvedFacetPathSegment {
+    ResolvedFacetPathSegment::Bracket(ResolvedFacetBracketExpr {
+        expr: Box::new(expr),
+        display: display.into(),
+    })
+}
+
 fn process_stdlib_no_longer_declares_task_hidden_lower_helpers() {
     for hidden_name in [
         "__task_call",
@@ -1726,6 +1750,165 @@ talk = get_talk(score_map)"#,
             "{name} should be Result<Int>, got {:?}",
             rhs.ty
         );
+    }
+}
+
+#[test]
+fn facet_root_dispatch_requires_symbol_capability_metadata_not_matching_names() {
+    let span = Span { start: 0, end: 0 };
+    let tuple_id = resolved_test_id("Tuple", 900_001, &span);
+    let tuple_value_id = resolved_test_id("tuple_value", 900_002, &span);
+    let list_id = resolved_test_id("List", 900_003, &span);
+    let list_value_id = resolved_test_id("list_value", 900_004, &span);
+    let map_id = resolved_test_id("HashMap", 900_005, &span);
+    let map_value_id = resolved_test_id("map_value", 900_006, &span);
+
+    let typed = typecheck(vec![
+        Resolved::Bind(
+            span.clone(),
+            ResolvedPattern::Var(tuple_id.clone()),
+            Box::new(Resolved::TupleLiteral(
+                span.clone(),
+                vec![
+                    Resolved::Lit(span.clone(), Lit::Str("alice".into())),
+                    Resolved::Lit(span.clone(), Lit::Int(int(42))),
+                ],
+            )),
+        ),
+        Resolved::Bind(
+            span.clone(),
+            ResolvedPattern::Var(tuple_value_id),
+            Box::new(Resolved::FieldAccess(
+                span.clone(),
+                Box::new(Resolved::Var(span.clone(), tuple_id)),
+                "_0".into(),
+            )),
+        ),
+        Resolved::Bind(
+            span.clone(),
+            ResolvedPattern::Var(list_id.clone()),
+            Box::new(Resolved::ListLiteral(
+                span.clone(),
+                vec![
+                    Resolved::Lit(span.clone(), Lit::Int(int(10))),
+                    Resolved::Lit(span.clone(), Lit::Int(int(20))),
+                ],
+            )),
+        ),
+        Resolved::Bind(
+            span.clone(),
+            ResolvedPattern::Var(list_value_id),
+            Box::new(Resolved::FacetSegmentAccess(
+                span.clone(),
+                Box::new(Resolved::Var(span.clone(), list_id)),
+                resolved_bracket_segment(Resolved::Lit(span.clone(), Lit::Int(int(0))), "0"),
+            )),
+        ),
+        Resolved::Bind(
+            span.clone(),
+            ResolvedPattern::Var(map_id.clone()),
+            Box::new(Resolved::HashMapLiteral(
+                span.clone(),
+                vec![ResolvedHashMapLiteralEntry {
+                    key: Resolved::Lit(span.clone(), Lit::Str("talk".into())),
+                    value: Resolved::Lit(span.clone(), Lit::Int(int(80))),
+                }],
+            )),
+        ),
+        Resolved::Bind(
+            span.clone(),
+            ResolvedPattern::Var(map_value_id),
+            Box::new(Resolved::FacetSegmentAccess(
+                span.clone(),
+                Box::new(Resolved::Var(span.clone(), map_id)),
+                resolved_bracket_segment(
+                    Resolved::Lit(span.clone(), Lit::Str("talk".into())),
+                    "\"talk\"",
+                ),
+            )),
+        ),
+    ])
+    .expect("value bindings with root-like names should typecheck as ordinary values");
+
+    let tuple_rhs = typed_bind_rhs(&typed, "tuple_value");
+    assert!(matches!(tuple_rhs.ty, Ty::Str));
+
+    for name in ["list_value", "map_value"] {
+        let rhs = typed_bind_rhs(&typed, name);
+        assert!(
+            matches!(
+                &rhs.ty,
+                Ty::Result(ok, err)
+                    if matches!(ok.as_ref(), Ty::Int) && matches!(err.as_ref(), Ty::Error)
+            ),
+            "{name} should be Result<Int>, got {:?}",
+            rhs.ty
+        );
+        assert!(matches!(rhs.node, TypedInner::FacetView { .. }));
+    }
+}
+
+#[test]
+fn facet_root_capability_dispatch_preserves_standard_roots_and_string_diagnostic() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord User(name: String)
+user = User("alice")
+pair = ("bob", 7)
+scores = [10, 20]
+score_map = HashMap::from_entries([("talk", 80)])
+user_name = Facet::view(User.name, user)
+tuple_name = Facet::view(Tuple._0, pair)
+list_score = Facet::view(List.[0], scores)
+map_score = Facet::view(HashMap.["talk"], score_map)"#,
+    );
+
+    for name in ["user_name", "tuple_name"] {
+        let rhs = typed_bind_rhs(&typed, name);
+        assert!(matches!(rhs.ty, Ty::Str), "{name} should be String");
+        assert!(matches!(rhs.node, TypedInner::FacetView { .. }));
+    }
+    for name in ["list_score", "map_score"] {
+        let rhs = typed_bind_rhs(&typed, name);
+        assert!(
+            matches!(
+                &rhs.ty,
+                Ty::Result(ok, err)
+                    if matches!(ok.as_ref(), Ty::Int) && matches!(err.as_ref(), Ty::Error)
+            ),
+            "{name} should be Result<Int>, got {:?}",
+            rhs.ty
+        );
+        assert!(matches!(rhs.node, TypedInner::FacetView { .. }));
+    }
+
+    let err = typecheck_with_rules("bad = String.len", RuntimeSourcePolicy::script())
+        .expect_err("String.len should stay a known-symbol non-Facet-root diagnostic");
+    assert!(err.message.contains("String is not a Facet path root"));
+}
+
+#[test]
+fn deferred_list_and_hashmap_facet_bindings_can_be_reused_by_facet_intrinsics() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"scores = [10, 20]
+score_map = HashMap::from_entries([("talk", 80)])
+list_path = List.[0]
+map_path = HashMap.["talk"]
+list_score = Facet::view(list_path, scores)
+map_score = Facet::view(map_path, score_map)"#,
+    );
+
+    for name in ["list_score", "map_score"] {
+        let rhs = typed_bind_rhs(&typed, name);
+        assert!(
+            matches!(
+                &rhs.ty,
+                Ty::Result(ok, err)
+                    if matches!(ok.as_ref(), Ty::Int) && matches!(err.as_ref(), Ty::Error)
+            ),
+            "{name} should be Result<Int>, got {:?}",
+            rhs.ty
+        );
+        assert!(matches!(rhs.node, TypedInner::FacetView { .. }));
     }
 }
 

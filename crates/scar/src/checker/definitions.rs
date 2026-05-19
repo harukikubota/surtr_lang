@@ -2050,6 +2050,7 @@ impl Checker {
                         node: TypedInner::Var(ResolvedId {
                             name: new_name,
                             qualified_name: None,
+                            symbol_info: None,
                             unique_id: new_uid,
                             compiler_generated: false,
                             span: id.span.clone(),

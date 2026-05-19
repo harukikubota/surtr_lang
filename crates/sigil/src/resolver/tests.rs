@@ -1,4 +1,5 @@
 use super::*;
+use sindr::names::{FacetRootKind, TypeIdentity};
 use sindr::primitives::int;
 use sindr::warning::WarningKind;
 use spire::ast::{AstTy, BinOp, Lit};
@@ -3953,14 +3954,151 @@ fn test_tuple_type_root_resolves_in_field_access() {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::FieldAccess(_, expr, field) => {
                 assert_eq!(field, "_0");
-                assert!(
-                    matches!(expr.as_ref(), Resolved::Var(_, id) if id.name == "Tuple"),
-                    "field access target should be tuple type root"
-                );
+                let id = resolved_var_id(expr.as_ref());
+                assert_eq!(id.name, "Tuple");
+                assert_symbol_info_facet_root(id, Some(FacetRootKind::Tuple));
             }
             other => panic!("Expected FieldAccess, got {:?}", other),
         },
         other => panic!("Expected Bind, got {:?}", other),
+    }
+}
+
+fn bind_rhs(node: &Resolved) -> &Resolved {
+    match node {
+        Resolved::Bind(_, _, rhs) => rhs.as_ref(),
+        other => panic!("Expected Bind, got {:?}", other),
+    }
+}
+
+fn resolved_var_id(node: &Resolved) -> &ResolvedId {
+    match node {
+        Resolved::Var(_, id) => id,
+        other => panic!("Expected Var, got {:?}", other),
+    }
+}
+
+fn assert_symbol_info_facet_root(id: &ResolvedId, expected: Option<FacetRootKind>) {
+    let info = id
+        .symbol_info
+        .as_ref()
+        .expect("resolved id should carry symbol identity info");
+    assert_eq!(info.capabilities.facet_root_path, expected);
+}
+
+#[test]
+fn test_container_facet_roots_carry_symbol_identity_info() {
+    let resolved = parse_and_resolve(
+        r#"tuple_facet = Tuple._0
+list_facet = List.[0]
+map_facet = HashMap.["k"]"#,
+    )
+    .unwrap();
+
+    match bind_rhs(&resolved[0]) {
+        Resolved::FieldAccess(_, expr, field) => {
+            assert_eq!(field, "_0");
+            assert_symbol_info_facet_root(resolved_var_id(expr), Some(FacetRootKind::Tuple));
+        }
+        other => panic!("Expected Tuple FieldAccess, got {:?}", other),
+    }
+
+    match bind_rhs(&resolved[1]) {
+        Resolved::FacetSegmentAccess(_, expr, ResolvedFacetPathSegment::Bracket(_)) => {
+            assert_symbol_info_facet_root(resolved_var_id(expr), Some(FacetRootKind::List));
+        }
+        other => panic!("Expected List FacetSegmentAccess, got {:?}", other),
+    }
+
+    match bind_rhs(&resolved[2]) {
+        Resolved::FacetSegmentAccess(_, expr, ResolvedFacetPathSegment::Bracket(_)) => {
+            assert_symbol_info_facet_root(resolved_var_id(expr), Some(FacetRootKind::HashMap));
+        }
+        other => panic!("Expected HashMap FacetSegmentAccess, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_primitive_facet_roots_carry_symbol_identity_info_without_facet_path() {
+    let resolved = parse_and_resolve("string_facet = String.len").unwrap();
+
+    match bind_rhs(&resolved[0]) {
+        Resolved::FieldAccess(_, expr, field) => {
+            assert_eq!(field, "len");
+            assert_symbol_info_facet_root(resolved_var_id(expr), None);
+        }
+        other => panic!("Expected String FieldAccess, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_user_type_declarations_carry_symbol_identity_info() {
+    let resolved = parse_and_resolve(
+        r#"defstruct User { name: String }
+defrecord Pair(left: Int, right: Int)
+defenum Light {
+  Red,
+  Green,
+}
+deferror Oops(reason: String) { reason }"#,
+    )
+    .unwrap();
+
+    match &resolved[0] {
+        Resolved::StructDef(_, id, ..) => {
+            let info = id.symbol_info.as_ref().expect("struct should carry info");
+            assert_eq!(info.identity, TypeIdentity::Struct);
+            assert!(info.capabilities.type_annotation);
+            assert!(info.capabilities.module_owner);
+            assert!(info.capabilities.impl_target);
+            assert_eq!(
+                info.capabilities.facet_root_path,
+                Some(FacetRootKind::TypeRoot)
+            );
+        }
+        other => panic!("Expected StructDef, got {:?}", other),
+    }
+
+    match &resolved[1] {
+        Resolved::RecordDef(_, id, _) => {
+            let info = id.symbol_info.as_ref().expect("record should carry info");
+            assert_eq!(info.identity, TypeIdentity::Record);
+            assert!(info.capabilities.type_annotation);
+            assert!(info.capabilities.module_owner);
+            assert!(info.capabilities.impl_target);
+            assert_eq!(
+                info.capabilities.facet_root_path,
+                Some(FacetRootKind::TypeRoot)
+            );
+        }
+        other => panic!("Expected RecordDef, got {:?}", other),
+    }
+
+    match &resolved[2] {
+        Resolved::EnumDef(_, id, ..) => {
+            let info = id.symbol_info.as_ref().expect("enum should carry info");
+            assert_eq!(info.identity, TypeIdentity::Enum);
+            assert!(info.capabilities.type_annotation);
+            assert!(info.capabilities.module_owner);
+            assert!(info.capabilities.impl_target);
+            assert_eq!(
+                info.capabilities.facet_root_path,
+                Some(FacetRootKind::TypeRoot)
+            );
+        }
+        other => panic!("Expected EnumDef, got {:?}", other),
+    }
+
+    match &resolved[3] {
+        Resolved::DeferrorDef(_, id, _, _) => {
+            let info = id.symbol_info.as_ref().expect("deferror should carry info");
+            assert_eq!(info.identity, TypeIdentity::ConcreteError);
+            assert!(info.capabilities.type_annotation);
+            assert!(!info.capabilities.module_owner);
+            assert!(!info.capabilities.impl_target);
+            assert_eq!(info.capabilities.facet_root_path, None);
+        }
+        other => panic!("Expected DeferrorDef, got {:?}", other),
     }
 }
 
