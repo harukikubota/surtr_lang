@@ -25,12 +25,13 @@ pub use project_runner::{
 };
 pub use semantic::{
     complete_call_argument, complete_facet_path_arg, complete_prefix, complete_repl_prefix,
-    facet_path_context_at_cursor, lookup_symbol_at_cursor,
+    facet_path_context_at_cursor, facet_type_root_capabilities, lookup_symbol_at_cursor,
     rank_completion_candidates_by_expected_type, repl_assist_at_cursor, signature_help_at_cursor,
-    CallableSignature, CompletionCandidate, CompletionKind, CompletionOrigin, CompletionRequest,
-    CompletionResponse, CompletionScope, CompletionSymbol, FacetPathCompletionContext,
-    FacetPathRootKind, InputSignatureHelp, ReplAssist, ReplInputSupport, ReplInputSupportContext,
-    ReplInputSupportUpdate, SemanticIndex, SignatureLookup, SourceLocation, SymbolLookup,
+    symbol_capabilities_for_builtin_surface, CallableSignature, CompletionCandidate,
+    CompletionKind, CompletionOrigin, CompletionRequest, CompletionResponse, CompletionScope,
+    CompletionSymbol, FacetPathCompletionContext, FacetPathRootKind, InputSignatureHelp,
+    ReplAssist, ReplInputSupport, ReplInputSupportContext, ReplInputSupportUpdate, SemanticIndex,
+    SignatureLookup, SourceLocation, SymbolLookup,
 };
 pub use service::{
     AnalysisDiagnostic, AnalysisDiagnosticKind, AnalysisHost, AnalysisRange, AnalysisService,

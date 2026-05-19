@@ -416,13 +416,22 @@ fn merge_symbol_capabilities(
     }
 }
 
-pub(crate) fn completion_capabilities_for_builtin(name: &str) -> Option<SymbolCapabilities> {
+/// Return shared compile-space capabilities for builtin surface symbols.
+pub fn symbol_capabilities_for_builtin_surface(name: &str) -> Option<SymbolCapabilities> {
     let surface_name = surface_name(name);
     builtin_symbol_identity_info(&surface_name).map(|info| info.capabilities)
 }
 
-pub(crate) fn facet_root_capabilities(kind: FacetRootKind) -> SymbolCapabilities {
+pub(crate) fn completion_capabilities_for_builtin(name: &str) -> Option<SymbolCapabilities> {
+    symbol_capabilities_for_builtin_surface(name)
+}
+
+pub fn facet_root_capabilities(kind: FacetRootKind) -> SymbolCapabilities {
     SymbolCapabilities::new(true, true, true, Some(kind))
+}
+
+pub fn facet_type_root_capabilities() -> SymbolCapabilities {
+    facet_root_capabilities(FacetRootKind::TypeRoot)
 }
 
 pub fn completion_symbol_for_effective_visible_entry(

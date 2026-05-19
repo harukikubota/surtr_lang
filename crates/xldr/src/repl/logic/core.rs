@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use sigil::error::ResolveError;
 use sindr::builtin::BUILTIN_METAS;
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
-use sindr::names::{builtin_symbol_identity_info, FacetRootKind, SymbolCapabilities};
+use sindr::names::SymbolCapabilities;
 use sindr::policy::CompileUnitKind;
 use spire::ast::{Ast, AstTy, BinOp, ImportSpec, RecordLitArg, Span};
 
@@ -2203,7 +2203,7 @@ impl ReplEngine {
 
     fn completion_capabilities_for_builtin(name: &str) -> Option<SymbolCapabilities> {
         let surface_name = crate::surface_rendered_name(name);
-        builtin_symbol_identity_info(&surface_name).map(|info| info.capabilities)
+        surtr_analysis::symbol_capabilities_for_builtin_surface(&surface_name)
     }
 
     fn completion_capabilities_for_declaration(
@@ -2218,14 +2218,10 @@ impl ReplEngine {
         match entry.kind {
             sigil::DeclarationKind::Struct
             | sigil::DeclarationKind::Record
-            | sigil::DeclarationKind::Enum => Some(Self::facet_type_root_capabilities()),
+            | sigil::DeclarationKind::Enum => Some(surtr_analysis::facet_type_root_capabilities()),
             sigil::DeclarationKind::BuiltinType => None,
             _ => None,
         }
-    }
-
-    fn facet_type_root_capabilities() -> SymbolCapabilities {
-        SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot))
     }
 
     pub fn prompt(&self) -> String {

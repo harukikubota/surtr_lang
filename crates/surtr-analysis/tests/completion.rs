@@ -1134,6 +1134,25 @@ fn semantic_index_compile_metadata_joins_declaration_docs_and_signatures() {
 }
 
 #[test]
+fn shared_builtin_surface_capability_query_excludes_runtime_aliases() {
+    let string_caps =
+        surtr_analysis::symbol_capabilities_for_builtin_surface("String").expect("String caps");
+    assert!(string_caps.type_annotation);
+    assert!(string_caps.module_owner);
+    assert!(string_caps.impl_target);
+    assert_eq!(string_caps.facet_root_path, None);
+
+    assert!(
+        surtr_analysis::symbol_capabilities_for_builtin_surface("String::len").is_none(),
+        "runtime builtin aliases are not compile-space symbol surfaces"
+    );
+    assert_eq!(
+        surtr_analysis::facet_type_root_capabilities().facet_root_path,
+        Some(FacetRootKind::TypeRoot)
+    );
+}
+
+#[test]
 fn effective_visible_entry_projection_reuses_qualified_symbol_metadata() {
     let source_location = surtr_analysis::SourceLocation {
         path: "/repo/helper.srt".into(),
