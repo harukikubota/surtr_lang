@@ -242,15 +242,15 @@ enum ReplTypeDisplayCategory {
 }
 
 impl ReplTypeDisplayCategory {
-    fn display_label(self) -> &'static str {
+    fn identity_label(self) -> &'static str {
         match self {
-            Self::Type => "RuntimeTypeDisplay::Type",
-            Self::Struct => "RuntimeTypeDisplay::Struct",
-            Self::Record => "RuntimeTypeDisplay::Record",
-            Self::Enum => "RuntimeTypeDisplay::Enum",
-            Self::Closure => "RuntimeTypeDisplay::Closure",
-            Self::Capture => "RuntimeTypeDisplay::Capture",
-            Self::FacetPath => "RuntimeTypeDisplay::FacetPath",
+            Self::Type => "TypeIdentity::Type",
+            Self::Struct => "TypeIdentity::Struct",
+            Self::Record => "TypeIdentity::Record",
+            Self::Enum => "TypeIdentity::Enum",
+            Self::Closure => "TypeIdentity::Closure",
+            Self::Capture => "TypeIdentity::Capture",
+            Self::FacetPath => "TypeIdentity::FacetPath",
         }
     }
 }
@@ -3078,7 +3078,7 @@ impl ReplEngine {
         vec![
             owner.to_string(),
             format!("type: PID<{}>", crate::surface_rendered_name(owner)),
-            "display: RuntimeTypeDisplay::Type".to_string(),
+            "identity: TypeIdentity::Type".to_string(),
         ]
     }
 
@@ -3090,7 +3090,7 @@ impl ReplEngine {
             format!("origin: {}", Self::origin_for_name(&owner)),
             format!("defined: PID<{owner}>"),
             format!("type: PID<{owner}>"),
-            "display: RuntimeTypeDisplay::Type".to_string(),
+            "identity: TypeIdentity::Type".to_string(),
             format!("instance: {:?}", metadata.instance),
             format!("runtime kind: {:?}", metadata.kind),
         ]
@@ -4297,8 +4297,8 @@ impl ReplEngine {
                     crate::surface_rendered_name(binding.ty.as_str())
                 ),
                 format!(
-                    "display: {}",
-                    self.render_type_display_category(binding, None)
+                    "identity: {}",
+                    self.render_type_identity(binding, None)
                 ),
             ]);
         }
@@ -4314,8 +4314,8 @@ impl ReplEngine {
             binding_name.to_string(),
             format!("type: {rendered_ty}"),
             format!(
-                "display: {}",
-                self.render_type_display_category(binding, Some(&value))
+                "identity: {}",
+                self.render_type_identity(binding, Some(&value))
             ),
         ])
     }
@@ -4594,7 +4594,7 @@ impl ReplEngine {
                     "kind: process pid".to_string(),
                     "origin: repl".to_string(),
                     format!("type: {rendered_ty}"),
-                    "display: RuntimeTypeDisplay::Type".to_string(),
+                    "identity: TypeIdentity::Type".to_string(),
                     format!(
                         "defined: PID<{}>",
                         crate::surface_rendered_name(process_name)
@@ -4611,7 +4611,7 @@ impl ReplEngine {
                 "kind: process pid".to_string(),
                 "origin: repl".to_string(),
                 format!("type: {}", crate::surface_rendered_name(&binding.ty)),
-                "display: RuntimeTypeDisplay::Type".to_string(),
+                "identity: TypeIdentity::Type".to_string(),
                 format!("defined: {}", crate::surface_rendered_name(&binding.ty)),
                 format!("instance: {:?}", metadata.instance),
                 format!("runtime kind: {:?}", metadata.kind),
@@ -4632,8 +4632,8 @@ impl ReplEngine {
                 crate::surface_rendered_name(&binding.ty)
             ));
             lines.push(format!(
-                "display: {}",
-                self.render_type_display_category(binding, None)
+                "identity: {}",
+                self.render_type_identity(binding, None)
             ));
             if let Some(facet_info) = &binding.facet_info {
                 lines.push(format!(
@@ -4647,8 +4647,8 @@ impl ReplEngine {
                 crate::surface_rendered_name(&binding.ty)
             ));
             lines.push(format!(
-                "display: {}",
-                self.render_type_display_category(binding, Some(&value))
+                "identity: {}",
+                self.render_type_identity(binding, Some(&value))
             ));
         }
         if let Some(sig) = self.binding_callable_sig_summary(symbol) {
@@ -7187,19 +7187,19 @@ impl ReplEngine {
         chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
     }
 
-    fn render_type_display_category(
+    fn render_type_identity(
         &self,
         binding: &forge::BindingInfo,
         value: Option<&Value>,
     ) -> String {
         if binding.facet_info.is_some() {
             return ReplTypeDisplayCategory::FacetPath
-                .display_label()
+                .identity_label()
                 .to_string();
         }
         if let Some(kind) = binding.callable_kind {
             return Self::callable_display_category(kind)
-                .display_label()
+                .identity_label()
                 .to_string();
         }
         let category = match value {
@@ -7223,7 +7223,7 @@ impl ReplEngine {
             }
             Some(_) => ReplTypeDisplayCategory::Type,
         };
-        category.display_label().to_string()
+        category.identity_label().to_string()
     }
 
     fn callable_display_category(kind: forge::ReplCallableKind) -> ReplTypeDisplayCategory {
@@ -9773,18 +9773,18 @@ supervisor_init {
     }
 
     #[test]
-    fn core_type_display_category_keeps_runtime_display_out_of_compile_identity() {
+    fn core_type_identity_reports_repl_surface_contract() {
         assert_eq!(
-            ReplTypeDisplayCategory::FacetPath.display_label(),
-            "RuntimeTypeDisplay::FacetPath"
+            ReplTypeDisplayCategory::FacetPath.identity_label(),
+            "TypeIdentity::FacetPath"
         );
         assert_eq!(
-            ReplTypeDisplayCategory::Closure.display_label(),
-            "RuntimeTypeDisplay::Closure"
+            ReplTypeDisplayCategory::Closure.identity_label(),
+            "TypeIdentity::Closure"
         );
         assert_eq!(
-            ReplTypeDisplayCategory::Struct.display_label(),
-            "RuntimeTypeDisplay::Struct"
+            ReplTypeDisplayCategory::Struct.identity_label(),
+            "TypeIdentity::Struct"
         );
     }
 }
