@@ -986,15 +986,21 @@ fn analyze_project_stages(
     } else {
         active_ast.unwrap_or(&[]).to_vec()
     };
+    let current_module_path = completion_module_path_for_ast(&visible_ast);
+    let docs = sigil::collect_doc_entries(&module_stages, &visible_ast, current_module_path.as_deref());
+    let signatures =
+        sigil::collect_signature_entries(&module_stages, &visible_ast, current_module_path.as_deref());
 
     match sigil::precollect_declaration_index(&module_stages) {
         Ok(declaration_index) => {
             *semantic_index = semantic_index_with_declarations(
                 semantic_index,
                 &declaration_index,
+                &docs,
+                &signatures,
                 &module_stages,
                 &visible_ast,
-                completion_module_path_for_ast(&visible_ast).as_deref(),
+                current_module_path.as_deref(),
                 active_stage_index_for_document(runner, active_document),
             );
             let user_ast = project_user_ast_for_active_document(context, active_ast);
@@ -1076,6 +1082,8 @@ fn is_load_project_statement(stmt: &Ast) -> bool {
 fn semantic_index_with_declarations(
     existing: &SemanticIndex,
     declaration_index: &sigil::DeclarationIndex,
+    docs: &[sindr::ir::DocEntry],
+    signatures: &[sindr::ir::SignatureEntry],
     module_stages: &[Vec<sigil::StagedModuleAst>],
     active_ast: &[Ast],
     current_module_path: Option<&str>,
@@ -1083,7 +1091,7 @@ fn semantic_index_with_declarations(
 ) -> SemanticIndex {
     let mut symbols = existing.symbols().to_vec();
     symbols.extend(
-        SemanticIndex::from_compile_metadata(declaration_index, &[], &[])
+        SemanticIndex::from_compile_metadata(declaration_index, docs, signatures)
             .symbols()
             .iter()
             .cloned(),

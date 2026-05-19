@@ -656,6 +656,111 @@ Project::config({|config|
 }
 
 #[test]
+fn analysis_service_project_context_imported_short_name_inherits_compile_metadata() {
+    let root = temp_root("project-imported-short-metadata");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let helper_path = src.join("helper.srt");
+    let main_path = src.join("main.srt");
+    let project_file = root.join("project.srt");
+    let helper_source = r#"defmod Helper {
+  @doc """
+  Increment a number.
+  """
+  def helper(value: Int) -> Int { value + 1 }
+}"#;
+    let main_source = "import Helper::helper\ndefmod Main { def main() -> Int { helper(1) } }";
+    std::fs::write(&helper_path, helper_source).expect("write helper");
+    std::fs::write(&main_path, main_source).expect("write main");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/helper.srt")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.update_document(main_path.clone(), Some(1), main_source.to_string());
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: main_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(main_path.clone()),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+
+    let snapshot = service.analyze(context);
+    let helper_symbol = snapshot
+        .semantic_index
+        .symbols()
+        .iter()
+        .find(|symbol| symbol.label == "helper")
+        .expect("effective import should expose helper");
+    assert_eq!(
+        helper_symbol.detail.as_deref(),
+        Some("helper(value: Int) -> Int")
+    );
+    assert_eq!(
+        helper_symbol.documentation.as_deref().map(str::trim),
+        Some("Increment a number.")
+    );
+
+    let hover_line = main_source.lines().nth(1).expect("call line");
+    let hover_column = hover_line.find("helper").expect("helper call exists") as u32 + 3;
+    let hover = service
+        .hover(
+            &snapshot,
+            Utf16Position {
+                line: 1,
+                character: hover_column,
+            },
+        )
+        .expect("imported helper should produce hover");
+    assert!(
+        hover.contents.contains("helper(value: Int) -> Int"),
+        "{hover:?}"
+    );
+    assert!(hover.contents.contains("Increment a number."), "{hover:?}");
+
+    let signature_column =
+        hover_line.find("helper(1").expect("call exists") + "helper(1".len();
+    let signature_column = signature_column as u32;
+    let help = service
+        .signature_help(
+            &snapshot,
+            Utf16Position {
+                line: 1,
+                character: signature_column,
+            },
+        )
+        .expect("imported helper should produce signature help");
+    assert_eq!(
+        help.signatures,
+        vec!["helper(value: Int) -> Int".to_string()]
+    );
+    assert_eq!(help.active_parameter, Some(0));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn analysis_service_project_context_rejects_set_exit_code_outside_entrypoint() {
     let root = temp_root("project-set-exit-code");
     let src = root.join("src");
