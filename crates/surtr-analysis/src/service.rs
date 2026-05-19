@@ -1100,13 +1100,6 @@ fn semantic_index_with_declarations(
             .collect::<Vec<_>>();
         symbols.extend(visible_symbols);
     }
-    let explicit_import_symbols = collect_explicit_import_completion_symbols(
-        &symbols,
-        active_ast,
-        declaration_index,
-        current_stage_index,
-    );
-    symbols.extend(explicit_import_symbols);
     SemanticIndex::from_symbols(symbols)
 }
 
@@ -1156,52 +1149,6 @@ fn completion_symbol_for_effective_visible_entry(
         definition,
         capabilities,
     })
-}
-
-fn collect_explicit_import_completion_symbols(
-    existing_symbols: &[CompletionSymbol],
-    active_ast: &[Ast],
-    declaration_index: &sigil::DeclarationIndex,
-    current_stage_index: usize,
-) -> Vec<CompletionSymbol> {
-    let mut symbols = Vec::new();
-    for stmt in active_ast {
-        let Ast::Import(_, path, spec) = stmt else {
-            continue;
-        };
-        let module_name = path.segments.join("::");
-        let import_names = match spec {
-            spire::ast::ImportSpec::All => continue,
-            spire::ast::ImportSpec::Single(name) => vec![name.as_str()],
-            spire::ast::ImportSpec::List(names) => names.iter().map(String::as_str).collect(),
-        };
-        for import_name in import_names {
-            let Some(entry) = declaration_index.values().find(|entry| {
-                surface_path_name(&entry.module_path) == module_name
-                    && entry.stage_index <= current_stage_index
-                    && !entry.hidden
-                    && entry.visibility == spire::ast::Visibility::Public
-                    && (entry.user_importable || entry.user_callable)
-                    && (surface_path_name(&entry.name) == import_name
-                        || entry
-                            .name
-                            .rsplit_once("::")
-                            .is_some_and(|(_, tail)| surface_path_name(tail) == import_name))
-            }) else {
-                continue;
-            };
-            if let Some(symbol) = completion_symbol_for_effective_visible_entry(
-                existing_symbols,
-                sigil::EffectiveVisibleEntry {
-                    visible_name: import_name.to_string(),
-                    entry: entry.clone(),
-                },
-            ) {
-                symbols.push(symbol);
-            }
-        }
-    }
-    symbols
 }
 
 fn active_stage_index_for_document(
