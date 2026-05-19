@@ -479,6 +479,10 @@ fn core_exposes_symbol_semantic_infos_before_completion_projection() {
         .expect("stdlib function should be visible as semantic info");
     assert_eq!(print.kind, surtr_analysis::CompletionKind::FunctionCall);
     assert!(print.documentation.is_some());
+    assert!(
+        print.display_metadata.is_some(),
+        "REPL semantic info should retain stdlib display metadata origin: {print:?}"
+    );
 
     let duration = infos
         .iter()

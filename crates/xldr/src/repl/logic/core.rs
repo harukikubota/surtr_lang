@@ -1576,7 +1576,53 @@ impl ReplEngine {
                 .and_then(surtr_analysis::symbol_identity_for_declaration_entry)
                 .or_else(|| surtr_analysis::symbol_identity_for_builtin_surface(&symbol.label));
         }
+        if info.display_metadata.is_none() {
+            info.display_metadata = self.symbol_display_metadata_for_completion_symbol(symbol);
+        }
         info
+    }
+
+    fn symbol_display_metadata_for_completion_symbol(
+        &self,
+        symbol: &surtr_analysis::CompletionSymbol,
+    ) -> Option<surtr_analysis::SymbolDisplayMetadata> {
+        let (qualified_name, module_path) = match symbol.origin.as_ref() {
+            Some(surtr_analysis::CompletionOrigin::Metadata {
+                qualified_name,
+                module_path,
+            })
+            | Some(surtr_analysis::CompletionOrigin::Declaration {
+                qualified_name,
+                module_path,
+                ..
+            }) => (qualified_name.as_str(), module_path.as_str()),
+            None => self
+                .completion_symbol_declaration(symbol)
+                .map(|decl| (decl.fq_name.as_str(), decl.module_path.as_str()))?,
+        };
+        let surface_name = crate::surface_path_name(qualified_name);
+        let has_doc = self
+            .docs
+            .iter()
+            .any(|entry| {
+                entry.qualified_name == qualified_name || entry.qualified_name == surface_name
+            });
+        let has_signature = self
+            .signatures
+            .iter()
+            .any(|entry| {
+                entry.qualified_name == qualified_name || entry.qualified_name == surface_name
+            })
+            || self.docs.iter().any(|entry| {
+                (entry.qualified_name == qualified_name || entry.qualified_name == surface_name)
+                    && entry.signature.is_some()
+            });
+        (has_doc || has_signature).then(|| surtr_analysis::SymbolDisplayMetadata {
+            qualified_name: qualified_name.to_string(),
+            module_path: module_path.to_string(),
+            has_doc,
+            has_signature,
+        })
     }
 
     fn build_completion_context(&self) -> ReplCompletionContext {
