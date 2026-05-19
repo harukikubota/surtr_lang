@@ -35,7 +35,7 @@ pub use semantic::{
     CompletionResponse, CompletionScope, CompletionSymbol, FacetPathCompletionContext,
     FacetPathRootKind, InputSignatureHelp, ReplAssist, ReplInputSupport,
     ReplInputSupportContext, ReplInputSupportUpdate, SemanticIndex, SignatureLookup,
-    SourceLocation, SymbolLookup, SymbolSemanticInfo,
+    SourceLocation, SymbolDisplayMetadata, SymbolLookup, SymbolSemanticInfo,
 };
 pub use service::{
     AnalysisDiagnostic, AnalysisDiagnosticKind, AnalysisHost, AnalysisRange, AnalysisService,

@@ -7,7 +7,7 @@ use surtr_analysis::{
     rank_completion_candidates_by_expected_type, repl_assist_at_cursor, signature_help_at_cursor,
     CallableSignature, CompletionCandidate, CompletionKind, CompletionOrigin, CompletionRequest,
     CompletionScope, CompletionSymbol, ReplInputSupportContext, ReplInputSupportUpdate,
-    SemanticIndex,
+    SemanticIndex, SymbolDisplayMetadata,
 };
 
 #[test]
@@ -1228,6 +1228,7 @@ fn compile_metadata_exposes_symbol_semantic_info_before_completion_projection() 
         .display_metadata
         .as_ref()
         .expect("compile semantic info should retain display metadata origin");
+    let _: &SymbolDisplayMetadata = display_metadata;
     assert_eq!(display_metadata.qualified_name, "Global::Helper::User");
     assert!(display_metadata.has_doc);
     assert!(display_metadata.has_signature);
