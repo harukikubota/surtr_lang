@@ -31,6 +31,73 @@ pub fn surface_rendered_eq(left: &str, right: &str) -> bool {
     surface_rendered_name(left) == surface_rendered_name(right)
 }
 
+/// Canonical compile-space symbol identity. This form may include implicit
+/// compiler namespaces such as `Global::`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CanonicalSymbolName(String);
+
+impl CanonicalSymbolName {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn to_surface_symbol_name(&self) -> SurfaceSymbolName {
+        SurfaceSymbolName(surface_rendered_name(&self.0))
+    }
+}
+
+/// User-facing rendered symbol name for diagnostics, docs, and completion UI.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SurfaceSymbolName(String);
+
+impl SurfaceSymbolName {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+/// A symbol reference in the names visible from a specific source context.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct VisibleSymbolRef(String);
+
+impl VisibleSymbolRef {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+
+    pub fn from_surface(surface: SurfaceSymbolName) -> Self {
+        Self(surface.into_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Marker for the compiler's implicit root namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ImplicitRootNamespace;
+
+impl ImplicitRootNamespace {
+    pub const PREFIX: &'static str = IMPLICIT_ROOT_NAMESPACE_PREFIX;
+
+    pub fn hide(name: &str) -> &str {
+        surface_path_name(name)
+    }
+}
+
 /// Bump when compile-space symbol capability semantics change in a way that
 /// invalidates staged semantic snapshots.
 pub const SYMBOL_CAPABILITY_SCHEMA_VERSION: u32 = 1;
@@ -276,6 +343,18 @@ mod tests {
             "Trait::User::method"
         ));
         assert!(!surface_rendered_eq("Trait::User::method", "User::method"));
+    }
+
+    #[test]
+    fn symbol_name_types_separate_canonical_surface_and_visible_forms() {
+        let canonical = CanonicalSymbolName::new("Trait::Global::User::method");
+        let surface = canonical.to_surface_symbol_name();
+        let visible = VisibleSymbolRef::from_surface(surface.clone());
+
+        assert_eq!(canonical.as_str(), "Trait::Global::User::method");
+        assert_eq!(surface.as_str(), "Trait::User::method");
+        assert_eq!(visible.as_str(), "Trait::User::method");
+        assert_eq!(ImplicitRootNamespace::hide("Global::User"), "User");
     }
 
     #[test]
